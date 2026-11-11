@@ -1,0 +1,5 @@
+error: migration: stage must be pre, post or end, not `Post`
+ --> tests/ui/migration/uppercase_stage.rs:2:66
+  |
+2 | #[erp_macros::migration(addon = "shop", version = "1.1", stage = "Post")]
+  |                                                                  ^^^^^^

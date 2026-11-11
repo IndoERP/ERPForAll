@@ -1,0 +1,20 @@
+{
+  "name": "@erpforall-addon/web",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Client code of the ERPForAll web addon",
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "dependencies": {
+    "@erpforall/elang": "workspace:*",
+    "@erpforall/mail-store": "workspace:*",
+    "@erpforall/mail-thread-view": "workspace:*",
+    "luxon": "3.7.2",
+    "ace-builds": "1.45.0"
+  },
+  "devDependencies": {
+    "@types/luxon": "3.7.6",
+    "@types/node": "catalog:",
+    "vitest": "catalog:"
+  }
+}

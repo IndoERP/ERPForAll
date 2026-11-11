@@ -1,0 +1,1 @@
+{"aggregates":[{"field":null,"func":"count"},{"field":"amount_total","func":"sum"}],"context":{},"domain":[],"groupby":[{"granularity":"month","path":"invoice_date"}],"having":[],"kind":"read_group","limit":500,"model":"account.move","offset":0,"order":[],"version":1}

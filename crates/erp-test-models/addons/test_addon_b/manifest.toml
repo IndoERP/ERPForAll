@@ -1,0 +1,7 @@
+name = "Test Addon B"
+summary = "Fixture: extends test_addon.book with ISBN, rating and inherited view"
+version = "1.0.0"
+depends = ["base", "test_addon_a"]
+data = [
+    "views/book_views.xml",
+]

@@ -1,0 +1,5 @@
+error: #[search_method] must return Result<Domain>
+ --> tests/ui/search_method/wrong_result.rs:4:79
+  |
+4 |     fn search(req: &FieldSearchRequest<'_>, ctx: &mut FieldSearchContext<'_>) -> Result<bool> {
+  |                                                                               ^

@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates>
+  <t t-name="web.HumanClient">
+    <div class="erp-client">
+      <button type="button" class="skip-link" data-skip-content="">Skip to content</button>
+      <header class="app-bar" data-client-header=""/>
+      <nav class="app-navigation" aria-label="Application navigation" data-client-navigation=""/>
+      <div class="client-notice" role="status" aria-live="polite" data-client-notice=""/>
+      <main id="erp-content" tabindex="-1" data-client-content=""/>
+    </div>
+  </t>
+  <t t-name="web.HumanLogin">
+    <main class="login-screen">
+      <div class="login-brand">
+        <img class="login-logo brand-logo-light" src="/erp/brand/logo.svg" alt="ERPForAll" width="168" height="45"/>
+        <img class="login-logo brand-logo-dark" src="/erp/brand/logo-dark.svg" alt="" width="168" height="45"/>
+      </div>
+      <section class="login-card" aria-labelledby="login-title">
+        <h1 id="login-title">Sign in</h1>
+        <p role="alert" class="login-error" t-if="this.props.page.error" t-out="this.props.page.error"/>
+        <form action="/erp/login" method="post" t-on-submit="this.onSubmit">
+          <input type="hidden" name="csrf_token" t-att-value="this.props.page.csrf"/>
+          <input type="hidden" name="db" t-att-value="this.props.page.database"/>
+          <input type="hidden" name="redirect" t-att-value="this.props.page.redirect"/>
+          <div class="login-field">
+            <label for="login-name">Email or login</label>
+            <input id="login-name" name="login" autocomplete="username" autocapitalize="none" spellcheck="false" required="required" autofocus="autofocus"/>
+          </div>
+          <div class="login-field">
+            <label for="login-password">Password</label>
+            <div class="login-password">
+              <input id="login-password" name="password" type="password" autocomplete="current-password" required="required"
+                     aria-describedby="login-capslock" t-on-keyup="this.onPasswordKey" t-on-keydown="this.onPasswordKey"/>
+              <button type="button" class="login-reveal" aria-controls="login-password" aria-pressed="false"
+                      data-login-reveal="" t-on-click="this.onReveal">Show</button>
+            </div>
+            <p id="login-capslock" class="login-hint" data-login-capslock="" hidden="hidden">Caps Lock is on.</p>
+          </div>
+          <button type="submit" class="primary login-submit" data-login-submit="">Sign in</button>
+        </form>
+      </section>
+      <p class="login-footer">Database <span t-out="this.props.page.database"/></p>
+    </main>
+  </t>
+  <t t-name="web.HumanControlPanel">
+    <section class="control-panel" data-control-panel="">
+      <div class="control-panel-heading">
+        <nav class="breadcrumbs" aria-label="Breadcrumbs" data-control-breadcrumbs="">
+          <h1 t-out="this.props.title"/>
+        </nav>
+        <div class="control-panel-search-area" data-control-search=""/>
+        <div class="control-panel-tools" data-control-tools=""/>
+      </div>
+      <div class="control-panel-categories" data-control-categories=""/>
+      <div class="control-panel-actions-row">
+        <div class="actions" data-control-actions=""/>
+        <div class="actions" data-control-extension=""/>
+      </div>
+    </section>
+  </t>
+</templates>

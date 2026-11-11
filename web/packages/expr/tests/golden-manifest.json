@@ -1,0 +1,2412 @@
+[
+  {
+    "ordinal": 0,
+    "source": "-2**2",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 1,
+    "source": "2**3**2",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 2,
+    "source": "2**-1",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 3,
+    "source": "(-2)**2",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 4,
+    "source": "-2**-2",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 5,
+    "source": "not 1 == 2",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 6,
+    "source": "not 1 == 1",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 7,
+    "source": "1 + 2 * 3 - 4 / 2",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 8,
+    "source": "(1 + 2) * 3",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 9,
+    "source": "7 // 2",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 10,
+    "source": "-7 // 2",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 11,
+    "source": "7 // -2",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 12,
+    "source": "-7 // -2",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 13,
+    "source": "-7 % 3",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 14,
+    "source": "7 % -2",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 15,
+    "source": "-7 % -3",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 16,
+    "source": "7 // 2.0",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 17,
+    "source": "-7 // 2.0",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 18,
+    "source": "7.5 % 2",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 19,
+    "source": "-7.5 % 2",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 20,
+    "source": "5 % 2.5",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 21,
+    "source": "7 / 2",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 22,
+    "source": "1 / 3",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 23,
+    "source": "2 ** 0.5",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 24,
+    "source": "10 / 4",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 25,
+    "source": "0.1 + 0.2",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 26,
+    "source": "1e16",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 27,
+    "source": "1.5e16",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 28,
+    "source": "123456789012345678.0",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 29,
+    "source": "1e-5",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 30,
+    "source": "0.0001",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 31,
+    "source": "1.0",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 32,
+    "source": "-0.0",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 33,
+    "source": "1e300 * 10",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 34,
+    "source": "float('inf')",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 35,
+    "source": "float('-inf')",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 36,
+    "source": "float('nan')",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 37,
+    "source": "float(' 1_000.5 ')",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 38,
+    "source": "float('1e3')",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 39,
+    "source": "int(' 42 ')",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 40,
+    "source": "int('-1_000')",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 41,
+    "source": "int(3.99)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 42,
+    "source": "int(-3.99)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 43,
+    "source": "int(True)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 44,
+    "source": "str(1.0)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 45,
+    "source": "str(10.0)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 46,
+    "source": "str(1e22)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 47,
+    "source": "str(0.1)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 48,
+    "source": "str(-1.5)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 49,
+    "source": "str(True)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 50,
+    "source": "str(None)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 51,
+    "source": "str([1, 'a', None])",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 52,
+    "source": "str((1,))",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 53,
+    "source": "str({'a': 1})",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 54,
+    "source": "repr('it\\'s')",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 55,
+    "source": "repr('say \"hi\"')",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 56,
+    "source": "repr('both \\' and \"')",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 57,
+    "source": "repr('tab\\tnew\\nline\\\\')",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 58,
+    "source": "repr('\u00e9')",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 59,
+    "source": "repr(b'a\\x00\\xff')",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 60,
+    "source": "'' or 'x'",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 61,
+    "source": "0 or []",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 62,
+    "source": "None and 1",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 63,
+    "source": "'a' and 'b'",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 64,
+    "source": "1 and 0",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 65,
+    "source": "[] or {} or 0",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 66,
+    "source": "1 < 2 < 3",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 67,
+    "source": "1 < 3 < 2",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 68,
+    "source": "1 == 1.0",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 69,
+    "source": "1 == True",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 70,
+    "source": "'1' == 1",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 71,
+    "source": "[1, 2] == [1, 2]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 72,
+    "source": "(1, 2) == [1, 2]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 73,
+    "source": "{'a': 1, 'b': 2} == {'b': 2, 'a': 1}",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 74,
+    "source": "None == 0",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 75,
+    "source": "1 < 2.5",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 76,
+    "source": "'abc' < 'abd'",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 77,
+    "source": "[1, 2] < [1, 3]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 78,
+    "source": "(1, 2) < (1, 2, 0)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 79,
+    "source": "'b' in 'abc'",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 80,
+    "source": "'' in 'abc'",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 81,
+    "source": "'x' not in 'abc'",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 82,
+    "source": "1 in [1, 2]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 83,
+    "source": "3 in (1, 2)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 84,
+    "source": "'a' in {'a': 1}",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 85,
+    "source": "1.0 in {1: 'x'}",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 86,
+    "source": "True in {1: 'x'}",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 87,
+    "source": "[1, 2][-1]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 88,
+    "source": "'hello'[1]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 89,
+    "source": "'h\u00e9llo'[1]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 90,
+    "source": "'hello'[::-1]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 91,
+    "source": "'hello'[1:4:2]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 92,
+    "source": "'abcdef'[5:]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 93,
+    "source": "'abcdef'[-2:]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 94,
+    "source": "'abcdef'[:-2]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 95,
+    "source": "'abcdef'[10:]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 96,
+    "source": "'abcdef'[-100:2]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 97,
+    "source": "'abcdef'[::2]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 98,
+    "source": "'abcdef'[::-2]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 99,
+    "source": "'abcdef'[4:1:-1]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 100,
+    "source": "'h\u00e9llo w\u00f6rld'[::-1]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 101,
+    "source": "[1, 2, 3][1::9223372036854775807]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 102,
+    "source": "[1, 2, 3][::-9223372036854775807]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 103,
+    "source": "[1, 2, 3][-9223372036854775807:9223372036854775807]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 104,
+    "source": "(1, 2, 3, 4)[1:3]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 105,
+    "source": "b'abcdef'[-2:]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 106,
+    "source": "b'abc'[0]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 107,
+    "source": "[1, 2, 3][None:2]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 108,
+    "source": "'\\n'",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 109,
+    "source": "'\\x41'",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 110,
+    "source": "'A'",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 111,
+    "source": "'\\U0001F600'",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 112,
+    "source": "'\u00e9'",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 113,
+    "source": "'\\\u00e9'",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 114,
+    "source": "'\\q'",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 115,
+    "source": "'\\101'",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 116,
+    "source": "r'\\n'",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 117,
+    "source": "r'a\\'b'",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 118,
+    "source": "r'\\\\'",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 119,
+    "source": "'''multi\nline'''",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 120,
+    "source": "'a' 'b'",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 121,
+    "source": "'a' \"b\" '''c'''",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 122,
+    "source": "b'foo' b'bar'",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 123,
+    "source": "f'{1}{2}'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 124,
+    "source": "f'{\"x\"!r}'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 125,
+    "source": "f'{\"\u00e9\"!a}'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 126,
+    "source": "f'{3.14159:.2f}'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 127,
+    "source": "f'{42:05d}'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 128,
+    "source": "f'{42:>6}|{42:<6}|{42:^6}'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 129,
+    "source": "f'{\"ab\":*^7}'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 130,
+    "source": "f'{1234567:,}'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 131,
+    "source": "f'{1234567.891:,.2f}'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 132,
+    "source": "f'{255:x} {255:#X} {255:b} {255:#o}'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 133,
+    "source": "f'{-5:+d} {5:+d} {5: d}'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 134,
+    "source": "f'{0.5:.0%}'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 135,
+    "source": "f'{1e-7:g} {123456789.0:g} {0.0001:g} {100.0:g}'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 136,
+    "source": "f'{1.5:e} {1234.5678:.3e}'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 137,
+    "source": "f'{1.0:.3} {1234.5:.3} {0.1:.3}'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 138,
+    "source": "f'{True}'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 139,
+    "source": "f'{True:d}'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 140,
+    "source": "f'{None}'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 141,
+    "source": "f'{[1, \"a\"]}'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 142,
+    "source": "f'a {{b}} c'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 143,
+    "source": "f'{\"a\" \"b\"}'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 144,
+    "source": "f'{ {\"k\": 1}[\"k\"] }'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 145,
+    "source": "f'{[1,2,3][1:2]}'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 146,
+    "source": "'a' f'{1}' 'b'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 147,
+    "source": "'%s' % 'x'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 148,
+    "source": "'%s \u00e9 %s' % ('\u00fc', 1)",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 149,
+    "source": "'%d' % 3.7",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 150,
+    "source": "'%5d|%-5d|%05d' % (42, 42, 42)",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 151,
+    "source": "'%05.1f' % 3.14159",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 152,
+    "source": "'%.2f' % 1.005",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 153,
+    "source": "'%.3e' % 12345.678",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 154,
+    "source": "'%g' % 0.00001",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 155,
+    "source": "'%x %X %o %#x %#o' % (255, 255, 8, 255, 8)",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 156,
+    "source": "'%+d % d' % (5, 5)",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 157,
+    "source": "'%r' % 'x'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 158,
+    "source": "'%(a)s-%(b)03d' % {'a': 'x', 'b': 7}",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 159,
+    "source": "'%%' % ()",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 160,
+    "source": "'%s' % {'a': 1}",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 161,
+    "source": "'%c%c' % (65, 'b')",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 162,
+    "source": "'%.2s' % 'abcdef'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 163,
+    "source": "'%*d' % (5, 42)",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 164,
+    "source": "'%-*d|' % (5, 42)",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 165,
+    "source": "'%.*f' % (2, 3.14159)",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 166,
+    "source": "'%s' % [1, 2]",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 167,
+    "source": "'abc' % {}",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 168,
+    "source": "'%10.10f' % 1",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 169,
+    "source": "'{} {}'.format(1, 'a')",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 170,
+    "source": "'{1}{0}'.format('a', 'b')",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 171,
+    "source": "'{name}!'.format(name='x')",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 172,
+    "source": "'{0!r:>6}'.format('a')",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 173,
+    "source": "'{:08.3f}'.format(3.14159)",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 174,
+    "source": "'{{}}'.format()",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 175,
+    "source": "'a,b,,c'.split(',')",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 176,
+    "source": "'a b  c '.split()",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 177,
+    "source": "'  a b  c '.split(None, 1)",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 178,
+    "source": "'a,b,c'.split(',', 1)",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 179,
+    "source": "'-'.join(['a', 'b', 'c'])",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 180,
+    "source": "''.join([])",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 181,
+    "source": "'  x  '.strip()",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 182,
+    "source": "'xxaxx'.strip('x')",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 183,
+    "source": "'  x'.lstrip()",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 184,
+    "source": "'x  '.rstrip()",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 185,
+    "source": "'Hello'.lower()",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 186,
+    "source": "'stra\u00dfe'.upper()",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 187,
+    "source": "'hELLO wORLD'.capitalize()",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 188,
+    "source": "'aaa'.replace('a', 'bb')",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 189,
+    "source": "'aaa'.replace('a', 'b', 2)",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 190,
+    "source": "'abc'.replace('', '-')",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 191,
+    "source": "'abc'.startswith('ab')",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 192,
+    "source": "'abc'.startswith(('x', 'a'))",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 193,
+    "source": "'abc'.endswith('bc')",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 194,
+    "source": "{'a': 1}.get('a')",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 195,
+    "source": "{'a': 1}.get('b')",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 196,
+    "source": "{'a': 1}.get('b', 2)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 197,
+    "source": "{'a': 1, 'b': 2}.keys()",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 198,
+    "source": "list({'a': 1, 'b': 2}.values())",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 199,
+    "source": "list({'a': 1}.items())",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 200,
+    "source": "{1: 'a', True: 'b', 1.0: 'c'}",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 201,
+    "source": "{1: 'int', '1': 'str'}",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 202,
+    "source": "{'a': 1, 'a': 2}",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 203,
+    "source": "{'a': 1} | {'b': 2, 'a': 3}",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 204,
+    "source": "dict(a=1, b=2)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 205,
+    "source": "dict([('a', 1), ('b', 2)])",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 206,
+    "source": "dict({'a': 1}, b=2)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 207,
+    "source": "list('abc')",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 208,
+    "source": "list((1, 2))",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 209,
+    "source": "tuple([1, 2])",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 210,
+    "source": "tuple('ab')",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 211,
+    "source": "list({'x': 1, 'y': 2})",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 212,
+    "source": "len('h\u00e9llo')",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 213,
+    "source": "len([1, 2, 3])",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 214,
+    "source": "len({'a': 1})",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 215,
+    "source": "len(b'ab')",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 216,
+    "source": "min(3, 1, 2)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 217,
+    "source": "min([4, 2, 8])",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 218,
+    "source": "min('abc')",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 219,
+    "source": "max('abc')",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 220,
+    "source": "max([1, 2.5, 2])",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 221,
+    "source": "min([], default=7)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 222,
+    "source": "sum([1, 2, 3])",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 223,
+    "source": "sum([1, 2], 10)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 224,
+    "source": "sum([1, 2], start=10)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 225,
+    "source": "sum([0.1, 0.2])",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 226,
+    "source": "sum([[1], [2]], [])",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 227,
+    "source": "abs(-5)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 228,
+    "source": "abs(-2.5)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 229,
+    "source": "abs(True)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 230,
+    "source": "round(2.5)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 231,
+    "source": "round(3.5)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 232,
+    "source": "round(-2.5)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 233,
+    "source": "round(0.5)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 234,
+    "source": "round(1.5)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 235,
+    "source": "round(2.675, 2)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 236,
+    "source": "round(0.125, 2)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 237,
+    "source": "round(0.375, 2)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 238,
+    "source": "round(1234.5678, -2)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 239,
+    "source": "round(1250, -2)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 240,
+    "source": "round(1350, -2)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 241,
+    "source": "round(-1250, -2)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 242,
+    "source": "round(7, 0)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 243,
+    "source": "round(2.5, ndigits=None)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 244,
+    "source": "round(3.14159, ndigits=3)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 245,
+    "source": "True & False",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 246,
+    "source": "True | False",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 247,
+    "source": "True ^ True",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 248,
+    "source": "True & 1",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 249,
+    "source": "6 & 3",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 250,
+    "source": "6 | 3",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 251,
+    "source": "6 ^ 3",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 252,
+    "source": "~5",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 253,
+    "source": "1 << 10",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 254,
+    "source": "-16 >> 2",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 255,
+    "source": "1 << 62",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 256,
+    "source": "(-1)**(2**40)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 257,
+    "source": "(-1)**(2**40 + 1)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 258,
+    "source": "0 ** 0",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 259,
+    "source": "1 ** 9999999",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 260,
+    "source": "bool([])",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 261,
+    "source": "bool('x')",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 262,
+    "source": "bool(0.0)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 263,
+    "source": "True + 1",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 264,
+    "source": "True < 2",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 265,
+    "source": "-True",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 266,
+    "source": "+True",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 267,
+    "source": "~True",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 268,
+    "source": "[1] * 3",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 269,
+    "source": "3 * [1]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 270,
+    "source": "[1] * 0",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 271,
+    "source": "[1] * -2",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 272,
+    "source": "'ab' * 3",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 273,
+    "source": "'ab' * 0",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 274,
+    "source": "(1,) * 2",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 275,
+    "source": "[1, 2] + [3]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 276,
+    "source": "(1,) + (2,)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 277,
+    "source": "'a' + 'b'",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 278,
+    "source": "b'a' + b'b'",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 279,
+    "source": "[x * 2 for x in [1, 2, 3, 4] if x > 2]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 280,
+    "source": "[(x, y) for x in [1, 2] for y in 'ab']",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 281,
+    "source": "[x for x in 'h\u00e9llo']",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 282,
+    "source": "[k for k in {'a': 1, 'b': 2}]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 283,
+    "source": "[a + b for a, b in [(1, 2), (3, 4)]]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 284,
+    "source": "[a for a, in [(1,), (2,)]]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 285,
+    "source": "[c for c in b'ab']",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 286,
+    "source": "sum(x for x in [1, 2, 3])",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 287,
+    "source": "' '.join(w.capitalize() for w in ['hello', 'world'])",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 288,
+    "source": "[x for x in [1, 2] if x if x > 1]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 289,
+    "source": "(y := 5) + y",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 290,
+    "source": "[y := 1, y + 1]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 291,
+    "source": "1 if True else 2",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 292,
+    "source": "1 if False else 2 if False else 3",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 293,
+    "source": "datetime(2024, 1, 31)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 294,
+    "source": "datetime(2024, 1, 31, 10, 30)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 295,
+    "source": "datetime(2024, 1, 31, 10, 30, 5, 123)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 296,
+    "source": "str(datetime(2024, 1, 31, 10, 30))",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 297,
+    "source": "str(datetime(2024, 1, 31, 10, 30, 0, 5))",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 298,
+    "source": "datetime(2024, 1, 31) + relativedelta(months=1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 299,
+    "source": "datetime(2024, 1, 31) + relativedelta(months=-1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 300,
+    "source": "datetime(2024, 3, 31) - relativedelta(months=1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 301,
+    "source": "datetime(2024, 2, 29) + relativedelta(years=1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 302,
+    "source": "datetime(2024, 1, 15) + relativedelta(day=31)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 303,
+    "source": "datetime(2024, 2, 15) + relativedelta(day=31)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 304,
+    "source": "datetime(2024, 1, 15) + relativedelta(weekday=0)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 305,
+    "source": "datetime(2024, 1, 15) + relativedelta(weekday=2)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 306,
+    "source": "datetime(2024, 1, 15) + relativedelta(day=1, weekday=0)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 307,
+    "source": "datetime(2024, 1, 15) + relativedelta(months=1, day=17, weekday=0)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 308,
+    "source": "datetime(2024, 1, 15).date() + relativedelta(day=1, weekday=0) + relativedelta(weekday=2)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 309,
+    "source": "datetime(2024, 1, 15).date() + relativedelta(hours=1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 310,
+    "source": "datetime(2024, 1, 15, 23) + relativedelta(hours=2)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 311,
+    "source": "datetime(2024, 1, 15) + relativedelta(years=-1, month=1, day=1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 312,
+    "source": "datetime(2024, 1, 15) + relativedelta(years=-2, months=-3, days=-4)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 313,
+    "source": "datetime(2024, 1, 15) - relativedelta(days=1.5)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 314,
+    "source": "datetime(2024, 1, 15) + relativedelta(weeks=-2, days=1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 315,
+    "source": "datetime(2024, 1, 15) + relativedelta(months=-1, days=-1, minutes=30)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 316,
+    "source": "datetime(2024, 1, 15) + relativedelta(hour=1, minute=0)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 317,
+    "source": "datetime(2024, 3, 1) + relativedelta(leapdays=1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 318,
+    "source": "relativedelta(months=14)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 319,
+    "source": "relativedelta(hours=25, minutes=-1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 320,
+    "source": "relativedelta(days=1) + relativedelta(months=1, day=5)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 321,
+    "source": "-relativedelta(months=1, day=5)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 322,
+    "source": "relativedelta(months=1).months",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 323,
+    "source": "relativedelta(day=5).day",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 324,
+    "source": "relativedelta(day=5).month",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 325,
+    "source": "bool(relativedelta())",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 326,
+    "source": "bool(relativedelta(days=1))",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 327,
+    "source": "datetime(2024, 1, 1, 10) + timedelta(days=5)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 328,
+    "source": "datetime(2024, 1, 1) - timedelta(days=1, hours=1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 329,
+    "source": "datetime(2024, 1, 1).date() + timedelta(hours=25)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 330,
+    "source": "datetime(2024, 1, 1).date() - timedelta(days=1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 331,
+    "source": "datetime(2024, 3, 1) - datetime(2024, 2, 1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 332,
+    "source": "datetime(2024, 3, 1, 12) - datetime(2024, 3, 2)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 333,
+    "source": "datetime(2024, 3, 1).date() - datetime(2024, 2, 1).date()",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 334,
+    "source": "timedelta(days=1, hours=2, minutes=3, seconds=4)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 335,
+    "source": "timedelta(hours=-1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 336,
+    "source": "timedelta(0)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 337,
+    "source": "timedelta(1.5)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 338,
+    "source": "timedelta(seconds=0.5)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 339,
+    "source": "timedelta(milliseconds=1, microseconds=1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 340,
+    "source": "timedelta(weeks=1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 341,
+    "source": "timedelta(-1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 342,
+    "source": "str(timedelta(days=1, hours=2, minutes=3, seconds=4))",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 343,
+    "source": "str(timedelta(days=2))",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 344,
+    "source": "str(timedelta(hours=-1))",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 345,
+    "source": "str(timedelta(seconds=1, microseconds=5))",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 346,
+    "source": "timedelta(days=1) + timedelta(hours=1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 347,
+    "source": "timedelta(days=1) - timedelta(hours=1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 348,
+    "source": "timedelta(days=1) * 2",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 349,
+    "source": "2 * timedelta(hours=1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 350,
+    "source": "timedelta(hours=1) * 1.5",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 351,
+    "source": "timedelta(days=1) / timedelta(hours=1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 352,
+    "source": "-timedelta(hours=1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 353,
+    "source": "abs(timedelta(hours=-1))",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 354,
+    "source": "timedelta(days=1, seconds=5).total_seconds()",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 355,
+    "source": "timedelta(days=1).days",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 356,
+    "source": "timedelta(hours=-1).seconds",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 357,
+    "source": "bool(timedelta(0))",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 358,
+    "source": "datetime(2024, 1, 1) < datetime(2024, 1, 2)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 359,
+    "source": "datetime(2024, 1, 1) == datetime(2024, 1, 1, 0, 0)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 360,
+    "source": "datetime(2024, 1, 31).strftime('%Y-%m-%d %H:%M:%S')",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 361,
+    "source": "datetime(2024, 1, 31, 15, 4, 5).strftime('%y %j %w %p %I %a %A %b %B %%')",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 362,
+    "source": "datetime(2024, 1, 31, 15, 4, 5, 7).strftime('%f %U %W %u')",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 363,
+    "source": "datetime(2024, 1, 31).date().strftime('%d/%m/%Y')",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 364,
+    "source": "datetime(2024, 1, 31, 10, 2).isoformat()",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 365,
+    "source": "datetime(2024, 1, 31, 10, 2).isoformat(' ')",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 366,
+    "source": "datetime(2024, 1, 31).date().isoformat()",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 367,
+    "source": "datetime(2024, 1, 31).weekday()",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 368,
+    "source": "datetime(2024, 1, 31).isoweekday()",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 369,
+    "source": "datetime(2024, 1, 31).replace(day=1, hour=3)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 370,
+    "source": "datetime(2024, 1, 31).date().replace(month=2, day=29)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 371,
+    "source": "datetime(2024, 1, 31).year",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 372,
+    "source": "datetime(2024, 1, 31, 4, 5, 6).second",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 373,
+    "source": "datetime(2024, 1, 31).date().month",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 374,
+    "source": "f'{datetime(2024, 1, 31):%Y/%m}'",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 375,
+    "source": "Command.create({'name': 'x'})",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 376,
+    "source": "Command.update(3, {'a': 1})",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 377,
+    "source": "Command.delete(1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 378,
+    "source": "Command.unlink(2)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 379,
+    "source": "Command.link(3)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 380,
+    "source": "Command.clear()",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 381,
+    "source": "Command.set([1, 2])",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 382,
+    "source": "Command.set((1, 2))",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 383,
+    "source": "Command.CREATE",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 384,
+    "source": "Command.SET",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 385,
+    "source": "[Command.link(4), Command.clear()]",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 386,
+    "source": "1 / 0",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 387,
+    "source": "1.0 / 0",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 388,
+    "source": "1 // 0",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 389,
+    "source": "1 % 0",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 390,
+    "source": "1.0 // 0",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 391,
+    "source": "1.0 % 0",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 392,
+    "source": "0 ** -1",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 393,
+    "source": "0.0 ** -1",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 394,
+    "source": "10.0 ** 400",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 395,
+    "source": "int(float('nan'))",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 396,
+    "source": "int(float('inf'))",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 397,
+    "source": "int('abc')",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 398,
+    "source": "int('')",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 399,
+    "source": "int('1.5')",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 400,
+    "source": "float('abc')",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 401,
+    "source": "1 in 'abc'",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 402,
+    "source": "'a' + 1",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 403,
+    "source": "1 + 'a'",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 404,
+    "source": "[1] + (1,)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 405,
+    "source": "{} + {}",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 406,
+    "source": "'a' * 'b'",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 407,
+    "source": "- 'a'",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 408,
+    "source": "~1.5",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 409,
+    "source": "1 < 'a'",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 410,
+    "source": "[1] < (1,)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 411,
+    "source": "None < None",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 412,
+    "source": "undefined_name",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 413,
+    "source": "'abc'.missing",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 414,
+    "source": "(1).missing",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 415,
+    "source": "[1, 2][5]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 416,
+    "source": "(1,)[3]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 417,
+    "source": "'abc'[10]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 418,
+    "source": "'abc'['x']",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 419,
+    "source": "[1]['x']",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 420,
+    "source": "{'a': 1}['b']",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 421,
+    "source": "{'a': 1}[[1]]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 422,
+    "source": "{[1]: 2}",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 423,
+    "source": "{'a': 1}.get([1])",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 424,
+    "source": "len(5)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 425,
+    "source": "len()",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 426,
+    "source": "len([1], [2])",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 427,
+    "source": "abs('x')",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 428,
+    "source": "round('x')",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 429,
+    "source": "round(1.5, 'x')",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 430,
+    "source": "sum(['a', 'b'], '')",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 431,
+    "source": "sum([1], 2, 3)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 432,
+    "source": "min()",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 433,
+    "source": "min([])",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 434,
+    "source": "max(1, 2, default=3)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 435,
+    "source": "int(x=1)",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 436,
+    "source": "5()",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 437,
+    "source": "'abc'.split('')",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 438,
+    "source": "'{} {}'.format(1)",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 439,
+    "source": "'{0} {}'.format(1, 2)",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 440,
+    "source": "'{'.format()",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 441,
+    "source": "'}'.format()",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 442,
+    "source": "'{x}'.format()",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 443,
+    "source": "'%d' % 'x'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 444,
+    "source": "'%s %s' % (1,)",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 445,
+    "source": "'%s' % (1, 2)",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 446,
+    "source": "'%q' % 1",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 447,
+    "source": "'%' % ()",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 448,
+    "source": "'%(a)s' % 1",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 449,
+    "source": "'%(a)s' % {'b': 1}",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 450,
+    "source": "'abc' % 5",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 451,
+    "source": "'%x' % 1.5",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 452,
+    "source": "f'{1:d}{\"x\":d}'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 453,
+    "source": "f'{1.5:d}'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 454,
+    "source": "f'{\"x\":+}'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 455,
+    "source": "f'{[]:>5}'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 456,
+    "source": "f'{1:.2d}'",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 457,
+    "source": "'%c' % 1114112",
+    "owner": "FORMAT"
+  },
+  {
+    "ordinal": 458,
+    "source": "datetime(2024, 2, 30)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 459,
+    "source": "datetime(2024, 13, 1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 460,
+    "source": "datetime(0, 1, 1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 461,
+    "source": "datetime(2024, 1, 1, 24)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 462,
+    "source": "datetime(10000, 1, 1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 463,
+    "source": "datetime(9999, 12, 31) + timedelta(days=1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 464,
+    "source": "datetime(1, 1, 1) - timedelta(days=1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 465,
+    "source": "datetime(9999, 12, 31) + relativedelta(years=1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 466,
+    "source": "timedelta(days=1000000000)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 467,
+    "source": "timedelta(days=999999999) + timedelta(days=1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 468,
+    "source": "relativedelta(months=1.5)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 469,
+    "source": "relativedelta(foo=1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 470,
+    "source": "datetime(2024, 1, 1) - datetime(2024, 1, 1).date()",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 471,
+    "source": "datetime(2024, 1, 1) < datetime(2024, 1, 1).date()",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 472,
+    "source": "datetime(2024, 1, 1).date() + datetime(2024, 1, 1).date()",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 473,
+    "source": "datetime(2024, 1, 1).strftime(1)",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 474,
+    "source": "Command.link()",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 475,
+    "source": "Command.unknown",
+    "owner": "DATES"
+  },
+  {
+    "ordinal": 476,
+    "source": "1 << -1",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 477,
+    "source": "-1 >> -1",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 478,
+    "source": "[a for a, b in [(1, 2, 3)]]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 479,
+    "source": "[a for a, b, c in [(1, 2)]]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 480,
+    "source": "[a for a, b in [1]]",
+    "owner": "CORE"
+  },
+  {
+    "ordinal": 481,
+    "source": "[x for x in 5]",
+    "owner": "CORE"
+  }
+]

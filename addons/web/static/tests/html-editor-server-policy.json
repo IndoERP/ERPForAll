@@ -1,0 +1,10 @@
+{
+  "boundary": "Default-policy element retention source projection; not sanitizer execution or field-write proof. Reseal only after reviewing policy/table/helper/caller changes.",
+  "sources": {
+    "crates/erp-html/src/clean.rs": "6f3e0b41166cb853c7411a5ae60a5f8bf3e00fe76ca1e9514eef4108164bb3cd",
+    "crates/erp-html/src/tables.rs": "03ba98ce30f7ba2c9c1cf9d9e4eaabe77e4fc4967dad8c42cab041033805b592",
+    "crates/erp-html/src/normalize.rs": "0b73cfeac954520e2c9a4516c5dee58daab9b875aa959e52e3e1ab63b2e1fe74",
+    "crates/erp-html/src/serialize.rs": "089b4f29b558e8df4dec3a41dfe86c096e297f0f872cc4744639420f31a688ed",
+    "crates/erp-html/src/policy.rs": "15f738d9933e3762becf0e356d0cf77d9311bdb6b14cd3a9b6f67d5aa18972d9"
+  }
+}

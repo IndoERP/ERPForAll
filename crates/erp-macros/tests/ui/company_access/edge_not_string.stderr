@@ -1,0 +1,5 @@
+error: expected a string literal
+ --> tests/ui/company_access/edge_not_string.rs:5:36
+  |
+5 |     company_access = parent(edge = 3)
+  |                                    ^

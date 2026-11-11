@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ERPForAll records with stable semantic IDs. Keep tenant edits on upgrades. -->
+<erp noupdate="1">
+  <record id="industry_administration" model="res.partner.industry">
+    <field name="name">Business support</field>
+    <field name="full_name">Office administration, staffing and operational support services.</field>
+    <field name="active" eval="True"/>
+  </record>
+  <record id="industry_arts" model="res.partner.industry">
+    <field name="name">Culture and leisure</field>
+    <field name="full_name">Creative work, cultural venues, sport and leisure providers.</field>
+    <field name="active" eval="True"/>
+  </record>
+  <record id="industry_building" model="res.partner.industry">
+    <field name="name">Building and infrastructure</field>
+    <field name="full_name">Construction projects, site preparation and specialist building trades.</field>
+    <field name="active" eval="True"/>
+  </record>
+  <record id="industry_education" model="res.partner.industry">
+    <field name="name">Learning and training</field>
+    <field name="full_name">Schools, teaching providers and vocational learning services.</field>
+    <field name="active" eval="True"/>
+  </record>
+  <record id="industry_energy" model="res.partner.industry">
+    <field name="name">Power and utilities</field>
+    <field name="full_name">Generation and delivery of electricity, fuel gas and thermal energy.</field>
+    <field name="active" eval="True"/>
+  </record>
+  <record id="industry_finance" model="res.partner.industry">
+    <field name="name">Money and risk services</field>
+    <field name="full_name">Banking, investment, insurance and financial support businesses.</field>
+    <field name="active" eval="True"/>
+  </record>
+  <record id="industry_health" model="res.partner.industry">
+    <field name="name">Care and wellbeing</field>
+    <field name="full_name">Medical care, residential care and community support services.</field>
+    <field name="active" eval="True"/>
+  </record>
+  <record id="industry_home_services" model="res.partner.industry">
+    <field name="name">Household activities</field>
+    <field name="full_name">Domestic employment and goods or services made for household use.</field>
+    <field name="active" eval="True"/>
+  </record>
+  <record id="industry_hospitality" model="res.partner.industry">
+    <field name="name">Stays and dining</field>
+    <field name="full_name">Accommodation providers, food preparation and dining services.</field>
+    <field name="active" eval="True"/>
+  </record>
+  <record id="industry_information" model="res.partner.industry">
+    <field name="name">Digital and media services</field>
+    <field name="full_name">Software, publishing, communications networks and information services.</field>
+    <field name="active" eval="True"/>
+  </record>
+  <record id="industry_international" model="res.partner.industry">
+    <field name="name">International institutions</field>
+    <field name="full_name">International bodies and organizations operating across national jurisdictions.</field>
+    <field name="active" eval="True"/>
+  </record>
+  <record id="industry_land" model="res.partner.industry">
+    <field name="name">Property services</field>
+    <field name="full_name">Property ownership, letting, brokerage and management activities.</field>
+    <field name="active" eval="True"/>
+  </record>
+  <record id="industry_manufacturing" model="res.partner.industry">
+    <field name="name">Industrial production</field>
+    <field name="full_name">Businesses that transform materials into finished or intermediate goods.</field>
+    <field name="active" eval="True"/>
+  </record>
+  <record id="industry_mining" model="res.partner.industry">
+    <field name="name">Resource extraction</field>
+    <field name="full_name">Extraction of mineral resources and services supporting extraction sites.</field>
+    <field name="active" eval="True"/>
+  </record>
+  <record id="industry_other_services" model="res.partner.industry">
+    <field name="name">Personal and member services</field>
+    <field name="full_name">Membership organizations, repair businesses and other personal services.</field>
+    <field name="active" eval="True"/>
+  </record>
+  <record id="industry_primary" model="res.partner.industry">
+    <field name="name">Land and sea production</field>
+    <field name="full_name">Farming, forestry, fishing and related primary production activities.</field>
+    <field name="active" eval="True"/>
+  </record>
+  <record id="industry_professional" model="res.partner.industry">
+    <field name="name">Professional expertise</field>
+    <field name="full_name">Research, design, engineering, legal and other specialist advisory work.</field>
+    <field name="active" eval="True"/>
+  </record>
+  <record id="industry_public_services" model="res.partner.industry">
+    <field name="name">Government and civic services</field>
+    <field name="full_name">Public administration, defence and statutory social protection activities.</field>
+    <field name="active" eval="True"/>
+  </record>
+  <record id="industry_trade" model="res.partner.industry">
+    <field name="name">Commerce and distribution</field>
+    <field name="full_name">Wholesale and retail businesses, including vehicle sales and servicing.</field>
+    <field name="active" eval="True"/>
+  </record>
+  <record id="industry_transport" model="res.partner.industry">
+    <field name="name">Movement and storage</field>
+    <field name="full_name">Passenger transport, freight, warehousing and delivery operations.</field>
+    <field name="active" eval="True"/>
+  </record>
+  <record id="industry_water" model="res.partner.industry">
+    <field name="name">Water and environmental services</field>
+    <field name="full_name">Water provision, wastewater treatment, waste handling and site remediation.</field>
+    <field name="active" eval="True"/>
+  </record>
+</erp>

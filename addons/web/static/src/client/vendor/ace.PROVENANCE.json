@@ -1,0 +1,161 @@
+{
+  "package": "ace-builds",
+  "version": "1.45.0",
+  "license": "BSD-3-Clause",
+  "url": "https://registry.npmjs.org/ace-builds/-/ace-builds-1.45.0.tgz",
+  "integrity": "sha512-tAAorvbQRlsdDeuf4RnBLgaRk4HVT9td2D4QKEqXyuQkZmFoqHxl9JuV2o1XkuDT+zOreooGPiG1tU/Y+pNFkg==",
+  "command": "python3 web/scripts/update-code-editor-vendor.py",
+  "utc": "2026-11-03T14:10:40.814093+00:00",
+  "python": "3.13.16 (main, Sep 30 2026, 18:57:20) [Clang 21.0.0 (clang-2100.3.34.2)]",
+  "script_sha256": "b76a4c4951d6862ef1591d369d289d892f3632569150005e07a45e0835253e35",
+  "files": {
+    "ace.upstream.css": {
+      "source": "package/css/ace.css",
+      "sha256": "2272e3f6e5efac0fed1e2d4815fe2c3223fd6cda22aab6cd397fe6881f49ec13"
+    },
+    "ace.LICENSE": {
+      "source": "package/LICENSE",
+      "sha256": "850f545c5254e8c08204edb2a6d50bbb72727c38a82982c17a84bebf6064cdf8"
+    },
+    "ace.css": {
+      "source": "derived from package/css/ace.css with pinned PNG/SVG data URLs",
+      "sha256": "613e95b0301f37d517c63a623a566cb9dff461b7fc0074cf62df4248f67f5528"
+    },
+    "ace-license.css": {
+      "source": "generated notice from package/LICENSE",
+      "sha256": "a2b4ac5b2b1205c5e58cb0ef468b44b5d7d2822a47082aaa57ccd458b5f53f02"
+    }
+  },
+  "image_inputs": {
+    "./main-1.png": {
+      "source": "package/css/main-1.png",
+      "mime": "image/png",
+      "sha256": "b0bbaf193d4ad8501ad5cbedfe46baf723220c0050586e6aa32f1b63e1381041"
+    },
+    "./main-2.png": {
+      "source": "package/css/main-2.png",
+      "mime": "image/png",
+      "sha256": "38eb4f90c90b001e6f9b9a4964a0505a94665e049882fc47f1681a5c86da2593"
+    },
+    "./main-3.png": {
+      "source": "package/css/main-3.png",
+      "mime": "image/png",
+      "sha256": "2ac2faa1d2bf9705f09d04011148f86bca12c92f46a9e96a1353b53c5e5349e3"
+    },
+    "./main-4.png": {
+      "source": "package/css/main-4.png",
+      "mime": "image/png",
+      "sha256": "e1042e35af12aa6719ebb1caebbdfd3870b28e7009b1e5356e4727e39e0a450b"
+    },
+    "./main-5.svg": {
+      "source": "package/css/main-5.svg",
+      "mime": "image/svg+xml",
+      "sha256": "6f77d7eda75a43203e44eb3ede0811bd00521169a0cb6aa7b4ce3a58454315bb"
+    },
+    "./main-6.svg": {
+      "source": "package/css/main-6.svg",
+      "mime": "image/svg+xml",
+      "sha256": "aa91ed1aa6b222e26e112ec27cd743998e9e799e5e302725a05ca0787bd6889d"
+    },
+    "./main-7.svg": {
+      "source": "package/css/main-7.svg",
+      "mime": "image/svg+xml",
+      "sha256": "5b7826039d9166410e14c66e209ea95391acaaebf58c66e32bd2dbf9d246efe6"
+    },
+    "./main-8.svg": {
+      "source": "package/css/main-8.svg",
+      "mime": "image/svg+xml",
+      "sha256": "28609535adc207661bad712be836c3d95961a4f15c7a13762aedccbaf9398a14"
+    },
+    "./main-9.svg": {
+      "source": "package/css/main-9.svg",
+      "mime": "image/svg+xml",
+      "sha256": "fd71dcf667d06601a4732e2148d5eeb903223caececa61e3686f123b417179ca"
+    },
+    "./main-10.svg": {
+      "source": "package/css/main-10.svg",
+      "mime": "image/svg+xml",
+      "sha256": "8aa7e401f5186e00fab6568e73bf60672d35a01662846cfba3a8c3bb7aad13f9"
+    },
+    "./main-11.svg": {
+      "source": "package/css/main-11.svg",
+      "mime": "image/svg+xml",
+      "sha256": "968022dd259f4d77d4700c07cd7fdbe491c76b467aae3c474811b33d01ba6cf7"
+    },
+    "./main-12.svg": {
+      "source": "package/css/main-12.svg",
+      "mime": "image/svg+xml",
+      "sha256": "9b0dbdbf0934bb6efdf2a2ce17ceea1834097c03c9dad76f639f3c6f15ef6166"
+    },
+    "./main-13.png": {
+      "source": "package/css/main-13.png",
+      "mime": "image/png",
+      "sha256": "215f5ce60e8f1074586091f57304dd2b37421d92aaf4f8133a4eac46f2ccda53"
+    },
+    "./main-14.png": {
+      "source": "package/css/main-14.png",
+      "mime": "image/png",
+      "sha256": "1bdb09eb2115acf75ad9f4eeb2a56af98d09abf00510afb71dc19c028f359137"
+    },
+    "./main-15.png": {
+      "source": "package/css/main-15.png",
+      "mime": "image/png",
+      "sha256": "215f5ce60e8f1074586091f57304dd2b37421d92aaf4f8133a4eac46f2ccda53"
+    },
+    "./main-16.png": {
+      "source": "package/css/main-16.png",
+      "mime": "image/png",
+      "sha256": "ec0ef427eec99ef164324d4cd297068bcfeda3601bcef50df3c3866b63a4dd16"
+    },
+    "./main-17.png": {
+      "source": "package/css/main-17.png",
+      "mime": "image/png",
+      "sha256": "d0813bef17881631cd4fccc0a707d46e7c1233d4bb3ce8409f6185262fe1d449"
+    },
+    "./main-18.png": {
+      "source": "package/css/main-18.png",
+      "mime": "image/png",
+      "sha256": "f490485bcea193badedb7aa9dcd14c453cf2404db9749f3e2bee9a2be8707eee"
+    },
+    "./main-19.png": {
+      "source": "package/css/main-19.png",
+      "mime": "image/png",
+      "sha256": "bc584bdac605f389365de2a72006e42e960981c5ce943eebcc2df06828eef698"
+    },
+    "./main-20.png": {
+      "source": "package/css/main-20.png",
+      "mime": "image/png",
+      "sha256": "f02a1991536045f3807bad97d5d53e0190efc21fe711229a41b94499a5f65ebb"
+    },
+    "./main-21.png": {
+      "source": "package/css/main-21.png",
+      "mime": "image/png",
+      "sha256": "9c88b75996a7c0c49fe3f0b5d60829291f3ad0ad41d4a9a2e87a8cc6ae0c1998"
+    },
+    "./main-22.png": {
+      "source": "package/css/main-22.png",
+      "mime": "image/png",
+      "sha256": "d87d7878e0904726611462752a7d8b1f58fbd244c5d50a29e2f1feb622aac8f2"
+    },
+    "./main-23.png": {
+      "source": "package/css/main-23.png",
+      "mime": "image/png",
+      "sha256": "1a020e872a95cde139d1be39a9c9a4905fdf67e9bd7fa53e72d6e83218cdabf6"
+    },
+    "./main-24.png": {
+      "source": "package/css/main-24.png",
+      "mime": "image/png",
+      "sha256": "5dcf845557b32e1af2c3a19623209bfef6f335f215d19f46f4d152544acc94d3"
+    },
+    "./main-25.svg": {
+      "source": "package/css/main-25.svg",
+      "mime": "image/svg+xml",
+      "sha256": "ba67e2434b2373c32f785527cd1517eeecc69c9c140a648a05cbab1c3d89cc3a"
+    },
+    "./main-26.png": {
+      "source": "package/css/main-26.png",
+      "mime": "image/png",
+      "sha256": "676bc3ed63c2a4f0a64a891e5b82dc01d15ac587ce4c5e54bc660f3e1cfaaf2e"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+name = "Test Wasm Refs"
+summary = "Fixture: a WebAssembly addon with typed references to fields of other addons, creating records through the chain (a later release)"
+depends = ["test_wasm_dual_a"]
+
+[wasm]
+sdk_version = "1.0"

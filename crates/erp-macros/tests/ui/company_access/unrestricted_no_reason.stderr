@@ -1,0 +1,5 @@
+error: company_access: unrestricted(…) needs a reason that is not blank and at most 512 bytes long
+ --> tests/ui/company_access/unrestricted_no_reason.rs:5:22
+  |
+5 |     company_access = unrestricted()
+  |                      ^^^^^^^^^^^^

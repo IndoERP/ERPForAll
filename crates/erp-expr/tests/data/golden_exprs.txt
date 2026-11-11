@@ -1,0 +1,488 @@
+-2**2
+2**3**2
+2**-1
+(-2)**2
+-2**-2
+not 1 == 2
+not 1 == 1
+1 + 2 * 3 - 4 / 2
+(1 + 2) * 3
+7 // 2
+-7 // 2
+7 // -2
+-7 // -2
+-7 % 3
+7 % -2
+-7 % -3
+7 // 2.0
+-7 // 2.0
+7.5 % 2
+-7.5 % 2
+5 % 2.5
+7 / 2
+1 / 3
+2 ** 0.5
+10 / 4
+0.1 + 0.2
+1e16
+1.5e16
+123456789012345678.0
+1e-5
+0.0001
+1.0
+-0.0
+1e300 * 10
+float('inf')
+float('-inf')
+float('nan')
+float(' 1_000.5 ')
+float('1e3')
+int(' 42 ')
+int('-1_000')
+int(3.99)
+int(-3.99)
+int(True)
+str(1.0)
+str(10.0)
+str(1e22)
+str(0.1)
+str(-1.5)
+str(True)
+str(None)
+str([1, 'a', None])
+str((1,))
+str({'a': 1})
+repr('it\'s')
+repr('say "hi"')
+repr('both \' and "')
+repr('tab\tnew\nline\\')
+repr('é')
+repr(b'a\x00\xff')
+'' or 'x'
+0 or []
+None and 1
+'a' and 'b'
+1 and 0
+[] or {} or 0
+1 < 2 < 3
+1 < 3 < 2
+1 == 1.0
+1 == True
+'1' == 1
+[1, 2] == [1, 2]
+(1, 2) == [1, 2]
+{'a': 1, 'b': 2} == {'b': 2, 'a': 1}
+None == 0
+1 < 2.5
+2 ** 63 - 1 > 9.2e18
+'abc' < 'abd'
+[1, 2] < [1, 3]
+(1, 2) < (1, 2, 0)
+'b' in 'abc'
+'' in 'abc'
+'x' not in 'abc'
+1 in [1, 2]
+3 in (1, 2)
+'a' in {'a': 1}
+1.0 in {1: 'x'}
+True in {1: 'x'}
+[1, 2][-1]
+'hello'[1]
+'héllo'[1]
+'hello'[::-1]
+'hello'[1:4:2]
+'abcdef'[5:]
+'abcdef'[-2:]
+'abcdef'[:-2]
+'abcdef'[10:]
+'abcdef'[-100:2]
+'abcdef'[::2]
+'abcdef'[::-2]
+'abcdef'[4:1:-1]
+'héllo wörld'[::-1]
+[1, 2, 3][1::9223372036854775807]
+[1, 2, 3][::-9223372036854775807]
+[1, 2, 3][-9223372036854775807:9223372036854775807]
+(1, 2, 3, 4)[1:3]
+b'abcdef'[-2:]
+b'abc'[0]
+[1, 2, 3][None:2]
+'\n'
+'\x41'
+'A'
+'\U0001F600'
+'é'
+'\é'
+'\q'
+'\101'
+r'\n'
+r'a\'b'
+r'\\'
+'''multi\nline'''
+'a' 'b'
+'a' "b" '''c'''
+b'foo' b'bar'
+f'{1}{2}'
+f'{"x"!r}'
+f'{"é"!a}'
+f'{3.14159:.2f}'
+f'{42:05d}'
+f'{42:>6}|{42:<6}|{42:^6}'
+f'{"ab":*^7}'
+f'{1234567:,}'
+f'{1234567.891:,.2f}'
+f'{255:x} {255:#X} {255:b} {255:#o}'
+f'{-5:+d} {5:+d} {5: d}'
+f'{0.5:.0%}'
+f'{1e-7:g} {123456789.0:g} {0.0001:g} {100.0:g}'
+f'{1.5:e} {1234.5678:.3e}'
+f'{1.0:.3} {1234.5:.3} {0.1:.3}'
+f'{True}'
+f'{True:d}'
+f'{None}'
+f'{[1, "a"]}'
+f'a {{b}} c'
+f'{"a" "b"}'
+f'{ {"k": 1}["k"] }'
+f'{[1,2,3][1:2]}'
+'a' f'{1}' 'b'
+'%s' % 'x'
+'%s é %s' % ('ü', 1)
+'%d' % 3.7
+'%5d|%-5d|%05d' % (42, 42, 42)
+'%05.1f' % 3.14159
+'%.2f' % 1.005
+'%.3e' % 12345.678
+'%g' % 0.00001
+'%x %X %o %#x %#o' % (255, 255, 8, 255, 8)
+'%+d % d' % (5, 5)
+'%r' % 'x'
+'%(a)s-%(b)03d' % {'a': 'x', 'b': 7}
+'%%' % ()
+'%s' % {'a': 1}
+'%c%c' % (65, 'b')
+'%.2s' % 'abcdef'
+'%*d' % (5, 42)
+'%-*d|' % (5, 42)
+'%.*f' % (2, 3.14159)
+'%s' % [1, 2]
+'abc' % {}
+'%10.10f' % 1
+'{} {}'.format(1, 'a')
+'{1}{0}'.format('a', 'b')
+'{name}!'.format(name='x')
+'{0!r:>6}'.format('a')
+'{:08.3f}'.format(3.14159)
+'{{}}'.format()
+'a,b,,c'.split(',')
+'a b  c '.split()
+'  a b  c '.split(None, 1)
+'a,b,c'.split(',', 1)
+'-'.join(['a', 'b', 'c'])
+''.join([])
+'  x  '.strip()
+'xxaxx'.strip('x')
+'  x'.lstrip()
+'x  '.rstrip()
+'Hello'.lower()
+'straße'.upper()
+'hELLO wORLD'.capitalize()
+'aaa'.replace('a', 'bb')
+'aaa'.replace('a', 'b', 2)
+'abc'.replace('', '-')
+'abc'.startswith('ab')
+'abc'.startswith(('x', 'a'))
+'abc'.endswith('bc')
+{'a': 1}.get('a')
+{'a': 1}.get('b')
+{'a': 1}.get('b', 2)
+{'a': 1, 'b': 2}.keys()
+list({'a': 1, 'b': 2}.values())
+list({'a': 1}.items())
+{1: 'a', True: 'b', 1.0: 'c'}
+{1: 'int', '1': 'str'}
+{'a': 1, 'a': 2}
+{'a': 1} | {'b': 2, 'a': 3}
+dict(a=1, b=2)
+dict([('a', 1), ('b', 2)])
+dict({'a': 1}, b=2)
+list('abc')
+list((1, 2))
+tuple([1, 2])
+tuple('ab')
+list({'x': 1, 'y': 2})
+len('héllo')
+len([1, 2, 3])
+len({'a': 1})
+len(b'ab')
+min(3, 1, 2)
+min([4, 2, 8])
+min('abc')
+max('abc')
+max([1, 2.5, 2])
+min([], default=7)
+sum([1, 2, 3])
+sum([1, 2], 10)
+sum([1, 2], start=10)
+sum([0.1, 0.2])
+sum([[1], [2]], [])
+abs(-5)
+abs(-2.5)
+abs(True)
+round(2.5)
+round(3.5)
+round(-2.5)
+round(0.5)
+round(1.5)
+round(2.675, 2)
+round(0.125, 2)
+round(0.375, 2)
+round(1234.5678, -2)
+round(1250, -2)
+round(1350, -2)
+round(-1250, -2)
+round(7, 0)
+round(2.5, ndigits=None)
+round(3.14159, ndigits=3)
+True & False
+True | False
+True ^ True
+True & 1
+6 & 3
+6 | 3
+6 ^ 3
+~5
+1 << 10
+-16 >> 2
+1 << 62
+(-1)**(2**40)
+(-1)**(2**40 + 1)
+0 ** 0
+1 ** 9999999
+bool([])
+bool('x')
+bool(0.0)
+True + 1
+True < 2
+-True
++True
+~True
+[1] * 3
+3 * [1]
+[1] * 0
+[1] * -2
+'ab' * 3
+'ab' * 0
+(1,) * 2
+[1, 2] + [3]
+(1,) + (2,)
+'a' + 'b'
+b'a' + b'b'
+[x * 2 for x in [1, 2, 3, 4] if x > 2]
+[(x, y) for x in [1, 2] for y in 'ab']
+[x for x in 'héllo']
+[k for k in {'a': 1, 'b': 2}]
+[a + b for a, b in [(1, 2), (3, 4)]]
+[a for a, in [(1,), (2,)]]
+[c for c in b'ab']
+sum(x for x in [1, 2, 3])
+' '.join(w.capitalize() for w in ['hello', 'world'])
+[x for x in [1, 2] if x if x > 1]
+(y := 5) + y
+[y := 1, y + 1]
+1 if True else 2
+1 if False else 2 if False else 3
+datetime(2024, 1, 31)
+datetime(2024, 1, 31, 10, 30)
+datetime(2024, 1, 31, 10, 30, 5, 123)
+str(datetime(2024, 1, 31, 10, 30))
+str(datetime(2024, 1, 31, 10, 30, 0, 5))
+datetime(2024, 1, 31) + relativedelta(months=1)
+datetime(2024, 1, 31) + relativedelta(months=-1)
+datetime(2024, 3, 31) - relativedelta(months=1)
+datetime(2024, 2, 29) + relativedelta(years=1)
+datetime(2024, 1, 15) + relativedelta(day=31)
+datetime(2024, 2, 15) + relativedelta(day=31)
+datetime(2024, 1, 15) + relativedelta(weekday=0)
+datetime(2024, 1, 15) + relativedelta(weekday=2)
+datetime(2024, 1, 15) + relativedelta(day=1, weekday=0)
+datetime(2024, 1, 15) + relativedelta(months=1, day=17, weekday=0)
+datetime(2024, 1, 15).date() + relativedelta(day=1, weekday=0) + relativedelta(weekday=2)
+datetime(2024, 1, 15).date() + relativedelta(hours=1)
+datetime(2024, 1, 15, 23) + relativedelta(hours=2)
+datetime(2024, 1, 15) + relativedelta(years=-1, month=1, day=1)
+datetime(2024, 1, 15) + relativedelta(years=-2, months=-3, days=-4)
+datetime(2024, 1, 15) - relativedelta(days=1.5)
+datetime(2024, 1, 15) + relativedelta(weeks=-2, days=1)
+datetime(2024, 1, 15) + relativedelta(months=-1, days=-1, minutes=30)
+datetime(2024, 1, 15) + relativedelta(hour=1, minute=0)
+datetime(2024, 3, 1) + relativedelta(leapdays=1)
+relativedelta(months=14)
+relativedelta(hours=25, minutes=-1)
+relativedelta(days=1) + relativedelta(months=1, day=5)
+-relativedelta(months=1, day=5)
+relativedelta(months=1).months
+relativedelta(day=5).day
+relativedelta(day=5).month
+bool(relativedelta())
+bool(relativedelta(days=1))
+datetime(2024, 1, 1, 10) + timedelta(days=5)
+datetime(2024, 1, 1) - timedelta(days=1, hours=1)
+datetime(2024, 1, 1).date() + timedelta(hours=25)
+datetime(2024, 1, 1).date() - timedelta(days=1)
+datetime(2024, 3, 1) - datetime(2024, 2, 1)
+datetime(2024, 3, 1, 12) - datetime(2024, 3, 2)
+datetime(2024, 3, 1).date() - datetime(2024, 2, 1).date()
+timedelta(days=1, hours=2, minutes=3, seconds=4)
+timedelta(hours=-1)
+timedelta(0)
+timedelta(1.5)
+timedelta(seconds=0.5)
+timedelta(milliseconds=1, microseconds=1)
+timedelta(weeks=1)
+timedelta(-1)
+str(timedelta(days=1, hours=2, minutes=3, seconds=4))
+str(timedelta(days=2))
+str(timedelta(hours=-1))
+str(timedelta(seconds=1, microseconds=5))
+timedelta(days=1) + timedelta(hours=1)
+timedelta(days=1) - timedelta(hours=1)
+timedelta(days=1) * 2
+2 * timedelta(hours=1)
+timedelta(hours=1) * 1.5
+timedelta(days=1) / timedelta(hours=1)
+-timedelta(hours=1)
+abs(timedelta(hours=-1))
+timedelta(days=1, seconds=5).total_seconds()
+timedelta(days=1).days
+timedelta(hours=-1).seconds
+bool(timedelta(0))
+datetime(2024, 1, 1) < datetime(2024, 1, 2)
+datetime(2024, 1, 1) == datetime(2024, 1, 1, 0, 0)
+datetime(2024, 1, 31).strftime('%Y-%m-%d %H:%M:%S')
+datetime(2024, 1, 31, 15, 4, 5).strftime('%y %j %w %p %I %a %A %b %B %%')
+datetime(2024, 1, 31, 15, 4, 5, 7).strftime('%f %U %W %u')
+datetime(2024, 1, 31).date().strftime('%d/%m/%Y')
+datetime(2024, 1, 31, 10, 2).isoformat()
+datetime(2024, 1, 31, 10, 2).isoformat(' ')
+datetime(2024, 1, 31).date().isoformat()
+datetime(2024, 1, 31).weekday()
+datetime(2024, 1, 31).isoweekday()
+datetime(2024, 1, 31).replace(day=1, hour=3)
+datetime(2024, 1, 31).date().replace(month=2, day=29)
+datetime(2024, 1, 31).year
+datetime(2024, 1, 31, 4, 5, 6).second
+datetime(2024, 1, 31).date().month
+f'{datetime(2024, 1, 31):%Y/%m}'
+Command.create({'name': 'x'})
+Command.update(3, {'a': 1})
+Command.delete(1)
+Command.unlink(2)
+Command.link(3)
+Command.clear()
+Command.set([1, 2])
+Command.set((1, 2))
+Command.CREATE
+Command.SET
+[Command.link(4), Command.clear()]
+1 / 0
+1.0 / 0
+1 // 0
+1 % 0
+1.0 // 0
+1.0 % 0
+0 ** -1
+0.0 ** -1
+10.0 ** 400
+int(float('nan'))
+int(float('inf'))
+int('abc')
+int('')
+int('1.5')
+float('abc')
+1 in 'abc'
+'a' + 1
+1 + 'a'
+[1] + (1,)
+{} + {}
+'a' * 'b'
+- 'a'
+~1.5
+1 < 'a'
+[1] < (1,)
+None < None
+undefined_name
+'abc'.missing
+(1).missing
+[1, 2][5]
+(1,)[3]
+'abc'[10]
+'abc'['x']
+[1]['x']
+{'a': 1}['b']
+{'a': 1}[[1]]
+{[1]: 2}
+{'a': 1}.get([1])
+len(5)
+len()
+len([1], [2])
+abs('x')
+round('x')
+round(1.5, 'x')
+sum(['a', 'b'], '')
+sum([1], 2, 3)
+min()
+min([])
+max(1, 2, default=3)
+min(1, key=None)
+int(x=1)
+str(1, 2)
+5()
+'abc'.split('')
+'{} {}'.format(1)
+'{0} {}'.format(1, 2)
+'{'.format()
+'}'.format()
+'{x}'.format()
+'%d' % 'x'
+'%s %s' % (1,)
+'%s' % (1, 2)
+'%q' % 1
+'%' % ()
+'%(a)s' % 1
+'%(a)s' % {'b': 1}
+'abc' % 5
+'%x' % 1.5
+f'{1:d}{"x":d}'
+f'{1.5:d}'
+f'{"x":+}'
+f'{[]:>5}'
+f'{1:.2d}'
+'%c' % 1114112
+datetime(2024, 2, 30)
+datetime(2024, 13, 1)
+datetime(0, 1, 1)
+datetime(2024, 1, 1, 24)
+datetime(10000, 1, 1)
+datetime(9999, 12, 31) + timedelta(days=1)
+datetime(1, 1, 1) - timedelta(days=1)
+datetime(9999, 12, 31) + relativedelta(years=1)
+timedelta(days=1000000000)
+timedelta(days=999999999) + timedelta(days=1)
+relativedelta(months=1.5)
+relativedelta(foo=1)
+datetime(2024, 1, 1) - datetime(2024, 1, 1).date()
+datetime(2024, 1, 1) < datetime(2024, 1, 1).date()
+datetime(2024, 1, 1).date() + datetime(2024, 1, 1).date()
+datetime(2024, 1, 1).strftime(1)
+Command.create(1)
+Command.set(1)
+Command.set(['a'])
+Command.link()
+Command.unknown
+1 << -1
+-1 >> -1
+[a for a, b in [(1, 2, 3)]]
+[a for a, b, c in [(1, 2)]]
+[a for a, b in [1]]
+[x for x in 5]

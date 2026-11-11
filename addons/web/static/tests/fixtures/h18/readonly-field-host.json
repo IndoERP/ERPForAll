@@ -1,0 +1,133 @@
+{
+  "description_version": "e319bed986277a9a",
+  "fields": {
+    "res.users": {
+      "email": {
+        "label": "Email",
+        "readonly": false,
+        "relation": null,
+        "relation_field": null,
+        "required": false,
+        "selection": null,
+        "type": "char"
+      },
+      "login": {
+        "label": "Login",
+        "readonly": true,
+        "relation": null,
+        "relation_field": null,
+        "required": false,
+        "selection": null,
+        "type": "char"
+      }
+    }
+  },
+  "model": "res.users",
+  "notices": [],
+  "registry_version": "6",
+  "views": [
+    {
+      "identity": {
+        "id": 70,
+        "kind": "stored"
+      },
+      "nodes": [
+        {
+          "children": [
+            1,
+            2,
+            3
+          ],
+          "kind": "form",
+          "record_mode": "record"
+        },
+        {
+          "field": {
+            "model": "res.users",
+            "name": "login"
+          },
+          "force_save": false,
+          "kind": "field",
+          "label": "Login",
+          "modifiers": {
+            "invisible": null,
+            "readonly": {
+              "nodes": [
+                {
+                  "kind": "literal",
+                  "value": {
+                    "kind": "bool",
+                    "value": false
+                  }
+                }
+              ],
+              "schema": 1
+            },
+            "required": null
+          },
+          "options": {},
+          "widget": "char"
+        },
+        {
+          "field": {
+            "model": "res.users",
+            "name": "login"
+          },
+          "force_save": false,
+          "kind": "field",
+          "label": "Login",
+          "modifiers": {
+            "invisible": null,
+            "readonly": {
+              "nodes": [
+                {
+                  "kind": "literal",
+                  "value": {
+                    "kind": "bool",
+                    "value": true
+                  }
+                }
+              ],
+              "schema": 1
+            },
+            "required": null
+          },
+          "options": {},
+          "widget": "char"
+        },
+        {
+          "field": {
+            "model": "res.users",
+            "name": "email"
+          },
+          "force_save": false,
+          "kind": "field",
+          "label": "Email",
+          "modifiers": {
+            "invisible": null,
+            "readonly": {
+              "nodes": [
+                {
+                  "kind": "literal",
+                  "value": {
+                    "kind": "bool",
+                    "value": false
+                  }
+                }
+              ],
+              "schema": 1
+            },
+            "required": null
+          },
+          "options": {},
+          "widget": "char"
+        }
+      ],
+      "renderer": "web.form",
+      "root": 0,
+      "schema_major": 1,
+      "type": "form"
+    }
+  ],
+  "wire_major": 1
+}

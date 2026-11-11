@@ -1,0 +1,33 @@
+id,name,model_id/id,group_id/id,operation,domain
+access_product_category_user,product.category.user,model_product_category,base.group_user,r,
+access_product_category_manager,product.category.manager,model_product_category,product.group_product_manager,crud,
+product_category_comp_rule,Product category multi-company rule,model_product_category,,crud,"['|', ('company_id', '=', False), ('company_id', 'parent_of', company_ids)]"
+access_product_template_user,product.template.user,model_product_template,base.group_user,r,
+access_product_template_manager,product.template.manager,model_product_template,product.group_product_manager,crud,
+product_comp_rule,Product multi-company,model_product_template,,crud,"['|', ('company_id', '=', False), ('company_id', 'parent_of', company_ids)]"
+access_product_product_user,product.product.user,model_product_product,base.group_user,r,
+access_product_product_manager,product.product.manager,model_product_product,product.group_product_manager,crud,
+access_product_supplierinfo_user,product.supplierinfo.user,model_product_supplierinfo,base.group_user,r,
+access_product_supplierinfo_manager,product.supplierinfo.manager,model_product_supplierinfo,product.group_product_manager,crud,
+product_supplierinfo_comp_rule,Product supplierinfo company rule,model_product_supplierinfo,,crud,"['|', ('company_id', '=', False), ('company_id', 'parent_of', company_ids)]"
+access_product_pricelist_user,product.pricelist.user,model_product_pricelist,base.group_user,r,
+access_product_pricelist_manager,product.pricelist.manager,model_product_pricelist,product.group_product_manager,crud,
+product_pricelist_comp_rule,Product pricelist company rule,model_product_pricelist,,crud,"['|', ('company_id', '=', False), ('company_id', 'parent_of', company_ids)]"
+access_product_pricelist_item_user,product.pricelist.item.user,model_product_pricelist_item,base.group_user,r,
+access_product_pricelist_item_manager,product.pricelist.item.manager,model_product_pricelist_item,product.group_product_manager,crud,
+access_product_attribute_user,product.attribute.user,model_product_attribute,base.group_user,r,
+access_product_attribute_manager,product.attribute.manager,model_product_attribute,product.group_product_manager,crud,
+access_product_attribute_value_user,product.attribute.value.user,model_product_attribute_value,base.group_user,r,
+access_product_attribute_value_manager,product.attribute.value.manager,model_product_attribute_value,product.group_product_manager,crud,
+access_product_template_attribute_line_user,product.template.attribute.line.user,model_product_template_attribute_line,base.group_user,r,
+access_product_template_attribute_line_manager,product.template.attribute.line.manager,model_product_template_attribute_line,product.group_product_manager,crud,
+access_product_template_attribute_value_user,product.template.attribute.value.user,model_product_template_attribute_value,base.group_user,r,
+access_product_template_attribute_value_manager,product.template.attribute.value.manager,model_product_template_attribute_value,product.group_product_manager,crud,
+access_product_combo_user,product.combo.user,model_product_combo,base.group_user,r,
+access_product_combo_manager,product.combo.manager,model_product_combo,product.group_product_manager,crud,
+access_product_combo_item_user,product.combo.item.user,model_product_combo_item,base.group_user,r,
+access_product_combo_item_manager,product.combo.item.manager,model_product_combo_item,product.group_product_manager,crud,
+access_product_uom_user,product.uom.user,model_product_uom,base.group_user,r,
+access_product_uom_manager,product.uom.manager,model_product_uom,product.group_product_manager,crud,
+product_uom_comp_rule,Product packaging company rule,model_product_uom,,crud,"['|', ('company_id', '=', False), ('company_id', 'parent_of', company_ids)]"
+access_uom_uom_product_manager,uom.uom.product.manager,uom.model_uom_uom,product.group_product_manager,crud,

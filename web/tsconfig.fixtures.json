@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": [],
+    "allowJs": true,
+    "checkJs": true,
+    "noImplicitAny": false,
+    "strictNullChecks": false,
+    "paths": { "@erpforall/elang/abi": ["./tests/fixtures/abi-js.d.ts"] }
+  },
+  "include": ["tests/fixtures/compiled/*.js"]
+}

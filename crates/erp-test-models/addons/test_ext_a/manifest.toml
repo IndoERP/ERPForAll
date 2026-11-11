@@ -1,0 +1,3 @@
+name = "Test Ext A"
+summary = "Fixture: defines test_ext.book (cross-crate extension tests)"
+depends = ["base"]

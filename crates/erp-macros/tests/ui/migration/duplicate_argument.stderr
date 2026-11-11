@@ -1,0 +1,5 @@
+error: migration: `version` is given twice
+ --> tests/ui/migration/duplicate_argument.rs:2:72
+  |
+2 | #[erp_macros::migration(addon = "shop", version = "1.1", stage = post, version = "1.2")]
+  |                                                                        ^^^^^^^

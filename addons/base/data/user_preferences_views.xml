@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<erp>
+  <!--
+"My Preferences": the dialog the user menu opens on the current user.
+       Only fields that res.users lets a user write on their own record appear here
+       (user_writeable). Signature, phone, avatar and the Security page are
+       deferred,
+  -->
+  <record id="users_preferences_form" model="ir.ui.view">
+    <field name="name">res.users.preferences.form</field>
+    <field name="model">res.users</field>
+    <field name="arch" type="xml">
+      <form string="My Preferences" record_mode="record">
+        <sheet>
+          <group>
+            <field name="name"/>
+            <field name="email"/>
+          </group>
+          <notebook>
+            <page name="preferences_page" string="Preferences">
+              <group>
+                <field name="lang" widget="web.preference_choice" required="1"/>
+              </group>
+            </page>
+            <page name="calendar" string="Calendar">
+              <group>
+                <field name="tz" widget="web.preference_choice"/>
+              </group>
+            </page>
+          </notebook>
+        </sheet>
+        <footer>
+          <button name="preference_change_password" type="object" string="Change password"/>
+          <button name="preference_save" type="object" string="Update Preferences" class="btn-primary" data-hotkey="q"/>
+          <button special="cancel" string="Cancel" class="btn-secondary" data-hotkey="x"/>
+        </footer>
+      </form>
+    </field>
+  </record>
+  <record id="action_res_users_my" model="ir.actions.act_window">
+    <field name="name">My Preferences</field>
+    <field name="res_model">res.users</field>
+    <field name="target">new</field>
+    <field name="view_mode">form</field>
+    <field name="view_id" ref="users_preferences_form"/>
+  </record>
+  <record id="action_res_users_my_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="action_res_users_my"/>
+    <field name="view_id" ref="users_preferences_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="10"/>
+  </record>
+</erp>

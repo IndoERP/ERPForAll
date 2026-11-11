@@ -1,0 +1,44 @@
+diff --git a/src/index.ts b/src/index.ts
+index 596dd4f47..e4ff01068 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -21,6 +21,7 @@ interface ComputedNode<T = any> extends ReactiveNode {
+ }
+ 
+ interface SignalNode<T = any> extends ReactiveNode {
++	onUnwatched?: () => void;
+ 	currentValue: T;
+ 	pendingValue: T;
+ }
+@@ -103,7 +104,8 @@ const {
+ 			}
+ 		}
+ 		else if ('currentValue' in node) {
+-			// Nothing to do for signals, they are always mutable and never dirty until pendingValue changes
++			// ERPForAll patch 0003: a sparse store can release a signal when its final reader leaves.
++			node.onUnwatched?.();
+ 		}
+ 		else if ('fn' in node) {
+ 			effectOper.call(node);
+@@ -154,6 +156,21 @@ export function isEffectScope(fn: () => void): boolean {
+ 	return fn.name === 'bound ' + effectScopeOper.name;
+ }
+ 
++/** ERPForAll internal factory: the callback runs when the final dependency link is removed. */
++export function watchedSignal<T>(initialValue: T, onUnwatched: () => void): {
++	(): T;
++	(value: T): void;
++} {
++	return signalOper.bind({
++		currentValue: initialValue,
++		pendingValue: initialValue,
++		subs: undefined,
++		subsTail: undefined,
++		flags: ReactiveFlags.Mutable,
++		onUnwatched,
++	}) as { (): T; (value: T): void };
++}
++
+ export function signal<T>(): {
+ 	(): T | undefined;
+ 	(value: T | undefined): void;

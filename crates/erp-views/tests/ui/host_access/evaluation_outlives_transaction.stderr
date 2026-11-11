@@ -1,0 +1,11 @@
+error[E0597]: `tx` does not live long enough
+  --> tests/ui/host_access/evaluation_outlives_transaction.rs:12:22
+   |
+11 |         let mut tx: Transaction = make();
+   |             ------ binding `tx` declared here
+12 |         evaluation = tx.evaluate_guards(env, &plan).await?;
+   |                      ^^ borrowed value does not live long enough
+13 |     }
+   |     - `tx` dropped here while still borrowed
+14 |     let _ = evaluation.subject();
+   |             ---------- borrow later used here

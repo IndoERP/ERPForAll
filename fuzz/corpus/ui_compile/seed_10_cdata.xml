@@ -1,0 +1,1 @@
+<templates><t t-name="web.Cdata"><!-- comment --><![CDATA[literal <tag> & text]]></t></templates>

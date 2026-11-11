@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "entry": "src/client/index.ts",
+  "templates": [
+    "src/client/templates/client.xml"
+  ],
+  "styles": [
+    "src/client/vendor/ace-license.css",
+    "src/client/vendor/ace.css",
+    "src/client/client.css",
+    "src/client/code-editor.css"
+  ]
+}

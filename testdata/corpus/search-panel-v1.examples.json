@@ -1,0 +1,310 @@
+{
+  "status": "version-one implementation fixtures; executed subsets and exact receipts are listed in the slice review; no whole-case parity claim",
+  "schema": "search-panel-v1.schema.json",
+  "positive": [
+    {
+      "name": "same-spelling criterion and category variable",
+      "panel": {
+        "kind": "sections",
+        "version": 1,
+        "view_types": [
+          "list",
+          "kanban"
+        ],
+        "sections": [
+          {
+            "kind": "category",
+            "id": 1,
+            "field": {
+              "model": "panel.item",
+              "name": "category_id"
+            },
+            "label": "Category",
+            "icon": "folder",
+            "enable_counters": false,
+            "expand": false,
+            "limit": 200,
+            "default_values": [],
+            "hierarchize": true
+          },
+          {
+            "kind": "filter",
+            "id": 2,
+            "field": {
+              "model": "panel.item",
+              "name": "tag_ids"
+            },
+            "label": "Tags",
+            "icon": "filter_alt",
+            "enable_counters": true,
+            "expand": false,
+            "limit": 200,
+            "default_values": [],
+            "domain": {
+              "model": "panel.tag",
+              "ast": {
+                "schema": 1,
+                "nodes": [
+                  {
+                    "kind": "literal",
+                    "value": {
+                      "kind": "str",
+                      "value": "category_id"
+                    }
+                  },
+                  {
+                    "kind": "literal",
+                    "value": {
+                      "kind": "str",
+                      "value": "="
+                    }
+                  },
+                  {
+                    "kind": "name",
+                    "name": "category_id"
+                  },
+                  {
+                    "kind": "tuple",
+                    "items": [
+                      0,
+                      1,
+                      2
+                    ]
+                  },
+                  {
+                    "kind": "list",
+                    "items": [
+                      3
+                    ]
+                  }
+                ]
+              }
+            },
+            "group_by": {
+              "model": "panel.tag",
+              "name": "group_id"
+            }
+          }
+        ],
+        "notice": null
+      },
+      "expected_references": [
+        {
+          "model": "panel.item",
+          "name": "category_id"
+        },
+        {
+          "model": "panel.item",
+          "name": "tag_ids"
+        },
+        {
+          "model": "panel.tag",
+          "name": "category_id"
+        },
+        {
+          "model": "panel.tag",
+          "name": "group_id"
+        }
+      ]
+    }
+  ],
+  "negative": [
+    {
+      "name": "unknown section version",
+      "patch": {
+        "version": 2
+      },
+      "expected": "VersionMismatch/explicit unsupported before panel use"
+    },
+    {
+      "name": "forged domain model",
+      "path": "sections[1].domain.model",
+      "value": "secret.model",
+      "expected": "Validation; relation/comodel mismatch"
+    },
+    {
+      "name": "undeclared RHS variable",
+      "path": "sections[1].domain.ast.nodes[2].name",
+      "value": "unlisted_category",
+      "expected": "Validation; undeclared category dependency"
+    },
+    {
+      "name": "wrong grouping scope",
+      "path": "sections[1].group_by.model",
+      "value": "panel.item",
+      "expected": "Validation; grouping/comodel mismatch"
+    },
+    {
+      "name": "unsafe default record ID",
+      "path": "sections[0].default_values",
+      "value": [
+        9007199254740992
+      ],
+      "expected": "Validation; no coercion or rounding"
+    },
+    {
+      "name": "unknown section member",
+      "path": "sections[1].unlisted",
+      "value": true,
+      "expected": "Validation; closed object"
+    },
+    {
+      "name": "missing binary prefix operand",
+      "domain_source": [
+        "&",
+        [
+          "category_id",
+          "=",
+          7
+        ]
+      ],
+      "expected": "Validation; malformed prefix arity"
+    },
+    {
+      "name": "unknown criterion operator",
+      "domain_source": [
+        [
+          "category_id",
+          "unexpected",
+          7
+        ]
+      ],
+      "expected": "Validation; unsupported operator"
+    },
+    {
+      "name": "nested relational predicate",
+      "domain_source": [
+        [
+          "related_ids",
+          "any",
+          [
+            [
+              "secret",
+              "=",
+              true
+            ]
+          ]
+        ]
+      ],
+      "expected": "Unsupported; quantified/nested relational operators are unavailable in v1"
+    },
+    {
+      "name": "undeclared execution global",
+      "domain_source": "[('owner_id', '=', uid)]",
+      "expected": "Unsupported; RHS names must be declared categories"
+    }
+  ],
+  "binding_cases": [
+    {
+      "name": "selection category All",
+      "field_kind": "selection",
+      "default_values": [],
+      "bound_value": false
+    },
+    {
+      "name": "selection category selected",
+      "field_kind": "selection",
+      "default_values": [
+        "active"
+      ],
+      "bound_value": "active"
+    },
+    {
+      "name": "many2one category All",
+      "field_kind": "many2one",
+      "default_values": [],
+      "bound_value": false
+    },
+    {
+      "name": "many2one category selected",
+      "field_kind": "many2one",
+      "default_values": [
+        7
+      ],
+      "bound_value": 7
+    },
+    {
+      "name": "many2many category All",
+      "field_kind": "many2many",
+      "default_values": [],
+      "bound_value": false
+    },
+    {
+      "name": "many2many category selected",
+      "field_kind": "many2many",
+      "default_values": [
+        7
+      ],
+      "bound_value": 7
+    }
+  ],
+  "counter_pruning_cases": [
+    {
+      "retained_domain_filter": true,
+      "requested_category_counters": true,
+      "effective_category_counters": false,
+      "notice": "fixed category-counter compatibility notice"
+    },
+    {
+      "denied": "filter root field",
+      "retained_domain_filter": false,
+      "requested_category_counters": true,
+      "effective_category_counters": true,
+      "notice": null
+    },
+    {
+      "denied": "filter domain-only field",
+      "retained_domain_filter": false,
+      "requested_category_counters": true,
+      "effective_category_counters": true,
+      "notice": null
+    },
+    {
+      "denied": "category dependency",
+      "retained_domain_filter": false,
+      "dependent_filter_retained": false,
+      "requested_independent_category_counters": true,
+      "effective_independent_category_counters": true,
+      "notice": null
+    }
+  ],
+  "compatibility_cases": [
+    {
+      "name": "old client / new server",
+      "renderer": "web.list_sections_v1",
+      "expected": "visible old-client refusal before nodes; explicit manual reload loads compatible bundle; no automatic loop"
+    },
+    {
+      "name": "new client / old server",
+      "renderer": "web.list",
+      "expected": "legacy selection/unsupported admitted; no sections under old key"
+    },
+    {
+      "name": "new client unknown panel version",
+      "version": 2,
+      "guard_initially_set": false,
+      "expected": "one guarded read-metadata reload, no data effects"
+    },
+    {
+      "name": "persistent mismatch",
+      "version": 2,
+      "guard_initially_set": true,
+      "expected": "fixed terminal visible error; zero further automatic reloads"
+    },
+    {
+      "name": "dirty/pending/uncertain state or unavailable storage",
+      "expected": "visible manual recovery only; no draft discard or write retry"
+    },
+    {
+      "name": "intervening compatible root does not re-arm",
+      "transitions": [
+        "dependent mismatch",
+        "one guarded reload",
+        "compatible root",
+        "compatible unrelated/background description",
+        "same dependent mismatch"
+      ],
+      "expected": "fixed visible terminal error; no second automatic reload for the browsing-tab session"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<erp>
+  <menuitem id="menu_product_root" name="Catalog" sequence="30" web_icon="lucide:package">
+    <menuitem id="menu_product_template" name="Products" action="product_template_action" sequence="10"/>
+    <menuitem id="menu_product_product" name="Product Variants" action="product_product_action" sequence="20"/>
+    <menuitem id="menu_product_pricelist" name="Pricelists" action="product_pricelist_action2" sequence="30"/>
+    <menuitem id="menu_product_category" name="Product Categories" action="product_category_action_form" sequence="40"/>
+    <menuitem id="menu_product_attribute" name="Attributes" action="product_attribute_action" sequence="50"/>
+  </menuitem>
+</erp>

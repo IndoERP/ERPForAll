@@ -1,0 +1,1 @@
+<templates><t t-name="web.Attrs"><div t-att-class="this.cls" t-attf-id="item-{{this.id}}" t-out="this.val"/></t></templates>

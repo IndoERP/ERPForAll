@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<erp>
+  <record id="product_product_tree_view" model="ir.ui.view">
+    <field name="name">product.product.list</field>
+    <field name="model">product.product</field>
+    <field name="arch" type="xml">
+      <list>
+        <field name="default_code"/>
+        <field name="name"/>
+        <field name="product_template_attribute_value_ids" widget="many2many_tags" context="{'display_attribute_name': False}"/>
+        <field name="lst_price"/>
+        <field name="standard_price"/>
+        <field name="uom_id"/>
+        <field name="barcode"/>
+      </list>
+    </field>
+  </record>
+
+  <record id="product_normal_form_view" model="ir.ui.view">
+    <field name="name">product.product.form</field>
+    <field name="model">product.product</field>
+    <field name="arch" type="xml">
+      <form record_mode="record">
+        <sheet>
+          <div class="oe_title">
+            <h1><field name="name"/></h1>
+          </div>
+          <group>
+            <group>
+              <field name="product_tmpl_id" readonly="1"/>
+              <field name="product_template_attribute_value_ids" widget="many2many_tags" readonly="1" context="{'display_attribute_name': False}"/>
+              <field name="default_code"/>
+              <field name="barcode"/>
+            </group>
+            <group>
+              <field name="lst_price"/>
+              <field name="price_extra" readonly="1"/>
+              <field name="standard_price"/>
+              <field name="uom_id" readonly="1"/>
+              <field name="active"/>
+            </group>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+
+  <record id="product_product_action" model="ir.actions.act_window">
+    <field name="name">Product Variants</field>
+    <field name="res_model">product.product</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="product_product_tree_view"/>
+  </record>
+
+  <record id="product_product_action_tree" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="product_product_action"/>
+    <field name="view_id" ref="product_product_tree_view"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+
+  <record id="product_product_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="product_product_action"/>
+    <field name="view_id" ref="product_normal_form_view"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+</erp>

@@ -1,0 +1,61 @@
+[package]
+name = "erp-security"
+description = "ERPForAll access engine: ir.access policy rows, rule compiler, group graph, policy snapshot"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+# Default-off access to exact private functions for integration regression fixtures.
+test-support = []
+
+# Layer L6: depends on erp-orm (L5) and the pure crates below it, never on an addon,
+# erp-testkit (non-dev), erp-modules or a link root. scripts/check-layers.py enforces it.
+[dependencies]
+thiserror.workspace = true
+erp-orm = { workspace = true }
+erp-domain = { workspace = true }
+erp-expr = { workspace = true }
+erp-fields = { workspace = true }
+erp-registry = { workspace = true }
+erp-sql = { workspace = true }
+deadpool-postgres = { workspace = true }
+rustc-hash = { workspace = true }
+tokio = { workspace = true, features = ["sync", "rt", "time"] }
+tokio-postgres = { workspace = true }
+tracing = { workspace = true }
+argon2 = { workspace = true }
+pbkdf2 = { workspace = true }
+hkdf = { workspace = true }
+# `zeroize`: the keyed HMAC state of the login throttle wipes itself when dropped (security
+# review round 2 delta N-d); no new crate, `zeroize` is already a dependency.
+hmac = { workspace = true, features = ["zeroize"] }
+sha2 = { workspace = true, features = ["zeroize"] }
+subtle = { workspace = true }
+zeroize = { workspace = true }
+getrandom = { workspace = true }
+base64 = { workspace = true }
+linkme = { workspace = true }
+
+[dev-dependencies]
+erp-orm = { workspace = true, features = ["test-support"] }
+erp-addon-base = { workspace = true }
+erp-data = { workspace = true }
+erp-testkit = { workspace = true }
+# The host-access bridge under the compiled snapshot policy (tests/guard_bridge.rs).
+erp-views = { workspace = true, features = ["host-access"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time", "sync"] }
+proptest = { workspace = true }
+# Date/Datetime operands of the login selection type matrix (selection.rs unit tests).
+time = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "auth_floor"
+harness = false
+
+[lints]
+workspace = true

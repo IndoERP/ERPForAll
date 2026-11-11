@@ -1,0 +1,8 @@
+name = "Stock Landed Costs"
+summary = "Landed cost documents and valuation adjustments"
+category = "Inventory"
+author = "Arkana"
+license = "MIT OR Apache-2.0"
+version = "1.0.0"
+depends = ["stock_account", "purchase_stock"]
+data = []

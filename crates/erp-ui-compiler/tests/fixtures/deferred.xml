@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+Synthetic fixtures: templates the front end accepts whose code generation a later task adds
+     (t-call and t-set:).
+-->
+<templates xml:space="preserve">
+
+    <t t-name="fixtures.Caller">
+        <div><t t-call="fixtures.Hello"/></div>
+    </t>
+
+    <t t-name="fixtures.Sets">
+        <t t-set="label" t-value="this.props.label or 'none'"/>
+        <em t-esc="label"/>
+    </t>
+
+</templates>

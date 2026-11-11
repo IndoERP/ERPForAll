@@ -1,0 +1,13 @@
+{
+  "name": "@erpforall/expr",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Bounded expression AST admission",
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": { "types": "./src/index.ts", "default": "./src/index.ts" },
+    "./wire": { "types": "./src/wire.d.ts" },
+    "./restricted-host": { "types": "./src/restricted-host.ts" }
+  }
+}

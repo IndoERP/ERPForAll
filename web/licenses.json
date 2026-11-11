@@ -1,0 +1,16 @@
+{
+  "_comment": "npm licence allowlist. production must equal the allow list of deny.toml (tests/licenses.test.ts); dev_only adds licences accepted for build and test tooling only. Build-time-only tools may be LGPL; anything that ships stays permissive; GPL and AGPL never. Checked by scripts/check-licenses.mjs.",
+  "production": [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "MPL-2.0"
+  ],
+  "dev_only": ["BlueOak-1.0.0", "0BSD", "CC0-1.0", "Unlicense", "Python-2.0", "CC-BY-4.0", "LGPL-2.1-only", "LGPL-2.1-or-later", "LGPL-3.0-only", "LGPL-3.0-or-later"]
+}

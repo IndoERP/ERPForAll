@@ -1,0 +1,3 @@
+name = "Test Data Only"
+summary = "A data-only addon: manifest and model files, no Rust crate"
+depends = ["base"]

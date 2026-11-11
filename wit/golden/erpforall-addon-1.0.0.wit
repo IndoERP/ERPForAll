@@ -1,0 +1,163 @@
+package erpforall:addon@1.0.0;
+
+interface types {
+  type model-name = string;
+
+  type field-name = string;
+
+  type record-id = s64;
+
+  enum boundary-error-kind {
+    not-found,
+    access-denied,
+    validation-failed,
+    concurrency-conflict,
+    resource-exhausted,
+    invalid-argument,
+    unsupported,
+    internal-error,
+  }
+
+  record boundary-error {
+    kind: boundary-error-kind,
+    message: string,
+  }
+
+  record date-range {
+    lower: option<s32>,
+    upper: option<s32>,
+  }
+
+  record datetime-range {
+    lower: option<s64>,
+    upper: option<s64>,
+  }
+
+  variant column-data {
+    col-bool(list<bool>),
+    col-opt-bool(list<option<bool>>),
+    col-int(list<s64>),
+    col-opt-int(list<option<s64>>),
+    col-float(list<f64>),
+    col-opt-float(list<option<f64>>),
+    col-opt-decimal(list<option<string>>),
+    col-string(list<string>),
+    col-opt-string(list<option<string>>),
+    col-opt-date(list<option<s32>>),
+    col-opt-datetime(list<option<s64>>),
+    col-opt-date-range(list<option<date-range>>),
+    col-opt-datetime-range(list<option<datetime-range>>),
+    col-opt-id(list<option<record-id>>),
+    col-ids(list<list<record-id>>),
+    col-opt-json(list<option<string>>),
+    col-opt-bytes(list<option<list<u8>>>),
+  }
+
+  record column-vector {
+    field: field-name,
+    data: column-data,
+  }
+
+  record record-batch {
+    model: model-name,
+    ids: list<record-id>,
+    columns: list<column-vector>,
+  }
+
+  variant x2many-command {
+    link(record-id),
+    unlink(record-id),
+    delete(record-id),
+    clear,
+    set(list<record-id>),
+  }
+
+  variant scalar-value {
+    val-null,
+    val-bool(bool),
+    val-int(s64),
+    val-float(f64),
+    val-decimal(string),
+    val-str(string),
+    val-date(s32),
+    val-datetime(s64),
+    val-date-range(date-range),
+    val-datetime-range(datetime-range),
+    val-id(record-id),
+    val-ids(list<record-id>),
+    val-x2many(list<x2many-command>),
+    val-json(string),
+    val-bytes(list<u8>),
+  }
+
+  record call-context {
+    user-id: record-id,
+    company-id: record-id,
+    allowed-company-ids: list<record-id>,
+    lang: string,
+    tz: string,
+    context-json: string,
+    cache-epoch: u64,
+  }
+
+  record onchange-warning {
+    title: string,
+    message: string,
+  }
+
+  record onchange-result {
+    values: list<tuple<field-name, scalar-value>>,
+    warning: option<onchange-warning>,
+  }
+}
+
+interface addon-guest {
+  use types.{model-name, field-name, record-id, column-vector, record-batch, call-context, onchange-result, scalar-value, boundary-error};
+
+  describe: func() -> string;
+
+  invoke-method: func(ctx: call-context, model: model-name, method: string, ids: list<record-id>, args-json: string) -> result<string, boundary-error>;
+
+  compute-fields: func(ctx: call-context, batch: record-batch, fields: list<field-name>) -> result<list<column-vector>, boundary-error>;
+
+  validate-constraints: func(ctx: call-context, batch: record-batch, constraints: list<string>) -> result<_, boundary-error>;
+
+  onchange: func(ctx: call-context, model: model-name, values: list<tuple<field-name, scalar-value>>, changed-fields: list<field-name>) -> result<onchange-result, boundary-error>;
+}
+
+interface orm-host {
+  use types.{model-name, field-name, record-id, column-vector, record-batch, scalar-value, boundary-error};
+
+  enum log-level {
+    trace,
+    debug,
+    info,
+    warn,
+    error,
+  }
+
+  search: func(model: model-name, domain-json: string, limit: option<u32>, offset: option<u32>, order: option<string>) -> result<list<record-id>, boundary-error>;
+
+  read-columns: func(model: model-name, ids: list<record-id>, fields: list<field-name>) -> result<record-batch, boundary-error>;
+
+  create-batch: func(model: model-name, values: list<list<tuple<field-name, scalar-value>>>) -> result<list<record-id>, boundary-error>;
+
+  write-batch: func(model: model-name, ids: list<record-id>, values: list<tuple<field-name, scalar-value>>) -> result<_, boundary-error>;
+
+  write-columns: func(model: model-name, ids: list<record-id>, columns: list<column-vector>) -> result<_, boundary-error>;
+
+  unlink-batch: func(model: model-name, ids: list<record-id>) -> result<_, boundary-error>;
+
+  call-method: func(model: model-name, method: string, ids: list<record-id>, args-json: string) -> result<string, boundary-error>;
+
+  super-call: func(model: model-name, method: string, ids: list<record-id>, args-json: string) -> result<string, boundary-error>;
+
+  log: func(level: log-level, target: string, message: string);
+}
+
+world addon {
+  import types;
+  import orm-host;
+
+  export addon-guest;
+}

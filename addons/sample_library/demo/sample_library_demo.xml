@@ -1,0 +1,197 @@
+<?xml version="1.0" encoding="utf-8"?>
+<erp>
+    <!-- Genres: each book is filed under one or more (many2many). -->
+    <record id="genre_demo_science_fiction" model="sample_library.genre">
+        <field name="name">Science Fiction</field>
+    </record>
+    <record id="genre_demo_fantasy" model="sample_library.genre">
+        <field name="name">Fantasy</field>
+    </record>
+    <record id="genre_demo_historical" model="sample_library.genre">
+        <field name="name">Historical Fiction</field>
+    </record>
+    <record id="genre_demo_literary" model="sample_library.genre">
+        <field name="name">Literary Fiction</field>
+    </record>
+    <record id="genre_demo_indonesian" model="sample_library.genre">
+        <field name="name">Indonesian Literature</field>
+    </record>
+    <record id="genre_demo_young_adult" model="sample_library.genre">
+        <field name="name">Young Adult</field>
+    </record>
+
+    <!-- Authors: each lists its books (one2many through book.author_id). -->
+    <record id="author_demo_le_guin" model="sample_library.author">
+        <field name="name">Ursula K. Le Guin</field>
+        <field name="country">United States</field>
+    </record>
+    <record id="author_demo_pramoedya" model="sample_library.author">
+        <field name="name">Pramoedya Ananta Toer</field>
+        <field name="country">Indonesia</field>
+        <field name="email">authors@example.org</field>
+        <field name="phone">+62 21 555 0100</field>
+    </record>
+    <record id="author_demo_hirata" model="sample_library.author">
+        <field name="name">Andrea Hirata</field>
+        <field name="country">Indonesia</field>
+    </record>
+    <record id="author_demo_kurniawan" model="sample_library.author">
+        <field name="name">Eka Kurniawan</field>
+        <field name="country">Indonesia</field>
+    </record>
+    <record id="author_demo_herbert" model="sample_library.author">
+        <field name="name">Frank Herbert</field>
+        <field name="country">United States</field>
+    </record>
+    <record id="author_demo_asimov" model="sample_library.author">
+        <field name="name">Isaac Asimov</field>
+        <field name="country">United States</field>
+    </record>
+
+    <!-- Books. -->
+    <record id="book_demo_dispossessed" model="sample_library.book">
+        <field name="title">The Dispossessed</field>
+        <field name="author_id" ref="author_demo_le_guin"/>
+        <field name="isbn">9780061054884</field>
+        <field name="publication_year" eval="1974"/>
+        <field name="summary">A physicist travels between two worlds with opposite social orders.</field>
+        <field name="website">https://example.org/books/the-dispossessed</field>
+        <field name="cover_color">#2f6f8f</field>
+        <field name="color" eval="4"/>
+        <field name="rating">3</field>
+        <field name="book_format">hardcover</field>
+        <field name="member_discount" eval="0.1"/>
+        <field name="favorite" eval="True"/>
+        <field name="genre_ids" eval="[(4, ref('genre_demo_science_fiction'), 0)]"/>
+    </record>
+    <record id="book_demo_earthsea" model="sample_library.book">
+        <field name="title">A Wizard of Earthsea</field>
+        <field name="author_id" ref="author_demo_le_guin"/>
+        <field name="publication_year" eval="1968"/>
+        <field name="genre_ids" eval="[(4, ref('genre_demo_fantasy'), 0), (4, ref('genre_demo_young_adult'), 0)]"/>
+    </record>
+    <record id="book_demo_left_hand" model="sample_library.book">
+        <field name="title">The Left Hand of Darkness</field>
+        <field name="author_id" ref="author_demo_le_guin"/>
+        <field name="publication_year" eval="1969"/>
+        <field name="genre_ids" eval="[(4, ref('genre_demo_science_fiction'), 0)]"/>
+    </record>
+    <record id="book_demo_bumi_manusia" model="sample_library.book">
+        <field name="title">Bumi Manusia</field>
+        <field name="author_id" ref="author_demo_pramoedya"/>
+        <field name="publication_year" eval="1980"/>
+        <field name="available" eval="False"/>
+        <field name="genre_ids" eval="[(4, ref('genre_demo_historical'), 0), (4, ref('genre_demo_indonesian'), 0)]"/>
+    </record>
+    <record id="book_demo_anak_semua_bangsa" model="sample_library.book">
+        <field name="title">Anak Semua Bangsa</field>
+        <field name="author_id" ref="author_demo_pramoedya"/>
+        <field name="publication_year" eval="1980"/>
+        <field name="genre_ids" eval="[(4, ref('genre_demo_historical'), 0), (4, ref('genre_demo_indonesian'), 0)]"/>
+    </record>
+    <record id="book_demo_jejak_langkah" model="sample_library.book">
+        <field name="title">Jejak Langkah</field>
+        <field name="author_id" ref="author_demo_pramoedya"/>
+        <field name="publication_year" eval="1985"/>
+        <field name="genre_ids" eval="[(4, ref('genre_demo_historical'), 0), (4, ref('genre_demo_indonesian'), 0)]"/>
+    </record>
+    <record id="book_demo_laskar_pelangi" model="sample_library.book">
+        <field name="title">Laskar Pelangi</field>
+        <field name="author_id" ref="author_demo_hirata"/>
+        <field name="publication_year" eval="2005"/>
+        <field name="available" eval="False"/>
+        <field name="genre_ids" eval="[(4, ref('genre_demo_indonesian'), 0), (4, ref('genre_demo_young_adult'), 0)]"/>
+    </record>
+    <record id="book_demo_sang_pemimpi" model="sample_library.book">
+        <field name="title">Sang Pemimpi</field>
+        <field name="author_id" ref="author_demo_hirata"/>
+        <field name="publication_year" eval="2006"/>
+        <field name="genre_ids" eval="[(4, ref('genre_demo_indonesian'), 0), (4, ref('genre_demo_young_adult'), 0)]"/>
+    </record>
+    <record id="book_demo_cantik_itu_luka" model="sample_library.book">
+        <field name="title">Cantik Itu Luka</field>
+        <field name="author_id" ref="author_demo_kurniawan"/>
+        <field name="publication_year" eval="2002"/>
+        <field name="genre_ids" eval="[(4, ref('genre_demo_literary'), 0), (4, ref('genre_demo_indonesian'), 0)]"/>
+    </record>
+    <record id="book_demo_dune" model="sample_library.book">
+        <field name="title">Dune</field>
+        <field name="author_id" ref="author_demo_herbert"/>
+        <field name="isbn">9780441172719</field>
+        <field name="publication_year" eval="1965"/>
+        <field name="summary">A noble family takes charge of a desert planet that produces a rare resource.</field>
+        <field name="website">https://example.org/books/dune</field>
+        <field name="cover_color">#c8892e</field>
+        <field name="color" eval="2"/>
+        <field name="rating">2</field>
+        <field name="book_format">ebook</field>
+        <field name="member_discount" eval="0.075"/>
+        <field name="available" eval="False"/>
+        <field name="genre_ids" eval="[(4, ref('genre_demo_science_fiction'), 0)]"/>
+    </record>
+    <record id="book_demo_foundation" model="sample_library.book">
+        <field name="title">Foundation</field>
+        <field name="author_id" ref="author_demo_asimov"/>
+        <field name="publication_year" eval="1951"/>
+        <field name="genre_ids" eval="[(4, ref('genre_demo_science_fiction'), 0)]"/>
+    </record>
+    <record id="book_demo_i_robot" model="sample_library.book">
+        <field name="title">I, Robot</field>
+        <field name="author_id" ref="author_demo_asimov"/>
+        <field name="publication_year" eval="1950"/>
+        <field name="genre_ids" eval="[(4, ref('genre_demo_science_fiction'), 0)]"/>
+    </record>
+
+    <!-- Readers and loans: each book lists its loans (one2many through loan.book_id). -->
+    <record id="partner_demo_reader" model="res.partner">
+        <field name="name">Demo Reader</field>
+    </record>
+    <record id="partner_demo_sari" model="res.partner">
+        <field name="name">Sari Wulandari</field>
+    </record>
+    <record id="partner_demo_budi" model="res.partner">
+        <field name="name">Budi Santoso</field>
+    </record>
+    <record id="loan_demo_bumi_manusia" model="sample_library.loan">
+        <field name="book_id" ref="book_demo_bumi_manusia"/>
+        <field name="borrower_id" ref="partner_demo_reader"/>
+        <field name="loan_date">2026-10-01</field>
+        <field name="due_date">2026-10-29</field>
+        <field name="state">out</field>
+    </record>
+    <record id="loan_demo_laskar_pelangi" model="sample_library.loan">
+        <field name="book_id" ref="book_demo_laskar_pelangi"/>
+        <field name="borrower_id" ref="partner_demo_sari"/>
+        <field name="loan_date">2026-10-10</field>
+        <field name="due_date">2026-11-07</field>
+        <field name="state">out</field>
+    </record>
+    <record id="loan_demo_dune" model="sample_library.loan">
+        <field name="book_id" ref="book_demo_dune"/>
+        <field name="borrower_id" ref="partner_demo_budi"/>
+        <field name="loan_date">2026-10-20</field>
+        <field name="due_date">2026-11-17</field>
+        <field name="state">out</field>
+    </record>
+    <record id="loan_demo_dune_returned" model="sample_library.loan">
+        <field name="book_id" ref="book_demo_dune"/>
+        <field name="borrower_id" ref="partner_demo_sari"/>
+        <field name="loan_date">2026-08-04</field>
+        <field name="due_date">2026-09-01</field>
+        <field name="return_date">2026-08-28</field>
+        <field name="state">returned</field>
+    </record>
+    <record id="loan_demo_earthsea_returned" model="sample_library.loan">
+        <field name="book_id" ref="book_demo_earthsea"/>
+        <field name="borrower_id" ref="partner_demo_reader"/>
+        <field name="loan_date">2026-09-02</field>
+        <field name="due_date">2026-09-30</field>
+        <field name="return_date">2026-09-25</field>
+        <field name="state">returned</field>
+    </record>
+    <record id="loan_demo_foundation_draft" model="sample_library.loan">
+        <field name="book_id" ref="book_demo_foundation"/>
+        <field name="borrower_id" ref="partner_demo_budi"/>
+        <field name="state">draft</field>
+    </record>
+</erp>

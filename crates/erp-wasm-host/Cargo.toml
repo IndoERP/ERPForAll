@@ -1,0 +1,39 @@
+[package]
+name = "erp-wasm-host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+wasmtime.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+# Guest call arguments are checked for identity keys before they reach the backend; the wire form of
+# method arguments and the `describe()` text are JSON.
+serde_json.workspace = true
+# the host implements `erp_orm::MethodInvoker` (L7 -> the ORM below it), runs a
+# guest's ORM requests through the ORM's access-checked entry points, and keeps its per-transaction
+# instance pool in the transaction.
+erp-orm.workspace = true
+erp-fields.workspace = true
+erp-domain.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }
+
+[dev-dependencies]
+# WIT contract checks. Exact pins: the versions wasmtime 50 builds on, so the
+# host runtime parses the contract with the same parser the tests check it with.
+# Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT.
+wit-parser.workspace = true
+wit-component.workspace = true
+wasmparser.workspace = true
+# Package versions of the contract and its goldens (MIT OR Apache-2.0; wit-parser's own version type).
+semver.workspace = true
+# Test components are written in the WASM text format.
+wat.workspace = true

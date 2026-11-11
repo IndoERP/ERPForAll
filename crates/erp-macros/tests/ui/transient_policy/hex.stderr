@@ -1,0 +1,5 @@
+error: `transient_max_count` takes a decimal integer literal without suffix, e.g. `transient_max_count = 3600` (0 disables the threshold)
+ --> tests/ui/transient_policy/hex.rs:2:79
+  |
+2 | #[erp_macros::model(name = "x.wiz", kind = "transient", transient_max_count = 0x10)]
+  |                                                                               ^^^^

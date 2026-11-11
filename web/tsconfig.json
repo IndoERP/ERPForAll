@@ -1,0 +1,60 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "isolatedModules": true,
+    "allowJs": true,
+    "checkJs": false,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": [
+      "node"
+    ],
+    "paths": {
+      "@erpforall/expr": [
+        "./packages/expr/src/index.ts"
+      ],
+      "@erpforall/elang": [
+        "./src/index.ts"
+      ],
+      "@erpforall/mail-store": [
+        "./packages/mail-store/src/index.ts"
+      ],
+      "@erpforall/mail-thread-view": [
+        "./packages/mail-thread-view/src/index.ts"
+      ],
+      "@erpforall/store-wire": [
+        "./packages/store-wire/src/index.ts"
+      ],
+      "@erpforall/client": [
+        "../addons/web/static/src/client/public.ts"
+      ],
+      "@erpforall/elang-test": [
+        "./packages/elang-test/src/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "packages/**/*.ts",
+    "tests/**/*.ts",
+    "vendor/**/*.ts",
+    "vitest.config.ts",
+    "vitest.milestone.config.ts",
+    "scripts/measure-expr-worker.ts",
+    "testing/**/*.ts",
+    "typechecks/accessibility.ts",
+    "typechecks/mail-thread-view.ts"
+  ]
+}

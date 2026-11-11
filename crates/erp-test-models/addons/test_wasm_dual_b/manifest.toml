@@ -1,0 +1,6 @@
+name = "Test Wasm Dual B"
+summary = "Fixture: identical-source native/WASM addon B (a later release)"
+depends = ["test_wasm_dual_a"]
+
+[wasm]
+sdk_version = "1.0"

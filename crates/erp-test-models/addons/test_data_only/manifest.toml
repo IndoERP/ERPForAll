@@ -1,0 +1,7 @@
+name = "Test Data Only"
+summary = "Fixture: data-only addon with models/*.toml and data/tags.xml"
+version = "1.0.0"
+depends = ["base"]
+data = [
+    "data/tags.xml",
+]

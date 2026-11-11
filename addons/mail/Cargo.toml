@@ -1,0 +1,20 @@
+[package]
+name = "erp-addon-mail"
+description = "ERPForAll addon mail: messages, subtypes, followers and the mail.thread mixin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+erp-sdk = { workspace = true }
+erp-addon-base = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+erp-testkit = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros"] }
+toml = { workspace = true }
+
+[lints]
+workspace = true

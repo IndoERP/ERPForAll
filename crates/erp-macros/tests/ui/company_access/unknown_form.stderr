@@ -1,0 +1,5 @@
+error: company_access must be direct(field = "…", branch = "exact" | "ancestor", empty = "allow" | "deny"[, parent = "…" | escape = "…"]), parent(edge = "…") or unrestricted(reason = "…")
+ --> tests/ui/company_access/unknown_form.rs:5:22
+  |
+5 |     company_access = owner(edge = "doc_id")
+  |                      ^^^^^

@@ -1,0 +1,1 @@
+<templates><t t-name="web.Events"><button t-on-click="() => this.onClick(this.id)" t-att-disabled="this.disabled">Click</button></t></templates>

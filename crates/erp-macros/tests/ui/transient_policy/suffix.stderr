@@ -1,0 +1,5 @@
+error: `transient_max_age_seconds` takes a decimal integer literal without suffix, e.g. `transient_max_age_seconds = 3600` (0 disables the threshold)
+ --> tests/ui/transient_policy/suffix.rs:5:33
+  |
+5 |     transient_max_age_seconds = 3600u64
+  |                                 ^^^^^^^

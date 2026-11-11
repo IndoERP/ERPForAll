@@ -1,0 +1,5 @@
+error: a `candidate` compute cannot be an override and has no `super()`
+ --> tests/ui/candidate/override_candidate.rs:3:25
+  |
+3 |     #[compute(override, candidate, depends = [])]
+  |                         ^^^^^^^^^

@@ -1,0 +1,5 @@
+id,name,model_id/id,group_id/id,operation,domain
+access_author_user,Authors for internal users,sample_library.model_sample_library_author,base.group_user,crud,
+access_book_user,Books for internal users,sample_library.model_sample_library_book,base.group_user,crud,
+access_loan_user,Loans for internal users,sample_library.model_sample_library_loan,base.group_user,crud,
+access_genre_user,Genres for internal users,sample_library.model_sample_library_genre,base.group_user,crud,

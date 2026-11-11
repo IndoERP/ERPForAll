@@ -1,0 +1,5 @@
+error: #[search_method] parameter 1 must be &FieldSearchRequest<'_>
+ --> tests/ui/search_method/wrong_request.rs:4:5
+  |
+4 |     fn search(req: &str, ctx: &mut FieldSearchContext<'_>) -> Result<Domain> {
+  |     ^^

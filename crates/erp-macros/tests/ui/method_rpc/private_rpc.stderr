@@ -1,0 +1,5 @@
+error: `rpc` on a method whose name starts with `_`: such a name is private and never callable from a client; rename the method or remove `rpc`
+ --> tests/ui/method_rpc/private_rpc.rs:7:14
+  |
+7 |     async fn _lend(this: &u8, tx: &mut u8) {}
+  |              ^^^^^

@@ -1,0 +1,8 @@
+name = "Test Addon A"
+summary = "Fixture: defines test_addon.book (two-addon suite)"
+version = "1.0.0"
+depends = ["base"]
+data = [
+    "data/books.xml",
+    "views/book_views.xml",
+]

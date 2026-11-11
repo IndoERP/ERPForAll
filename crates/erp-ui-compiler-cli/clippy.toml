@@ -1,0 +1,9 @@
+# Same test allowances as the workspace's clippy.toml (a crate-level file replaces it).
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+# Ordered maps only (design §4.2): the output must not depend on hash order.
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "ordered maps only: use BTreeMap or a Vec in input order" },
+    { path = "std::collections::HashSet", reason = "ordered maps only: use BTreeSet or a Vec in input order" },
+]

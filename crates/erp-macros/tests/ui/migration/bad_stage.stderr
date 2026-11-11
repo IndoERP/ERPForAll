@@ -1,0 +1,5 @@
+error: migration: stage must be pre, post or end, not `middle`
+ --> tests/ui/migration/bad_stage.rs:2:66
+  |
+2 | #[erp_macros::migration(addon = "shop", version = "1.1", stage = middle)]
+  |                                                                  ^^^^^^

@@ -1,0 +1,1 @@
+{"context":{},"domain":[["order_line","any",[["product_id.name","like","x"],["qty",">",1.5]]]],"fields":["name"],"kind":"search_read","limit":10,"model":"sale.order","offset":0,"order":[],"version":1}

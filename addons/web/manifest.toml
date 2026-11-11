@@ -1,0 +1,13 @@
+# The web client addon (plan "Crates and packages").
+# creates the skeleton: the crate, this manifest and the
+# client package under static/. The web_* exposure, view descriptions, menus, the asset store and the
+# client shell come with and.
+name = "Web"
+summary = "The ERPForAll web client: views, shell and the Elang client runtime's addon side"
+category = "Hidden"
+author = "Arkana"
+license = "MIT OR Apache-2.0"
+version = "1.0"
+auto_install = true
+depends = ["base"]
+data = ["data/addons_views.xml"]

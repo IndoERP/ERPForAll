@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+Demo contacts with invented names. The Contacts app defines no model of its own, so it has no default
+     records beyond these demo partners and tags. A company here is a root partner with a tax ID
+     (base computes is_company that way); its people are child contacts.
+-->
+<erp>
+  <record id="tag_demo_customer" model="res.partner.category">
+    <field name="name">Customer</field>
+  </record>
+  <record id="tag_demo_supplier" model="res.partner.category">
+    <field name="name">Supplier</field>
+  </record>
+
+  <record id="partner_demo_lumbung" model="res.partner">
+    <field name="name">Lumbung Teknik</field>
+    <field name="vat">DEMO-LT-0001</field>
+    <field name="email">info@lumbung-teknik.example</field>
+    <field name="phone">+62 21 555 0101</field>
+    <field name="website">https://lumbung-teknik.example</field>
+    <field name="street">Jalan Contoh 12</field>
+    <field name="city">Bandung</field>
+    <field name="zip">40111</field>
+    <field name="category_id" eval="[(6, 0, [ref('tag_demo_customer')])]"/>
+  </record>
+  <record id="partner_demo_lumbung_sari" model="res.partner">
+    <field name="name">Sari Wulandari</field>
+    <field name="parent_id" ref="partner_demo_lumbung"/>
+    <field name="email">sari@lumbung-teknik.example</field>
+    <field name="phone">+62 21 555 0102</field>
+  </record>
+  <record id="partner_demo_lumbung_budi" model="res.partner">
+    <field name="name">Budi Prasetyo</field>
+    <field name="parent_id" ref="partner_demo_lumbung"/>
+    <field name="email">budi@lumbung-teknik.example</field>
+  </record>
+
+  <record id="partner_demo_tirta" model="res.partner">
+    <field name="name">Tirta Logistik</field>
+    <field name="vat">DEMO-TL-0002</field>
+    <field name="email">halo@tirta-logistik.example</field>
+    <field name="phone">+62 31 555 0120</field>
+    <field name="street">Jalan Percobaan 7</field>
+    <field name="city">Surabaya</field>
+    <field name="zip">60123</field>
+    <field name="category_id" eval="[(6, 0, [ref('tag_demo_supplier')])]"/>
+  </record>
+  <record id="partner_demo_tirta_dewi" model="res.partner">
+    <field name="name">Dewi Anggraini</field>
+    <field name="parent_id" ref="partner_demo_tirta"/>
+    <field name="email">dewi@tirta-logistik.example</field>
+    <field name="phone">+62 31 555 0121</field>
+  </record>
+</erp>

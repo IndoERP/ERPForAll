@@ -1,0 +1,51 @@
+[package]
+name = "erp-ui-compiler"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Elang template compiler (pure): QWeb-dialect XML front end, inheritance adapter, ES module codegen"
+
+[lints]
+workspace = true
+
+[features]
+# Bounded HTML parsing: html5ever with the vendored admission budget.
+html-budget = ["dep:html5ever", "html5ever/budget"]
+
+[dependencies]
+html5ever = { workspace = true, optional = true }
+erp-views.workspace = true
+roxmltree.workspace = true
+thiserror.workspace = true
+# Exact pins in the workspace manifest.
+oxc_allocator.workspace = true
+oxc_ast.workspace = true
+oxc_ast_visit.workspace = true
+oxc_parser.workspace = true
+oxc_span.workspace = true
+oxc_syntax.workspace = true
+
+[dev-dependencies]
+erp-alloc-budget.workspace = true
+# Pins AddonName's grammar to ModuleName's (dev-only: check-layers ignores dev-dependencies).
+erp-modules.workspace = true
+html5ever.workspace = true
+markup5ever_rcdom.workspace = true
+proptest.workspace = true
+serde_json.workspace = true
+
+[[test]]
+name = "alloc_analyze"
+harness = false
+
+[[test]]
+name = "alloc_compile"
+harness = false
+
+[[test]]
+name = "alloc_html5ever_budget"
+harness = false
+required-features = ["html-budget"]

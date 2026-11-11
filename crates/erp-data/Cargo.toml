@@ -1,0 +1,43 @@
+[package]
+name = "erp-data"
+description = "ERPForAll data files, XML and CSV reading, external IDs, and import/export"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+quick-xml = { workspace = true }
+csv = { workspace = true }
+erp-domain = { workspace = true }
+erp-expr = { workspace = true }
+erp-fields = { workspace = true }
+erp-orm = { workspace = true }
+erp-registry = { workspace = true }
+erp-sql = { workspace = true }
+tracing = { workspace = true }
+# Only to read the diagnostics (table, column) of a database error behind an ORM error.
+tokio-postgres = { workspace = true }
+serde_json = { workspace = true }
+# the native migration declarations (`migration`): the MIGRATIONS slice and its stage enum
+linkme = { workspace = true }
+serde = { workspace = true }
+time = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# Allocation pins (tests/alloc_*.rs, standards §5b).
+erp-alloc-budget = { workspace = true }
+
+# Allocation tests run on the main thread under erp_alloc_budget's harness (lesson).
+[[test]]
+name = "alloc_load_state"
+harness = false
+
+[[test]]
+name = "alloc_load_stream"
+harness = false

@@ -1,0 +1,326 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/*",
+    # addon crates, listed one by one (data-only addons have no Cargo.toml)
+    "addons/base",
+    "addons/uom",
+    "addons/product",
+    "addons/mail",
+    "addons/web",
+    "addons/theme_office_blue",
+    "addons/acceptance_notes",
+    "addons/barcodes",
+    "addons/barcodes_gs1_nomenclature",
+    "addons/stock",
+    "addons/delivery",
+    "addons/stock_delivery",
+    "addons/product_expiry",
+    "addons/stock_sms",
+    "addons/stock_account",
+    "addons/stock_landed_costs",
+    "addons/purchase_stock",
+    "addons/sale_stock",
+    "addons/stock_dropshipping",
+    # sample WebAssembly addons: Rust code packed as .erpaddon components
+    "examples/wasm/sample_library_wasm",
+    "examples/wasm/sample_library_wasm_policy",
+    # fixture addon crates of the test link root (L12)
+    "crates/erp-test-models/addons/test_ext_a",
+    "crates/erp-test-models/addons/test_ext_b",
+    "crates/erp-test-models/addons/test_ext_c",
+    "crates/erp-test-models/addons/test_addon_a",
+    "crates/erp-test-models/addons/test_addon_b",
+    "crates/erp-test-models/addons/test_wasm_dual_a",
+    "crates/erp-test-models/addons/test_wasm_dual_b",
+    "crates/erp-test-models/addons/test_wasm_dual_c",
+    "crates/erp-test-models/addons/test_wasm_ovr_a",
+    "crates/erp-test-models/addons/test_wasm_ovr_w",
+    "crates/erp-test-models/addons/test_wasm_ovr_c",
+    "crates/erp-test-models/addons/test_wasm_forge",
+    "crates/erp-test-models/addons/test_wasm_life",
+    "crates/erp-test-models/addons/test_wasm_refs",
+]
+# Vendored third-party crates are path crates, not members (no workspace lints, own edition).
+exclude = ["vendor/hyper", "vendor/tokio-postgres"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/IndoERP/ERPForAll"
+publish = false
+
+[workspace.dependencies]
+# Internal crates
+erp-testkit = { path = "crates/erp-testkit" }
+erp-alloc-budget = { path = "crates/erp-alloc-budget" }
+erp-test-models = { path = "crates/erp-test-models" }
+erp-macros = { path = "crates/erp-macros" }
+erp-fields = { path = "crates/erp-fields" }
+erp-html = { path = "crates/erp-html" }
+erp-store-wire = { path = "crates/erp-store-wire" }
+erp-blob = { path = "crates/erp-blob" }
+erp-registry = { path = "crates/erp-registry" }
+erp-sql = { path = "crates/erp-sql" }
+erp-orm = { path = "crates/erp-orm" }
+erp-sdk = { path = "crates/erp-sdk" }
+erp-domain = { path = "crates/erp-domain" }
+erp-data = { path = "crates/erp-data" }
+erp-modules = { path = "crates/erp-modules" }
+erp-views = { path = "crates/erp-views" }
+erp-ui-compiler = { path = "crates/erp-ui-compiler" }
+erp-expr = { path = "crates/erp-expr" }
+erp-script = { path = "crates/erp-script" }
+erp-cli = { path = "crates/erp-cli" }
+erp-rpc = { path = "crates/erp-rpc" }
+erp-security = { path = "crates/erp-security" }
+erp-server = { path = "crates/erp-server" }
+erp-wasm-host = { path = "crates/erp-wasm-host" }
+erp-guest = { path = "crates/erp-guest" }
+# Addon crates (L11)
+erp-addon-base = { path = "addons/base" }
+erp-addon-uom = { path = "addons/uom" }
+erp-addon-product = { path = "addons/product" }
+erp-addon-mail = { path = "addons/mail" }
+erp-addon-web = { path = "addons/web" }
+erp-addon-theme-office-blue = { path = "addons/theme_office_blue" }
+erp-addon-acceptance-notes = { package = "addon-acceptance_notes", path = "addons/acceptance_notes" }
+erp-addon-barcodes = { path = "addons/barcodes" }
+erp-addon-barcodes_gs1_nomenclature = { path = "addons/barcodes_gs1_nomenclature" }
+erp-addon-stock = { path = "addons/stock" }
+erp-addon-delivery = { path = "addons/delivery" }
+erp-addon-stock_delivery = { path = "addons/stock_delivery" }
+erp-addon-product_expiry = { path = "addons/product_expiry" }
+erp-addon-stock_sms = { path = "addons/stock_sms" }
+erp-addon-stock_account = { path = "addons/stock_account" }
+erp-addon-stock_landed_costs = { path = "addons/stock_landed_costs" }
+erp-addon-purchase_stock = { path = "addons/purchase_stock" }
+erp-addon-sale_stock = { path = "addons/sale_stock" }
+erp-addon-stock_dropshipping = { path = "addons/stock_dropshipping" }
+# Fixture addon crates (tests only)
+erp-addon-test_ext_a = { path = "crates/erp-test-models/addons/test_ext_a" }
+erp-addon-test_ext_b = { path = "crates/erp-test-models/addons/test_ext_b" }
+erp-addon-test_ext_c = { path = "crates/erp-test-models/addons/test_ext_c" }
+erp-addon-test_addon_a = { path = "crates/erp-test-models/addons/test_addon_a" }
+erp-addon-test_addon_b = { path = "crates/erp-test-models/addons/test_addon_b" }
+erp-addon-test_wasm_dual_a = { path = "crates/erp-test-models/addons/test_wasm_dual_a" }
+erp-addon-test_wasm_dual_b = { path = "crates/erp-test-models/addons/test_wasm_dual_b" }
+erp-addon-test_wasm_dual_c = { path = "crates/erp-test-models/addons/test_wasm_dual_c" }
+erp-addon-test_wasm_ovr_a = { path = "crates/erp-test-models/addons/test_wasm_ovr_a" }
+erp-addon-test_wasm_ovr_w = { path = "crates/erp-test-models/addons/test_wasm_ovr_w" }
+erp-addon-test_wasm_ovr_c = { path = "crates/erp-test-models/addons/test_wasm_ovr_c" }
+erp-addon-test_wasm_forge = { path = "crates/erp-test-models/addons/test_wasm_forge" }
+erp-addon-test_wasm_refs = { path = "crates/erp-test-models/addons/test_wasm_refs" }
+
+# WIT contract tooling: parser, encoder/printer/semver check and validator of
+# the bytecodealliance wasm-tools family, pinned to the versions wasmtime 50 uses
+# (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT). Dev-dependencies of erp-wasm-host only.
+wit-parser = "=0.261.0"
+wit-component = { version = "=0.261.0", features = ["dummy-module", "semver-check"] }
+wasmparser = "=0.261.0"
+# Guest bindings of the addon contract (erp-guest). Apache-2.0 WITH LLVM-exception OR
+# Apache-2.0 OR MIT. The version wasip2 already brings in; `macros` for `generate!`, `std` for
+# owned strings and lists, `realloc` for the `cabi_realloc` export a component needs. No async
+# support: the contract is synchronous.
+wit-bindgen = { version = "=0.57.1", default-features = false, features = ["macros", "realloc", "std"] }
+# Registration collector of the WASM guest build (erp-sdk); native builds use
+# linkme. MIT OR Apache-2.0. Exact pin: the version the guard proved on wasm32-wasip2.
+inventory = "=0.3.25"
+# Semantic versions of the WIT contract and its goldens (MIT OR Apache-2.0; the type wit-parser uses).
+semver = "1"
+
+# WASM addon host runtime: wasmtime with the component model, async calls, epoch
+# interruption and the pooling allocator, no WASI and no disk cache. Apache-2.0 WITH LLVM-exception.
+wasmtime = { version = "50", default-features = false, features = ["runtime", "component-model", "async", "cranelift", "pooling-allocator"] }
+# Text-format WASM components for the host's tests (same wasm-tools family and pin as above).
+wat = "=1.261.0"
+
+# Collections
+indexmap = "2"
+
+# Digests (MIT OR Apache-2.0): idempotency-key request digests. Already in the
+# graph through postgres-protocol.
+sha2 = "0.11"
+sha1 = "0.11"
+# Magic-number content detection of the attachment store (and 14; MIT). Only
+# the `alloc` feature (`Infer::new`): `std` would bring `cfb` and its graph for Office containers.
+infer = { version = "0.22", default-features = false, features = ["alloc"] }
+# The S3-compatible attachment store (MIT OR Apache-2.0, Apache Arrow project):
+# only the `aws` service client. Credentials come from the environment or an instance role.
+object_store = { version = "0.14", default-features = false, features = ["aws"] }
+# Stream adapters of that store (MIT; already in the graph through object_store and reqwest).
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+tokio-util = { version = "0.7", default-features = false, features = ["io"] }
+# Packages (erpaddon format,; MIT).
+zip = { version = "9.1", default-features = false, features = ["deflate"] }
+# Keyed digests of shared secrets in node configuration digests (MIT OR Apache-2.0,
+# RustCrypto, same family and digest version as sha2).
+hmac = "0.13"
+
+# OS interfaces: O_NOFOLLOW / O_NONBLOCK when opening addon model and data files (MIT OR Apache-2.0)
+libc = "0.2"
+# Safe OS interfaces (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT; already in the graph
+# through erp-bench and tempfile): the node registry's suspend-counting clock (CLOCK_BOOTTIME on
+# Linux, CLOCK_MONOTONIC on Apple), the dev-folder walk by directory descriptor, gethostname
+# (SCALE.NODES review round 1). No `unsafe` in our code.
+rustix = { version = "1.1", default-features = false, features = ["std"] }
+
+# Integer text for the JSON-2 result writer without a String per number (MIT OR Apache-2.0;
+# already in the graph through serde_json)
+itoa = "1.0.18"
+
+# Constant-time comparison of secrets (BSD-3-Clause; the floor service's bearer key, PERF.SERVE-FLOOR)
+subtle = { version = "2.6.1", default-features = false }
+
+# Password hashing, purpose keys and secrets (RustCrypto,
+# MIT OR Apache-2.0).
+argon2 = { version = "0.6.0", default-features = false, features = ["alloc", "zeroize"] }
+pbkdf2 = { version = "0.13.0", default-features = false, features = ["hmac"] }
+hkdf = "0.13.0"
+zeroize = { version = "1.9", default-features = false, features = ["alloc"] }
+# OS CSPRNG (MIT OR Apache-2.0; already in the graph): session secrets, salts, `database.secret`.
+getrandom = "0.4"
+# base64 (MIT OR Apache-2.0; already in the graph through reqwest): PHC and passlib salts and tags,
+# base64url session secrets.
+base64 = { version = "0.23", default-features = false, features = ["alloc"] }
+
+# Data formats (XML and CSV)
+quick-xml = "0.42"
+csv = "1.3"
+
+# Template compiler (erp-ui-compiler): JavaScript expression parser (MIT). Pinned
+# exactly: native and WASM builds must produce the same bytes; a version bump is a
+# reviewed change of its own.
+oxc_allocator = "=0.154.0"
+oxc_ast = "=0.154.0"
+oxc_ast_visit = "=0.154.0"
+oxc_parser = { version = "=0.154.0", default-features = false }
+oxc_span = "=0.154.0"
+oxc_syntax = "=0.154.0"
+# Pure-Rust WebAssembly interpreter (MIT OR Apache-2.0), tests only: runs the wasm32-wasip1 build
+# of erp-ui-compile in the native/WASM identity test (design note §11). `portable-dispatch`
+# selects its loop interpreter: the default tail-call dispatch needs optimised builds and overflows
+# the stack in the unoptimised test profile.
+wasmi = { version = "=2.0.0", default-features = false, features = ["std", "validate", "portable-dispatch"] }
+# HTML5 parser (MIT OR Apache-2.0, Servo): the static-HTML round-trip test of the template compiler
+# parses what codegen serialises and compares it to the IR (design note §8); erp-html uses the
+# vendored fork (see `[patch.crates-io]`) with feature `budget` as its bounded parser.
+html5ever = "=0.39.0"
+markup5ever_rcdom = "=0.39.0"
+
+# Testing
+proptest = "1"
+tempfile = "3"
+# Compile-fail tests of the proc macros (MIT OR Apache-2.0): the error lands on the offending token.
+trybuild = "1"
+# Micro-benchmarks (MIT OR Apache-2.0); plotting and rayon off to keep the dev graph small.
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+
+# Async runtime and PostgreSQL
+tokio = { version = "1.53.3", default-features = false }
+tokio-postgres = { version = "0.7.18", default-features = false, features = ["runtime"] }
+deadpool-postgres = { version = "0.14.2", default-features = false, features = ["rt_tokio_1"] }
+# `deadpool::managed::ObjectId`, the pooled connection's identity (`erp_orm::ResponseBatches`); the version
+# and feature deadpool-postgres already pulls in.
+deadpool = { version = "0.13.1", default-features = false, features = ["managed"] }
+postgres-types = { version = "0.2.14", default-features = false }
+# The wire messages the vendored tokio-postgres hands over raw: `DataRowBody`. Must be the
+# version the driver resolves (a skew is two distinct types and does not compile).
+postgres-protocol = { version = "0.6.12", default-features = false }
+bytes = "1"
+# HTTP/1 server (MIT). Measured by the served-path harness before
+# erp-server is built (PERF.SERVE-HARNESS); `hyper-util` (MIT) for the Tokio IO adapter and timer,
+# `http-body-util` (MIT) for the response bodies. All three already in the graph through reqwest.
+hyper = { version = "1.12.0", default-features = false }
+hyper-util = { version = "0.1.21", default-features = false }
+http-body-util = "0.1.5"
+
+# ORM building blocks (licences checked: MIT/Apache-2.0; jiff is MIT OR Unlicense)
+linkme = "0.3"
+rust_decimal = { version = "1.39", default-features = false, features = ["std"] }
+jiff = "0.2"
+rustc-hash = "2.1"
+
+# Proc macros
+syn = { version = "2", features = ["full", "extra-traits"] }
+quote = "1"
+proc-macro2 = "1"
+
+# Luau sandbox for `code` server actions and data-only addon hooks (mlua MIT, Luau MIT).
+# Only the `luau` feature: no `send` (one VM per evaluation, never shared), no `serde`.
+mlua = { version = "0.12", default-features = false, features = ["luau"] }
+
+# Logging (MIT): targets (`erp::orm`, `erp::sql`)
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+
+# Errors, serialization, CLI, system info
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+clap = { version = "4.6", features = ["derive", "env"] }
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
+time = { version = "0.3.47", features = ["formatting"] }
+# XML parsing for view archs (MIT OR Apache-2.0): no DTD expansion, node limit.
+roxmltree = "0.21.1"
+futures-core = { version = "0.3", default-features = false, features = ["alloc"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+# No panics on user or database data outside tests (clippy.toml allows them in tests).
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+dbg_macro = "deny"
+todo = "warn"
+
+[profile.dev]
+debug = "line-tables-only"
+
+# Stated explicitly so a change to Cargo's defaults cannot silently move benchmark numbers.
+[profile.release]
+opt-level = 3
+debug = false
+lto = false
+codegen-units = 16
+incremental = false
+panic = "unwind"
+overflow-checks = false
+
+# Timing runs of the test binaries (`cargo nextest run --cargo-profile release-tests ...`): optimized
+# like `release`, with `debug-assertions` on, because the test crates enable `erp-orm/test-faults`,
+# which does not compile without them (`erp-orm/src/lib.rs`). The `debug_assert!` checks cost time:
+# numbers from this profile are an upper bound next to a plain `release` build of the same code.
+[profile.release-tests]
+inherits = "release"
+debug-assertions = true
+
+[profile.dev.package."*"]
+opt-level = 1
+
+# `cargo bench` and `cargo build --profile bench`: release + thin LTO, one codegen unit, line tables
+# so profilers can attribute samples. The built-in `bench` profile already inherits from `release`.
+[profile.bench]
+lto = "thin"
+codegen-units = 1
+debug = "line-tables-only"
+
+# hyper 1.12.0 with the opt-in HTTP/1 server buffer-provider hook (perf-serve §4.1):
+# a vendored path crate because deny.toml allows no git sources. It replaces hyper for the whole
+# graph (reqwest's client included); without `http1::Builder::buffer_provider` hyper behaves as
+# released. Provenance and the patch: vendor/README.md.
+[patch.crates-io]
+hyper = { path = "vendor/hyper" }
+# tokio-postgres 0.7.18, vendored for the opt-in raw-row read: rows handed over as their
+# `DataRow` body so the ORM decodes them without the driver's per-row range vector. It replaces
+# tokio-postgres for the whole graph (deadpool-postgres included); without `RowStream::poll_next_body`
+# it behaves as released. Provenance and the patch: vendor/README.md.
+tokio-postgres = { path = "vendor/tokio-postgres" }
+# html5ever 0.39.0, vendored so a parse budget can be added inside the tokenizer and tree builder
+# . The copy is patched; with the `budget` feature off it behaves as
+# released (the feature is enabled only by the crates that parse untrusted HTML: erp-ui-compiler/html-budget and,, erp-html). Provenance and patch: vendor/README.md.
+html5ever = { path = "vendor/html5ever-bounded" }

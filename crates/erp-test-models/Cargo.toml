@@ -1,0 +1,170 @@
+[package]
+name = "erp-test-models"
+description = "ERPForAll test link root: fixture addons mirroring the reference ERP's test modules, and the ORM parity tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+erp-sdk = { workspace = true }
+
+[dev-dependencies]
+erp-server.workspace = true
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio"] }
+tower = { version = "=0.5.3", features = ["util"] }
+# Private impex served-floor capture reuses the existing PostgreSQL wire recorder.
+tempfile = { workspace = true }
+erp-addon-base = { workspace = true }
+# the attachment store tests (base_attachment_*): the in-memory store and the zero GC grace
+erp-blob = { workspace = true, features = ["testing"] }
+erp-addon-web = { workspace = true }
+erp-addon-mail = { workspace = true }
+erp-addon-uom = { workspace = true }
+erp-addon-product = { workspace = true }
+erp-addon-test_ext_a = { workspace = true }
+erp-addon-test_ext_b = { workspace = true }
+erp-addon-test_ext_c = { workspace = true }
+erp-addon-test_addon_a = { workspace = true }
+erp-addon-test_addon_b = { workspace = true }
+erp-addon-test_wasm_dual_a = { workspace = true }
+erp-addon-test_wasm_dual_b = { workspace = true }
+erp-addon-test_wasm_dual_c = { workspace = true }
+erp-addon-test_wasm_ovr_a = { workspace = true }
+erp-addon-test_wasm_ovr_w = { workspace = true }
+erp-addon-test_wasm_ovr_c = { workspace = true }
+erp-addon-test_wasm_forge = { workspace = true }
+erp-addon-test_wasm_refs = { workspace = true }
+erp-wasm-host = { workspace = true }
+# the dual-mode test loads the built component (wasm_dual_describe.rs)
+wasmtime = { workspace = true }
+erp-modules = { workspace = true }
+erp-domain = { workspace = true }
+erp-data = { workspace = true }
+erp-fields = { workspace = true }
+erp-testkit = { workspace = true }
+erp-orm = { workspace = true, features = ["test-faults", "test-driver-process-batches"] }
+erp-registry = { workspace = true }
+erp-rpc = { workspace = true, features = ["test-faults"] }
+erp-security = { workspace = true, features = ["test-support"] }
+erp-sql = { workspace = true }
+serde_json = { workspace = true }
+# base_money: independent rounding of the expected values by the decimal library itself
+rust_decimal = { workspace = true }
+# alloc_raw_rows_profile: a whole-process heap profile with backtraces (probe, run by hand)
+dhat = "0.3.3"
+# the entry-point enumeration test reads erp-orm's public API from its source
+syn = { workspace = true, features = ["visit"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time", "net", "io-util", "io-std", "process", "sync"] }
+# driver_response_batches polls a result stream by hand
+futures-core = { workspace = true }
+# the two-node attachment tests run their tasks concurrently on one thread
+futures-util = { workspace = true }
+# stream_core checks that a flight error keeps the driver error as its source
+tokio-postgres = { workspace = true }
+# node.rs captures the node registry's log events
+tracing = { workspace = true }
+# Private served-copy fixture uses the existing HTTP stack and allocation harness.
+bytes = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true, features = ["server", "http1"] }
+hyper-util = { workspace = true, features = ["tokio"] }
+
+[lints]
+workspace = true
+
+# Allocation tests run on the main thread under erp_alloc_budget's harness (lesson):
+# libtest's own main thread would allocate inside their counting windows.
+[[test]]
+name = "alloc_bindings"
+harness = false
+
+[[test]]
+name = "alloc_driver_batches"
+harness = false
+
+[[test]]
+name = "alloc_login"
+harness = false
+
+[[test]]
+name = "alloc_raw_rows"
+harness = false
+
+[[test]]
+name = "alloc_raw_rows_profile"
+harness = false
+
+[[test]]
+name = "alloc_read"
+harness = false
+
+[[test]]
+name = "alloc_rpc_kinds"
+harness = false
+
+[[test]]
+name = "alloc_rpc_access"
+harness = false
+
+[[test]]
+name = "alloc_rpc_impex"
+harness = false
+
+[[test]]
+name = "alloc_onchange_batch"
+harness = false
+
+[[test]]
+name = "alloc_rows_stream"
+harness = false
+
+[[test]]
+name = "alloc_stream_fetch"
+harness = false
+
+[[test]]
+name = "alloc_stream_overlap"
+harness = false
+
+[[test]]
+name = "alloc_web_read"
+harness = false
+
+[[test]]
+name = "alloc_server_action"
+harness = false
+
+[[test]]
+name = "alloc_server_action_path"
+harness = false
+
+[[test]]
+name = "alloc_base_formats"
+harness = false
+
+[[test]]
+name = "alloc_base_orm"
+harness = false
+
+[[test]]
+name = "alloc_base_orm_profile"
+harness = false
+
+[[test]]
+name = "alloc_search_panel"
+harness = false
+
+[[test]]
+name = "alloc_search_panel_rpc"
+harness = false
+
+[[test]]
+name = "alloc_copy"
+harness = false
+
+[[test]]
+name = "alloc_copy_served"
+harness = false

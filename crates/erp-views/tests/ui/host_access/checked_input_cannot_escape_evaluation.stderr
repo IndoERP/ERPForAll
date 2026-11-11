@@ -1,0 +1,22 @@
+error[E0621]: explicit lifetime required in the type of `evaluation`
+ --> tests/ui/host_access/checked_input_cannot_escape_evaluation.rs:9:5
+  |
+9 |     host_access::checked_view_input(env, guarded, evaluation).unwrap()
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ lifetime `'a` required
+  |
+help: add explicit lifetime `'a` to the type of `evaluation`
+  |
+7 |     evaluation: &'a GuardEvaluation<'_>,
+  |                  ++
+
+error[E0621]: explicit lifetime required in the type of `evaluation`
+ --> tests/ui/host_access/checked_input_cannot_escape_evaluation.rs:9:5
+  |
+9 |     host_access::checked_view_input(env, guarded, evaluation).unwrap()
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ lifetime `'a` required
+  |
+help: add explicit lifetime `'a` to the type of `evaluation`
+  |
+7 -     evaluation: &GuardEvaluation<'_>,
+7 +     evaluation: &GuardEvaluation<'a>,
+  |

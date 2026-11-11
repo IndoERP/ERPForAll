@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+    <t t-name="fixtures.Hello">
+        <div class="o_hello" t-att-title="this.props.title">
+            Hello <t t-esc="this.props.name"/>!
+        </div>
+    </t>
+
+    <t t-name="fixtures.Branches">
+        <span t-if="this.props.count === 0">none</span>
+        <span t-elif="this.props.count === 1">one</span>
+        <span t-else="">many: <t t-out="this.props.count"/></span>
+    </t>
+
+    <t t-name="fixtures.Rows">
+        <ul class="o_rows">
+            <li t-foreach="this.props.rows" t-as="row" t-key="row.id"
+                t-att-class="{ o_active: row.id === this.props.activeId, o_odd: row_index % 2 }"
+                t-on-click="() => this.props.onSelect(row.id)">
+                <t t-esc="row.label"/> (<t t-esc="row_index + 1"/>/<t t-esc="this.props.rows.length"/>)
+            </li>
+        </ul>
+    </t>
+
+    <t t-name="fixtures.Attributes">
+        <input type="text" t-att-value="this.props.value" t-attf-placeholder="Search {{ this.props.what }}…"
+               t-att-disabled="this.props.readonly" t-on-input="this.onInput"/>
+    </t>
+
+    <t t-name="fixtures.Card">
+        <section class="o_card">
+            <header><t t-slot="title">Untitled</t></header>
+            <t t-slot="default"/>
+        </section>
+    </t>
+
+    <t t-name="fixtures.UsesCard">
+        <Card>
+            <t t-set-slot="title"><b t-esc="this.props.title"/></t>
+            <p>Body</p>
+        </Card>
+    </t>
+
+</templates>

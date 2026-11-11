@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+Source of the compiled fixtures of tests/contract.test.ts. The .js
+     modules beside it are erp-ui-compile output for this file (PROVENANCE.json names the compiler commit);
+     never edit them by hand: regenerate them. 
+-->
+<templates>
+  <t t-name="contract.Root">
+    <div class="o_root" t-att-title="this.title()" t-att-class="{ o_active: this.active() }">
+      <h1 t-out="this.title()"/>
+      <p t-if="this.mode() === 'a'" class="mode">mode a</p>
+      <p t-elif="this.mode() === 'b'" class="mode" t-attf-data-mode="m-{{ this.mode() }}">mode b</p>
+      <p t-else="" class="mode">other</p>
+      <button class="inc" t-on-click="() => this.inc()">+</button>
+      <button class="named" t-on-click.stop="this.onNamed">named</button>
+      <input class="field" t-att-value="this.title()"/>
+      <span class="count" t-out="this.count()"/>
+      <ul>
+        <li t-foreach="this.rows()" t-as="row" t-key="row.id" t-att-data-id="row.id"><t t-out="row_index"/>:<t t-out="row.label"/></li>
+      </ul>
+      <Child label="this.title()" onPing.bind="this.ping"/>
+      <Card>
+        <t t-set-slot="header"><b>Header <t t-out="this.title()"/></b></t>
+        <em>body</em>
+      </Card>
+      <Rows items="this.rows()">
+        <t t-set-slot="row" t-slot-scope="s"><i t-out="s.label"/></t>
+      </Rows>
+      <span class="raw" t-out="this.html()">empty</span>
+    </div>
+  </t>
+  <t t-name="contract.Child">
+    <section class="child"><t t-out="this.props.label"/><button class="ping" t-on-click="() => this.props.onPing('pong')">ping</button></section>
+  </t>
+  <t t-name="contract.Card">
+    <article><header><t t-slot="header"/></header><t t-slot="default"/></article>
+  </t>
+  <t t-name="contract.Rows">
+    <ol><li t-foreach="this.props.items" t-as="it" t-key="it.id"><t t-slot="row" t-props="{ label: it.label }"/></li></ol>
+  </t>
+  <t t-name="contract.Multi"><t t-out="this.a()"/><i>mid</i><t t-out="this.b()"/></t>
+  <t t-name="contract.Bench">
+    <table><tbody>
+      <tr t-foreach="this.rows()" t-as="row" t-key="row.id" t-att-class="{ danger: row.id === this.selected() }">
+        <td class="col-md-1" t-out="row.id"/>
+        <td class="col-md-4"><a t-on-click="() => this.select(row.id)" t-out="row.label()"/></td>
+        <td class="col-md-1"><a t-on-click="() => this.remove(row.id)"><span class="remove" aria-hidden="true"/></a></td>
+        <td class="col-md-6"/>
+      </tr>
+    </tbody></table>
+  </t>
+</templates>

@@ -1,0 +1,52 @@
+[package]
+name = "erp-ui-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+erp-ui-compiler = { path = "../crates/erp-ui-compiler" }
+erp-ui-compiler-cli = { path = "../crates/erp-ui-compiler-cli" }
+erp-html = { path = "../crates/erp-html" }
+
+# Independent workspace so cargo-deny and root workspace tests ignore it
+[workspace]
+members = ["."]
+
+# erp-html needs the bounded html5ever fork (feature `budget`), which the root workspace reaches
+# through `[patch.crates-io]`; this independent workspace repeats that patch.
+# tests/scripts/test_fuzz_patch_sync.py keeps the two in step.
+[patch.crates-io]
+html5ever = { path = "../vendor/html5ever-bounded" }
+
+[[bin]]
+name = "ui_compile"
+path = "fuzz_targets/ui_compile.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "erpui2_decode"
+path = "fuzz_targets/erpui2_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "html_sanitize"
+path = "fuzz_targets/html_sanitize.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "html_sanitize_bytes"
+path = "fuzz_targets/html_sanitize_bytes.rs"
+test = false
+doc = false
+bench = false

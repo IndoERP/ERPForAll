@@ -1,0 +1,45 @@
+package erpforall:addon@1.0.0;
+
+/// What the host offers a guest: set-based ORM access under the caller's rights.
+///
+/// Every function runs as the user and company of the current call, taken from the host's store
+/// and never from an argument. Calls are set-based: one call per batch, never one per record.
+interface orm-host {
+    use types.{model-name, field-name, record-id, column-vector, record-batch, scalar-value, boundary-error};
+
+    /// Severity of a log event.
+    enum log-level {
+        trace,
+        debug,
+        info,
+        warn,
+        error,
+    }
+
+    search: func(model: model-name, domain-json: string, limit: option<u32>, offset: option<u32>, order: option<string>) -> result<list<record-id>, boundary-error>;
+
+    /// The given fields of the given records, one typed column per field.
+    read-columns: func(model: model-name, ids: list<record-id>, fields: list<field-name>) -> result<record-batch, boundary-error>;
+
+    /// Create one record per entry of `values`; returns the new ids in the same order.
+    create-batch: func(model: model-name, values: list<list<tuple<field-name, scalar-value>>>) -> result<list<record-id>, boundary-error>;
+
+    /// Write the same values to every record in `ids`.
+    write-batch: func(model: model-name, ids: list<record-id>, values: list<tuple<field-name, scalar-value>>) -> result<_, boundary-error>;
+
+    /// Write a different value per record: each column holds one value per id, in the order of `ids`.
+    write-columns: func(model: model-name, ids: list<record-id>, columns: list<column-vector>) -> result<_, boundary-error>;
+
+    /// Delete the records in `ids`.
+    unlink-batch: func(model: model-name, ids: list<record-id>) -> result<_, boundary-error>;
+
+    /// Call a model method through the full override chain. Arguments and result are
+    /// JSON text.
+    call-method: func(model: model-name, method: string, ids: list<record-id>, args-json: string) -> result<string, boundary-error>;
+
+    /// The host knows which layer is calling; the guest does not name it.
+    super-call: func(model: model-name, method: string, ids: list<record-id>, args-json: string) -> result<string, boundary-error>;
+
+    /// Send one structured event to the host's log. `target` names the addon's module path.
+    log: func(level: log-level, target: string, message: string);
+}

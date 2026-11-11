@@ -1,0 +1,8 @@
+id,name,groups,description
+capability_policy_explain_others,policy.explain_others,base.group_system,Explain the access of other users and list rule names and record results
+capability_policy_customize,policy.customize,base.group_system,Change the access rules of the database
+capability_principal_impersonate,principal.impersonate,base.group_system,Act as another user (with_user)
+capability_audit_read,audit.read,base.group_system,Read the audit trail
+capability_company_all,company.all,base.group_system,Work in every company of the database
+capability_rpc_debug_errors,rpc.debug_errors,base.group_system,See the debug details of RPC error responses
+capability_jobs_admin,jobs.admin,base.group_system,Hold resume cancel requeue and discard background jobs

@@ -1,0 +1,7 @@
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
+# erp-ui-compile is also built for WASI preview 1 (design note m4-ui0-compiler §11).
+# erp-expr's production dependency check also builds WASI preview 2 (m4-uix §3).
+targets = ["wasm32-wasip1", "wasm32-wasip2"]
+profile = "minimal"

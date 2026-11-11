@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<erp>
+  <!-- Runs after the preceding file publishes the XML ID, also on ordinary upgrade. -->
+  <function model="res.groups" name="_uom_reclassify_light_groups"/>
+</erp>

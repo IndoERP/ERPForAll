@@ -1,0 +1,8 @@
+name = "Sale Stock"
+summary = "Sales orders, delivery, and invoicing control for stock"
+category = "Inventory"
+author = "Arkana"
+license = "MIT OR Apache-2.0"
+version = "1.0.0"
+depends = ["stock_account"]
+data = []

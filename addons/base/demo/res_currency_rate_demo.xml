@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Demo spot rates for the main company (USD): units of the currency per one USD, invented values.
+     Two dates per currency, so a lookup by date has a choice. A rate is stated on a main company. -->
+<erp>
+  <record id="rate_demo_eur_old" model="res.currency.rate">
+    <field name="name">2026-01-01</field>
+    <field name="rate">0.9200</field>
+    <field name="currency_id" ref="base.EUR"/>
+    <field name="company_id" ref="base.main_company"/>
+    <field name="rate_type_id" ref="base.rate_type_spot"/>
+  </record>
+  <record id="rate_demo_eur_new" model="res.currency.rate">
+    <field name="name">2026-10-01</field>
+    <field name="rate">0.8800</field>
+    <field name="currency_id" ref="base.EUR"/>
+    <field name="company_id" ref="base.main_company"/>
+    <field name="rate_type_id" ref="base.rate_type_spot"/>
+  </record>
+  <record id="rate_demo_idr_old" model="res.currency.rate">
+    <field name="name">2026-01-01</field>
+    <field name="rate">16000</field>
+    <field name="currency_id" ref="base.IDR"/>
+    <field name="company_id" ref="base.main_company"/>
+    <field name="rate_type_id" ref="base.rate_type_spot"/>
+  </record>
+  <record id="rate_demo_idr_new" model="res.currency.rate">
+    <field name="name">2026-10-01</field>
+    <field name="rate">16500</field>
+    <field name="currency_id" ref="base.IDR"/>
+    <field name="company_id" ref="base.main_company"/>
+    <field name="rate_type_id" ref="base.rate_type_spot"/>
+  </record>
+  <record id="rate_demo_sgd_old" model="res.currency.rate">
+    <field name="name">2026-01-01</field>
+    <field name="rate">1.3400</field>
+    <field name="currency_id" ref="base.SGD"/>
+    <field name="company_id" ref="base.main_company"/>
+    <field name="rate_type_id" ref="base.rate_type_spot"/>
+  </record>
+  <record id="rate_demo_sgd_new" model="res.currency.rate">
+    <field name="name">2026-10-01</field>
+    <field name="rate">1.3000</field>
+    <field name="currency_id" ref="base.SGD"/>
+    <field name="company_id" ref="base.main_company"/>
+    <field name="rate_type_id" ref="base.rate_type_spot"/>
+  </record>
+  <record id="rate_demo_gbp_new" model="res.currency.rate">
+    <field name="name">2026-10-01</field>
+    <field name="rate">0.7500</field>
+    <field name="currency_id" ref="base.GBP"/>
+    <field name="company_id" ref="base.main_company"/>
+    <field name="rate_type_id" ref="base.rate_type_spot"/>
+  </record>
+</erp>

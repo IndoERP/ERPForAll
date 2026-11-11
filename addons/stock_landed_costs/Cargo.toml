@@ -1,0 +1,17 @@
+[package]
+name = "erp-addon-stock_landed_costs"
+description = "ERPForAll addon stock_landed_costs: landed cost documents and valuation adjustments"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+erp-sdk = { workspace = true }
+erp-addon-stock_account = { workspace = true }
+erp-addon-purchase_stock = { workspace = true }
+
+[lints]
+workspace = true

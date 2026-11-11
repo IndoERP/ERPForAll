@@ -1,0 +1,30 @@
+exact_only = true
+name = "Product"
+summary = "Manage product templates, variants, pricelists, and vendor agreements"
+category = "Sales/Sales"
+author = "ERPForAll"
+license = "MIT OR Apache-2.0"
+version = "1.0.0"
+depends = ["base", "uom"]
+data = [
+    "security/product_security.xml",
+    "security/ir.access.csv",
+    "data/product_data.xml",
+    "data/product_attribute_data.xml",
+    "views/product_category_views.xml",
+    "views/product_attribute_views.xml",
+    "views/product_template_attribute_line_views.xml",
+    "views/product_template_views.xml",
+    "views/product_product_views.xml",
+    "views/product_pricelist_views.xml",
+    "views/product_uom_views.xml",
+    "views/product_menus.xml",
+]
+# Loaded only with demo data. The product demo prices the vendor partners of the base demo.
+demo = [
+    "demo/product_attribute_demo.xml",
+    "demo/product_category_demo.xml",
+    "demo/product_demo.xml",
+    "demo/product_supplierinfo_demo.xml",
+    "demo/product_pricelist_demo.xml",
+]

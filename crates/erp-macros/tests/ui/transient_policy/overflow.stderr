@@ -1,0 +1,5 @@
+error: `transient_max_count` does not fit in 64 bits
+ --> tests/ui/transient_policy/overflow.rs:5:27
+  |
+5 |     transient_max_count = 18446744073709551616
+  |                           ^^^^^^^^^^^^^^^^^^^^

@@ -1,0 +1,3 @@
+name = "Test Wasm Ovr A"
+summary = "Fixture: native layer below a WebAssembly override of create, write and unlink (a later release)"
+depends = ["base"]

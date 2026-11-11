@@ -1,0 +1,6 @@
+name = "Test Wasm Forge"
+summary = "Fixture: a component that misbehaves toward the host (a later release security review r1)"
+depends = ["test_wasm_ovr_a"]
+
+[wasm]
+sdk_version = "1.0"

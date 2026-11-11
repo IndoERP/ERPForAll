@@ -1,0 +1,5 @@
+error[E0599]: no associated function or constant named `new` found for struct `FilteredArch<'a>` in the current scope
+ --> tests/ui/host_access/filtered_arch_new.rs:8:33
+  |
+8 |     let _forged = FilteredArch::new(guarded, Vec::new());
+  |                                 ^^^ associated function or constant not found in `FilteredArch<'_>`

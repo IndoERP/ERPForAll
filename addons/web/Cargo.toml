@@ -1,0 +1,43 @@
+[package]
+name = "erp-addon-web"
+description = "ERPForAll addon web: the web client's server side and its client code under static/"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# Addons depend on erp-sdk and declared addon dependencies: never on
+# erp-orm, erp-modules, or erp-testkit outside [dev-dependencies]. scripts/check-layers.py enforces it.
+[features]
+test-support = []
+
+[dependencies]
+erp-sdk = { workspace = true }
+erp-addon-base = { workspace = true }
+
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+flate2 = "1.1"
+brotli = "=8.0.4"
+oxc_allocator.workspace = true
+oxc_parser.workspace = true
+oxc_span.workspace = true
+oxc_codegen = "=0.154.0"
+oxc_minifier = "=0.154.0"
+
+[dev-dependencies]
+oxc_ast.workspace = true
+tempfile.workspace = true
+erp-testkit.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "alloc_h18_transport"
+harness = false

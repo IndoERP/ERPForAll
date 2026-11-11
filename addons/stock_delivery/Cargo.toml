@@ -1,0 +1,17 @@
+[package]
+name = "erp-addon-stock_delivery"
+description = "ERPForAll addon stock_delivery: carrier shipping contract and delivery hooks for stock pickings"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+erp-sdk = { workspace = true }
+erp-addon-sale_stock = { workspace = true }
+erp-addon-delivery = { workspace = true }
+
+[lints]
+workspace = true

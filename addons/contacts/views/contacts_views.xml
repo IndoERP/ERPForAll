@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Contacts app: window actions over res.partner and res.partner.category with the views base ships
+     (base.partner_list, base.partner_form, base.partner_search, base.partner_category_*), and the menus. -->
+<erp>
+  <record id="action_contacts" model="ir.actions.act_window">
+    <field name="name">Contacts</field>
+    <field name="res_model">res.partner</field>
+    <field name="view_mode">list,form</field>
+    <field name="search_view_id" ref="base.partner_search"/>
+  </record>
+  <record id="action_contacts_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="action_contacts"/>
+    <field name="view_id" ref="base.partner_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="action_contacts_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="action_contacts"/>
+    <field name="view_id" ref="base.partner_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+
+  <record id="action_contact_tags" model="ir.actions.act_window">
+    <field name="name">Contact Tags</field>
+    <field name="res_model">res.partner.category</field>
+    <field name="view_mode">list,form</field>
+  </record>
+  <record id="action_contact_tags_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="action_contact_tags"/>
+    <field name="view_id" ref="base.partner_category_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="action_contact_tags_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="action_contact_tags"/>
+    <field name="view_id" ref="base.partner_category_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+
+  <menuitem id="menu_contacts_root" name="Contacts" action="action_contacts" groups="base.group_user" sequence="20" web_icon="lucide:contact">
+    <menuitem id="menu_contacts" name="Contacts" action="action_contacts" sequence="10"/>
+    <menuitem id="menu_contacts_config" name="Configuration" groups="base.group_system" sequence="100">
+      <menuitem id="menu_contact_tags" name="Contact Tags" action="action_contact_tags" sequence="10"/>
+    </menuitem>
+  </menuitem>
+</erp>

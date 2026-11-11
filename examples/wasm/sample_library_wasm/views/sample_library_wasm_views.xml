@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<erp>
+    <!-- The screens of this package: the book and loan forms of sample_library, extended in place,
+         and the Lend wizard of the package's own transient model. Nothing of sample_library is
+         edited; the inherited views are removed with this package. The buttons call package
+         methods marked #[method(rpc)]; the form refuses a button whose method is not exposed. -->
+    <record id="book_form_lend" model="ir.ui.view">
+        <field name="name">sample_library.book.form.lend</field>
+        <field name="model">sample_library.book</field>
+        <field name="inherit_id" ref="sample_library.book_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//sheet" position="before">
+                <header>
+                    <button name="lend" type="object" string="Lend" class="btn-primary" invisible="not available"/>
+                    <button name="give_back" type="object" string="Return" class="btn-secondary" invisible="available"/>
+                </header>
+            </xpath>
+            <!-- ERPForAll relation_count is an explicit authorized aggregate provider. -->
+            <xpath expr="//div[@name='button_box']" position="inside">
+                <button name="open_loans" type="object" class="oe_stat_button" string="Loans">
+                    <field name="loan_ids" widget="relation_count" string="Loans"/>
+                </button>
+            </xpath>
+            <xpath expr="//field[@name='available']" position="after">
+                <field name="popular"/>
+                <field name="times_lent"/>
+                <field name="last_borrower"/>
+                <field name="lending_summary"/>
+            </xpath>
+        </field>
+    </record>
+    <record id="loan_form_renew" model="ir.ui.view">
+        <field name="name">sample_library.loan.form.renew</field>
+        <field name="model">sample_library.loan</field>
+        <field name="inherit_id" ref="sample_library.loan_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//header" position="inside">
+                <button name="renew" type="object" string="Renew" class="btn-secondary" invisible="state != 'out'"/>
+                <button name="give_back" type="object" string="Return" class="btn-primary" invisible="state != 'out'"/>
+            </xpath>
+            <xpath expr="//field[@name='return_date']" position="after">
+                <field name="renewals"/>
+                <field name="renewal_note"/>
+            </xpath>
+        </field>
+    </record>
+    <record id="book_list_lend" model="ir.ui.view">
+        <field name="name">sample_library.book.list.lend</field>
+        <field name="model">sample_library.book</field>
+        <field name="inherit_id" ref="sample_library.book_list"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='available']" position="after">
+                <field name="times_lent"/>
+                <field name="popular"/>
+                <field name="lending_summary"/>
+            </xpath>
+        </field>
+    </record>
+    <!-- The Lend wizard: `lend` on a book returns a window action on this form (target new). The
+         fields are required in the model; the human UI does not take per-view modifiers yet. -->
+    <record id="lend_wizard_form" model="ir.ui.view">
+        <field name="name">sample_library.lend.wizard.form</field>
+        <field name="model">sample_library.lend.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Lend Book">
+                <group>
+                    <field name="book_id"/>
+                    <field name="borrower_id"/>
+                    <field name="due_date"/>
+                </group>
+                <footer>
+                    <button name="action_confirm" type="object" string="Lend" class="btn-primary"/>
+                    <button special="cancel" string="Cancel" class="btn-secondary"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</erp>

@@ -1,0 +1,551 @@
+[
+  {
+    "kind": "generated_rust_differential_failure",
+    "propertySeed": 1430870017,
+    "shrinkPath": "0:0",
+    "shrinkDomain": "corpus row index",
+    "context": "EvalContext::standard; no host vars; no clock",
+    "limits": {
+      "max_source_bytes": 65536,
+      "max_depth": 100,
+      "max_steps": 1000000,
+      "max_value_bytes": 1048576,
+      "max_total_bytes": 16777216,
+      "max_format_width": 1000
+    },
+    "row": {
+      "ordinal": 1000,
+      "family": "containers",
+      "case": 0,
+      "seed": 1430870017,
+      "source": "[x * 12 for x in range(4)][::-1]",
+      "outcome": {
+        "status": "parsed",
+        "ast": {
+          "schema": 1,
+          "nodes": [
+            {
+              "kind": "name",
+              "name": "x"
+            },
+            {
+              "kind": "literal",
+              "value": {
+                "kind": "int",
+                "value": "12"
+              }
+            },
+            {
+              "kind": "binary",
+              "op": "mult",
+              "left": 0,
+              "right": 1
+            },
+            {
+              "kind": "name",
+              "name": "x"
+            },
+            {
+              "kind": "name",
+              "name": "range"
+            },
+            {
+              "kind": "literal",
+              "value": {
+                "kind": "int",
+                "value": "4"
+              }
+            },
+            {
+              "kind": "call",
+              "func": 4,
+              "args": [
+                5
+              ],
+              "keywords": []
+            },
+            {
+              "kind": "list_comp",
+              "elt": 2,
+              "generators": [
+                {
+                  "target": 3,
+                  "iter": 6,
+                  "ifs": []
+                }
+              ]
+            },
+            {
+              "kind": "literal",
+              "value": {
+                "kind": "int",
+                "value": "1"
+              }
+            },
+            {
+              "kind": "unary",
+              "op": "u_sub",
+              "operand": 8
+            },
+            {
+              "kind": "subscript",
+              "value": 7,
+              "slice": {
+                "kind": "slice",
+                "lower": null,
+                "upper": null,
+                "step": 9
+              }
+            }
+          ]
+        },
+        "result": {
+          "status": "error",
+          "class": "NameError",
+          "message": "NameError: name 'range' is not defined"
+        }
+      }
+    },
+    "error": "AssertionError [ERR_ASSERTION]: family=containers case=0 source=[x * 12 for x in range(4)][::-1]\n+ actual - expected\n\n+ {\n- [Object: null prototype] {\n    class: 'NameError',\n    message: \"NameError: name 'range' is not defined\",\n    status: 'error'\n  }\n"
+  },
+  {
+    "kind": "generated_rust_differential_failure",
+    "propertySeed": 1430870017,
+    "shrinkPath": "0:0",
+    "shrinkDomain": "corpus row index",
+    "context": "EvalContext::standard; no host vars; no clock",
+    "limits": {
+      "max_source_bytes": 65536,
+      "max_depth": 100,
+      "max_steps": 1000000,
+      "max_value_bytes": 1048576,
+      "max_total_bytes": 16777216,
+      "max_format_width": 1000
+    },
+    "row": {
+      "ordinal": 0,
+      "family": "core",
+      "case": 0,
+      "seed": 1430870017,
+      "source": "(-4 * -5) + (-4 // (-5 or 1))",
+      "outcome": {
+        "status": "parsed",
+        "ast": {
+          "schema": 1,
+          "nodes": [
+            {
+              "kind": "literal",
+              "value": {
+                "kind": "int",
+                "value": "4"
+              }
+            },
+            {
+              "kind": "unary",
+              "op": "u_sub",
+              "operand": 0
+            },
+            {
+              "kind": "literal",
+              "value": {
+                "kind": "int",
+                "value": "5"
+              }
+            },
+            {
+              "kind": "unary",
+              "op": "u_sub",
+              "operand": 2
+            },
+            {
+              "kind": "binary",
+              "op": "mult",
+              "left": 1,
+              "right": 3
+            },
+            {
+              "kind": "literal",
+              "value": {
+                "kind": "int",
+                "value": "4"
+              }
+            },
+            {
+              "kind": "unary",
+              "op": "u_sub",
+              "operand": 5
+            },
+            {
+              "kind": "literal",
+              "value": {
+                "kind": "int",
+                "value": "5"
+              }
+            },
+            {
+              "kind": "unary",
+              "op": "u_sub",
+              "operand": 7
+            },
+            {
+              "kind": "literal",
+              "value": {
+                "kind": "int",
+                "value": "1"
+              }
+            },
+            {
+              "kind": "bool_op",
+              "op": "or",
+              "values": [
+                8,
+                9
+              ]
+            },
+            {
+              "kind": "binary",
+              "op": "floor_div",
+              "left": 6,
+              "right": 10
+            },
+            {
+              "kind": "binary",
+              "op": "add",
+              "left": 4,
+              "right": 11
+            }
+          ]
+        },
+        "result": {
+          "status": "ok",
+          "repr": "20"
+        }
+      }
+    },
+    "error": "AssertionError [ERR_ASSERTION]: family=core case=0 source=(-4 * -5) + (-4 // (-5 or 1))\n+ actual - expected\n\n+ {\n- [Object: null prototype] {\n    repr: '20',\n    status: 'ok'\n  }\n"
+  },
+  {
+    "kind": "generated_rust_differential_failure",
+    "propertySeed": 1430870017,
+    "shrinkPath": "0:0",
+    "shrinkDomain": "corpus row index",
+    "context": "EvalContext::standard; no host vars; no clock",
+    "limits": {
+      "max_source_bytes": 65536,
+      "max_depth": 100,
+      "max_steps": 1000000,
+      "max_value_bytes": 1048576,
+      "max_total_bytes": 16777216,
+      "max_format_width": 1000
+    },
+    "row": {
+      "ordinal": 3000,
+      "family": "dates",
+      "case": 0,
+      "seed": 1430870017,
+      "source": "datetime(2024, 2, 17).date().isoformat()",
+      "outcome": {
+        "status": "parsed",
+        "ast": {
+          "schema": 1,
+          "nodes": [
+            {
+              "kind": "name",
+              "name": "datetime"
+            },
+            {
+              "kind": "literal",
+              "value": {
+                "kind": "int",
+                "value": "2024"
+              }
+            },
+            {
+              "kind": "literal",
+              "value": {
+                "kind": "int",
+                "value": "2"
+              }
+            },
+            {
+              "kind": "literal",
+              "value": {
+                "kind": "int",
+                "value": "17"
+              }
+            },
+            {
+              "kind": "call",
+              "func": 0,
+              "args": [
+                1,
+                2,
+                3
+              ],
+              "keywords": []
+            },
+            {
+              "kind": "attribute",
+              "value": 4,
+              "attr": "date"
+            },
+            {
+              "kind": "call",
+              "func": 5,
+              "args": [],
+              "keywords": []
+            },
+            {
+              "kind": "attribute",
+              "value": 6,
+              "attr": "isoformat"
+            },
+            {
+              "kind": "call",
+              "func": 7,
+              "args": [],
+              "keywords": []
+            }
+          ]
+        },
+        "result": {
+          "status": "ok",
+          "repr": "'2024-02-17'"
+        }
+      }
+    },
+    "error": "AssertionError [ERR_ASSERTION]: family=dates case=0 source=datetime(2024, 2, 17).date().isoformat()\n+ actual - expected\n\n+ {\n- [Object: null prototype] {\n    repr: \"'2024-02-17'\",\n    status: 'ok'\n  }\n"
+  },
+  {
+    "kind": "generated_rust_differential_failure",
+    "propertySeed": 1430870017,
+    "shrinkPath": "0:0",
+    "shrinkDomain": "corpus row index",
+    "context": "EvalContext::standard; no host vars; no clock",
+    "limits": {
+      "max_source_bytes": 65536,
+      "max_depth": 100,
+      "max_steps": 1000000,
+      "max_value_bytes": 1048576,
+      "max_total_bytes": 16777216,
+      "max_format_width": 1000
+    },
+    "row": {
+      "ordinal": 4000,
+      "family": "errors",
+      "case": 0,
+      "seed": 1430870017,
+      "source": "2 / 0",
+      "outcome": {
+        "status": "parsed",
+        "ast": {
+          "schema": 1,
+          "nodes": [
+            {
+              "kind": "literal",
+              "value": {
+                "kind": "int",
+                "value": "2"
+              }
+            },
+            {
+              "kind": "literal",
+              "value": {
+                "kind": "int",
+                "value": "0"
+              }
+            },
+            {
+              "kind": "binary",
+              "op": "div",
+              "left": 0,
+              "right": 1
+            }
+          ]
+        },
+        "result": {
+          "status": "error",
+          "class": "ZeroDivisionError",
+          "message": "ZeroDivisionError: division by zero"
+        }
+      }
+    },
+    "error": "AssertionError [ERR_ASSERTION]: family=errors case=0 source=2 / 0\n+ actual - expected\n\n+ {\n- [Object: null prototype] {\n    class: 'ZeroDivisionError',\n    message: 'ZeroDivisionError: division by zero',\n    status: 'error'\n  }\n"
+  },
+  {
+    "kind": "generated_rust_differential_failure",
+    "propertySeed": 1430870017,
+    "shrinkPath": "0:0",
+    "shrinkDomain": "corpus row index",
+    "context": "EvalContext::standard; no host vars; no clock",
+    "limits": {
+      "max_source_bytes": 65536,
+      "max_depth": 100,
+      "max_steps": 1000000,
+      "max_value_bytes": 1048576,
+      "max_total_bytes": 16777216,
+      "max_format_width": 1000
+    },
+    "row": {
+      "ordinal": 2000,
+      "family": "format",
+      "case": 0,
+      "seed": 1430870017,
+      "source": "'{:04d}'.format(-4)",
+      "outcome": {
+        "status": "parsed",
+        "ast": {
+          "schema": 1,
+          "nodes": [
+            {
+              "kind": "literal",
+              "value": {
+                "kind": "str",
+                "value": "{:04d}"
+              }
+            },
+            {
+              "kind": "attribute",
+              "value": 0,
+              "attr": "format"
+            },
+            {
+              "kind": "literal",
+              "value": {
+                "kind": "int",
+                "value": "4"
+              }
+            },
+            {
+              "kind": "unary",
+              "op": "u_sub",
+              "operand": 2
+            },
+            {
+              "kind": "call",
+              "func": 1,
+              "args": [
+                3
+              ],
+              "keywords": []
+            }
+          ]
+        },
+        "result": {
+          "status": "ok",
+          "repr": "'-004'"
+        }
+      }
+    },
+    "error": "AssertionError [ERR_ASSERTION]: family=format case=0 source='{:04d}'.format(-4)\n+ actual - expected\n\n+ {\n- [Object: null prototype] {\n    repr: \"'-004'\",\n    status: 'ok'\n  }\n"
+  },
+  {
+    "kind": "generated_rust_differential_failure",
+    "propertySeed": 1430870017,
+    "shrinkPath": "8",
+    "shrinkDomain": "corpus row index",
+    "context": "EvalContext::standard; no host vars; no clock",
+    "limits": {
+      "max_source_bytes": 65536,
+      "max_depth": 100,
+      "max_steps": 1000000,
+      "max_value_bytes": 1048576,
+      "max_total_bytes": 16777216,
+      "max_format_width": 1000
+    },
+    "row": {
+      "ordinal": 5894,
+      "family": "parser",
+      "case": 894,
+      "seed": 1430870017,
+      "source": "-2..x",
+      "outcome": {
+        "status": "parsed",
+        "ast": {
+          "schema": 1,
+          "nodes": [
+            {
+              "kind": "literal",
+              "value": {
+                "kind": "float",
+                "value": "4000000000000000"
+              }
+            },
+            {
+              "kind": "attribute",
+              "value": 0,
+              "attr": "x"
+            },
+            {
+              "kind": "unary",
+              "op": "u_sub",
+              "operand": 1
+            }
+          ]
+        },
+        "result": {
+          "status": "error",
+          "class": "AttributeError",
+          "message": "AttributeError: 'float' object has no attribute 'x'"
+        }
+      }
+    },
+    "error": "AssertionError [ERR_ASSERTION]: family=parser case=894 source=-2..x\n+ actual - expected\n\n+ {\n- [Object: null prototype] {\n    class: 'AttributeError',\n    message: \"AttributeError: 'float' object has no attribute 'x'\",\n    status: 'error'\n  }\n"
+  },
+  {
+    "kind": "generated_rust_differential_failure",
+    "propertySeed": 1430870017,
+    "shrinkPath": "1",
+    "shrinkDomain": "corpus row index",
+    "context": "EvalContext::standard; no host vars; no clock",
+    "limits": {
+      "max_source_bytes": 65536,
+      "max_depth": 100,
+      "max_steps": 1000000,
+      "max_value_bytes": 1048576,
+      "max_total_bytes": 16777216,
+      "max_format_width": 1000
+    },
+    "row": {
+      "ordinal": 4009,
+      "family": "errors",
+      "case": 9,
+      "seed": 1430870017,
+      "source": "9223372036854775807 + 12",
+      "outcome": {
+        "status": "parsed",
+        "ast": {
+          "schema": 1,
+          "nodes": [
+            {
+              "kind": "literal",
+              "value": {
+                "kind": "int",
+                "value": "9223372036854775807"
+              }
+            },
+            {
+              "kind": "literal",
+              "value": {
+                "kind": "int",
+                "value": "12"
+              }
+            },
+            {
+              "kind": "binary",
+              "op": "add",
+              "left": 0,
+              "right": 1
+            }
+          ]
+        },
+        "result": {
+          "status": "error",
+          "class": "OverflowError",
+          "message": "OverflowError: integer result does not fit in 64 bits"
+        }
+      }
+    },
+    "error": "AssertionError [ERR_ASSERTION]: family=errors case=9 source=9223372036854775807 + 12\n+ actual - expected\n\n  {\n    class: 'OverflowError',\n+   message: 'OverflowError: integer overflow',\n-   message: 'OverflowError: integer result does not fit in 64 bits',\n    status: 'error'\n  }\n"
+  }
+]

@@ -1,0 +1,7 @@
+name = "Office Blue Theme"
+summary = "Compact blue office appearance for the web client"
+version = "1.0"
+license = "MIT OR Apache-2.0"
+author = "Arkana"
+depends = ["base", "web"]
+data = []

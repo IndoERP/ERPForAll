@@ -1,0 +1,11 @@
+package erpforall:addon@1.0.0;
+
+/// A WASM addon component.
+///
+/// The world imports nothing but the ORM host interface: no files, network, clock or environment.
+/// WASI imports a guest toolchain adds are answered by the host with a deny-by-default context;
+/// capabilities approved at install arrive as further interfaces in a later minor version.
+world addon {
+    import orm-host;
+    export addon-guest;
+}

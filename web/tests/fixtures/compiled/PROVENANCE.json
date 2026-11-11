@@ -1,0 +1,16 @@
+{
+  "generator": "erp_ui_compiler::compile (BuildMode::Prod, addon web, path static/tests/contract.xml), each module written as <name>.js",
+  "compiler_branch": "wip/a later release (the compiler merged to main at 77144727 plus the Elang rename)",
+  "compiler_commit": "96ed4239cf2c5dd498b2ad5402567cc13961d9e0",
+  "source": {
+    "contract.xml": "1f8846b964ace330b48172d4c19c554237a1326d5722eb466a7674a4168a058f"
+  },
+  "modules": {
+    "contract.Bench.js": "1a7317278b6229c22a1a4a2ec70c806e365597040f065a257fedebeaad87586d",
+    "contract.Card.js": "ada7314ad5a12da7d76f666f0c3134fc9e47d0ef248206e7ae6f45d98db570a7",
+    "contract.Child.js": "c555f0bef9e9bccfddb5a66db0d3ab182366596c0ae758604477636552644c68",
+    "contract.Multi.js": "9202b440b4758991854e9ef207fa8816f543b1dd0837423e089f7ad647f03224",
+    "contract.Root.js": "276a0b92d8e3e4f81977d35334e1809048237e8d65fbd3cae05c031daef4a0c6",
+    "contract.Rows.js": "4946096e80710b77dd9bb296ce6ec96326a50e668d84b504b3bcfccd4164e1e9"
+  }
+}

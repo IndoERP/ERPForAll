@@ -1,0 +1,11 @@
+{
+  "name": "@erpforall/mail-store",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Client messaging store on keyed tables: typed records, delegation, local records, bounded windows, wire application",
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": { "types": "./src/index.ts", "default": "./src/index.ts" }
+  }
+}

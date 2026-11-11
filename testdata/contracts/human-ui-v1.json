@@ -1,0 +1,617 @@
+{
+  "contract": "human-ui-v1",
+  "wire_major": 1,
+  "status": "design-fixture-not-runtime-evidence",
+  "bootstrap": {
+    "wire_major": 1,
+    "registry_version": "registry-example-1",
+    "asset_version": "assets-example-1",
+    "identity": {
+      "uid": 2,
+      "name": "Administrator",
+      "internal": true
+    },
+    "companies": [
+      {
+        "id": 1,
+        "name": "Human test company",
+        "parent_id": null
+      }
+    ],
+    "current_company_id": 1,
+    "allowed_company_ids": [
+      1
+    ],
+    "locale": {
+      "lang": "en_US",
+      "tz": "UTC",
+      "decimal_point": ".",
+      "thousands_sep": ",",
+      "grouping": [
+        3,
+        0
+      ],
+      "date_format": "%m/%d/%Y",
+      "time_format": "%H:%M:%S"
+    },
+    "csrf": {
+      "logout": "FIXTURE-NOT-A-TOKEN"
+    },
+    "renderers": [
+      {
+        "key": "web.list",
+        "schema_major": 1
+      },
+      {
+        "key": "web.form",
+        "schema_major": 1
+      }
+    ],
+    "active_company_ids": [
+      1
+    ]
+  },
+  "menus": {
+    "path": "/erp/json/2/ir.ui.menu/erp_load_web_menus",
+    "request": {},
+    "response": {
+      "wire_major": 1,
+      "registry_version": "registry-example-1",
+      "roots": [
+        10
+      ],
+      "nodes": [
+        {
+          "id": 10,
+          "parent_id": null,
+          "children": [
+            11
+          ],
+          "label": "Notes",
+          "icon": null,
+          "action_id": 20
+        },
+        {
+          "id": 11,
+          "parent_id": 10,
+          "children": [],
+          "label": "All notes",
+          "icon": null,
+          "action_id": 20
+        }
+      ]
+    }
+  },
+  "action": {
+    "path": "/erp/json/2/ir.actions.act_window/erp_load_web_action",
+    "request": {
+      "ids": [
+        20
+      ]
+    },
+    "response": {
+      "wire_major": 1,
+      "id": 20,
+      "name": "Notes",
+      "model": "acceptance.note",
+      "target": "current",
+      "views": [
+        {
+          "id": 30,
+          "type": "list"
+        },
+        {
+          "id": 31,
+          "type": "form"
+        }
+      ],
+      "domain": null,
+      "context": null
+    }
+  },
+  "views": {
+    "path": "/erp/json/2/acceptance.note/get_views",
+    "request": {
+      "views": [
+        [
+          30,
+          "list"
+        ],
+        [
+          31,
+          "form"
+        ]
+      ],
+      "wire_major": 1,
+      "options": {
+        "mobile": false
+      }
+    },
+    "response": {
+      "wire_major": 1,
+      "registry_version": "registry-example-1",
+      "description_version": "description-example-1",
+      "model": "acceptance.note",
+      "fields": {
+        "acceptance.note": {
+          "name": {
+            "type": "char",
+            "label": "Name",
+            "required": true,
+            "readonly": false,
+            "selection": null,
+            "relation": null,
+            "relation_field": null
+          }
+        }
+      },
+      "views": [
+        {
+          "identity": {
+            "kind": "stored",
+            "id": 30
+          },
+          "type": "list",
+          "schema_major": 1,
+          "renderer": "web.list",
+          "root": 0,
+          "nodes": [
+            {
+              "kind": "list",
+              "children": [
+                1
+              ]
+            },
+            {
+              "kind": "field",
+              "field": {
+                "model": "acceptance.note",
+                "name": "name"
+              },
+              "widget": "char",
+              "options": {},
+              "modifiers": {
+                "readonly": null,
+                "required": null,
+                "invisible": null
+              },
+              "label": "Name",
+              "force_save": false
+            }
+          ]
+        },
+        {
+          "identity": {
+            "kind": "stored",
+            "id": 31
+          },
+          "type": "form",
+          "schema_major": 1,
+          "renderer": "web.form",
+          "root": 0,
+          "nodes": [
+            {
+              "kind": "form",
+              "children": [
+                1
+              ],
+              "record_mode": "record"
+            },
+            {
+              "kind": "field",
+              "field": {
+                "model": "acceptance.note",
+                "name": "name"
+              },
+              "widget": "char",
+              "options": {},
+              "modifiers": {
+                "readonly": null,
+                "required": null,
+                "invisible": null
+              },
+              "label": "Name",
+              "force_save": false
+            }
+          ]
+        }
+      ],
+      "notices": []
+    }
+  },
+  "settings_describe": {
+    "path": "/erp/json/2/ir.config.setting/erp_describe",
+    "request": {
+      "scope": {
+        "kind": "global"
+      }
+    },
+    "response": {
+      "wire_major": 1,
+      "registry_version": "registry-example-1",
+      "scope": {
+        "kind": "global"
+      },
+      "declarations": [
+        {
+          "key": "acceptance_notes.show_archived",
+          "label": "Show archived notes",
+          "kind": "boolean",
+          "default": false,
+          "choices": null,
+          "writable": true
+        }
+      ]
+    }
+  },
+  "settings_read": {
+    "path": "/erp/json/2/ir.config.setting/erp_read_values",
+    "request": {
+      "scope": {
+        "kind": "global"
+      },
+      "keys": [
+        "acceptance_notes.show_archived"
+      ]
+    },
+    "response": {
+      "wire_major": 1,
+      "scope": {
+        "kind": "global"
+      },
+      "revision": "0",
+      "values": [
+        {
+          "key": "acceptance_notes.show_archived",
+          "value": false,
+          "source": "default"
+        }
+      ]
+    }
+  },
+  "settings_write": {
+    "path": "/erp/json/2/ir.config.setting/erp_write_values",
+    "request": {
+      "scope": {
+        "kind": "global"
+      },
+      "expected_revision": "0",
+      "changes": [
+        {
+          "key": "acceptance_notes.show_archived",
+          "value": true
+        }
+      ]
+    },
+    "response": {
+      "wire_major": 1,
+      "scope": {
+        "kind": "global"
+      },
+      "revision": "1",
+      "values": [
+        {
+          "key": "acceptance_notes.show_archived",
+          "value": true,
+          "source": "stored"
+        }
+      ]
+    }
+  },
+  "company_scope": {
+    "kind": "company",
+    "company_id": 1
+  },
+  "addon_catalog": {
+    "path": "/erp/json/2/ir.module.module/erp_available_addons",
+    "request": {},
+    "response": {
+      "wire_major": 1,
+      "registry_version": "registry-example-1",
+      "addons": [
+        {
+          "name": "acceptance_notes",
+          "label": "Acceptance Notes",
+          "version": "1.0.0",
+          "state": "uninstalled",
+          "installable": true,
+          "summary": "Shared notes for framework acceptance",
+          "category": "Productivity",
+          "author": "Arkana",
+          "application": false,
+          "website": "https://erpforall.example/notes",
+          "license": "LGPL-3",
+          "depends": [
+            "base",
+            "web"
+          ]
+        }
+      ]
+    }
+  },
+  "install": {
+    "path": "/web/module/install",
+    "request": {
+      "modules": [
+        "acceptance_notes"
+      ]
+    },
+    "response": {
+      "installed": [
+        "acceptance_notes"
+      ],
+      "registry_version": "registry-example-2",
+      "asset_version": "assets-example-2"
+    }
+  },
+  "login": {
+    "element_id": "erp-login",
+    "value": {
+      "csrf": "FIXTURE-NOT-A-TOKEN",
+      "database": "FIXTURE-DATABASE",
+      "redirect": "/erp",
+      "error": null
+    },
+    "form_fields": [
+      "csrf_token",
+      "db",
+      "login",
+      "password",
+      "redirect"
+    ]
+  },
+  "shell_dom": {
+    "bootstrap_id": "erp-bootstrap",
+    "mount_id": "erp-root"
+  },
+  "asset_manifest": {
+    "schema": 1,
+    "assets": [
+      {
+        "name": "client.js",
+        "path": "client.0000000000000000000000000000000000000000000000000000000000000000.js",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "content_type": "text/javascript; charset=utf-8"
+      },
+      {
+        "name": "client.css",
+        "path": "client.1111111111111111111111111111111111111111111111111111111111111111.css",
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "content_type": "text/css; charset=utf-8"
+      }
+    ]
+  },
+  "settings_action": {
+    "path": "/erp/json/2/ir.actions.act_window/erp_load_web_action",
+    "request": {
+      "ids": [
+        21
+      ]
+    },
+    "response": {
+      "wire_major": 1,
+      "id": 21,
+      "name": "Settings",
+      "model": "ir.config.setting",
+      "target": "current",
+      "views": [
+        {
+          "id": 32,
+          "type": "form"
+        }
+      ],
+      "domain": null,
+      "context": null
+    }
+  },
+  "settings_views": {
+    "path": "/erp/json/2/ir.config.setting/get_views",
+    "request": {
+      "views": [
+        [
+          32,
+          "form"
+        ]
+      ],
+      "wire_major": 1,
+      "options": {
+        "mobile": false
+      }
+    },
+    "response": {
+      "wire_major": 1,
+      "registry_version": "registry-example-1",
+      "description_version": "description-example-1",
+      "model": "ir.config.setting",
+      "fields": {
+        "ir.config.setting": {}
+      },
+      "views": [
+        {
+          "identity": {
+            "kind": "stored",
+            "id": 32
+          },
+          "type": "form",
+          "schema_major": 1,
+          "renderer": "web.form",
+          "root": 0,
+          "nodes": [
+            {
+              "kind": "form",
+              "record_mode": "service",
+              "children": [
+                1
+              ]
+            },
+            {
+              "kind": "widget",
+              "widget": "web.settings",
+              "options": {
+                "scope_kinds": [
+                  "global",
+                  "company"
+                ], "app": null
+              },
+              "modifiers": {
+                "readonly": null,
+                "required": null,
+                "invisible": null
+              }
+            }
+          ]
+        }
+      ],
+      "notices": []
+    }
+  },
+  "addons_action": {
+    "path": "/erp/json/2/ir.actions.act_window/erp_load_web_action",
+    "request": {
+      "ids": [
+        22
+      ]
+    },
+    "response": {
+      "wire_major": 1,
+      "id": 22,
+      "name": "Addons",
+      "model": "ir.module.module",
+      "target": "current",
+      "views": [
+        {
+          "id": 33,
+          "type": "form"
+        }
+      ],
+      "domain": null,
+      "context": null
+    }
+  },
+  "addons_views": {
+    "path": "/erp/json/2/ir.module.module/get_views",
+    "request": {
+      "views": [
+        [
+          33,
+          "form"
+        ]
+      ],
+      "wire_major": 1,
+      "options": {
+        "mobile": false
+      }
+    },
+    "response": {
+      "wire_major": 1,
+      "registry_version": "registry-example-1",
+      "description_version": "description-example-1",
+      "model": "ir.module.module",
+      "fields": {
+        "ir.module.module": {}
+      },
+      "views": [
+        {
+          "identity": {
+            "kind": "stored",
+            "id": 33
+          },
+          "type": "form",
+          "schema_major": 1,
+          "renderer": "web.form",
+          "root": 0,
+          "nodes": [
+            {
+              "kind": "form",
+              "record_mode": "service",
+              "children": [
+                1
+              ]
+            },
+            {
+              "kind": "widget",
+              "widget": "web.addons",
+              "options": {},
+              "modifiers": {
+                "readonly": null,
+                "required": null,
+                "invisible": null
+              }
+            }
+          ]
+        }
+      ],
+      "notices": []
+    }
+  },
+  "upgrade": {
+    "path": "/erp/module/upgrade",
+    "request": {
+      "modules": [
+        "acceptance_notes"
+      ]
+    },
+    "response": {
+      "upgraded": [
+        "acceptance_notes"
+      ],
+      "installed": [],
+      "registry_version": "registry-example-2",
+      "asset_version": "assets-example-2"
+    }
+  },
+  "uninstall": {
+    "path": "/erp/module/uninstall",
+    "request": {
+      "modules": [
+        "acceptance_notes"
+      ],
+      "impact": "uninstall-v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "response": {
+      "uninstalled": [
+        "acceptance_notes"
+      ],
+      "registry_version": "registry-example-3",
+      "asset_version": "assets-example-3"
+    }
+  },
+  "addon_detail": {
+    "path": "/erp/json/2/ir.module.module/erp_addon_detail",
+    "request": {
+      "name": "acceptance_notes"
+    },
+    "response": {
+      "wire_major": 1,
+      "registry_version": "registry-example-1",
+      "name": "acceptance_notes",
+      "label": "Acceptance Notes",
+      "summary": "Notes for acceptance checks",
+      "description": "Plain text addon description.",
+      "author": "ERPForAll",
+      "available_version": "1.0.0",
+      "installed_version": null,
+      "state": "uninstalled",
+      "dependencies": {
+        "items": [
+          "base"
+        ],
+        "next_cursor": null
+      },
+      "dependents": {
+        "items": [],
+        "next_cursor": null
+      },
+      "menus": {
+        "items": [],
+        "next_cursor": null
+      },
+      "views": {
+        "items": [],
+        "next_cursor": null
+      },
+      "upgrade_refusal": "Addon is not installed",
+      "uninstall_refusal": "Addon is not installed"
+    }
+  }
+}

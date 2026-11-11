@@ -1,0 +1,47 @@
+# A loan of one book to one contact.
+[[model]]
+name = "sample_library.loan"
+description = "Library Loan"
+order = "loan_date desc, id desc"
+
+[model.company_access]
+unrestricted = "sample library loans use the existing borrower and library access rules"
+
+[[model.field]]
+name = "book_id"
+type = "many2one"
+comodel = "sample_library.book"
+string = "Book"
+required = true
+ondelete = "restrict"
+
+[[model.field]]
+name = "borrower_id"
+type = "many2one"
+comodel = "res.partner"
+string = "Borrower"
+required = true
+ondelete = "restrict"
+
+[[model.field]]
+name = "loan_date"
+type = "date"
+string = "Loan Date"
+
+[[model.field]]
+name = "due_date"
+type = "date"
+string = "Due Date"
+
+[[model.field]]
+name = "return_date"
+type = "date"
+string = "Return Date"
+
+[[model.field]]
+name = "state"
+type = "selection"
+selection = [["draft", "Draft"], ["out", "On Loan"], ["returned", "Returned"]]
+string = "Status"
+default = "draft"
+required = true

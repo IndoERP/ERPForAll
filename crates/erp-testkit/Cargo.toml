@@ -1,0 +1,61 @@
+[package]
+name = "erp-testkit"
+description = "Throwaway PostgreSQL databases, the ORM registry harness and query budgets for ERPForAll tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+tokio = { workspace = true, features = ["rt", "macros", "time", "net", "io-util", "sync"] }
+tokio-postgres = { workspace = true }
+deadpool-postgres = { workspace = true }
+thiserror = { workspace = true }
+clap = { workspace = true }
+erp-domain = { workspace = true }
+erp-fields = { workspace = true }
+erp-registry = { workspace = true }
+erp-orm = { workspace = true, features = ["trusted-test-principals", "test-identities"] }
+erp-rpc = { workspace = true }
+erp-sdk = { workspace = true }
+futures-core = { workspace = true }
+rustc-hash = { workspace = true }
+erp-alloc-budget = { workspace = true }
+
+[dev-dependencies]
+# Allocation envelope of the real sanitiser (tests/alloc_html_sanitize_envelope.rs).
+erp-html = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "time"] }
+serde_json = { workspace = true }
+# stock hyper measured by the served-path harness (tests/alloc_serve_hyper.rs)
+hyper = { workspace = true, features = ["server", "http1"] }
+hyper-util = { workspace = true, features = ["tokio"] }
+http-body-util = { workspace = true }
+bytes = { workspace = true }
+
+[lints]
+workspace = true
+
+# Allocation tests run on the main thread under erp_alloc_budget's harness (lesson):
+# libtest's own main thread would allocate inside their counting windows.
+[[test]]
+name = "alloc_budget"
+harness = false
+
+[[test]]
+name = "alloc_html_sanitize_envelope"
+harness = false
+
+[[test]]
+name = "alloc_serve_harness"
+harness = false
+
+[[test]]
+name = "alloc_serve_hyper"
+harness = false
+
+[[test]]
+name = "alloc_serve_hyper_provider"
+harness = false

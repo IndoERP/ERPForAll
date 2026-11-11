@@ -1,0 +1,37 @@
+# The core addon every database installs (L11). Data files, security CSVs and hooks are
+# added by the M3 slices that bring the models (S1, S2, BASE-A, AUTH, ...).
+name = "Base"
+summary = "The kernel of ERPForAll, needed for every installation"
+category = "Hidden"
+author = "Arkana"
+license = "MIT OR Apache-2.0"
+version = "1.8"
+auto_install = true
+depends = []
+# Loaded by the data loader. ir.capability: which groups hold the core capabilities
+# . res.currency: ISO 4217 currencies. res.lang: base languages (en_US).
+data = [
+    "data/bootstrap_groups.xml",
+    "data/ir.capability.csv",
+    "data/res.currency.csv",
+    "data/res_currency_rate_type_data.xml",
+    "data/res.lang.csv",
+    "data/bootstrap_company.xml",
+    "data/partner_industries.xml",
+    "data/res_partner_data.xml",
+    "data/ir_config_parameter_data.xml",
+    "security/ir.access.csv",
+    "data/settings_views.xml",
+    "data/user_preferences_views.xml",
+    "data/password_change_views.xml",
+    "data/currency_views.xml",
+    "data/partner_views.xml",
+    "data/technical_views.xml",
+]
+# Loaded only when the database is created with demo data: invented partners, extra active currencies and
+# their demo rates. No demo users (a demo user needs a password; demo data never ships credentials).
+demo = [
+    "demo/res_currency_demo.xml",
+    "demo/res_currency_rate_demo.xml",
+    "demo/res_partner_demo.xml",
+]

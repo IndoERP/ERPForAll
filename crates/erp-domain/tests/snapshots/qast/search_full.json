@@ -1,0 +1,1 @@
+{"context":{"active_test":false},"domain":["|",["name","ilike","acme"],["email","!=",false]],"fields":["name","email","country_id"],"kind":"search_read","limit":20,"model":"res.partner","offset":40,"order":[{"dir":"desc","field":"name","nulls":"last"},{"dir":"asc","field":"id","nulls":null}],"version":1}

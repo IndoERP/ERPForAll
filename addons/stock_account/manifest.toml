@@ -1,0 +1,9 @@
+name = "Stock Account"
+summary = "Stock valuation engine, cost state, FIFO layers and value journal"
+category = "Inventory"
+author = "Arkana"
+license = "MIT OR Apache-2.0"
+version = "1.0.0"
+depends = ["stock"]
+data = []
+exact_only = true

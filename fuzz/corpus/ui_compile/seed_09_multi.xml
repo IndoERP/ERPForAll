@@ -1,0 +1,1 @@
+<templates><t t-name="web.A"><div>A</div></t><t t-name="web.B"><span>B</span></t></templates>

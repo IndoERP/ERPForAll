@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<erp>
+    <record id="note_list" model="ir.ui.view">
+        <field name="name">acceptance_notes.note.list</field>
+        <field name="model">acceptance_notes.note</field>
+        <field name="arch" type="xml">
+            <list string="Notes">
+                <field name="name"/>
+                <field name="priority" widget="priority"/>
+                <field name="owner_id"/>
+                <field name="company_id"/>
+                <field name="active" widget="boolean_toggle"/>
+            </list>
+        </field>
+    </record>
+    <record id="note_search" model="ir.ui.view">
+        <field name="name">acceptance_notes.note.search</field>
+        <field name="model">acceptance_notes.note</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="name"/>
+                <searchpanel>
+                    <field name="priority" string="Priority" enable_counters="1" expand="1"/>
+                </searchpanel>
+            </search>
+        </field>
+    </record>
+    <record id="note_form" model="ir.ui.view">
+        <field name="name">acceptance_notes.note.form</field>
+        <field name="model">acceptance_notes.note</field>
+        <field name="arch" type="xml">
+            <form string="Note">
+                <sheet>
+                    <div class="oe_title">
+                        <h1><field name="name" string="Title" widget="acceptance_notes.note_title"/></h1>
+                    </div>
+                    <group>
+                        <group string="Details">
+                            <field name="priority" widget="radio"/>
+                            <field name="owner_id"/>
+                        </group>
+                        <group string="Organization">
+                            <field name="company_id"/>
+                            <field name="active" widget="boolean_toggle"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page name="description" string="Description">
+                            <field name="body" string="Description" widget="CopyClipboardText"/>
+                        </page>
+                        <page name="internal" string="Internal Memo" groups="base.group_system">
+                            <field name="internal_memo"/>
+                        </page>
+                    </notebook>
+                </sheet>
+                <aside>
+                    <group string="Record information">
+                        <field name="create_uid" readonly="1"/>
+                        <field name="create_date" readonly="1"/>
+                        <field name="write_uid" readonly="1"/>
+                        <field name="write_date" readonly="1"/>
+                    </group>
+                </aside>
+            </form>
+        </field>
+    </record>
+    <record id="note_action" model="ir.actions.act_window">
+        <field name="name">Notes</field>
+        <field name="res_model">acceptance_notes.note</field>
+        <field name="view_mode">list,form</field>
+    </record>
+    <menuitem id="notes_menu" name="Notes" action="note_action" groups="base.group_user" sequence="60" web_icon="lucide:notebook-pen"/>
+    <!-- The addon's own settings page: the shared Settings page, opened on this addon's app. -->
+    <record id="settings_form" model="ir.ui.view">
+        <field name="name">acceptance_notes.settings</field>
+        <field name="model">ir.config.setting</field>
+        <field name="arch" type="xml">
+            <form record_mode="service">
+                <widget name="web.settings" scope_kinds="global,company" app="acceptance_notes"/>
+            </form>
+        </field>
+    </record>
+    <record id="settings_action" model="ir.actions.act_window">
+        <field name="name">Settings</field>
+        <field name="res_model">ir.config.setting</field>
+        <field name="view_mode">form</field>
+        <field name="view_id" ref="settings_form"/>
+    </record>
+    <menuitem id="notes_config_menu" name="Configuration" parent="notes_menu" groups="base.group_system" sequence="90"/>
+    <menuitem id="notes_settings_menu" name="Settings" parent="notes_config_menu" action="settings_action" groups="base.group_system" sequence="10"/>
+</erp>

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Two demo pricelists: a reseller list in the company currency with category, product and global rules, and a list in rupiah (the currency is switched on by the base demo). -->
+<erp>
+  <record id="pricelist_demo_reseller" model="product.pricelist">
+    <field name="name">Reseller</field>
+    <field name="sequence">10</field>
+    <field name="currency_id" ref="base.USD"/>
+  </record>
+  <record id="pricelist_item_demo_reseller_furniture" model="product.pricelist.item">
+    <field name="pricelist_id" ref="pricelist_demo_reseller"/>
+    <field name="applied_on">2_product_category</field>
+    <field name="categ_id" ref="product_category_demo_furniture"/>
+    <field name="compute_price">discount</field>
+    <field name="price_discount">15</field>
+  </record>
+  <record id="pricelist_item_demo_reseller_laptop" model="product.pricelist.item">
+    <field name="pricelist_id" ref="pricelist_demo_reseller"/>
+    <field name="applied_on">1_product</field>
+    <field name="product_tmpl_id" ref="product_demo_laptop"/>
+    <field name="compute_price">fixed</field>
+    <field name="fixed_price">650</field>
+  </record>
+  <record id="pricelist_item_demo_reseller_all" model="product.pricelist.item">
+    <field name="pricelist_id" ref="pricelist_demo_reseller"/>
+    <field name="applied_on">3_global</field>
+    <field name="compute_price">discount</field>
+    <field name="price_discount">5</field>
+  </record>
+
+  <record id="pricelist_demo_rupiah" model="product.pricelist">
+    <field name="name">Harga Rupiah</field>
+    <field name="sequence">20</field>
+    <field name="currency_id" ref="base.IDR"/>
+  </record>
+  <record id="pricelist_item_demo_rupiah_bulk_coffee" model="product.pricelist.item">
+    <field name="pricelist_id" ref="pricelist_demo_rupiah"/>
+    <field name="applied_on">2_product_category</field>
+    <field name="categ_id" ref="product_category_demo_food"/>
+    <field name="min_quantity">10</field>
+    <field name="compute_price">discount</field>
+    <field name="price_discount">10</field>
+  </record>
+</erp>

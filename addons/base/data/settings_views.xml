@@ -1,0 +1,235 @@
+<?xml version="1.0" encoding="utf-8"?>
+<erp>
+  <record id="settings_form" model="ir.ui.view">
+    <field name="name">ir.config.setting.form</field>
+    <field name="model">ir.config.setting</field>
+    <field name="arch" type="xml">
+      <form record_mode="service">
+        <widget name="web.settings" scope_kinds="global,company"/>
+      </form>
+    </field>
+  </record>
+  <record id="settings_action" model="ir.actions.act_window">
+    <field name="name">Settings</field>
+    <field name="res_model">ir.config.setting</field>
+    <field name="view_mode">form</field>
+    <field name="view_id" ref="settings_form"/>
+  </record>
+  <menuitem id="settings_menu" name="Settings" action="settings_action" groups="base.group_system" sequence="90" web_icon="lucide:settings"/>
+  <!--
+Each
+       addon with settings ships its own Configuration > Settings menu that opens this page on its app
+       (`<widget name="web.settings" app="<addon>"/>`).
+  -->
+
+  <record id="settings_users_list" model="ir.ui.view">
+    <field name="name">res.users.settings.list</field>
+    <field name="model">res.users</field>
+    <field name="arch" type="xml"><list><field name="name"/><field name="login"/><field name="active"/><field name="company_id"/></list></field>
+  </record>
+  <record id="settings_users_form" model="ir.ui.view">
+    <field name="name">res.users.settings.form</field>
+    <field name="model">res.users</field>
+    <field name="arch" type="xml"><form record_mode="record">
+      <header><button name="preference_change_password" type="object" string="Change password" invisible="not password_is_own"/><button name="action_change_password_wizard" type="object" string="Change password" groups="base.group_erp_manager" invisible="password_is_own"/></header>
+      <sheet>
+        <div class="oe_title"><h1><field name="name" placeholder="e.g. John Doe"/></h1></div>
+        <group>
+          <group>
+            <field name="login" string="Login / Email" invisible="login != email"/>
+            <field name="login" string="Login" invisible="login == email"/>
+            <field name="email" invisible="login == email"/>
+          </group>
+          <group>
+            <field name="active"/>
+          </group>
+        </group>
+        <notebook>
+          <page name="access_rights" string="Access Rights">
+            <group>
+              <field name="company_ids"/>
+              <field name="company_id"/>
+            </group>
+            <group string="Groups">
+              <field name="group_ids"/>
+            </group>
+          </page>
+        </notebook>
+        <field name="password_is_own" invisible="1"/>
+      </sheet>
+    </form></field>
+  </record>
+  <record id="settings_users_action" model="ir.actions.act_window">
+    <field name="name">Users</field>
+    <field name="res_model">res.users</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="settings_users_list"/>
+  </record>
+  <record id="settings_users_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="settings_users_action"/>
+    <field name="view_id" ref="settings_users_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="settings_users_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="settings_users_action"/>
+    <field name="view_id" ref="settings_users_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="settings_users_menu" name="Users" parent="settings_menu" action="settings_users_action" groups="base.group_system" sequence="30"/>
+  <record id="settings_companies_list" model="ir.ui.view">
+    <field name="name">res.company.settings.list</field>
+    <field name="model">res.company</field>
+    <field name="arch" type="xml"><list><field name="name"/><field name="parent_id"/><field name="email"/><field name="phone"/><field name="currency_id"/></list></field>
+  </record>
+  <record id="settings_companies_form" model="ir.ui.view">
+    <field name="name">res.company.settings.form</field>
+    <field name="model">res.company</field>
+    <field name="arch" type="xml"><form record_mode="record">
+      <sheet>
+        <div class="oe_button_box" name="button_box">
+          <button class="oe_stat_button" name="action_all_company_branches" type="object" string="Branches" invisible="not all_child_ids"><field name="child_ids" widget="relation_count" string="Branches"/></button>
+        </div>
+        <field name="name"/>
+        <notebook>
+          <page name="general_info" string="General Information">
+            <group>
+              <group string="Address">
+                <field name="street"/>
+                <field name="street2"/>
+                <field name="city"/>
+                <field name="zip"/>
+              </group>
+              <group string="Contact">
+                <field name="phone"/>
+                <field name="email"/>
+                <field name="website"/>
+              </group>
+            </group>
+            <group>
+              <group string="Identification">
+                <field name="vat"/>
+                <field name="currency_id"/>
+              </group>
+              <group string="Organization">
+                <field name="parent_id" readonly="1"/>
+              </group>
+            </group>
+          </page>
+          <page name="branches" string="Branches">
+            <field name="child_ids" nolabel="1" context="{'default_parent_id': id}"/>
+          </page>
+        </notebook>
+        <field name="all_child_ids" invisible="1"/>
+      </sheet>
+    </form></field>
+  </record>
+  <record id="settings_companies_action" model="ir.actions.act_window">
+    <field name="name">Companies</field>
+    <field name="res_model">res.company</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="settings_companies_list"/>
+    <field name="domain">[('parent_id', '=', False)]</field>
+  </record>
+  <record id="settings_companies_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="settings_companies_action"/>
+    <field name="view_id" ref="settings_companies_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="settings_companies_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="settings_companies_action"/>
+    <field name="view_id" ref="settings_companies_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="settings_companies_menu" name="Companies" parent="settings_menu" action="settings_companies_action" groups="base.group_system" sequence="30"/>
+  <record id="settings_languages_list" model="ir.ui.view">
+    <field name="name">res.lang.settings.list</field>
+    <field name="model">res.lang</field>
+    <field name="arch" type="xml"><list><field name="name"/><field name="code"/><field name="active"/></list></field>
+  </record>
+  <record id="settings_languages_form" model="ir.ui.view">
+    <field name="name">res.lang.settings.form</field>
+    <field name="model">res.lang</field>
+    <field name="arch" type="xml"><form record_mode="record"><field name="name"/><field name="code"/><field name="active"/><field name="direction"/></form></field>
+  </record>
+  <record id="settings_languages_action" model="ir.actions.act_window">
+    <field name="name">Languages</field>
+    <field name="res_model">res.lang</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="settings_languages_list"/>
+  </record>
+  <record id="settings_languages_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="settings_languages_action"/>
+    <field name="view_id" ref="settings_languages_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="settings_languages_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="settings_languages_action"/>
+    <field name="view_id" ref="settings_languages_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="settings_languages_menu" name="Languages" parent="settings_menu" action="settings_languages_action" groups="base.group_system" sequence="30"/>
+  <record id="settings_groups_list" model="ir.ui.view">
+    <field name="name">res.groups.settings.list</field>
+    <field name="model">res.groups</field>
+    <field name="arch" type="xml"><list><field name="name"/><field name="share"/></list></field>
+  </record>
+  <record id="settings_groups_form" model="ir.ui.view">
+    <field name="name">res.groups.settings.form</field>
+    <field name="model">res.groups</field>
+    <field name="arch" type="xml"><form record_mode="record"><field name="name"/><field name="share"/><field name="implied_ids"/></form></field>
+  </record>
+  <record id="settings_groups_action" model="ir.actions.act_window">
+    <field name="name">Groups</field>
+    <field name="res_model">res.groups</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="settings_groups_list"/>
+  </record>
+  <record id="settings_groups_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="settings_groups_action"/>
+    <field name="view_id" ref="settings_groups_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="settings_groups_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="settings_groups_action"/>
+    <field name="view_id" ref="settings_groups_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="settings_groups_menu" name="Groups" parent="settings_menu" action="settings_groups_action" groups="base.group_system" sequence="30"/>
+  <record id="settings_access_list" model="ir.ui.view">
+    <field name="name">ir.access.settings.list</field>
+    <field name="model">ir.access</field>
+    <field name="arch" type="xml"><list><field name="name"/><field name="active"/><field name="model_id"/><field name="group_id"/><field name="operation"/></list></field>
+  </record>
+  <record id="settings_access_form" model="ir.ui.view">
+    <field name="name">ir.access.settings.form</field>
+    <field name="model">ir.access</field>
+    <field name="arch" type="xml"><form record_mode="record"><field name="name"/><field name="active"/><field name="model_id"/><field name="group_id"/><field name="operation"/><field name="domain"/></form></field>
+  </record>
+  <record id="settings_access_action" model="ir.actions.act_window">
+    <field name="name">Access Rules</field>
+    <field name="res_model">ir.access</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="settings_access_list"/>
+  </record>
+  <record id="settings_access_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="settings_access_action"/>
+    <field name="view_id" ref="settings_access_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="settings_access_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="settings_access_action"/>
+    <field name="view_id" ref="settings_access_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="settings_access_menu" name="Access Rules" parent="settings_menu" action="settings_access_action" groups="base.group_system" sequence="30"/>
+</erp>

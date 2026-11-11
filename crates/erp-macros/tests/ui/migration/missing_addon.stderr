@@ -1,0 +1,7 @@
+error: migration: missing `addon = "..."`
+ --> tests/ui/migration/missing_addon.rs:2:1
+  |
+2 | #[erp_macros::migration(version = "1.1", stage = post)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `erp_macros::migration` (in Nightly builds, run with -Z macro-backtrace for more info)

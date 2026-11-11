@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic fixtures: templates the compiler must reject, each with one named reason. -->
+<templates xml:space="preserve">
+
+    <t t-name="fixtures.Raw">
+        <div t-raw="this.props.html"/>
+    </t>
+
+    <t t-name="fixtures.UnknownDirective">
+        <div t-frobnicate="1"/>
+    </t>
+
+    <t t-name="fixtures.BadExpression">
+        <div t-esc="this.props.a +"/>
+    </t>
+
+    <t t-name="fixtures.GlobalWindow">
+        <div t-esc="window.location"/>
+    </t>
+
+</templates>

@@ -1,0 +1,306 @@
+{
+  "description_version": "31c7f26ef2287614",
+  "fields": {
+    "acceptance_notes.note": {
+      "active": {
+        "label": "Active",
+        "readonly": false,
+        "relation": null,
+        "relation_field": null,
+        "required": false,
+        "selection": null,
+        "type": "boolean"
+      },
+      "body": {
+        "label": "Body",
+        "readonly": false,
+        "relation": null,
+        "relation_field": null,
+        "required": false,
+        "selection": null,
+        "type": "text"
+      },
+      "company_id": {
+        "label": "Company",
+        "readonly": false,
+        "relation": "res.company",
+        "relation_field": null,
+        "required": true,
+        "selection": null,
+        "type": "many2one"
+      },
+      "create_date": {
+        "label": "Created on",
+        "readonly": true,
+        "relation": null,
+        "relation_field": null,
+        "required": false,
+        "selection": null,
+        "type": "datetime"
+      },
+      "create_uid": {
+        "label": "Created by",
+        "readonly": true,
+        "relation": "res.users",
+        "relation_field": null,
+        "required": false,
+        "selection": null,
+        "type": "many2one"
+      },
+      "display_name": {
+        "label": "Display Name",
+        "readonly": true,
+        "relation": null,
+        "relation_field": null,
+        "required": false,
+        "selection": null,
+        "type": "char"
+      },
+      "id": {
+        "label": "ID",
+        "readonly": true,
+        "relation": null,
+        "relation_field": null,
+        "required": false,
+        "selection": null,
+        "type": "integer"
+      },
+      "name": {
+        "label": "Name",
+        "readonly": false,
+        "relation": null,
+        "relation_field": null,
+        "required": true,
+        "selection": null,
+        "type": "char"
+      },
+      "owner_id": {
+        "label": "Owner",
+        "readonly": false,
+        "relation": "res.users",
+        "relation_field": null,
+        "required": true,
+        "selection": null,
+        "type": "many2one"
+      },
+      "priority": {
+        "label": "Priority",
+        "readonly": false,
+        "relation": null,
+        "relation_field": null,
+        "required": false,
+        "selection": [
+          [
+            "low",
+            "Low"
+          ],
+          [
+            "normal",
+            "Normal"
+          ],
+          [
+            "high",
+            "High"
+          ]
+        ],
+        "type": "selection"
+      },
+      "write_date": {
+        "label": "Last Updated on",
+        "readonly": true,
+        "relation": null,
+        "relation_field": null,
+        "required": false,
+        "selection": null,
+        "type": "datetime"
+      },
+      "write_uid": {
+        "label": "Last Updated by",
+        "readonly": true,
+        "relation": "res.users",
+        "relation_field": null,
+        "required": false,
+        "selection": null,
+        "type": "many2one"
+      }
+    }
+  },
+  "model": "acceptance_notes.note",
+  "notices": [],
+  "registry_version": "6",
+  "views": [
+    {
+      "identity": {
+        "id": 68,
+        "kind": "stored"
+      },
+      "nodes": [
+        {
+          "children": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "kind": "search",
+          "search_panel": {
+            "default_value": null,
+            "enable_counters": false,
+            "expand": true,
+            "field": {
+              "model": "acceptance_notes.note",
+              "name": "priority"
+            },
+            "kind": "selection",
+            "label": "Priority",
+            "notice": null
+          }
+        },
+        {
+          "field": {
+            "model": "acceptance_notes.note",
+            "name": "name"
+          },
+          "filter_domain": {
+            "nodes": [
+              {
+                "kind": "literal",
+                "value": {
+                  "kind": "str",
+                  "value": "name"
+                }
+              },
+              {
+                "kind": "literal",
+                "value": {
+                  "kind": "str",
+                  "value": "ilike"
+                }
+              },
+              {
+                "kind": "name",
+                "name": "self"
+              },
+              {
+                "items": [
+                  0,
+                  1,
+                  2
+                ],
+                "kind": "tuple"
+              },
+              {
+                "items": [
+                  3
+                ],
+                "kind": "list"
+              }
+            ],
+            "schema": 1
+          },
+          "kind": "search_field",
+          "label": "Name",
+          "operator": "ilike"
+        },
+        {
+          "domain": {
+            "nodes": [
+              {
+                "kind": "literal",
+                "value": {
+                  "kind": "str",
+                  "value": "name"
+                }
+              },
+              {
+                "kind": "literal",
+                "value": {
+                  "kind": "str",
+                  "value": "!="
+                }
+              },
+              {
+                "kind": "literal",
+                "value": {
+                  "kind": "bool",
+                  "value": false
+                }
+              },
+              {
+                "items": [
+                  0,
+                  1,
+                  2
+                ],
+                "kind": "tuple"
+              },
+              {
+                "items": [
+                  3
+                ],
+                "kind": "list"
+              }
+            ],
+            "schema": 1
+          },
+          "kind": "search_filter",
+          "label": "Named",
+          "name": "named"
+        },
+        {
+          "kind": "search_separator"
+        },
+        {
+          "children": [
+            5,
+            6
+          ],
+          "expand": true,
+          "kind": "search_group",
+          "label": "Group"
+        },
+        {
+          "context": {
+            "nodes": [
+              {
+                "kind": "literal",
+                "value": {
+                  "kind": "str",
+                  "value": "group_by"
+                }
+              },
+              {
+                "kind": "literal",
+                "value": {
+                  "kind": "str",
+                  "value": "priority"
+                }
+              },
+              {
+                "items": [
+                  [
+                    0,
+                    1
+                  ]
+                ],
+                "kind": "dict"
+              }
+            ],
+            "schema": 1
+          },
+          "kind": "search_filter",
+          "label": "Priority",
+          "name": "priority"
+        },
+        {
+          "kind": "search_separator"
+        }
+      ],
+      "renderer": "web.search",
+      "root": 0,
+      "schema_major": 1,
+      "type": "search"
+    }
+  ],
+  "wire_major": 1
+}

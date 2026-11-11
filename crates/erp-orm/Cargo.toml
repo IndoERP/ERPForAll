@@ -1,0 +1,101 @@
+[package]
+name = "erp-orm"
+description = "ERPForAll ORM runtime: environments, transactions, columnar cache, recordsets, CRUD, schema sync, method dispatch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+# Fault injection for tests of the ambiguous-commit path and an unchecked
+# `Env::with_principal_for_tests`; never in production builds.
+test-faults = []
+# `OrmBuilder::trust_caller_resolutions`: accept a policy that decides on resolved principals
+# without a resolver, trusting resolutions callers build. Test setups only (erp-testkit enables
+# it); never in production builds.
+trusted-test-principals = []
+# `OrmConfig::identify_untagged`: give every untagged transaction a generated operation identity so
+# test fixtures can write audited lifecycle events outside the RPC layer. It would silently satisfy
+# the identity requirement, so no shipped build may enable it (erp-testkit, itself only a
+# dev-dependency, is the one route; scripts/ci.sh `no_test_faults_in_shipped_builds` checks that no
+# shipped crate enables it and that none reaches erp-testkit through a normal or build edge).
+# Limit: the guard covers per-package builds (the release scripts use `-p`). A `cargo build
+# --workspace --release` selects erp-testkit, a member, and would unify this feature in; it only
+# turns the option on (default off), and there is deliberately no `compile_error!` route as for
+# `test-faults`.
+test-identities = []
+# `query::__statement`, the statement a stored query would send, for the statement snapshots of
+# erp-security's tests; its dev-dependency is the only place that enables it.
+test-support = []
+# Detached node constructors (`NodeIdentityBuilder::create_detached_for_benches`,
+# `NodeAdmission::detached_for_benches`) for the admission benchmark, which runs in the `bench`
+# profile where `test-faults` is refused. A detached handle touches no database; no shipped crate
+# enables this feature.
+bench-seams = []
+# Process-wide allocation-test diagnostics; enabled only by a test dev-dependency.
+test-driver-process-batches = ["tokio-postgres/process-response-batches"]
+
+[dependencies]
+getrandom = { workspace = true }
+erp-domain = { workspace = true }
+erp-fields = { workspace = true, features = ["pg"] }
+# The bundled IANA database: timezone results do not depend on the host's tzdata.
+jiff = { workspace = true, features = ["tzdb-bundle-always"] }
+tracing = { workspace = true }
+time = { workspace = true }
+erp-registry = { workspace = true }
+erp-sql = { workspace = true }
+# The messaging wire contract: `Transaction::store_snapshot` builds its snapshot descriptor
+# (amendment 2026-11-06; erp-orm is the only crate allowed to depend on it).
+erp-store-wire = { workspace = true }
+tokio-postgres = { workspace = true, features = ["with-serde_json-1"] }
+deadpool-postgres = { workspace = true }
+deadpool = { workspace = true }
+postgres-types = { workspace = true }
+postgres-protocol = { workspace = true }
+rustc-hash = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+linkme = { workspace = true }
+tokio = { workspace = true, features = ["time", "sync", "macros", "rt"] }
+# Node digests: SHA-256 of configuration, build and addons, HMAC of shared secrets.
+sha2 = { workspace = true }
+hmac = { workspace = true }
+# The membership clock counts suspend (design §6.4).
+rustix = { workspace = true, features = ["time"] }
+
+[dev-dependencies]
+bytes = { workspace = true }
+criterion = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt"] }
+
+[[bench]]
+name = "search_compile"
+harness = false
+
+[[bench]]
+name = "rset_ops"
+harness = false
+
+[[bench]]
+name = "read_group"
+harness = false
+
+[[bench]]
+name = "create_defaults"
+harness = false
+
+[[bench]]
+name = "field_access"
+harness = false
+
+[[bench]]
+name = "node_admission"
+harness = false
+required-features = ["bench-seams"]
+
+[lints]
+workspace = true

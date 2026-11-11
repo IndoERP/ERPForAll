@@ -1,0 +1,31 @@
+[package]
+name = "erp-alloc-budget"
+description = "Allocation counting for ERPForAll tests: per-operation heap blocks and bytes against a budget"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The counting allocator in testing mode (MIT OR Apache-2.0): no `unsafe` in ERPForAll code.
+dhat = "0.3.3"
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
+
+# Allocation tests run on the main thread under erp_alloc_budget's harness (lesson):
+# libtest's own main thread would allocate inside their counting windows.
+[[test]]
+name = "alloc_foreign_profiler"
+harness = false
+
+[[test]]
+name = "alloc_not_installed"
+harness = false
+
+[[test]]
+name = "alloc_harness_rules"
+harness = false

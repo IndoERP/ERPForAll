@@ -1,0 +1,27 @@
+package erpforall:addon@1.0.0;
+
+/// What a WASM addon exports to the host.
+interface addon-guest {
+    use types.{model-name, field-name, record-id, column-vector, record-batch, call-context, onchange-result, scalar-value, boundary-error};
+
+    /// The addon's contributions as JSON text: models, fields, computes, constraints, onchanges and
+    /// method overrides with their signatures. Feeds the registry and the AI tool registry
+    /// . Called once per loaded component, outside any transaction.
+    describe: func() -> string;
+
+    /// Run a business method or an override the addon contributes. Arguments and result are JSON
+    /// text.
+    invoke-method: func(ctx: call-context, model: model-name, method: string, ids: list<record-id>, args-json: string) -> result<string, boundary-error>;
+
+    /// Compute `fields` for every record of `batch`; the batch holds the columns their dependencies
+    /// need. Returns one column per requested field, one value per id of the batch, in its order.
+    compute-fields: func(ctx: call-context, batch: record-batch, fields: list<field-name>) -> result<list<column-vector>, boundary-error>;
+
+    /// Check the named constraints (as listed by `describe`) on every record of `batch`. A violation
+    /// is an error of kind `validation-failed` whose message is shown to the user.
+    validate-constraints: func(ctx: call-context, batch: record-batch, constraints: list<string>) -> result<_, boundary-error>;
+
+    /// Run the onchange handlers of `changed-fields` for one record whose current values are
+    /// `values`.
+    onchange: func(ctx: call-context, model: model-name, values: list<tuple<field-name, scalar-value>>, changed-fields: list<field-name>) -> result<onchange-result, boundary-error>;
+}

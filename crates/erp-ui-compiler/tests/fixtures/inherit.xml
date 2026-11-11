@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic fixtures: an extension and a primary child of fixtures.Hello. -->
+<templates xml:space="preserve">
+
+    <t t-inherit="fixtures.Hello" t-inherit-mode="extension">
+        <xpath expr="//div" position="inside">
+            <small class="o_hello_note">extended</small>
+        </xpath>
+    </t>
+
+    <t t-name="fixtures.HelloPrimary" t-inherit="fixtures.Hello">
+        <xpath expr="//div" position="attributes">
+            <attribute name="class" add="o_primary" separator=" "/>
+        </xpath>
+    </t>
+
+</templates>

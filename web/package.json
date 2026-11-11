@@ -1,0 +1,44 @@
+{
+  "name": "@erpforall/elang",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Elang, the ERPForAll web UI runtime",
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./abi": {
+      "types": "./src/runtime/abi.d.ts",
+      "default": "./src/runtime/abi-impl.ts"
+    },
+    "./testing": {
+      "types": "./testing/axe.ts",
+      "default": "./testing/axe.ts"
+    }
+  },
+  "packageManager": "pnpm@10.34.7",
+  "engines": {
+    "node": ">=24.22.0 <25"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.src.json --noEmit && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.generated.json --noEmit && tsc -p tsconfig.fixtures.json --noEmit && tsc -p tsconfig.dts.json && mkdir -p node_modules/.elang-dts/src/runtime && cp src/runtime/abi.d.ts node_modules/.elang-dts/src/runtime/abi.d.ts && tsc -p tsconfig.dts-consumer.json --noEmit",
+    "test": "vitest run",
+    "test:milestone": "vitest run --config vitest.milestone.config.ts",
+    "licenses": "node scripts/check-licenses.mjs",
+    "vendor": "node scripts/check-vendor.mjs",
+    "size": "node scripts/size.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "axe-core": "4.11.0",
+    "esbuild": "catalog:",
+    "fast-check": "4.3.0",
+    "jsdom": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "playwright": "1.56.1"
+  }
+}

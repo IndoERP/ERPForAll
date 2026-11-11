@@ -1,0 +1,2 @@
+id,name,model_id/id,group_id/id,operation
+access_lend_wizard_user,Lend wizard for internal users,sample_library_wasm.model_sample_library_lend_wizard,base.group_user,crud

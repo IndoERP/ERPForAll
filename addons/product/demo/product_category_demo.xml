@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Subcategories under the default Goods, Services and Expenses categories. -->
+<erp>
+  <record id="product_category_demo_furniture" model="product.category">
+    <field name="name">Furniture</field>
+    <field name="parent_id" ref="product_category_goods"/>
+  </record>
+  <record id="product_category_demo_apparel" model="product.category">
+    <field name="name">Apparel</field>
+    <field name="parent_id" ref="product_category_goods"/>
+  </record>
+  <record id="product_category_demo_food" model="product.category">
+    <field name="name">Food and Drink</field>
+    <field name="parent_id" ref="product_category_goods"/>
+  </record>
+  <record id="product_category_demo_electronics" model="product.category">
+    <field name="name">Electronics</field>
+    <field name="parent_id" ref="product_category_goods"/>
+  </record>
+  <record id="product_category_demo_consulting" model="product.category">
+    <field name="name">Consulting</field>
+    <field name="parent_id" ref="product_category_services"/>
+  </record>
+  <record id="product_category_demo_maintenance" model="product.category">
+    <field name="name">Maintenance</field>
+    <field name="parent_id" ref="product_category_services"/>
+  </record>
+  <record id="product_category_demo_travel" model="product.category">
+    <field name="name">Travel</field>
+    <field name="parent_id" ref="product_category_expenses"/>
+  </record>
+</erp>

@@ -1,0 +1,32 @@
+[package]
+name = "erp-html"
+description = "ERPForAll HTML sanitising: validated policy and limit types, typed errors and (from the engine slices) the bounded sanitiser"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# Pure L1 crate with no internal (workspace) dependencies (checked by
+# scripts/check-layers.py). html5ever is the vendored fork (root `[patch.crates-io]`); the `budget`
+# feature adds the admission budget the sanitiser hands to the tokenizer and tree builder.
+# Guest for the wasm32-wasip2 typed-failure test. A binary, not an example:
+# examples build the dev-dependencies, and proptest does not build for wasm. Off by default.
+[features]
+wasip2-probe = []
+
+[[bin]]
+name = "wasip2_typed_failure"
+path = "probes/wasip2_typed_failure.rs"
+required-features = ["wasip2-probe"]
+
+[dependencies]
+html5ever = { workspace = true, features = ["budget"] }
+
+[dev-dependencies]
+proptest = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

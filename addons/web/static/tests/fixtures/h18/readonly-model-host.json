@@ -1,0 +1,96 @@
+{
+  "description_version": "06169f18c95da778",
+  "fields": {
+    "acceptance_notes.note": {
+      "name": {
+        "label": "Name",
+        "readonly": true,
+        "relation": null,
+        "relation_field": null,
+        "required": true,
+        "selection": null,
+        "type": "char"
+      }
+    }
+  },
+  "model": "acceptance_notes.note",
+  "notices": [],
+  "registry_version": "6",
+  "views": [
+    {
+      "identity": {
+        "id": 69,
+        "kind": "stored"
+      },
+      "nodes": [
+        {
+          "children": [
+            1,
+            2
+          ],
+          "kind": "form",
+          "record_mode": "record"
+        },
+        {
+          "field": {
+            "model": "acceptance_notes.note",
+            "name": "name"
+          },
+          "force_save": false,
+          "kind": "field",
+          "label": "Name",
+          "modifiers": {
+            "invisible": null,
+            "readonly": {
+              "nodes": [
+                {
+                  "kind": "literal",
+                  "value": {
+                    "kind": "bool",
+                    "value": false
+                  }
+                }
+              ],
+              "schema": 1
+            },
+            "required": null
+          },
+          "options": {},
+          "widget": "char"
+        },
+        {
+          "field": {
+            "model": "acceptance_notes.note",
+            "name": "name"
+          },
+          "force_save": false,
+          "kind": "field",
+          "label": "Name",
+          "modifiers": {
+            "invisible": null,
+            "readonly": {
+              "nodes": [
+                {
+                  "kind": "literal",
+                  "value": {
+                    "kind": "bool",
+                    "value": true
+                  }
+                }
+              ],
+              "schema": 1
+            },
+            "required": null
+          },
+          "options": {},
+          "widget": "char"
+        }
+      ],
+      "renderer": "web.form",
+      "root": 0,
+      "schema_major": 1,
+      "type": "form"
+    }
+  ],
+  "wire_major": 1
+}

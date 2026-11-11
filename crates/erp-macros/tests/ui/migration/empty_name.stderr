@@ -1,0 +1,5 @@
+error: migration: `name` must not be empty
+ --> tests/ui/migration/empty_name.rs:2:79
+  |
+2 | #[erp_macros::migration(addon = "shop", version = "1.1", stage = post, name = " ")]
+  |                                                                               ^^^

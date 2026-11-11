@@ -1,0 +1,41 @@
+[package]
+name = "erp-rpc"
+description = "ERPForAll JSON-2 core: routing, exposure and effect gates, argument and context binding, retries, idempotency keys, reference-shaped error bodies (transport-agnostic)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+# Fault injection for tests of the ambiguous-commit path; never in
+# production builds.
+test-faults = ["erp-orm/test-faults"]
+
+[dependencies]
+erp-domain = { workspace = true }
+erp-fields = { workspace = true }
+erp-orm = { workspace = true }
+erp-registry = { workspace = true }
+# The idempotency store's statements (typed parameters, SQLSTATE of the claim).
+tokio-postgres = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
+tracing = { workspace = true }
+# Request digests of idempotency keys (SHA-256 over RFC 8785 canonical JSON).
+sha2 = { workspace = true }
+# Integers written into the result buffer without a String.
+itoa = { workspace = true }
+
+[dev-dependencies]
+# Allocation budgets (tests/alloc_*.rs, standards §5b).
+erp-alloc-budget = { workspace = true }
+
+[lints]
+workspace = true
+
+# Allocation tests run on the main thread under erp_alloc_budget's harness (lesson):
+# libtest's own main thread would allocate inside their counting windows.
+[[test]]
+name = "alloc_json_rows"
+harness = false

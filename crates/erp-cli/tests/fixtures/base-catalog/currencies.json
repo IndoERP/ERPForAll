@@ -1,0 +1,1702 @@
+[
+  {
+    "xmlid": "AED",
+    "name": "AED",
+    "symbol": "AED",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 784
+  },
+  {
+    "xmlid": "AFN",
+    "name": "AFN",
+    "symbol": "Afs",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 971
+  },
+  {
+    "xmlid": "ALL",
+    "name": "ALL",
+    "symbol": "L",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 8
+  },
+  {
+    "xmlid": "AMD",
+    "name": "AMD",
+    "symbol": "դր.",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 51
+  },
+  {
+    "xmlid": "ANG",
+    "name": "ANG",
+    "symbol": "ƒ",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 532
+  },
+  {
+    "xmlid": "AOA",
+    "name": "AOA",
+    "symbol": "Kz",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 973
+  },
+  {
+    "xmlid": "ARS",
+    "name": "ARS",
+    "symbol": "AR$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 32
+  },
+  {
+    "xmlid": "AUD",
+    "name": "AUD",
+    "symbol": "AU$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 36
+  },
+  {
+    "xmlid": "AWG",
+    "name": "AWG",
+    "symbol": "Afl.",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 533
+  },
+  {
+    "xmlid": "AZN",
+    "name": "AZN",
+    "symbol": "₼",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 944
+  },
+  {
+    "xmlid": "BAM",
+    "name": "BAM",
+    "symbol": "KM",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 977
+  },
+  {
+    "xmlid": "BBD",
+    "name": "BBD",
+    "symbol": "Bds$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 52
+  },
+  {
+    "xmlid": "BDT",
+    "name": "BDT",
+    "symbol": "৳",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 50
+  },
+  {
+    "xmlid": "BGN",
+    "name": "BGN",
+    "symbol": "лв",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 975
+  },
+  {
+    "xmlid": "BHD",
+    "name": "BHD",
+    "symbol": "BD",
+    "rounding": "0.001",
+    "decimal_places": 3,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 48
+  },
+  {
+    "xmlid": "BIF",
+    "name": "BIF",
+    "symbol": "FBu",
+    "rounding": "1",
+    "decimal_places": 0,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 108
+  },
+  {
+    "xmlid": "BMD",
+    "name": "BMD",
+    "symbol": "BD$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 60
+  },
+  {
+    "xmlid": "BND",
+    "name": "BND",
+    "symbol": "B$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 96
+  },
+  {
+    "xmlid": "BOB",
+    "name": "BOB",
+    "symbol": "Bs.",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 68
+  },
+  {
+    "xmlid": "BRL",
+    "name": "BRL",
+    "symbol": "R$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 986
+  },
+  {
+    "xmlid": "BSD",
+    "name": "BSD",
+    "symbol": "B$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 44
+  },
+  {
+    "xmlid": "BTN",
+    "name": "BTN",
+    "symbol": "Nu.",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 64
+  },
+  {
+    "xmlid": "BWP",
+    "name": "BWP",
+    "symbol": "P",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 72
+  },
+  {
+    "xmlid": "BYN",
+    "name": "BYN",
+    "symbol": "Br",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 933
+  },
+  {
+    "xmlid": "BYR",
+    "name": "BYR",
+    "symbol": "BR",
+    "rounding": "1",
+    "decimal_places": 0,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 974
+  },
+  {
+    "xmlid": "BZD",
+    "name": "BZD",
+    "symbol": "BZ$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 84
+  },
+  {
+    "xmlid": "CAD",
+    "name": "CAD",
+    "symbol": "CA$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 124
+  },
+  {
+    "xmlid": "CDF",
+    "name": "CDF",
+    "symbol": "Fr",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 976
+  },
+  {
+    "xmlid": "CHF",
+    "name": "CHF",
+    "symbol": "CHF",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 756
+  },
+  {
+    "xmlid": "CLF",
+    "name": "CLF",
+    "symbol": "$",
+    "rounding": "0.0001",
+    "decimal_places": 4,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 990
+  },
+  {
+    "xmlid": "CLP",
+    "name": "CLP",
+    "symbol": "CL$",
+    "rounding": "1",
+    "decimal_places": 0,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 152
+  },
+  {
+    "xmlid": "CNH",
+    "name": "CNH",
+    "symbol": "¥",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 0
+  },
+  {
+    "xmlid": "CNY",
+    "name": "CNY",
+    "symbol": "CN¥",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 156
+  },
+  {
+    "xmlid": "COP",
+    "name": "COP",
+    "symbol": "CO$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 170
+  },
+  {
+    "xmlid": "COU",
+    "name": "COU",
+    "symbol": "$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 970
+  },
+  {
+    "xmlid": "CRC",
+    "name": "CRC",
+    "symbol": "₡",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 188
+  },
+  {
+    "xmlid": "CUC",
+    "name": "CUC",
+    "symbol": "$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 931
+  },
+  {
+    "xmlid": "CUP",
+    "name": "CUP",
+    "symbol": "$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 192
+  },
+  {
+    "xmlid": "CVE",
+    "name": "CVE",
+    "symbol": "$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 132
+  },
+  {
+    "xmlid": "CZK",
+    "name": "CZK",
+    "symbol": "Kč",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 203
+  },
+  {
+    "xmlid": "DJF",
+    "name": "DJF",
+    "symbol": "Fdj",
+    "rounding": "1",
+    "decimal_places": 0,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 262
+  },
+  {
+    "xmlid": "DKK",
+    "name": "DKK",
+    "symbol": "kr.",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 208
+  },
+  {
+    "xmlid": "DOP",
+    "name": "DOP",
+    "symbol": "RD$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 214
+  },
+  {
+    "xmlid": "DZD",
+    "name": "DZD",
+    "symbol": "DA",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 12
+  },
+  {
+    "xmlid": "EGP",
+    "name": "EGP",
+    "symbol": "E£",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 818
+  },
+  {
+    "xmlid": "ERN",
+    "name": "ERN",
+    "symbol": "Nfk",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 232
+  },
+  {
+    "xmlid": "ETB",
+    "name": "ETB",
+    "symbol": "Br",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 230
+  },
+  {
+    "xmlid": "EUR",
+    "name": "EUR",
+    "symbol": "€",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 978
+  },
+  {
+    "xmlid": "FJD",
+    "name": "FJD",
+    "symbol": "FJ$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 242
+  },
+  {
+    "xmlid": "FKP",
+    "name": "FKP",
+    "symbol": "£",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 238
+  },
+  {
+    "xmlid": "GBP",
+    "name": "GBP",
+    "symbol": "£",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 826
+  },
+  {
+    "xmlid": "GEL",
+    "name": "GEL",
+    "symbol": "ლ",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 981
+  },
+  {
+    "xmlid": "GHS",
+    "name": "GHS",
+    "symbol": "GH¢",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 936
+  },
+  {
+    "xmlid": "GIP",
+    "name": "GIP",
+    "symbol": "£",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 292
+  },
+  {
+    "xmlid": "GMD",
+    "name": "GMD",
+    "symbol": "D",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 270
+  },
+  {
+    "xmlid": "GNF",
+    "name": "GNF",
+    "symbol": "FG",
+    "rounding": "1",
+    "decimal_places": 0,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 324
+  },
+  {
+    "xmlid": "GTQ",
+    "name": "GTQ",
+    "symbol": "Q",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 320
+  },
+  {
+    "xmlid": "GYD",
+    "name": "GYD",
+    "symbol": "$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 328
+  },
+  {
+    "xmlid": "HKD",
+    "name": "HKD",
+    "symbol": "HK$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 344
+  },
+  {
+    "xmlid": "HNL",
+    "name": "HNL",
+    "symbol": "L",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 340
+  },
+  {
+    "xmlid": "HRK",
+    "name": "HRK",
+    "symbol": "kn",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 191
+  },
+  {
+    "xmlid": "HTG",
+    "name": "HTG",
+    "symbol": "G",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 332
+  },
+  {
+    "xmlid": "HUF",
+    "name": "HUF",
+    "symbol": "Ft",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 348
+  },
+  {
+    "xmlid": "IDR",
+    "name": "IDR",
+    "symbol": "Rp",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 360
+  },
+  {
+    "xmlid": "ILS",
+    "name": "ILS",
+    "symbol": "₪",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 376
+  },
+  {
+    "xmlid": "INR",
+    "name": "INR",
+    "symbol": "₹",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 356
+  },
+  {
+    "xmlid": "IQD",
+    "name": "IQD",
+    "symbol": "ع.د",
+    "rounding": "0.001",
+    "decimal_places": 3,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 368
+  },
+  {
+    "xmlid": "IRR",
+    "name": "IRR",
+    "symbol": "﷼",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 364
+  },
+  {
+    "xmlid": "ISK",
+    "name": "ISK",
+    "symbol": "kr",
+    "rounding": "1",
+    "decimal_places": 0,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 352
+  },
+  {
+    "xmlid": "JMD",
+    "name": "JMD",
+    "symbol": "$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 388
+  },
+  {
+    "xmlid": "JOD",
+    "name": "JOD",
+    "symbol": "JD",
+    "rounding": "0.001",
+    "decimal_places": 3,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 400
+  },
+  {
+    "xmlid": "JPY",
+    "name": "JPY",
+    "symbol": "¥",
+    "rounding": "1",
+    "decimal_places": 0,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 392
+  },
+  {
+    "xmlid": "KES",
+    "name": "KES",
+    "symbol": "KSh",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 404
+  },
+  {
+    "xmlid": "KGS",
+    "name": "KGS",
+    "symbol": "KGS",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 417
+  },
+  {
+    "xmlid": "KHR",
+    "name": "KHR",
+    "symbol": "៛",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 116
+  },
+  {
+    "xmlid": "KMF",
+    "name": "KMF",
+    "symbol": "CF",
+    "rounding": "1",
+    "decimal_places": 0,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 174
+  },
+  {
+    "xmlid": "KPW",
+    "name": "KPW",
+    "symbol": "₩",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 408
+  },
+  {
+    "xmlid": "KRW",
+    "name": "KRW",
+    "symbol": "₩",
+    "rounding": "1",
+    "decimal_places": 0,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 410
+  },
+  {
+    "xmlid": "KWD",
+    "name": "KWD",
+    "symbol": "KD",
+    "rounding": "0.001",
+    "decimal_places": 3,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 414
+  },
+  {
+    "xmlid": "KYD",
+    "name": "KYD",
+    "symbol": "$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 136
+  },
+  {
+    "xmlid": "KZT",
+    "name": "KZT",
+    "symbol": "₸",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 398
+  },
+  {
+    "xmlid": "LAK",
+    "name": "LAK",
+    "symbol": "₭",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 418
+  },
+  {
+    "xmlid": "LBP",
+    "name": "LBP",
+    "symbol": "ل.ل",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 422
+  },
+  {
+    "xmlid": "LKR",
+    "name": "LKR",
+    "symbol": "Rs",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 144
+  },
+  {
+    "xmlid": "LRD",
+    "name": "LRD",
+    "symbol": "L$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 430
+  },
+  {
+    "xmlid": "LSL",
+    "name": "LSL",
+    "symbol": "M",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 426
+  },
+  {
+    "xmlid": "LTL",
+    "name": "LTL",
+    "symbol": "Lt",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 440
+  },
+  {
+    "xmlid": "LVL",
+    "name": "LVL",
+    "symbol": "Ls",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 428
+  },
+  {
+    "xmlid": "LYD",
+    "name": "LYD",
+    "symbol": "ل.د",
+    "rounding": "0.001",
+    "decimal_places": 3,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 434
+  },
+  {
+    "xmlid": "MAD",
+    "name": "MAD",
+    "symbol": "DH",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 504
+  },
+  {
+    "xmlid": "MDL",
+    "name": "MDL",
+    "symbol": "L",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 498
+  },
+  {
+    "xmlid": "MGA",
+    "name": "MGA",
+    "symbol": "Ar",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 969
+  },
+  {
+    "xmlid": "MKD",
+    "name": "MKD",
+    "symbol": "ден",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 807
+  },
+  {
+    "xmlid": "MMK",
+    "name": "MMK",
+    "symbol": "K",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 104
+  },
+  {
+    "xmlid": "MNT",
+    "name": "MNT",
+    "symbol": "₮",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 496
+  },
+  {
+    "xmlid": "MOP",
+    "name": "MOP",
+    "symbol": "MOP$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 446
+  },
+  {
+    "xmlid": "MRO",
+    "name": "MRO",
+    "symbol": "UM",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 478
+  },
+  {
+    "xmlid": "MRU",
+    "name": "MRU",
+    "symbol": "UM",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 929
+  },
+  {
+    "xmlid": "MUR",
+    "name": "MUR",
+    "symbol": "Rs",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 480
+  },
+  {
+    "xmlid": "MVR",
+    "name": "MVR",
+    "symbol": "Rf",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 462
+  },
+  {
+    "xmlid": "MWK",
+    "name": "MWK",
+    "symbol": "MK",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 454
+  },
+  {
+    "xmlid": "MXN",
+    "name": "MXN",
+    "symbol": "MX$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 484
+  },
+  {
+    "xmlid": "MYR",
+    "name": "MYR",
+    "symbol": "RM",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 458
+  },
+  {
+    "xmlid": "MZN",
+    "name": "MZN",
+    "symbol": "MT",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 943
+  },
+  {
+    "xmlid": "NAD",
+    "name": "NAD",
+    "symbol": "$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 516
+  },
+  {
+    "xmlid": "NGN",
+    "name": "NGN",
+    "symbol": "₦",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 566
+  },
+  {
+    "xmlid": "NIO",
+    "name": "NIO",
+    "symbol": "C$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 558
+  },
+  {
+    "xmlid": "NOK",
+    "name": "NOK",
+    "symbol": "kr",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 578
+  },
+  {
+    "xmlid": "NPR",
+    "name": "NPR",
+    "symbol": "₨",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 524
+  },
+  {
+    "xmlid": "NZD",
+    "name": "NZD",
+    "symbol": "NZ$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 554
+  },
+  {
+    "xmlid": "OMR",
+    "name": "OMR",
+    "symbol": "OMR",
+    "rounding": "0.001",
+    "decimal_places": 3,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 512
+  },
+  {
+    "xmlid": "PAB",
+    "name": "PAB",
+    "symbol": "B/.",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 590
+  },
+  {
+    "xmlid": "PEN",
+    "name": "PEN",
+    "symbol": "S/",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 604
+  },
+  {
+    "xmlid": "PGK",
+    "name": "PGK",
+    "symbol": "K",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 598
+  },
+  {
+    "xmlid": "PHP",
+    "name": "PHP",
+    "symbol": "₱",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 608
+  },
+  {
+    "xmlid": "PKR",
+    "name": "PKR",
+    "symbol": "Rs.",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 586
+  },
+  {
+    "xmlid": "PLN",
+    "name": "PLN",
+    "symbol": "zł",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 985
+  },
+  {
+    "xmlid": "PYG",
+    "name": "PYG",
+    "symbol": "₲",
+    "rounding": "1",
+    "decimal_places": 0,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 600
+  },
+  {
+    "xmlid": "QAR",
+    "name": "QAR",
+    "symbol": "QR",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 634
+  },
+  {
+    "xmlid": "RON",
+    "name": "RON",
+    "symbol": "lei",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 946
+  },
+  {
+    "xmlid": "RSD",
+    "name": "RSD",
+    "symbol": "din.",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 941
+  },
+  {
+    "xmlid": "RUB",
+    "name": "RUB",
+    "symbol": "руб",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 643
+  },
+  {
+    "xmlid": "RWF",
+    "name": "RWF",
+    "symbol": "RF",
+    "rounding": "1",
+    "decimal_places": 0,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 646
+  },
+  {
+    "xmlid": "SAR",
+    "name": "SAR",
+    "symbol": "SAR",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 682
+  },
+  {
+    "xmlid": "SBD",
+    "name": "SBD",
+    "symbol": "SI$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 90
+  },
+  {
+    "xmlid": "SCR",
+    "name": "SCR",
+    "symbol": "SR",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 690
+  },
+  {
+    "xmlid": "SDG",
+    "name": "SDG",
+    "symbol": "ج.س.",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 938
+  },
+  {
+    "xmlid": "SEK",
+    "name": "SEK",
+    "symbol": "kr",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 752
+  },
+  {
+    "xmlid": "SGD",
+    "name": "SGD",
+    "symbol": "SG$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 702
+  },
+  {
+    "xmlid": "SHP",
+    "name": "SHP",
+    "symbol": "£",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 654
+  },
+  {
+    "xmlid": "SLE",
+    "name": "SLE",
+    "symbol": "Le",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 925
+  },
+  {
+    "xmlid": "SLL",
+    "name": "SLL",
+    "symbol": "Le",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 694
+  },
+  {
+    "xmlid": "SOS",
+    "name": "SOS",
+    "symbol": "Sh.",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 706
+  },
+  {
+    "xmlid": "SRD",
+    "name": "SRD",
+    "symbol": "$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 968
+  },
+  {
+    "xmlid": "SSP",
+    "name": "SSP",
+    "symbol": "£",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 728
+  },
+  {
+    "xmlid": "STD",
+    "name": "STD",
+    "symbol": "Db",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 678
+  },
+  {
+    "xmlid": "STN",
+    "name": "STN",
+    "symbol": "Db",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 930
+  },
+  {
+    "xmlid": "SVC",
+    "name": "SVC",
+    "symbol": "¢",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 222
+  },
+  {
+    "xmlid": "SYP",
+    "name": "SYP",
+    "symbol": "£",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 760
+  },
+  {
+    "xmlid": "SZL",
+    "name": "SZL",
+    "symbol": "E",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 748
+  },
+  {
+    "xmlid": "THB",
+    "name": "THB",
+    "symbol": "฿",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 764
+  },
+  {
+    "xmlid": "TJS",
+    "name": "TJS",
+    "symbol": "TJS",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 972
+  },
+  {
+    "xmlid": "TMT",
+    "name": "TMT",
+    "symbol": "T",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 934
+  },
+  {
+    "xmlid": "TND",
+    "name": "TND",
+    "symbol": "DT",
+    "rounding": "0.001",
+    "decimal_places": 3,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 788
+  },
+  {
+    "xmlid": "TOP",
+    "name": "TOP",
+    "symbol": "T$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 776
+  },
+  {
+    "xmlid": "TRY",
+    "name": "TRY",
+    "symbol": "₺",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 949
+  },
+  {
+    "xmlid": "TTD",
+    "name": "TTD",
+    "symbol": "$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 780
+  },
+  {
+    "xmlid": "TWD",
+    "name": "TWD",
+    "symbol": "NT$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 901
+  },
+  {
+    "xmlid": "TZS",
+    "name": "TZS",
+    "symbol": "TSh",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 834
+  },
+  {
+    "xmlid": "UAH",
+    "name": "UAH",
+    "symbol": "₴",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 980
+  },
+  {
+    "xmlid": "UGX",
+    "name": "UGX",
+    "symbol": "USh",
+    "rounding": "1",
+    "decimal_places": 0,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 800
+  },
+  {
+    "xmlid": "USD",
+    "name": "USD",
+    "symbol": "$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": true,
+    "position": "before",
+    "iso_numeric": 840
+  },
+  {
+    "xmlid": "UYI",
+    "name": "UYI",
+    "symbol": "$",
+    "rounding": "1",
+    "decimal_places": 0,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 940
+  },
+  {
+    "xmlid": "UYU",
+    "name": "UYU",
+    "symbol": "$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 858
+  },
+  {
+    "xmlid": "UYW",
+    "name": "UYW",
+    "symbol": "$",
+    "rounding": "0.0001",
+    "decimal_places": 4,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 927
+  },
+  {
+    "xmlid": "UZS",
+    "name": "UZS",
+    "symbol": "so'm",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 860
+  },
+  {
+    "xmlid": "VEF",
+    "name": "VEF",
+    "symbol": "Bs.F",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 937
+  },
+  {
+    "xmlid": "VES",
+    "name": "VES",
+    "symbol": "Bs",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 928
+  },
+  {
+    "xmlid": "VND",
+    "name": "VND",
+    "symbol": "₫",
+    "rounding": "1",
+    "decimal_places": 0,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 704
+  },
+  {
+    "xmlid": "VUV",
+    "name": "VUV",
+    "symbol": "VT",
+    "rounding": "1",
+    "decimal_places": 0,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 548
+  },
+  {
+    "xmlid": "WST",
+    "name": "WST",
+    "symbol": "WS$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 882
+  },
+  {
+    "xmlid": "XAF",
+    "name": "XAF",
+    "symbol": "FCFA",
+    "rounding": "1",
+    "decimal_places": 0,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 950
+  },
+  {
+    "xmlid": "XCD",
+    "name": "XCD",
+    "symbol": "$",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 951
+  },
+  {
+    "xmlid": "XCG",
+    "name": "XCG",
+    "symbol": "Cg",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 532
+  },
+  {
+    "xmlid": "XOF",
+    "name": "XOF",
+    "symbol": "CFA",
+    "rounding": "1",
+    "decimal_places": 0,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 952
+  },
+  {
+    "xmlid": "XPF",
+    "name": "XPF",
+    "symbol": "XPF",
+    "rounding": "1",
+    "decimal_places": 0,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 953
+  },
+  {
+    "xmlid": "YER",
+    "name": "YER",
+    "symbol": "﷼",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 886
+  },
+  {
+    "xmlid": "ZAR",
+    "name": "ZAR",
+    "symbol": "R",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "before",
+    "iso_numeric": 710
+  },
+  {
+    "xmlid": "ZMW",
+    "name": "ZMW",
+    "symbol": "ZK",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 967
+  },
+  {
+    "xmlid": "ZIG",
+    "name": "ZWG",
+    "symbol": "ZiG",
+    "rounding": "0.01",
+    "decimal_places": 2,
+    "active": false,
+    "position": "after",
+    "iso_numeric": 924
+  }
+]

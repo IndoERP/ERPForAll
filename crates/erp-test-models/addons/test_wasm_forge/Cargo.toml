@@ -1,0 +1,25 @@
+[package]
+name = "erp-addon-test_wasm_forge"
+description = "ERPForAll fixture addon test_wasm_forge: a component that lies about create and asks too much of the host, to prove the host refuses (a later release)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+erp-sdk = { workspace = true }
+erp-addon-test_wasm_ovr_a = { workspace = true }
+
+# The component export glue of `export_component!()` is unsafe by nature (the canonical ABI), which
+# the workspace's `forbid` cannot allow: repeat the workspace lints with `deny`.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+dbg_macro = "deny"
+todo = "warn"

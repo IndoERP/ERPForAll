@@ -1,0 +1,5 @@
+error: a function is either a #[search_method] or another attribute, not both
+ --> tests/ui/search_method/conflicting_attributes.rs:5:8
+  |
+5 |     fn search(req: &FieldSearchRequest<'_>, ctx: &mut FieldSearchContext<'_>) -> Result<Domain> {
+  |        ^^^^^^

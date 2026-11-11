@@ -1,0 +1,156 @@
+<?xml version="1.0" encoding="utf-8"?>
+<erp>
+    <record id="author_list" model="ir.ui.view">
+        <field name="name">sample_library.author.list</field>
+        <field name="model">sample_library.author</field>
+        <field name="arch" type="xml">
+            <list string="Authors">
+                <field name="name"/>
+                <field name="country"/>
+            </list>
+        </field>
+    </record>
+    <record id="author_form" model="ir.ui.view">
+        <field name="name">sample_library.author.form</field>
+        <field name="model">sample_library.author</field>
+        <field name="arch" type="xml">
+            <form string="Author">
+                <sheet>
+                    <group>
+                        <field name="name"/>
+                        <field name="country"/>
+                    </group>
+                    <notebook>
+                        <page name="books" string="Books">
+                            <field name="book_ids"/>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+    <record id="book_list" model="ir.ui.view">
+        <field name="name">sample_library.book.list</field>
+        <field name="model">sample_library.book</field>
+        <field name="arch" type="xml">
+            <list string="Books">
+                <field name="title"/>
+                <field name="author_id"/>
+                <field name="genre_ids"/>
+                <field name="isbn"/>
+                <field name="publication_year"/>
+                <field name="available"/>
+            </list>
+        </field>
+    </record>
+    <record id="book_form" model="ir.ui.view">
+        <field name="name">sample_library.book.form</field>
+        <field name="model">sample_library.book</field>
+        <field name="arch" type="xml">
+            <form string="Book">
+                <sheet>
+                    <group>
+                        <group string="Book">
+                            <field name="title"/>
+                            <field name="author_id"/>
+                            <field name="isbn"/>
+                        </group>
+                        <group string="Catalogue">
+                            <field name="publication_year"/>
+                            <field name="genre_ids"/>
+                            <field name="available"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page name="loans" string="Loans">
+                            <field name="loan_ids"/>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+    <record id="loan_list" model="ir.ui.view">
+        <field name="name">sample_library.loan.list</field>
+        <field name="model">sample_library.loan</field>
+        <field name="arch" type="xml">
+            <list string="Loans">
+                <field name="book_id"/>
+                <field name="borrower_id"/>
+                <field name="loan_date"/>
+                <field name="due_date"/>
+                <field name="state"/>
+            </list>
+        </field>
+    </record>
+    <record id="loan_form" model="ir.ui.view">
+        <field name="name">sample_library.loan.form</field>
+        <field name="model">sample_library.loan</field>
+        <field name="arch" type="xml">
+            <form string="Loan">
+                <sheet>
+                    <group>
+                        <group string="Loan">
+                            <field name="book_id"/>
+                            <field name="borrower_id"/>
+                            <field name="state"/>
+                        </group>
+                        <group string="Dates">
+                            <field name="loan_date"/>
+                            <field name="due_date"/>
+                            <field name="return_date"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+    <record id="genre_list" model="ir.ui.view">
+        <field name="name">sample_library.genre.list</field>
+        <field name="model">sample_library.genre</field>
+        <field name="arch" type="xml">
+            <list string="Genres">
+                <field name="name"/>
+            </list>
+        </field>
+    </record>
+    <record id="genre_form" model="ir.ui.view">
+        <field name="name">sample_library.genre.form</field>
+        <field name="model">sample_library.genre</field>
+        <field name="arch" type="xml">
+            <form string="Genre">
+                <sheet>
+                    <group>
+                        <field name="name"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+    <record id="author_action" model="ir.actions.act_window">
+        <field name="name">Authors</field>
+        <field name="res_model">sample_library.author</field>
+        <field name="view_mode">list,form</field>
+    </record>
+    <record id="book_action" model="ir.actions.act_window">
+        <field name="name">Books</field>
+        <field name="res_model">sample_library.book</field>
+        <field name="view_mode">list,form</field>
+    </record>
+    <record id="loan_action" model="ir.actions.act_window">
+        <field name="name">Loans</field>
+        <field name="res_model">sample_library.loan</field>
+        <field name="view_mode">list,form</field>
+    </record>
+    <record id="genre_action" model="ir.actions.act_window">
+        <field name="name">Genres</field>
+        <field name="res_model">sample_library.genre</field>
+        <field name="view_mode">list,form</field>
+    </record>
+    <menuitem id="library_menu" name="Library" groups="base.group_user" sequence="70" web_icon="lucide:library">
+        <menuitem id="book_menu" name="Books" action="book_action" sequence="10"/>
+        <menuitem id="author_menu" name="Authors" action="author_action" sequence="20"/>
+        <menuitem id="loan_menu" name="Loans" action="loan_action" sequence="30"/>
+        <menuitem id="genre_menu" name="Genres" action="genre_action" sequence="40"/>
+    </menuitem>
+</erp>

@@ -1,0 +1,53 @@
+[package]
+name = "erp-fields"
+description = "ERPForAll field type system: kinds, values, the dynamic input converter and the error taxonomy"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+# PostgreSQL wire conversions (ToSql/FromSql). Off for the WASM guest build.
+pg = ["dep:postgres-types", "dep:bytes", "rust_decimal/db-tokio-postgres"]
+
+[dependencies]
+erp-html = { workspace = true }
+rust_decimal = { workspace = true }
+indexmap = { workspace = true }
+serde_json = { workspace = true }
+# The key index of wide row layouts (`rows::Layout`, above 16 keys).
+rustc-hash = { workspace = true }
+postgres-types = { workspace = true, optional = true, features = ["with-serde_json-1"] }
+bytes = { workspace = true, optional = true }
+
+# Time zones. Natively the system tz database may be read from disk, with the bundled one as the
+# fallback (erp-orm turns the bundle on). A component has no file system: the default features
+# would link the code that reads `/usr/share/zoneinfo` and so import `wasi:filesystem`, which the
+# host refuses, so the guest build takes only the bundled database.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+jiff = { workspace = true }
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bundle-always"] }
+
+[dev-dependencies]
+# Allocation budgets (tests/alloc_*.rs, standards §5b).
+erp-alloc-budget = { workspace = true }
+# Property tests of the exact money primitives against an independent integer reference.
+proptest = { workspace = true }
+
+[lints]
+workspace = true
+
+# Allocation tests run on the main thread under erp_alloc_budget's harness (lesson):
+# libtest's own main thread would allocate inside their counting windows.
+[[test]]
+name = "alloc_rows_build"
+harness = false
+
+[[test]]
+name = "alloc_rows_view"
+harness = false

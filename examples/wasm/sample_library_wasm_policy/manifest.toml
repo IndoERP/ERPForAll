@@ -1,0 +1,11 @@
+name = "Sample Library WASM Policy"
+summary = "Renewal rules for sample_library_wasm: a second WebAssembly addon that overrides renew() with super"
+description = "Limits how often a loan can be renewed and lets a loan be locked against renewal. Extends the method and the model of sample_library_wasm from its own package, without editing it."
+version = "1.0.0"
+license = "MIT OR Apache-2.0"
+author = "ERPForAll"
+category = "Sample"
+depends = ["sample_library_wasm"]
+
+[wasm]
+sdk_version = "1.0"

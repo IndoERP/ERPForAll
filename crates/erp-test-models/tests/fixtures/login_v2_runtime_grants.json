@@ -1,0 +1,8 @@
+{
+  "commit": "8265424da73c727d267864e7baf3a52a5f3f4629",
+  "source": "crates/erp-cli/src/human.rs",
+  "source_sha256": "34f6942c539d7474b9c2ffa900144eb6de37d2657d515f139afae83d9ee303a6",
+  "fixture": "login_v2_runtime_grants.sql",
+  "fixture_sha256": "33e67f2675be93b18ed37a54a8f3caee6fd2ea891e66378b1ce6c39b26f449a1",
+  "scope": "SQL literals in grant_runtime only; called helpers are not extracted; not an old-binary rehearsal"
+}

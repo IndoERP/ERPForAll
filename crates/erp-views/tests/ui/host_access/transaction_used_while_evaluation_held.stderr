@@ -1,0 +1,9 @@
+error[E0499]: cannot borrow `tx` as mutable more than once at a time
+  --> tests/ui/host_access/transaction_used_while_evaluation_held.rs:11:5
+   |
+10 |     let evaluation = tx.evaluate_guards(env, &plan).await?;
+   |                      -- first mutable borrow occurs here
+11 |     tx.commit().await?;
+   |     ^^ second mutable borrow occurs here
+12 |     let _ = evaluation.subject();
+   |             ---------- first borrow later used here

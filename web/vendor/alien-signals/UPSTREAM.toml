@@ -1,0 +1,24 @@
+# Vendored signal core. web/scripts/check-vendor.mjs
+# downloads every file below at `commit`, checks its SHA-256, applies `patches` in order and requires
+# the result to equal this tree byte for byte.
+repository = "https://github.com/stackblitz/alien-signals"
+tag = "v3.2.1"
+commit = "8734d386d925025d0e99419bd9161c17b112c5ee"
+license = "MIT"
+patches = ["patches/0001-erpforall-legal-comments.patch", "patches/0002-erpforall-effect-scheduler.patch", "patches/0003-erpforall-signal-unwatched.patch"]
+npm_package = "alien-signals"
+
+[[files]]
+path = "LICENSE"
+upstream = "LICENSE"
+sha256 = "75863f712f8f0603b0dba33edf4b725bab80fc858a51756e5905a3c4c8087169"
+
+[[files]]
+path = "src/system.ts"
+upstream = "src/system.ts"
+sha256 = "9c47ab21a12c942881ef945813e76c8d201e62264c0997e37f5d3dfe074c89f8"
+
+[[files]]
+path = "src/index.ts"
+upstream = "src/index.ts"
+sha256 = "c60b509b7ee5dba5567f1cbf9377d2193227af4f2338145a805815f40b9291ff"

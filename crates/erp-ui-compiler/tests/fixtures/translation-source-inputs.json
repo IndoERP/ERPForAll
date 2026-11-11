@@ -1,0 +1,5 @@
+[
+  ["web", "static/src/source.xml", "<templates><t t-name=\"web.Source\"><section title=\"Hint\"><p t-translation=\"off\">  Hello  </p><span t-translation-context=\"other\">Same</span><t t-out=\"this.value\"/><Child label.translate=\"Hello\"/></section></t><t t-name=\"web.Caller\"><t t-call=\"other.Callee\" label.translate=\"Hello\"/></t></templates>"],
+  ["other", "static/src/callee.xml", "<templates><t t-name=\"other.Callee\"><p t-out=\"label\"/></t></templates>"],
+  ["other", "static/src/extension.xml", "<templates><t t-inherit=\"web.Source\" t-inherit-mode=\"extension\"><xpath expr=\"//section\" position=\"inside\"><b>Added</b></xpath></t></templates>"]
+]

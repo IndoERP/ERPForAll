@@ -1,0 +1,713 @@
+<?xml version="1.0" encoding="utf-8"?>
+<erp>
+  <!-- Technical Parent Menu -->
+  <menuitem id="technical_menu" name="Technical" parent="settings_menu" groups="base.group_system" sequence="100"/>
+
+  <!-- Database Structure Category -->
+  <menuitem id="technical_db_menu" name="Database Structure" parent="technical_menu" sequence="10"/>
+
+  <!-- ir.model -->
+  <record id="technical_model_list" model="ir.ui.view">
+    <field name="name">ir.model.technical.list</field>
+    <field name="model">ir.model</field>
+    <field name="arch" type="xml"><list><field name="name"/><field name="model"/><field name="state"/><field name="transient"/></list></field>
+  </record>
+  <record id="technical_model_form" model="ir.ui.view">
+    <field name="name">ir.model.technical.form</field>
+    <field name="model">ir.model</field>
+    <field name="arch" type="xml"><form record_mode="record"><field name="name"/><field name="model"/><field name="state"/><field name="transient"/><field name="info"/></form></field>
+  </record>
+  <record id="technical_model_search" model="ir.ui.view">
+    <field name="name">ir.model.technical.search</field>
+    <field name="model">ir.model</field>
+    <field name="arch" type="xml"><search><field name="name"/><field name="model"/><field name="state"/></search></field>
+  </record>
+  <record id="technical_model_action" model="ir.actions.act_window">
+    <field name="name">Models</field>
+    <field name="res_model">ir.model</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="technical_model_list"/>
+    <field name="search_view_id" ref="technical_model_search"/>
+    <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
+  </record>
+  <record id="technical_model_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_model_action"/>
+    <field name="view_id" ref="technical_model_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="technical_model_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_model_action"/>
+    <field name="view_id" ref="technical_model_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="technical_models_menu" name="Models" parent="technical_db_menu" action="technical_model_action" groups="base.group_system" sequence="10"/>
+
+  <!-- ir.model.fields -->
+  <record id="technical_fields_list" model="ir.ui.view">
+    <field name="name">ir.model.fields.technical.list</field>
+    <field name="model">ir.model.fields</field>
+    <field name="arch" type="xml"><list><field name="name"/><field name="field_description"/><field name="model"/><field name="ttype"/><field name="state"/><field name="required"/><field name="readonly"/><field name="store"/></list></field>
+  </record>
+  <record id="technical_fields_form" model="ir.ui.view">
+    <field name="name">ir.model.fields.technical.form</field>
+    <field name="model">ir.model.fields</field>
+    <field name="arch" type="xml"><form record_mode="record"><field name="name"/><field name="field_description"/><field name="model_id"/><field name="model"/><field name="ttype"/><field name="relation"/><field name="relation_field"/><field name="state"/><field name="required"/><field name="readonly"/><field name="store"/><field name="index"/><field name="help"/></form></field>
+  </record>
+  <record id="technical_fields_search" model="ir.ui.view">
+    <field name="name">ir.model.fields.technical.search</field>
+    <field name="model">ir.model.fields</field>
+    <field name="arch" type="xml"><search><field name="name"/><field name="field_description"/><field name="model"/><field name="ttype"/></search></field>
+  </record>
+  <record id="technical_fields_action" model="ir.actions.act_window">
+    <field name="name">Fields</field>
+    <field name="res_model">ir.model.fields</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="technical_fields_list"/>
+    <field name="search_view_id" ref="technical_fields_search"/>
+    <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
+  </record>
+  <record id="technical_fields_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_fields_action"/>
+    <field name="view_id" ref="technical_fields_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="technical_fields_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_fields_action"/>
+    <field name="view_id" ref="technical_fields_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="technical_fields_menu" name="Fields" parent="technical_db_menu" action="technical_fields_action" groups="base.group_system" sequence="20"/>
+
+  <!-- ir.model.relation -->
+  <record id="technical_relation_list" model="ir.ui.view">
+    <field name="name">ir.model.relation.technical.list</field>
+    <field name="model">ir.model.relation</field>
+    <field name="arch" type="xml"><list><field name="name"/><field name="model_id"/><field name="module"/></list></field>
+  </record>
+  <record id="technical_relation_form" model="ir.ui.view">
+    <field name="name">ir.model.relation.technical.form</field>
+    <field name="model">ir.model.relation</field>
+    <field name="arch" type="xml"><form record_mode="record"><field name="name"/><field name="model_id"/><field name="module"/></form></field>
+  </record>
+  <record id="technical_relation_search" model="ir.ui.view">
+    <field name="name">ir.model.relation.technical.search</field>
+    <field name="model">ir.model.relation</field>
+    <field name="arch" type="xml"><search><field name="name"/><field name="model_id"/><field name="module"/></search></field>
+  </record>
+  <record id="technical_relation_action" model="ir.actions.act_window">
+    <field name="name">Model Relations</field>
+    <field name="res_model">ir.model.relation</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="technical_relation_list"/>
+    <field name="search_view_id" ref="technical_relation_search"/>
+    <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
+  </record>
+  <record id="technical_relation_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_relation_action"/>
+    <field name="view_id" ref="technical_relation_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="technical_relation_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_relation_action"/>
+    <field name="view_id" ref="technical_relation_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="technical_relations_menu" name="Model Relations" parent="technical_db_menu" action="technical_relation_action" groups="base.group_system" sequence="30"/>
+
+  <!-- decimal.precision -->
+  <record id="technical_precision_list" model="ir.ui.view">
+    <field name="name">decimal.precision.technical.list</field>
+    <field name="model">decimal.precision</field>
+    <field name="arch" type="xml"><list><field name="name"/><field name="digits"/></list></field>
+  </record>
+  <record id="technical_precision_form" model="ir.ui.view">
+    <field name="name">decimal.precision.technical.form</field>
+    <field name="model">decimal.precision</field>
+    <field name="arch" type="xml"><form record_mode="record"><field name="name"/><field name="digits"/></form></field>
+  </record>
+  <record id="technical_precision_search" model="ir.ui.view">
+    <field name="name">decimal.precision.technical.search</field>
+    <field name="model">decimal.precision</field>
+    <field name="arch" type="xml"><search><field name="name"/></search></field>
+  </record>
+  <record id="technical_precision_action" model="ir.actions.act_window">
+    <field name="name">Decimal Accuracy</field>
+    <field name="res_model">decimal.precision</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="technical_precision_list"/>
+    <field name="search_view_id" ref="technical_precision_search"/>
+    <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
+  </record>
+  <record id="technical_precision_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_precision_action"/>
+    <field name="view_id" ref="technical_precision_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="technical_precision_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_precision_action"/>
+    <field name="view_id" ref="technical_precision_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="technical_precision_menu" name="Decimal Accuracy" parent="technical_db_menu" action="technical_precision_action" groups="base.group_system" sequence="40"/>
+
+  <!-- Sequences & Identifiers Category -->
+  <menuitem id="technical_seq_menu" name="Sequences &amp; Identifiers" parent="technical_menu" sequence="20"/>
+
+  <!-- ir.sequence -->
+  <record id="technical_sequence_list" model="ir.ui.view">
+    <field name="name">ir.sequence.technical.list</field>
+    <field name="model">ir.sequence</field>
+    <field name="arch" type="xml"><list><field name="name"/><field name="code"/><field name="prefix"/><field name="padding"/><field name="number_next"/><field name="implementation"/><field name="active"/></list></field>
+  </record>
+  <record id="technical_sequence_form" model="ir.ui.view">
+    <field name="name">ir.sequence.technical.form</field>
+    <field name="model">ir.sequence</field>
+    <field name="arch" type="xml"><form record_mode="record"><field name="name"/><field name="code"/><field name="implementation"/><field name="prefix"/><field name="suffix"/><field name="padding"/><field name="number_next"/><field name="number_increment"/><field name="company_id"/><field name="use_date_range"/><field name="active"/></form></field>
+  </record>
+  <record id="technical_sequence_search" model="ir.ui.view">
+    <field name="name">ir.sequence.technical.search</field>
+    <field name="model">ir.sequence</field>
+    <field name="arch" type="xml"><search><field name="name"/><field name="code"/><field name="prefix"/></search></field>
+  </record>
+  <record id="technical_sequence_action" model="ir.actions.act_window">
+    <field name="name">Sequences</field>
+    <field name="res_model">ir.sequence</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="technical_sequence_list"/>
+    <field name="search_view_id" ref="technical_sequence_search"/>
+    <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
+  </record>
+  <record id="technical_sequence_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_sequence_action"/>
+    <field name="view_id" ref="technical_sequence_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="technical_sequence_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_sequence_action"/>
+    <field name="view_id" ref="technical_sequence_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="technical_sequences_menu" name="Sequences" parent="technical_seq_menu" action="technical_sequence_action" groups="base.group_system" sequence="10"/>
+
+  <!-- ir.sequence.date_range -->
+  <record id="technical_seq_range_list" model="ir.ui.view">
+    <field name="name">ir.sequence.date_range.technical.list</field>
+    <field name="model">ir.sequence.date_range</field>
+    <field name="arch" type="xml"><list><field name="sequence_id"/><field name="date_from"/><field name="date_to"/><field name="number_next"/></list></field>
+  </record>
+  <record id="technical_seq_range_form" model="ir.ui.view">
+    <field name="name">ir.sequence.date_range.technical.form</field>
+    <field name="model">ir.sequence.date_range</field>
+    <field name="arch" type="xml"><form record_mode="record"><field name="sequence_id"/><field name="date_from"/><field name="date_to"/><field name="number_next"/></form></field>
+  </record>
+  <record id="technical_seq_range_search" model="ir.ui.view">
+    <field name="name">ir.sequence.date_range.technical.search</field>
+    <field name="model">ir.sequence.date_range</field>
+    <field name="arch" type="xml"><search><field name="sequence_id"/></search></field>
+  </record>
+  <record id="technical_seq_range_action" model="ir.actions.act_window">
+    <field name="name">Sequence Date Ranges</field>
+    <field name="res_model">ir.sequence.date_range</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="technical_seq_range_list"/>
+    <field name="search_view_id" ref="technical_seq_range_search"/>
+    <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
+  </record>
+  <record id="technical_seq_range_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_seq_range_action"/>
+    <field name="view_id" ref="technical_seq_range_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="technical_seq_range_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_seq_range_action"/>
+    <field name="view_id" ref="technical_seq_range_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="technical_seq_ranges_menu" name="Sequence Date Ranges" parent="technical_seq_menu" action="technical_seq_range_action" groups="base.group_system" sequence="20"/>
+
+  <!-- ir.model.data -->
+  <record id="technical_model_data_list" model="ir.ui.view">
+    <field name="name">ir.model.data.technical.list</field>
+    <field name="model">ir.model.data</field>
+    <field name="arch" type="xml"><list><field name="module"/><field name="name"/><field name="model"/><field name="noupdate"/></list></field>
+  </record>
+  <record id="technical_model_data_form" model="ir.ui.view">
+    <field name="name">ir.model.data.technical.form</field>
+    <field name="model">ir.model.data</field>
+    <field name="arch" type="xml"><form record_mode="record"><field name="module"/><field name="name"/><field name="model"/><field name="noupdate"/></form></field>
+  </record>
+  <record id="technical_model_data_search" model="ir.ui.view">
+    <field name="name">ir.model.data.technical.search</field>
+    <field name="model">ir.model.data</field>
+    <field name="arch" type="xml"><search><field name="module"/><field name="name"/><field name="model"/></search></field>
+  </record>
+  <record id="technical_model_data_action" model="ir.actions.act_window">
+    <field name="name">External Identifiers</field>
+    <field name="res_model">ir.model.data</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="technical_model_data_list"/>
+    <field name="search_view_id" ref="technical_model_data_search"/>
+    <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
+  </record>
+  <record id="technical_model_data_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_model_data_action"/>
+    <field name="view_id" ref="technical_model_data_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="technical_model_data_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_model_data_action"/>
+    <field name="view_id" ref="technical_model_data_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="technical_data_menu" name="External Identifiers" parent="technical_seq_menu" action="technical_model_data_action" groups="base.group_system" sequence="30"/>
+
+  <!-- User Interface Category -->
+  <menuitem id="technical_ui_menu" name="User Interface" parent="technical_menu" sequence="30"/>
+
+  <!-- ir.ui.view -->
+  <record id="technical_view_list" model="ir.ui.view">
+    <field name="name">ir.ui.view.technical.list</field>
+    <field name="model">ir.ui.view</field>
+    <field name="arch" type="xml"><list><field name="name"/><field name="model"/><field name="type"/><field name="priority"/><field name="mode"/><field name="active"/></list></field>
+  </record>
+  <record id="technical_view_form" model="ir.ui.view">
+    <field name="name">ir.ui.view.technical.form</field>
+    <field name="model">ir.ui.view</field>
+    <field name="arch" type="xml"><form record_mode="record"><field name="name"/><field name="model"/><field name="key"/><field name="priority"/><field name="type"/><field name="mode"/><field name="active"/><field name="inherit_id"/><field name="arch_db"/></form></field>
+  </record>
+  <record id="technical_view_search" model="ir.ui.view">
+    <field name="name">ir.ui.view.technical.search</field>
+    <field name="model">ir.ui.view</field>
+    <field name="arch" type="xml"><search><field name="name"/><field name="model"/><field name="type"/><field name="key"/><field name="inherit_id"/></search></field>
+  </record>
+  <record id="technical_view_action" model="ir.actions.act_window">
+    <field name="name">Views</field>
+    <field name="res_model">ir.ui.view</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="technical_view_list"/>
+    <field name="search_view_id" ref="technical_view_search"/>
+    <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
+  </record>
+  <record id="technical_view_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_view_action"/>
+    <field name="view_id" ref="technical_view_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="technical_view_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_view_action"/>
+    <field name="view_id" ref="technical_view_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="technical_views_menu" name="Views" parent="technical_ui_menu" action="technical_view_action" groups="base.group_system" sequence="10"/>
+
+  <!-- ir.ui.menu -->
+  <record id="technical_menu_list" model="ir.ui.view">
+    <field name="name">ir.ui.menu.technical.list</field>
+    <field name="model">ir.ui.menu</field>
+    <field name="arch" type="xml"><list><field name="name"/><field name="sequence"/><field name="parent_id"/><field name="active"/></list></field>
+  </record>
+  <record id="technical_menu_form" model="ir.ui.view">
+    <field name="name">ir.ui.menu.technical.form</field>
+    <field name="model">ir.ui.menu</field>
+    <field name="arch" type="xml"><form record_mode="record"><field name="name"/><field name="sequence"/><field name="parent_id"/><field name="web_icon" widget="web.menu_icon"/><field name="active"/><field name="group_ids"/></form></field>
+  </record>
+  <record id="technical_menu_search" model="ir.ui.view">
+    <field name="name">ir.ui.menu.technical.search</field>
+    <field name="model">ir.ui.menu</field>
+    <field name="arch" type="xml"><search><field name="name"/><field name="parent_id"/></search></field>
+  </record>
+  <record id="technical_menu_action" model="ir.actions.act_window">
+    <field name="name">Menu Items</field>
+    <field name="res_model">ir.ui.menu</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="technical_menu_list"/>
+    <field name="search_view_id" ref="technical_menu_search"/>
+    <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
+  </record>
+  <record id="technical_menu_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_menu_action"/>
+    <field name="view_id" ref="technical_menu_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="technical_menu_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_menu_action"/>
+    <field name="view_id" ref="technical_menu_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="technical_menus_menu" name="Menu Items" parent="technical_ui_menu" action="technical_menu_action" groups="base.group_system" sequence="20"/>
+
+  <!-- Actions Category -->
+  <menuitem id="technical_actions_menu" name="Actions" parent="technical_menu" sequence="40"/>
+
+  <!-- ir.actions.actions (read-only key table) -->
+  <record id="technical_actions_list" model="ir.ui.view">
+    <field name="name">ir.actions.actions.technical.list</field>
+    <field name="model">ir.actions.actions</field>
+    <field name="arch" type="xml"><list><field name="name"/><field name="type"/><field name="path"/><field name="binding_model_id"/><field name="binding_type"/></list></field>
+  </record>
+  <record id="technical_actions_form" model="ir.ui.view">
+    <field name="name">ir.actions.actions.technical.form</field>
+    <field name="model">ir.actions.actions</field>
+    <field name="arch" type="xml"><form record_mode="record"><field name="name"/><field name="type"/><field name="path"/><field name="binding_model_id"/><field name="binding_type"/><field name="binding_view_types"/></form></field>
+  </record>
+  <record id="technical_actions_search" model="ir.ui.view">
+    <field name="name">ir.actions.actions.technical.search</field>
+    <field name="model">ir.actions.actions</field>
+    <field name="arch" type="xml"><search><field name="name"/><field name="type"/><field name="path"/></search></field>
+  </record>
+  <record id="technical_actions_action" model="ir.actions.act_window">
+    <field name="name">Actions</field>
+    <field name="res_model">ir.actions.actions</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="technical_actions_list"/>
+    <field name="search_view_id" ref="technical_actions_search"/>
+    <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
+  </record>
+  <record id="technical_actions_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_actions_action"/>
+    <field name="view_id" ref="technical_actions_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="technical_actions_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_actions_action"/>
+    <field name="view_id" ref="technical_actions_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="technical_actions_act_menu" name="Actions" parent="technical_actions_menu" action="technical_actions_action" groups="base.group_system" sequence="10"/>
+
+  <!-- ir.actions.act_window -->
+  <record id="technical_act_window_list" model="ir.ui.view">
+    <field name="name">ir.actions.act_window.technical.list</field>
+    <field name="model">ir.actions.act_window</field>
+    <field name="arch" type="xml"><list><field name="name"/><field name="res_model"/><field name="view_mode"/><field name="target"/><field name="path"/></list></field>
+  </record>
+  <record id="technical_act_window_form" model="ir.ui.view">
+    <field name="name">ir.actions.act_window.technical.form</field>
+    <field name="model">ir.actions.act_window</field>
+    <field name="arch" type="xml"><form record_mode="record"><field name="name"/><field name="res_model"/><field name="view_mode"/><field name="target"/><field name="view_id"/><field name="domain"/><field name="context"/><field name="path"/></form></field>
+  </record>
+  <record id="technical_act_window_search" model="ir.ui.view">
+    <field name="name">ir.actions.act_window.technical.search</field>
+    <field name="model">ir.actions.act_window</field>
+    <field name="arch" type="xml"><search><field name="name"/><field name="res_model"/><field name="path"/></search></field>
+  </record>
+  <record id="technical_act_window_action" model="ir.actions.act_window">
+    <field name="name">Window Actions</field>
+    <field name="res_model">ir.actions.act_window</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="technical_act_window_list"/>
+    <field name="search_view_id" ref="technical_act_window_search"/>
+    <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
+  </record>
+  <record id="technical_act_window_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_act_window_action"/>
+    <field name="view_id" ref="technical_act_window_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="technical_act_window_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_act_window_action"/>
+    <field name="view_id" ref="technical_act_window_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="technical_act_window_menu" name="Window Actions" parent="technical_actions_menu" action="technical_act_window_action" groups="base.group_system" sequence="20"/>
+
+  <!-- ir.actions.server -->
+  <record id="technical_act_server_list" model="ir.ui.view">
+    <field name="name">ir.actions.server.technical.list</field>
+    <field name="model">ir.actions.server</field>
+    <field name="arch" type="xml"><list><field name="name"/><field name="model_id"/><field name="state"/><field name="usage"/><field name="sequence"/></list></field>
+  </record>
+  <record id="technical_act_server_form" model="ir.ui.view">
+    <field name="name">ir.actions.server.technical.form</field>
+    <field name="model">ir.actions.server</field>
+    <field name="arch" type="xml"><form record_mode="record"><field name="name"/><field name="model_id"/><field name="state"/><field name="usage"/><field name="sequence"/><field name="code"/><field name="parent_id"/></form></field>
+  </record>
+  <record id="technical_act_server_search" model="ir.ui.view">
+    <field name="name">ir.actions.server.technical.search</field>
+    <field name="model">ir.actions.server</field>
+    <field name="arch" type="xml"><search><field name="name"/><field name="model_id"/><field name="state"/></search></field>
+  </record>
+  <record id="technical_act_server_action" model="ir.actions.act_window">
+    <field name="name">Server Actions</field>
+    <field name="res_model">ir.actions.server</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="technical_act_server_list"/>
+    <field name="search_view_id" ref="technical_act_server_search"/>
+    <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
+  </record>
+  <record id="technical_act_server_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_act_server_action"/>
+    <field name="view_id" ref="technical_act_server_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="technical_act_server_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_act_server_action"/>
+    <field name="view_id" ref="technical_act_server_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="technical_act_server_menu" name="Server Actions" parent="technical_actions_menu" action="technical_act_server_action" groups="base.group_system" sequence="30"/>
+
+  <!-- ir.actions.client -->
+  <record id="technical_act_client_list" model="ir.ui.view">
+    <field name="name">ir.actions.client.technical.list</field>
+    <field name="model">ir.actions.client</field>
+    <field name="arch" type="xml"><list><field name="name"/><field name="tag"/><field name="target"/><field name="res_model"/></list></field>
+  </record>
+  <record id="technical_act_client_form" model="ir.ui.view">
+    <field name="name">ir.actions.client.technical.form</field>
+    <field name="model">ir.actions.client</field>
+    <field name="arch" type="xml"><form record_mode="record"><field name="name"/><field name="tag"/><field name="target"/><field name="res_model"/><field name="context"/></form></field>
+  </record>
+  <record id="technical_act_client_search" model="ir.ui.view">
+    <field name="name">ir.actions.client.technical.search</field>
+    <field name="model">ir.actions.client</field>
+    <field name="arch" type="xml"><search><field name="name"/><field name="tag"/><field name="res_model"/></search></field>
+  </record>
+  <record id="technical_act_client_action" model="ir.actions.act_window">
+    <field name="name">Client Actions</field>
+    <field name="res_model">ir.actions.client</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="technical_act_client_list"/>
+    <field name="search_view_id" ref="technical_act_client_search"/>
+    <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
+  </record>
+  <record id="technical_act_client_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_act_client_action"/>
+    <field name="view_id" ref="technical_act_client_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="technical_act_client_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_act_client_action"/>
+    <field name="view_id" ref="technical_act_client_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="technical_act_client_menu" name="Client Actions" parent="technical_actions_menu" action="technical_act_client_action" groups="base.group_system" sequence="40"/>
+
+  <!-- ir.actions.act_url -->
+  <record id="technical_act_url_list" model="ir.ui.view">
+    <field name="name">ir.actions.act_url.technical.list</field>
+    <field name="model">ir.actions.act_url</field>
+    <field name="arch" type="xml"><list><field name="name"/><field name="url"/><field name="target"/></list></field>
+  </record>
+  <record id="technical_act_url_form" model="ir.ui.view">
+    <field name="name">ir.actions.act_url.technical.form</field>
+    <field name="model">ir.actions.act_url</field>
+    <field name="arch" type="xml"><form record_mode="record"><field name="name"/><field name="url"/><field name="target"/></form></field>
+  </record>
+  <record id="technical_act_url_search" model="ir.ui.view">
+    <field name="name">ir.actions.act_url.technical.search</field>
+    <field name="model">ir.actions.act_url</field>
+    <field name="arch" type="xml"><search><field name="name"/><field name="url"/></search></field>
+  </record>
+  <record id="technical_act_url_action" model="ir.actions.act_window">
+    <field name="name">URL Actions</field>
+    <field name="res_model">ir.actions.act_url</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="technical_act_url_list"/>
+    <field name="search_view_id" ref="technical_act_url_search"/>
+    <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
+  </record>
+  <record id="technical_act_url_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_act_url_action"/>
+    <field name="view_id" ref="technical_act_url_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="technical_act_url_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_act_url_action"/>
+    <field name="view_id" ref="technical_act_url_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="technical_act_url_menu" name="URL Actions" parent="technical_actions_menu" action="technical_act_url_action" groups="base.group_system" sequence="50"/>
+
+  <!-- ir.default -->
+  <record id="technical_default_list" model="ir.ui.view">
+    <field name="name">ir.default.technical.list</field>
+    <field name="model">ir.default</field>
+    <field name="arch" type="xml"><list><field name="field_id"/><field name="user_id"/><field name="company_id"/><field name="condition"/><field name="json_value"/></list></field>
+  </record>
+  <record id="technical_default_form" model="ir.ui.view">
+    <field name="name">ir.default.technical.form</field>
+    <field name="model">ir.default</field>
+    <field name="arch" type="xml"><form record_mode="record"><field name="field_id"/><field name="user_id"/><field name="company_id"/><field name="condition"/><field name="json_value"/></form></field>
+  </record>
+  <record id="technical_default_search" model="ir.ui.view">
+    <field name="name">ir.default.technical.search</field>
+    <field name="model">ir.default</field>
+    <field name="arch" type="xml"><search><field name="field_id"/><field name="user_id"/><field name="company_id"/></search></field>
+  </record>
+  <record id="technical_default_action" model="ir.actions.act_window">
+    <field name="name">User-defined Defaults</field>
+    <field name="res_model">ir.default</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="technical_default_list"/>
+    <field name="search_view_id" ref="technical_default_search"/>
+    <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
+  </record>
+  <record id="technical_default_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_default_action"/>
+    <field name="view_id" ref="technical_default_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="technical_default_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_default_action"/>
+    <field name="view_id" ref="technical_default_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="technical_defaults_menu" name="User-defined Defaults" parent="technical_actions_menu" action="technical_default_action" groups="base.group_system" sequence="60"/>
+
+  <!-- Parameters Category -->
+  <menuitem id="technical_params_menu" name="Parameters" parent="technical_menu" sequence="50"/>
+
+  <!-- ir.config_parameter -->
+  <record id="technical_config_param_list" model="ir.ui.view">
+    <field name="name">ir.config_parameter.technical.list</field>
+    <field name="model">ir.config_parameter</field>
+    <field name="arch" type="xml"><list><field name="key"/><field name="value"/></list></field>
+  </record>
+  <record id="technical_config_param_form" model="ir.ui.view">
+    <field name="name">ir.config_parameter.technical.form</field>
+    <field name="model">ir.config_parameter</field>
+    <field name="arch" type="xml"><form record_mode="record"><field name="key"/><field name="value"/></form></field>
+  </record>
+  <record id="technical_config_param_search" model="ir.ui.view">
+    <field name="name">ir.config_parameter.technical.search</field>
+    <field name="model">ir.config_parameter</field>
+    <field name="arch" type="xml"><search><field name="key"/><field name="value"/></search></field>
+  </record>
+  <record id="technical_config_param_action" model="ir.actions.act_window">
+    <field name="name">System Parameters</field>
+    <field name="res_model">ir.config_parameter</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="technical_config_param_list"/>
+    <field name="search_view_id" ref="technical_config_param_search"/>
+    <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
+  </record>
+  <record id="technical_config_param_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_config_param_action"/>
+    <field name="view_id" ref="technical_config_param_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="technical_config_param_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_config_param_action"/>
+    <field name="view_id" ref="technical_config_param_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="technical_params_act_menu" name="System Parameters" parent="technical_params_menu" action="technical_config_param_action" groups="base.group_system" sequence="10"/>
+
+  <!-- Security Category -->
+  <menuitem id="technical_security_menu" name="Security" parent="technical_menu" sequence="60"/>
+
+  <!-- res.groups.privilege -->
+  <record id="technical_privilege_list" model="ir.ui.view">
+    <field name="name">res.groups.privilege.technical.list</field>
+    <field name="model">res.groups.privilege</field>
+    <field name="arch" type="xml"><list><field name="name"/><field name="sequence"/><field name="placeholder"/></list></field>
+  </record>
+  <record id="technical_privilege_form" model="ir.ui.view">
+    <field name="name">res.groups.privilege.technical.form</field>
+    <field name="model">res.groups.privilege</field>
+    <field name="arch" type="xml"><form record_mode="record"><field name="name"/><field name="sequence"/><field name="placeholder"/><field name="description"/></form></field>
+  </record>
+  <record id="technical_privilege_search" model="ir.ui.view">
+    <field name="name">res.groups.privilege.technical.search</field>
+    <field name="model">res.groups.privilege</field>
+    <field name="arch" type="xml"><search><field name="name"/></search></field>
+  </record>
+  <record id="technical_privilege_action" model="ir.actions.act_window">
+    <field name="name">User Privileges</field>
+    <field name="res_model">res.groups.privilege</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="technical_privilege_list"/>
+    <field name="search_view_id" ref="technical_privilege_search"/>
+    <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
+  </record>
+  <record id="technical_privilege_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_privilege_action"/>
+    <field name="view_id" ref="technical_privilege_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="technical_privilege_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_privilege_action"/>
+    <field name="view_id" ref="technical_privilege_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="technical_privilege_menu" name="User Privileges" parent="technical_security_menu" action="technical_privilege_action" groups="base.group_system" sequence="10"/>
+
+  <!-- ir.access (pointing to existing settings_access_action) -->
+  <menuitem id="technical_access_menu" name="Access Rules" parent="technical_security_menu" action="settings_access_action" groups="base.group_system" sequence="20"/>
+
+  <!-- Modules Category & Menu -->
+  <menuitem id="technical_modules_menu" name="Installed Modules" parent="technical_menu" sequence="70"/>
+
+  <!-- ir.module.module -->
+  <record id="technical_module_list" model="ir.ui.view">
+    <field name="name">ir.module.module.technical.list</field>
+    <field name="model">ir.module.module</field>
+    <field name="arch" type="xml"><list><field name="shortdesc"/><field name="name"/><field name="state"/><field name="latest_version"/><field name="category_id"/></list></field>
+  </record>
+  <record id="technical_module_form" model="ir.ui.view">
+    <field name="name">ir.module.module.technical.form</field>
+    <field name="model">ir.module.module</field>
+    <field name="arch" type="xml"><form record_mode="record"><field name="shortdesc"/><field name="name"/><field name="summary"/><field name="state"/><field name="latest_version"/><field name="category_id"/><field name="author"/><field name="website"/><field name="license"/></form></field>
+  </record>
+  <record id="technical_module_search" model="ir.ui.view">
+    <field name="name">ir.module.module.technical.search</field>
+    <field name="model">ir.module.module</field>
+    <field name="arch" type="xml"><search><field name="shortdesc"/><field name="name"/><field name="state"/><field name="category_id"/></search></field>
+  </record>
+  <record id="technical_module_action" model="ir.actions.act_window">
+    <field name="name">Modules</field>
+    <field name="res_model">ir.module.module</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="technical_module_list"/>
+    <field name="search_view_id" ref="technical_module_search"/>
+    <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
+  </record>
+  <record id="technical_module_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_module_action"/>
+    <field name="view_id" ref="technical_module_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="technical_module_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_module_action"/>
+    <field name="view_id" ref="technical_module_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="technical_modules_act_menu" name="Modules" parent="technical_modules_menu" action="technical_module_action" groups="base.group_system" sequence="10"/>
+</erp>

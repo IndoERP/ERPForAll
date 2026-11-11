@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/ui/host_access/fake_evaluation.rs:12:34
+   |
+12 |     let _ = filter(env, guarded, &Fake);
+   |             ------               ^^^^^ expected `&GuardEvaluation<'_>`, found `&Fake`
+   |             |
+   |             arguments to this function are incorrect
+   |
+   = note: expected reference `&GuardEvaluation<'_>`
+              found reference `&Fake`
+note: function defined here
+  --> src/host_access.rs
+   |
+   | pub fn filter<'a>(
+   |        ^^^^^^

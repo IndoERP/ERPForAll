@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.src.json",
+  "compilerOptions": {
+    "skipLibCheck": false,
+    "types": []
+  },
+  "include": ["src/generated/**/*.d.ts", "typechecks/generated.ts"]
+}

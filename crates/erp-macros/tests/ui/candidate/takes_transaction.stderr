@@ -1,0 +1,5 @@
+error: a `candidate` compute receives the read-only view `&mut ReadTx<'_>`, not `&mut Transaction`: it cannot mutate, use extensions or queue commit hooks
+ --> tests/ui/candidate/takes_transaction.rs:6:13
+  |
+6 |         tx: &mut Transaction,
+  |             ^

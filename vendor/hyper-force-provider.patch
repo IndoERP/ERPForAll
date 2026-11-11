@@ -1,0 +1,70 @@
+--- a/src/proto/h1/conn.rs
++++ b/src/proto/h1/conn.rs
+@@ -48,6 +48,14 @@
+     T: Http1Transaction,
+ {
+     pub(crate) fn new(io: I) -> Conn<I, B, T> {
++        // ERPForAll test-only change (vendor/hyper-suite.sh --force-provider): every connection,
++        // client and server, borrows its buffers from a pooling provider
++        #[cfg(feature = "server")]
++        return Conn::from_buffered(Buffered::with_provider(
++            io,
++            std::sync::Arc::new(super::io::ForcedPool),
++        ));
++        #[cfg(not(feature = "server"))]
+         Conn::from_buffered(Buffered::new(io))
+     }
+ 
+--- a/src/proto/h1/io.rs
++++ b/src/proto/h1/io.rs
+@@ -77,6 +77,50 @@
+     fn take_write(&self) -> Vec<u8>;
+     /// A head buffer whose bytes have all been written (always empty).
+     fn give_write(&self, buf: Vec<u8>);
++}
++
++/// ERPForAll test-only provider (vendor/hyper-suite.sh --force-provider): a process-wide pool
++/// that reuses buffers (a read buffer only when `try_reclaim` recovers its whole allocation) and
++/// panics when hyper gives a buffer back with bytes in it, so the suite checks the contract.
++/// With `HYPER_FORCED_PROVIDER_SELFTEST` set, every take panics (the script's self-test).
++#[cfg(feature = "server")]
++pub(crate) struct ForcedPool;
++
++#[cfg(feature = "server")]
++static FORCED_READS: std::sync::Mutex<Vec<BytesMut>> = std::sync::Mutex::new(Vec::new());
++#[cfg(feature = "server")]
++static FORCED_WRITES: std::sync::Mutex<Vec<Vec<u8>>> = std::sync::Mutex::new(Vec::new());
++
++#[cfg(feature = "server")]
++impl BufProvider for ForcedPool {
++    fn take_read(&self, min: usize) -> BytesMut {
++        // vendor/hyper-suite.sh's self-test: proves the suite's connections use this provider
++        if std::env::var_os("HYPER_FORCED_PROVIDER_SELFTEST").is_some() {
++            panic!("forced provider in use");
++        }
++        let cached = FORCED_READS.lock().unwrap().pop();
++        if let Some(mut buf) = cached {
++            if buf.capacity() >= min || buf.try_reclaim(min) {
++                return buf;
++            }
++        }
++        BytesMut::with_capacity(cmp::max(min, INIT_BUFFER_SIZE))
++    }
++
++    fn give_read(&self, buf: BytesMut) {
++        assert!(buf.is_empty(), "give_read with {} bytes", buf.len());
++        FORCED_READS.lock().unwrap().push(buf);
++    }
++
++    fn take_write(&self) -> Vec<u8> {
++        let cached = FORCED_WRITES.lock().unwrap().pop();
++        cached.unwrap_or_else(|| Vec::with_capacity(INIT_BUFFER_SIZE))
++    }
++
++    fn give_write(&self, buf: Vec<u8>) {
++        assert!(buf.is_empty(), "give_write with {} bytes", buf.len());
++        FORCED_WRITES.lock().unwrap().push(buf);
++    }
+ }
+ 
+ pub(crate) struct Buffered<T, B> {

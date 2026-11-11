@@ -1,0 +1,54 @@
+id,name,model_id:id,group_id:id,operation,domain
+access_users_system,Manage users,base.model_res_users,base.group_system,crud,
+access_partner_system,Manage contacts,base.model_res_partner,base.group_system,crud,
+access_company_system,Manage companies,base.model_res_company,base.group_system,crud,
+access_groups_system,Manage groups,base.model_res_groups,base.group_system,crud,
+access_privilege_system,Manage privileges,base.model_res_groups_privilege,base.group_system,crud,
+access_rules_system,Manage access rules,base.model_ir_access,base.group_system,crud,
+access_currency_system,Manage currencies,base.model_res_currency,base.group_system,crud,
+access_lang_system,Manage languages,base.model_res_lang,base.group_system,crud,
+access_models_system,Read model metadata,base.model_ir_model,base.group_system,r,
+access_fields_system,Read field metadata,base.model_ir_model_fields,base.group_system,r,
+access_views_system,Manage views,base.model_ir_ui_view,base.group_system,crud,
+access_menus_system,Manage menus,base.model_ir_ui_menu,base.group_system,crud,
+access_actions_system,Manage window actions,base.model_ir_actions_act_window,base.group_system,crud,
+access_action_views_system,Manage window action views,base.model_ir_actions_act_window_view,base.group_system,crud,
+access_model_relations_system,Read model relations,base.model_ir_model_relation,base.group_system,r,
+access_decimal_precision_system,Read decimal precision,base.model_decimal_precision,base.group_system,r,
+access_sequences_system,Read sequences,base.model_ir_sequence,base.group_system,r,
+access_sequence_ranges_system,Read sequence date ranges,base.model_ir_sequence_date_range,base.group_system,r,
+access_model_data_system,Read external identifiers,base_data.model_ir_model_data,base.group_system,r,
+access_action_keys_system,Read actions,base.model_ir_actions_actions,base.group_system,r,
+access_server_actions_system,Read server actions,base.model_ir_actions_server,base.group_system,r,
+access_client_actions_system,Read client actions,base.model_ir_actions_client,base.group_system,r,
+access_url_actions_system,Read URL actions,base.model_ir_actions_act_url,base.group_system,r,
+access_defaults_system,Read user-defined defaults,base.model_ir_default,base.group_system,r,
+access_partner_internal,Read contacts,base.model_res_partner,base.group_user,r,
+access_company_internal,Read allowed companies,base.model_res_company,base.group_user,r,"[('id', 'in', company_ids)]"
+access_currency_internal,Read currencies,base.model_res_currency,base.group_user,r,
+access_lang_internal,Read languages,base.model_res_lang,base.group_user,r,
+access_menus_internal,Read menus,base.model_ir_ui_menu,base.group_user,r,
+access_actions_internal,Read window actions,base.model_ir_actions_act_window,base.group_user,r,
+access_action_views_internal,Read window action views,base.model_ir_actions_act_window_view,base.group_user,r,
+access_settings_service_internal,Read declared Settings service,base.model_ir_config_setting,base.group_user,ru,
+access_settings_service_system,Save declared Settings service,base.model_ir_config_setting,base.group_system,u,
+access_settings_audit_system,Read Settings audit,base.model_ir_config_setting_audit,base.group_system,r,
+access_module_catalog_system,Read linked addon catalog,base.model_ir_module_module,base.group_system,r,
+access_currency_rate_system,Manage currency rates,base.model_res_currency_rate,base.group_system,crud,
+access_currency_rate_type_system,Manage currency rate types,base.model_res_currency_rate_type,base.group_system,crud,
+access_currency_rate_internal,Read currency rates,base.model_res_currency_rate,base.group_user,r,"['|', ('company_id', '=', False), ('company_id', 'parent_of', company_ids)]"
+access_currency_rate_type_internal,Read currency rate types,base.model_res_currency_rate_type,base.group_user,r,
+access_dated_parameter_system,Manage dated parameters,base.model_ir_dated_parameter,base.group_system,crud,
+access_dated_parameter_internal,Read dated parameters,base.model_ir_dated_parameter,base.group_user,r,"['|', ('company_id', '=', False), ('company_id', 'parent_of', company_ids)]"
+access_users_self_internal,Read and update the own user record,base.model_res_users,base.group_user,ru,"[('id', '=', user.id)]"
+access_password_wizard,Own password wizard,base.model_change_password_wizard,base.group_erp_manager,crud,"[('create_uid', '=', user.id)]"
+access_password_user,Own password wizard,base.model_change_password_user,base.group_erp_manager,crud,"[('create_uid', '=', user.id)]"
+access_password_own,Own password wizard,base.model_change_password_own,base.group_user,crud,"[('create_uid', '=', user.id)]"
+access_password_identity,Own password wizard,base.model_res_users_identitycheck,base.group_user,crud,"[('create_uid', '=', user.id)]"
+access_partner_category_system,Manage contact tags,base.model_res_partner_category,base.group_system,crud,
+access_partner_category_internal,Read contact tags,base.model_res_partner_category,base.group_user,r,
+access_partner_industry_system,Manage industries,base.model_res_partner_industry,base.group_system,crud,
+access_partner_industry_internal,Read industries,base.model_res_partner_industry,base.group_user,r,
+access_attachment_system,Manage attachments,base.model_ir_attachment,base.group_system,crud,
+access_attachment_internal_read,Read the own attachments,base.model_ir_attachment,base.group_user,r,"[('create_uid', '=', user.id)]"
+access_attachment_internal_write,Create and change attachments of records the user may write,base.model_ir_attachment,base.group_user,cud,

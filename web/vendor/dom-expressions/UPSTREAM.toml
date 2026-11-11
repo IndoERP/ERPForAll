@@ -1,0 +1,29 @@
+# Vendored keyed list reconciliation, taken as is.
+# reconcile.js is itself "a slightly modified version of" udomdiff (ISC), whose licence is kept beside
+# it. web/scripts/check-vendor.mjs downloads every file at its commit, checks its SHA-256, applies
+# `patches` in order and requires the result to equal this tree byte for byte.
+repository = "https://github.com/ryansolid/dom-expressions"
+tag = "v0.40.12"
+commit = "27a88bea8ffa97400bbcc66d380e40daed9e1cf1"
+license = "MIT AND ISC"
+patches = ["patches/0001-erpforall-legal-comments.patch"]
+npm_package = "dom-expressions"
+# Our own files in this tree, not from upstream.
+local = ["src/reconcile.d.ts"]
+
+[[files]]
+path = "LICENSE"
+upstream = "LICENSE"
+sha256 = "f309720128d29476b91891a60c0e9270c96a41ce0f241cd05fcf11d771300a4a"
+
+[[files]]
+path = "src/reconcile.js"
+upstream = "packages/dom-expressions/src/reconcile.js"
+sha256 = "d6265a99082a8d6d4151fdc5eb1acd39b254430c32dc77a81f98f99671bcb183"
+
+[[files]]
+path = "LICENSE.udomdiff"
+repository = "https://github.com/WebReflection/udomdiff"
+commit = "e58db3ad28b72ade55a14452a73331a0db4d0871"
+upstream = "LICENSE"
+sha256 = "2b0748436e16684ec912b82f153343c6063ae7a7f24fac680058ca06bf02f2a7"

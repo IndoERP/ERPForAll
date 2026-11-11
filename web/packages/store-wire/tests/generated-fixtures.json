@@ -1,0 +1,2241 @@
+{
+  "client_majors": [
+    {
+      "accepted": null,
+      "client": 0,
+      "refusal": {
+        "code": "client_outdated",
+        "path": null,
+        "limit": null
+      }
+    },
+    {
+      "accepted": 1,
+      "client": 1,
+      "refusal": null
+    },
+    {
+      "accepted": null,
+      "client": 2,
+      "refusal": {
+        "code": "client_outdated",
+        "path": null,
+        "limit": null
+      }
+    },
+    {
+      "accepted": null,
+      "client": 4294967296,
+      "refusal": {
+        "code": "client_outdated",
+        "path": null,
+        "limit": null
+      }
+    }
+  ],
+  "cursor_cases": [
+    {
+      "name": "cursor_plain",
+      "outcome": {
+        "outcome": "valid",
+        "cursor": {
+          "id": "5512",
+          "xid": "104"
+        }
+      },
+      "wire": {
+        "id": "5512",
+        "xid": "104"
+      }
+    },
+    {
+      "name": "cursor_above_2_pow_53",
+      "outcome": {
+        "outcome": "valid",
+        "cursor": {
+          "id": "9223372036854775807",
+          "xid": "9007199254740993"
+        }
+      },
+      "wire": {
+        "id": "9223372036854775807",
+        "xid": "9007199254740993"
+      }
+    },
+    {
+      "name": "refuse_cursor_id_zero",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_descriptor",
+          "path": "cursor.id",
+          "limit": null
+        }
+      },
+      "wire": {
+        "id": "0",
+        "xid": "104"
+      }
+    },
+    {
+      "name": "refuse_cursor_id_above_i64",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_descriptor",
+          "path": "cursor.id",
+          "limit": null
+        }
+      },
+      "wire": {
+        "id": "9223372036854775808",
+        "xid": "104"
+      }
+    },
+    {
+      "name": "refuse_cursor_id_leading_zero",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_descriptor",
+          "path": "cursor.id",
+          "limit": null
+        }
+      },
+      "wire": {
+        "id": "05",
+        "xid": "104"
+      }
+    },
+    {
+      "name": "refuse_cursor_xid_zero",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_descriptor",
+          "path": "cursor.xid",
+          "limit": null
+        }
+      },
+      "wire": {
+        "id": "5",
+        "xid": "0"
+      }
+    },
+    {
+      "name": "refuse_cursor_xid_not_decimal",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_descriptor",
+          "path": "cursor.xid",
+          "limit": null
+        }
+      },
+      "wire": {
+        "id": "5",
+        "xid": "x"
+      }
+    }
+  ],
+  "cursor_order": {
+    "shuffled": [
+      {
+        "id": "1",
+        "xid": "10"
+      },
+      {
+        "id": "2",
+        "xid": "9"
+      },
+      {
+        "id": "1",
+        "xid": "9"
+      },
+      {
+        "id": "1",
+        "xid": "100"
+      },
+      {
+        "id": "2",
+        "xid": "10"
+      },
+      {
+        "id": "10",
+        "xid": "9"
+      },
+      {
+        "id": "9",
+        "xid": "9"
+      }
+    ],
+    "sorted": [
+      {
+        "id": "1",
+        "xid": "9"
+      },
+      {
+        "id": "2",
+        "xid": "9"
+      },
+      {
+        "id": "9",
+        "xid": "9"
+      },
+      {
+        "id": "10",
+        "xid": "9"
+      },
+      {
+        "id": "1",
+        "xid": "10"
+      },
+      {
+        "id": "2",
+        "xid": "10"
+      },
+      {
+        "id": "1",
+        "xid": "100"
+      }
+    ]
+  },
+  "descriptor_cases": [
+    {
+      "name": "read_only_with_in_progress",
+      "outcome": {
+        "outcome": "valid",
+        "asof": {
+          "own": null,
+          "xip": [
+            "100",
+            "103"
+          ],
+          "xmax": "105",
+          "xmin": "100"
+        },
+        "completed_count": "103",
+        "probes": [
+          {
+            "reflects": true,
+            "xid": "99"
+          },
+          {
+            "reflects": false,
+            "xid": "100"
+          },
+          {
+            "reflects": true,
+            "xid": "101"
+          },
+          {
+            "reflects": true,
+            "xid": "102"
+          },
+          {
+            "reflects": false,
+            "xid": "103"
+          },
+          {
+            "reflects": true,
+            "xid": "104"
+          },
+          {
+            "reflects": false,
+            "xid": "105"
+          },
+          {
+            "reflects": false,
+            "xid": "106"
+          }
+        ]
+      },
+      "wire": {
+        "own": null,
+        "xip": [
+          "100",
+          "103"
+        ],
+        "xmax": "105",
+        "xmin": "100"
+      }
+    },
+    {
+      "name": "refuse_own_below_xmax",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_descriptor",
+          "path": "asof.own",
+          "limit": null
+        }
+      },
+      "wire": {
+        "own": "104",
+        "xip": [
+          "100",
+          "103"
+        ],
+        "xmax": "105",
+        "xmin": "100"
+      }
+    },
+    {
+      "name": "writer_at_xmax",
+      "outcome": {
+        "outcome": "valid",
+        "asof": {
+          "own": "105",
+          "xip": [
+            "100",
+            "103"
+          ],
+          "xmax": "105",
+          "xmin": "100"
+        },
+        "completed_count": "103",
+        "probes": [
+          {
+            "reflects": true,
+            "xid": "99"
+          },
+          {
+            "reflects": false,
+            "xid": "100"
+          },
+          {
+            "reflects": true,
+            "xid": "101"
+          },
+          {
+            "reflects": true,
+            "xid": "102"
+          },
+          {
+            "reflects": false,
+            "xid": "103"
+          },
+          {
+            "reflects": true,
+            "xid": "104"
+          },
+          {
+            "reflects": true,
+            "xid": "105"
+          },
+          {
+            "reflects": false,
+            "xid": "106"
+          }
+        ]
+      },
+      "wire": {
+        "own": "105",
+        "xip": [
+          "100",
+          "103"
+        ],
+        "xmax": "105",
+        "xmin": "100"
+      }
+    },
+    {
+      "name": "writer_above_xmax",
+      "outcome": {
+        "outcome": "valid",
+        "asof": {
+          "own": "110",
+          "xip": [
+            "100",
+            "103"
+          ],
+          "xmax": "105",
+          "xmin": "100"
+        },
+        "completed_count": "103",
+        "probes": [
+          {
+            "reflects": true,
+            "xid": "99"
+          },
+          {
+            "reflects": false,
+            "xid": "100"
+          },
+          {
+            "reflects": true,
+            "xid": "101"
+          },
+          {
+            "reflects": true,
+            "xid": "102"
+          },
+          {
+            "reflects": false,
+            "xid": "103"
+          },
+          {
+            "reflects": true,
+            "xid": "104"
+          },
+          {
+            "reflects": false,
+            "xid": "105"
+          },
+          {
+            "reflects": false,
+            "xid": "106"
+          },
+          {
+            "reflects": false,
+            "xid": "109"
+          },
+          {
+            "reflects": true,
+            "xid": "110"
+          },
+          {
+            "reflects": false,
+            "xid": "111"
+          }
+        ]
+      },
+      "wire": {
+        "own": "110",
+        "xip": [
+          "100",
+          "103"
+        ],
+        "xmax": "105",
+        "xmin": "100"
+      }
+    },
+    {
+      "name": "no_in_progress",
+      "outcome": {
+        "outcome": "valid",
+        "asof": {
+          "own": null,
+          "xip": [],
+          "xmax": "7",
+          "xmin": "7"
+        },
+        "completed_count": "7",
+        "probes": [
+          {
+            "reflects": true,
+            "xid": "6"
+          },
+          {
+            "reflects": false,
+            "xid": "7"
+          },
+          {
+            "reflects": false,
+            "xid": "8"
+          }
+        ]
+      },
+      "wire": {
+        "own": null,
+        "xip": [],
+        "xmax": "7",
+        "xmin": "7"
+      }
+    },
+    {
+      "name": "above_2_pow_53",
+      "outcome": {
+        "outcome": "valid",
+        "asof": {
+          "own": "9007199254741001",
+          "xip": [
+            "9007199254740995"
+          ],
+          "xmax": "9007199254740999",
+          "xmin": "9007199254740993"
+        },
+        "completed_count": "9007199254740998",
+        "probes": [
+          {
+            "reflects": true,
+            "xid": "9007199254740992"
+          },
+          {
+            "reflects": true,
+            "xid": "9007199254740993"
+          },
+          {
+            "reflects": true,
+            "xid": "9007199254740994"
+          },
+          {
+            "reflects": false,
+            "xid": "9007199254740995"
+          },
+          {
+            "reflects": true,
+            "xid": "9007199254740996"
+          },
+          {
+            "reflects": true,
+            "xid": "9007199254740998"
+          },
+          {
+            "reflects": false,
+            "xid": "9007199254740999"
+          },
+          {
+            "reflects": false,
+            "xid": "9007199254741000"
+          },
+          {
+            "reflects": true,
+            "xid": "9007199254741001"
+          },
+          {
+            "reflects": false,
+            "xid": "9007199254741002"
+          }
+        ]
+      },
+      "wire": {
+        "own": "9007199254741001",
+        "xip": [
+          "9007199254740995"
+        ],
+        "xmax": "9007199254740999",
+        "xmin": "9007199254740993"
+      }
+    },
+    {
+      "name": "near_u64_max",
+      "outcome": {
+        "outcome": "valid",
+        "asof": {
+          "own": null,
+          "xip": [
+            "18446744073709551612"
+          ],
+          "xmax": "18446744073709551615",
+          "xmin": "18446744073709551610"
+        },
+        "completed_count": "18446744073709551614",
+        "probes": [
+          {
+            "reflects": true,
+            "xid": "18446744073709551609"
+          },
+          {
+            "reflects": true,
+            "xid": "18446744073709551610"
+          },
+          {
+            "reflects": true,
+            "xid": "18446744073709551611"
+          },
+          {
+            "reflects": false,
+            "xid": "18446744073709551612"
+          },
+          {
+            "reflects": true,
+            "xid": "18446744073709551613"
+          },
+          {
+            "reflects": true,
+            "xid": "18446744073709551614"
+          },
+          {
+            "reflects": false,
+            "xid": "18446744073709551615"
+          }
+        ]
+      },
+      "wire": {
+        "own": null,
+        "xip": [
+          "18446744073709551612"
+        ],
+        "xmax": "18446744073709551615",
+        "xmin": "18446744073709551610"
+      }
+    },
+    {
+      "name": "refuse_xmin_above_xmax",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_descriptor",
+          "path": "asof",
+          "limit": null
+        }
+      },
+      "wire": {
+        "own": null,
+        "xip": [],
+        "xmax": "5",
+        "xmin": "6"
+      }
+    },
+    {
+      "name": "refuse_xip_below_xmin",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_descriptor",
+          "path": "asof.xip[0]",
+          "limit": null
+        }
+      },
+      "wire": {
+        "own": null,
+        "xip": [
+          "99"
+        ],
+        "xmax": "105",
+        "xmin": "100"
+      }
+    },
+    {
+      "name": "refuse_xip_at_xmax",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_descriptor",
+          "path": "asof.xip[0]",
+          "limit": null
+        }
+      },
+      "wire": {
+        "own": null,
+        "xip": [
+          "105"
+        ],
+        "xmax": "105",
+        "xmin": "100"
+      }
+    },
+    {
+      "name": "refuse_xip_not_ascending",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_descriptor",
+          "path": "asof.xip[1]",
+          "limit": null
+        }
+      },
+      "wire": {
+        "own": null,
+        "xip": [
+          "103",
+          "101"
+        ],
+        "xmax": "105",
+        "xmin": "100"
+      }
+    },
+    {
+      "name": "refuse_xip_duplicate",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_descriptor",
+          "path": "asof.xip[1]",
+          "limit": null
+        }
+      },
+      "wire": {
+        "own": null,
+        "xip": [
+          "103",
+          "103"
+        ],
+        "xmax": "105",
+        "xmin": "100"
+      }
+    },
+    {
+      "name": "refuse_own_in_xip",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_descriptor",
+          "path": "asof.own",
+          "limit": null
+        }
+      },
+      "wire": {
+        "own": "103",
+        "xip": [
+          "100",
+          "103"
+        ],
+        "xmax": "105",
+        "xmin": "100"
+      }
+    },
+    {
+      "name": "refuse_zero_xid",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_descriptor",
+          "path": "asof.xmin",
+          "limit": null
+        }
+      },
+      "wire": {
+        "own": null,
+        "xip": [],
+        "xmax": "5",
+        "xmin": "0"
+      }
+    },
+    {
+      "name": "refuse_leading_zero",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_descriptor",
+          "path": "asof.xmin",
+          "limit": null
+        }
+      },
+      "wire": {
+        "own": null,
+        "xip": [],
+        "xmax": "105",
+        "xmin": "0100"
+      }
+    },
+    {
+      "name": "refuse_non_digit",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_descriptor",
+          "path": "asof.xmin",
+          "limit": null
+        }
+      },
+      "wire": {
+        "own": null,
+        "xip": [],
+        "xmax": "105",
+        "xmin": "1e2"
+      }
+    },
+    {
+      "name": "refuse_negative",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_descriptor",
+          "path": "asof.xmin",
+          "limit": null
+        }
+      },
+      "wire": {
+        "own": null,
+        "xip": [],
+        "xmax": "105",
+        "xmin": "-1"
+      }
+    },
+    {
+      "name": "refuse_above_u64",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_descriptor",
+          "path": "asof.xmax",
+          "limit": null
+        }
+      },
+      "wire": {
+        "own": null,
+        "xip": [],
+        "xmax": "18446744073709551616",
+        "xmin": "1"
+      }
+    },
+    {
+      "name": "refuse_empty_xip_entry",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_descriptor",
+          "path": "asof.xip[0]",
+          "limit": null
+        }
+      },
+      "wire": {
+        "own": null,
+        "xip": [
+          ""
+        ],
+        "xmax": "105",
+        "xmin": "100"
+      }
+    }
+  ],
+  "format": 1,
+  "limits": [
+    {
+      "limit": "bytes",
+      "value": 8388608
+    },
+    {
+      "limit": "depth",
+      "value": 16
+    },
+    {
+      "limit": "models",
+      "value": 256
+    },
+    {
+      "limit": "records",
+      "value": 50000
+    },
+    {
+      "limit": "ids_per_list",
+      "value": 50000
+    },
+    {
+      "limit": "xip",
+      "value": 65536
+    },
+    {
+      "limit": "string_bytes",
+      "value": 1048576
+    },
+    {
+      "limit": "schema_token_bytes",
+      "value": 128
+    },
+    {
+      "limit": "schema_fields",
+      "value": 16384
+    }
+  ],
+  "payload_cases": [
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "answer_empty",
+      "outcome": {
+        "outcome": "decoded",
+        "payload": {
+          "asof": {
+            "own": null,
+            "xip": [
+              "100",
+              "103"
+            ],
+            "xmax": "104",
+            "xmin": "100"
+          },
+          "cursor": null,
+          "deletes": [],
+          "generation": "g1",
+          "upserts": []
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":null,\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "answer_every_kind_with_written_and_deletes",
+      "outcome": {
+        "outcome": "decoded",
+        "payload": {
+          "asof": {
+            "own": "104",
+            "xip": [
+              "100",
+              "103"
+            ],
+            "xmax": "104",
+            "xmin": "100"
+          },
+          "cursor": null,
+          "deletes": [
+            {
+              "id": 2,
+              "model": "test.message"
+            },
+            {
+              "id": 9,
+              "model": "test.thread"
+            }
+          ],
+          "generation": "g1",
+          "upserts": [
+            {
+              "id": 5,
+              "model": "test.message",
+              "fields": [
+                {
+                  "name": "text",
+                  "value": {
+                    "kind": "string",
+                    "value": "hi"
+                  },
+                  "written": false
+                }
+              ]
+            },
+            {
+              "id": 3,
+              "model": "test.partner",
+              "fields": [
+                {
+                  "name": "score",
+                  "value": {
+                    "kind": "counter",
+                    "value": 99
+                  },
+                  "written": false
+                }
+              ]
+            },
+            {
+              "id": 7,
+              "model": "test.thread",
+              "fields": [
+                {
+                  "name": "active",
+                  "value": {
+                    "kind": "bool",
+                    "value": false
+                  },
+                  "written": false
+                },
+                {
+                  "name": "author",
+                  "value": {
+                    "kind": "many2one",
+                    "value": 4
+                  },
+                  "written": false
+                },
+                {
+                  "name": "body",
+                  "value": {
+                    "kind": "html",
+                    "value": "<p>x</p>"
+                  },
+                  "written": false
+                },
+                {
+                  "name": "day",
+                  "value": {
+                    "kind": "date",
+                    "value": "2026-02-28"
+                  },
+                  "written": false
+                },
+                {
+                  "name": "messages",
+                  "value": {
+                    "kind": "x2many_replace",
+                    "value": [
+                      1,
+                      5,
+                      9
+                    ]
+                  },
+                  "written": true
+                },
+                {
+                  "name": "owner",
+                  "value": {
+                    "kind": "reference",
+                    "value": {
+                      "id": 4,
+                      "model": "test.partner"
+                    }
+                  },
+                  "written": false
+                },
+                {
+                  "name": "ratio",
+                  "value": {
+                    "kind": "float",
+                    "value": 0.1
+                  },
+                  "written": false
+                },
+                {
+                  "name": "seq",
+                  "value": {
+                    "kind": "int",
+                    "value": -3
+                  },
+                  "written": false
+                },
+                {
+                  "name": "stamp",
+                  "value": {
+                    "kind": "datetime",
+                    "value": "2026-11-06 18:30:00"
+                  },
+                  "written": false
+                },
+                {
+                  "name": "state",
+                  "value": {
+                    "kind": "selection",
+                    "value": "open"
+                  },
+                  "written": false
+                },
+                {
+                  "name": "stats",
+                  "value": {
+                    "kind": "string",
+                    "value": "s"
+                  },
+                  "written": false
+                },
+                {
+                  "name": "title",
+                  "value": {
+                    "kind": "string",
+                    "value": "tést \"q\""
+                  },
+                  "written": true
+                },
+                {
+                  "name": "unread",
+                  "value": {
+                    "kind": "counter",
+                    "value": 12
+                  },
+                  "written": false
+                }
+              ]
+            },
+            {
+              "id": 8,
+              "model": "test.thread",
+              "fields": [
+                {
+                  "name": "author",
+                  "value": {
+                    "kind": "many2one",
+                    "value": null
+                  },
+                  "written": false
+                },
+                {
+                  "name": "messages",
+                  "value": {
+                    "kind": "x2many_replace",
+                    "value": []
+                  },
+                  "written": false
+                },
+                {
+                  "name": "owner",
+                  "value": {
+                    "kind": "reference",
+                    "value": null
+                  },
+                  "written": false
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":\"104\",\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.message\":[{\"delete\":true,\"id\":2},{\"id\":5,\"text\":\"hi\"}],\"test.partner\":[{\"id\":3,\"score\":99}],\"test.thread\":[{\"active\":false,\"author\":4,\"body\":\"<p>x</p>\",\"day\":\"2026-02-28\",\"id\":7,\"messages\":[1,5,9],\"owner\":{\"id\":4,\"model\":\"test.partner\"},\"ratio\":0.1,\"seq\":-3,\"stamp\":\"2026-11-06 18:30:00\",\"state\":\"open\",\"stats\":\"s\",\"title\":\"tést \\\"q\\\"\",\"unread\":12},{\"author\":null,\"id\":8,\"messages\":[],\"owner\":null},{\"delete\":true,\"id\":9}]},\"schema\":\"g1\",\"wire\":1,\"written\":{\"test.thread\":{\"7\":[\"messages\",\"title\"]}}}"
+    },
+    {
+      "kind": "frame",
+      "limits": [],
+      "name": "frame_inc_delta_and_delete",
+      "outcome": {
+        "outcome": "decoded",
+        "payload": {
+          "asof": {
+            "own": "104",
+            "xip": [
+              "100",
+              "103"
+            ],
+            "xmax": "104",
+            "xmin": "100"
+          },
+          "cursor": {
+            "id": "5512",
+            "xid": "104"
+          },
+          "deletes": [
+            {
+              "id": 2,
+              "model": "test.message"
+            }
+          ],
+          "generation": "g1",
+          "upserts": [
+            {
+              "id": 3,
+              "model": "test.partner",
+              "fields": [
+                {
+                  "name": "score",
+                  "value": {
+                    "kind": "inc",
+                    "value": 2
+                  },
+                  "written": false
+                }
+              ]
+            },
+            {
+              "id": 7,
+              "model": "test.thread",
+              "fields": [
+                {
+                  "name": "messages",
+                  "value": {
+                    "kind": "x2many_delta",
+                    "value": {
+                      "add": [
+                        2,
+                        5
+                      ],
+                      "remove": [
+                        9
+                      ]
+                    }
+                  },
+                  "written": false
+                },
+                {
+                  "name": "unread",
+                  "value": {
+                    "kind": "inc",
+                    "value": -3
+                  },
+                  "written": false
+                }
+              ]
+            },
+            {
+              "id": 8,
+              "model": "test.thread",
+              "fields": [
+                {
+                  "name": "title",
+                  "value": {
+                    "kind": "string",
+                    "value": "x"
+                  },
+                  "written": false
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":\"104\",\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"cursor\":{\"id\":\"5512\",\"xid\":\"104\"},\"records\":{\"test.message\":[{\"delete\":true,\"id\":2}],\"test.partner\":[{\"id\":3,\"score\":{\"inc\":2}}],\"test.thread\":[{\"id\":7,\"messages\":{\"add\":[2,5],\"remove\":[9]},\"unread\":{\"inc\":-3}},{\"id\":8,\"title\":\"x\"}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "answer_needs_schema_when_none_held",
+      "outcome": {
+        "outcome": "needs_schema",
+        "generation": "g1"
+      },
+      "schema": null,
+      "wire": "{\"asof\":{\"own\":\"104\",\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.message\":[{\"delete\":true,\"id\":2},{\"id\":5,\"text\":\"hi\"}],\"test.partner\":[{\"id\":3,\"score\":99}],\"test.thread\":[{\"active\":false,\"author\":4,\"body\":\"<p>x</p>\",\"day\":\"2026-02-28\",\"id\":7,\"messages\":[1,5,9],\"owner\":{\"id\":4,\"model\":\"test.partner\"},\"ratio\":0.1,\"seq\":-3,\"stamp\":\"2026-11-06 18:30:00\",\"state\":\"open\",\"stats\":\"s\",\"title\":\"tést \\\"q\\\"\",\"unread\":12},{\"author\":null,\"id\":8,\"messages\":[],\"owner\":null},{\"delete\":true,\"id\":9}]},\"schema\":\"g1\",\"wire\":1,\"written\":{\"test.thread\":{\"7\":[\"messages\",\"title\"]}}}"
+    },
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "answer_needs_schema_when_other_generation_held",
+      "outcome": {
+        "outcome": "needs_schema",
+        "generation": "g1"
+      },
+      "schema": "g0",
+      "wire": "{\"asof\":{\"own\":\"104\",\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.message\":[{\"delete\":true,\"id\":2},{\"id\":5,\"text\":\"hi\"}],\"test.partner\":[{\"id\":3,\"score\":99}],\"test.thread\":[{\"active\":false,\"author\":4,\"body\":\"<p>x</p>\",\"day\":\"2026-02-28\",\"id\":7,\"messages\":[1,5,9],\"owner\":{\"id\":4,\"model\":\"test.partner\"},\"ratio\":0.1,\"seq\":-3,\"stamp\":\"2026-11-06 18:30:00\",\"state\":\"open\",\"stats\":\"s\",\"title\":\"tést \\\"q\\\"\",\"unread\":12},{\"author\":null,\"id\":8,\"messages\":[],\"owner\":null},{\"delete\":true,\"id\":9}]},\"schema\":\"g1\",\"wire\":1,\"written\":{\"test.thread\":{\"7\":[\"messages\",\"title\"]}}}"
+    },
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "refuse_wire_major_2_before_content",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "wire_major_unsupported",
+          "path": null,
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"wire\":2,\"records\":42}"
+    },
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "refuse_missing_wire",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "malformed",
+          "path": "wire",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":null,\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.thread\":[{\"id\":7,\"seq\":1}]},\"schema\":\"g1\"}"
+    },
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "refuse_text_wire",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "malformed",
+          "path": "wire",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":null,\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.thread\":[{\"id\":7,\"seq\":1}]},\"schema\":\"g1\",\"wire\":\"1\"}"
+    },
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "refuse_not_json",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "malformed",
+          "path": "",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{"
+    },
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "refuse_not_an_object",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "malformed",
+          "path": "",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "[]"
+    },
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "refuse_unknown_member",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "malformed",
+          "path": "extra",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":null,\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.thread\":[{\"id\":7,\"seq\":1}]},\"schema\":\"g1\",\"wire\":1,\"extra\":1}"
+    },
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "refuse_unknown_model",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "unknown_model",
+          "path": "records.test.nope",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":null,\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.nope\":[{\"id\":1}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "refuse_unknown_field",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "unknown_field",
+          "path": "records.test.thread[0].nope",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":null,\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.thread\":[{\"id\":1,\"nope\":1}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "refuse_type_mismatch",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "type_mismatch",
+          "path": "records.test.thread[0].seq",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":null,\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.thread\":[{\"id\":1,\"seq\":\"1\"}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "refuse_unsafe_integer",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "value_out_of_range",
+          "path": "records.test.thread[0].seq",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":null,\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.thread\":[{\"id\":1,\"seq\":9007199254740992}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "refuse_bad_date",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "value_out_of_range",
+          "path": "records.test.thread[0].day",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":null,\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.thread\":[{\"day\":\"2026-02-30\",\"id\":1}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "refuse_bad_datetime",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "value_out_of_range",
+          "path": "records.test.thread[0].stamp",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":null,\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.thread\":[{\"id\":1,\"stamp\":\"2026-02-03T01:02:03\"}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "refuse_id_zero",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_id",
+          "path": "records.test.thread[0].id",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":null,\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.thread\":[{\"id\":0,\"seq\":1}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "refuse_id_above_safe_range",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_id",
+          "path": "records.test.thread[0].id",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":null,\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.thread\":[{\"id\":9007199254740992,\"seq\":1}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "refuse_duplicate_record_id",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "duplicate_id",
+          "path": "records.test.thread[1].id",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":null,\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.thread\":[{\"id\":1,\"seq\":1},{\"id\":1,\"seq\":2}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "refuse_delete_with_fields",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "delete_with_fields",
+          "path": "records.test.thread[0]",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":null,\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.thread\":[{\"delete\":true,\"id\":1,\"seq\":1}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "refuse_delete_not_true",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "malformed",
+          "path": "records.test.thread[0].delete",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":null,\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.thread\":[{\"delete\":false,\"id\":1}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "refuse_duplicate_ids_in_replace",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "duplicate_id",
+          "path": "records.test.thread[0].messages",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":null,\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.thread\":[{\"id\":1,\"messages\":[2,2]}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "frame",
+      "limits": [],
+      "name": "refuse_add_remove_overlap",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "add_remove_overlap",
+          "path": "records.test.thread[0].messages",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":\"104\",\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"cursor\":{\"id\":\"5512\",\"xid\":\"104\"},\"records\":{\"test.thread\":[{\"id\":1,\"messages\":{\"add\":[2],\"remove\":[2]}}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "frame",
+      "limits": [],
+      "name": "refuse_empty_x2many_delta",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "empty_operation",
+          "path": "records.test.thread[0].messages.add",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":\"104\",\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"cursor\":{\"id\":\"5512\",\"xid\":\"104\"},\"records\":{\"test.thread\":[{\"id\":1,\"messages\":{\"add\":[]}}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "frame",
+      "limits": [],
+      "name": "refuse_unknown_x2many_operation",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "unknown_operation",
+          "path": "records.test.thread[0].messages",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":\"104\",\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"cursor\":{\"id\":\"5512\",\"xid\":\"104\"},\"records\":{\"test.thread\":[{\"id\":1,\"messages\":{\"set\":[1]}}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "frame",
+      "limits": [],
+      "name": "refuse_x2many_replace_in_frame",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "operation_not_allowed",
+          "path": "records.test.thread[0].messages",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":\"104\",\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"cursor\":{\"id\":\"5512\",\"xid\":\"104\"},\"records\":{\"test.thread\":[{\"id\":1,\"messages\":[1]}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "frame",
+      "limits": [],
+      "name": "refuse_zero_counter_delta",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "zero_delta",
+          "path": "records.test.thread[0].unread",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":\"104\",\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"cursor\":{\"id\":\"5512\",\"xid\":\"104\"},\"records\":{\"test.thread\":[{\"id\":1,\"unread\":{\"inc\":0}}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "frame",
+      "limits": [],
+      "name": "refuse_counter_absolute_in_frame",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "operation_not_allowed",
+          "path": "records.test.thread[0].unread",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":\"104\",\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"cursor\":{\"id\":\"5512\",\"xid\":\"104\"},\"records\":{\"test.thread\":[{\"id\":1,\"unread\":5}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "refuse_counter_delta_in_answer",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "operation_not_allowed",
+          "path": "records.test.thread[0].unread",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":null,\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.thread\":[{\"id\":1,\"unread\":{\"inc\":1}}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "frame",
+      "limits": [],
+      "name": "refuse_answer_only_field_in_frame",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "operation_not_allowed",
+          "path": "records.test.thread[0].stats",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":\"104\",\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"cursor\":{\"id\":\"5512\",\"xid\":\"104\"},\"records\":{\"test.thread\":[{\"id\":1,\"stats\":\"s\"}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "refuse_counter_above_cap",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "value_out_of_range",
+          "path": "records.test.partner[0].score",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":null,\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.partner\":[{\"id\":1,\"score\":100}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "frame",
+      "limits": [],
+      "name": "refuse_frame_without_cursor",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "malformed",
+          "path": "cursor",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":null,\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "frame",
+      "limits": [],
+      "name": "refuse_frame_own_differs_from_cursor",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_descriptor",
+          "path": "asof.own",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":\"104\",\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"cursor\":{\"id\":\"5512\",\"xid\":\"103\"},\"records\":{},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "refuse_written_without_own",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_written",
+          "path": "written",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":null,\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.thread\":[{\"id\":7,\"seq\":1}]},\"schema\":\"g1\",\"wire\":1,\"written\":{\"test.thread\":{\"7\":[\"seq\"]}}}"
+    },
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "refuse_written_unknown_record",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_written",
+          "path": "written.test.thread.8",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":\"104\",\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.thread\":[{\"id\":7,\"seq\":1,\"unread\":2}]},\"schema\":\"g1\",\"wire\":1,\"written\":{\"test.thread\":{\"8\":[\"seq\"]}}}"
+    },
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "refuse_written_field_not_set",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_written",
+          "path": "written.test.thread.7[0]",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":\"104\",\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.thread\":[{\"id\":7,\"seq\":1,\"unread\":2}]},\"schema\":\"g1\",\"wire\":1,\"written\":{\"test.thread\":{\"7\":[\"title\"]}}}"
+    },
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "refuse_written_counter",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_written",
+          "path": "written.test.thread.7[0]",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":\"104\",\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.thread\":[{\"id\":7,\"seq\":1,\"unread\":2}]},\"schema\":\"g1\",\"wire\":1,\"written\":{\"test.thread\":{\"7\":[\"unread\"]}}}"
+    },
+    {
+      "kind": "answer",
+      "limits": [],
+      "name": "refuse_written_duplicate_name",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "duplicate_field",
+          "path": "written.test.thread.7[1]",
+          "limit": null
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":\"104\",\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.thread\":[{\"id\":7,\"seq\":1,\"unread\":2}]},\"schema\":\"g1\",\"wire\":1,\"written\":{\"test.thread\":{\"7\":[\"seq\",\"seq\"]}}}"
+    },
+    {
+      "kind": "answer",
+      "limits": [
+        {
+          "limit": "bytes",
+          "value": 64
+        }
+      ],
+      "name": "limit_bytes",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "limit_exceeded",
+          "path": "",
+          "limit": "bytes"
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":null,\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.message\":[{\"id\":1,\"text\":\"a\"}],\"test.thread\":[{\"id\":1,\"seq\":1}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "answer",
+      "limits": [
+        {
+          "limit": "depth",
+          "value": 3
+        }
+      ],
+      "name": "limit_depth",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "limit_exceeded",
+          "path": "",
+          "limit": "depth"
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":null,\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.thread\":[{\"id\":7,\"seq\":1}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "answer",
+      "limits": [
+        {
+          "limit": "models",
+          "value": 1
+        }
+      ],
+      "name": "limit_models",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "limit_exceeded",
+          "path": "records",
+          "limit": "models"
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":null,\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.message\":[{\"id\":1,\"text\":\"a\"}],\"test.thread\":[{\"id\":1,\"seq\":1}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "answer",
+      "limits": [
+        {
+          "limit": "records",
+          "value": 1
+        }
+      ],
+      "name": "limit_records",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "limit_exceeded",
+          "path": "records",
+          "limit": "records"
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":null,\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.thread\":[{\"id\":1,\"seq\":1},{\"id\":2,\"seq\":1}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "answer",
+      "limits": [
+        {
+          "limit": "ids_per_list",
+          "value": 2
+        }
+      ],
+      "name": "limit_ids_per_list",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "limit_exceeded",
+          "path": "records.test.thread[0].messages",
+          "limit": "ids_per_list"
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":null,\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.thread\":[{\"id\":1,\"messages\":[1,2,3]}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "answer",
+      "limits": [
+        {
+          "limit": "xip",
+          "value": 1
+        }
+      ],
+      "name": "limit_xip",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "limit_exceeded",
+          "path": "asof.xip",
+          "limit": "xip"
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":null,\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.thread\":[{\"id\":7,\"seq\":1}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "answer",
+      "limits": [
+        {
+          "limit": "string_bytes",
+          "value": 4
+        }
+      ],
+      "name": "limit_string_bytes",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "limit_exceeded",
+          "path": "records.test.thread[0].title",
+          "limit": "string_bytes"
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":null,\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.thread\":[{\"id\":1,\"title\":\"hello\"}]},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "kind": "answer",
+      "limits": [
+        {
+          "limit": "schema_token_bytes",
+          "value": 1
+        }
+      ],
+      "name": "limit_schema_token_bytes",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "limit_exceeded",
+          "path": "schema",
+          "limit": "schema_token_bytes"
+        }
+      },
+      "schema": "g1",
+      "wire": "{\"asof\":{\"own\":null,\"xip\":[\"100\",\"103\"],\"xmax\":\"104\",\"xmin\":\"100\"},\"records\":{\"test.thread\":[{\"id\":7,\"seq\":1}]},\"schema\":\"g1\",\"wire\":1}"
+    }
+  ],
+  "read_order": {
+    "ascending": [
+      4,
+      2,
+      0,
+      3,
+      1
+    ],
+    "counts": [
+      "103",
+      "104",
+      "101",
+      "103",
+      "9"
+    ],
+    "descriptors": [
+      {
+        "own": null,
+        "xip": [
+          "100",
+          "103"
+        ],
+        "xmax": "105",
+        "xmin": "100"
+      },
+      {
+        "own": "105",
+        "xip": [
+          "100"
+        ],
+        "xmax": "105",
+        "xmin": "100"
+      },
+      {
+        "own": null,
+        "xip": [],
+        "xmax": "101",
+        "xmin": "90"
+      },
+      {
+        "own": null,
+        "xip": [
+          "101",
+          "102"
+        ],
+        "xmax": "105",
+        "xmin": "100"
+      },
+      {
+        "own": null,
+        "xip": [
+          "9"
+        ],
+        "xmax": "10",
+        "xmin": "9"
+      }
+    ]
+  },
+  "schema_cases": [
+    {
+      "limits": [],
+      "name": "schema_every_kind",
+      "outcome": {
+        "outcome": "decoded",
+        "schema": {
+          "generation": "g1",
+          "models": {
+            "test.message": {
+              "fields": {
+                "text": {
+                  "cap": null,
+                  "kind": "string",
+                  "sync": "state",
+                  "target": null
+                },
+                "thread": {
+                  "cap": null,
+                  "kind": "many2one",
+                  "sync": "state",
+                  "target": "test.thread"
+                }
+              }
+            },
+            "test.partner": {
+              "fields": {
+                "name": {
+                  "cap": null,
+                  "kind": "string",
+                  "sync": "state",
+                  "target": null
+                },
+                "score": {
+                  "cap": 99,
+                  "kind": "counter",
+                  "sync": "counter",
+                  "target": null
+                }
+              }
+            },
+            "test.thread": {
+              "fields": {
+                "active": {
+                  "cap": null,
+                  "kind": "bool",
+                  "sync": "state",
+                  "target": null
+                },
+                "author": {
+                  "cap": null,
+                  "kind": "many2one",
+                  "sync": "state",
+                  "target": "test.partner"
+                },
+                "body": {
+                  "cap": null,
+                  "kind": "html",
+                  "sync": "state",
+                  "target": null
+                },
+                "day": {
+                  "cap": null,
+                  "kind": "date",
+                  "sync": "state",
+                  "target": null
+                },
+                "messages": {
+                  "cap": null,
+                  "kind": "x2many",
+                  "sync": "state",
+                  "target": "test.message"
+                },
+                "owner": {
+                  "cap": null,
+                  "kind": "reference",
+                  "sync": "state",
+                  "target": null
+                },
+                "ratio": {
+                  "cap": null,
+                  "kind": "float",
+                  "sync": "state",
+                  "target": null
+                },
+                "seq": {
+                  "cap": null,
+                  "kind": "int",
+                  "sync": "state",
+                  "target": null
+                },
+                "stamp": {
+                  "cap": null,
+                  "kind": "datetime",
+                  "sync": "state",
+                  "target": null
+                },
+                "state": {
+                  "cap": null,
+                  "kind": "selection",
+                  "sync": "state",
+                  "target": null
+                },
+                "stats": {
+                  "cap": null,
+                  "kind": "string",
+                  "sync": "answer_only",
+                  "target": null
+                },
+                "title": {
+                  "cap": null,
+                  "kind": "string",
+                  "sync": "state",
+                  "target": null
+                },
+                "unread": {
+                  "cap": null,
+                  "kind": "counter",
+                  "sync": "counter",
+                  "target": null
+                }
+              }
+            }
+          }
+        }
+      },
+      "wire": "{\"models\":{\"test.message\":{\"fields\":{\"text\":{\"kind\":\"string\"},\"thread\":{\"kind\":\"many2one\",\"target\":\"test.thread\"}}},\"test.partner\":{\"fields\":{\"name\":{\"kind\":\"string\"},\"score\":{\"cap\":99,\"kind\":\"counter\"}}},\"test.thread\":{\"fields\":{\"active\":{\"kind\":\"bool\"},\"author\":{\"kind\":\"many2one\",\"target\":\"test.partner\"},\"body\":{\"kind\":\"html\"},\"day\":{\"kind\":\"date\"},\"messages\":{\"kind\":\"x2many\",\"target\":\"test.message\"},\"owner\":{\"kind\":\"reference\"},\"ratio\":{\"kind\":\"float\"},\"seq\":{\"kind\":\"int\"},\"stamp\":{\"kind\":\"datetime\"},\"state\":{\"kind\":\"selection\"},\"stats\":{\"kind\":\"string\",\"sync\":\"answer_only\"},\"title\":{\"kind\":\"string\"},\"unread\":{\"kind\":\"counter\"}}}},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "limits": [],
+      "name": "refuse_schema_wire_major_2",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "wire_major_unsupported",
+          "path": null,
+          "limit": null
+        }
+      },
+      "wire": "{\"models\":{},\"schema\":\"g1\",\"wire\":2}"
+    },
+    {
+      "limits": [],
+      "name": "refuse_schema_not_json",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "malformed",
+          "path": "",
+          "limit": null
+        }
+      },
+      "wire": "{"
+    },
+    {
+      "limits": [],
+      "name": "refuse_schema_unknown_kind",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_schema",
+          "path": "models.m.fields.f.kind",
+          "limit": null
+        }
+      },
+      "wire": "{\"models\":{\"m\":{\"fields\":{\"f\":{\"kind\":\"blob\"}}}},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "limits": [],
+      "name": "refuse_schema_many2one_without_target",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_schema",
+          "path": "models.m.fields.f.target",
+          "limit": null
+        }
+      },
+      "wire": "{\"models\":{\"m\":{\"fields\":{\"f\":{\"kind\":\"many2one\"}}}},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "limits": [],
+      "name": "refuse_schema_target_on_int",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_schema",
+          "path": "models.m.fields.f.target",
+          "limit": null
+        }
+      },
+      "wire": "{\"models\":{\"m\":{\"fields\":{\"f\":{\"kind\":\"int\",\"target\":\"m\"}}}},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "limits": [],
+      "name": "refuse_schema_cap_on_int",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_schema",
+          "path": "models.m.fields.f.cap",
+          "limit": null
+        }
+      },
+      "wire": "{\"models\":{\"m\":{\"fields\":{\"f\":{\"cap\":3,\"kind\":\"int\"}}}},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "limits": [],
+      "name": "refuse_schema_cap_zero",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_schema",
+          "path": "models.m.fields.f.cap",
+          "limit": null
+        }
+      },
+      "wire": "{\"models\":{\"m\":{\"fields\":{\"f\":{\"cap\":0,\"kind\":\"counter\"}}}},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "limits": [],
+      "name": "refuse_schema_sync_on_counter",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_schema",
+          "path": "models.m.fields.f.sync",
+          "limit": null
+        }
+      },
+      "wire": "{\"models\":{\"m\":{\"fields\":{\"f\":{\"kind\":\"counter\",\"sync\":\"answer_only\"}}}},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "limits": [],
+      "name": "refuse_schema_unknown_sync",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_schema",
+          "path": "models.m.fields.f.sync",
+          "limit": null
+        }
+      },
+      "wire": "{\"models\":{\"m\":{\"fields\":{\"f\":{\"kind\":\"int\",\"sync\":\"lazy\"}}}},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "limits": [],
+      "name": "refuse_schema_target_not_a_model",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_schema",
+          "path": "models.m.fields.f.target",
+          "limit": null
+        }
+      },
+      "wire": "{\"models\":{\"m\":{\"fields\":{\"f\":{\"kind\":\"many2one\",\"target\":\"other\"}}}},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "limits": [],
+      "name": "refuse_schema_reserved_field_name",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_name",
+          "path": "models.m.fields.id",
+          "limit": null
+        }
+      },
+      "wire": "{\"models\":{\"m\":{\"fields\":{\"id\":{\"kind\":\"int\"}}}},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "limits": [],
+      "name": "refuse_schema_bad_model_name",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_name",
+          "path": "models.M",
+          "limit": null
+        }
+      },
+      "wire": "{\"models\":{\"M\":{\"fields\":{}}},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "limits": [],
+      "name": "refuse_schema_empty_generation",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "bad_name",
+          "path": "schema",
+          "limit": null
+        }
+      },
+      "wire": "{\"models\":{},\"schema\":\"\",\"wire\":1}"
+    },
+    {
+      "limits": [
+        {
+          "limit": "schema_fields",
+          "value": 2
+        }
+      ],
+      "name": "limit_schema_fields",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "limit_exceeded",
+          "path": "models.test.partner.fields",
+          "limit": "schema_fields"
+        }
+      },
+      "wire": "{\"models\":{\"test.message\":{\"fields\":{\"text\":{\"kind\":\"string\"},\"thread\":{\"kind\":\"many2one\",\"target\":\"test.thread\"}}},\"test.partner\":{\"fields\":{\"name\":{\"kind\":\"string\"},\"score\":{\"cap\":99,\"kind\":\"counter\"}}},\"test.thread\":{\"fields\":{\"active\":{\"kind\":\"bool\"},\"author\":{\"kind\":\"many2one\",\"target\":\"test.partner\"},\"body\":{\"kind\":\"html\"},\"day\":{\"kind\":\"date\"},\"messages\":{\"kind\":\"x2many\",\"target\":\"test.message\"},\"owner\":{\"kind\":\"reference\"},\"ratio\":{\"kind\":\"float\"},\"seq\":{\"kind\":\"int\"},\"stamp\":{\"kind\":\"datetime\"},\"state\":{\"kind\":\"selection\"},\"stats\":{\"kind\":\"string\",\"sync\":\"answer_only\"},\"title\":{\"kind\":\"string\"},\"unread\":{\"kind\":\"counter\"}}}},\"schema\":\"g1\",\"wire\":1}"
+    },
+    {
+      "limits": [
+        {
+          "limit": "models",
+          "value": 2
+        }
+      ],
+      "name": "limit_schema_models",
+      "outcome": {
+        "outcome": "refused",
+        "refusal": {
+          "code": "limit_exceeded",
+          "path": "models",
+          "limit": "models"
+        }
+      },
+      "wire": "{\"models\":{\"test.message\":{\"fields\":{\"text\":{\"kind\":\"string\"},\"thread\":{\"kind\":\"many2one\",\"target\":\"test.thread\"}}},\"test.partner\":{\"fields\":{\"name\":{\"kind\":\"string\"},\"score\":{\"cap\":99,\"kind\":\"counter\"}}},\"test.thread\":{\"fields\":{\"active\":{\"kind\":\"bool\"},\"author\":{\"kind\":\"many2one\",\"target\":\"test.partner\"},\"body\":{\"kind\":\"html\"},\"day\":{\"kind\":\"date\"},\"messages\":{\"kind\":\"x2many\",\"target\":\"test.message\"},\"owner\":{\"kind\":\"reference\"},\"ratio\":{\"kind\":\"float\"},\"seq\":{\"kind\":\"int\"},\"stamp\":{\"kind\":\"datetime\"},\"state\":{\"kind\":\"selection\"},\"stats\":{\"kind\":\"string\",\"sync\":\"answer_only\"},\"title\":{\"kind\":\"string\"},\"unread\":{\"kind\":\"counter\"}}}},\"schema\":\"g1\",\"wire\":1}"
+    }
+  ],
+  "schemas": {
+    "g0": "{\"models\":{\"test.message\":{\"fields\":{\"text\":{\"kind\":\"string\"},\"thread\":{\"kind\":\"many2one\",\"target\":\"test.thread\"}}},\"test.partner\":{\"fields\":{\"name\":{\"kind\":\"string\"},\"score\":{\"cap\":99,\"kind\":\"counter\"}}},\"test.thread\":{\"fields\":{\"active\":{\"kind\":\"bool\"},\"author\":{\"kind\":\"many2one\",\"target\":\"test.partner\"},\"body\":{\"kind\":\"html\"},\"day\":{\"kind\":\"date\"},\"messages\":{\"kind\":\"x2many\",\"target\":\"test.message\"},\"owner\":{\"kind\":\"reference\"},\"ratio\":{\"kind\":\"float\"},\"seq\":{\"kind\":\"int\"},\"stamp\":{\"kind\":\"datetime\"},\"state\":{\"kind\":\"selection\"},\"stats\":{\"kind\":\"string\",\"sync\":\"answer_only\"},\"title\":{\"kind\":\"string\"},\"unread\":{\"kind\":\"counter\"}}}},\"schema\":\"g0\",\"wire\":1}",
+    "g1": "{\"models\":{\"test.message\":{\"fields\":{\"text\":{\"kind\":\"string\"},\"thread\":{\"kind\":\"many2one\",\"target\":\"test.thread\"}}},\"test.partner\":{\"fields\":{\"name\":{\"kind\":\"string\"},\"score\":{\"cap\":99,\"kind\":\"counter\"}}},\"test.thread\":{\"fields\":{\"active\":{\"kind\":\"bool\"},\"author\":{\"kind\":\"many2one\",\"target\":\"test.partner\"},\"body\":{\"kind\":\"html\"},\"day\":{\"kind\":\"date\"},\"messages\":{\"kind\":\"x2many\",\"target\":\"test.message\"},\"owner\":{\"kind\":\"reference\"},\"ratio\":{\"kind\":\"float\"},\"seq\":{\"kind\":\"int\"},\"stamp\":{\"kind\":\"datetime\"},\"state\":{\"kind\":\"selection\"},\"stats\":{\"kind\":\"string\",\"sync\":\"answer_only\"},\"title\":{\"kind\":\"string\"},\"unread\":{\"kind\":\"counter\"}}}},\"schema\":\"g1\",\"wire\":1}"
+  },
+  "wire": 1
+}

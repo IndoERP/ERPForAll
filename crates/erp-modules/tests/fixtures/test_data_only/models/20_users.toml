@@ -1,0 +1,14 @@
+# Extends a model of another addon in place (`base`'s res.users).
+[[model]]
+extend = "res.users"
+
+[[model.field]]
+name = "tag_id"
+type = "many2one"
+comodel = "test_data_only.tag"
+ondelete = "set null"
+
+[[model.field]]
+name = "tag_name"
+type = "char"
+related = "tag_id.name"

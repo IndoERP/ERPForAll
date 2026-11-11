@@ -1,0 +1,15 @@
+[package]
+name = "erp-addon-test_wasm_dual_a"
+description = "ERPForAll fixture addon test_wasm_dual_a: identical source for the native and the WASM build (a later release)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+erp-sdk = { workspace = true }
+
+[lints]
+workspace = true

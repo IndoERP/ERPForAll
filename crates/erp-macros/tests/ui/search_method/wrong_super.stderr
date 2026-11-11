@@ -1,0 +1,5 @@
+error: #[search_method] third parameter must be FieldSearchSuper<'_>
+ --> tests/ui/search_method/wrong_super.rs:7:14
+  |
+7 |         sup: usize,
+  |              ^^^^^

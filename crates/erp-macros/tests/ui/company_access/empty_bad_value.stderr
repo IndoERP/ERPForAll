@@ -1,0 +1,5 @@
+error: company_access: empty must be "allow" or "deny"
+ --> tests/ui/company_access/empty_bad_value.rs:5:77
+  |
+5 |     company_access = direct(field = "company_id", branch = "exact", empty = "x")
+  |                                                                             ^^^

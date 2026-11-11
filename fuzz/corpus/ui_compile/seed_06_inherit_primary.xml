@@ -1,0 +1,1 @@
+<templates><t t-name="web.Child" t-inherit="web.Parent" t-inherit-mode="primary"><xpath expr="//div" position="inside"><span>extra</span></xpath></t></templates>

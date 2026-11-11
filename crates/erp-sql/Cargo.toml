@@ -1,0 +1,29 @@
+[package]
+name = "erp-sql"
+description = "ERPForAll SQL text builders: DDL and set-based statements (executes nothing)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+erp-domain = { workspace = true }
+erp-expr = { workspace = true }
+erp-fields = { workspace = true }
+erp-registry = { workspace = true }
+time = { workspace = true }
+
+[dev-dependencies]
+erp-alloc-budget = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
+
+# Allocation tests run on the main thread under erp_alloc_budget's harness (lesson):
+# libtest's own main thread would allocate inside their counting windows.
+[[test]]
+name = "alloc_sql_text"
+harness = false

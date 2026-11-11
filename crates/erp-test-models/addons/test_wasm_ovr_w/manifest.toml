@@ -1,0 +1,3 @@
+name = "Test Wasm Ovr W"
+summary = "Fixture: the addon a test runs as a WebAssembly layer, with computed fields (a later release)"
+depends = ["test_wasm_ovr_a"]

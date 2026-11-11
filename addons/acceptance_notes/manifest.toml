@@ -1,0 +1,11 @@
+name = "Notes"
+summary = "Shared notes for framework acceptance"
+version = "1.0.2"
+license = "MIT OR Apache-2.0"
+author = "Arkana"
+depends = ["base"]
+data = [
+    "security/ir.access.csv",
+    "data/acceptance_notes_data.xml",
+    "views/acceptance_notes_views.xml",
+]

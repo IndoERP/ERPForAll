@@ -1,0 +1,772 @@
+repository = "https://github.com/lucide-icons/lucide"
+tag = "1.61.0"
+commit = "c29c276f16590cf017126671535ad8c792be64d8"
+license = "ISC AND MIT"
+patches = []
+npm_package = "lucide"
+local = ["nodes.ts", "README.md"]
+
+[[files]]
+path = "LICENSE"
+upstream = "LICENSE"
+sha256 = "b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57"
+
+[[files]]
+path = "icons/notebook-pen.svg"
+upstream = "icons/notebook-pen.svg"
+sha256 = "56705c35e839977bd6f133d7ca4e9c93a6eea563c89e4be125efd0a32e1fa041"
+
+[[files]]
+path = "icons/settings.svg"
+upstream = "icons/settings.svg"
+sha256 = "0ae27fd0f81999229e3127ac96c5b32edfea448e291d509e76212b917551d66b"
+
+[[files]]
+path = "icons/layout-grid.svg"
+upstream = "icons/layout-grid.svg"
+sha256 = "b8903f61d09b1d75e55c71158277d26570962f69c2099446a251871e0a2d6678"
+
+[[files]]
+path = "icons/list.svg"
+upstream = "icons/list.svg"
+sha256 = "ff97a7379eb962ddc3863bb59f0f45875ac8da91aac8a38a67361e7118d2d627"
+
+[[files]]
+path = "icons/panels-top-left.svg"
+upstream = "icons/panels-top-left.svg"
+sha256 = "321a2a5500f2b814a2e62eb73c4b01dc65c7334fe2e6f7d77517239383e26bb1"
+
+[[files]]
+path = "icons/menu.svg"
+upstream = "icons/menu.svg"
+sha256 = "af6491988ac1ba30dc5414f485bc48713e957e1edb0fbef4a0dd8691c3c21598"
+
+[[files]]
+path = "icons/x.svg"
+upstream = "icons/x.svg"
+sha256 = "4a9cdab38fbb96162e7dace28e33f4ca0e49d8963a6162abc3d4691b7d675117"
+
+[[files]]
+path = "icons/chevron-left.svg"
+upstream = "icons/chevron-left.svg"
+sha256 = "83b0681aa38bf55e9d52a1e4b4cced624abe1fe7678ecafda133a574f1161d93"
+
+[[files]]
+path = "icons/chevron-right.svg"
+upstream = "icons/chevron-right.svg"
+sha256 = "2758143d7b2434e4aa7307dfd34405c87909ff4052f21b5f3f40d45224b4f19b"
+
+[[files]]
+path = "icons/chevron-down.svg"
+upstream = "icons/chevron-down.svg"
+sha256 = "66ea878e72ed3488bb3b464c39dfdccee8d1f78e560dccea40e5e12da0e87e87"
+
+[[files]]
+path = "icons/arrow-left.svg"
+upstream = "icons/arrow-left.svg"
+sha256 = "c5f4b88076108eb1a0d95336e1aa7e7bb1419a3a92af96f6247d88cd3456f933"
+
+[[files]]
+path = "icons/plus.svg"
+upstream = "icons/plus.svg"
+sha256 = "7f6af73bf1ff6c4bca3f18351c8d1bdec6749c0c2530c4de5da85d520c21df17"
+
+[[files]]
+path = "icons/save.svg"
+upstream = "icons/save.svg"
+sha256 = "ee9d56a7fec4b20dd6689546d41f68219ea8cbd67f99bd17a1bdaff5be6edb53"
+
+[[files]]
+path = "icons/rotate-ccw.svg"
+upstream = "icons/rotate-ccw.svg"
+sha256 = "622685386ab4017eabfde01cd74550a20b1924df233b353f73b6b155371f2afd"
+
+[[files]]
+path = "icons/refresh-cw.svg"
+upstream = "icons/refresh-cw.svg"
+sha256 = "2e10dd403c85a24f163d59fc6151aa21147fe9402e1305dfc8979208caee8944"
+
+[[files]]
+path = "icons/trash.svg"
+upstream = "icons/trash.svg"
+sha256 = "27299f69ad7c6272be64b1b8e2d48cbd6dcf0ef0d4f92827a1affa945c91700e"
+
+[[files]]
+path = "icons/search.svg"
+upstream = "icons/search.svg"
+sha256 = "283d371c2e433817bb9c0c8310caa6c77fa4177c0f4f1168d9c83b97af7389dc"
+
+[[files]]
+path = "icons/log-out.svg"
+upstream = "icons/log-out.svg"
+sha256 = "f24b5b45c05a3acc346af8095408f6ba197ff58ea1641a4f2cb25a9702d2c0ac"
+
+[[files]]
+path = "icons/alarm-clock.svg"
+upstream = "icons/alarm-clock.svg"
+sha256 = "28b99c01c718b004fbeb35afd06a7deb5d854ae81d4dc31fe043c8074353d45d"
+
+[[files]]
+path = "icons/archive.svg"
+upstream = "icons/archive.svg"
+sha256 = "78c732e34e232db63af06a2330b4448045cfdf49b48b59f2d31922df54c7bb17"
+
+[[files]]
+path = "icons/award.svg"
+upstream = "icons/award.svg"
+sha256 = "4d9818ae68bb0776cbec9e65d26a33c7854eff600f33fcd6268e67b9d1caa06d"
+
+[[files]]
+path = "icons/badge-check.svg"
+upstream = "icons/badge-check.svg"
+sha256 = "a83b36e35ed35be896c5e5d39d0a63ba4368735ac22f09a26a31726259467775"
+
+[[files]]
+path = "icons/badge-percent.svg"
+upstream = "icons/badge-percent.svg"
+sha256 = "9472ab7004b6c0357a02d9a16294c913d809bb0e016a9a1ebc1e1171517fe39c"
+
+[[files]]
+path = "icons/banknote.svg"
+upstream = "icons/banknote.svg"
+sha256 = "212d628014554424ec0041ab56e8869149d255b7077cfd6977d4ab2be32e8cb1"
+
+[[files]]
+path = "icons/bed.svg"
+upstream = "icons/bed.svg"
+sha256 = "5be6d421e2ab4d7c6ecb953754a9f7cf35ced313dcfd0216087aa892125366ee"
+
+[[files]]
+path = "icons/bell.svg"
+upstream = "icons/bell.svg"
+sha256 = "394889e9631fe3a9a63be9a479a95b451b708e432d895978d21d9130b5ee5dbe"
+
+[[files]]
+path = "icons/book-open.svg"
+upstream = "icons/book-open.svg"
+sha256 = "9b9bed0ff057283d5c5c5a1c71f8d3e927db26a56639603a92fdf7b25961510e"
+
+[[files]]
+path = "icons/book.svg"
+upstream = "icons/book.svg"
+sha256 = "1a94c0af6224104124e873af2f6ba73d5a17dc536360a03cdb826eab858826a5"
+
+[[files]]
+path = "icons/boxes.svg"
+upstream = "icons/boxes.svg"
+sha256 = "7e301f6c38337389f5a96675d14cb9d8ef8a613329e99c3dfcf7c635bdd1faae"
+
+[[files]]
+path = "icons/briefcase.svg"
+upstream = "icons/briefcase.svg"
+sha256 = "7c9e6bea85d15affdc5802bacbb7aae548c6031f246e4faef3747f36847365d0"
+
+[[files]]
+path = "icons/building.svg"
+upstream = "icons/building.svg"
+sha256 = "62afdf63b5020448cba93267343a91c16ee4dffc7969e46b223ee531cf0bcd1c"
+
+[[files]]
+path = "icons/calculator.svg"
+upstream = "icons/calculator.svg"
+sha256 = "a6b191250b1ffabdf9fc9536662309f1b0f65336aa681d75bae9f1708baaefd0"
+
+[[files]]
+path = "icons/calendar-days.svg"
+upstream = "icons/calendar-days.svg"
+sha256 = "9330eb8d7c4989e97b6361314abbf02953243c602874725c9e58ceca00da3bd7"
+
+[[files]]
+path = "icons/calendar.svg"
+upstream = "icons/calendar.svg"
+sha256 = "312ac8e715ac2b71bcc942dec2e8de9c1929085474f08885af35b563f6aa7a0b"
+
+[[files]]
+path = "icons/camera.svg"
+upstream = "icons/camera.svg"
+sha256 = "ebbb3178dd80dfd942770a2237fe7bfc3515c55c7daa9d3666933a656d2790e3"
+
+[[files]]
+path = "icons/car.svg"
+upstream = "icons/car.svg"
+sha256 = "6d70bc146ca53b9c140a859319df471616c1ee6758bfb31a346d549d1fe92211"
+
+[[files]]
+path = "icons/chart-bar.svg"
+upstream = "icons/chart-bar.svg"
+sha256 = "9035a34f1713a781e02af86b5b0d086c44ccb10f985c51a8fa2796211e88597b"
+
+[[files]]
+path = "icons/chart-column.svg"
+upstream = "icons/chart-column.svg"
+sha256 = "80664a4c5ca1bca10bcb88c1a99f62593c94d61d72d3a4bbf577eb3f3ea4da57"
+
+[[files]]
+path = "icons/chart-line.svg"
+upstream = "icons/chart-line.svg"
+sha256 = "8736da84214736c4fd579b52b8a41f454cddf0dba9578618eee5ae8e22f40645"
+
+[[files]]
+path = "icons/chart-pie.svg"
+upstream = "icons/chart-pie.svg"
+sha256 = "1ae765b638fe588b392f7da6e2c274fb438b257d936f9f4c7d548c73d5f9d8a1"
+
+[[files]]
+path = "icons/circle-dollar-sign.svg"
+upstream = "icons/circle-dollar-sign.svg"
+sha256 = "3c08d3d34021890474cf8e2ffd2de43af1229a884b1db84cb35ce6cbdb040390"
+
+[[files]]
+path = "icons/clipboard-check.svg"
+upstream = "icons/clipboard-check.svg"
+sha256 = "e2bac86a6b24caa0d7d0dcc2719ec6b7870ec5eef2d21afae498d8cb5eefda96"
+
+[[files]]
+path = "icons/clipboard-list.svg"
+upstream = "icons/clipboard-list.svg"
+sha256 = "2b91abc2e8ee8ba4c2e0f77d506a47a7a9774b0d4de3fa4b27e822a6376ab892"
+
+[[files]]
+path = "icons/clock.svg"
+upstream = "icons/clock.svg"
+sha256 = "e9d3e3acf4d1c280fcf8092293439dc0a4756a908ceb859de144b12451cd1cb9"
+
+[[files]]
+path = "icons/coffee.svg"
+upstream = "icons/coffee.svg"
+sha256 = "970595bdafac0df42c00b847d53fd00c2283ecc3b83881274de2aa7dbce2bbc8"
+
+[[files]]
+path = "icons/cog.svg"
+upstream = "icons/cog.svg"
+sha256 = "8b00c44388d173ca490d4bfde8ed28f58c23902fd84b8da9e5052578bfe633cf"
+
+[[files]]
+path = "icons/coins.svg"
+upstream = "icons/coins.svg"
+sha256 = "bcfec9236fd10d0aadbf90951f61dd31ec7cedc72dd38d2639f95c2b8437b9f1"
+
+[[files]]
+path = "icons/contact.svg"
+upstream = "icons/contact.svg"
+sha256 = "eefb74f714f0c516c6624b5cd8872714e700ad67a8ca34c7b1d078527a2e4331"
+
+[[files]]
+path = "icons/cpu.svg"
+upstream = "icons/cpu.svg"
+sha256 = "ec83bb69ec029d367d749afc445b39c8e95891ebf99b0400652677c2b149b99c"
+
+[[files]]
+path = "icons/credit-card.svg"
+upstream = "icons/credit-card.svg"
+sha256 = "72d2b1acd904e01c6f676b4f6d07d56550a80b5d42687d43a313b85040943a2e"
+
+[[files]]
+path = "icons/database.svg"
+upstream = "icons/database.svg"
+sha256 = "471eb14bc8d144896a82dfc4aa9daf350f769f0896f4bef33e50aabdbb51130d"
+
+[[files]]
+path = "icons/dollar-sign.svg"
+upstream = "icons/dollar-sign.svg"
+sha256 = "3d17a134b3764e8f23625e0e770e131f180599d97be74b86261b05d8c7e833f5"
+
+[[files]]
+path = "icons/droplet.svg"
+upstream = "icons/droplet.svg"
+sha256 = "abca4df60f91c605d945c6fe5ee0e6c919b53116d81e268f4581f8841bf24751"
+
+[[files]]
+path = "icons/factory.svg"
+upstream = "icons/factory.svg"
+sha256 = "5482b8d73276e072a951f4c1be530d31efa584c8d1a7affbeec22a560f0d5cc0"
+
+[[files]]
+path = "icons/file-text.svg"
+upstream = "icons/file-text.svg"
+sha256 = "52ca55846c202335fb870c8aa23e9345630ec10489303756d62e750f7109605c"
+
+[[files]]
+path = "icons/files.svg"
+upstream = "icons/files.svg"
+sha256 = "97adf06fc0511e7a40be93ecda04466ed196718ab4a5e3a62b1148cc49697775"
+
+[[files]]
+path = "icons/film.svg"
+upstream = "icons/film.svg"
+sha256 = "85cfa80821b34f512bd401a1249957c9f2f612497602ecc31dff39517823ee52"
+
+[[files]]
+path = "icons/flask-conical.svg"
+upstream = "icons/flask-conical.svg"
+sha256 = "a2ce857c159bef4c128a6d9f0b6dcbd6504ecf1a2a670ee220efd14fd032b561"
+
+[[files]]
+path = "icons/folder-kanban.svg"
+upstream = "icons/folder-kanban.svg"
+sha256 = "7ccff27583e2eced364fd2680e60ac11b137b603ced9cbbe99143484abe911ba"
+
+[[files]]
+path = "icons/folder-open.svg"
+upstream = "icons/folder-open.svg"
+sha256 = "ee57452b40e71df310214091dd9da1941a397c83197b8ff8d7ae66dd4242578b"
+
+[[files]]
+path = "icons/folder.svg"
+upstream = "icons/folder.svg"
+sha256 = "f0d92b94b797a8ab7d4c4ae33c3236c47f64068351b4e14bdb5014ee42898a39"
+
+[[files]]
+path = "icons/fuel.svg"
+upstream = "icons/fuel.svg"
+sha256 = "1e2f065370733e919bda97f92a946c1fec79cae809da4b53d364ead08eea136e"
+
+[[files]]
+path = "icons/gift.svg"
+upstream = "icons/gift.svg"
+sha256 = "bc0651476bc7fdefa8d033f7b7572f9c8712aaca3b9196488442e6b4e76ed2a4"
+
+[[files]]
+path = "icons/git-branch.svg"
+upstream = "icons/git-branch.svg"
+sha256 = "041f04acc8f92657b849540f0440e2e85d0df0b8da2365611e81b9bebfafc4eb"
+
+[[files]]
+path = "icons/globe.svg"
+upstream = "icons/globe.svg"
+sha256 = "82c6b8fa0b8e8d775ec9becd86f74a4e50bff7bee4c81f7362de45348504f14d"
+
+[[files]]
+path = "icons/graduation-cap.svg"
+upstream = "icons/graduation-cap.svg"
+sha256 = "326b4a1c18429509a697cbc0c49fdfcf9316da34bcf581569c2fc73cc772b86f"
+
+[[files]]
+path = "icons/hammer.svg"
+upstream = "icons/hammer.svg"
+sha256 = "db75caf31bd080726be0c2dab09372498b999cbdcf10c756f44636831f9529f5"
+
+[[files]]
+path = "icons/hand-coins.svg"
+upstream = "icons/hand-coins.svg"
+sha256 = "3b031c330bd625ece6cb884c9a3f2f41ff8a836c6638bc42c220968716dfb212"
+
+[[files]]
+path = "icons/handshake.svg"
+upstream = "icons/handshake.svg"
+sha256 = "f58638064a1884e256895720c9a665d9e98cfc6935c52e14782ce0e84ecdad02"
+
+[[files]]
+path = "icons/headset.svg"
+upstream = "icons/headset.svg"
+sha256 = "685de90f65108f523577a3fc9202f4e7f812ea7d4609a981aac3b36d3b33fc01"
+
+[[files]]
+path = "icons/heart-pulse.svg"
+upstream = "icons/heart-pulse.svg"
+sha256 = "103d6b99ac9ab53c5861317673880ae5d6e2491efa7a40e8b89ecac449842df2"
+
+[[files]]
+path = "icons/hospital.svg"
+upstream = "icons/hospital.svg"
+sha256 = "d13d08f229cb151593c5e5a55a0c287b223f353acab6b2c805b5ca2a73958601"
+
+[[files]]
+path = "icons/hotel.svg"
+upstream = "icons/hotel.svg"
+sha256 = "06a81cd2b3f4d9f5aa34839ba710173d65c3c0574f4f4919966b9c97e74030c0"
+
+[[files]]
+path = "icons/id-card.svg"
+upstream = "icons/id-card.svg"
+sha256 = "b2a55b00b0cb4c7a84f2596610a9240f7d05e4d9cd260ec85028a79c4ab10ced"
+
+[[files]]
+path = "icons/image.svg"
+upstream = "icons/image.svg"
+sha256 = "619c9db58c879dce6250376ba67d9c9102ca6dbb3b1efb9294c9f180e22273a5"
+
+[[files]]
+path = "icons/inbox.svg"
+upstream = "icons/inbox.svg"
+sha256 = "1838482c53d0846badef9be96fdcf7a167064241bd4891efa995c77ebec5f187"
+
+[[files]]
+path = "icons/kanban.svg"
+upstream = "icons/kanban.svg"
+sha256 = "a0dd4ebbf96fa29bca4527892cd2a19d55c61164f73dcd43c20e7a979b9963bc"
+
+[[files]]
+path = "icons/key.svg"
+upstream = "icons/key.svg"
+sha256 = "1f0bdf32374dacfca8cfc7f942c59d27a438e409dccaef11a8ce57de9365ae60"
+
+[[files]]
+path = "icons/landmark.svg"
+upstream = "icons/landmark.svg"
+sha256 = "28408ef995796bffc390e8f217cdaa61e383627789d66300d4ff839248a3f144"
+
+[[files]]
+path = "icons/layers.svg"
+upstream = "icons/layers.svg"
+sha256 = "ce16d0a955e3581cda17f6b2fd5c5bc2034b405f9cecc31c8ebb8495b4afc1bb"
+
+[[files]]
+path = "icons/leaf.svg"
+upstream = "icons/leaf.svg"
+sha256 = "ac2b65d8d35b5038c9388cd1f161e74570fce6ef6a4c3d99a6b0c2bd68e0cb28"
+
+[[files]]
+path = "icons/library.svg"
+upstream = "icons/library.svg"
+sha256 = "892ba1bd1ee2e5bba320eea1c30c83ed83055ded5a0a0c0e7e4ee5fb06c307a5"
+
+[[files]]
+path = "icons/lightbulb.svg"
+upstream = "icons/lightbulb.svg"
+sha256 = "e33bbec15b1e64cca958e086850f951c0dc2201cd5778bb3695fda3cb6ea457d"
+
+[[files]]
+path = "icons/list-todo.svg"
+upstream = "icons/list-todo.svg"
+sha256 = "8620dcb86d9d27e0eeebc627b6a0f995ff3bb0264fd3c12ad003401981771848"
+
+[[files]]
+path = "icons/lock.svg"
+upstream = "icons/lock.svg"
+sha256 = "d2cfe60cac8deaef36442b5c8218c1e61abe18222784b2a370ea090d13fca840"
+
+[[files]]
+path = "icons/mail.svg"
+upstream = "icons/mail.svg"
+sha256 = "3236a51d5b8ce9b0528cf2e6ad07e527bd636dded6f5a9d656072052b99caea8"
+
+[[files]]
+path = "icons/map-pin.svg"
+upstream = "icons/map-pin.svg"
+sha256 = "16f1042a62f1bda20ebab8bfc1cb79c0be285c980dea6c2c733a17902631405b"
+
+[[files]]
+path = "icons/map.svg"
+upstream = "icons/map.svg"
+sha256 = "41300a8ef2c2a4cf36ec3f8a730bcb4754543889eb23b98e7435de7a0757752d"
+
+[[files]]
+path = "icons/megaphone.svg"
+upstream = "icons/megaphone.svg"
+sha256 = "279096a06626ec84f76a6358cf25b919d77d6fa53e82892397c0f2a907602850"
+
+[[files]]
+path = "icons/message-square.svg"
+upstream = "icons/message-square.svg"
+sha256 = "5812a3be783fdcd73efd2b6026e03131e4b8c6649e7d52aa2dc7bf2e2023a59d"
+
+[[files]]
+path = "icons/messages-square.svg"
+upstream = "icons/messages-square.svg"
+sha256 = "97733c58b74f8beddd569927f8453c86bca4afa394e6aad606db1acff4bd8355"
+
+[[files]]
+path = "icons/microscope.svg"
+upstream = "icons/microscope.svg"
+sha256 = "72fab65c4fdd0a7d784485dc7aaa8bf8c4fba9a4dc9ae38a6538e58bdd8b5f42"
+
+[[files]]
+path = "icons/monitor.svg"
+upstream = "icons/monitor.svg"
+sha256 = "d1a443233345724859de8e4fb48968ba91e885e12ddbd710701548bd91b39428"
+
+[[files]]
+path = "icons/navigation.svg"
+upstream = "icons/navigation.svg"
+sha256 = "3c1adf655f06c733013ddf00848c3efe905ed70d7b3eba7a6be5e60e65880503"
+
+[[files]]
+path = "icons/network.svg"
+upstream = "icons/network.svg"
+sha256 = "626be730feea1e5ea7539fbf78b4a3fcb927ce5d7dc43364f2216908672ac792"
+
+[[files]]
+path = "icons/newspaper.svg"
+upstream = "icons/newspaper.svg"
+sha256 = "f5147e2a92a0ca16edea01782b09afeea7f9ebcda029d3f38ae93a3058ed1b78"
+
+[[files]]
+path = "icons/notebook-text.svg"
+upstream = "icons/notebook-text.svg"
+sha256 = "f4fd882aaa00be2d0459bd72d44f2b6f4f59bf2786cc415efff69a51b74ab630"
+
+[[files]]
+path = "icons/notebook.svg"
+upstream = "icons/notebook.svg"
+sha256 = "03c9f3fa8ead15c1f64c7dd4269d4c0376d1e88f7c534acbbb716f2995942821"
+
+[[files]]
+path = "icons/notepad-text.svg"
+upstream = "icons/notepad-text.svg"
+sha256 = "046e0a770756ff1578bdfb43477a2f9b3710bf33aabb28c758c7951772199a45"
+
+[[files]]
+path = "icons/package.svg"
+upstream = "icons/package.svg"
+sha256 = "69d6bc7650d26c4d24dd55eb22791607b982ce7637073944c256f1f61575509d"
+
+[[files]]
+path = "icons/palette.svg"
+upstream = "icons/palette.svg"
+sha256 = "8e7d3fde990cffd10469ba351f27c50202b057a9bb9af5626322e53fd3abc78c"
+
+[[files]]
+path = "icons/pen-tool.svg"
+upstream = "icons/pen-tool.svg"
+sha256 = "dbdbc461cb669bd8038458047e993e26f9ac0ce391cb4e606da5b04c3c46ff55"
+
+[[files]]
+path = "icons/percent.svg"
+upstream = "icons/percent.svg"
+sha256 = "580948bc2c69b84380f0d1e628d85227600886e3f1620effb1ae300b750a9dc0"
+
+[[files]]
+path = "icons/phone.svg"
+upstream = "icons/phone.svg"
+sha256 = "bd59dd10667cbe410a69e2fbbf4d9645d08abe862c8d89082bd4f533957859a8"
+
+[[files]]
+path = "icons/piggy-bank.svg"
+upstream = "icons/piggy-bank.svg"
+sha256 = "6e12568aecf5db868a6f76c6308cb1c9ca47e6b121217f84346482ca927f7152"
+
+[[files]]
+path = "icons/pill.svg"
+upstream = "icons/pill.svg"
+sha256 = "cf28e85117f308eb1d33b8ccd07f5dca5d6796bd1d76ab531d010b2dfc514949"
+
+[[files]]
+path = "icons/plane.svg"
+upstream = "icons/plane.svg"
+sha256 = "4c775a62a524be78fe20aed8544933d4bd3802c5eca17cd6923509f87671d6d6"
+
+[[files]]
+path = "icons/presentation.svg"
+upstream = "icons/presentation.svg"
+sha256 = "5d15abfdfca21e40abe3b8daead5e8f6a7d38e623fb1a4dd8890448c79e75342"
+
+[[files]]
+path = "icons/printer.svg"
+upstream = "icons/printer.svg"
+sha256 = "fa9a6381687bc519a62eb9eac2492d5d51e8e659182822296b6e14bf2f00ecfb"
+
+[[files]]
+path = "icons/puzzle.svg"
+upstream = "icons/puzzle.svg"
+sha256 = "6d80d0c3b214c96945ed0f1c6ee0e4c4ea3911c6cc91c75751fdba08c31eab02"
+
+[[files]]
+path = "icons/qr-code.svg"
+upstream = "icons/qr-code.svg"
+sha256 = "920cb79ab4b2fd23c36a16de3ca533c4896cb989adb823eb7dec97fd840d30f5"
+
+[[files]]
+path = "icons/receipt-text.svg"
+upstream = "icons/receipt-text.svg"
+sha256 = "35b44cd6ce443dc58119380750d6bc12b6dbead1cac23e7ac3dc578d52795bf4"
+
+[[files]]
+path = "icons/receipt.svg"
+upstream = "icons/receipt.svg"
+sha256 = "26b4af2c5ea5aef9578c765a01585d9c8726ce00928dc64175a0d7d9f7c5f0a0"
+
+[[files]]
+path = "icons/recycle.svg"
+upstream = "icons/recycle.svg"
+sha256 = "21ce80a29ae558e16406dfb9143cf7b107c2d76b0174624328ff0e7abeaed7e2"
+
+[[files]]
+path = "icons/rocket.svg"
+upstream = "icons/rocket.svg"
+sha256 = "2b7887d9a5623f2e5e4a5d32716f93829d61b458e03b6eae33a6df648b9eb855"
+
+[[files]]
+path = "icons/route.svg"
+upstream = "icons/route.svg"
+sha256 = "fc169fd38a9963b016ad6d60fd72baa2b0ea8e0cec085bbc53287297c3d8121a"
+
+[[files]]
+path = "icons/scale.svg"
+upstream = "icons/scale.svg"
+sha256 = "a7faa238b153311b18aaffb14ade8989128eaac35a92482edb7a7ee04c7333de"
+
+[[files]]
+path = "icons/scan-barcode.svg"
+upstream = "icons/scan-barcode.svg"
+sha256 = "1d9ed9ea0da73c30d1b02738c774262ec1123cd95274aae28c774b5e83de35e6"
+
+[[files]]
+path = "icons/school.svg"
+upstream = "icons/school.svg"
+sha256 = "30ffb7f18e62bf6c0d592556f8cd45c936265af578f7dbf5cb7b85a867e1dbe5"
+
+[[files]]
+path = "icons/send.svg"
+upstream = "icons/send.svg"
+sha256 = "a489257f447b808ab6b258ae888fa49686885bbc30a7a2774d97a01f11f9cd5e"
+
+[[files]]
+path = "icons/server.svg"
+upstream = "icons/server.svg"
+sha256 = "f7bea54b609dc488f3b848995014041846b2443fd2a880653e9e583d7a034f61"
+
+[[files]]
+path = "icons/shield-check.svg"
+upstream = "icons/shield-check.svg"
+sha256 = "8d4fcdbde5bba4abb1a2f6fe53e37ceb6343a1d5449a9d88f6f97c1971d26c4e"
+
+[[files]]
+path = "icons/shield.svg"
+upstream = "icons/shield.svg"
+sha256 = "be32f6a86df7cbe43a83c439dd8849e5bcf5145e484d23420c20d8b98a78e82b"
+
+[[files]]
+path = "icons/ship.svg"
+upstream = "icons/ship.svg"
+sha256 = "bb958a2f8c37dbb3412b07493f2739bb32349713222108bd9a3468c8893a0eb5"
+
+[[files]]
+path = "icons/shopping-bag.svg"
+upstream = "icons/shopping-bag.svg"
+sha256 = "24a161961b559234b7a31af904dab18b437507336ba2decff3fe6b7772495896"
+
+[[files]]
+path = "icons/shopping-cart.svg"
+upstream = "icons/shopping-cart.svg"
+sha256 = "7cdc07053044af9e5fd24fff5e089ce97b2a39ea978933a160c4bbfebf8a167c"
+
+[[files]]
+path = "icons/sliders-horizontal.svg"
+upstream = "icons/sliders-horizontal.svg"
+sha256 = "e43a00e5eb684e6cbb61083bed2528d7a3fa5f265693eb2b5f314cd432aa65f4"
+
+[[files]]
+path = "icons/smartphone.svg"
+upstream = "icons/smartphone.svg"
+sha256 = "f9fdb700b50feb5fc6436f53eb9813e9eb56a9071ac4cdcba69c7f7c1c13877d"
+
+[[files]]
+path = "icons/sprout.svg"
+upstream = "icons/sprout.svg"
+sha256 = "cf4cd97166b3239348dfe2a94dad045bf788883c32292b16fd8c953f619a4f7b"
+
+[[files]]
+path = "icons/square-check-big.svg"
+upstream = "icons/square-check-big.svg"
+sha256 = "3329bc2e10145074994ffe4cc21e99103c22ccbdb9f651588cf4aed0238fd9d7"
+
+[[files]]
+path = "icons/stethoscope.svg"
+upstream = "icons/stethoscope.svg"
+sha256 = "a5621a048bcb911d4d51a6b8e6b5821dc68b0e7554dc001389ee9bc5f251c3ad"
+
+[[files]]
+path = "icons/store.svg"
+upstream = "icons/store.svg"
+sha256 = "ab2cb92d8cff487f5a53a06f5ee3ba0c2cf522b95281adc1de9ec8410c26e99a"
+
+[[files]]
+path = "icons/tag.svg"
+upstream = "icons/tag.svg"
+sha256 = "85e11c07b29f5b67410e0f14c84799d9406320cd4575b7c8322f31910e0582cc"
+
+[[files]]
+path = "icons/tags.svg"
+upstream = "icons/tags.svg"
+sha256 = "61ffd6d11beb2073bfed08a318d2804492545e11356995c7fc9bc6d20ca1873a"
+
+[[files]]
+path = "icons/target.svg"
+upstream = "icons/target.svg"
+sha256 = "96a6b16628825a1a207a77e9a5818f74c3e74ea3664783ff5c2a44e6347b90df"
+
+[[files]]
+path = "icons/ticket.svg"
+upstream = "icons/ticket.svg"
+sha256 = "37dfe2d23041dd13224fef9d1cb7db4b4f589b661b850f23f57105e843534a2f"
+
+[[files]]
+path = "icons/timer.svg"
+upstream = "icons/timer.svg"
+sha256 = "6771297be65225d462c930865b6f9ee1617aa453885be4c8116a7512a77ac2b6"
+
+[[files]]
+path = "icons/tractor.svg"
+upstream = "icons/tractor.svg"
+sha256 = "3d6a148301f7511e7dcc4f14f2a751e04af00dc50da903b35f6f6560a192a819"
+
+[[files]]
+path = "icons/trending-up.svg"
+upstream = "icons/trending-up.svg"
+sha256 = "c86a4afe20ceccd7a28e829a2cd83dbc40a8af51ffa9547332a9bac9a50a90ae"
+
+[[files]]
+path = "icons/truck.svg"
+upstream = "icons/truck.svg"
+sha256 = "1476faa56b56414ba5d5f01d15e851b8bfd79bef6c36f5855811c27590136e50"
+
+[[files]]
+path = "icons/user-check.svg"
+upstream = "icons/user-check.svg"
+sha256 = "8768036bfd882012085d6c22cdd21f1a5f9c1b2a273c60390ad742ab535c2eff"
+
+[[files]]
+path = "icons/user-cog.svg"
+upstream = "icons/user-cog.svg"
+sha256 = "89847051e7a3c52d2231f2d67c23c56aa3a2db196e5301389f3c7029eebc16e5"
+
+[[files]]
+path = "icons/user-round.svg"
+upstream = "icons/user-round.svg"
+sha256 = "84870f26f3faf8da45da84174517519e81b9e8f00319c78954fcbb74f50038a1"
+
+[[files]]
+path = "icons/user.svg"
+upstream = "icons/user.svg"
+sha256 = "eae3b3b2400031ddd5ec869327d127a96014e5f63aa6e06658dd5d4e90661aa8"
+
+[[files]]
+path = "icons/users.svg"
+upstream = "icons/users.svg"
+sha256 = "eeed488a1ec95ba730dd69996536fb65061d6ea273afb2429ae47e65eebf401c"
+
+[[files]]
+path = "icons/utensils.svg"
+upstream = "icons/utensils.svg"
+sha256 = "9b5eb803bc342b8503b6a154ff63a0f754ba52a13fa24c2e270d2ab89c70f76a"
+
+[[files]]
+path = "icons/video.svg"
+upstream = "icons/video.svg"
+sha256 = "d4fb6587f282c1152b953fe9494cd8ccafdf1e9f44957fbb7fe8dc7af0457597"
+
+[[files]]
+path = "icons/wallet.svg"
+upstream = "icons/wallet.svg"
+sha256 = "76c9596f629a2abf9cfabb573452f3113ed7e9502c699aa811e630f156eb7556"
+
+[[files]]
+path = "icons/warehouse.svg"
+upstream = "icons/warehouse.svg"
+sha256 = "709f50b56a6808e03de3f0d3a9dc74234825d1dd162382cc87460e414e1eb915"
+
+[[files]]
+path = "icons/workflow.svg"
+upstream = "icons/workflow.svg"
+sha256 = "ae99ea8f56a2835a2cca35b2fbb57643ab73443610970dba23e24bd9df75cfec"
+
+[[files]]
+path = "icons/wrench.svg"
+upstream = "icons/wrench.svg"
+sha256 = "b5f3bf792743edb9e81b543dd1b13ccc26d3afe1d33500a1cd8dee2e052d6197"
+
+[[files]]
+path = "icons/zap.svg"
+upstream = "icons/zap.svg"
+sha256 = "4c395891eab4d1e5627c5d414a16db037317cb2f12453de0f3a1130964c6d444"

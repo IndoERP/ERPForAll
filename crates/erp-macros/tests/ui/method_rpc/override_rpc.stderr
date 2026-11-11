@@ -1,0 +1,5 @@
+error: `rpc` marks a method an addon defines for RPC clients; an override is never exposed (the definition's declaration decides): remove `rpc`
+ --> tests/ui/method_rpc/override_rpc.rs:7:14
+  |
+7 |     async fn lend(this: &u8, tx: &mut u8, sup: u8) {}
+  |              ^^^^

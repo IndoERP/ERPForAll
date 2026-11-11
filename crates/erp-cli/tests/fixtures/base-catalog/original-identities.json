@@ -1,0 +1,182 @@
+[
+  {
+    "xmlid": "AED",
+    "name": "AED"
+  },
+  {
+    "xmlid": "ARS",
+    "name": "ARS"
+  },
+  {
+    "xmlid": "AUD",
+    "name": "AUD"
+  },
+  {
+    "xmlid": "BHD",
+    "name": "BHD"
+  },
+  {
+    "xmlid": "BRL",
+    "name": "BRL"
+  },
+  {
+    "xmlid": "CAD",
+    "name": "CAD"
+  },
+  {
+    "xmlid": "CHF",
+    "name": "CHF"
+  },
+  {
+    "xmlid": "CLP",
+    "name": "CLP"
+  },
+  {
+    "xmlid": "CNY",
+    "name": "CNY"
+  },
+  {
+    "xmlid": "COP",
+    "name": "COP"
+  },
+  {
+    "xmlid": "CZK",
+    "name": "CZK"
+  },
+  {
+    "xmlid": "DKK",
+    "name": "DKK"
+  },
+  {
+    "xmlid": "EGP",
+    "name": "EGP"
+  },
+  {
+    "xmlid": "EUR",
+    "name": "EUR"
+  },
+  {
+    "xmlid": "GBP",
+    "name": "GBP"
+  },
+  {
+    "xmlid": "HKD",
+    "name": "HKD"
+  },
+  {
+    "xmlid": "HUF",
+    "name": "HUF"
+  },
+  {
+    "xmlid": "IDR",
+    "name": "IDR"
+  },
+  {
+    "xmlid": "ILS",
+    "name": "ILS"
+  },
+  {
+    "xmlid": "INR",
+    "name": "INR"
+  },
+  {
+    "xmlid": "JOD",
+    "name": "JOD"
+  },
+  {
+    "xmlid": "JPY",
+    "name": "JPY"
+  },
+  {
+    "xmlid": "KES",
+    "name": "KES"
+  },
+  {
+    "xmlid": "KRW",
+    "name": "KRW"
+  },
+  {
+    "xmlid": "KWD",
+    "name": "KWD"
+  },
+  {
+    "xmlid": "MXN",
+    "name": "MXN"
+  },
+  {
+    "xmlid": "MYR",
+    "name": "MYR"
+  },
+  {
+    "xmlid": "NGN",
+    "name": "NGN"
+  },
+  {
+    "xmlid": "NOK",
+    "name": "NOK"
+  },
+  {
+    "xmlid": "NZD",
+    "name": "NZD"
+  },
+  {
+    "xmlid": "OMR",
+    "name": "OMR"
+  },
+  {
+    "xmlid": "PEN",
+    "name": "PEN"
+  },
+  {
+    "xmlid": "PHP",
+    "name": "PHP"
+  },
+  {
+    "xmlid": "PLN",
+    "name": "PLN"
+  },
+  {
+    "xmlid": "QAR",
+    "name": "QAR"
+  },
+  {
+    "xmlid": "SAR",
+    "name": "SAR"
+  },
+  {
+    "xmlid": "SEK",
+    "name": "SEK"
+  },
+  {
+    "xmlid": "SGD",
+    "name": "SGD"
+  },
+  {
+    "xmlid": "THB",
+    "name": "THB"
+  },
+  {
+    "xmlid": "TND",
+    "name": "TND"
+  },
+  {
+    "xmlid": "TRY",
+    "name": "TRY"
+  },
+  {
+    "xmlid": "TWD",
+    "name": "TWD"
+  },
+  {
+    "xmlid": "USD",
+    "name": "USD"
+  },
+  {
+    "xmlid": "VND",
+    "name": "VND"
+  },
+  {
+    "xmlid": "ZAR",
+    "name": "ZAR"
+  }
+]

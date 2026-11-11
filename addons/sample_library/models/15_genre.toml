@@ -1,0 +1,12 @@
+# A genre a book can be filed under (several per book).
+[[model]]
+name = "sample_library.genre"
+description = "Library Genre"
+order = "name, id"
+
+[[model.field]]
+name = "name"
+type = "char"
+string = "Name"
+required = true
+index = true

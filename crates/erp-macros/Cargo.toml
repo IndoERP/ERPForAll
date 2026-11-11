@@ -1,0 +1,29 @@
+[package]
+name = "erp-macros"
+description = "ERPForAll proc macros: #[model], #[extend], #[methods], #[migration], addon!()"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { workspace = true }
+quote = { workspace = true }
+proc-macro2 = { workspace = true }
+# the descriptor text the macros write at compile time (`src/descriptor.rs`)
+serde_json = { workspace = true }
+
+[dev-dependencies]
+erp-fields = { workspace = true }
+# a test ties the macro's company_match spellings to `CompanyMatch::parse`
+erp-registry = { workspace = true }
+# compile-fail tests: macro errors are reported on the offending token (tests/compile_fail.rs)
+trybuild = { workspace = true }
+
+[lints]
+workspace = true

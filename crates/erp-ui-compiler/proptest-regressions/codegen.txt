@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc eadd53050ca0f899a8097e4aefda66f8ed673e7410808a1c16d044f5519a819e # shrinks to body = ["<option><optgroup></optgroup></option>"]
+cc 3c98967ceaecd27579f211f52e49ba201b806eace48f5cad965419c0e48b4d6a # shrinks to body = ["<button><div><button></button></div></button>"]

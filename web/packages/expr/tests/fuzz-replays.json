@@ -1,0 +1,11 @@
+[
+  {
+    "seed": 1430861873,
+    "shrinkPath": "manual-minimal-admission-fixture",
+    "sample": {
+      "wire": "{\"schema\":1,\"nodes\":[{\"kind\":\"name\",\"name\":\"x\",\"__proto__\":{}}]}",
+      "path": "$.nodes[0][\"__proto__\"]",
+      "detail": "unknown field"
+    }
+  }
+]

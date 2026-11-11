@@ -1,0 +1,16 @@
+[package]
+name = "erp-addon-barcodes_gs1_nomenclature"
+description = "ERPForAll addon barcodes_gs1_nomenclature: parse barcodes according to GS1-128 specifications"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+erp-sdk = { workspace = true }
+erp-addon-barcodes = { workspace = true }
+
+[lints]
+workspace = true

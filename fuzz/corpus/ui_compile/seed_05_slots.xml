@@ -1,0 +1,1 @@
+<templates><t t-name="web.Slots"><Card><t t-set-slot="header"><b>Title</b></t><div>Body</div></Card></t></templates>

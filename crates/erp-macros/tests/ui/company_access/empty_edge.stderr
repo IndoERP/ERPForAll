@@ -1,0 +1,5 @@
+error: company_access: the edge name is empty
+ --> tests/ui/company_access/empty_edge.rs:5:94
+  |
+5 |     company_access = direct(field = "company_id", branch = "exact", empty = "deny", parent = "")
+  |                                                                                              ^^

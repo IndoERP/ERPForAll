@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<erp noupdate="1">
+    <!-- The generic subtypes every thread uses; mt_comment, mt_note and mt_activities are
+         protected master records (mail.message.subtype write/unlink overrides). -->
+    <record id="mt_comment" model="mail.message.subtype">
+        <field name="name">Messages</field>
+        <field name="sequence" eval="0"/>
+        <field name="track_recipients" eval="True"/>
+    </record>
+    <record id="mt_note" model="mail.message.subtype">
+        <field name="name">Notes</field>
+        <field name="default" eval="False"/>
+        <field name="internal" eval="True"/>
+        <field name="sequence" eval="90"/>
+        <field name="track_recipients" eval="True"/>
+    </record>
+    <record id="mt_activities" model="mail.message.subtype">
+        <field name="name">Activities</field>
+        <field name="default" eval="False"/>
+        <field name="internal" eval="True"/>
+        <field name="sequence" eval="100"/>
+    </record>
+    <record id="mt_important_notification" model="mail.message.subtype">
+        <field name="name">Important Notification</field>
+        <field name="default" eval="False"/>
+        <field name="internal" eval="True"/>
+    </record>
+</erp>

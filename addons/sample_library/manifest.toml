@@ -1,0 +1,16 @@
+name = "Sample Library"
+summary = "Books, authors and loans: a sample addon with no Rust code and no compilation"
+description = "A worked example of a data-only addon: models in models/*.toml, views, menus, access rows and demo data in data files."
+version = "1.0.4"
+license = "MIT OR Apache-2.0"
+author = "ERPForAll"
+category = "Sample"
+application = true
+depends = ["base"]
+data = [
+    "security/ir.access.csv",
+    "views/sample_library_views.xml",
+]
+demo = [
+    "demo/sample_library_demo.xml",
+]

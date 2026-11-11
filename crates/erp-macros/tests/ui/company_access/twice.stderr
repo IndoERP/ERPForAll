@@ -1,0 +1,5 @@
+error: company_access: parameter 'edge' is given twice
+ --> tests/ui/company_access/twice.rs:5:41
+  |
+5 |     company_access = parent(edge = "a", edge = "b")
+  |                                         ^^^^

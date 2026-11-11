@@ -1,0 +1,16 @@
+[package]
+name = "erp-addon-product_expiry"
+description = "ERPForAll addon product_expiry: product expiration dates, tracking and lot alerts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+erp-sdk = { workspace = true }
+erp-addon-stock = { workspace = true }
+
+[lints]
+workspace = true

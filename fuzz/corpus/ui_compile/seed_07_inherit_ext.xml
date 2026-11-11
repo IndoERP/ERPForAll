@@ -1,0 +1,1 @@
+<templates><t t-inherit="web.Base" t-inherit-mode="extension"><xpath expr="//div" position="attributes"><attribute name="class">added</attribute></xpath></t></templates>

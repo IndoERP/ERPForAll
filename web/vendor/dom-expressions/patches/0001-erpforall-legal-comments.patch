@@ -1,0 +1,17 @@
+diff --git a/src/reconcile.js b/src/reconcile.js
+index 91736362..3da90564 100644
+--- a/src/reconcile.js
++++ b/src/reconcile.js
+@@ -1,3 +1,12 @@
++/*!
++ * dom-expressions 0.40.12, reconcile.js (https://github.com/ryansolid/dom-expressions)
++ * Copyright (c) 2018-2019 Ryan Carniato
++ * @license MIT
++ * SPDX-License-Identifier: MIT AND ISC
++ * Derived from udomdiff (https://github.com/WebReflection/udomdiff),
++ * Copyright (c) 2020, Andrea Giammarchi, @WebReflection, ISC License
++ * Modified by ERPForAll contributors, 2026: this notice only (web/vendor/dom-expressions/patches/)
++ */
+ // Slightly modified version of: https://github.com/WebReflection/udomdiff/blob/master/index.js
+ export default function reconcileArrays(parentNode, a, b) {
+   let bLength = b.length,

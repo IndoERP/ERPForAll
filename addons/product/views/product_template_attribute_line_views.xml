@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<erp>
+  <!-- Columns of the attribute lines sub-list on the product form. -->
+  <record id="product_template_attribute_line_tree_view" model="ir.ui.view">
+    <field name="name">product.template.attribute.line.list</field>
+    <field name="model">product.template.attribute.line</field>
+    <field name="arch" type="xml">
+      <list>
+        <field name="attribute_id"/>
+        <field name="value_ids" widget="many2many_tags"/>
+      </list>
+    </field>
+  </record>
+
+  <record id="product_template_attribute_line_form_view" model="ir.ui.view">
+    <field name="name">product.template.attribute.line.form</field>
+    <field name="model">product.template.attribute.line</field>
+    <field name="arch" type="xml">
+      <form>
+        <group>
+          <field name="attribute_id"/>
+          <field name="value_ids" widget="many2many_tags"/>
+        </group>
+      </form>
+    </field>
+  </record>
+</erp>

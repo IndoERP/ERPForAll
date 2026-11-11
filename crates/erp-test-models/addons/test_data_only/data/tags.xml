@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="tag_fiction" model="test_data_only.tag">
+        <field name="name">Fiction</field>
+        <field name="sequence">1</field>
+        <field name="color">red</field>
+    </record>
+    <record id="tag_science" model="test_data_only.tag">
+        <field name="name">Science</field>
+        <field name="sequence">2</field>
+        <field name="color">green</field>
+    </record>
+</odoo>

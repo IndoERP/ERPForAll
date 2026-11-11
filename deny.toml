@@ -1,0 +1,72 @@
+# cargo-deny policy for ERPForAll.
+#
+# ERPForAll is distributed under MIT OR Apache-2.0, and premium addons may be proprietary.
+# Rule: dependencies that ship must be permissive (or MPL-2.0, per-file copyleft);
+# build-time-only tools that never ship may be LGPL (see web/licenses.json `dev_only`); GPL and AGPL
+# never. This file covers Rust crates, all of which ship, so LGPL crates are rejected here.
+# Run: `cargo deny check` (part of scripts/ci.sh).
+
+[graph]
+# Build hosts and the platforms we ship to. Keeps Windows/macOS-only crates out of the licence check
+# noise while still covering what we distribute.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "aarch64-apple-darwin",
+]
+all-features = true
+
+[output]
+feature-depth = 1
+
+[advisories]
+# RustSec database. Vulnerabilities are always errors; unmaintained/unsound notices apply to the
+# whole graph. Add an `ignore` entry only with a reason and an issue link.
+unmaintained = "all"
+unsound = "all"
+yanked = "deny"
+ignore = []
+
+[licenses]
+# Anything not listed here is denied, including GPL-*, LGPL-* and AGPL-*.
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "MPL-2.0",
+]
+confidence-threshold = 0.9
+# The list is a policy, not an inventory: do not warn about allowed licences no crate uses yet.
+unused-allowed-license = "allow"
+exceptions = []
+
+[licenses.private]
+# Workspace crates are `publish = false` and carry MIT OR Apache-2.0; they are checked like any other.
+ignore = false
+registries = []
+
+[bans]
+multiple-versions = "warn"
+# `path` dependencies inside the workspace have no version; allow those, deny `*` from registries.
+wildcards = "deny"
+allow-wildcard-paths = true
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

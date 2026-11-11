@@ -1,0 +1,165 @@
+package erpforall:addon@1.0.0;
+
+/// Types shared by the host and guest interfaces of the ERPForAll addon contract.
+///
+/// Records, variants and enums are frozen for the whole major version: in the component model a
+/// field or case added to one changes its type, so it is a new major, never a minor.
+interface types {
+    /// Technical model name, e.g. `sale.order`.
+    type model-name = string;
+
+    /// Technical field name, e.g. `partner_id`.
+    type field-name = string;
+
+    /// Record id (`int8` identity column).
+    type record-id = s64;
+
+    /// Why a call across the boundary failed. Every failure is reported; nothing is replaced by a
+    /// default value.
+    enum boundary-error-kind {
+        /// A model, field, method or record named in the call does not exist.
+        not-found,
+        /// The caller's access rights or the addon's approved capabilities refuse the operation.
+        access-denied,
+        /// Business validation refused the values: a constraint, a required field, a selection value.
+        validation-failed,
+        /// A concurrent transaction changed the rows: a serialization failure or a row-version mismatch.
+        concurrency-conflict,
+        /// A limit was reached: batch size, payload size, call depth, time or memory.
+        resource-exhausted,
+        /// The call broke this contract: malformed JSON, columns of unequal length, a value of the
+        /// wrong type for its field.
+        invalid-argument,
+        /// The operation is valid but not implemented yet; the message names the slice that adds it.
+        unsupported,
+        /// A defect in the host or the guest; the message carries the detail.
+        internal-error,
+    }
+
+    /// A failed call: its kind and a message for the log and the user.
+    record boundary-error {
+        kind: boundary-error-kind,
+        message: string,
+    }
+
+    /// A `date_range` value. Each end is a day count since 1970-01-01; `none` is an unbounded end.
+    /// Whether the upper end is included is declared by the field, not carried by the value.
+    record date-range {
+        lower: option<s32>,
+        upper: option<s32>,
+    }
+
+    /// A `datetime_range` value. Each end is a microsecond count since 1970-01-01 00:00:00 (naive
+    /// UTC); `none` is an unbounded end. The field declares whether the upper end is included.
+    record datetime-range {
+        lower: option<s64>,
+        upper: option<s64>,
+    }
+
+    /// One field's values for a list of records, in the order of the ids they belong to. One typed
+    /// list per column, never a tagged value per cell.
+    ///
+    /// Encodings match the host's in-memory values: dates are day counts since 1970-01-01, datetimes
+    /// microsecond counts since 1970-01-01 00:00:00 naive UTC, exact decimals (`monetary`, `float`
+    /// with digits) canonical text (`-?[0-9]+(\.[0-9]+)?`, no exponent), JSON values compact JSON
+    /// text.
+    variant column-data {
+        col-bool(list<bool>),
+        col-opt-bool(list<option<bool>>),
+        col-int(list<s64>),
+        col-opt-int(list<option<s64>>),
+        col-float(list<f64>),
+        col-opt-float(list<option<f64>>),
+        col-opt-decimal(list<option<string>>),
+        col-string(list<string>),
+        col-opt-string(list<option<string>>),
+        col-opt-date(list<option<s32>>),
+        col-opt-datetime(list<option<s64>>),
+        col-opt-date-range(list<option<date-range>>),
+        col-opt-datetime-range(list<option<datetime-range>>),
+        /// `many2one` and `many2one_reference` target ids.
+        col-opt-id(list<option<record-id>>),
+        /// `one2many` and `many2many` target ids per record.
+        col-ids(list<list<record-id>>),
+        col-opt-json(list<option<string>>),
+        col-opt-bytes(list<option<list<u8>>>),
+    }
+
+    /// The values of one field.
+    record column-vector {
+        field: field-name,
+        data: column-data,
+    }
+
+    /// Columns of one model for a list of records. Every column holds exactly one value per id, in
+    /// the order of `ids`; a batch that breaks this is refused with `invalid-argument`.
+    record record-batch {
+        model: model-name,
+        ids: list<record-id>,
+        columns: list<column-vector>,
+    }
+
+    /// One change to an `x2many` field. Creating or updating target records goes through
+    /// `orm-host.create-batch` and `orm-host.write-batch` on the target model.
+    variant x2many-command {
+        /// Add the link to an existing record.
+        link(record-id),
+        /// Remove the link; the target record stays.
+        unlink(record-id),
+        /// Remove the link and delete the target record.
+        delete(record-id),
+        /// Remove every link.
+        clear,
+        /// Replace every link with these records.
+        set(list<record-id>),
+    }
+
+    /// One value: a value written to every id of a batch, a value of a single record in onchange,
+    /// or a default. Encodings as in `column-data`.
+    variant scalar-value {
+        val-null,
+        val-bool(bool),
+        val-int(s64),
+        val-float(f64),
+        val-decimal(string),
+        val-str(string),
+        val-date(s32),
+        val-datetime(s64),
+        val-date-range(date-range),
+        val-datetime-range(datetime-range),
+        val-id(record-id),
+        val-ids(list<record-id>),
+        val-x2many(list<x2many-command>),
+        val-json(string),
+        val-bytes(list<u8>),
+    }
+
+    /// The caller's context, set by the host for each call into the guest.
+    ///
+    /// Identity is the host's: it comes from the authenticated session, and nothing the guest sends
+    /// back can change the user, the company or the rights a host call runs under.
+    record call-context {
+        user-id: record-id,
+        company-id: record-id,
+        allowed-company-ids: list<record-id>,
+        lang: string,
+        tz: string,
+        /// The other context keys as a compact JSON object, as filtered by the host.
+        context-json: string,
+        /// The transaction's cache generation. It changes whenever the host writes or flushes; a
+        /// guest drops columns it cached under another value.
+        cache-epoch: u64,
+    }
+
+    /// A warning returned by an onchange, shown to the user.
+    record onchange-warning {
+        title: string,
+        message: string,
+    }
+
+    /// What an onchange changed: new field values and an optional warning.
+    record onchange-result {
+        values: list<tuple<field-name, scalar-value>>,
+        warning: option<onchange-warning>,
+    }
+}

@@ -1,0 +1,22 @@
+# A new model whose range field and WITHOUT OVERLAPS key come from the model file.
+[[model]]
+name = "scale.season"
+description = "Season"
+
+[[model.field]]
+name = "resource_id"
+type = "many2one"
+comodel = "scale.resource"
+required = true
+
+[[model.field]]
+name = "dates"
+type = "date_range"
+bounds = "[]"
+string = "Dates"
+
+[[model.key]]
+name = "_one_season"
+fields = ["resource_id"]
+without_overlaps = "dates"
+message = "Seasons of a resource may not overlap."

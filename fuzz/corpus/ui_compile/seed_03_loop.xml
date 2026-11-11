@@ -1,0 +1,1 @@
+<templates><t t-name="web.Loop"><ul><li t-foreach="this.items" t-as="item" t-key="item.id"><span t-out="item.name"/></li></ul></t></templates>

@@ -1,0 +1,1 @@
+<templates><t t-name="web.Branching"><div t-if="this.a">A</div><div t-elif="this.b">B</div><div t-else="">C</div></t></templates>

@@ -1,0 +1,21 @@
+[package]
+name = "erp-addon-product"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+erp-sdk = { workspace = true }
+erp-addon-base = { workspace = true }
+erp-addon-uom = { workspace = true }
+rust_decimal = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+erp-testkit = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
+toml = { workspace = true }
+
+[lints]
+workspace = true

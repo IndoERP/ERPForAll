@@ -1,0 +1,31 @@
+# cargo-nextest configuration (https://nexte.st/).
+#
+# `ci` is the profile scripts/ci.sh runs. It inherits every default-profile setting and only adds a
+# JUnit report, written to target/nextest/ci/junit.xml; ci.sh copies it to
+# logs/junit-<revision>-<UTC timestamp>.xml next to the CI log, and scripts/parity-map.py --junit
+# reads it to fill the Status column
+# No test may hang a run (round 2: one test polled forever and held a host run for
+# 8.8 h). A test still running after 60 s is reported slow; after 5 periods (5 min) it is killed and
+# fails. The slowest test of the ci.sh JUnit of a6f38d56 (2026-10-21) took 26.4 s. Every profile
+# inherits it from `default`.
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+[profile.ci.junit]
+path = "junit.xml"
+
+# exact ignored performance cases selected by scripts/performance-policy.py.
+# Separate report so a milestone run never overwrites mandatory functional test evidence.
+[profile.performance.junit]
+path = "junit.xml"
+
+# plan_o2m_growth timing guard is explicitly deferred; its active plan-shape twin needs no timing retry.
+
+# Forced-deadlock cases require a scheduling window to make the login backend the victim
+# (auth_login.rs until_the_login_waits). Reserve the global slots for just these two cases;
+# a parallel suite stall can otherwise let the other backend's detector win and test the
+# wrong path. Keep SQLSTATE/retry assertions and ordinary parallelism; no retries added.
+# https://www.nexte.st/
+[[profile.ci.overrides]]
+filter = 'binary(=auth_login) & (test(=a_deadlocked_failure_count_is_retried) | test(=a_deadlocked_login_success_is_retried))'
+threads-required = "num-test-threads"

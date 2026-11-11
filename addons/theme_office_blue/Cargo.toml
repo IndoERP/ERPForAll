@@ -1,0 +1,17 @@
+[package]
+name = "erp-addon-theme-office-blue"
+description = "Database-wide Office Blue appearance for the web client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+erp-sdk.workspace = true
+erp-addon-base.workspace = true
+erp-addon-web.workspace = true
+
+[lints]
+workspace = true

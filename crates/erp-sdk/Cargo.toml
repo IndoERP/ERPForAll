@@ -1,0 +1,47 @@
+[package]
+name = "erp-sdk"
+description = "The ERPForAll addon API (native backend)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+# Reserved for the native base addon; not an addon extension API.
+__base-core-ddl = []
+
+[dependencies]
+erp-macros = { workspace = true }
+erp-fields = { workspace = true }
+
+# Native backend: the ORM, registry and database crates. Nothing here is built for WebAssembly
+# : the guest facade (`src/guest/`) needs none of it.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+# the load-state context keys (`load_state`, review T-4)
+erp-data = { workspace = true }
+erp-expr = { workspace = true }
+erp-script = { workspace = true }
+erp-domain = { workspace = true }
+erp-registry = { workspace = true }
+erp-orm = { workspace = true }
+# the attachment store types of `base`'s attachments module
+erp-blob = { workspace = true }
+erp-views = { workspace = true, features = ["host-access"] }
+erp-ui-compiler = { workspace = true }
+erp-security = { workspace = true }
+futures-core = { workspace = true }
+linkme = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+# Guest backend (`wasm32-wasip2`): the component bindings and the collector the guard proved on
+# WebAssembly.
+[target.'cfg(target_family = "wasm")'.dependencies]
+erp-guest = { workspace = true }
+inventory = { workspace = true }
+serde = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,15 @@
+[package]
+name = "erp-addon-test_addon_a"
+description = "ERPForAll fixture addon test_addon_a: two-addon suite base"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+erp-sdk = { workspace = true }
+
+[lints]
+workspace = true

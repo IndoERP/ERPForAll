@@ -1,0 +1,3 @@
+name = "Test Ext C"
+summary = "Fixture: a second, independent extension of test_ext.book"
+depends = ["base", "test_ext_a"]

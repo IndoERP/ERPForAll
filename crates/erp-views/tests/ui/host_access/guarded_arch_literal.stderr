@@ -1,0 +1,15 @@
+error[E0451]: fields `arch` and `table` of struct `GuardedArch` are private
+  --> tests/ui/host_access/guarded_arch_literal.rs:9:9
+   |
+ 8 |     let _forged = GuardedArch {
+   |                   ----------- in this type
+ 9 |         arch,
+   |         ^^^^ private field
+10 |         table: todo!(),
+   |         ^^^^^ private field
+
+error: type `guard::GuardTable` is private
+  --> tests/ui/host_access/guarded_arch_literal.rs:10:16
+   |
+10 |         table: todo!(),
+   |                ^^^^^^^ private type

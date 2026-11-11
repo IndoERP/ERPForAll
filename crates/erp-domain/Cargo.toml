@@ -1,0 +1,25 @@
+[package]
+name = "erp-domain"
+description = "Domain AST for ERPForAll: list syntax, construction checks, negation and BASIC optimization"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# Pure crate (layer L3): no database, no registry, no I/O. Must keep building for
+# wasm32-wasip2, so dependencies stay small and platform-independent (erp-fields is pure, L1).
+[dependencies]
+# The shared error taxonomy only: `DomainError` converts into `erp_fields::Error`.
+erp-fields = { workspace = true }
+indexmap = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true

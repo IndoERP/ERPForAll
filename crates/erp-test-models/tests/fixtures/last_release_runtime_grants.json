@@ -1,0 +1,7 @@
+{
+  "commit": "0fd74f97b58a3c7d76e9434444adc27ae33daeb6",
+  "source": "crates/erp-cli/src/human.rs",
+  "source_sha256": "f2b0c0661e6c6ad38871daddd28fc30ccdd780e70b91ef2ca282eb24211f04fa",
+  "fixture": "last_release_runtime_grants.sql",
+  "fixture_sha256": "f3f6bb1abe0d5c32908c955763fae41e50a01c60aa8b99e3a5f9e74b30ef8f3e"
+}

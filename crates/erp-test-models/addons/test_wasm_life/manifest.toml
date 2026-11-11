@@ -1,0 +1,3 @@
+name = "Test Wasm Life"
+summary = "Fixture: a WebAssembly addon installed, upgraded and uninstalled at runtime (a later release)"
+depends = ["base"]

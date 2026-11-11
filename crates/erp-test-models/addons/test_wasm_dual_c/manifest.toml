@@ -1,0 +1,3 @@
+name = "Test Wasm Dual C"
+summary = "Fixture: native addon on top of the WASM layer of B (a later release)"
+depends = ["test_wasm_dual_b"]

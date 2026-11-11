@@ -1,0 +1,42 @@
+[package]
+name = "erp-store-wire"
+description = "ERPForAll messaging store wire contract: snapshot descriptors, bus cursors, versions, store schema, canonical encoder and strict decoder"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# Pure L1 crate with no internal (workspace) dependencies (amendment 2026-11-06, checked by
+# scripts/check-layers.py). No I/O, no clock, no threads; must keep building for wasm32-wasip2.
+# `schema-gen` enables the ts-rs derives of `erp_store_wire::doc` for the TypeScript declaration
+# generator; the production dependency tree and the wasm build never contain ts-rs.
+[features]
+default = []
+schema-gen = ["dep:ts-rs"]
+
+[dependencies]
+serde = { workspace = true }
+# `raw_value` only adds the `RawValue` type, which the reader uses to keep each number's text. The
+# `float_roundtrip` feature is deliberately NOT enabled: it is additive across the workspace and the
+# project removed it from the graph. Exact float parsing is
+# confined to `src/json.rs`, which parses the number text with `str::parse::<f64>`.
+serde_json = { workspace = true, features = ["raw_value"] }
+thiserror = { workspace = true }
+# Build tooling only; keep the production and wasm dependency trees pure.
+ts-rs = { version = "=11.1.0", optional = true, default-features = false, features = ["serde-compat"] }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+# Build tooling only: the schema example needs the generator feature, the fixture writer does not.
+[[example]]
+name = "store_wire_schema"
+required-features = ["schema-gen"]
+
+[[example]]
+name = "store_wire_fixtures"
+
+[lints]
+workspace = true

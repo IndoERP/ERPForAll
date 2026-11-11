@@ -1,0 +1,65 @@
+[package]
+name = "erp-views"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "View arch inheritance engine (pure, no database): parse, locate, apply specs, combine"
+
+[lints]
+workspace = true
+
+[features]
+schema-gen = ["dep:ts-rs", "erp-expr/schema-gen"]
+# The bridge to the ORM guard plan (design m2-s3-b-guarded-arch.md section 3). Off in the pure and
+# guest builds; erp-sdk turns it on for the native target.
+host-access = ["dep:erp-orm", "dep:erp-fields"]
+
+[dependencies]
+erp-expr.workspace = true
+erp-orm = { workspace = true, optional = true }
+erp-fields = { workspace = true, optional = true }
+# Pure H18 ownership/publication identity.
+erp-registry.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ts-rs = { version = "=11.1.0", optional = true, default-features = false, features = ["serde-compat"] }
+roxmltree.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# Exact resident high-water mark for the bounded views_cost measurement example.
+nix = { version = "0.31.3", default-features = false, features = ["resource"] }
+# Allocation pins (tests/alloc_*.rs, standards §5b).
+erp-alloc-budget = { workspace = true }
+criterion.workspace = true
+proptest.workspace = true
+trybuild.workspace = true
+# Named by the compile-fail cases (tests/ui/host_access), which build against the host-access bridge.
+erp-orm.workspace = true
+erp-fields.workspace = true
+
+[[bench]]
+name = "views_combine"
+harness = false
+
+# Allocation tests run on the main thread under erp_alloc_budget's harness (lesson):
+# libtest's own main thread would allocate inside their counting windows.
+[[test]]
+name = "alloc_catalogue"
+harness = false
+
+# Forging and lifetime compile-fail cases of the host-access bridge.
+[[test]]
+name = "compile_fail"
+required-features = ["host-access"]
+
+[[test]]
+name = "alloc_expression_preflight"
+harness = false
+
+[[example]]
+name = "human_ui_schema"
+required-features = ["schema-gen"]

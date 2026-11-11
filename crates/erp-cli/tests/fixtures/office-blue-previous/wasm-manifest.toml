@@ -1,0 +1,15 @@
+name = "Sample Library WASM"
+summary = "Lend, return and renew: Rust methods in a sandboxed component that extend the data-only sample_library"
+description = "A Lend wizard that creates the loan, Return and Renew, with lend counters on books and renewal counters on loans. Compiled to WebAssembly, packed as a .erpaddon and installed into a running server without a restart."
+version = "1.3.4"
+license = "MIT OR Apache-2.0"
+author = "ERPForAll"
+category = "Sample"
+depends = ["sample_library"]
+data = [
+    "security/ir.access.csv",
+    "views/sample_library_wasm_views.xml",
+]
+
+[wasm]
+sdk_version = "1.0"

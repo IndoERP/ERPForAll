@@ -1,0 +1,99 @@
+/*! SPDX-License-Identifier: MIT OR Apache-2.0 */
+/* The external engine CSS supplies geometry. These original styles use the office design tokens. */
+.code-editor {
+  --code-editor-background: var(--surface);
+  --code-editor-text: var(--text);
+  --code-editor-subtle: var(--surface-subtle);
+  --code-editor-muted: var(--muted);
+  --code-editor-line: var(--input-line);
+  /* Opaque selection avoids compounding active-line and word-marker washes. The
+     focus outline distinguishes the selected range in both inherited and explicit themes. */
+  --code-editor-selection-background: var(--surface-subtle);
+  position: relative; isolation: isolate;
+  display: flex; flex-direction: column; gap: 6px;
+  min-width: 0; max-width: 100%; color: var(--code-editor-text); background: var(--code-editor-background);
+}
+.code-editor[data-code-theme="light"] {
+  --surface: #fff; --surface-subtle: #edf1f4; --text: #22313b; --muted: #52636f;
+  --line: #d5dde3; --input-line: #8b9ba7; --hover: #e4eaee; --accent: #086d71;
+  --selected: #e4f2f1; --focus: #126aab; --focus-wash: #126aab26;
+  --danger: #a52b37; --danger-bg: #fcebed; --success: #22613d; --warning: #82510c;
+  color-scheme: light;
+}
+.code-editor[data-code-theme="dark"] {
+  --surface: #1d2831; --surface-subtle: #25333e; --text: #e3ebf0; --muted: #acbdc9;
+  --line: #405361; --input-line: #7e96a6; --hover: #30424f; --accent: #67d2ca;
+  --selected: #1d4144; --focus: #8bc5ff; --focus-wash: #8bc5ff33;
+  --danger: #ffb2bb; --danger-bg: #452832; --success: #a7dbb8; --warning: #f3d18c;
+  color-scheme: dark;
+}
+.code-editor-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.code-editor-label { display: inline-flex; align-items: baseline; gap: 4px; color: var(--code-editor-muted); font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+.code-editor-required { color: var(--danger); }
+.code-editor-required[hidden] { display: none; }
+.code-editor-history { display: flex; flex-wrap: wrap; gap: 4px; }
+.code-editor-history button { min-width: 42px; min-height: 28px; padding: 3px 8px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface); color: var(--text); font: inherit; font-size: 12px; cursor: pointer; }
+.code-editor-history button:hover:enabled { background: var(--hover); }
+.code-editor-history button:active:enabled { background: var(--selected); }
+.code-editor-history button:disabled { opacity: .5; cursor: default; }
+.code-editor-history button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.code-editor-surface { position: relative; z-index: 0; isolation: isolate; min-width: 0; max-width: 100%; overflow: hidden; border: 1px solid var(--code-editor-line); border-radius: var(--radius-control); background: var(--code-editor-background); }
+.code-editor-surface:hover { border-color: var(--accent); }
+.code-editor-surface:focus-within { outline: 2px solid var(--focus); outline-offset: 1px; }
+.code-editor .ace_editor { width: 100%; min-height: 160px; max-width: 100%; color: var(--code-editor-text); background: var(--code-editor-background); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: 13px; line-height: 1.5; }
+.code-editor .ace_scroller { background: var(--code-editor-background); }
+/* Own every textmate colour with stronger selectors, independently of vendor rule order. */
+.code-editor .ace_editor.ace-tm { color: var(--code-editor-text); background: var(--code-editor-background); }
+.code-editor .ace-tm .ace_gutter { color: var(--code-editor-muted); background: var(--code-editor-subtle); }
+.code-editor .ace-tm .ace_gutter-active-line, .code-editor .ace-tm .ace_marker-layer .ace_active-line { background: var(--selected); }
+.code-editor .ace-tm .ace_marker-layer .ace_selection { background: var(--code-editor-selection-background); outline: 1px solid var(--focus); outline-offset: 0; }
+.code-editor .ace-tm .ace_cursor { color: var(--code-editor-text); border-left-color: var(--code-editor-text); }
+.code-editor .ace-tm .ace_print-margin { display: none; background: var(--code-editor-line); }
+.code-editor .ace-tm .ace_fold { color: var(--surface); background: var(--accent); border-color: var(--accent); }
+.code-editor .ace-tm .ace_invisible { color: var(--code-editor-muted); }
+.code-editor .ace-tm .ace_comment,
+.code-editor .ace-tm .ace_comment.ace_doc,
+.code-editor .ace-tm .ace_comment.ace_doc.ace_tag { color: var(--code-editor-muted); font-style: italic; }
+.code-editor .ace-tm .ace_keyword,
+.code-editor .ace-tm .ace_keyword.ace_operator,
+.code-editor .ace-tm .ace_storage,
+.code-editor .ace-tm .ace_meta.ace_tag,
+.code-editor .ace-tm .ace_support.ace_function,
+.code-editor .ace-tm .ace_support.ace_type,
+.code-editor .ace-tm .ace_support.ace_class,
+.code-editor .ace-tm .ace_entity.ace_name.ace_function,
+.code-editor .ace-tm .ace_entity.ace_other.ace_attribute-name { color: var(--accent); }
+.code-editor .ace-tm .ace_string,
+.code-editor .ace-tm .ace_string.ace_regex { color: var(--success); }
+.code-editor .ace-tm .ace_constant,
+.code-editor .ace-tm .ace_constant.ace_buildin,
+.code-editor .ace-tm .ace_constant.ace_language,
+.code-editor .ace-tm .ace_constant.ace_library,
+.code-editor .ace-tm .ace_constant.ace_numeric,
+.code-editor .ace-tm .ace_support.ace_constant { color: var(--warning); }
+.code-editor .ace-tm .ace_variable,
+.code-editor .ace-tm .ace_xml-pe,
+.code-editor .ace-tm .ace_heading,
+.code-editor .ace-tm .ace_list { color: var(--code-editor-text); }
+.code-editor .ace-tm .ace_invalid { color: var(--danger); background: var(--danger-bg); }
+.code-editor .ace-tm.ace_multiselect .ace_selection.ace_start { box-shadow: 0 0 0 1px var(--focus); }
+.code-editor .ace-tm .ace_marker-layer .ace_step,
+.code-editor .ace-tm .ace_marker-layer .ace_stack { background: var(--selected); }
+.code-editor .ace-tm .ace_marker-layer .ace_bracket { border-color: var(--code-editor-line); }
+.code-editor .ace-tm .ace_marker-layer .ace_error_bracket { border-bottom-color: var(--danger); }
+.code-editor .ace-tm .ace_marker-layer .ace_selected-word { background: var(--selected); border-color: var(--code-editor-line); }
+/* Highlight outlines remain visible without a fill that compounds native selection washes. */
+.code-editor .ace-tm .ace_marker-layer .ace_highlight-marker { background-color: transparent; outline: 1px solid var(--code-editor-line); outline-offset: 0; }
+.code-editor-hint, .code-editor-status, .code-editor-error { position: relative; z-index: 1; margin: 0; min-width: 0; font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.code-editor-hint, .code-editor-status { color: var(--code-editor-muted); }
+.code-editor-error { color: var(--danger); }
+.code-editor-error[hidden], .code-editor-status[hidden] { display: none; }
+.code-editor-invalid .code-editor-surface { border-color: var(--danger); }
+.code-editor-readonly .code-editor-surface { background: var(--code-editor-subtle); }
+.code-editor-disabled .code-editor-surface { opacity: .65; }
+.code-editor-disposed .code-editor-hint { display: none; }
+@media (max-width: 700px) {
+  .code-editor { gap: 8px; }
+  .code-editor-history button { min-width: 44px; min-height: 44px; padding: 8px 12px; }
+  .code-editor .ace_editor { font-size: 14px; min-height: 200px; }
+}

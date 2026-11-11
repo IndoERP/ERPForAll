@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.src.json",
+  "compilerOptions": {
+    "skipLibCheck": false,
+    "types": []
+  },
+  "include": ["typechecks/abi-emitted-conformance.ts", "typechecks/type-identity.ts"]
+}

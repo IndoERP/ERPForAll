@@ -1,0 +1,5 @@
+error: `candidate` applies to async computes only: write `async fn(this: &RecordSet<M>, tx: &mut ReadTx<'_>, out: &mut Assign<'_, M>)`
+ --> tests/ui/candidate/not_async.rs:3:15
+  |
+3 |     #[compute(candidate, depends = [])]
+  |               ^^^^^^^^^

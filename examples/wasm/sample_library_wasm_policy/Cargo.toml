@@ -1,0 +1,25 @@
+[package]
+name = "erp-addon-sample_library_wasm_policy"
+description = "ERPForAll sample addon sample_library_wasm_policy: a second WebAssembly addon that overrides a method of sample_library_wasm with super (a later release)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+erp-sdk = { workspace = true }
+# without its `component` feature: this crate exports the component
+erp-addon-sample_library_wasm = { path = "../sample_library_wasm", default-features = false }
+
+# See sample_library_wasm: the component export glue needs `unsafe_code = "deny"`.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+dbg_macro = "deny"
+todo = "warn"

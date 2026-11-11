@@ -1,0 +1,31 @@
+[package]
+name = "erp-addon-sample_library_wasm"
+description = "ERPForAll sample addon sample_library_wasm: Rust code in a sandboxed component, installed into a running server (a later release)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+erp-sdk = { workspace = true }
+
+# Exactly one crate of a component exports it. This addon is the
+# leaf of its own package and a dependency of `sample_library_wasm_policy`, which is the leaf of
+# its package: the policy crate turns the default feature off.
+[features]
+default = ["component"]
+component = []
+
+# The component export glue of `export_component!()` is unsafe by nature (the canonical ABI), which
+# the workspace's `forbid` cannot allow: repeat the workspace lints with `deny`.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+dbg_macro = "deny"
+todo = "warn"

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="book_dune" model="test_addon.book">
+        <field name="name">Dune</field>
+        <field name="author">Frank Herbert</field>
+        <field name="published_year">1965</field>
+    </record>
+    <record id="book_foundation" model="test_addon.book">
+        <field name="name">Foundation</field>
+        <field name="author">Isaac Asimov</field>
+        <field name="published_year">1951</field>
+    </record>
+</odoo>

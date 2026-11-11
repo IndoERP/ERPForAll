@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+Demo partners with invented names, example.com-style addresses and fictional phone numbers.
+     A company is a root partner with a tax ID (is_company is computed from it); its people
+     are child contacts. Mitra Kayu, Baja Sentosa, Kopi Gunung and Cipta Digital are vendors the product demo prices
+     (product.supplierinfo); Toko Maju and Griya Persada are customers. No demo users are created: a demo user would need a password, and demo
+     data never ships credentials. 
+-->
+<erp>
+  <record id="partner_demo_mitra_kayu" model="res.partner">
+    <field name="name">Mitra Kayu Nusantara</field>
+    <field name="vat">DEMO-MK-0101</field>
+    <field name="email">kontak@mitra-kayu.example</field>
+    <field name="phone">+62 21 555 0201</field>
+    <field name="website">https://mitra-kayu.example</field>
+    <field name="street">Jalan Contoh 21</field>
+    <field name="city">Jakarta</field>
+    <field name="zip">12110</field>
+  </record>
+  <record id="partner_demo_mitra_kayu_hendra" model="res.partner">
+    <field name="name">Hendra Gunawan</field>
+    <field name="parent_id" ref="partner_demo_mitra_kayu"/>
+    <field name="email">hendra@mitra-kayu.example</field>
+  </record>
+  <record id="partner_demo_mitra_kayu_ratna" model="res.partner">
+    <field name="name">Ratna Kusuma</field>
+    <field name="parent_id" ref="partner_demo_mitra_kayu"/>
+    <field name="email">ratna@mitra-kayu.example</field>
+  </record>
+  <record id="partner_demo_baja_sentosa" model="res.partner">
+    <field name="name">Baja Sentosa Abadi</field>
+    <field name="vat">DEMO-BS-0102</field>
+    <field name="email">penjualan@baja-sentosa.example</field>
+    <field name="phone">+62 24 555 0202</field>
+    <field name="website">https://baja-sentosa.example</field>
+    <field name="street">Jalan Contoh 34</field>
+    <field name="city">Semarang</field>
+    <field name="zip">50134</field>
+  </record>
+  <record id="partner_demo_baja_sentosa_agus" model="res.partner">
+    <field name="name">Agus Setiawan</field>
+    <field name="parent_id" ref="partner_demo_baja_sentosa"/>
+    <field name="email">agus@baja-sentosa.example</field>
+  </record>
+  <record id="partner_demo_kopi_gunung" model="res.partner">
+    <field name="name">Kopi Gunung Lestari</field>
+    <field name="vat">DEMO-KG-0103</field>
+    <field name="email">halo@kopi-gunung.example</field>
+    <field name="phone">+62 22 555 0203</field>
+    <field name="website">https://kopi-gunung.example</field>
+    <field name="street">Jalan Contoh 8</field>
+    <field name="city">Bandung</field>
+    <field name="zip">40115</field>
+  </record>
+  <record id="partner_demo_kopi_gunung_dewi" model="res.partner">
+    <field name="name">Dewi Anggraini</field>
+    <field name="parent_id" ref="partner_demo_kopi_gunung"/>
+    <field name="email">dewi@kopi-gunung.example</field>
+  </record>
+  <record id="partner_demo_kopi_gunung_yoga" model="res.partner">
+    <field name="name">Yoga Pratama</field>
+    <field name="parent_id" ref="partner_demo_kopi_gunung"/>
+    <field name="email">yoga@kopi-gunung.example</field>
+  </record>
+  <record id="partner_demo_toko_maju" model="res.partner">
+    <field name="name">Toko Maju Bersama</field>
+    <field name="vat">DEMO-TM-0104</field>
+    <field name="email">admin@toko-maju.example</field>
+    <field name="phone">+62 274 555 0204</field>
+    <field name="website">https://toko-maju.example</field>
+    <field name="street">Jalan Contoh 77</field>
+    <field name="city">Yogyakarta</field>
+    <field name="zip">55281</field>
+  </record>
+  <record id="partner_demo_toko_maju_lestari" model="res.partner">
+    <field name="name">Lestari Handayani</field>
+    <field name="parent_id" ref="partner_demo_toko_maju"/>
+    <field name="email">lestari@toko-maju.example</field>
+  </record>
+  <record id="partner_demo_griya_persada" model="res.partner">
+    <field name="name">Griya Interior Persada</field>
+    <field name="vat">DEMO-GP-0105</field>
+    <field name="email">studio@griya-persada.example</field>
+    <field name="phone">+62 361 555 0205</field>
+    <field name="website">https://griya-persada.example</field>
+    <field name="street">Jalan Contoh 5</field>
+    <field name="city">Denpasar</field>
+    <field name="zip">80361</field>
+  </record>
+  <record id="partner_demo_griya_persada_wayan" model="res.partner">
+    <field name="name">Wayan Suartika</field>
+    <field name="parent_id" ref="partner_demo_griya_persada"/>
+    <field name="email">wayan@griya-persada.example</field>
+  </record>
+  <record id="partner_demo_cipta_digital" model="res.partner">
+    <field name="name">Cipta Digital Mandiri</field>
+    <field name="vat">DEMO-CD-0106</field>
+    <field name="email">info@cipta-digital.example</field>
+    <field name="phone">+62 31 555 0206</field>
+    <field name="website">https://cipta-digital.example</field>
+    <field name="street">Jalan Contoh 90</field>
+    <field name="city">Surabaya</field>
+    <field name="zip">60175</field>
+  </record>
+  <record id="partner_demo_cipta_digital_nadia" model="res.partner">
+    <field name="name">Nadia Rahmawati</field>
+    <field name="parent_id" ref="partner_demo_cipta_digital"/>
+    <field name="email">nadia@cipta-digital.example</field>
+  </record>
+  <record id="partner_demo_cipta_digital_fajar" model="res.partner">
+    <field name="name">Fajar Nugroho</field>
+    <field name="parent_id" ref="partner_demo_cipta_digital"/>
+    <field name="email">fajar@cipta-digital.example</field>
+  </record>
+</erp>

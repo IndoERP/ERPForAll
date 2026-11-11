@@ -1,0 +1,20 @@
+id,name,model_id/id,group_id/id,operation,domain
+access_mail_message_subtype_user,mail.message.subtype.user,model_mail_message_subtype,base.group_user,r,
+access_mail_message_subtype_portal,mail.message.subtype.portal,model_mail_message_subtype,base.group_portal,r,"[('internal', '=', False)]"
+access_mail_message_subtype_public,mail.message.subtype.public,model_mail_message_subtype,base.group_public,r,"[('internal', '=', False)]"
+access_mail_message_subtype_system,mail.message.subtype.system,model_mail_message_subtype,base.group_system,crud,
+access_mail_followers_user,mail.followers.user,model_mail_followers,base.group_user,r,
+access_mail_followers_system,mail.followers.system,model_mail_followers,base.group_system,crud,
+access_mail_message_system,mail.message.system,model_mail_message,base.group_system,crud,
+access_mail_message_user,mail.message.user,model_mail_message,base.group_user,r,"['|', '|', '|', ('author_id', '=', user.partner_id.id), ('partner_ids', 'in', user.partner_id.ids), ('notified_partner_ids', 'in', user.partner_id.ids), '&', ('message_type', '!=', 'user_notification'), ('res_id', 'thread_access', 'read')]"
+access_mail_message_portal,mail.message.portal,model_mail_message,base.group_portal,r,"['&', '&', '&', ('message_type', '!=', 'tracking'), ('is_internal', '=', False), ('subtype_id.internal', '=', False), '|', '|', '|', ('author_id', '=', user.partner_id.id), ('partner_ids', 'in', user.partner_id.ids), ('notified_partner_ids', 'in', user.partner_id.ids), '&', ('message_type', '!=', 'user_notification'), ('res_id', 'thread_access', 'read')]"
+access_mail_message_public,mail.message.public,model_mail_message,base.group_public,r,"['&', '&', '&', ('message_type', '!=', 'tracking'), ('is_internal', '=', False), ('subtype_id.internal', '=', False), '&', ('message_type', '!=', 'user_notification'), ('res_id', 'thread_access', 'read')]"
+access_mail_activity_type_user,mail.activity.type.user,model_mail_activity_type,base.group_user,r,
+access_mail_activity_type_system,mail.activity.type.system,model_mail_activity_type,base.group_system,crud,
+access_mail_activity_system,mail.activity.system,model_mail_activity,base.group_system,crud,
+access_mail_activity_user_read,mail.activity.user.read,model_mail_activity,base.group_user,r,"['|', ('user_id', '=', user.id), ('res_id', 'activity_thread_access', 'read')]"
+access_mail_activity_user_create,mail.activity.user.create,model_mail_activity,base.group_user,c,
+access_mail_activity_user_write,mail.activity.user.write,model_mail_activity,base.group_user,ud,"['|', ('user_id', '=', user.id), ('create_uid', '=', user.id)]"
+access_mail_activity_user_doc_write,mail.activity.user.doc.write,model_mail_activity,base.group_user,u,"[('res_id', 'activity_thread_access', 'write')]"
+access_mail_activity_user_doc_unlink,mail.activity.user.doc.unlink,model_mail_activity,base.group_user,d,"[('res_id', 'activity_thread_access', 'write')]"
+access_mail_scheduled_message_system,mail.scheduled.message.system,model_mail_scheduled_message,base.group_system,crud,

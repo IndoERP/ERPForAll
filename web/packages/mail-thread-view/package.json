@@ -1,0 +1,12 @@
+{
+  "name": "@erpforall/mail-thread-view",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Shared Thread, Message and Composer components over the messaging store: renderers, action and suggestion registries, structured mentions",
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": { "types": "./src/index.ts", "default": "./src/index.ts" },
+    "./styles.css": "./src/thread-view.css"
+  }
+}

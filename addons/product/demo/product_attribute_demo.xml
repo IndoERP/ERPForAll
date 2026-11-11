@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Values for the default attributes (product_attribute_data.xml). default_extra_price is copied to a template's attribute value when a product uses the value, so the Size XL, Color Merah/Biru, Material Baja and Pattern Batik/Garis values add to the price of the variants that carry them. -->
+<erp>
+  <record id="pav_brand_nusantara_home" model="product.attribute.value">
+    <field name="name">Nusantara Home</field>
+    <field name="sequence">10</field>
+    <field name="attribute_id" ref="pa_brand"/>
+  </record>
+  <record id="pav_brand_karya_prima" model="product.attribute.value">
+    <field name="name">Karya Prima</field>
+    <field name="sequence">20</field>
+    <field name="attribute_id" ref="pa_brand"/>
+  </record>
+  <record id="pav_brand_bumi_craft" model="product.attribute.value">
+    <field name="name">Bumi Craft</field>
+    <field name="sequence">30</field>
+    <field name="attribute_id" ref="pa_brand"/>
+  </record>
+  <record id="pav_size_s" model="product.attribute.value">
+    <field name="name">S</field>
+    <field name="sequence">10</field>
+    <field name="attribute_id" ref="pa_size"/>
+  </record>
+  <record id="pav_size_m" model="product.attribute.value">
+    <field name="name">M</field>
+    <field name="sequence">20</field>
+    <field name="attribute_id" ref="pa_size"/>
+  </record>
+  <record id="pav_size_l" model="product.attribute.value">
+    <field name="name">L</field>
+    <field name="sequence">30</field>
+    <field name="attribute_id" ref="pa_size"/>
+  </record>
+  <record id="pav_size_xl" model="product.attribute.value">
+    <field name="name">XL</field>
+    <field name="sequence">40</field>
+    <field name="attribute_id" ref="pa_size"/>
+    <field name="default_extra_price">3</field>
+  </record>
+  <record id="pav_color_putih" model="product.attribute.value">
+    <field name="name">Putih</field>
+    <field name="sequence">10</field>
+    <field name="attribute_id" ref="pa_color"/>
+  </record>
+  <record id="pav_color_hitam" model="product.attribute.value">
+    <field name="name">Hitam</field>
+    <field name="sequence">20</field>
+    <field name="attribute_id" ref="pa_color"/>
+  </record>
+  <record id="pav_color_merah" model="product.attribute.value">
+    <field name="name">Merah</field>
+    <field name="sequence">30</field>
+    <field name="attribute_id" ref="pa_color"/>
+    <field name="default_extra_price">5</field>
+  </record>
+  <record id="pav_color_biru" model="product.attribute.value">
+    <field name="name">Biru</field>
+    <field name="sequence">40</field>
+    <field name="attribute_id" ref="pa_color"/>
+    <field name="default_extra_price">5</field>
+  </record>
+  <record id="pav_material_jati" model="product.attribute.value">
+    <field name="name">Kayu Jati</field>
+    <field name="sequence">10</field>
+    <field name="attribute_id" ref="pa_material"/>
+  </record>
+  <record id="pav_material_baja" model="product.attribute.value">
+    <field name="name">Baja</field>
+    <field name="sequence">20</field>
+    <field name="attribute_id" ref="pa_material"/>
+    <field name="default_extra_price">25</field>
+  </record>
+  <record id="pav_material_katun" model="product.attribute.value">
+    <field name="name">Katun</field>
+    <field name="sequence">30</field>
+    <field name="attribute_id" ref="pa_material"/>
+  </record>
+  <record id="pav_pattern_polos" model="product.attribute.value">
+    <field name="name">Polos</field>
+    <field name="sequence">10</field>
+    <field name="attribute_id" ref="pa_pattern"/>
+  </record>
+  <record id="pav_pattern_batik" model="product.attribute.value">
+    <field name="name">Batik</field>
+    <field name="sequence">20</field>
+    <field name="attribute_id" ref="pa_pattern"/>
+    <field name="default_extra_price">4</field>
+  </record>
+  <record id="pav_pattern_garis" model="product.attribute.value">
+    <field name="name">Garis</field>
+    <field name="sequence">30</field>
+    <field name="attribute_id" ref="pa_pattern"/>
+    <field name="default_extra_price">2</field>
+  </record>
+</erp>

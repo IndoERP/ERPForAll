@@ -1,0 +1,15 @@
+GRANT USAGE ON SCHEMA public TO {role};
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {role};
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {role};
+REVOKE ALL ON erp_module_install_audit FROM {role};
+REVOKE ALL ON SEQUENCE erp_module_install_audit_id_seq FROM {role};
+REVOKE ALL ON public.erp_translated_verified FROM {role};
+REVOKE ALL ON erp_node, erp_node_detail, erp_node_rollout, erp_node_feature, erp_node_feature_digest FROM {role};
+REVOKE INSERT, DELETE, TRUNCATE, REFERENCES, TRIGGER ON erp_auth_gc_state FROM {role};
+GRANT USAGE ON SCHEMA public TO {node_role};
+REVOKE ALL ON erp_module_lifecycle_audit FROM {role};
+REVOKE ALL ON SEQUENCE erp_module_lifecycle_audit_id_seq FROM {role};
+REVOKE ALL ON public.erp_schema_generated FROM {role};
+GRANT SELECT ON public.erp_schema_generated TO {role};
+REVOKE ALL ON public.installed_addon_identity, public.installed_addon_identity_audit FROM {role};
+REVOKE ALL ON SEQUENCE public.installed_addon_identity_audit_id_seq FROM {role};

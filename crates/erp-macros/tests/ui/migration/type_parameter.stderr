@@ -1,0 +1,5 @@
+error: migration: a migration function cannot have type or const parameters
+ --> tests/ui/migration/type_parameter.rs:3:15
+  |
+3 | async fn fill<T>(_tx: T, _from: u8) {}
+  |               ^

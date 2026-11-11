@@ -1,0 +1,15 @@
+[package]
+name = "addon-acceptance_notes"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+erp-sdk = { workspace = true }
+
+[dev-dependencies]
+erp-addon-base = { workspace = true }
+
+[lints]
+workspace = true

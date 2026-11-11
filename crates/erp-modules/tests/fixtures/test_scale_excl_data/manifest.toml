@@ -1,0 +1,3 @@
+name = "Test Scale Exclusion Data"
+summary = "A data-only addon declaring a typed exclusion, a range field and a WITHOUT OVERLAPS key in models/*.toml"
+depends = ["test_scale_excl"]

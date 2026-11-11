@@ -1,0 +1,41 @@
+[package]
+name = "erp-guest"
+description = "Guest side of the ERPForAll WASM addon contract: bindings, typed column reads, batched writes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# Guest crate (layer L1): compiled into addon components for wasm32-wasip2 and checked
+# natively. No database, registry or I/O: everything outside the component goes through the
+# imported `orm-host` interface.
+#
+# Lints: the workspace forbids unsafe code, and `forbid` cannot be lifted further down. The
+# canonical-ABI glue `wit-bindgen` generates is unsafe by nature, so this crate repeats the
+# workspace lints with `unsafe_code = "deny"` and allows it on the generated `bindings` module
+# only (`src/lib.rs`). Everything written by hand stays free of unsafe code.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+dbg_macro = "deny"
+todo = "warn"
+
+[dependencies]
+wit-bindgen = { workspace = true }
+
+[features]
+# Builds the example component. Its export symbols only link for wasm32-wasip2, so native workspace
+# builds leave it out; CI builds it with this feature for that target (`scripts/ci.sh`).
+component = []
+
+# The smallest addon component; CI builds it for wasm32-wasip2 and checks it against the contract.
+[[example]]
+name = "minimal_guest"
+crate-type = ["cdylib"]
+required-features = ["component"]

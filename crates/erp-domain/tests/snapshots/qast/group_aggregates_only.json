@@ -1,0 +1,1 @@
+{"aggregates":[{"field":null,"func":"count"}],"context":{},"domain":[],"groupby":[],"having":[],"kind":"read_group","limit":1,"model":"res.partner","offset":0,"order":[],"version":1}

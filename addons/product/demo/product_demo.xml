@@ -1,0 +1,220 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Demo catalog: goods and services in invented Indonesian-flavoured business terms. Templates with attribute lines get one variant per combination when the line is created; the combo items point at single-variant products by search because generated variants carry no external id. -->
+<erp>
+  <record id="product_demo_meja" model="product.template">
+    <field name="name">Meja Kerja</field>
+    <field name="type">consu</field>
+    <field name="categ_id" ref="product_category_demo_furniture"/>
+    <field name="uom_id" ref="uom.product_uom_unit"/>
+    <field name="list_price">450</field>
+    <field name="standard_price">300</field>
+    <field name="default_code">MJ-001</field>
+    <field name="description_sale">Meja kerja untuk kantor kecil.</field>
+  </record>
+  <record id="ptal_demo_meja_material" model="product.template.attribute.line">
+    <field name="product_tmpl_id" ref="product_demo_meja"/>
+    <field name="attribute_id" ref="pa_material"/>
+    <field name="value_ids" eval="[(6, 0, [ref('pav_material_jati'), ref('pav_material_baja')])]"/>
+  </record>
+  <record id="product_demo_kursi" model="product.template">
+    <field name="name">Kursi Kantor Ergonomis</field>
+    <field name="type">consu</field>
+    <field name="categ_id" ref="product_category_demo_furniture"/>
+    <field name="uom_id" ref="uom.product_uom_unit"/>
+    <field name="list_price">180</field>
+    <field name="standard_price">110</field>
+    <field name="default_code">KR-001</field>
+    <field name="description_sale">Kursi dengan sandaran punggung yang dapat diatur.</field>
+  </record>
+  <record id="ptal_demo_kursi_color" model="product.template.attribute.line">
+    <field name="product_tmpl_id" ref="product_demo_kursi"/>
+    <field name="attribute_id" ref="pa_color"/>
+    <field name="value_ids" eval="[(6, 0, [ref('pav_color_hitam'), ref('pav_color_biru'), ref('pav_color_merah')])]"/>
+  </record>
+  <record id="product_demo_rak" model="product.template">
+    <field name="name">Rak Buku Minimalis</field>
+    <field name="type">consu</field>
+    <field name="categ_id" ref="product_category_demo_furniture"/>
+    <field name="uom_id" ref="uom.product_uom_unit"/>
+    <field name="list_price">120</field>
+    <field name="standard_price">70</field>
+    <field name="default_code">RK-001</field>
+    <field name="description_sale">Rak buku lima tingkat.</field>
+  </record>
+  <record id="product_demo_kaos" model="product.template">
+    <field name="name">Kaos Batik Nusantara</field>
+    <field name="type">consu</field>
+    <field name="categ_id" ref="product_category_demo_apparel"/>
+    <field name="uom_id" ref="uom.product_uom_unit"/>
+    <field name="list_price">15</field>
+    <field name="standard_price">6</field>
+    <field name="default_code">KB-001</field>
+    <field name="description_sale">Kaos katun dengan motif batik.</field>
+  </record>
+  <record id="ptal_demo_kaos_size" model="product.template.attribute.line">
+    <field name="product_tmpl_id" ref="product_demo_kaos"/>
+    <field name="attribute_id" ref="pa_size"/>
+    <field name="value_ids" eval="[(6, 0, [ref('pav_size_s'), ref('pav_size_m'), ref('pav_size_l'), ref('pav_size_xl')])]"/>
+  </record>
+  <record id="ptal_demo_kaos_color" model="product.template.attribute.line">
+    <field name="product_tmpl_id" ref="product_demo_kaos"/>
+    <field name="attribute_id" ref="pa_color"/>
+    <field name="value_ids" eval="[(6, 0, [ref('pav_color_putih'), ref('pav_color_hitam')])]"/>
+  </record>
+  <record id="product_demo_kemeja" model="product.template">
+    <field name="name">Kemeja Katun</field>
+    <field name="type">consu</field>
+    <field name="categ_id" ref="product_category_demo_apparel"/>
+    <field name="uom_id" ref="uom.product_uom_unit"/>
+    <field name="list_price">22</field>
+    <field name="standard_price">9</field>
+    <field name="default_code">KM-001</field>
+    <field name="description_sale">Kemeja lengan panjang.</field>
+  </record>
+  <record id="ptal_demo_kemeja_size" model="product.template.attribute.line">
+    <field name="product_tmpl_id" ref="product_demo_kemeja"/>
+    <field name="attribute_id" ref="pa_size"/>
+    <field name="value_ids" eval="[(6, 0, [ref('pav_size_s'), ref('pav_size_m'), ref('pav_size_l')])]"/>
+  </record>
+  <record id="product_demo_kopi" model="product.template">
+    <field name="name">Kopi Arabika Gunung 250 g</field>
+    <field name="type">consu</field>
+    <field name="categ_id" ref="product_category_demo_food"/>
+    <field name="uom_id" ref="uom.product_uom_unit"/>
+    <field name="list_price">9</field>
+    <field name="standard_price">4</field>
+    <field name="default_code">KP-001</field>
+    <field name="description_sale">Biji kopi sangrai sedang, kemasan 250 gram.</field>
+  </record>
+  <record id="product_demo_robusta" model="product.template">
+    <field name="name">Kopi Robusta Curah</field>
+    <field name="type">consu</field>
+    <field name="categ_id" ref="product_category_demo_food"/>
+    <field name="uom_id" ref="uom.product_uom_kgm"/>
+    <field name="list_price">14</field>
+    <field name="standard_price">8</field>
+    <field name="default_code">KP-002</field>
+    <field name="description_sale">Kopi robusta curah dijual per kilogram.</field>
+  </record>
+  <record id="product_demo_teh" model="product.template">
+    <field name="name">Teh Melati Kemasan</field>
+    <field name="type">consu</field>
+    <field name="categ_id" ref="product_category_demo_food"/>
+    <field name="uom_id" ref="uom.product_uom_pack_6"/>
+    <field name="list_price">12</field>
+    <field name="standard_price">7</field>
+    <field name="default_code">TH-001</field>
+    <field name="description_sale">Satu paket berisi enam kotak teh melati.</field>
+  </record>
+  <record id="product_demo_laptop" model="product.template">
+    <field name="name">Laptop Bisnis 14 inci</field>
+    <field name="type">consu</field>
+    <field name="categ_id" ref="product_category_demo_electronics"/>
+    <field name="uom_id" ref="uom.product_uom_unit"/>
+    <field name="list_price">700</field>
+    <field name="standard_price">520</field>
+    <field name="default_code">LP-001</field>
+    <field name="description_sale">Laptop ringan untuk pekerjaan kantor.</field>
+  </record>
+  <record id="ptal_demo_laptop_brand" model="product.template.attribute.line">
+    <field name="product_tmpl_id" ref="product_demo_laptop"/>
+    <field name="attribute_id" ref="pa_brand"/>
+    <field name="value_ids" eval="[(6, 0, [ref('pav_brand_karya_prima'), ref('pav_brand_bumi_craft')])]"/>
+  </record>
+  <record id="product_demo_mouse" model="product.template">
+    <field name="name">Mouse Nirkabel</field>
+    <field name="type">consu</field>
+    <field name="categ_id" ref="product_category_demo_electronics"/>
+    <field name="uom_id" ref="uom.product_uom_unit"/>
+    <field name="list_price">12</field>
+    <field name="standard_price">5</field>
+    <field name="default_code">MS-001</field>
+    <field name="description_sale">Mouse nirkabel dengan baterai tahan lama.</field>
+  </record>
+  <record id="product_demo_kertas" model="product.template">
+    <field name="name">Kertas A4 Satu Rim</field>
+    <field name="type">consu</field>
+    <field name="categ_id" ref="product_category_demo_electronics"/>
+    <field name="uom_id" ref="uom.product_uom_unit"/>
+    <field name="list_price">4</field>
+    <field name="standard_price">2.5</field>
+    <field name="default_code">KT-001</field>
+    <field name="description_sale">Kertas fotokopi 80 gsm, 500 lembar.</field>
+  </record>
+  <record id="product_demo_kabel" model="product.template">
+    <field name="name">Kabel Baja per Meter</field>
+    <field name="type">consu</field>
+    <field name="categ_id" ref="product_category_demo_electronics"/>
+    <field name="uom_id" ref="uom.product_uom_meter"/>
+    <field name="list_price">2.5</field>
+    <field name="standard_price">1.2</field>
+    <field name="default_code">KB-100</field>
+    <field name="description_sale">Kabel baja galvanis dijual per meter.</field>
+  </record>
+  <record id="product_demo_konsultasi" model="product.template">
+    <field name="name">Jasa Konsultasi</field>
+    <field name="type">service</field>
+    <field name="categ_id" ref="product_category_demo_consulting"/>
+    <field name="uom_id" ref="uom.product_uom_hour"/>
+    <field name="list_price">60</field>
+    <field name="standard_price">0</field>
+    <field name="description_sale">Konsultasi proses bisnis per jam.</field>
+  </record>
+  <record id="product_demo_instalasi" model="product.template">
+    <field name="name">Instalasi dan Pemasangan</field>
+    <field name="type">service</field>
+    <field name="categ_id" ref="product_category_demo_maintenance"/>
+    <field name="uom_id" ref="uom.product_uom_hour"/>
+    <field name="list_price">35</field>
+    <field name="standard_price">0</field>
+    <field name="description_sale">Pemasangan di lokasi pelanggan per jam.</field>
+  </record>
+  <record id="product_demo_perawatan" model="product.template">
+    <field name="name">Kontrak Perawatan Tahunan</field>
+    <field name="type">service</field>
+    <field name="categ_id" ref="product_category_demo_maintenance"/>
+    <field name="uom_id" ref="uom.product_uom_unit"/>
+    <field name="list_price">300</field>
+    <field name="standard_price">0</field>
+    <field name="description_sale">Perawatan berkala selama satu tahun.</field>
+  </record>
+  <record id="product_combo_demo_perangkat" model="product.combo">
+    <field name="name">Perangkat Kerja</field>
+  </record>
+  <record id="product_combo_item_demo_perangkat_laptop" model="product.combo.item">
+    <field name="combo_id" ref="product_combo_demo_perangkat"/>
+    <field name="product_id" search="[('product_tmpl_id', '=', ref('product_demo_laptop'))]"/>
+    <field name="extra_price">0</field>
+  </record>
+  <record id="product_combo_item_demo_perangkat_mouse" model="product.combo.item">
+    <field name="combo_id" ref="product_combo_demo_perangkat"/>
+    <field name="product_id" search="[('product_tmpl_id', '=', ref('product_demo_mouse'))]"/>
+    <field name="extra_price">2</field>
+  </record>
+  <record id="product_combo_demo_perlengkapan" model="product.combo">
+    <field name="name">Perlengkapan Kantor</field>
+  </record>
+  <record id="product_combo_item_demo_perlengkapan_kertas" model="product.combo.item">
+    <field name="combo_id" ref="product_combo_demo_perlengkapan"/>
+    <field name="product_id" search="[('product_tmpl_id', '=', ref('product_demo_kertas'))]"/>
+    <field name="extra_price">0</field>
+  </record>
+  <record id="product_combo_item_demo_perlengkapan_rak" model="product.combo.item">
+    <field name="combo_id" ref="product_combo_demo_perlengkapan"/>
+    <field name="product_id" search="[('product_tmpl_id', '=', ref('product_demo_rak'))]"/>
+    <field name="extra_price">10</field>
+  </record>
+  <record id="product_combo_demo_minuman" model="product.combo">
+    <field name="name">Minuman Rapat</field>
+  </record>
+  <record id="product_combo_item_demo_minuman_kopi" model="product.combo.item">
+    <field name="combo_id" ref="product_combo_demo_minuman"/>
+    <field name="product_id" search="[('product_tmpl_id', '=', ref('product_demo_kopi'))]"/>
+    <field name="extra_price">0</field>
+  </record>
+  <record id="product_combo_item_demo_minuman_teh" model="product.combo.item">
+    <field name="combo_id" ref="product_combo_demo_minuman"/>
+    <field name="product_id" search="[('product_tmpl_id', '=', ref('product_demo_teh'))]"/>
+    <field name="extra_price">1</field>
+  </record>
+</erp>

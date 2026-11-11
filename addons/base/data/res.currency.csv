@@ -1,0 +1,172 @@
+# noupdate: 1
+id,name,symbol,full_name,rounding,active,position,iso_numeric
+USD,USD,$,US Dollar,0.01,true,before,840
+EUR,EUR,€,Euro,0.01,false,after,978
+GBP,GBP,£,Pound Sterling,0.01,false,before,826
+JPY,JPY,¥,Japanese Yen,1.0,false,before,392
+CHF,CHF,CHF,Swiss Franc,0.01,false,after,756
+CAD,CAD,CA$,Canadian Dollar,0.01,false,before,124
+AUD,AUD,AU$,Australian Dollar,0.01,false,before,36
+CNY,CNY,CN¥,Chinese Yuan,0.01,false,before,156
+INR,INR,₹,Indian Rupee,0.01,false,before,356
+IDR,IDR,Rp,Indonesian Rupiah,0.01,false,before,360
+SGD,SGD,SG$,Singapore Dollar,0.01,false,before,702
+HKD,HKD,HK$,Hong Kong Dollar,0.01,false,before,344
+NZD,NZD,NZ$,New Zealand Dollar,0.01,false,before,554
+KRW,KRW,₩,South Korean Won,1.0,false,before,410
+BRL,BRL,R$,Brazilian Real,0.01,false,before,986
+MXN,MXN,MX$,Mexican Peso,0.01,false,before,484
+ZAR,ZAR,R,South African Rand,0.01,false,before,710
+SEK,SEK,kr,Swedish Krona,0.01,false,after,752
+NOK,NOK,kr,Norwegian Krone,0.01,false,after,578
+DKK,DKK,kr.,Danish Krone,0.01,false,after,208
+PLN,PLN,zł,Polish Zloty,0.01,false,after,985
+THB,THB,฿,Thai Baht,0.01,false,before,764
+TRY,TRY,₺,Turkish Lira,0.01,false,after,949
+AED,AED,AED,UAE Dirham,0.01,false,after,784
+SAR,SAR,SAR,Saudi Riyal,0.01,false,after,682
+MYR,MYR,RM,Malaysian Ringgit,0.01,false,before,458
+PHP,PHP,₱,Philippine Peso,0.01,false,before,608
+VND,VND,₫,Vietnamese Dong,1.0,false,after,704
+TWD,TWD,NT$,New Taiwan Dollar,0.01,false,before,901
+ILS,ILS,₪,Israeli New Shekel,0.01,false,after,376
+CZK,CZK,Kč,Czech Koruna,0.01,false,after,203
+HUF,HUF,Ft,Hungarian Forint,0.01,false,after,348
+CLP,CLP,CL$,Chilean Peso,1.0,false,before,152
+COP,COP,CO$,Colombian Peso,0.01,false,before,170
+PEN,PEN,S/,Peruvian Sol,0.01,false,before,604
+ARS,ARS,AR$,Argentine Peso,0.01,false,before,32
+EGP,EGP,E£,Egyptian Pound,0.01,false,before,818
+KES,KES,KSh,Kenyan Shilling,0.01,false,before,404
+NGN,NGN,₦,Nigerian Naira,0.01,false,before,566
+BHD,BHD,BD,Bahraini Dinar,0.001,false,after,48
+KWD,KWD,KD,Kuwaiti Dinar,0.001,false,after,414
+OMR,OMR,OMR,Omani Rial,0.001,false,after,512
+JOD,JOD,JD,Jordanian Dinar,0.001,false,after,400
+TND,TND,DT,Tunisian Dinar,0.001,false,after,788
+QAR,QAR,QR,Qatari Riyal,0.01,false,after,634
+VEF,VEF,Bs.F,Venezuelan bolívar fuerte,0.01,false,after,937
+CNH,CNH,¥,Chinese yuan - Offshore,0.01,false,before,
+LVL,LVL,Ls,Latvian lats,0.01,false,after,428
+XPF,XPF,XPF,CFP franc,1.00,false,after,953
+PAB,PAB,B/.,Panamanian balboa,0.01,false,after,590
+UAH,UAH,₴,Ukraine Hryvnia,0.01,false,after,980
+BGN,BGN,лв,Bulgarian lev,0.01,false,after,975
+LTL,LTL,Lt,Lithuanian litas,0.01,false,after,440
+RON,RON,lei,Romanian leu,0.01,false,after,946
+HRK,HRK,kn,Croatian kuna,0.01,false,after,191
+RUB,RUB,руб,Russian ruble,0.01,false,after,643
+CRC,CRC,₡,Costa Rican colón,0.01,false,before,188
+MUR,MUR,Rs,Mauritian rupee,0.01,false,after,480
+XOF,XOF,CFA,CFA franc BCEAO,1,false,after,952
+XAF,XAF,FCFA,CFA franc BEAC,1,false,after,950
+UGX,UGX,USh,Ugandan shilling,1,false,after,800
+HNL,HNL,L,Honduran lempira,0.01,false,before,340
+UYU,UYU,$,Uruguayan peso,0.01,false,after,858
+AFN,AFN,Afs,Afghan afghani,0.01,false,after,971
+AOA,AOA,Kz,Angolan kwanza,0.01,false,after,973
+XCD,XCD,$,East Caribbean dollar,0.01,false,after,951
+AMD,AMD,դր.,Armenian dram,0.01,false,after,051
+AWG,AWG,Afl.,Aruban florin,0.01,false,after,533
+AZN,AZN,₼,Azerbaijani manat,0.01,false,after,944
+BSD,BSD,B$,Bahamian dollar,0.01,false,after,044
+BDT,BDT,৳,Bangladeshi taka,0.01,false,after,050
+BBD,BBD,Bds$,Barbados dollar,0.01,false,after,052
+BYR,BYR,BR,Belarusian ruble,1,false,after,974
+BYN,BYN,Br,Belarusian ruble,0.01,false,after,933
+BZD,BZD,BZ$,Belize dollar,0.01,false,after,084
+BMD,BMD,BD$,Bermudian dollar,0.01,false,after,060
+BTN,BTN,Nu.,Bhutanese ngultrum,0.01,false,after,064
+BOB,BOB,Bs.,Boliviano,0.01,false,after,068
+BAM,BAM,KM,Bosnia and Herzegovina convertible mark,0.01,false,after,977
+BWP,BWP,P,Botswana pula,0.01,false,after,072
+BIF,BIF,FBu,Burundian franc,1,false,after,108
+KHR,KHR,៛,Cambodian riel,0.01,false,after,116
+KYD,KYD,$,Cayman Islands dollar,0.01,false,after,136
+KMF,KMF,CF,Comorian franc,1,false,after,174
+CDF,CDF,Fr,Congolese franc,0.01,false,after,976
+CUP,CUP,$,Cuban peso,0.01,false,after,192
+ANG,ANG,ƒ,Netherlands Antillean guilder,0.01,false,before,532
+XCG,XCG,Cg,Caribbean Guilder,0.01,false,after,532
+DJF,DJF,Fdj,Djiboutian franc,1,false,after,262
+DOP,DOP,RD$,Dominican peso,0.01,false,before,214
+SVC,SVC,¢,Salvadoran Colon,0.01,false,after,222
+ERN,ERN,Nfk,Eritrean nakfa,0.01,false,after,232
+ETB,ETB,Br,Ethiopian birr,0.01,false,after,230
+FKP,FKP,£,Falkland Islands pound,0.01,false,after,238
+FJD,FJD,FJ$,Fiji dollar,0.01,false,after,242
+GEL,GEL,ლ,Georgian lari,0.01,false,after,981
+GIP,GIP,£,Gibraltar pound,0.01,false,after,292
+GNF,GNF,FG,Guinean franc,1,false,after,324
+GYD,GYD,$,Guyanese dollar,0.01,false,after,328
+HTG,HTG,G,Haitian gourde,0.01,false,after,332
+ISK,ISK,kr,Icelandic króna,1,false,after,352
+IRR,IRR,﷼,Iranian rial,0.01,false,after,364
+IQD,IQD,ع.د,Iraqi dinar,0.001,false,after,368
+JMD,JMD,$,Jamaican dollar,0.01,false,after,388
+KZT,KZT,₸,Kazakhstani tenge,0.01,false,after,398
+KGS,KGS,KGS,Kyrgyzstani som,0.01,false,after,417
+LAK,LAK,₭,Lao kip,0.01,false,after,418
+LBP,LBP,ل.ل,Lebanese pound,0.01,false,after,422
+LSL,LSL,M,Lesotho loti,0.01,false,after,426
+LRD,LRD,L$,Liberian dollar,0.01,false,after,430
+LYD,LYD,ل.د,Libyan dinar,0.001,false,after,434
+MOP,MOP,MOP$,Macanese pataca,0.01,false,after,446
+MKD,MKD,ден,Macedonian denar,0.01,false,after,807
+MGA,MGA,Ar,Malagasy ariary,0.01,false,after,969
+MWK,MWK,MK,Malawian kwacha,0.01,false,after,454
+MVR,MVR,Rf,Maldivian rufiyaa,0.01,false,before,462
+MRO,MRO,UM,Mauritanian ouguiya (old),0.01,false,after,478
+MRU,MRU,UM,Mauritanian ouguiya,0.01,false,after,929
+MDL,MDL,L,Moldovan leu,0.01,false,after,498
+MNT,MNT,₮,Mongolian tögrög,0.01,false,after,496
+MAD,MAD,DH,Moroccan dirham,0.01,false,after,504
+BND,BND,B$,Brunei dollar,0.01,false,before,096
+DZD,DZD,DA,Algerian dinar,0.01,false,after,012
+GHS,GHS,GH¢,Ghanaian cedi,0.01,false,after,936
+GMD,GMD,D,Gambian dalasi,0.01,false,after,270
+MZN,MZN,MT,Mozambican metical,0.01,false,after,943
+MMK,MMK,K,Myanmar kyat,0.01,false,after,104
+NAD,NAD,$,Namibian dollar,0.01,false,after,516
+NPR,NPR,₨,Nepalese rupee,0.01,false,after,524
+ALL,ALL,L,Albanian lek,0.01,false,after,008
+NIO,NIO,C$,Nicaraguan córdoba,0.01,false,after,558
+KPW,KPW,₩,North Korean won,0.01,false,after,408
+ZIG,ZWG,ZiG,Zimbabwe Gold,0.01,false,after,924
+ZMW,ZMW,ZK,Zambian kwacha,0.01,false,after,967
+YER,YER,﷼,Yemeni rial,0.01,false,after,886
+VUV,VUV,VT,Vanuatu vatu,1,false,after,548
+UZS,UZS,so'm,Uzbekistan som,0.01,false,after,860
+TMT,TMT,T,Turkmenistan manat,0.01,false,after,934
+TTD,TTD,$,Trinidad and Tobago dollar,0.01,false,after,780
+TOP,TOP,T$,Tongan paʻanga,0.01,false,after,776
+TZS,TZS,TSh,Tanzanian shilling,0.01,false,after,834
+TJS,TJS,TJS,Tajikistani somoni,0.01,false,after,972
+SYP,SYP,£,Syrian pound,0.01,false,after,760
+SZL,SZL,E,Swazi lilangeni,0.01,false,after,748
+SRD,SRD,$,Surinamese dollar,0.01,false,after,968
+SDG,SDG,ج.س.,Sudanese pound,0.01,false,after,938
+LKR,LKR,Rs,Sri Lankan rupee,0.01,false,after,144
+SSP,SSP,£,South Sudanese pound,0.01,false,after,728
+SOS,SOS,Sh.,Somali shilling,0.01,false,after,706
+SBD,SBD,SI$,Solomon Islands dollar,0.01,false,after,090
+SLL,SLL,Le,Sierra Leonean leone,0.01,false,after,694
+SLE,SLE,Le,Sierra Leonean leone,0.01,false,after,925
+SCR,SCR,SR,Seychellois rupee,0.01,false,after,690
+RSD,RSD,din.,Serbian dinar,0.01,false,after,941
+STD,STD,Db,São Tomé and Príncipe dobra,0.01,false,after,678
+WST,WST,WS$,Samoan tālā,0.01,false,after,882
+SHP,SHP,£,Saint Helena pound,0.01,false,after,654
+RWF,RWF,RF,Rwandan franc,1,false,after,646
+PYG,PYG,₲,Paraguayan guaraní,1,false,after,600
+PGK,PGK,K,Papua New Guinean kina,0.01,false,after,598
+PKR,PKR,Rs.,Pakistani rupee,0.01,false,before,586
+CVE,CVE,$,Cape Verdean escudo,0.01,false,after,132
+COU,COU,$,Unidad de Valor Real,0.01,false,before,970
+CLF,CLF,$,Unidad de Fomento,0.0001,false,before,990
+CUC,CUC,$,Cuban convertible peso,0.01,false,after,931
+GTQ,GTQ,Q,Guatemalan Quetzal,0.01,false,after,320
+VES,VES,Bs,Venezuelan bolívar soberano,0.01,false,after,928
+UYW,UYW,$,Unidad previsional,0.0001,false,after,927
+UYI,UYI,$,Uruguay Peso en Unidades Indexadas,1.0,false,after,940
+STN,STN,Db,São Tomé and Príncipe dobra,0.01,false,after,930

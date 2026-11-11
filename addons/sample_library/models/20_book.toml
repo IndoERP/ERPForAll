@@ -1,0 +1,95 @@
+# A book of the library.
+[[model]]
+name = "sample_library.book"
+description = "Library Book"
+order = "title, id"
+rec_name = "title"
+
+[[model.field]]
+name = "title"
+type = "char"
+string = "Title"
+required = true
+index = true
+
+[[model.field]]
+name = "isbn"
+type = "char"
+string = "ISBN"
+
+[[model.field]]
+name = "author_id"
+type = "many2one"
+comodel = "sample_library.author"
+string = "Author"
+ondelete = "restrict"
+
+[[model.field]]
+name = "publication_year"
+type = "integer"
+string = "Publication Year"
+
+[[model.field]]
+name = "available"
+type = "boolean"
+string = "Available"
+default = true
+
+[[model.field]]
+name = "genre_ids"
+type = "many2many"
+comodel = "sample_library.genre"
+string = "Genres"
+
+[[model.field]]
+name = "loan_ids"
+type = "one2many"
+comodel = "sample_library.loan"
+inverse = "book_id"
+string = "Loans"
+
+# The fields below give the sample one field for each shipped widget, so a tester can try them.
+[[model.field]]
+name = "summary"
+type = "text"
+string = "Summary"
+
+[[model.field]]
+name = "website"
+type = "char"
+string = "Website"
+
+[[model.field]]
+name = "cover_color"
+type = "char"
+string = "Cover Color"
+
+[[model.field]]
+name = "color"
+type = "integer"
+string = "Color Tag"
+
+[[model.field]]
+name = "rating"
+type = "selection"
+selection = [["0", "Not rated"], ["1", "Good"], ["2", "Very good"], ["3", "Excellent"]]
+string = "Rating"
+default = "0"
+
+[[model.field]]
+name = "book_format"
+type = "selection"
+selection = [["hardcover", "Hardcover"], ["paperback", "Paperback"], ["ebook", "E-book"]]
+string = "Format"
+default = "paperback"
+
+[[model.field]]
+name = "member_discount"
+type = "float"
+string = "Member Discount"
+
+[[model.field]]
+name = "favorite"
+type = "boolean"
+string = "Favorite"
+default = false

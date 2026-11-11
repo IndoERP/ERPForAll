@@ -1,0 +1,16 @@
+[package]
+name = "erp-addon-stock_account"
+description = "ERPForAll addon stock_account: stock valuation engine, cost state, FIFO layers and value journal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+erp-sdk = { workspace = true }
+erp-addon-stock = { workspace = true }
+
+[lints]
+workspace = true

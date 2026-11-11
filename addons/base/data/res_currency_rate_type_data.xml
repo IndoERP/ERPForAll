@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The six stable currency rate types and their date rules. No rate values are seeded. -->
+<erp noupdate="1">
+  <record id="rate_type_spot" model="res.currency.rate.type">
+    <field name="code">spot</field>
+    <field name="name">Spot</field>
+    <field name="date_rule">strictly_before</field>
+    <field name="later_fallback" eval="True"/>
+    <field name="sequence">10</field>
+  </record>
+  <record id="rate_type_monthly_average" model="res.currency.rate.type">
+    <field name="code">monthly_average</field>
+    <field name="name">Monthly Average</field>
+    <field name="date_rule">on_or_before</field>
+    <field name="later_fallback" eval="False"/>
+    <field name="sequence">20</field>
+  </record>
+  <record id="rate_type_closing" model="res.currency.rate.type">
+    <field name="code">closing</field>
+    <field name="name">Closing</field>
+    <field name="date_rule">on_or_before</field>
+    <field name="later_fallback" eval="False"/>
+    <field name="sequence">30</field>
+  </record>
+  <record id="rate_type_historical" model="res.currency.rate.type">
+    <field name="code">historical</field>
+    <field name="name">Historical</field>
+    <field name="date_rule">strictly_before</field>
+    <field name="later_fallback" eval="False"/>
+    <field name="sequence">40</field>
+  </record>
+  <record id="rate_type_budget" model="res.currency.rate.type">
+    <field name="code">budget</field>
+    <field name="name">Budget</field>
+    <field name="date_rule">strictly_before</field>
+    <field name="later_fallback" eval="False"/>
+    <field name="sequence">50</field>
+  </record>
+  <record id="rate_type_tax" model="res.currency.rate.type">
+    <field name="code">tax</field>
+    <field name="name">Tax</field>
+    <field name="date_rule">on_or_before</field>
+    <field name="later_fallback" eval="False"/>
+    <field name="sequence">60</field>
+  </record>
+</erp>

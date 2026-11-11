@@ -1,0 +1,37 @@
+[package]
+name = "erp-ui-compiler-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "erp-ui-compile: stdin/stdout wrapper over erp-ui-compiler; its wasm32-wasip1 build is the WASM compiler"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "erp-ui-compile"
+path = "src/main.rs"
+
+# Built for wasm32-wasip1 by the ui-compiler-wasm-identity step to show a node-budget refusal is a
+# typed failure in WASM too. Off by default: the WASM compiler itself
+# does not link the HTML parser.
+[[bin]]
+name = "html_budget_probe"
+path = "src/html_budget_probe.rs"
+required-features = ["html-budget-probe"]
+
+[features]
+html-budget-probe = ["erp-ui-compiler/html-budget", "dep:markup5ever_rcdom"]
+
+[dependencies]
+erp-ui-compiler.workspace = true
+markup5ever_rcdom = { workspace = true, optional = true }
+
+[dev-dependencies]
+# Runs the wasm32-wasip1 build in the native/WASM identity test (pin and features in the workspace
+# manifest).
+wasmi.workspace = true
+proptest.workspace = true

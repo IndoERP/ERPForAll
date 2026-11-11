@@ -1,0 +1,11 @@
+error: cannot construct `CheckedViewInput<'_>` with struct literal syntax due to private fields
+ --> tests/ui/host_access/checked_input_cannot_be_forged.rs:4:13
+  |
+4 |     let _ = CheckedViewInput {};
+  |             ^^^^^^^^^^^^^^^^
+  |
+help: you might have meant to use the `from_parts` associated function
+  |
+4 -     let _ = CheckedViewInput {};
+4 +     let _ = CheckedViewInput::from_parts(_, _, _);
+  |

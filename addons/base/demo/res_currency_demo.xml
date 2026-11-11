@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Demo: a few currencies beyond the company currency are switched on, so rates and multi-currency
+     prices have something to show. The currencies themselves are default data (res.currency.csv), where
+     they ship inactive; a demo database activates these four. -->
+<erp>
+  <record id="EUR" model="res.currency">
+    <field name="active" eval="True"/>
+  </record>
+  <record id="IDR" model="res.currency">
+    <field name="active" eval="True"/>
+  </record>
+  <record id="SGD" model="res.currency">
+    <field name="active" eval="True"/>
+  </record>
+  <record id="GBP" model="res.currency">
+    <field name="active" eval="True"/>
+  </record>
+</erp>

@@ -1,0 +1,20 @@
+[package]
+name = "erp-registry"
+description = "ERPForAll model metadata: declarations, _inherit composition and the per-database registry"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+erp-expr = { workspace = true }
+erp-fields = { workspace = true }
+rustc-hash = { workspace = true }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+linkme = { workspace = true }
+
+[lints]
+workspace = true

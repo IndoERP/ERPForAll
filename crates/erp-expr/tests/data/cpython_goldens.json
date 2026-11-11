@@ -1,0 +1,2442 @@
+[
+[
+"-2**2",
+"ok",
+"-4"
+],
+[
+"2**3**2",
+"ok",
+"512"
+],
+[
+"2**-1",
+"ok",
+"0.5"
+],
+[
+"(-2)**2",
+"ok",
+"4"
+],
+[
+"-2**-2",
+"ok",
+"-0.25"
+],
+[
+"not 1 == 2",
+"ok",
+"True"
+],
+[
+"not 1 == 1",
+"ok",
+"False"
+],
+[
+"1 + 2 * 3 - 4 / 2",
+"ok",
+"5.0"
+],
+[
+"(1 + 2) * 3",
+"ok",
+"9"
+],
+[
+"7 // 2",
+"ok",
+"3"
+],
+[
+"-7 // 2",
+"ok",
+"-4"
+],
+[
+"7 // -2",
+"ok",
+"-4"
+],
+[
+"-7 // -2",
+"ok",
+"3"
+],
+[
+"-7 % 3",
+"ok",
+"2"
+],
+[
+"7 % -2",
+"ok",
+"-1"
+],
+[
+"-7 % -3",
+"ok",
+"-1"
+],
+[
+"7 // 2.0",
+"ok",
+"3.0"
+],
+[
+"-7 // 2.0",
+"ok",
+"-4.0"
+],
+[
+"7.5 % 2",
+"ok",
+"1.5"
+],
+[
+"-7.5 % 2",
+"ok",
+"0.5"
+],
+[
+"5 % 2.5",
+"ok",
+"0.0"
+],
+[
+"7 / 2",
+"ok",
+"3.5"
+],
+[
+"1 / 3",
+"ok",
+"0.3333333333333333"
+],
+[
+"2 ** 0.5",
+"ok",
+"1.4142135623730951"
+],
+[
+"10 / 4",
+"ok",
+"2.5"
+],
+[
+"0.1 + 0.2",
+"ok",
+"0.30000000000000004"
+],
+[
+"1e16",
+"ok",
+"1e+16"
+],
+[
+"1.5e16",
+"ok",
+"1.5e+16"
+],
+[
+"123456789012345678.0",
+"ok",
+"1.2345678901234568e+17"
+],
+[
+"1e-5",
+"ok",
+"1e-05"
+],
+[
+"0.0001",
+"ok",
+"0.0001"
+],
+[
+"1.0",
+"ok",
+"1.0"
+],
+[
+"-0.0",
+"ok",
+"-0.0"
+],
+[
+"1e300 * 10",
+"ok",
+"1e+301"
+],
+[
+"float('inf')",
+"ok",
+"inf"
+],
+[
+"float('-inf')",
+"ok",
+"-inf"
+],
+[
+"float('nan')",
+"ok",
+"nan"
+],
+[
+"float(' 1_000.5 ')",
+"ok",
+"1000.5"
+],
+[
+"float('1e3')",
+"ok",
+"1000.0"
+],
+[
+"int(' 42 ')",
+"ok",
+"42"
+],
+[
+"int('-1_000')",
+"ok",
+"-1000"
+],
+[
+"int(3.99)",
+"ok",
+"3"
+],
+[
+"int(-3.99)",
+"ok",
+"-3"
+],
+[
+"int(True)",
+"ok",
+"1"
+],
+[
+"str(1.0)",
+"ok",
+"'1.0'"
+],
+[
+"str(10.0)",
+"ok",
+"'10.0'"
+],
+[
+"str(1e22)",
+"ok",
+"'1e+22'"
+],
+[
+"str(0.1)",
+"ok",
+"'0.1'"
+],
+[
+"str(-1.5)",
+"ok",
+"'-1.5'"
+],
+[
+"str(True)",
+"ok",
+"'True'"
+],
+[
+"str(None)",
+"ok",
+"'None'"
+],
+[
+"str([1, 'a', None])",
+"ok",
+"\"[1, 'a', None]\""
+],
+[
+"str((1,))",
+"ok",
+"'(1,)'"
+],
+[
+"str({'a': 1})",
+"ok",
+"\"{'a': 1}\""
+],
+[
+"repr('it\\'s')",
+"ok",
+"'\"it\\'s\"'"
+],
+[
+"repr('say \"hi\"')",
+"ok",
+"'\\'say \"hi\"\\''"
+],
+[
+"repr('both \\' and \"')",
+"ok",
+"'\\'both \\\\\\' and \"\\''"
+],
+[
+"repr('tab\\tnew\\nline\\\\')",
+"ok",
+"\"'tab\\\\tnew\\\\nline\\\\\\\\'\""
+],
+[
+"repr('é')",
+"ok",
+"\"'é'\""
+],
+[
+"repr(b'a\\x00\\xff')",
+"ok",
+"\"b'a\\\\x00\\\\xff'\""
+],
+[
+"'' or 'x'",
+"ok",
+"'x'"
+],
+[
+"0 or []",
+"ok",
+"[]"
+],
+[
+"None and 1",
+"ok",
+"None"
+],
+[
+"'a' and 'b'",
+"ok",
+"'b'"
+],
+[
+"1 and 0",
+"ok",
+"0"
+],
+[
+"[] or {} or 0",
+"ok",
+"0"
+],
+[
+"1 < 2 < 3",
+"ok",
+"True"
+],
+[
+"1 < 3 < 2",
+"ok",
+"False"
+],
+[
+"1 == 1.0",
+"ok",
+"True"
+],
+[
+"1 == True",
+"ok",
+"True"
+],
+[
+"'1' == 1",
+"ok",
+"False"
+],
+[
+"[1, 2] == [1, 2]",
+"ok",
+"True"
+],
+[
+"(1, 2) == [1, 2]",
+"ok",
+"False"
+],
+[
+"{'a': 1, 'b': 2} == {'b': 2, 'a': 1}",
+"ok",
+"True"
+],
+[
+"None == 0",
+"ok",
+"False"
+],
+[
+"1 < 2.5",
+"ok",
+"True"
+],
+[
+"2 ** 63 - 1 > 9.2e18",
+"ok",
+"True"
+],
+[
+"'abc' < 'abd'",
+"ok",
+"True"
+],
+[
+"[1, 2] < [1, 3]",
+"ok",
+"True"
+],
+[
+"(1, 2) < (1, 2, 0)",
+"ok",
+"True"
+],
+[
+"'b' in 'abc'",
+"ok",
+"True"
+],
+[
+"'' in 'abc'",
+"ok",
+"True"
+],
+[
+"'x' not in 'abc'",
+"ok",
+"True"
+],
+[
+"1 in [1, 2]",
+"ok",
+"True"
+],
+[
+"3 in (1, 2)",
+"ok",
+"False"
+],
+[
+"'a' in {'a': 1}",
+"ok",
+"True"
+],
+[
+"1.0 in {1: 'x'}",
+"ok",
+"True"
+],
+[
+"True in {1: 'x'}",
+"ok",
+"True"
+],
+[
+"[1, 2][-1]",
+"ok",
+"2"
+],
+[
+"'hello'[1]",
+"ok",
+"'e'"
+],
+[
+"'héllo'[1]",
+"ok",
+"'é'"
+],
+[
+"'hello'[::-1]",
+"ok",
+"'olleh'"
+],
+[
+"'hello'[1:4:2]",
+"ok",
+"'el'"
+],
+[
+"'abcdef'[5:]",
+"ok",
+"'f'"
+],
+[
+"'abcdef'[-2:]",
+"ok",
+"'ef'"
+],
+[
+"'abcdef'[:-2]",
+"ok",
+"'abcd'"
+],
+[
+"'abcdef'[10:]",
+"ok",
+"''"
+],
+[
+"'abcdef'[-100:2]",
+"ok",
+"'ab'"
+],
+[
+"'abcdef'[::2]",
+"ok",
+"'ace'"
+],
+[
+"'abcdef'[::-2]",
+"ok",
+"'fdb'"
+],
+[
+"'abcdef'[4:1:-1]",
+"ok",
+"'edc'"
+],
+[
+"'héllo wörld'[::-1]",
+"ok",
+"'dlröw olléh'"
+],
+[
+"[1, 2, 3][1::9223372036854775807]",
+"ok",
+"[2]"
+],
+[
+"[1, 2, 3][::-9223372036854775807]",
+"ok",
+"[3]"
+],
+[
+"[1, 2, 3][-9223372036854775807:9223372036854775807]",
+"ok",
+"[1, 2, 3]"
+],
+[
+"(1, 2, 3, 4)[1:3]",
+"ok",
+"(2, 3)"
+],
+[
+"b'abcdef'[-2:]",
+"ok",
+"b'ef'"
+],
+[
+"b'abc'[0]",
+"ok",
+"97"
+],
+[
+"[1, 2, 3][None:2]",
+"ok",
+"[1, 2]"
+],
+[
+"'\\n'",
+"ok",
+"'\\n'"
+],
+[
+"'\\x41'",
+"ok",
+"'A'"
+],
+[
+"'A'",
+"ok",
+"'A'"
+],
+[
+"'\\U0001F600'",
+"ok",
+"'😀'"
+],
+[
+"'é'",
+"ok",
+"'é'"
+],
+[
+"'\\é'",
+"ok",
+"'\\\\é'"
+],
+[
+"'\\q'",
+"ok",
+"'\\\\q'"
+],
+[
+"'\\101'",
+"ok",
+"'A'"
+],
+[
+"r'\\n'",
+"ok",
+"'\\\\n'"
+],
+[
+"r'a\\'b'",
+"ok",
+"\"a\\\\'b\""
+],
+[
+"r'\\\\'",
+"ok",
+"'\\\\\\\\'"
+],
+[
+"'''multi\nline'''",
+"ok",
+"'multi\\nline'"
+],
+[
+"'a' 'b'",
+"ok",
+"'ab'"
+],
+[
+"'a' \"b\" '''c'''",
+"ok",
+"'abc'"
+],
+[
+"b'foo' b'bar'",
+"ok",
+"b'foobar'"
+],
+[
+"f'{1}{2}'",
+"ok",
+"'12'"
+],
+[
+"f'{\"x\"!r}'",
+"ok",
+"\"'x'\""
+],
+[
+"f'{\"é\"!a}'",
+"ok",
+"\"'\\\\xe9'\""
+],
+[
+"f'{3.14159:.2f}'",
+"ok",
+"'3.14'"
+],
+[
+"f'{42:05d}'",
+"ok",
+"'00042'"
+],
+[
+"f'{42:>6}|{42:<6}|{42:^6}'",
+"ok",
+"'    42|42    |  42  '"
+],
+[
+"f'{\"ab\":*^7}'",
+"ok",
+"'**ab***'"
+],
+[
+"f'{1234567:,}'",
+"ok",
+"'1,234,567'"
+],
+[
+"f'{1234567.891:,.2f}'",
+"ok",
+"'1,234,567.89'"
+],
+[
+"f'{255:x} {255:#X} {255:b} {255:#o}'",
+"ok",
+"'ff 0XFF 11111111 0o377'"
+],
+[
+"f'{-5:+d} {5:+d} {5: d}'",
+"ok",
+"'-5 +5  5'"
+],
+[
+"f'{0.5:.0%}'",
+"ok",
+"'50%'"
+],
+[
+"f'{1e-7:g} {123456789.0:g} {0.0001:g} {100.0:g}'",
+"ok",
+"'1e-07 1.23457e+08 0.0001 100'"
+],
+[
+"f'{1.5:e} {1234.5678:.3e}'",
+"ok",
+"'1.500000e+00 1.235e+03'"
+],
+[
+"f'{1.0:.3} {1234.5:.3} {0.1:.3}'",
+"ok",
+"'1.0 1.23e+03 0.1'"
+],
+[
+"f'{True}'",
+"ok",
+"'True'"
+],
+[
+"f'{True:d}'",
+"ok",
+"'1'"
+],
+[
+"f'{None}'",
+"ok",
+"'None'"
+],
+[
+"f'{[1, \"a\"]}'",
+"ok",
+"\"[1, 'a']\""
+],
+[
+"f'a {{b}} c'",
+"ok",
+"'a {b} c'"
+],
+[
+"f'{\"a\" \"b\"}'",
+"ok",
+"'ab'"
+],
+[
+"f'{ {\"k\": 1}[\"k\"] }'",
+"ok",
+"'1'"
+],
+[
+"f'{[1,2,3][1:2]}'",
+"ok",
+"'[2]'"
+],
+[
+"'a' f'{1}' 'b'",
+"ok",
+"'a1b'"
+],
+[
+"'%s' % 'x'",
+"ok",
+"'x'"
+],
+[
+"'%s é %s' % ('ü', 1)",
+"ok",
+"'ü é 1'"
+],
+[
+"'%d' % 3.7",
+"ok",
+"'3'"
+],
+[
+"'%5d|%-5d|%05d' % (42, 42, 42)",
+"ok",
+"'   42|42   |00042'"
+],
+[
+"'%05.1f' % 3.14159",
+"ok",
+"'003.1'"
+],
+[
+"'%.2f' % 1.005",
+"ok",
+"'1.00'"
+],
+[
+"'%.3e' % 12345.678",
+"ok",
+"'1.235e+04'"
+],
+[
+"'%g' % 0.00001",
+"ok",
+"'1e-05'"
+],
+[
+"'%x %X %o %#x %#o' % (255, 255, 8, 255, 8)",
+"ok",
+"'ff FF 10 0xff 0o10'"
+],
+[
+"'%+d % d' % (5, 5)",
+"ok",
+"'+5  5'"
+],
+[
+"'%r' % 'x'",
+"ok",
+"\"'x'\""
+],
+[
+"'%(a)s-%(b)03d' % {'a': 'x', 'b': 7}",
+"ok",
+"'x-007'"
+],
+[
+"'%%' % ()",
+"ok",
+"'%'"
+],
+[
+"'%s' % {'a': 1}",
+"ok",
+"\"{'a': 1}\""
+],
+[
+"'%c%c' % (65, 'b')",
+"ok",
+"'Ab'"
+],
+[
+"'%.2s' % 'abcdef'",
+"ok",
+"'ab'"
+],
+[
+"'%*d' % (5, 42)",
+"ok",
+"'   42'"
+],
+[
+"'%-*d|' % (5, 42)",
+"ok",
+"'42   |'"
+],
+[
+"'%.*f' % (2, 3.14159)",
+"ok",
+"'3.14'"
+],
+[
+"'%s' % [1, 2]",
+"ok",
+"'[1, 2]'"
+],
+[
+"'abc' % {}",
+"ok",
+"'abc'"
+],
+[
+"'%10.10f' % 1",
+"ok",
+"'1.0000000000'"
+],
+[
+"'{} {}'.format(1, 'a')",
+"ok",
+"'1 a'"
+],
+[
+"'{1}{0}'.format('a', 'b')",
+"ok",
+"'ba'"
+],
+[
+"'{name}!'.format(name='x')",
+"ok",
+"'x!'"
+],
+[
+"'{0!r:>6}'.format('a')",
+"ok",
+"\"   'a'\""
+],
+[
+"'{:08.3f}'.format(3.14159)",
+"ok",
+"'0003.142'"
+],
+[
+"'{{}}'.format()",
+"ok",
+"'{}'"
+],
+[
+"'a,b,,c'.split(',')",
+"ok",
+"['a', 'b', '', 'c']"
+],
+[
+"'a b  c '.split()",
+"ok",
+"['a', 'b', 'c']"
+],
+[
+"'  a b  c '.split(None, 1)",
+"ok",
+"['a', 'b  c ']"
+],
+[
+"'a,b,c'.split(',', 1)",
+"ok",
+"['a', 'b,c']"
+],
+[
+"'-'.join(['a', 'b', 'c'])",
+"ok",
+"'a-b-c'"
+],
+[
+"''.join([])",
+"ok",
+"''"
+],
+[
+"'  x  '.strip()",
+"ok",
+"'x'"
+],
+[
+"'xxaxx'.strip('x')",
+"ok",
+"'a'"
+],
+[
+"'  x'.lstrip()",
+"ok",
+"'x'"
+],
+[
+"'x  '.rstrip()",
+"ok",
+"'x'"
+],
+[
+"'Hello'.lower()",
+"ok",
+"'hello'"
+],
+[
+"'straße'.upper()",
+"ok",
+"'STRASSE'"
+],
+[
+"'hELLO wORLD'.capitalize()",
+"ok",
+"'Hello world'"
+],
+[
+"'aaa'.replace('a', 'bb')",
+"ok",
+"'bbbbbb'"
+],
+[
+"'aaa'.replace('a', 'b', 2)",
+"ok",
+"'bba'"
+],
+[
+"'abc'.replace('', '-')",
+"ok",
+"'-a-b-c-'"
+],
+[
+"'abc'.startswith('ab')",
+"ok",
+"True"
+],
+[
+"'abc'.startswith(('x', 'a'))",
+"ok",
+"True"
+],
+[
+"'abc'.endswith('bc')",
+"ok",
+"True"
+],
+[
+"{'a': 1}.get('a')",
+"ok",
+"1"
+],
+[
+"{'a': 1}.get('b')",
+"ok",
+"None"
+],
+[
+"{'a': 1}.get('b', 2)",
+"ok",
+"2"
+],
+[
+"{'a': 1, 'b': 2}.keys()",
+"ok",
+"['a', 'b']"
+],
+[
+"list({'a': 1, 'b': 2}.values())",
+"ok",
+"[1, 2]"
+],
+[
+"list({'a': 1}.items())",
+"ok",
+"[('a', 1)]"
+],
+[
+"{1: 'a', True: 'b', 1.0: 'c'}",
+"ok",
+"{1: 'c'}"
+],
+[
+"{1: 'int', '1': 'str'}",
+"ok",
+"{1: 'int', '1': 'str'}"
+],
+[
+"{'a': 1, 'a': 2}",
+"ok",
+"{'a': 2}"
+],
+[
+"{'a': 1} | {'b': 2, 'a': 3}",
+"ok",
+"{'a': 3, 'b': 2}"
+],
+[
+"dict(a=1, b=2)",
+"ok",
+"{'a': 1, 'b': 2}"
+],
+[
+"dict([('a', 1), ('b', 2)])",
+"ok",
+"{'a': 1, 'b': 2}"
+],
+[
+"dict({'a': 1}, b=2)",
+"ok",
+"{'a': 1, 'b': 2}"
+],
+[
+"list('abc')",
+"ok",
+"['a', 'b', 'c']"
+],
+[
+"list((1, 2))",
+"ok",
+"[1, 2]"
+],
+[
+"tuple([1, 2])",
+"ok",
+"(1, 2)"
+],
+[
+"tuple('ab')",
+"ok",
+"('a', 'b')"
+],
+[
+"list({'x': 1, 'y': 2})",
+"ok",
+"['x', 'y']"
+],
+[
+"len('héllo')",
+"ok",
+"5"
+],
+[
+"len([1, 2, 3])",
+"ok",
+"3"
+],
+[
+"len({'a': 1})",
+"ok",
+"1"
+],
+[
+"len(b'ab')",
+"ok",
+"2"
+],
+[
+"min(3, 1, 2)",
+"ok",
+"1"
+],
+[
+"min([4, 2, 8])",
+"ok",
+"2"
+],
+[
+"min('abc')",
+"ok",
+"'a'"
+],
+[
+"max('abc')",
+"ok",
+"'c'"
+],
+[
+"max([1, 2.5, 2])",
+"ok",
+"2.5"
+],
+[
+"min([], default=7)",
+"ok",
+"7"
+],
+[
+"sum([1, 2, 3])",
+"ok",
+"6"
+],
+[
+"sum([1, 2], 10)",
+"ok",
+"13"
+],
+[
+"sum([1, 2], start=10)",
+"ok",
+"13"
+],
+[
+"sum([0.1, 0.2])",
+"ok",
+"0.30000000000000004"
+],
+[
+"sum([[1], [2]], [])",
+"ok",
+"[1, 2]"
+],
+[
+"abs(-5)",
+"ok",
+"5"
+],
+[
+"abs(-2.5)",
+"ok",
+"2.5"
+],
+[
+"abs(True)",
+"ok",
+"1"
+],
+[
+"round(2.5)",
+"ok",
+"2"
+],
+[
+"round(3.5)",
+"ok",
+"4"
+],
+[
+"round(-2.5)",
+"ok",
+"-2"
+],
+[
+"round(0.5)",
+"ok",
+"0"
+],
+[
+"round(1.5)",
+"ok",
+"2"
+],
+[
+"round(2.675, 2)",
+"ok",
+"2.67"
+],
+[
+"round(0.125, 2)",
+"ok",
+"0.12"
+],
+[
+"round(0.375, 2)",
+"ok",
+"0.38"
+],
+[
+"round(1234.5678, -2)",
+"ok",
+"1200.0"
+],
+[
+"round(1250, -2)",
+"ok",
+"1200"
+],
+[
+"round(1350, -2)",
+"ok",
+"1400"
+],
+[
+"round(-1250, -2)",
+"ok",
+"-1200"
+],
+[
+"round(7, 0)",
+"ok",
+"7"
+],
+[
+"round(2.5, ndigits=None)",
+"ok",
+"2"
+],
+[
+"round(3.14159, ndigits=3)",
+"ok",
+"3.142"
+],
+[
+"True & False",
+"ok",
+"False"
+],
+[
+"True | False",
+"ok",
+"True"
+],
+[
+"True ^ True",
+"ok",
+"False"
+],
+[
+"True & 1",
+"ok",
+"1"
+],
+[
+"6 & 3",
+"ok",
+"2"
+],
+[
+"6 | 3",
+"ok",
+"7"
+],
+[
+"6 ^ 3",
+"ok",
+"5"
+],
+[
+"~5",
+"ok",
+"-6"
+],
+[
+"1 << 10",
+"ok",
+"1024"
+],
+[
+"-16 >> 2",
+"ok",
+"-4"
+],
+[
+"1 << 62",
+"ok",
+"4611686018427387904"
+],
+[
+"(-1)**(2**40)",
+"ok",
+"1"
+],
+[
+"(-1)**(2**40 + 1)",
+"ok",
+"-1"
+],
+[
+"0 ** 0",
+"ok",
+"1"
+],
+[
+"1 ** 9999999",
+"ok",
+"1"
+],
+[
+"bool([])",
+"ok",
+"False"
+],
+[
+"bool('x')",
+"ok",
+"True"
+],
+[
+"bool(0.0)",
+"ok",
+"False"
+],
+[
+"True + 1",
+"ok",
+"2"
+],
+[
+"True < 2",
+"ok",
+"True"
+],
+[
+"-True",
+"ok",
+"-1"
+],
+[
+"+True",
+"ok",
+"1"
+],
+[
+"~True",
+"ok",
+"-2"
+],
+[
+"[1] * 3",
+"ok",
+"[1, 1, 1]"
+],
+[
+"3 * [1]",
+"ok",
+"[1, 1, 1]"
+],
+[
+"[1] * 0",
+"ok",
+"[]"
+],
+[
+"[1] * -2",
+"ok",
+"[]"
+],
+[
+"'ab' * 3",
+"ok",
+"'ababab'"
+],
+[
+"'ab' * 0",
+"ok",
+"''"
+],
+[
+"(1,) * 2",
+"ok",
+"(1, 1)"
+],
+[
+"[1, 2] + [3]",
+"ok",
+"[1, 2, 3]"
+],
+[
+"(1,) + (2,)",
+"ok",
+"(1, 2)"
+],
+[
+"'a' + 'b'",
+"ok",
+"'ab'"
+],
+[
+"b'a' + b'b'",
+"ok",
+"b'ab'"
+],
+[
+"[x * 2 for x in [1, 2, 3, 4] if x > 2]",
+"ok",
+"[6, 8]"
+],
+[
+"[(x, y) for x in [1, 2] for y in 'ab']",
+"ok",
+"[(1, 'a'), (1, 'b'), (2, 'a'), (2, 'b')]"
+],
+[
+"[x for x in 'héllo']",
+"ok",
+"['h', 'é', 'l', 'l', 'o']"
+],
+[
+"[k for k in {'a': 1, 'b': 2}]",
+"ok",
+"['a', 'b']"
+],
+[
+"[a + b for a, b in [(1, 2), (3, 4)]]",
+"ok",
+"[3, 7]"
+],
+[
+"[a for a, in [(1,), (2,)]]",
+"ok",
+"[1, 2]"
+],
+[
+"[c for c in b'ab']",
+"ok",
+"[97, 98]"
+],
+[
+"sum(x for x in [1, 2, 3])",
+"ok",
+"6"
+],
+[
+"' '.join(w.capitalize() for w in ['hello', 'world'])",
+"ok",
+"'Hello World'"
+],
+[
+"[x for x in [1, 2] if x if x > 1]",
+"ok",
+"[2]"
+],
+[
+"(y := 5) + y",
+"ok",
+"10"
+],
+[
+"[y := 1, y + 1]",
+"ok",
+"[1, 2]"
+],
+[
+"1 if True else 2",
+"ok",
+"1"
+],
+[
+"1 if False else 2 if False else 3",
+"ok",
+"3"
+],
+[
+"datetime(2024, 1, 31)",
+"ok",
+"datetime.datetime(2024, 1, 31, 0, 0)"
+],
+[
+"datetime(2024, 1, 31, 10, 30)",
+"ok",
+"datetime.datetime(2024, 1, 31, 10, 30)"
+],
+[
+"datetime(2024, 1, 31, 10, 30, 5, 123)",
+"ok",
+"datetime.datetime(2024, 1, 31, 10, 30, 5, 123)"
+],
+[
+"str(datetime(2024, 1, 31, 10, 30))",
+"ok",
+"'2024-01-31 10:30:00'"
+],
+[
+"str(datetime(2024, 1, 31, 10, 30, 0, 5))",
+"ok",
+"'2024-01-31 10:30:00.000005'"
+],
+[
+"datetime(2024, 1, 31) + relativedelta(months=1)",
+"ok",
+"datetime.datetime(2024, 2, 29, 0, 0)"
+],
+[
+"datetime(2024, 1, 31) + relativedelta(months=-1)",
+"ok",
+"datetime.datetime(2023, 12, 31, 0, 0)"
+],
+[
+"datetime(2024, 3, 31) - relativedelta(months=1)",
+"ok",
+"datetime.datetime(2024, 2, 29, 0, 0)"
+],
+[
+"datetime(2024, 2, 29) + relativedelta(years=1)",
+"ok",
+"datetime.datetime(2025, 2, 28, 0, 0)"
+],
+[
+"datetime(2024, 1, 15) + relativedelta(day=31)",
+"ok",
+"datetime.datetime(2024, 1, 31, 0, 0)"
+],
+[
+"datetime(2024, 2, 15) + relativedelta(day=31)",
+"ok",
+"datetime.datetime(2024, 2, 29, 0, 0)"
+],
+[
+"datetime(2024, 1, 15) + relativedelta(weekday=0)",
+"ok",
+"datetime.datetime(2024, 1, 15, 0, 0)"
+],
+[
+"datetime(2024, 1, 15) + relativedelta(weekday=2)",
+"ok",
+"datetime.datetime(2024, 1, 17, 0, 0)"
+],
+[
+"datetime(2024, 1, 15) + relativedelta(day=1, weekday=0)",
+"ok",
+"datetime.datetime(2024, 1, 1, 0, 0)"
+],
+[
+"datetime(2024, 1, 15) + relativedelta(months=1, day=17, weekday=0)",
+"ok",
+"datetime.datetime(2024, 2, 19, 0, 0)"
+],
+[
+"datetime(2024, 1, 15).date() + relativedelta(day=1, weekday=0) + relativedelta(weekday=2)",
+"ok",
+"datetime.date(2024, 1, 3)"
+],
+[
+"datetime(2024, 1, 15).date() + relativedelta(hours=1)",
+"ok",
+"datetime.datetime(2024, 1, 15, 1, 0)"
+],
+[
+"datetime(2024, 1, 15, 23) + relativedelta(hours=2)",
+"ok",
+"datetime.datetime(2024, 1, 16, 1, 0)"
+],
+[
+"datetime(2024, 1, 15) + relativedelta(years=-1, month=1, day=1)",
+"ok",
+"datetime.datetime(2023, 1, 1, 0, 0)"
+],
+[
+"datetime(2024, 1, 15) + relativedelta(years=-2, months=-3, days=-4)",
+"ok",
+"datetime.datetime(2021, 10, 11, 0, 0)"
+],
+[
+"datetime(2024, 1, 15) - relativedelta(days=1.5)",
+"ok",
+"datetime.datetime(2024, 1, 13, 12, 0)"
+],
+[
+"datetime(2024, 1, 15) + relativedelta(weeks=-2, days=1)",
+"ok",
+"datetime.datetime(2024, 1, 2, 0, 0)"
+],
+[
+"datetime(2024, 1, 15) + relativedelta(months=-1, days=-1, minutes=30)",
+"ok",
+"datetime.datetime(2023, 12, 14, 0, 30)"
+],
+[
+"datetime(2024, 1, 15) + relativedelta(hour=1, minute=0)",
+"ok",
+"datetime.datetime(2024, 1, 15, 1, 0)"
+],
+[
+"datetime(2024, 3, 1) + relativedelta(leapdays=1)",
+"ok",
+"datetime.datetime(2024, 3, 2, 0, 0)"
+],
+[
+"relativedelta(months=14)",
+"ok",
+"relativedelta(years=+1, months=+2)"
+],
+[
+"relativedelta(hours=25, minutes=-1)",
+"ok",
+"relativedelta(days=+1, hours=+1, minutes=-1)"
+],
+[
+"relativedelta(days=1) + relativedelta(months=1, day=5)",
+"ok",
+"relativedelta(months=+1, days=+1, day=5)"
+],
+[
+"-relativedelta(months=1, day=5)",
+"ok",
+"relativedelta(months=-1, day=5)"
+],
+[
+"relativedelta(months=1).months",
+"ok",
+"1"
+],
+[
+"relativedelta(day=5).day",
+"ok",
+"5"
+],
+[
+"relativedelta(day=5).month",
+"ok",
+"None"
+],
+[
+"bool(relativedelta())",
+"ok",
+"False"
+],
+[
+"bool(relativedelta(days=1))",
+"ok",
+"True"
+],
+[
+"datetime(2024, 1, 1, 10) + timedelta(days=5)",
+"ok",
+"datetime.datetime(2024, 1, 6, 10, 0)"
+],
+[
+"datetime(2024, 1, 1) - timedelta(days=1, hours=1)",
+"ok",
+"datetime.datetime(2023, 12, 30, 23, 0)"
+],
+[
+"datetime(2024, 1, 1).date() + timedelta(hours=25)",
+"ok",
+"datetime.date(2024, 1, 2)"
+],
+[
+"datetime(2024, 1, 1).date() - timedelta(days=1)",
+"ok",
+"datetime.date(2023, 12, 31)"
+],
+[
+"datetime(2024, 3, 1) - datetime(2024, 2, 1)",
+"ok",
+"datetime.timedelta(days=29)"
+],
+[
+"datetime(2024, 3, 1, 12) - datetime(2024, 3, 2)",
+"ok",
+"datetime.timedelta(days=-1, seconds=43200)"
+],
+[
+"datetime(2024, 3, 1).date() - datetime(2024, 2, 1).date()",
+"ok",
+"datetime.timedelta(days=29)"
+],
+[
+"timedelta(days=1, hours=2, minutes=3, seconds=4)",
+"ok",
+"datetime.timedelta(days=1, seconds=7384)"
+],
+[
+"timedelta(hours=-1)",
+"ok",
+"datetime.timedelta(days=-1, seconds=82800)"
+],
+[
+"timedelta(0)",
+"ok",
+"datetime.timedelta(0)"
+],
+[
+"timedelta(1.5)",
+"ok",
+"datetime.timedelta(days=1, seconds=43200)"
+],
+[
+"timedelta(seconds=0.5)",
+"ok",
+"datetime.timedelta(microseconds=500000)"
+],
+[
+"timedelta(milliseconds=1, microseconds=1)",
+"ok",
+"datetime.timedelta(microseconds=1001)"
+],
+[
+"timedelta(weeks=1)",
+"ok",
+"datetime.timedelta(days=7)"
+],
+[
+"timedelta(-1)",
+"ok",
+"datetime.timedelta(days=-1)"
+],
+[
+"str(timedelta(days=1, hours=2, minutes=3, seconds=4))",
+"ok",
+"'1 day, 2:03:04'"
+],
+[
+"str(timedelta(days=2))",
+"ok",
+"'2 days, 0:00:00'"
+],
+[
+"str(timedelta(hours=-1))",
+"ok",
+"'-1 day, 23:00:00'"
+],
+[
+"str(timedelta(seconds=1, microseconds=5))",
+"ok",
+"'0:00:01.000005'"
+],
+[
+"timedelta(days=1) + timedelta(hours=1)",
+"ok",
+"datetime.timedelta(days=1, seconds=3600)"
+],
+[
+"timedelta(days=1) - timedelta(hours=1)",
+"ok",
+"datetime.timedelta(seconds=82800)"
+],
+[
+"timedelta(days=1) * 2",
+"ok",
+"datetime.timedelta(days=2)"
+],
+[
+"2 * timedelta(hours=1)",
+"ok",
+"datetime.timedelta(seconds=7200)"
+],
+[
+"timedelta(hours=1) * 1.5",
+"ok",
+"datetime.timedelta(seconds=5400)"
+],
+[
+"timedelta(days=1) / timedelta(hours=1)",
+"ok",
+"24.0"
+],
+[
+"-timedelta(hours=1)",
+"ok",
+"datetime.timedelta(days=-1, seconds=82800)"
+],
+[
+"abs(timedelta(hours=-1))",
+"ok",
+"datetime.timedelta(seconds=3600)"
+],
+[
+"timedelta(days=1, seconds=5).total_seconds()",
+"ok",
+"86405.0"
+],
+[
+"timedelta(days=1).days",
+"ok",
+"1"
+],
+[
+"timedelta(hours=-1).seconds",
+"ok",
+"82800"
+],
+[
+"bool(timedelta(0))",
+"ok",
+"False"
+],
+[
+"datetime(2024, 1, 1) < datetime(2024, 1, 2)",
+"ok",
+"True"
+],
+[
+"datetime(2024, 1, 1) == datetime(2024, 1, 1, 0, 0)",
+"ok",
+"True"
+],
+[
+"datetime(2024, 1, 31).strftime('%Y-%m-%d %H:%M:%S')",
+"ok",
+"'2024-01-31 00:00:00'"
+],
+[
+"datetime(2024, 1, 31, 15, 4, 5).strftime('%y %j %w %p %I %a %A %b %B %%')",
+"ok",
+"'24 031 3 PM 03 Wed Wednesday Jan January %'"
+],
+[
+"datetime(2024, 1, 31, 15, 4, 5, 7).strftime('%f %U %W %u')",
+"ok",
+"'000007 04 05 3'"
+],
+[
+"datetime(2024, 1, 31).date().strftime('%d/%m/%Y')",
+"ok",
+"'31/01/2024'"
+],
+[
+"datetime(2024, 1, 31, 10, 2).isoformat()",
+"ok",
+"'2024-01-31T10:02:00'"
+],
+[
+"datetime(2024, 1, 31, 10, 2).isoformat(' ')",
+"ok",
+"'2024-01-31 10:02:00'"
+],
+[
+"datetime(2024, 1, 31).date().isoformat()",
+"ok",
+"'2024-01-31'"
+],
+[
+"datetime(2024, 1, 31).weekday()",
+"ok",
+"2"
+],
+[
+"datetime(2024, 1, 31).isoweekday()",
+"ok",
+"3"
+],
+[
+"datetime(2024, 1, 31).replace(day=1, hour=3)",
+"ok",
+"datetime.datetime(2024, 1, 1, 3, 0)"
+],
+[
+"datetime(2024, 1, 31).date().replace(month=2, day=29)",
+"ok",
+"datetime.date(2024, 2, 29)"
+],
+[
+"datetime(2024, 1, 31).year",
+"ok",
+"2024"
+],
+[
+"datetime(2024, 1, 31, 4, 5, 6).second",
+"ok",
+"6"
+],
+[
+"datetime(2024, 1, 31).date().month",
+"ok",
+"1"
+],
+[
+"f'{datetime(2024, 1, 31):%Y/%m}'",
+"ok",
+"'2024/01'"
+],
+[
+"Command.create({'name': 'x'})",
+"ok",
+"(<Command.CREATE: 0>, 0, {'name': 'x'})"
+],
+[
+"Command.update(3, {'a': 1})",
+"ok",
+"(<Command.UPDATE: 1>, 3, {'a': 1})"
+],
+[
+"Command.delete(1)",
+"ok",
+"(<Command.DELETE: 2>, 1, 0)"
+],
+[
+"Command.unlink(2)",
+"ok",
+"(<Command.UNLINK: 3>, 2, 0)"
+],
+[
+"Command.link(3)",
+"ok",
+"(<Command.LINK: 4>, 3, 0)"
+],
+[
+"Command.clear()",
+"ok",
+"(<Command.CLEAR: 5>, 0, 0)"
+],
+[
+"Command.set([1, 2])",
+"ok",
+"(<Command.SET: 6>, 0, [1, 2])"
+],
+[
+"Command.set((1, 2))",
+"ok",
+"(<Command.SET: 6>, 0, (1, 2))"
+],
+[
+"Command.CREATE",
+"ok",
+"0"
+],
+[
+"Command.SET",
+"ok",
+"6"
+],
+[
+"[Command.link(4), Command.clear()]",
+"ok",
+"[(<Command.LINK: 4>, 4, 0), (<Command.CLEAR: 5>, 0, 0)]"
+],
+[
+"1 / 0",
+"err",
+"ZeroDivisionError: division by zero"
+],
+[
+"1.0 / 0",
+"err",
+"ZeroDivisionError: float division by zero"
+],
+[
+"1 // 0",
+"err",
+"ZeroDivisionError: integer division or modulo by zero"
+],
+[
+"1 % 0",
+"err",
+"ZeroDivisionError: integer modulo by zero"
+],
+[
+"1.0 // 0",
+"err",
+"ZeroDivisionError: float floor division by zero"
+],
+[
+"1.0 % 0",
+"err",
+"ZeroDivisionError: float modulo"
+],
+[
+"0 ** -1",
+"err",
+"ZeroDivisionError: 0.0 cannot be raised to a negative power"
+],
+[
+"0.0 ** -1",
+"err",
+"ZeroDivisionError: 0.0 cannot be raised to a negative power"
+],
+[
+"10.0 ** 400",
+"err",
+"OverflowError: (34, 'Numerical result out of range')"
+],
+[
+"int(float('nan'))",
+"err",
+"ValueError: cannot convert float NaN to integer"
+],
+[
+"int(float('inf'))",
+"err",
+"OverflowError: cannot convert float infinity to integer"
+],
+[
+"int('abc')",
+"err",
+"ValueError: invalid literal for int() with base 10: 'abc'"
+],
+[
+"int('')",
+"err",
+"ValueError: invalid literal for int() with base 10: ''"
+],
+[
+"int('1.5')",
+"err",
+"ValueError: invalid literal for int() with base 10: '1.5'"
+],
+[
+"float('abc')",
+"err",
+"ValueError: could not convert string to float: 'abc'"
+],
+[
+"1 in 'abc'",
+"err",
+"TypeError: 'in <string>' requires string as left operand, not int"
+],
+[
+"'a' + 1",
+"err",
+"TypeError: can only concatenate str (not \"int\") to str"
+],
+[
+"1 + 'a'",
+"err",
+"TypeError: unsupported operand type(s) for +: 'int' and 'str'"
+],
+[
+"[1] + (1,)",
+"err",
+"TypeError: can only concatenate list (not \"tuple\") to list"
+],
+[
+"{} + {}",
+"err",
+"TypeError: unsupported operand type(s) for +: 'dict' and 'dict'"
+],
+[
+"'a' * 'b'",
+"err",
+"TypeError: can't multiply sequence by non-int of type 'str'"
+],
+[
+"- 'a'",
+"err",
+"TypeError: bad operand type for unary -: 'str'"
+],
+[
+"~1.5",
+"err",
+"TypeError: bad operand type for unary ~: 'float'"
+],
+[
+"1 < 'a'",
+"err",
+"TypeError: '<' not supported between instances of 'int' and 'str'"
+],
+[
+"[1] < (1,)",
+"err",
+"TypeError: '<' not supported between instances of 'list' and 'tuple'"
+],
+[
+"None < None",
+"err",
+"TypeError: '<' not supported between instances of 'NoneType' and 'NoneType'"
+],
+[
+"undefined_name",
+"err",
+"NameError: name 'undefined_name' is not defined"
+],
+[
+"'abc'.missing",
+"err",
+"AttributeError: 'str' object has no attribute 'missing'"
+],
+[
+"(1).missing",
+"err",
+"AttributeError: 'int' object has no attribute 'missing'"
+],
+[
+"[1, 2][5]",
+"err",
+"IndexError: list index out of range"
+],
+[
+"(1,)[3]",
+"err",
+"IndexError: tuple index out of range"
+],
+[
+"'abc'[10]",
+"err",
+"IndexError: string index out of range"
+],
+[
+"'abc'['x']",
+"err",
+"TypeError: string indices must be integers, not 'str'"
+],
+[
+"[1]['x']",
+"err",
+"TypeError: list indices must be integers or slices, not str"
+],
+[
+"{'a': 1}['b']",
+"err",
+"KeyError: 'b'"
+],
+[
+"{'a': 1}[[1]]",
+"err",
+"TypeError: unhashable type: 'list'"
+],
+[
+"{[1]: 2}",
+"err",
+"TypeError: unhashable type: 'list'"
+],
+[
+"{'a': 1}.get([1])",
+"err",
+"TypeError: unhashable type: 'list'"
+],
+[
+"len(5)",
+"err",
+"TypeError: object of type 'int' has no len()"
+],
+[
+"len()",
+"err",
+"TypeError: len() takes exactly one argument (0 given)"
+],
+[
+"len([1], [2])",
+"err",
+"TypeError: len() takes exactly one argument (2 given)"
+],
+[
+"abs('x')",
+"err",
+"TypeError: bad operand type for abs(): 'str'"
+],
+[
+"round('x')",
+"err",
+"TypeError: type str doesn't define __round__ method"
+],
+[
+"round(1.5, 'x')",
+"err",
+"TypeError: 'str' object cannot be interpreted as an integer"
+],
+[
+"sum(['a', 'b'], '')",
+"err",
+"TypeError: sum() can't sum strings [use ''.join(seq) instead]"
+],
+[
+"sum([1], 2, 3)",
+"err",
+"TypeError: sum() takes at most 2 arguments (3 given)"
+],
+[
+"min()",
+"err",
+"TypeError: min expected at least 1 argument, got 0"
+],
+[
+"min([])",
+"err",
+"ValueError: min() iterable argument is empty"
+],
+[
+"max(1, 2, default=3)",
+"err",
+"TypeError: Cannot specify a default for max() with multiple positional arguments"
+],
+[
+"min(1, key=None)",
+"err",
+"TypeError: 'int' object is not iterable"
+],
+[
+"int(x=1)",
+"err",
+"TypeError: 'x' is an invalid keyword argument for int()"
+],
+[
+"str(1, 2)",
+"err",
+"TypeError: str() argument 'encoding' must be str, not int"
+],
+[
+"5()",
+"err",
+"TypeError: 'int' object is not callable"
+],
+[
+"'abc'.split('')",
+"err",
+"ValueError: empty separator"
+],
+[
+"'{} {}'.format(1)",
+"err",
+"IndexError: Replacement index 1 out of range for positional args tuple"
+],
+[
+"'{0} {}'.format(1, 2)",
+"err",
+"ValueError: cannot switch from manual field specification to automatic field numbering"
+],
+[
+"'{'.format()",
+"err",
+"ValueError: Single '{' encountered in format string"
+],
+[
+"'}'.format()",
+"err",
+"ValueError: Single '}' encountered in format string"
+],
+[
+"'{x}'.format()",
+"err",
+"KeyError: 'x'"
+],
+[
+"'%d' % 'x'",
+"err",
+"TypeError: %d format: a real number is required, not str"
+],
+[
+"'%s %s' % (1,)",
+"err",
+"TypeError: not enough arguments for format string"
+],
+[
+"'%s' % (1, 2)",
+"err",
+"TypeError: not all arguments converted during string formatting"
+],
+[
+"'%q' % 1",
+"err",
+"ValueError: unsupported format character 'q' (0x71) at index 1"
+],
+[
+"'%' % ()",
+"err",
+"ValueError: incomplete format"
+],
+[
+"'%(a)s' % 1",
+"err",
+"TypeError: format requires a mapping"
+],
+[
+"'%(a)s' % {'b': 1}",
+"err",
+"KeyError: 'a'"
+],
+[
+"'abc' % 5",
+"err",
+"TypeError: not all arguments converted during string formatting"
+],
+[
+"'%x' % 1.5",
+"err",
+"TypeError: %x format: an integer is required, not float"
+],
+[
+"f'{1:d}{\"x\":d}'",
+"err",
+"ValueError: Unknown format code 'd' for object of type 'str'"
+],
+[
+"f'{1.5:d}'",
+"err",
+"ValueError: Unknown format code 'd' for object of type 'float'"
+],
+[
+"f'{\"x\":+}'",
+"err",
+"ValueError: Sign not allowed in string format specifier"
+],
+[
+"f'{[]:>5}'",
+"err",
+"TypeError: unsupported format string passed to list.__format__"
+],
+[
+"f'{1:.2d}'",
+"err",
+"ValueError: Precision not allowed in integer format specifier"
+],
+[
+"'%c' % 1114112",
+"err",
+"OverflowError: %c arg not in range(0x110000)"
+],
+[
+"datetime(2024, 2, 30)",
+"err",
+"ValueError: day is out of range for month"
+],
+[
+"datetime(2024, 13, 1)",
+"err",
+"ValueError: month must be in 1..12"
+],
+[
+"datetime(0, 1, 1)",
+"err",
+"ValueError: year 0 is out of range"
+],
+[
+"datetime(2024, 1, 1, 24)",
+"err",
+"ValueError: hour must be in 0..23"
+],
+[
+"datetime(10000, 1, 1)",
+"err",
+"ValueError: year 10000 is out of range"
+],
+[
+"datetime(9999, 12, 31) + timedelta(days=1)",
+"err",
+"OverflowError: date value out of range"
+],
+[
+"datetime(1, 1, 1) - timedelta(days=1)",
+"err",
+"OverflowError: date value out of range"
+],
+[
+"datetime(9999, 12, 31) + relativedelta(years=1)",
+"err",
+"ValueError: year 10000 is out of range"
+],
+[
+"timedelta(days=1000000000)",
+"err",
+"OverflowError: days=1000000000; must have magnitude <= 999999999"
+],
+[
+"timedelta(days=999999999) + timedelta(days=1)",
+"err",
+"OverflowError: days=1000000000; must have magnitude <= 999999999"
+],
+[
+"relativedelta(months=1.5)",
+"err",
+"ValueError: Non-integer years and months are ambiguous and not currently supported."
+],
+[
+"relativedelta(foo=1)",
+"err",
+"TypeError: relativedelta.__init__() got an unexpected keyword argument 'foo'"
+],
+[
+"datetime(2024, 1, 1) - datetime(2024, 1, 1).date()",
+"err",
+"TypeError: unsupported operand type(s) for -: 'datetime.datetime' and 'datetime.date'"
+],
+[
+"datetime(2024, 1, 1) < datetime(2024, 1, 1).date()",
+"err",
+"TypeError: can't compare datetime.datetime to datetime.date"
+],
+[
+"datetime(2024, 1, 1).date() + datetime(2024, 1, 1).date()",
+"err",
+"TypeError: unsupported operand type(s) for +: 'datetime.date' and 'datetime.date'"
+],
+[
+"datetime(2024, 1, 1).strftime(1)",
+"err",
+"TypeError: strftime() argument 1 must be str, not int"
+],
+[
+"Command.create(1)",
+"ok",
+"(<Command.CREATE: 0>, 0, 1)"
+],
+[
+"Command.set(1)",
+"ok",
+"(<Command.SET: 6>, 0, 1)"
+],
+[
+"Command.set(['a'])",
+"ok",
+"(<Command.SET: 6>, 0, ['a'])"
+],
+[
+"Command.link()",
+"err",
+"TypeError: Command.link() missing 1 required positional argument: 'id'"
+],
+[
+"Command.unknown",
+"err",
+"AttributeError: type object 'Command' has no attribute 'unknown'"
+],
+[
+"1 << -1",
+"err",
+"ValueError: negative shift count"
+],
+[
+"-1 >> -1",
+"err",
+"ValueError: negative shift count"
+],
+[
+"[a for a, b in [(1, 2, 3)]]",
+"err",
+"ValueError: too many values to unpack (expected 2)"
+],
+[
+"[a for a, b, c in [(1, 2)]]",
+"err",
+"ValueError: not enough values to unpack (expected 3, got 2)"
+],
+[
+"[a for a, b in [1]]",
+"err",
+"TypeError: cannot unpack non-iterable int object"
+],
+[
+"[x for x in 5]",
+"err",
+"TypeError: 'int' object is not iterable"
+]
+]

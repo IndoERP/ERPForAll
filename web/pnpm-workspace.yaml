@@ -1,0 +1,16 @@
+# The web workspace: this directory is the @erpforall/elang package;
+# addon client packages join from ../addons/<name>/static.
+packages:
+  - "packages/*"
+  - "../addons/*/static"
+# pnpm runs no dependency lifecycle script except these (esbuild checks its platform binary).
+onlyBuiltDependencies:
+  - esbuild
+# Exact versions of the workspace's dev tooling, written once;
+# packages refer to them as "catalog:".
+catalog:
+  "@types/node": 24.19.2
+  esbuild: 0.28.2
+  jsdom: 30.1.3
+  typescript: 7.0.2
+  vitest: 5.0.5

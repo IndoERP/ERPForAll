@@ -1,0 +1,5 @@
+error: company_access: parent(…) needs edge (missing: edge)
+ --> tests/ui/company_access/parent_no_edge.rs:5:22
+  |
+5 |     company_access = parent()
+  |                      ^^^^^^

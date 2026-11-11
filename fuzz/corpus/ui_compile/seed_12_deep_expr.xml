@@ -1,0 +1,1 @@
+<templates><t t-name="web.DeepExpr"><b t-out="((this.a + this.b) * this.c) > 0 ? this.x : this.y"/></t></templates>

@@ -1,0 +1,5 @@
+error: company_access: unknown parameter 'why' in unrestricted(…)
+ --> tests/ui/company_access/unknown_parameter.rs:5:35
+  |
+5 |     company_access = unrestricted(why = "x")
+  |                                   ^^^

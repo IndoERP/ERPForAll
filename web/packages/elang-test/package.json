@@ -1,0 +1,9 @@
+{
+  "name": "@erpforall/elang-test",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Isolated Elang component test harness",
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "exports": { ".": { "types": "./src/index.ts", "default": "./src/index.ts" } }
+}

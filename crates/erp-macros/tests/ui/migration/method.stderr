@@ -1,0 +1,5 @@
+error: migration: a migration is a free function, not a method
+ --> tests/ui/migration/method.rs:6:19
+  |
+6 |     async fn fill(&self, _from: u8) {}
+  |                   ^

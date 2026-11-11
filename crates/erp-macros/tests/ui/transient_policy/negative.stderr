@@ -1,0 +1,5 @@
+error: `transient_max_count` must not be negative (0 disables the threshold)
+ --> tests/ui/transient_policy/negative.rs:2:79
+  |
+2 | #[erp_macros::model(name = "x.wiz", kind = "transient", transient_max_count = -5)]
+  |                                                                               ^

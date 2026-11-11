@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<erp noupdate="1">
+  <!-- A feature classification only: permissions remain in the existing access rows. -->
+  <record id="group_uom" model="res.groups">
+    <field name="name">Multiple measurement units</field>
+  </record>
+</erp>

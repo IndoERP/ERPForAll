@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<erp>
+  <record id="addons_form" model="ir.ui.view">
+    <field name="name">ir.module.module.addons.service</field>
+    <field name="model">ir.module.module</field>
+    <field name="arch" type="xml">
+      <form record_mode="service">
+        <widget name="web.addons"/>
+      </form>
+    </field>
+  </record>
+  <record id="addons_action" model="ir.actions.act_window">
+    <field name="name">Addons</field>
+    <field name="res_model">ir.module.module</field>
+    <field name="view_mode">form</field>
+    <field name="view_id" ref="addons_form"/>
+  </record>
+  <menuitem id="addons_menu" name="Addons" parent="base.settings_menu" action="addons_action" groups="base.group_system" sequence="20"/>
+</erp>

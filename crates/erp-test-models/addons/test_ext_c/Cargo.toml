@@ -1,0 +1,16 @@
+[package]
+name = "erp-addon-test_ext_c"
+description = "ERPForAll fixture addon test_ext_c: cross-crate model extension"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+erp-sdk = { workspace = true }
+erp-addon-test_ext_a = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,16 @@
+[package]
+name = "erp-addon-purchase_stock"
+description = "ERPForAll addon purchase_stock: purchase orders, receipts, and vendor bills for stock"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+erp-sdk = { workspace = true }
+erp-addon-stock_account = { workspace = true }
+
+[lints]
+workspace = true

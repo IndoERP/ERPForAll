@@ -1,0 +1,27 @@
+error[E0451]: fields `tx`, `plan`, `node`, `record`, `fields`, `registry_generation`, `policy`, `snapshot`, `subject`, `key` and `field_ctx` of struct `GuardEvaluation` are private
+  --> tests/ui/host_access/guard_evaluation_literal.rs:8:9
+   |
+ 7 |     let _forged: GuardEvaluation<'static> = GuardEvaluation {
+   |                                             --------------- in this type
+ 8 |         tx: todo!(),
+   |         ^^ private field
+ 9 |         plan: todo!(),
+   |         ^^^^ private field
+10 |         node: todo!(),
+   |         ^^^^ private field
+11 |         record: todo!(),
+   |         ^^^^^^ private field
+12 |         fields: todo!(),
+   |         ^^^^^^ private field
+13 |         registry_generation: todo!(),
+   |         ^^^^^^^^^^^^^^^^^^^ private field
+14 |         policy: todo!(),
+   |         ^^^^^^ private field
+15 |         snapshot: todo!(),
+   |         ^^^^^^^^ private field
+16 |         subject: todo!(),
+   |         ^^^^^^^ private field
+17 |         key: todo!(),
+   |         ^^^ private field
+18 |         field_ctx: todo!(),
+   |         ^^^^^^^^^ private field

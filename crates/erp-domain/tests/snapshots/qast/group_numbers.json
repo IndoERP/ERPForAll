@@ -1,0 +1,1 @@
+{"aggregates":[],"context":{},"domain":["&","&","&",["credit_limit",">",1],["score","<",0],["ratio","=",0.25],["n","=",false]],"groupby":[{"granularity":"day_of_week","path":"create_date"}],"having":[],"kind":"read_group","limit":9,"model":"res.partner","offset":0,"order":[],"version":1}

@@ -1,0 +1,1 @@
+{"context":{},"domain":["&","&","&","&",["user_id","=",{"param":"uid"}],["company_id","in",{"param":"company_ids"}],["date_order","<=",{"param":"now"}],["validity_date",">=",{"param":"today"}],["company_id","!=",{"param":"company_id"}]],"fields":["name"],"kind":"search_read","limit":100,"model":"sale.order","offset":0,"order":[],"version":1}

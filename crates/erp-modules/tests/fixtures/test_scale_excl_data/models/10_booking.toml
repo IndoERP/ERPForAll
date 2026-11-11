@@ -1,0 +1,35 @@
+# A new model whose exclusion comes from the model file: only confirmed holds count, with this
+# file's message. (A model file cannot replace a native object, so it declares its own model.)
+[[model]]
+name = "scale.hold"
+description = "Hold"
+
+[[model.field]]
+name = "resource_id"
+type = "many2one"
+comodel = "scale.resource"
+required = true
+
+[[model.field]]
+name = "start"
+type = "datetime"
+string = "Start"
+
+[[model.field]]
+name = "stop"
+type = "datetime"
+string = "Stop"
+
+[[model.field]]
+name = "state"
+type = "selection"
+selection = [["confirmed", "Confirmed"], ["cancel", "Cancelled"]]
+default = "confirmed"
+required = true
+
+[[model.exclude]]
+name = "_no_double_hold"
+equal = ["resource_id"]
+period = { from = "start", to = "stop", bounds = "[)" }
+filter = "[('state', '=', 'confirmed')]"
+message = "This resource is already held (model file)."

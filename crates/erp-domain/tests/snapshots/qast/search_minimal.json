@@ -1,0 +1,1 @@
+{"context":{},"domain":[["state","=","posted"]],"fields":["name","amount_total"],"kind":"search_read","limit":80,"model":"account.move","offset":0,"order":[],"version":1}

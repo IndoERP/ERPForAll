@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Currency screens: Settings > Currencies, and the default views a currency or a rate opens with
+     from a related field (for example the company's currency). Without them, opening a currency
+     from a company form had no form view to serve. -->
+<erp>
+  <record id="settings_currency_rates_list" model="ir.ui.view">
+    <field name="name">res.currency.rate.settings.list</field>
+    <field name="model">res.currency.rate</field>
+    <field name="arch" type="xml"><list><field name="name"/><field name="rate"/><field name="company_id"/></list></field>
+  </record>
+  <record id="settings_currency_rates_form" model="ir.ui.view">
+    <field name="name">res.currency.rate.settings.form</field>
+    <field name="model">res.currency.rate</field>
+    <field name="arch" type="xml"><form record_mode="record"><field name="name"/><field name="rate"/><field name="currency_id"/><field name="company_id"/></form></field>
+  </record>
+  <record id="settings_currencies_list" model="ir.ui.view">
+    <field name="name">res.currency.settings.list</field>
+    <field name="model">res.currency</field>
+    <field name="arch" type="xml"><list><field name="name"/><field name="symbol"/><field name="full_name"/><field name="active"/></list></field>
+  </record>
+  <record id="settings_currencies_form" model="ir.ui.view">
+    <field name="name">res.currency.settings.form</field>
+    <field name="model">res.currency</field>
+    <field name="arch" type="xml"><form record_mode="record"><field name="name"/><field name="full_name"/><field name="symbol"/><field name="position"/><field name="rounding"/><field name="decimal_places"/><field name="iso_numeric"/><field name="active"/><field name="rate_ids"/></form></field>
+  </record>
+  <record id="settings_currencies_action" model="ir.actions.act_window">
+    <field name="name">Currencies</field>
+    <field name="res_model">res.currency</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="settings_currencies_list"/>
+  </record>
+  <record id="settings_currencies_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="settings_currencies_action"/>
+    <field name="view_id" ref="settings_currencies_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="settings_currencies_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="settings_currencies_action"/>
+    <field name="view_id" ref="settings_currencies_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="settings_currencies_menu" name="Currencies" parent="settings_menu" action="settings_currencies_action" groups="base.group_system" sequence="30"/>
+</erp>

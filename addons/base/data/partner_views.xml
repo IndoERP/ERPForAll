@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+Contact views (partner part).
+     Only fields that exist on res.partner today are shown;
+     for what is left out. The Contacts app (addon `contacts`)
+     opens these through its window actions. 
+-->
+<erp>
+  <record id="partner_list" model="ir.ui.view">
+    <field name="name">res.partner.list</field>
+    <field name="model">res.partner</field>
+    <field name="arch" type="xml">
+      <list string="Contacts">
+        <field name="complete_name" string="Name"/>
+        <field name="phone" widget="phone"/>
+        <field name="email" widget="email"/>
+        <field name="city"/>
+        <field name="vat"/>
+        <field name="category_id" widget="many2many_tags"/>
+      </list>
+    </field>
+  </record>
+
+  <record id="partner_form" model="ir.ui.view">
+    <field name="name">res.partner.form</field>
+    <field name="model">res.partner</field>
+    <field name="arch" type="xml">
+      <form string="Contact">
+        <sheet>
+          <div class="oe_title">
+            <h1><field name="name" placeholder="e.g. Lumbung Teknik"/></h1>
+          </div>
+          <group>
+            <group string="Contact">
+              <field name="is_company" string="Company" readonly="1"/>
+              <field name="parent_id" invisible="is_company"/>
+              <field name="type"/>
+              <field name="vat"/>
+              <field name="ref"/>
+            </group>
+            <group string="Reach">
+              <field name="email" widget="email"/>
+              <field name="phone" widget="phone"/>
+              <field name="website" widget="url"/>
+            </group>
+          </group>
+          <notebook>
+            <page name="contacts" string="Contacts">
+              <field name="child_ids"/>
+            </page>
+            <page name="address" string="Address">
+              <group>
+                <field name="street"/>
+                <field name="street2"/>
+                <field name="zip"/>
+                <field name="city"/>
+              </group>
+            </page>
+            <page name="details" string="Details">
+              <group>
+                <group>
+                  <field name="industry_id"/>
+                  <field name="category_id" widget="many2many_tags"/>
+                </group>
+                <group>
+                  <field name="company_id"/>
+                  <field name="active"/>
+                </group>
+              </group>
+            </page>
+          </notebook>
+        </sheet>
+      </form>
+    </field>
+  </record>
+
+  <record id="partner_search" model="ir.ui.view">
+    <field name="name">res.partner.search</field>
+    <field name="model">res.partner</field>
+    <field name="arch" type="xml">
+      <search>
+        <field name="complete_name" string="Name" filter_domain="['|', '|', '|', ('complete_name', 'ilike', self), ('email', 'ilike', self), ('ref', 'ilike', self), ('vat', 'ilike', self)]"/>
+        <field name="email"/>
+        <field name="phone"/>
+        <field name="parent_id" string="Company"/>
+        <field name="category_id" string="Tag"/>
+        <field name="industry_id"/>
+        <filter name="companies" string="Companies" domain="[('is_company', '=', True)]"/>
+        <filter name="individuals" string="Individuals" domain="[('is_company', '=', False)]"/>
+        <separator/>
+        <filter name="archived" string="Archived" domain="[('active', '=', False)]"/>
+      </search>
+    </field>
+  </record>
+
+  <record id="partner_category_list" model="ir.ui.view">
+    <field name="name">res.partner.category.list</field>
+    <field name="model">res.partner.category</field>
+    <field name="arch" type="xml">
+      <list string="Contact Tags">
+        <field name="name"/>
+        <field name="parent_id"/>
+      </list>
+    </field>
+  </record>
+
+  <record id="partner_category_form" model="ir.ui.view">
+    <field name="name">res.partner.category.form</field>
+    <field name="model">res.partner.category</field>
+    <field name="arch" type="xml">
+      <form string="Contact Tag">
+        <sheet>
+          <div class="oe_title">
+            <h1><field name="name" placeholder="e.g. Distributor"/></h1>
+          </div>
+          <group>
+            <group>
+              <field name="parent_id"/>
+              <field name="color"/>
+            </group>
+            <group>
+              <field name="active"/>
+            </group>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+</erp>

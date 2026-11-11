@@ -1,0 +1,11 @@
+error[E0597]: `mobile` does not live long enough
+ --> tests/ui/host_access/checked_mobile_cannot_escape_input.rs:7:19
+  |
+6 |         let mobile = input.with_mobile(true);
+  |             ------ binding `mobile` declared here
+7 |         escaped = mobile.with_mobile(false);
+  |                   ^^^^^^ borrowed value does not live long enough
+8 |     }
+  |     - `mobile` dropped here while still borrowed
+9 |     let _ = escaped.mobile();
+  |             ------- borrow later used here

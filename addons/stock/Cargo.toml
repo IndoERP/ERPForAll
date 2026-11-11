@@ -1,0 +1,35 @@
+[package]
+name = "erp-addon-stock"
+description = "ERPForAll addon stock: inventory, logistics, and warehouse management"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+erp-sdk = { workspace = true }
+erp-addon-product = { workspace = true }
+erp-addon-barcodes_gs1_nomenclature = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+erp-testkit = { workspace = true }
+toml = { workspace = true }
+erp-addon-base = { workspace = true }
+erp-addon-web = { workspace = true }
+erp-addon-uom = { workspace = true }
+erp-addon-barcodes = { workspace = true }
+erp-addon-delivery = { workspace = true }
+erp-addon-stock_delivery = { workspace = true }
+erp-addon-product_expiry = { workspace = true }
+erp-addon-stock_sms = { workspace = true }
+erp-addon-stock_account = { workspace = true }
+erp-addon-stock_landed_costs = { workspace = true }
+erp-addon-purchase_stock = { workspace = true }
+erp-addon-sale_stock = { workspace = true }
+erp-addon-stock_dropshipping = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }

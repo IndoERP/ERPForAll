@@ -1,0 +1,3 @@
+.acceptance-note-title input { border-inline-start: 3px solid var(--accent); }
+.acceptance-note-title small, .acceptance-note-guide { color: var(--muted); font-size: .875rem; }
+.acceptance-note-guide { margin: .25rem 0; }

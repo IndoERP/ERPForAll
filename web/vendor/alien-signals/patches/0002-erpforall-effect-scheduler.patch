@@ -1,0 +1,36 @@
+diff --git a/src/index.ts b/src/index.ts
+index 8bdaf943..596dd4f4 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -39,6 +39,19 @@ let queuedLength = 0;
+ let activeSub: ReactiveNode | undefined;
+ 
+ const queued: (EffectNode | undefined)[] = [];
++
++// ERPForAll patch 0002 (docs/design/m4-ui0-runtime.md §4): with a scheduler installed, a notified
++// effect goes to it instead of this queue, and the scheduler runs it later through runEffect (the
++// same dirty check and re-run as flush). Without one, nothing changes.
++let effectScheduler: ((effect: ReactiveNode) => void) | undefined;
++
++export function setEffectScheduler(hook: ((effect: ReactiveNode) => void) | undefined): void {
++	effectScheduler = hook;
++}
++
++export function runEffect(effect: ReactiveNode): void {
++	run(effect as EffectNode);
++}
+ const {
+ 	link,
+ 	unlink,
+@@ -57,6 +70,11 @@ const {
+ 		return true;
+ 	},
+ 	notify(effect: EffectNode) {
++		if (effectScheduler !== undefined) {
++			effect.flags &= ~ReactiveFlags.Watching;
++			effectScheduler(effect);
++			return;
++		}
+ 		let insertIndex = queuedLength;
+ 		let firstInsertedIndex = insertIndex;
+ 

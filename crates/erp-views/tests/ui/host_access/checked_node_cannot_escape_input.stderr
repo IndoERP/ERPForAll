@@ -1,0 +1,8 @@
+error[E0515]: cannot return value referencing function parameter `input`
+ --> tests/ui/host_access/checked_node_cannot_escape_input.rs:4:5
+  |
+4 |     input.root().unwrap()
+  |     -----^^^^^^^^^^^^^^^^
+  |     |
+  |     returns a value referencing data owned by the current function
+  |     `input` is borrowed here

@@ -1,0 +1,13 @@
+<templates>
+  <t t-name="acceptance_notes.NoteTitle">
+    <label class="field-label acceptance-note-title">
+      <span t-out="this.labelValue"/>
+      <input type="text" t-att-name="this.props.field.name"
+             t-att-value="this.textValue" t-att-placeholder="this.props.field.label"
+             t-att-required="this.props.field.required"
+             t-att-disabled="this.props.field.readonly"
+             t-on-change="this.onChange"/>
+      <small>Give this note a short, descriptive title.</small>
+    </label>
+  </t>
+</templates>

@@ -1,0 +1,16 @@
+exact_only = true
+name = "Units of Measure"
+summary = "Manage product units of measure and unit conversions"
+category = "Inventory"
+author = "Arkana"
+license = "MIT OR Apache-2.0"
+version = "1.1.0"
+depends = ["base"]
+uninstall_hook = "guard_reference_history"
+data = [
+    "security/uom_groups.xml",
+    "security/uom_group_classification.xml",
+    "security/ir.access.csv",
+    "data/uom_guard_data.xml",
+    "data/uom_data.xml",
+]

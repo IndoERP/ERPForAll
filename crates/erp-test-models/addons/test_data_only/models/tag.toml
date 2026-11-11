@@ -1,0 +1,21 @@
+[[model]]
+name = "test_data_only.tag"
+description = "Tag"
+order = "sequence, name"
+
+[[model.field]]
+name = "name"
+type = "char"
+string = "Tag Name"
+required = true
+
+[[model.field]]
+name = "sequence"
+type = "integer"
+default = 10
+
+[[model.field]]
+name = "color"
+type = "selection"
+selection = [["red", "Red"], ["green", "Green"]]
+default = "red"

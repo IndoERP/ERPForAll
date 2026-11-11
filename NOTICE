@@ -1,0 +1,14 @@
+ERPForAll
+Copyright 2026 Arkana and the ERPForAll contributors
+
+This project is licensed under either of the MIT license (LICENSE-MIT) or the
+Apache License, Version 2.0 (LICENSE-APACHE), at your option.
+
+The names "ERPForAll" and "Elang" are not covered by these licences.
+
+Code under vendor/ keeps the licence it ships with (see each directory).
+Third-party notices for the web bundle and other redistributed material are
+kept next to that material.
+
+ERPForAll is a clean reimplementation: it does not copy code from the reference ERP.
+the reference ERP is a trademark of the reference ERP S.A.; this project is not affiliated with it.

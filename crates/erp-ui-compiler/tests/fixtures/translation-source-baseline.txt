@@ -1,0 +1,39 @@
+erpforall-ui-compiled 1
+modules 3
+module web.Source 619
+/*! SPDX-License-Identifier: MIT OR Apache-2.0 */
+import * as $ from "@erpforall/elang/abi";
+const $t0 = $.template("\u003csection title=\"Hint\"\u003e\u003cp\u003e Hello \u003c\/p\u003e\u003cspan\u003eSame\u003c\/span\u003e\u003c!\u003e\u003c!\u003e\u003cb\u003eAdded\u003c\/b\u003e\u003c\/section\u003e", 0);
+export const name = "web.Source";
+export function render($self) {
+  const $n0 = $t0();
+  const $n1 = $n0.firstChild.nextSibling.nextSibling;
+  $.insert($n0, () => $self.value, $n1);
+  const $n2 = $n1.nextSibling;
+  $.component($n0, $n2, $self, "Child", {"label": () => "Hello"}, null, null);
+  return $n0;
+}
+module web.Caller 726
+/*! SPDX-License-Identifier: MIT OR Apache-2.0 */
+import * as $ from "@erpforall/elang/abi";
+const $t0 = $.template("\u003c!\u003e", 1);
+export const name = "web.Caller";
+export function render($self, $c, $b, $d = 0) {
+  if ($d > 64) { throw Error("t-call depth limit (64) exceeded: web.Caller"); }
+  const $n0 = $t0();
+  const $n1 = $n0.firstChild;
+  $.keyed($n0, $n1, () => "other.Callee", () => { const $target = "other.Callee"; const $fn = ($c && $c.$call) ? $c.$call : ($self && $self.template ? ($target, $s, $c, $b, $d) => $self.template($target)($s, $c, $b, $d) : null); if (!$fn) return null; return $fn($target, $self, Object.assign(Object.create($c || null), {"label": "Hello"}), null, $d + 1); });
+  return $n0;
+}
+module other.Callee 413
+/*! SPDX-License-Identifier: MIT OR Apache-2.0 */
+import * as $ from "@erpforall/elang/abi";
+const $t0 = $.template("\u003cp\u003e\u003c\/p\u003e", 0);
+export const name = "other.Callee";
+export function render($self, $c, $b, $d = 0) {
+  if ($d > 64) { throw Error("t-call depth limit (64) exceeded: other.Callee"); }
+  const $n0 = $t0();
+  $.insert($n0, () => ($c ? $c.label : undefined), null);
+  return $n0;
+}
+warning info[skipped]: translation pass skipped: static text and .translate values are emitted untranslated until a later release

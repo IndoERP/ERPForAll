@@ -1,0 +1,42 @@
+[package]
+name = "erp-expr"
+description = "Python-expression subset evaluator for ERPForAll (XML eval, search, context, domains, and view modifiers)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# Pure crate (layer L1): no database, no registry, no I/O.
+# Must keep building for wasm32-wasip2.
+[features]
+default = []
+schema-gen = ["dep:ts-rs"]
+
+[dependencies]
+indexmap = { workspace = true }
+serde = { workspace = true }
+# Browser-equivalent numeric admission is scoped to the AST reader.
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true }
+# Build tooling only; keep the production evaluator and wasm dependency trees pure.
+ts-rs = { version = "=11.1.0", optional = true, default-features = false, features = ["serde-compat"] }
+
+[dev-dependencies]
+erp-alloc-budget = { workspace = true }
+proptest = { workspace = true }
+# Exact process resident peak for the bounded admission_cost example.
+nix = { version = "0.31.3", default-features = false, features = ["resource"] }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "alloc_wire"
+harness = false
+
+[[example]]
+name = "ui_schema"
+required-features = ["schema-gen"]

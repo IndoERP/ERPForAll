@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<erp noupdate="1">
+  <record id="partner_root" model="res.partner">
+    <field name="name">System</field>
+    <field name="company_id" ref="base.main_company"/>
+    <field name="email">system@example.com</field>
+    <field name="active" eval="False"/>
+  </record>
+
+  <record id="partner_admin" model="res.partner">
+    <field name="name">Administrator</field>
+    <field name="company_id" ref="base.main_company"/>
+  </record>
+
+  <record id="public_partner" model="res.partner">
+    <field name="name">Public user</field>
+    <field name="active" eval="False"/>
+  </record>
+</erp>

@@ -1,0 +1,5 @@
+<templates>
+  <t t-name="acceptance_notes.NotePanel">
+    <p class="acceptance-note-guide">Notes belong to your company. Your access determines which notes you can open.</p>
+  </t>
+</templates>

@@ -1,0 +1,63 @@
+# Continuous integration for pull requests and pushes to main.
+#
+# Rust job: `scripts/check.sh --tests` runs formatting, clippy, a build and the Rust tests against a PostgreSQL 18
+# service container. The test support creates and drops its own databases on the server named by DATABASE_URL.
+# Web job: type check and unit tests of the web workspace with the pinned Node and pnpm.
+#
+# Honest limits: the project's authors ran these commands on their own Linux build machine, not on GitHub-hosted
+# runners. The first run may need adjustments (runner packages, timeouts). Tests that need tools the runner lacks are
+# not skipped silently: they fail and show what is missing.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+      ERP_TEST_DATABASE_URLS: postgres://postgres:postgres@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned Rust toolchain
+        run: rustup show
+      - name: Install cargo-nextest
+        run: cargo install cargo-nextest --locked
+      - name: Format, lints, build and tests
+        run: scripts/check.sh --tests
+
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned Node and pnpm
+        run: |
+          scripts/web-toolchain.sh install
+          scripts/web-toolchain.sh check
+      - name: Install dependencies, type check and test
+        run: |
+          eval "$(scripts/web-toolchain.sh env)"
+          pnpm --dir web install --frozen-lockfile
+          cd web
+          pnpm run typecheck
+          pnpm exec vitest run --exclude "**/differential-property.test.ts" --exclude "**/hostile-property.test.ts"

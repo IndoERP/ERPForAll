@@ -1,0 +1,25 @@
+[package]
+name = "erp-addon-base"
+description = "ERPForAll addon base: the core addon's models, security data and overrides"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# Addons depend on erp-sdk only: never on erp-orm, erp-modules, or
+# erp-testkit outside [dev-dependencies]. scripts/check-layers.py enforces it.
+[dependencies]
+erp-sdk = { workspace = true, features = ["__base-core-ddl"] }
+jiff = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros", "io-util"] }
+base64 = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+erp-testkit = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }

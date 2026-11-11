@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_book_form_inherit" model="ir.ui.view">
+        <field name="name">test_addon.book.form.inherit</field>
+        <field name="model">test_addon.book</field>
+        <field name="inherit_id" ref="test_addon_a.view_book_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='published_year']" position="after">
+                <field name="isbn"/>
+                <field name="rating"/>
+            </xpath>
+        </field>
+    </record>
+</odoo>

@@ -1,0 +1,13 @@
+name = "Discuss"
+summary = "Messages, followers and subtypes behind the chatter of any document"
+category = "Productivity/Discuss"
+author = "Arkana"
+license = "MIT OR Apache-2.0"
+version = "1.0.0"
+depends = ["base"]
+data = [
+    "security/ir.access.csv",
+    "data/mail_message_subtype_data.xml",
+    "data/mail_activity_type_data.xml",
+    "views/res_partner_views.xml",
+]

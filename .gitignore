@@ -1,0 +1,21 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Local
+.DS_Store
+.env
+
+# Remote CI output and sync metadata
+
+# Python bytecode
+__pycache__/
+
+# Web workspace (web/, addons/*/static/): pnpm installs
+node_modules/
+
+# built components of the CLI (erp addon build --target wasm)
+/crates/erp-test-models/addons/*/wasm/
+/examples/wasm/*/wasm/
+
+# Documentation site build output (scripts/build-doc-site.sh)
