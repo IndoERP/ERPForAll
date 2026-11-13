@@ -482,6 +482,18 @@ fn collect_ids<E: std::fmt::Display>(
         .map_err(|e| Error::db(format!("{what}: {e}")))
 }
 
+fn listed_refusal_ids(ids: &[i64]) -> String {
+    let mut listed: Vec<String> = ids
+        .iter()
+        .take(REFUSAL_IDS_SHOWN)
+        .map(i64::to_string)
+        .collect();
+    if ids.len() > REFUSAL_IDS_SHOWN {
+        listed.push(format!("and {} more", ids.len() - REFUSAL_IDS_SHOWN));
+    }
+    listed.join(", ")
+}
+
 /// The body of [`assign_user_companies_base_1_10`], callable on its own (the upgrade test runs it
 /// against rows it inserts in the old shape). The superuser is skipped: it keeps no company.
 /// Set-based, under the company lifecycle fence and a table lock, and without
@@ -494,16 +506,16 @@ fn collect_ids<E: std::fmt::Display>(
 ///    set from the relation rows alone and refuses a default company outside it (`erp-security`
 ///    `resolver.rs` `SubjectRow::resolution`, `erp-orm` `Resolution::with_default_order`), so such
 ///    a user could not sign in before; now it can, in a company an administrator allowed. **R1b:**
-///    a user with no active allowed company at all (no row, or only archived companies) keeps the
-///    earlier handling: its default company is added to its allowed ones, as nothing else can be
-///    chosen without guessing. The warning logs name the user ids.
+///    an active user with no active allowed company at all (no row, or only archived companies)
+///    refuses before any fill, even with only one active company. An inactive user in that shape
+///    keeps its default and memberships unchanged (A1).
 /// 2. **R2.** A user without `company_id` and with `company_ids` takes the lowest-id active
 ///    company among them.
 /// 3. **R3a.** A user with neither, in a database with exactly one company that is active, takes
 ///    that company for both fields (active and inactive users alike).
 /// 4. **R3b.** Any active user that still has no default company refuses the upgrade before a row
 ///    is written: there is no company that can be chosen without guessing. Inactive users are
-///    never a reason to refuse (R1, R2 and R3a fill them like active ones); an inactive user that
+///    never a reason to refuse (R1a, R2 and R3a fill them like active ones); an inactive user that
 ///    stays without a default company is refused later, when someone reactivates it.
 ///
 /// A database without any company has nothing to assign and is left alone (the default company
@@ -512,7 +524,7 @@ fn collect_ids<E: std::fmt::Display>(
 ///
 /// # Errors
 ///
-/// `Validation` (R3b, naming the user ids and the number of companies); `Database` for a failed
+/// `Validation` (active R1b or R3b, naming user ids; R3b also names the company count); `Database` for a failed
 /// statement. A later lifecycle failure rolls the changes back with the schema, data and
 /// module-version changes.
 pub async fn assign_user_companies(tx: &mut Transaction) -> Result<()> {
@@ -570,19 +582,41 @@ pub async fn assign_user_companies(tx: &mut Transaction) -> Result<()> {
             unassignable.iter().map(|row| row.try_get(0)),
             "base 1.10 refusal ids",
         )?;
-        let mut listed: Vec<String> = ids
-            .iter()
-            .take(REFUSAL_IDS_SHOWN)
-            .map(i64::to_string)
-            .collect();
-        if ids.len() > REFUSAL_IDS_SHOWN {
-            listed.push(format!("and {} more", ids.len() - REFUSAL_IDS_SHOWN));
-        }
         return Err(Error::validation(format!(
             "base 1.10 refused: active users {} have no default company and none can be chosen \
              ({total} companies). Set each user's default and allowed companies in Settings > \
              Users with the current release, then upgrade again.",
-            listed.join(", ")
+            listed_refusal_ids(&ids)
+        )));
+    }
+
+    // R1b, also before any fill: a default is not authority to restore a removed membership.
+    // Inactive R1b users are left unchanged; the ORM checks them when they are reactivated.
+    let outside = tx
+        .query(
+            "SELECT u.id::int8 FROM res_users u \
+              WHERE u.id <> $1 AND u.active IS TRUE AND u.company_id IS NOT NULL \
+                AND NOT EXISTS ( \
+                      SELECT 1 FROM res_company_users_rel r \
+                       WHERE r.user_id = u.id AND r.cid = u.company_id) \
+                AND NOT EXISTS ( \
+                      SELECT 1 FROM res_company_users_rel r \
+                        JOIN res_company c ON c.id = r.cid \
+                       WHERE r.user_id = u.id AND c.active IS TRUE) \
+              ORDER BY u.id",
+            &[&superuser],
+        )
+        .await?;
+    if !outside.is_empty() {
+        let ids = collect_ids(
+            outside.iter().map(|row| row.try_get(0)),
+            "base 1.10 R1b refusal ids",
+        )?;
+        return Err(Error::validation(format!(
+            "base 1.10 refused: active users {} have a default company outside their allowed \
+             companies and no active allowed company. Set each user's default and allowed companies \
+             in Settings > Users with the current release, then upgrade again.",
+            listed_refusal_ids(&ids)
         )));
     }
 
@@ -610,30 +644,6 @@ pub async fn assign_user_companies(tx: &mut Transaction) -> Result<()> {
             target: "erp::migration",
             user_ids = ?ids,
             "base 1.10: the default company of these users was not one of their allowed companies; they took their lowest-id active allowed company"
-        );
-    }
-
-    // R1b: what is left has no active allowed company at all, so the default company is added to
-    // the allowed ones as before
-    let rows = tx
-        .query(
-            "INSERT INTO res_company_users_rel (user_id, cid) \
-             SELECT u.id, u.company_id FROM res_users u \
-              WHERE u.id <> $1 AND u.company_id IS NOT NULL \
-                AND NOT EXISTS ( \
-                      SELECT 1 FROM res_company_users_rel r \
-                       WHERE r.user_id = u.id AND r.cid = u.company_id) \
-              ORDER BY u.id \
-             RETURNING user_id::int8",
-            &[&superuser],
-        )
-        .await?;
-    if !rows.is_empty() {
-        let ids = collect_ids(rows.iter().map(|row| row.try_get(0)), "base 1.10 R1b ids")?;
-        tracing::warn!(
-            target: "erp::migration",
-            user_ids = ?ids,
-            "base 1.10: the default company of these users was added to their allowed companies"
         );
     }
 

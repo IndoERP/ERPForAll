@@ -2,6 +2,7 @@
 import { createHotkeyBoundary } from "@erpforall/elang";
 import { reportHotkeyError } from "../../../../../../web/src/runtime/hotkeys.js";
 import type { SearchModel } from "./search-model.js";
+import { GROUP_INTERVALS } from "./types.js";
 
 let menuSequence = 0;
 export function createSearchMenuPanel(model: SearchModel, onUpdate: () => void, trigger?: HTMLButtonElement): {
@@ -249,7 +250,15 @@ export function createSearchMenuPanel(model: SearchModel, onUpdate: () => void, 
       select.className = "erp-custom-group-select";
       select.setAttribute("aria-label", "Add custom group");
       select.append(new Option("Add Custom Group", ""));
-      for (const field of fields) select.append(new Option(field.label, field.name));
+      for (const field of fields) {
+        // A date field offers intervals when its owner enables temporal grouping.
+        if (model.hasGroupByIntervals() && ((field.kind as string) === "date" || (field.kind as string) === "datetime")) {
+          const dates = document.createElement("optgroup");
+          dates.label = field.label;
+          for (const [interval, label] of GROUP_INTERVALS) dates.append(new Option(label, `${field.name}:${interval}`));
+          select.append(dates);
+        } else select.append(new Option(field.label, field.name));
+      }
       select.addEventListener("change", () => {
         const chosen = select.value;
         select.value = "";

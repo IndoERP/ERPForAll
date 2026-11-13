@@ -10,7 +10,9 @@
 //! of a location and the policy row created with each location; the tracking tables of
 //! (lots, lot-name scope rows, packages, quants, serial positions), schema only;
 //! the operations tables (references, transfers with their move counter
-//! vector, moves with their product-unit conversion inputs), schema only;
+//! vector, moves with their product-unit conversion inputs), schema only; the move line tables of
+//! (move lines, serial rows and correction rows on the lines' shared id
+//! sequence), schema only;
 //! and the replenishment configuration tables (orderpoints, putaway rules), schema only.
 
 erp_sdk::addon!(
@@ -31,6 +33,7 @@ pub mod quant;
 pub mod reference;
 pub mod route;
 pub mod stock_move;
+pub mod stock_move_line;
 pub mod storage;
 pub mod warehouse;
 
@@ -45,5 +48,8 @@ pub use quant::{StockQuant, StockSerialPosition};
 pub use reference::StockReference;
 pub use route::{StockRoute, StockRule, StockTopologyVersion};
 pub use stock_move::StockMove;
+pub use stock_move_line::{
+    LOGICAL_ID_SEQUENCE, StockMoveLine, StockMoveLineCorrection, StockMoveLineSerial,
+};
 pub use storage::{StockPackageType, StockStorageCategory, StockStorageCategoryCapacity};
 pub use warehouse::{StockPickingType, StockWarehouse};

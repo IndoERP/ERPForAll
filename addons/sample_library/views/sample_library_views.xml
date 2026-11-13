@@ -188,6 +188,27 @@
             </form>
         </field>
     </record>
+    <!-- The search view of Books: three fields, two filters and the group-bys the list and the pivot offer. In the pivot the Group By menu
+         sets the rows; Published On groups by month there. -->
+    <record id="book_search" model="ir.ui.view">
+        <field name="name">sample_library.book.search</field>
+        <field name="model">sample_library.book</field>
+        <field name="arch" type="xml">
+            <search string="Books">
+                <field name="title"/>
+                <field name="author_id"/>
+                <field name="isbn"/>
+                <filter name="available" string="Available" domain="[('available', '=', True)]"/>
+                <filter name="popular" string="Popular" domain="[('rating', 'in', ['2', '3'])]"/>
+                <group>
+                    <filter name="group_author" string="Author" context="{'group_by': 'author_id'}"/>
+                    <filter name="group_format" string="Format" context="{'group_by': 'book_format'}"/>
+                    <filter name="group_published" string="Published On" context="{'group_by': 'published_on:month'}"/>
+                    <filter name="group_rating" string="Rating" context="{'group_by': 'rating'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
     <!-- Books by author, then by the year published (rows), and by format (columns): how many books, how many pages, what they cost.
          The pivot expands any header by any field, so a tester can add genre-free groupings such as the rating or the quarter. -->
     <record id="book_pivot" model="ir.ui.view">
@@ -212,6 +233,7 @@
         <field name="name">Books</field>
         <field name="res_model">sample_library.book</field>
         <field name="view_mode">list,form,pivot</field>
+        <field name="search_view_id" ref="book_search"/>
     </record>
     <record id="loan_action" model="ir.actions.act_window">
         <field name="name">Loans</field>

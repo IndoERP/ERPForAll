@@ -20,6 +20,7 @@ mod migration_sql;
 pub mod migrations;
 pub mod model_files;
 mod node_digest;
+pub mod pack;
 pub mod package;
 pub mod package_runtime;
 pub mod post_commit;

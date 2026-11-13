@@ -609,3 +609,46 @@ async fn heartbeat_beats_the_stores_after_one_under_recovery() {
     );
     h.cleanup().await.unwrap();
 }
+
+/// A cleaner whose work fails every time with a transient error (here a test trigger refuses the
+/// upload row delete, a database error) uses up its declared attempts and becomes a dead letter:
+/// no chunk commits before its work, so nothing resets the attempt count between runs.
+#[tokio::test]
+async fn a_cleaner_failing_every_run_becomes_a_dead_letter_at_its_attempt_limit() {
+    const CLEAN: &str = "base.attachment_clean_staging";
+    let f = fixture(limits()).await;
+    consumed(&f, "in.txt", b"abc").await;
+    gc::ensure_schedules(f.h.orm()).await.unwrap();
+    exec(
+        &f,
+        "CREATE FUNCTION test_refuse_upload_delete() RETURNS trigger LANGUAGE plpgsql AS $fn$ \
+         BEGIN RAISE EXCEPTION 'test refuses the upload delete'; END $fn$; \
+         CREATE TRIGGER test_refuse_upload_delete BEFORE DELETE ON ir_blob_upload \
+         FOR EACH STATEMENT EXECUTE FUNCTION test_refuse_upload_delete();",
+    )
+    .await;
+    let limit = erp_orm::jobs::JOB_KINDS
+        .iter()
+        .find(|decl| decl.name == CLEAN)
+        .unwrap()
+        .max_attempts
+        .unwrap();
+    let outcome = format!(
+        "SELECT state || ' ' || attempts || coalesce(' ' || last_error_code, '') \
+         || coalesce(' ' || last_error, '') FROM erp_job WHERE kind = '{CLEAN}'"
+    );
+    for _ in 0..limit + 2 {
+        run(&f, CLEAN, 1).await;
+        if scalar_text(&f, &outcome).await.starts_with("dead") {
+            break;
+        }
+    }
+    let last = scalar_text(&f, &outcome).await;
+    assert!(
+        last.starts_with("dead ")
+            && last.contains(" database ")
+            && last.ends_with(&format!("(attempt {limit} of {limit}: no attempt is left)")),
+        "{last}"
+    );
+    f.h.cleanup().await.unwrap();
+}

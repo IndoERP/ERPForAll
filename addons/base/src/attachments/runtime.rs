@@ -75,10 +75,15 @@ pub(crate) fn blob_error(error: BlobError) -> Error {
         }
         BlobError::LimitExceeded { .. }
         | BlobError::InvalidRange { .. }
-        | BlobError::UploadExpired => Error::validation(error.to_string()).with_source(error),
-        BlobError::QuotaExceeded { .. } => {
+        | BlobError::UploadExpired
+        | BlobError::UploadIdleTimeout
+        | BlobError::UploadReceiveTimeout => {
+            Error::validation(error.to_string()).with_source(error)
+        }
+        BlobError::QuotaExceeded { .. } | BlobError::PendingUploads { .. } => {
             Error::new(ErrorKind::ResourceExhausted, error.to_string()).with_source(error)
         }
+        BlobError::AccountingUnavailable => Error::internal(error.to_string()).with_source(error),
         BlobError::Configuration { .. } => Error::programming(error.to_string()).with_source(error),
         // a full node answers busy at once (409, retry); it never queues
         BlobError::Busy { .. } => {

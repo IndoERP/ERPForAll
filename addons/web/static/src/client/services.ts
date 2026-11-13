@@ -693,6 +693,8 @@ function addonRow(raw: unknown): AddonRow {
   };
 }
 
+const UNINSTALL_UNAVAILABLE = "Uninstalling this addon from this page is not available yet.";
+
 export async function addonsView(
   host: HTMLElement,
   rpc: RpcClient,
@@ -808,43 +810,45 @@ export async function addonsView(
     const headMain = el("div", undefined, "addon-detail-head-main");
     const titles = el("div", undefined, "addon-detail-titles");
     const heading = el("h2", text(detailData["label"], "addon detail label"), "addon-detail-title");
-    titles.append(heading, el("code", row.name, "addon-technical-name"));
-
     const stateStr = text(detailData["state"], "addon detail state");
     const badgeInfo = stateBadge(stateStr);
     const badge = el("span", badgeInfo.label, `addon-badge addon-badge-${badgeInfo.token}`);
-    headMain.append(tileIcon(row), titles, badge);
+    const titleRow = el("div", undefined, "addon-detail-title-row");
+    titleRow.append(heading, badge);
+    const technical = el("code", row.name, "addon-technical-name");
+    technical.title = row.name;
+    titles.append(titleRow, technical);
 
     const actions = el("div", undefined, "addon-detail-actions");
+    const notes = el("div", undefined, "addon-detail-notes");
+    // The server's refusal text names internal tasks and engine parts, so the page shows its own fixed sentence; the
+    // server's wording stays in a data attribute for diagnostics and is never rendered.
+    const unavailable = (btn: HTMLButtonElement, id: string, sentence: string, serverReason: string): void => {
+      btn.disabled = true;
+      btn.dataset["locked"] = "true"; // keeps `disable()` from enabling it again when another operation ends
+      btn.setAttribute("aria-describedby", id);
+      const note = el("p", sentence, "addon-refusal-note muted");
+      note.id = id; note.dataset["reason"] = serverReason;
+      notes.append(note);
+    };
     if (stateStr === "uninstalled" && row.installable) {
       actions.append(button("Install", () => run(() => executeInstall(row)), "primary addon-install"));
     } else if (stateStr === "installed") {
       const upgradeBtn = button("Upgrade", () => run(() => executeUpgrade(row)), "primary addon-upgrade");
-      const upgradeRefusal = detailData["upgrade_refusal"];
-      if (upgradeRefusal) {
-        upgradeBtn.disabled = true;
-        upgradeBtn.title = String(upgradeRefusal);
-        const refNote = el("span", String(upgradeRefusal), "addon-refusal-note muted");
-        actions.append(upgradeBtn, refNote);
-      } else {
-        actions.append(upgradeBtn);
-      }
-
       const uninstallBtn = button("Uninstall", () => run(() => startUninstall(row, uninstallBtn)), "danger addon-uninstall");
-      const uninstallRefusal = detailData["uninstall_refusal"];
-      if (uninstallRefusal) {
-        uninstallBtn.disabled = true;
-        uninstallBtn.title = String(uninstallRefusal);
-        const refNote = el("span", String(uninstallRefusal), "addon-refusal-note muted");
-        actions.append(uninstallBtn, refNote);
-      } else {
-        actions.append(uninstallBtn);
-      }
+      actions.append(upgradeBtn, uninstallBtn);
+      const refusal = (key: string): string | null => { const value = detailData[key]; return value === null || value === undefined ? null : text(value, `addon detail ${key}`); };
+      const upgradeRefusal = refusal("upgrade_refusal"), uninstallRefusal = refusal("uninstall_refusal");
+      if (upgradeRefusal) unavailable(upgradeBtn, "addon-upgrade-unavailable", "Upgrade from this page is not available: this addon is not in the server's addon directory.", upgradeRefusal);
+      if (uninstallRefusal) unavailable(uninstallBtn, "addon-uninstall-unavailable", UNINSTALL_UNAVAILABLE, uninstallRefusal);
+    } else if (stateStr === "uninstalled") {
+      notes.append(el("p", "This addon is marked as not installable, or its version does not fit this server.", "addon-transitional-note muted"));
     } else {
-      actions.append(el("p", "Pending module operations require operator recovery. Refresh the catalog after background tasks finish.", "addon-transitional-note muted"));
+      notes.append(el("p", "Pending module operations require operator recovery. Refresh the catalog after background tasks finish.", "addon-transitional-note muted"));
     }
 
-    header.append(backBtn, headMain, actions);
+    headMain.append(tileIcon(row), titles, actions);
+    header.append(backBtn, headMain, notes);
 
     const body = el("div", undefined, "addon-detail-body");
     const summaryText = text(detailData["summary"], "addon detail summary") || row.summary || "No description provided.";
@@ -852,25 +856,23 @@ export async function addonsView(
 
     const facts = el("dl", undefined, "addon-detail-facts");
     const addFact = (label: string, val: string | Node): void => {
-      const dt = el("dt", label), dd = el("dd");
+      const dd = el("dd");
       dd.append(val);
-      facts.append(dt, dd);
+      const group = el("div", undefined, "addon-detail-fact");
+      group.append(el("dt", label), dd);
+      facts.append(group);
     };
-    addFact("Technical name", el("code", row.name));
     addFact("Version", String(detailData["available_version"] || row.version || "—"));
     addFact("Installed version", String(detailData["installed_version"] || "—"));
     addFact("Category", categoryLabel(row));
     addFact("Type", row.application ? "App" : "Extra");
     addFact("Author", text(detailData["author"], "addon detail author") || row.author || "—");
     addFact("License", row.license || "—");
-    addFact("State", badgeInfo.label);
     body.append(facts);
 
     const descText = text(detailData["description"], "addon detail description");
     if (descText) {
-      const descEl = el("div", undefined, "addon-detail-description");
-      descEl.textContent = descText;
-      body.append(descEl);
+      body.append(el("p", descText, "addon-detail-description"));
     }
 
     const sections = el("div", undefined, "addon-detail-sections");
@@ -912,13 +914,17 @@ export async function addonsView(
     collection("Created Menus", "menus", "No menus created.", "addon-metadata-list", item => {
       const menu = object(item, "addon menu"), name = text(menu["name"], "addon menu name");
       const itemEl = el("div", undefined, "addon-metadata-item");
-      itemEl.append(el("strong", menu["label"] === undefined || menu["label"] === null ? name : text(menu["label"], "addon menu label") || name), el("code", name));
+      const label = menu["label"] === undefined || menu["label"] === null ? name : text(menu["label"], "addon menu label") || name;
+      itemEl.append(el("strong", label));
+      if (label !== name) itemEl.append(el("code", name));
       return itemEl;
     });
     collection("Created Views", "views", "No views created.", "addon-metadata-list", item => {
       const view = object(item, "addon view");
       const itemEl = el("div", undefined, "addon-metadata-item");
-      itemEl.append(el("strong", text(view["name"], "addon view name")), el("span", `[${text(view["kind"], "addon view kind")}]`, "badge addon-view-kind"), el("code", text(view["model"], "addon view model")));
+      const line = el("div", undefined, "addon-metadata-line");
+      line.append(el("strong", text(view["name"], "addon view name")), el("span", `[${text(view["kind"], "addon view kind")}]`, "badge addon-view-kind"));
+      itemEl.append(line, el("code", text(view["model"], "addon view model")));
       return itemEl;
     });
 
@@ -979,6 +985,8 @@ export async function addonsView(
       try {
         impact = object(await rpc.call("ir.module.module", "erp_preview_uninstall", { modules: [row.name], context }));
       } catch (error) {
+        // A validation refusal is the server declining to preview: the same fixed sentence as the detail page, nothing failed.
+        if (error instanceof ClientError && error.kind === "validation") { notice(UNINSTALL_UNAVAILABLE); return; }
         notice(`Uninstall preview failed: ${(error as Error).message || "Unable to compute uninstall impact."}`);
         await render();
         throw error;

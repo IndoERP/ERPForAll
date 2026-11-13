@@ -4,6 +4,7 @@ import { HumanApp } from "../src/client/app.js";
 import { configureClientTemplates } from "../src/client/registry.js";
 import { SearchModel } from "../src/client/search/search-model.js";
 import { createSearchBar } from "../src/client/search/search-bar.js";
+import { encodePath } from "../src/client/list-group-state.js";
 import { createGroupRow, decodeGroups, groupLabel } from "../src/client/list-groups.js";
 import { buildGroupByCatalogue, decodeGroupableFields } from "../src/client/group-by-catalogue.js";
 import type { Field, Node } from "../src/client/metadata.js";
@@ -36,7 +37,7 @@ test("a declared group-by item toggles one grouping on and off and leaves the do
   model.toggleGroupBy("groupby_by_priority");
   expect(model.getGroupBy()).toEqual(["priority"]);
   expect(model.getGroupBys()[0]!.isActive).toBe(true);
-  expect(model.getFacets()).toEqual([{ id: "groupby", type: "groupBy", title: "Group By", values: ["By priority"], separator: ">", groupByField: "priority", groupById: "groupby_by_priority" }]);
+  expect(model.getFacets()).toEqual([{ id: "groupby", type: "groupBy", title: "Group By", values: ["By priority"], separator: ">", groupByField: "priority", groupById: "groupby_by_priority", groupByFields: ["priority"], groupByIds: ["groupby_by_priority"] }]);
   expect(model.getDomain()).toEqual([]);
   expect(model.getGroupableField("priority")).toEqual(priority);
   model.toggleGroupBy("groupby_by_priority");
@@ -216,20 +217,6 @@ test("two unnamed declared group-by filters both appear, under position ids", ()
   expect(result.items).toEqual([{ id: "groupby_#0", description: "First", fieldName: "name" }, { id: "groupby_#1", description: "Second", fieldName: "priority" }]);
 });
 
-/// (partial: a kept grouping is exported and restored without the catalogue)
-test("the active grouping can be exported and restored on a new model", async () => {
-  const model = groupable();
-  await model.loadGroupByCatalogue();
-  expect(model.exportGroupBy()).toBeUndefined();
-  model.toggleGroupBy("groupby_by_priority");
-  const kept = model.exportGroupBy()!;
-  expect(kept).toEqual({ id: "groupby_by_priority", label: "By priority", field: priority });
-  const again = groupable();
-  again.restoreGroupBy(kept);
-  expect(again.getGroupBy()).toEqual(["priority"]);
-  expect(again.getGroupableField("priority")).toEqual(priority);
-});
-
 /// (partial: the group row toggle, its keyboard and its accessible name)
 test("a group row is one toggle: click, Enter-style click and arrows fold and unfold, with aria-expanded and the count in its name", async () => {
   const onToggle = vi.fn();
@@ -355,8 +342,8 @@ afterEach(() => { app?.dispose(); app = undefined; vi.restoreAllMocks(); vi.unst
 type Call = { method: string; body: Record<string, unknown> };
 const reply = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 /** Start the app on the Notes list with a fixture server. `handle` may answer a call first (return undefined to use the fixture). */
-async function startNotes(handle: (call: Call) => unknown | Promise<unknown> = () => undefined, options: { groups?: unknown[]; length?: number } = {}) {
-  history.replaceState(null, "", "/erp/action-20");
+async function startNotes(handle: (call: Call) => unknown | Promise<unknown> = () => undefined, options: { groups?: unknown[]; length?: number; path?: string } = {}) {
+  history.replaceState(null, "", options.path ?? "/erp/action-20");
   const calls: Call[] = [];
   vi.stubGlobal("fetch", vi.fn(async (path: string, init: RequestInit) => {
     const method = path.split("/").pop()!, body = init.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
@@ -436,9 +423,9 @@ test("a list grouped from the search menu shows folded group rows, opens and clo
   root.querySelector<HTMLButtonElement>(".search-menu-toggle")!.click();
   const panel = root.querySelector<HTMLElement>(".erp-search-menu-panel")!;
   await vi.waitFor(() => expect([...panel.querySelectorAll(".erp-groupby-section .erp-search-menu-item")].map(item => item.textContent)).toEqual(["By priority", "Notes"]));
-  expect(of("fields_get")[0]!.body["attributes"]).toEqual(["string", "type", "groupable", "selection"]);
-  expect(panel.querySelector(".erp-groupby-section")!.textContent).toContain("By month (a date interval is not available yet)");
-  expect([...panel.querySelectorAll<HTMLOptionElement>(".erp-custom-group-select option")].map(option => option.textContent)).toEqual(["Add Custom Group", "Name", "Priority"]);
+  expect(of("fields_get")[0]!.body["attributes"]).toEqual(["string", "type", "groupable", "selection", "aggregator", "currency_field"]);
+  expect(panel.querySelector(".erp-groupby-section")!.textContent).toContain("By month (only date fields accept an interval)");
+  expect([...panel.querySelectorAll<HTMLOptionElement>(".erp-custom-group-select option")].map(option => option.textContent)).toEqual(["Add Custom Group", "Name", "Priority", "Year", "Quarter", "Month", "Week", "Day"]);
 
   panel.querySelector<HTMLButtonElement>(".erp-groupby-section .erp-search-menu-item")!.click();
   await vi.waitFor(() => expect(root.querySelectorAll(".list-group-row")).toHaveLength(3));
@@ -482,13 +469,8 @@ test("a list grouped from the search menu shows folded group rows, opens and clo
   [...root.querySelectorAll<HTMLButtonElement>("th.sortable-column .sort-button")].find(button => button.textContent === "Priority")!.click();
   await vi.waitFor(() => expect(of("web_read_group").at(-1)!.body["order"]).toBe("priority asc"));
 
-  // A second grouping is refused in the menu.
   const panel2 = root.querySelector<HTMLElement>(".erp-search-menu-panel")!;
   root.querySelector<HTMLButtonElement>(".search-menu-toggle")!.click();
-  const select = panel2.querySelector<HTMLSelectElement>(".erp-custom-group-select")!;
-  select.value = "name"; select.dispatchEvent(new Event("change"));
-  expect(panel2.querySelector("[role=alert]")!.textContent).toBe("Grouping by more than one field (nested groups) is not available yet. Remove the current grouping first.");
-
   // Removing the chip returns the plain list, and the open menu unchecks the item.
   root.querySelector<HTMLButtonElement>(".erp-facet-groupBy .erp-facet-remove")!.click();
   await vi.waitFor(() => expect(root.querySelector(".list-group-row")).toBeNull());
@@ -613,6 +595,280 @@ test("opening a record and coming back by the breadcrumb restores the grouping",
   root.querySelector<HTMLElement>(".breadcrumb-previous a, .breadcrumb-back")!.click();
   await vi.waitFor(() => expect(root.querySelectorAll(".list-group-row")).toHaveLength(3));
   expect(root.querySelector(".erp-facet-groupBy")!.textContent).toContain("Group by By priority");
-  expect(heads().every(head => head.getAttribute("aria-expanded") === "false")).toBe(true);
+  await vi.waitFor(() => expect(heads()[0]!.getAttribute("aria-expanded")).toBe("true"));
   expect(of("web_read_group").at(-1)!.body["groupby"]).toEqual(["priority"]);
+});
+
+// ----: the pivot's search groups by several fields, in the order chosen ----
+const published = { name: "published", label: "Published", kind: "date", selection: null } as unknown as GroupableField;
+const multi = (maxLevels = 3): SearchModel => new SearchModel({
+  model: "t.note", fields: new Map([["name", field("name", "Name")]]),
+  groupBy: { multiple: true, maxLevels, load: async () => ({ items: [{ id: "groupby_by_priority", description: "By priority", fieldName: "priority" }, { id: "groupby_by_month", description: "By month", fieldName: "published", interval: "month" }], fields: [priority, city, published], skipped: [] }) }
+});
+
+/// (partial: the pivot's Group By keeps several groupings in the order chosen, in one facet; an interval item carries its interval)
+test("a multiple group-by facet keeps the order, removes one item, and the facet goes with the last one", async () => {
+  const model = multi();
+  await model.loadGroupByCatalogue();
+  model.toggleGroupBy("groupby_by_month");
+  model.toggleGroupBy("groupby_by_priority");
+  model.addCustomGroupBy("city");
+  expect(model.getGroupBy()).toEqual(["published:month", "priority", "city"]);
+  expect(model.getFacets()).toHaveLength(1);
+  expect(model.getFacets()[0]!.values).toEqual(["By month", "By priority", "City"]);
+  expect(model.getGroupBys().map(item => [item.id, item.isActive])).toEqual([["groupby_by_priority", true], ["groupby_by_month", true], ["custom:city", true]]);
+  expect(() => model.addCustomGroupBy("published:year")).toThrow(/at most 3/);
+  expect(model.getGroupBy()).toEqual(["published:month", "priority", "city"]); // a refused addition changes nothing
+  model.toggleGroupBy("groupby_by_priority");
+  expect(model.getGroupBy()).toEqual(["published:month", "city"]);
+  model.toggleGroupBy("groupby_by_month"); model.toggleGroupBy("custom:city");
+  expect(model.getFacets()).toEqual([]);
+});
+
+/// (partial: a custom group on a date field names its interval)
+test("a custom group-by on a date field takes the interval in its name, and an interval on another field is refused", async () => {
+  const model = multi();
+  await model.loadGroupByCatalogue();
+  model.addCustomGroupBy("published:quarter");
+  expect(model.getGroupBy()).toEqual(["published:quarter"]);
+  expect(model.getFacets()[0]!.values).toEqual(["Published: Quarter"]);
+  expect(() => model.addCustomGroupBy("city:month")).toThrow(/Invalid group by field/);
+  const list = groupable();
+  await list.loadGroupByCatalogue();
+  expect(() => list.addCustomGroupBy("city:month")).toThrow(/Invalid group by field/);
+});
+
+/// (partial: the menu offers the intervals of a date field when the owner groups by several fields)
+test("the search menu of a multiple group-by offers date fields by interval and stays open for the next item", async () => {
+  const model = multi();
+  const bar = createSearchBar(model, () => {});
+  document.body.append(bar.element);
+  bar.element.querySelector<HTMLButtonElement>(".search-menu-toggle")!.click();
+  const panel = bar.element.querySelector<HTMLElement>(".erp-search-menu-panel")!;
+  await vi.waitFor(() => expect(panel.querySelectorAll(".erp-groupby-section .erp-search-menu-item")).toHaveLength(2));
+  const select = panel.querySelector<HTMLSelectElement>(".erp-custom-group-select")!;
+  expect([...select.options].map(option => option.textContent)).toEqual(["Add Custom Group", "Priority", "City", "Year", "Quarter", "Month", "Week", "Day"]);
+  expect([...select.querySelectorAll("optgroup")].map(group => group.label)).toEqual(["Published"]);
+  select.value = "published:year"; select.dispatchEvent(new Event("change"));
+  panel.querySelectorAll<HTMLButtonElement>(".erp-groupby-section .erp-search-menu-item")[0]!.click();
+  expect(model.getGroupBy()).toEqual(["published:year", "priority"]);
+  expect(bar.element.querySelector(".erp-facet-groupBy")!.textContent).toContain("Group by Published: Year > By priority");
+  bar.dispose();
+});
+
+
+test("the mounted list lazily loads nested groups and keeps the state in its address", async () => {
+  const { root, of, groupByPriority, heads } = await startNotes(call => {
+    if (call.method === "web_read_group" && (call.body["groupby"] as string[])[0] === "name") return { groups: [{ name: "Ada", __count: 1, __extra_domain: [["name", "=", "Ada"]] }], length: 1 };
+    if (call.method === "web_read_group" && (call.body["groupby"] as string[]).length === 2) return { groups: [{ priority: "normal", __count: 2, __extra_domain: [["priority", "=", "normal"]] }], length: 1 };
+    return undefined;
+  });
+  await groupByPriority(); root.querySelector<HTMLButtonElement>(".search-menu-toggle")!.click();
+  const select = root.querySelector<HTMLSelectElement>(".erp-custom-group-select")!;
+  select.value = "name"; select.dispatchEvent(new Event("change"));
+  await vi.waitFor(() => expect(of("web_read_group").at(-1)!.body["groupby"]).toEqual(["priority", "name"]));
+  await vi.waitFor(() => expect(heads()).toHaveLength(1));
+  heads()[0]!.click();
+  await vi.waitFor(() => expect(heads()).toHaveLength(2));
+  expect(of("web_read_group").at(-1)!.body).toMatchObject({ groupby: ["name"], domain: [["priority", "=", "normal"]], offset: 0 });
+  const state = JSON.parse(new URL(location.href).searchParams.get("search_groupby")!);
+  expect(state.by).toEqual(["priority", "name"]); expect(state.open).toHaveLength(1);
+  heads()[1]!.click();
+  await vi.waitFor(() => expect(of("web_search_read").at(-1)!.body["domain"]).toEqual([["priority", "=", "normal"], ["name", "=", "Ada"]]));
+});
+
+/// (partial: mounted leaf paging and sibling preservation)
+test("paging one leaf group changes its offset and keeps a sibling open", async () => {
+  const { root, of, heads, groupByPriority } = await startNotes(call => {
+    if (call.method === "web_search_read" && JSON.stringify(call.body["domain"]).includes('"normal"')) return { records: [{ id: Number(call.body["offset"]) + 1, name: "Paged record", priority: "normal" }], length: 100 };
+    return undefined;
+  });
+  await groupByPriority(); heads()[0]!.click();
+  await vi.waitFor(() => expect(root.querySelector('[aria-label="Next page of Normal"]')).not.toBeNull());
+  heads()[1]!.click(); await vi.waitFor(() => expect(heads()[1]!.getAttribute("aria-expanded")).toBe("true"));
+  root.querySelector<HTMLButtonElement>('[aria-label="Next page of Normal"]')!.click();
+  await vi.waitFor(() => expect(of("web_search_read").at(-1)!.body).toMatchObject({ offset: 40, domain: [["priority", "=", "normal"]] }));
+  await vi.waitFor(() => expect(root.querySelector('.list-group-page-count')!.textContent).toBe("41–80 / 100"));
+  expect(heads()[1]!.getAttribute("aria-expanded")).toBe("true");
+  const state = JSON.parse(new URL(location.href).searchParams.get("search_groupby")!);
+  expect(state.open.map((entry: { offset: number }) => entry.offset).sort()).toEqual([0, 40]);
+});
+
+// ---- cycle 11 review fixes (S1 to S8) ----
+const notice = (root: HTMLElement): string => root.querySelector("[data-client-notice]")!.textContent!.trim();
+const settle = (): Promise<void> => new Promise(done => setTimeout(done, 30));
+const groupByName = async (root: HTMLElement): Promise<void> => {
+  root.querySelector<HTMLButtonElement>(".search-menu-toggle")!.click();
+  await vi.waitFor(() => expect(root.querySelector(".erp-custom-group-select")).not.toBeNull());
+  const select = root.querySelector<HTMLSelectElement>(".erp-custom-group-select")!;
+  select.value = "name"; select.dispatchEvent(new Event("change"));
+  root.querySelector<HTMLButtonElement>(".search-menu-toggle")!.click();
+};
+
+/// (partial: too many open groups for the address are refused in words, and a filter does not need the open list)
+test("opening more groups than the address can keep says what to do, and adding a filter still works", async () => {
+  const names = Array.from({ length: 40 }, (_, i) => `Group number ${String(i).padStart(3, "0")} of the table`);
+  const { root, of, heads, search } = await startNotes(call => {
+    if (call.method === "web_read_group") return { groups: names.map(name => ({ name, __count: 1, __extra_domain: [["name", "=", name]] })), length: names.length };
+    if (call.method === "web_search_read") return { length: 0, records: [] };
+    return undefined;
+  });
+  await groupByName(root);
+  await vi.waitFor(() => expect(heads()).toHaveLength(40));
+  let opened = 0;
+  for (; opened < 40; opened++) {
+    heads()[opened]!.click();
+    await vi.waitFor(() => expect(heads()[opened]!.getAttribute("aria-expanded") === "true" || document.querySelector("#client-error-message") !== null).toBe(true));
+    if (document.querySelector("#client-error-message")) break;
+  }
+  expect(opened).toBeGreaterThan(10);
+  expect(opened).toBeLessThan(40);
+  const refusal = document.querySelector("#client-error-message")!.textContent!;
+  expect(refusal).toBe("Too many groups are open to keep in the page address. Close some groups first.");
+  expect(heads()[opened]!.getAttribute("aria-expanded")).toBe("false");
+  // The same open list must not stop a new filter: the groups fold on a new search anyway.
+  const reads = of("web_read_group").length;
+  search("Ada");
+  await vi.waitFor(() => expect(of("web_read_group")).toHaveLength(reads + 1));
+  expect(of("web_read_group").at(-1)!.body["domain"]).toEqual([["name", "ilike", "Ada"]]);
+});
+
+/// (partial: the way back from a record keeps the record's own history entry)
+test("coming back from a record to a grouped list leaves the record's history entry alone", async () => {
+  const { root, rows, heads, groupByPriority } = await startNotes();
+  await groupByPriority();
+  heads()[0]!.click();
+  await vi.waitFor(() => expect(rows()).toBe(2));
+  root.querySelector<HTMLElement>(".list-table tbody tr[data-id] button.link")!.click();
+  await vi.waitFor(() => expect(root.querySelector(".record-form")).not.toBeNull());
+  const formAddress = location.pathname + location.search;
+  const entries = history.length;
+  root.querySelector<HTMLElement>(".breadcrumb-previous a, .breadcrumb-back")!.click();
+  await vi.waitFor(() => expect(root.querySelectorAll(".list-group-row")).toHaveLength(3));
+  await settle();
+  expect(history.length).toBe(entries + 1); // the list is a new entry
+  history.back();
+  await vi.waitFor(() => expect(location.pathname + location.search).toBe(formAddress));
+  await vi.waitFor(() => expect(root.querySelector(".record-form")).not.toBeNull());
+});
+
+/// (partial: paging the groups with a group open is not a lost group)
+test("paging the root groups with a group open does not report saved groups as missing", async () => {
+  const { root, heads, groupByPriority } = await startNotes(call => {
+    if (call.method === "web_read_group" && call.body["offset"] !== 0) return { groups: [{ priority: "high", __count: 1, __extra_domain: [["priority", "=", "high"]] }], length: 41 };
+    if (call.method === "web_read_group") return { groups: [
+      { priority: "normal", __count: 2, __extra_domain: [["priority", "=", "normal"]] }, { priority: "high", __count: 1, __extra_domain: [["priority", "=", "high"]] }
+    ], length: 41 };
+    return undefined;
+  });
+  await groupByPriority();
+  heads()[0]!.click();
+  await vi.waitFor(() => expect(heads()[0]!.getAttribute("aria-expanded")).toBe("true"));
+  root.querySelector<HTMLButtonElement>(".pager-next")!.click();
+  await vi.waitFor(() => expect(root.querySelector(".pager-count")!.textContent).toBe("41–41 / 41 groups"));
+  await settle();
+  expect(notice(root)).not.toContain("no longer in these results");
+  expect(JSON.parse(new URL(location.href).searchParams.get("search_groupby")!).open).toEqual([]);
+  root.querySelector<HTMLButtonElement>(".pager-prev")!.click();
+  await vi.waitFor(() => expect(root.querySelector(".pager-count")!.textContent).toBe("1–2 / 41 groups"));
+  await settle();
+  expect(notice(root)).not.toContain("no longer in these results");
+});
+
+/// (partial: focus after a grouped redraw stays on the control that was pressed)
+test("after a group's Next page the same Next button has focus, and a user who moved on keeps their focus", async () => {
+  const gate = deferred();
+  let hold = false;
+  const { root, heads, groupByPriority } = await startNotes(async call => {
+    if (call.method === "web_search_read" && JSON.stringify(call.body["domain"]).includes('"normal"')) {
+      if (hold) await gate.promise;
+      return { records: [{ id: Number(call.body["offset"]) + 1, name: "Paged record", priority: "normal" }], length: 100 };
+    }
+    return undefined;
+  });
+  await groupByPriority(); heads()[0]!.click();
+  await vi.waitFor(() => expect(root.querySelector('[aria-label="Next page of Normal"]')).not.toBeNull());
+  root.querySelector<HTMLButtonElement>('[aria-label="Next page of Normal"]')!.focus();
+  root.querySelector<HTMLButtonElement>('[aria-label="Next page of Normal"]')!.click();
+  await vi.waitFor(() => expect(root.querySelector(".list-group-page-count")!.textContent).toBe("41–80 / 100"));
+  expect(document.activeElement).toBe(root.querySelector('[aria-label="Next page of Normal"]'));
+  // A slow answer does not take focus away from the search field.
+  hold = true;
+  root.querySelector<HTMLButtonElement>('[aria-label="Next page of Normal"]')!.click();
+  const input = root.querySelector<HTMLInputElement>(".search-input")!;
+  input.focus();
+  gate.resolve();
+  await vi.waitFor(() => expect(root.querySelector(".list-group-page-count")!.textContent).toBe("81–100 / 100"));
+  expect(document.activeElement).toBe(input);
+  // The toggle keeps its own focus after it opens a group.
+  heads()[1]!.focus(); heads()[1]!.click();
+  await vi.waitFor(() => expect(heads()[1]!.getAttribute("aria-expanded")).toBe("true"));
+  expect(document.activeElement).toBe(heads()[1]);
+});
+
+/// (partial: a root offset from the address beyond the groups is clamped to the last page)
+test("an address whose group offset is beyond the groups shows the last page, not an empty list", async () => {
+  const state = JSON.stringify({ v: 1, by: ["priority"], offset: 80, limit: 40, order: "id asc", open: [] });
+  const { root, of, heads } = await startNotes(call => {
+    if (call.method === "web_read_group" && call.body["offset"] !== 0) return { groups: [], length: 3 };
+    return undefined;
+  }, { path: `/erp/action-20?search_groupby=${encodeURIComponent(state)}` });
+  await vi.waitFor(() => expect(heads()).toHaveLength(3));
+  expect(root.querySelector(".pager-count")!.textContent).toBe("1–3 / 3 groups");
+  expect(of("web_read_group").map(call => call.body["offset"])).toEqual([80, 0]);
+  expect(JSON.parse(new URL(location.href).searchParams.get("search_groupby")!).offset).toBe(0);
+});
+
+/// (partial: the nesting level is part of a group toggle's accessible name)
+test("a nested group's toggle names its level", async () => {
+  const flat = createGroupRow({ group: { key: '"normal"', label: "Normal", count: 2, domain: [] }, columns: 3, level: 1, onToggle: () => {} });
+  const nested = createGroupRow({ group: { key: '"Ada"', label: "Ada", count: 1, domain: [] }, columns: 3, level: 2, onToggle: () => {} });
+  expect(flat.toggle.getAttribute("aria-label")).toBe("Normal, 2 records");
+  expect(nested.toggle.getAttribute("aria-label")).toBe("Ada, 1 record, level 2");
+});
+
+/// (partial: a declared date group-by without an interval groups by month, as the reference does: search/utils/dates.js DEFAULT_INTERVAL)
+test("a declared group-by on a date field with no interval is offered with the month interval", () => {
+  const decoded = decodeGroupableFields({ ...fieldsReply, published: { string: "Published", type: "date", groupable: true } }, true);
+  const nodes: Node[] = [filterNode("by_date", "By date", { f: "published" }), filterNode("by_week", "By week", { f: "published:week" })];
+  const result = buildGroupByCatalogue(nodes, context => ({ group_by: (context as unknown as { f: string }).f }), decoded, true, true);
+  expect(result.skipped).toEqual([]);
+  expect(result.items).toEqual([
+    { id: "groupby_by_date", description: "By date", fieldName: "published", interval: "month" },
+    { id: "groupby_by_week", description: "By week", fieldName: "published", interval: "week" }
+  ]);
+});
+
+/// (partial: a reload restores the grouping and its chip; the chip removes it)
+test("after a reload of a grouped list the search bar shows the Group By facet, and removing it ungroups the list", async () => {
+  const state = JSON.stringify({ v: 1, by: ["priority", "name"], offset: 0, limit: 40, order: "id asc", open: [{ path: encodePath([["priority", "normal"]]), offset: 0 }] });
+  const { root, heads } = await startNotes(call => {
+    if (call.method === "web_read_group" && (call.body["groupby"] as string[])[0] === "name") return { groups: [{ name: "Ada", __count: 1, __extra_domain: [["name", "=", "Ada"]] }], length: 1 };
+    if (call.method === "web_read_group") return { groups: [{ priority: "normal", __count: 2, __extra_domain: [["priority", "=", "normal"]] }, { priority: "high", __count: 1, __extra_domain: [["priority", "=", "high"]] }], length: 2 };
+    return undefined;
+  }, { path: `/erp/action-20?search_groupby=${encodeURIComponent(state)}` });
+  await vi.waitFor(() => expect(heads()).toHaveLength(3)); // the open root, its child group, and the other root
+  const chip = root.querySelector(".erp-facet-groupBy");
+  expect(chip!.textContent).toContain("Group by");
+  root.querySelector<HTMLButtonElement>(".erp-facet-groupBy .erp-facet-remove")!.click();
+  await vi.waitFor(() => expect(root.querySelector(".list-group-row")).toBeNull());
+  expect(new URL(location.href).searchParams.has("search_groupby")).toBe(false);
+});
+
+/// (partial: a sort that returns to page 1 does not report the open group of page 2 as missing)
+test("sorting from a later page of groups does not report the saved open group as missing", async () => {
+  const { root, heads, groupByPriority } = await startNotes(call => {
+    if (call.method === "web_read_group") return { groups: [{ priority: call.body["offset"] === 0 ? "normal" : "high", __count: 1, __extra_domain: [["priority", "=", call.body["offset"] === 0 ? "normal" : "high"]] }], length: 41 };
+    if (call.method === "web_search_read") return { length: 0, records: [] };
+    return undefined;
+  });
+  await groupByPriority();
+  root.querySelector<HTMLButtonElement>(".pager-next")!.click();
+  await vi.waitFor(() => expect(root.querySelector(".pager-count")!.textContent).toBe("41–41 / 41 groups"));
+  heads()[0]!.click();
+  await vi.waitFor(() => expect(heads()[0]!.getAttribute("aria-expanded")).toBe("true"));
+  root.querySelector<HTMLButtonElement>("th.sortable-column .sort-button")!.click();
+  await vi.waitFor(() => expect(root.querySelector(".pager-count")!.textContent).toBe("1–1 / 41 groups"));
+  await settle();
+  expect(notice(root)).not.toContain("no longer in these results");
 });

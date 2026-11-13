@@ -175,35 +175,7 @@ async fn assert_loan_statusbar(orm: &Orm, expected: bool) {
 /// default order; the table itself is the client's). Books by author then by year published (rows) and by format
 /// (columns), measured in pages and price, with the count shown first.
 async fn assert_book_pivot(orm: &Orm) {
-    let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
-    let records = tx.env().records("sample_library.book").unwrap();
-    let Exposure::Exposed(method) = tx
-        .exposure()
-        .get(records.model_id(), "get_views")
-        .unwrap()
-        .clone()
-    else {
-        panic!("get_views is exposed")
-    };
-    let args = erp_fields::ValueMap::from_iter([
-        (
-            "views".into(),
-            Value::List(vec![Value::List(vec![Value::False, Value::str("pivot")].into())].into()),
-        ),
-        ("wire_major".into(), Value::Int(1)),
-        (
-            "options".into(),
-            Value::Map(Arc::new(erp_fields::ValueMap::from_iter([(
-                "mobile".into(),
-                Value::Bool(false),
-            )]))),
-        ),
-    ]);
-    let value = method
-        .call(&mut tx, records, RpcArgs::new(args))
-        .await
-        .unwrap();
-    let view = erp_fields::convert::value_to_json(&value).unwrap();
+    let view = book_view(orm, "pivot").await;
     assert_eq!(view["views"][0]["type"], "pivot");
     assert_eq!(view["views"][0]["renderer"], "web.pivot");
     let nodes = view["views"][0]["nodes"].as_array().unwrap();
@@ -231,7 +203,69 @@ async fn assert_book_pivot(orm: &Orm) {
             ("price", "measure", None)
         ]
     );
+}
+
+/// `get_views` of the book model for one view type, as the client receives it.
+async fn book_view(orm: &Orm, view_type: &str) -> serde_json::Value {
+    let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+    let records = tx.env().records("sample_library.book").unwrap();
+    let Exposure::Exposed(method) = tx
+        .exposure()
+        .get(records.model_id(), "get_views")
+        .unwrap()
+        .clone()
+    else {
+        panic!("get_views is exposed")
+    };
+    let args = erp_fields::ValueMap::from_iter([
+        (
+            "views".into(),
+            Value::List(
+                vec![Value::List(
+                    vec![Value::False, Value::str(view_type)].into(),
+                )]
+                .into(),
+            ),
+        ),
+        ("wire_major".into(), Value::Int(1)),
+        (
+            "options".into(),
+            Value::Map(Arc::new(erp_fields::ValueMap::from_iter([(
+                "mobile".into(),
+                Value::Bool(false),
+            )]))),
+        ),
+    ]);
+    let value = method
+        .call(&mut tx, records, RpcArgs::new(args))
+        .await
+        .unwrap();
     tx.rollback().await.unwrap();
+    erp_fields::convert::value_to_json(&value).unwrap()
+}
+
+/// the books have a default search view, so the pivot's Group By menu has its items and the client's request for
+/// a search view is answered (no refusal for a model without one).
+async fn assert_book_search(orm: &Orm) {
+    let view = book_view(orm, "search").await;
+    assert_eq!(view["views"][0]["type"], "search");
+    let nodes = view["views"][0]["nodes"].as_array().unwrap();
+    let filters: Vec<_> = nodes
+        .iter()
+        .filter(|node| node["kind"] == "search_filter")
+        .map(|node| node["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        filters,
+        [
+            "available",
+            "popular",
+            "group_author",
+            "group_format",
+            "group_published",
+            "group_rating"
+        ]
+    );
 }
 
 /// Runs `body` on a thread with a large stack: a full install chain exceeds the default one.
@@ -288,7 +322,7 @@ async fn install_use_upgrade_uninstall() {
     let candidate_manifest = fs::read_to_string(&manifest_path).unwrap();
     fs::write(
         &manifest_path,
-        candidate_manifest.replace("version = \"1.0.7\"", "version = \"1.0.1\""),
+        candidate_manifest.replace("version = \"1.0.8\"", "version = \"1.0.1\""),
     )
     .unwrap();
     let db = TestDb::create().await.unwrap();
@@ -456,7 +490,7 @@ async fn install_use_upgrade_uninstall() {
     let text = fs::read_to_string(&manifest).unwrap();
     fs::write(
         &manifest,
-        text.replace("version = \"1.0.7\"", "version = \"1.1.0\""),
+        text.replace("version = \"1.0.8\"", "version = \"1.1.0\""),
     )
     .unwrap();
     let candidate = system_builder(&db, work.path())
@@ -478,6 +512,7 @@ async fn install_use_upgrade_uninstall() {
     let orm = upgraded.orm;
     assert_loan_statusbar(&orm, true).await;
     assert_book_pivot(&orm).await;
+    assert_book_search(&orm).await;
     assert!(columns(&orm, "sample_library_book").await.contains("shelf"));
     assert_eq!(
         scalar(&orm, "SELECT count(*)::text FROM sample_library_book").await,

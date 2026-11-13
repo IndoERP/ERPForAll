@@ -472,7 +472,7 @@ async fn native_heartbeat_uses_shared_singleton_and_stale_epoch_writes_nothing()
         .unwrap();
     tx.commit().await.unwrap();
     drop(tx);
-    a.run_claimed(claim).await;
+    a.run_claimed(claim).await.unwrap();
     assert_eq!(
         scalar(&f.h, "SELECT count(*) FROM ir_blob_owner_state").await,
         0

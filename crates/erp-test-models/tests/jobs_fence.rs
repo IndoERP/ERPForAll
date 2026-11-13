@@ -113,7 +113,8 @@ async fn a_chunk_with_a_stale_epoch_writes_nothing_and_the_run_stops() {
     exec(&h, "UPDATE erp_job SET lease_epoch = lease_epoch + 1").await;
     runner
         .run_claimed(claimed.into_iter().next().unwrap())
-        .await;
+        .await
+        .unwrap();
     assert_eq!(effects(&h).await, "0");
     assert_eq!(
         REFUSALS.lock().unwrap().as_slice(),
@@ -138,7 +139,8 @@ async fn a_chunk_after_the_lease_expired_is_refused() {
     .await;
     runner
         .run_claimed(claimed.into_iter().next().unwrap())
-        .await;
+        .await
+        .unwrap();
     assert_eq!(effects(&h).await, "0");
     assert_eq!(REFUSALS.lock().unwrap().len(), 1);
 }
@@ -166,7 +168,8 @@ async fn a_chunk_moves_the_lease_forward() {
     .await;
     runner
         .run_claimed(claimed.into_iter().next().unwrap())
-        .await;
+        .await
+        .unwrap();
     let probes = PROBES.lock().unwrap().clone();
     assert_eq!(probes.len(), 1);
     assert!((88..=90).contains(&probes[0].0), "{probes:?}");
@@ -212,9 +215,9 @@ async fn a_deposed_owner_cannot_commit_after_the_job_was_reaped_and_claimed_agai
     let successor = second.claim(1).await.unwrap().into_iter().next().unwrap();
     assert_eq!((deposed.epoch(), successor.epoch()), (1, 2));
     // the deposed owner's chunk is refused; the successor's commits and completes the job
-    first.run_claimed(deposed).await;
+    first.run_claimed(deposed).await.unwrap();
     assert_eq!(effects(&h).await, "0");
-    second.run_claimed(successor).await;
+    second.run_claimed(successor).await.unwrap();
     assert_eq!(effects(&h).await, "1");
     assert_eq!(cell(&h, "SELECT count(*)::text FROM erp_job").await, "0");
     assert_eq!(
@@ -254,10 +257,10 @@ async fn a_deposed_singleton_owner_never_overlaps_the_successor_that_holds_the_k
     // the deposed owner's chunk fences first: its epoch is stale, so it fails there without
     // reaching the key: no wait, no write, no overlap with the successor's chunk
     let started = std::time::Instant::now();
-    first.run_claimed(deposed).await;
+    first.run_claimed(deposed).await.unwrap();
     assert!(started.elapsed() < Duration::from_secs(5));
     assert_eq!(effects(&h).await, "0");
     holder.rollback().await.unwrap();
-    second.run_claimed(successor).await;
+    second.run_claimed(successor).await.unwrap();
     assert_eq!(effects(&h).await, "1");
 }

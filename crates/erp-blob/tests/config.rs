@@ -289,3 +289,54 @@ fn quota_settings_have_safe_defaults_and_reject_invalid_bounds() {
         assert!(err.to_string().contains(key), "{setting}: {err}");
     }
 }
+
+#[test]
+fn receive_timeouts_are_validated_independently_of_intent_lifetime() {
+    let with = |setting: &str| GOOD.replace("inline_max_bytes = 4096", setting);
+    for setting in [
+        "upload_idle_timeout_secs = 1",
+        "upload_idle_timeout_secs = 300",
+        "upload_receive_timeout_secs = 10",
+        "upload_receive_timeout_secs = 86400",
+    ] {
+        AttachmentConfig::from_toml(&with(setting)).expect("valid receive setting");
+    }
+    for (key, value, low, high) in [
+        ("upload_idle_timeout_secs", 0, 1, 300),
+        ("upload_idle_timeout_secs", 301, 1, 300),
+        ("upload_receive_timeout_secs", 9, 10, 86400),
+        ("upload_receive_timeout_secs", 86401, 10, 86400),
+    ] {
+        let error = AttachmentConfig::from_toml(&with(&format!("{key} = {value}"))).unwrap_err();
+        assert!(matches!(error, erp_blob::BlobError::Configuration { .. }));
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "attachment store configuration: attachments.{key} = {value} is outside {low} to {high}"
+            )
+        );
+    }
+}
+
+#[test]
+fn quota_error_sources_never_render_private_accounting() {
+    let error = erp_blob::BlobError::QuotaExceeded {
+        budget: "database quota",
+        used: 123456,
+        requested: 789,
+        limit: 123457,
+    };
+    assert_eq!(
+        error.to_string(),
+        "This file cannot be uploaded because the attachment storage limit has been reached. Contact an administrator."
+    );
+    assert!(matches!(
+        error,
+        erp_blob::BlobError::QuotaExceeded {
+            used: 123456,
+            requested: 789,
+            limit: 123457,
+            ..
+        }
+    ));
+}

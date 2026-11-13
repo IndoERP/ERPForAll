@@ -31,6 +31,26 @@ pub struct User {
     cookies: String,
 }
 
+/// Explicit optional subject configuration for acceptance packages; never changes A/B defaults.
+pub struct UserSpec<'a> {
+    pub login: &'a str,
+    pub company: i64,
+    pub companies: Vec<i64>,
+    pub groups: Vec<i64>,
+}
+
+impl User {
+    /// Dispatch with this real session to a fixture-owned primary or peer. No cookie getter.
+    pub fn rpc_on(&self, port: u16, model: &str, method: &str, body: Value) -> Reply {
+        native_http::json_post(
+            port,
+            &self.cookies,
+            &format!("/erp/json/2/{model}/{method}"),
+            &body.to_string(),
+        )
+    }
+}
+
 /// Borrowed owner keeps the provisioning session separate from every acceptance subject.
 pub struct MultiuserFixture<'a> {
     pub native: &'a NativeFixture,
@@ -360,10 +380,21 @@ impl<'a> MultiuserFixture<'a> {
         sessions.len() == self.users.len()
     }
     pub fn rpc(&self, subject: Subject, model: &str, method: &str, body: Value) -> Reply {
+        self.rpc_on(self.native.port, subject, model, method, body)
+    }
+    /// Explicit destination keeps multi-process probes on the same authenticated subject.
+    pub fn rpc_on(
+        &self,
+        port: u16,
+        subject: Subject,
+        model: &str,
+        method: &str,
+        body: Value,
+    ) -> Reply {
         let path = format!("/erp/json/2/{model}/{method}");
         match subject {
             Subject::Anonymous => native_http::request(
-                self.native.port,
+                port,
                 "POST",
                 &path,
                 &[
@@ -372,13 +403,35 @@ impl<'a> MultiuserFixture<'a> {
                 ],
                 &body.to_string(),
             ),
-            Subject::Admin | Subject::A | Subject::B => native_http::json_post(
-                self.native.port,
-                &self.user(subject).cookies,
-                &path,
-                &body.to_string(),
-            ),
+            Subject::Admin | Subject::A | Subject::B => {
+                native_http::json_post(port, &self.user(subject).cookies, &path, &body.to_string())
+            }
         }
+    }
+    /// Request the signed-in content endpoint as exactly `subject`. The anonymous arm sends no
+    /// cookie; credentials remain private even when a content refusal is being diagnosed.
+    pub fn content(&self, subject: Subject, method: &str, id: i64, range: Option<&str>) -> Reply {
+        assert!(
+            matches!(method, "GET" | "HEAD"),
+            "content helper requires GET or HEAD"
+        );
+        let mut headers = Vec::new();
+        match subject {
+            Subject::Anonymous => {}
+            Subject::Admin | Subject::A | Subject::B => {
+                headers.push(("cookie", self.user(subject).cookies.as_str()));
+            }
+        }
+        if let Some(range) = range {
+            headers.push(("range", range));
+        }
+        native_http::request(
+            self.native.port,
+            method,
+            &format!("/erp/content/{id}"),
+            &headers,
+            "",
+        )
     }
     pub fn bootstrap(&self, subject: Subject) -> Value {
         let reply = native_http::request(
@@ -393,6 +446,101 @@ impl<'a> MultiuserFixture<'a> {
             "authenticated bootstrap failed (body redacted)"
         );
         native_http::embedded(&reply, "erp-bootstrap")
+    }
+    /// Resolve a setup identity through ordinary administrative JSON-2, not private SQL.
+    pub fn xmlid(&self, module: &str, name: &str) -> i64 {
+        let rows = success(&self.rpc(
+            Subject::Admin,
+            "ir.model.data",
+            "search_read",
+            json!({
+                "domain":[["module","=",module],["name","=",name]], "fields":["res_id"]
+            }),
+        ));
+        assert_eq!(
+            rows.as_array().expect("XML identity rows").len(),
+            1,
+            "ambiguous XML identity"
+        );
+        rows[0]["res_id"].as_i64().expect("XML record identity")
+    }
+    /// Provision and verify an additional ordinary subject using supported administrator calls.
+    pub fn provision(&self, spec: UserSpec<'_>) -> User {
+        assert!(!spec.companies.is_empty() && spec.companies.contains(&spec.company));
+        let partner = success(&self.rpc(
+            Subject::Admin,
+            "res.partner",
+            "create",
+            json!({
+                "vals_list":[{"name":spec.login,"company_id":spec.company}]
+            }),
+        ))[0]
+            .as_i64()
+            .expect("subject partner identity");
+        let password = format!("{} & = boundary £ password", self.native.db.name());
+        let reply = self.rpc(
+            Subject::Admin,
+            "res.users",
+            "create",
+            json!({"vals_list":[{
+                "name":spec.login,"login":spec.login,"password":password,"partner_id":partner,
+                "company_id":spec.company,"company_ids":[[6,0,spec.companies]],
+                "group_ids":[[6,0,spec.groups]],"lang":"en_US","tz":"UTC"
+            }]}),
+        );
+        // Only the known disposable submitted password could appear in a provisioning error.
+        if reply.status != 200 {
+            let value: Value = serde_json::from_str(&reply.body).expect("provision error JSON");
+            let message = value["message"]
+                .as_str()
+                .expect("provision error message")
+                .replace(&password, "[redacted]");
+            panic!(
+                "boundary provision: HTTP {} {}: {message}",
+                reply.status, value["name"]
+            );
+        }
+        let id = success(&reply)[0].as_i64().expect("subject user identity");
+        assert_ne!(id, erp_orm::SUPERUSER_ID.get());
+        let user = User {
+            id,
+            login: spec.login.to_owned(),
+            company: spec.company,
+            companies: spec.companies,
+            cookies: login_session(self.native, spec.login, &password),
+        };
+        let row = success(&self.rpc(Subject::Admin,"res.users","read",json!({
+            "ids":[id],"fields":["group_ids","all_group_ids","company_id","company_ids","active","share"]
+        })));
+        let groups = |key: &str| {
+            row[0][key]
+                .as_array()
+                .expect("membership list")
+                .iter()
+                .map(|v| v.as_i64().expect("membership id"))
+                .collect::<BTreeSet<_>>()
+        };
+        assert_eq!(groups("group_ids"), BTreeSet::from_iter(spec.groups));
+        let effective = groups("all_group_ids");
+        assert!(effective.contains(&self.group("group_user")));
+        assert!(!effective.contains(&self.group("group_system")));
+        assert!(!effective.contains(&self.group("group_erp_manager")));
+        assert_eq!(
+            groups("company_ids"),
+            BTreeSet::from_iter(user.companies.iter().copied())
+        );
+        assert_eq!(relation_id(&row[0]["company_id"]), user.company);
+        assert_eq!(row[0]["active"], true);
+        assert_eq!(row[0]["share"], false);
+        let own = success(&user.rpc_on(
+            self.native.port,
+            "res.users",
+            "read",
+            json!({"ids":[id],"fields":["id","login"]}),
+        ));
+        assert_eq!(own[0]["id"], id);
+        assert_eq!(own[0]["login"], spec.login);
+        user
     }
     pub fn cleanup_probe(&self) -> CleanupProbe {
         CleanupProbe::capture(self.native)

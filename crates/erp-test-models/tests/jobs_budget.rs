@@ -155,10 +155,16 @@ async fn a_continued_job_goes_behind_the_jobs_already_due() {
     // other job's, so the other job is claimed before it
     let first = runner.claim(1).await.unwrap();
     assert_eq!(first[0].job(), jobs[0]);
-    runner.run_claimed(first.into_iter().next().unwrap()).await;
+    runner
+        .run_claimed(first.into_iter().next().unwrap())
+        .await
+        .unwrap();
     let next = runner.claim(1).await.unwrap();
     assert_eq!(next[0].job(), jobs[1]);
-    runner.run_claimed(next.into_iter().next().unwrap()).await;
+    runner
+        .run_claimed(next.into_iter().next().unwrap())
+        .await
+        .unwrap();
     let again = runner.claim(1).await.unwrap();
     assert_eq!(again[0].job(), jobs[0]);
 }

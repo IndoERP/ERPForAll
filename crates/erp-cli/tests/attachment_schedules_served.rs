@@ -17,10 +17,11 @@ use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-const KINDS: [&str; 4] = [
+const KINDS: [&str; 5] = [
     "base.attachment_gc",
     "base.attachment_clean_staging",
     "base.attachment_reconcile",
+    "base.attachment_usage_compact",
     "base.attachment_owner_heartbeat",
 ];
 

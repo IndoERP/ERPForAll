@@ -26,6 +26,9 @@ erp-addon-web = { workspace = true }
 erp-addon-mail = { workspace = true }
 erp-addon-uom = { workspace = true }
 erp-addon-product = { workspace = true }
+# account_numbering: the chain rows, numbered on the test_numbering stand-in
+erp-addon-analytic = { workspace = true }
+erp-addon-account = { workspace = true }
 erp-addon-test_ext_a = { workspace = true }
 erp-addon-test_ext_b = { workspace = true }
 erp-addon-test_ext_c = { workspace = true }

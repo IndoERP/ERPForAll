@@ -19,7 +19,7 @@ use std::{
     sync::Arc,
     task::{Context, Poll},
 };
-use tokio::io::{AsyncRead, ReadBuf};
+use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 
 fn budgets(file: u64, staging: u64) -> AttachmentLimits {
     let mut l = limits().with_max_file_bytes_for_tests(file);
@@ -96,7 +96,7 @@ async fn two_nodes_cannot_race_the_last_pending_slot() {
     assert_eq!(err.kind(), ErrorKind::ResourceExhausted);
     assert_eq!(
         err.message(),
-        "The limit of 1 pending uploads is reached. Wait for attachment cleanup, then retry."
+        "Too many uploads are pending. Complete an upload or try again shortly."
     );
     assert_eq!(scalar(&f.h, "SELECT count(*) FROM ir_blob_upload").await, 1);
     f.h.cleanup().await.unwrap();
@@ -115,7 +115,7 @@ async fn retained_and_unknown_length_reservations_enforce_byte_caps_before_readi
     assert_eq!(err.kind(), ErrorKind::ResourceExhausted);
     assert_eq!(
         err.message(),
-        "QuotaExceeded: database staging uses 6 bytes; requested 8, limit 10"
+        "This file cannot be uploaded because the attachment storage limit has been reached. Contact an administrator."
     );
     assert_eq!(scalar(&f.h, "SELECT count(*) FROM ir_blob_upload").await, 1);
     let mut tx = f.h.begin().await.unwrap();
@@ -138,7 +138,7 @@ async fn retained_and_unknown_length_reservations_enforce_byte_caps_before_readi
     assert_eq!(err.kind(), ErrorKind::ResourceExhausted);
     assert_eq!(
         err.message(),
-        "QuotaExceeded: database staging uses 6 bytes; requested 8, limit 10"
+        "This file cannot be uploaded because the attachment storage limit has been reached. Contact an administrator."
     );
     clean(&f).await;
     assert_eq!(usage(&f).await, 0);
@@ -162,9 +162,7 @@ async fn actual_bytes_cannot_exceed_declared_or_effective_limits() {
         assert_eq!(err.kind(), ErrorKind::Validation);
         assert_eq!(
             err.message(),
-            format!(
-                "object size in bytes exceeds the limit of {limit} (and fenced cleanup pending; the committed reservation is retained)"
-            )
+            format!("object size in bytes exceeds the limit of {limit}")
         );
     }
     let err = Uploader::new(f.h.orm())
@@ -259,7 +257,7 @@ async fn failed_deletion_keeps_the_only_marker_and_reservation() {
     assert_eq!(err.kind(), ErrorKind::Internal);
     assert_eq!(
         err.message(),
-        "The attachment store failed: the attachment store is unavailable (retryable): injected fault in Stage (After its effect) (and fenced cleanup pending; the committed reservation is retained)"
+        "The attachment store failed: the attachment store is unavailable (retryable): injected fault in Stage (After its effect)"
     );
     assert!(
         std::error::Error::source(&err)
@@ -324,7 +322,7 @@ async fn inline_writes_charge_new_content_once_and_refuse_the_soft_quota() {
     assert_eq!(err.kind(), ErrorKind::ResourceExhausted);
     assert_eq!(
         err.message(),
-        "QuotaExceeded: database quota uses 5 bytes; requested 1, limit 5"
+        "This file cannot be uploaded because the attachment storage limit has been reached. Contact an administrator."
     );
     tx.rollback().await.unwrap();
     drop(tx);
@@ -474,7 +472,7 @@ async fn two_nodes_cannot_race_the_database_byte_budget() {
     assert_eq!(err.kind(), ErrorKind::ResourceExhausted);
     assert_eq!(
         err.message(),
-        "QuotaExceeded: database staging uses 6 bytes; requested 6, limit 10"
+        "This file cannot be uploaded because the attachment storage limit has been reached. Contact an administrator."
     );
     assert_eq!(usage(&f).await, 6);
     f.h.cleanup().await.unwrap();
@@ -519,7 +517,7 @@ async fn several_keys_share_one_subject_byte_budget() {
     assert_eq!(err.kind(), ErrorKind::ResourceExhausted);
     assert_eq!(
         err.message(),
-        "QuotaExceeded: subject staging uses 32 bytes; requested 8, limit 32"
+        "This file cannot be uploaded because the attachment storage limit has been reached. Contact an administrator."
     );
     let other = key_env(f.h.orm(), 8, 13).await;
     stage(&f, &other, "other.txt", b"12345678").await;
@@ -609,7 +607,7 @@ async fn deletion_after_effect_failure_keeps_accounting_until_retry() {
     assert_eq!(err.kind(), ErrorKind::Internal);
     assert_eq!(
         err.message(),
-        "The attachment store failed: the attachment store is unavailable (retryable): injected fault in Stage (After its effect) (and fenced cleanup pending; the committed reservation is retained)"
+        "The attachment store failed: the attachment store is unavailable (retryable): injected fault in Stage (After its effect)"
     );
     f.store.faults().inject(Op::DeleteStaged, When::After, 0, 1);
     let mut tx = f
@@ -723,7 +721,7 @@ async fn a_stalled_receive_cannot_outlive_its_durable_intent() {
     assert_eq!(err.kind(), ErrorKind::Validation);
     assert_eq!(
         err.message(),
-        "The upload intent expired before receiving completed. (and fenced cleanup pending; the committed reservation is retained)"
+        "The upload intent expired before receiving completed."
     );
     assert_eq!(
         scalar(
@@ -752,10 +750,7 @@ async fn zero_byte_failed_intents_still_count_until_cleanup() {
         .await
         .unwrap_err();
     assert_eq!(err.kind(), ErrorKind::Validation);
-    assert_eq!(
-        err.message(),
-        "object size in bytes exceeds the limit of 0 (and fenced cleanup pending; the committed reservation is retained)"
-    );
+    assert_eq!(err.message(), "object size in bytes exceeds the limit of 0");
     assert_eq!(
         scalar(
             &f.h,
@@ -771,10 +766,336 @@ async fn zero_byte_failed_intents_still_count_until_cleanup() {
     assert_eq!(err.kind(), ErrorKind::ResourceExhausted);
     assert_eq!(
         err.message(),
-        "The limit of 1 pending uploads is reached. Wait for attachment cleanup, then retry."
+        "Too many uploads are pending. Complete an upload or try again shortly."
     );
     clean(&f).await;
     assert_eq!(scalar(&f.h, "SELECT count(*) FROM ir_blob_upload").await, 0);
     stage(&f, &env, "after.txt", b"after cleanup").await;
+    f.h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn consumed_external_upload_releases_slot_but_retains_occupancy() {
+    let f = fixture(
+        budgets(8, 16)
+            .with_pending_uploads_for_tests(1)
+            .with_inline_max_bytes_for_tests(0),
+    )
+    .await;
+    let env = env_of(f.h.orm()).await;
+    let up = stage(&f, &env, "first.txt", b"12345678").await;
+    let mut tx = f.h.begin().await.unwrap();
+    attachments::create(
+        &mut tx,
+        vec![NewAttachment::new(
+            "first.txt",
+            AttachmentContent::Upload(up.id),
+        )],
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    drop(tx);
+    assert_eq!(
+        scalar(
+            &f.h,
+            "SELECT reserved_bytes FROM ir_blob_upload WHERE state=2"
+        )
+        .await,
+        8
+    );
+    let second = stage(&f, &env, "second.txt", b"new").await;
+    assert_eq!(second.size, 3);
+    assert_eq!(usage(&f).await, 19);
+    f.h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn quota_backlog_refuses_then_compaction_restores_admission() {
+    let mut l = budgets(8, 64);
+    l.quota_bytes = Some(100);
+    let f = fixture(l).await;
+    let mut tx = f.h.begin().await.unwrap();
+    tx.execute(
+        "INSERT INTO ir_blob_usage_delta(bytes) SELECT 0 FROM generate_series(1,10001)",
+        &[],
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    drop(tx);
+    let env = env_of(f.h.orm()).await;
+    let error = Uploader::new(f.h.orm())
+        .stage(&env, &mut NeverRead, StageRequest::named("backlog.txt"))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Internal);
+    assert_eq!(
+        error.message(),
+        "Attachment uploads are temporarily unavailable. Try again shortly."
+    );
+    let mut tx = f
+        .h
+        .orm()
+        .begin_opts(BeginOptions::new(PrincipalHint::system()).isolation(Isolation::ReadCommitted))
+        .await
+        .unwrap();
+    assert_eq!(gc::compact_usage(&mut tx, 10000).await.unwrap(), 10000);
+    tx.commit().await.unwrap();
+    drop(tx);
+    let up = stage(&f, &env, "recovered.txt", b"ok").await;
+    assert_eq!(up.size, 2);
+    f.h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn unknown_legacy_occupancy_blocks_admission_until_cleanup() {
+    let f = fixture(budgets(8, 64)).await;
+    let mut tx = f.h.begin().await.unwrap();
+    tx.execute("INSERT INTO ir_blob_upload(subject_user,expires_at,state,reserved_bytes,reservation_unknown) VALUES (7,now(),3,0,true)", &[]).await.unwrap();
+    tx.commit().await.unwrap();
+    drop(tx);
+    let env = env_of(f.h.orm()).await;
+    let error = Uploader::new(f.h.orm())
+        .stage(&env, &mut NeverRead, StageRequest::named("unknown.txt"))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Internal);
+    assert_eq!(
+        error.message(),
+        "Attachment uploads are temporarily unavailable. Try again shortly."
+    );
+    clean(&f).await;
+    assert_eq!(stage(&f, &env, "known.txt", b"ok").await.size, 2);
+    f.h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn unknown_legacy_occupancy_refuses_inline_creation_only_under_a_quota() {
+    for quota in [None, Some(1_000)] {
+        let mut limits = budgets(8, 64);
+        limits.quota_bytes = quota;
+        let f = fixture(limits).await;
+        let mut tx = f.h.begin().await.unwrap();
+        tx.execute("INSERT INTO ir_blob_upload(subject_user,expires_at,state,reserved_bytes,reservation_unknown) VALUES (7,now(),3,0,true)", &[]).await.unwrap();
+        tx.commit().await.unwrap();
+        drop(tx);
+        let mut tx = f.h.begin().await.unwrap();
+        let created =
+            attachments::create(&mut tx, vec![bytes_attachment("inline.txt", b"abc", None)]).await;
+        match quota {
+            None => {
+                created.unwrap();
+                tx.commit().await.unwrap();
+            }
+            Some(_) => {
+                let error = created.unwrap_err();
+                assert_eq!(error.kind(), ErrorKind::Internal);
+                assert_eq!(
+                    error.message(),
+                    "Attachment uploads are temporarily unavailable. Try again shortly."
+                );
+                tx.rollback().await.unwrap();
+            }
+        }
+        drop(tx);
+        assert_eq!(
+            scalar(
+                &f.h,
+                "SELECT count(*) FROM ir_attachment WHERE name='inline.txt'"
+            )
+            .await,
+            i64::from(quota.is_none())
+        );
+        f.h.cleanup().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn idle_receive_times_out_before_intent_expiry_in_both_storage_paths() {
+    for inline in [0, 2048] {
+        let mut limits = budgets(64, 1000).with_inline_max_bytes_for_tests(inline);
+        limits.upload_idle_timeout_secs = 1;
+        let f = fixture(limits).await;
+        let env = env_of(f.h.orm()).await;
+        let (entered, _keep_receiver) = tokio::sync::oneshot::channel();
+        let mut body = std::io::Cursor::new(b"prefix").chain(HoldReader(Some(entered)));
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            Uploader::new(f.h.orm()).stage(&env, &mut body, StageRequest::named("stall.txt")),
+        )
+        .await
+        .expect("idle timeout must precede intent expiry")
+        .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Validation);
+        assert_eq!(
+            error.message(),
+            "No upload data arrived before the timeout. Try uploading again."
+        );
+        assert!(matches!(
+            std::error::Error::source(&error)
+                .unwrap()
+                .downcast_ref::<erp_blob::BlobError>(),
+            Some(erp_blob::BlobError::UploadIdleTimeout)
+        ));
+        assert_eq!(scalar(&f.h, "SELECT count(*) FROM ir_blob_upload WHERE state=3 AND reserved_bytes=64 AND expires_at>now()").await, 1);
+        assert_eq!(f.rt.available_stream_permits(), 32);
+        f.h.cleanup().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn progress_cannot_extend_the_absolute_receive_deadline() {
+    let mut limits = budgets(1024, 10000).with_inline_max_bytes_for_tests(0);
+    limits.upload_idle_timeout_secs = 30;
+    limits.upload_receive_timeout_secs = 1; // Test-only shortened total receive time.
+    let f = fixture(limits).await;
+    let env = env_of(f.h.orm()).await;
+    let (mut body, mut writer) = tokio::io::duplex(8);
+    let feed = tokio::spawn(async move {
+        loop {
+            if tokio::io::AsyncWriteExt::write_all(&mut writer, b"x")
+                .await
+                .is_err()
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    });
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        Uploader::new(f.h.orm()).stage(&env, &mut body, StageRequest::named("trickle.txt")),
+    )
+    .await
+    .expect("absolute receive deadline must terminate input")
+    .unwrap_err();
+    drop(body);
+    feed.await.unwrap();
+    assert_eq!(error.kind(), ErrorKind::Validation);
+    assert_eq!(
+        error.message(),
+        "The upload took too long. Try uploading again."
+    );
+    assert!(matches!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .downcast_ref::<erp_blob::BlobError>(),
+        Some(erp_blob::BlobError::UploadReceiveTimeout)
+    ));
+    assert_eq!(
+        scalar(
+            &f.h,
+            "SELECT count(*) FROM ir_blob_upload WHERE state=3 AND reserved_bytes=1024"
+        )
+        .await,
+        1
+    );
+    assert_eq!(f.rt.available_stream_permits(), 32);
+    f.h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn quota_admission_accepts_exactly_ten_thousand_deltas() {
+    let mut limits = budgets(8, 64);
+    limits.quota_bytes = Some(8);
+    let f = fixture(limits).await;
+    let mut tx = f.h.begin().await.unwrap();
+    tx.execute(
+        "INSERT INTO ir_blob_usage_delta(bytes) SELECT 0 FROM generate_series(1,10000)",
+        &[],
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    drop(tx);
+    let env = env_of(f.h.orm()).await;
+    assert_eq!(stage(&f, &env, "cap.txt", b"ok").await.size, 2);
+    assert_eq!(usage(&f).await, 2);
+    f.h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn attachment_accounting_parameters_are_bounded_on_write() {
+    let f = fixture(budgets(8, 64)).await;
+    let mut tx = f.h.begin().await.unwrap();
+    for (key, value) in [
+        ("attachments.usage_delta_read_limit", "0"),
+        ("attachments.usage_compaction_batch", "10001"),
+        ("attachments.usage_compaction_interval_secs", "wrong"),
+        ("attachments.composer_retention_secs", "3599"),
+    ] {
+        let err = tx
+            .savepoint(async |tx| {
+                let params = tx.env().records("ir.config_parameter")?;
+                params
+                    .create(
+                        tx,
+                        vec![
+                            erp_orm::RawVals::new()
+                                .set_cell("key", erp_fields::Cell::Str(key.into()))
+                                .set_cell("value", erp_fields::Cell::Str(value.into())),
+                        ],
+                    )
+                    .await?;
+                Ok(())
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), erp_fields::ErrorKind::Validation);
+        let (low, high) = match key {
+            "attachments.usage_delta_read_limit" => (1, 10000),
+            "attachments.usage_compaction_batch" => (1, 10000),
+            "attachments.usage_compaction_interval_secs" => (1, 3600),
+            // above the longest expected compose time (review S5)
+            "attachments.composer_retention_secs" => (3600, 31_536_000),
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            err.message(),
+            format!("{key} must be an integer from {low} to {high}.")
+        );
+    }
+    tx.rollback().await.unwrap();
+    drop(tx);
+    f.h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn quota_read_window_uses_database_policy_and_rejects_corruption() {
+    let mut limits = budgets(8, 64);
+    limits.quota_bytes = Some(100);
+    let f = fixture(limits).await;
+    let mut tx = f.h.begin().await.unwrap();
+    tx.batch("INSERT INTO ir_config_parameter(key,value) VALUES ('attachments.usage_delta_read_limit','4'); INSERT INTO ir_blob_usage_delta(bytes) SELECT 0 FROM generate_series(1,5)").await.unwrap();
+    tx.commit().await.unwrap();
+    drop(tx);
+    let env = env_of(f.h.orm()).await;
+    let err = Uploader::new(f.h.orm())
+        .stage(&env, &mut NeverRead, StageRequest::named("backlog"))
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Internal);
+    assert_eq!(
+        err.message(),
+        "Attachment uploads are temporarily unavailable. Try again shortly."
+    );
+    let mut tx = f.h.begin().await.unwrap();
+    tx.batch(
+        "UPDATE ir_config_parameter SET value='0' WHERE key='attachments.usage_delta_read_limit'",
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    drop(tx);
+    let err = Uploader::new(f.h.orm())
+        .stage(&env, &mut NeverRead, StageRequest::named("corrupt"))
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Validation);
+    assert_eq!(
+        err.message(),
+        "attachments.usage_delta_read_limit must be an integer from 1 to 10000."
+    );
     f.h.cleanup().await.unwrap();
 }

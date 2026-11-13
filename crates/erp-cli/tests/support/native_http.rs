@@ -49,6 +49,29 @@ pub fn url(config: &erp_testkit::tokio_postgres::Config, role: Option<&str>) -> 
 }
 pub struct Server(Child);
 impl Server {
+    /// Exercise the real signal/drain path, retaining a bounded fixture wait.
+    pub fn terminate(&mut self) {
+        if self.0.try_wait().unwrap().is_some() {
+            return;
+        }
+        assert!(
+            Command::new("/bin/kill")
+                .arg("-TERM")
+                .arg(self.0.id().to_string())
+                .status()
+                .unwrap()
+                .success()
+        );
+        let deadline = Instant::now() + Duration::from_secs(120);
+        loop {
+            if let Some(status) = self.0.try_wait().unwrap() {
+                assert!(status.success(), "server shutdown: {status}");
+                break;
+            }
+            assert!(Instant::now() < deadline, "server did not drain after TERM");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
     pub fn stop(&mut self) {
         if self.0.try_wait().unwrap().is_none() {
             self.0.kill().unwrap();

@@ -161,11 +161,7 @@ impl Uploader {
             .map_err(|e| Error::validation(e.to_string()))?;
         // Start before BEGIN: PostgreSQL now() for expires_at is no earlier than this point.
         // A stalled receive must stop before an expired intent becomes eligible for cleanup.
-        let deadline = tokio::time::Instant::now()
-            .checked_add(std::time::Duration::from_secs(rt.limits().upload_ttl_secs))
-            .ok_or_else(|| {
-                Error::programming("attachments.upload_ttl_secs exceeds the monotonic clock range.")
-            })?;
+        let started = tokio::time::Instant::now();
         let options = || BeginOptions::for_principal(env.principal().clone()).on_primary();
         // The primary READ COMMITTED transaction takes database then subject locks. It commits
         // the intent and reservation before any read; none of these locks spans the stream.
@@ -173,6 +169,18 @@ impl Uploader {
             .orm
             .begin_opts(options().isolation(Isolation::ReadCommitted))
             .await?;
+        let policy = super::settings::Policy::load(&mut tx).await?;
+        // An absent database override preserves the validated node configuration's legacy value.
+        let receive_secs = policy
+            .receive
+            .unwrap_or(rt.limits().upload_receive_timeout_secs)
+            .min(rt.limits().upload_ttl_secs);
+        let idle_secs = policy.idle.unwrap_or(rt.limits().upload_idle_timeout_secs);
+        let deadline = started
+            .checked_add(std::time::Duration::from_secs(receive_secs))
+            .ok_or_else(|| {
+                Error::programming("Attachment receive deadline exceeds the monotonic clock range.")
+            })?;
         super::topology::verify(&mut tx, &rt).await?;
         let store = store_by_key(&mut tx, &rt, rt.write_store_key()).await?;
         let uid = env.principal().subject().get();
@@ -191,11 +199,24 @@ impl Uploader {
             .map_err(|e| col_error("upload id", e))?;
         tx.commit().await?;
         drop(tx);
+        let mut body =
+            super::upload_reader::IdleReader::new(body, std::time::Duration::from_secs(idle_secs));
         let result = async {
             let staged = tokio::select! {
                 biased;
-                _ = tokio::time::sleep_until(deadline) => Err(blob_error(erp_sdk::blob::BlobError::UploadExpired)),
-                received = self.receive(&rt, &store.namespace, &upload_id, body, &request, declared.as_deref()) => received,
+                _ = tokio::time::sleep_until(deadline) => Err(blob_error(
+                    if receive_secs == rt.limits().upload_ttl_secs { erp_sdk::blob::BlobError::UploadExpired }
+                    else { erp_sdk::blob::BlobError::UploadReceiveTimeout }
+                )),
+                received = self.receive(&rt, &store.namespace, &upload_id, &mut body, &request, declared.as_deref()) => {
+                    if body.timed_out() {
+                        if let Err(cause)=&received {
+                            tracing::error!(target: "erp::attachments", upload_id, error = %cause,
+                                "Upload idle timeout interrupted receiving; store diagnostics retained internally");
+                        }
+                        Err(blob_error(erp_sdk::blob::BlobError::UploadIdleTimeout))
+                    } else { received }
+                },
             }?;
             let mut tx = self.orm.begin_opts(options()).await?;
             let size = super::quota::sql_bytes(staged.size)?;
@@ -219,8 +240,13 @@ impl Uploader {
                     tx.commit().await
                 }.await;
                 match cleanup {
-                    Ok(()) => Err(original.and_also(&Error::internal("fenced cleanup pending; the committed reservation is retained"))),
-                    Err(cause) => Err(original.and_also(&Error::internal("cleanup state could not be recorded; verify the committed upload intent")).and_also(&cause)),
+                    Ok(()) => Err(original),
+                    Err(cause) => {
+                        tracing::error!(target: "erp::attachments", upload_id, error = %cause, "Failed receive could not record its cleanup state; committed intent requires recovery");
+                        Err(original.and_also(&Error::internal(
+                            "The upload could not be finalized. Try again shortly.",
+                        )))
+                    }
                 }
             }
         }

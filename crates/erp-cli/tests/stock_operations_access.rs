@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! The stock operations tables (`stock.reference`, `stock.picking`, `stock.move`)
-//! ship no access rows yet (adds them): on a real `stock` install with the compiled
-//! policy, an ordinary internal user is refused on each of them, for reading and for creating.
+//! and the move line tables (`stock.move.line`, `stock.move.line.serial`,
+//! `stock.move.line.correction`) ship no access rows yet (adds them): on a real `stock`
+//! install with the compiled policy, an ordinary internal user is refused on each of them, for reading
+//! and for creating.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -171,7 +173,14 @@ fn internal_user_is_refused_on_operations_tables_until_access_rows_ship() {
         tx.commit().await.unwrap();
         drop(tx);
         let mut tx = orm.begin(UserId::new(user).unwrap()).await.unwrap();
-        for model in ["stock.reference", "stock.picking", "stock.move"] {
+        for model in [
+            "stock.reference",
+            "stock.picking",
+            "stock.move",
+            "stock.move.line",
+            "stock.move.line.serial",
+            "stock.move.line.correction",
+        ] {
             // the refusal names the model's description, read from the installed registry
             let description = installed
                 .registry()

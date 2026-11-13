@@ -235,6 +235,7 @@ fn check_created_settings(tx: &Transaction, vals_list: &[RawVals]) -> Result<()>
         if let Some(Some(key)) = written(vals, "key")? {
             refuse_attachment_location(key)?;
             validate_setting_in(&env, key, written(vals, "value")?.flatten())?;
+            crate::attachments::settings::validate(key, written(vals, "value")?.flatten())?;
         }
     }
     Ok(())
@@ -264,7 +265,9 @@ async fn check_written_settings(
         if let Some(key) = &key {
             refuse_attachment_location(key)?;
         }
-        let Some(key) = key.filter(|k| keys::ALL.contains(&&**k)) else {
+        let Some(key) =
+            key.filter(|k| keys::ALL.contains(&&**k) || crate::attachments::settings::contains(k))
+        else {
             continue;
         };
         let value: Option<Arc<str>> = match new_value {
@@ -272,6 +275,7 @@ async fn check_written_settings(
             None => rec.get(tx, IrConfigParameter::VALUE).await?,
         };
         validate_setting_in(&tx.env(), &key, value.as_deref())?;
+        crate::attachments::settings::validate(&key, value.as_deref())?;
     }
     Ok(())
 }

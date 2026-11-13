@@ -1013,7 +1013,8 @@ type Call = { method: string; body: Record<string, unknown> };
 const reply = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 let holdReads: Promise<void> | undefined; // while set, grouped reads wait for it
 let failReads = false; // while set, grouped reads fail
-afterEach(() => { failReads = false; holdReads = undefined; });
+let noSearchView = false; // while set, the model has no default search view: the server refuses the request for one (addons/base/src/ir_ui_view/select.rs)
+afterEach(() => { failReads = false; holdReads = undefined; noSearchView = false; });
 async function startApp(path: string, options: { tolerant?: boolean } = {}) {
   history.replaceState(null, "", path);
   const calls: Call[] = [];
@@ -1025,7 +1026,11 @@ async function startApp(path: string, options: { tolerant?: boolean } = {}) {
       const action = { wire_major: 1, id: 20, name: "Notes", model: "t.note", target: "current", views: [{ id: 2, type: "list" }, { id: 5, type: "pivot" }], domain: null, context: null };
       return reply(method === "erp_load_web_action_views" ? { action, views: full } : action);
     }
-    if (method === "get_views") return reply(full);
+    if (method === "get_views") {
+      const asked = body["views"] as unknown[][];
+      if (noSearchView && asked.some(item => item[1] === "search")) return reply({ message: "No default view of type 'search' could be found! (generated default views come with the model)" }, 422);
+      return reply(full);
+    }
     if (method === "fields_get") {
       if (!Array.isArray(body["attributes"]) || !body["attributes"].every(name => typeof name === "string")) return reply({ message: "attributes must be a list of strings" }, 422);
       return reply(fieldsReply);
@@ -1043,6 +1048,11 @@ async function startApp(path: string, options: { tolerant?: boolean } = {}) {
       if (failReads) return reply({ message: "The server is busy." }, 500);
       await holdReads;
       return reply(answer(body, served));
+    }
+    if (method === "web_read_group") {
+      // the list's grouped read: the first grouping only, as the server does (crates/erp-orm/src/web/groups.rs)
+      const rows = answer({ domain: body["domain"], grouping_sets: [[(body["groupby"] as string[])[0]]], aggregates: ["__count"] }, served)[0]!;
+      return reply({ groups: rows, length: rows.length });
     }
     if (method === "web_search_read") {
       const kept = filterRecords(body["domain"] as unknown[], served);
@@ -1384,4 +1394,193 @@ test("a search view item with an interval on a non-date field is not offered in 
     expect(items).toContain("By author");
     expect(items).not.toContain("Bad interval");
   } finally { full.views = original; }
+});
+
+
+/// (partial: the search's Group By sets the row groupings: every level expanded, header clicks forgotten, null returns to the arch; the columns stay)
+test("setRows replaces the row groupings with every level expanded, drops what header clicks added, and null returns to the arch's rows", async () => {
+  const { model, requests } = await made();
+  await model.expand("row", [k("normal")], field("author_id"));
+  expect(labels(model.table())).toContain("    Ada");
+  requests.length = 0;
+  await model.setRows([field("author_id"), field("published", "month")]);
+  expect(requests).toHaveLength(1);
+  expect(requests[0]!.groupingSets).toEqual([[], ["state"], ["author_id"], ["author_id", "state"], ["author_id", "published:month"], ["author_id", "published:month", "state"]]);
+  expect(labels(model.table())).toEqual(["Total", "  Ada", "    January 2026", "    February 2026", "  Bo", "    February 2026", "    April 2026", "  None", "    None"]);
+  expect(model.table().headerRows.flat().map(header => header.label)).toEqual(["Total", "Draft", "Done"]); // the columns are the search's no business
+  expect(model.snapshot()).toMatchObject({ rows: ["author_id", "published:month"], cols: ["state"], layoutDefault: false });
+  await model.setRows(null);
+  expect(labels(model.table())).toEqual(["Total", "  Normal", "  High", "  None"]);
+  expect(model.snapshot()).toMatchObject({ rows: ["priority"], layoutDefault: true });
+  await rejects(model.setRows(Array.from({ length: 7 }, () => field("author_id"))), "validation", /at most 6/);
+});
+
+const nodes = (root: HTMLElement, axis: "row" | "col", path: string[]): HTMLElement => header(root, axis, path).closest("th")!;
+
+/// (partial: every header is a node that says closed or opened, with the whole cell as its target)
+test("each header shows a closed or opened node, its title is a tooltip, and a click anywhere in the cell works like the button", async () => {
+  const { root, settle, model } = await mounted([pivotField("priority", "row", "Priority"), pivotField("state", "row", "State"), pivotField("size", "measure", "Size")]);
+  const total = nodes(root, "row", []), leaf = nodes(root, "row", [k("normal"), k("draft")]);
+  expect(total.classList.contains("pivot-node-opened")).toBe(true);
+  expect(leaf.classList.contains("pivot-node-closed")).toBe(true);
+  expect(header(root, "row", []).querySelector("svg")!.innerHTML).not.toBe(header(root, "row", [k("normal"), k("draft")]).querySelector("svg")!.innerHTML);
+  expect(header(root, "row", [k("normal")]).title).toBe("Normal");
+  const expand = vi.spyOn(model, "expand"), collapse = vi.spyOn(model, "collapse");
+  header(root, "row", [k("normal")]).click(); // the button inside: the cell around it must not act a second time
+  await settle();
+  expect(collapse).toHaveBeenCalledTimes(1);
+  expect(expand).not.toHaveBeenCalled();
+  expect(nodes(root, "row", [k("normal")]).classList.contains("pivot-node-closed")).toBe(true);
+  expect(header(root, "row", [k("normal")]).getAttribute("aria-expanded")).toBe("false");
+  nodes(root, "row", [k("normal")]).click(); // the cell itself opens it by the next grouping
+  await settle();
+  expect(expand).toHaveBeenCalledTimes(1);
+  expect(nodes(root, "row", [k("normal")]).classList.contains("pivot-node-opened")).toBe(true);
+  nodes(root, "col", []).click();
+  await settle();
+  expect(root.querySelector(".pivot-field-menu")!.classList.contains("open")).toBe(true); // a folded leaf with no grouping below asks which field
+});
+
+const searchPanel = async (root: HTMLElement): Promise<HTMLElement> => {
+  root.querySelector<HTMLButtonElement>(".search-menu-toggle")!.click();
+  await vi.waitFor(() => expect(root.querySelectorAll(".erp-groupby-section .erp-search-menu-item").length).toBeGreaterThan(0));
+  return root.querySelector<HTMLElement>(".erp-search-menu-panel")!;
+};
+const groupByItem = (panel: HTMLElement, text: string): HTMLButtonElement =>
+  [...panel.querySelectorAll<HTMLButtonElement>(".erp-groupby-section .erp-search-menu-item")].find(item => item.textContent === text)!;
+
+/// (the search view's Group By sets the rows of the pivot in the order chosen; removing the facet returns to the arch's rows; reference pivot_model.js)
+test("the search's Group By sets the pivot's rows in the order chosen, a header click's level is forgotten, and removing the facet brings the arch's rows back", async () => {
+  const { root, of } = await startApp("/erp/action-20?view_type=pivot");
+  await ready(root);
+  header(root, "row", [k("normal")]).click();
+  choose(root, "Author");
+  await vi.waitFor(() => expect(cells(root, ".pivot-row-header")).toEqual(["Total", "Normal", "Ada", "High", "None"]));
+  const panel = await searchPanel(root);
+  groupByItem(panel, "By author").click();
+  await vi.waitFor(() => expect(cells(root, ".pivot-row-header")).toEqual(["Total", "Ada", "Bo", "None"]));
+  expect(of("formatted_read_grouping_sets").at(-1)!.body["grouping_sets"]).toEqual([[], ["state"], ["author_id"], ["author_id", "state"]]);
+  expect(cells(root, ".pivot-head-groups th")).toEqual(["Draft", "Done"]);
+  expect(query().get("pivot_rows")).toBe("author_id");
+  expect(query().get("pivot_cols")).toBe("state");
+  groupByItem(panel, "By month").click();
+  await vi.waitFor(() => expect(cells(root, ".pivot-row-header")).toEqual(["Total", "Ada", "January 2026", "February 2026", "Bo", "February 2026", "April 2026", "None", "None"]));
+  expect(root.querySelector(".erp-facet-groupBy")!.textContent).toContain("Group by By author > By month");
+  expect(query().get("pivot_rows")).toBe("author_id,published:month");
+  root.querySelector<HTMLButtonElement>(".erp-facet-groupBy .erp-facet-remove")!.click();
+  await vi.waitFor(() => expect(cells(root, ".pivot-row-header")).toEqual(["Total", "Normal", "High", "None"]));
+  expect(pivotParams()).toEqual([]); // the arch's table again: a clean address
+  expect(cells(root, ".pivot-head-groups th")).toEqual(["Draft", "Done"]);
+});
+
+/// (partial: the address keeps the table, not the facet: a reload shows the same rows, with one read and no Group By facet)
+test("the rows a search group-by made are kept in the address as pivot_rows, and opening that address shows the same table without the facet", async () => {
+  const first = await startApp("/erp/action-20?view_type=pivot");
+  await ready(first.root);
+  groupByItem(await searchPanel(first.root), "By author").click();
+  await vi.waitFor(() => expect(cells(first.root, ".pivot-row-header")).toEqual(["Total", "Ada", "Bo", "None"]));
+  const address = window.location.search;
+  expect(query().has("search_groupby")).toBe(false);
+  const text = cells(first.root, "tbody .pivot-cell");
+  closeApp();
+  const again = await startApp(`/erp/action-20${address}`);
+  await ready(again.root);
+  expect(again.of("formatted_read_grouping_sets")).toHaveLength(1);
+  expect(cells(again.root, ".pivot-row-header")).toEqual(["Total", "Ada", "Bo", "None"]);
+  expect(cells(again.root, "tbody .pivot-cell")).toEqual(text);
+  expect(again.root.querySelector(".erp-facet-groupBy")).toBeNull();
+  // A group-by chosen now replaces those rows again.
+  groupByItem(await searchPanel(again.root), "By month").click();
+  await vi.waitFor(() => expect(cells(again.root, ".pivot-row-header").slice(0, 3)).toEqual(["Total", "January 2026", "February 2026"]));
+});
+
+/// (partial: a model with no search view: the pivot opens, the Group By menu offers the model's fields; the server needs the request to know)
+test("a model with no default search view opens its pivot, and its Group By menu offers the groupable fields as custom groups", async () => {
+  noSearchView = true;
+  const { root, of } = await startApp("/erp/action-20?view_type=pivot");
+  await ready(root);
+  expect(of("get_views").filter(call => (call.body["views"] as unknown[][]).some(item => item[1] === "search"))).toHaveLength(1);
+  root.querySelector<HTMLButtonElement>(".search-menu-toggle")!.click();
+  await vi.waitFor(() => expect(root.querySelector(".erp-custom-group-select")).not.toBeNull());
+  expect(root.querySelectorAll(".erp-groupby-section .erp-search-menu-item")).toHaveLength(0);
+  const select = root.querySelector<HTMLSelectElement>(".erp-custom-group-select")!;
+  select.value = "author_id"; select.dispatchEvent(new Event("change"));
+  await vi.waitFor(() => expect(cells(root, ".pivot-row-header")).toEqual(["Total", "Ada", "Bo", "None"]));
+});
+
+// ---- cycle 11 review fixes (M1, M2, S5, S7) ----
+
+/// (partial: a list grouped from its search menu opens the pivot; the list's grouping is not carried over, the pivot keeps its arch rows)
+test("a grouped list opens its Pivot view: the pivot mounts, and the address carries no list grouping", async () => {
+  const { root } = await startApp("/erp/action-20");
+  groupByItem(await searchPanel(root), "By author").click();
+  await vi.waitFor(() => expect(root.querySelectorAll(".list-group-row").length).toBeGreaterThan(0));
+  expect(query().has("search_groupby")).toBe(true);
+  root.querySelector<HTMLButtonElement>('.view-btn[aria-label="pivot view"]')!.click();
+  await ready(root);
+  expect(query().get("view_type")).toBe("pivot");
+  expect(query().has("search_groupby")).toBe(false);
+  expect(cells(root, ".pivot-row-header")).toEqual(["Total", "Normal", "High", "None"]); // the arch's rows
+});
+
+/// (partial: two refusals in a row: the second search's figures are never the first search's)
+test("a Group By refused twice, with a search change in between, leaves the table unavailable and never the old search's figures", async () => {
+  let domain: unknown[] = [];
+  const { model } = await made(standard(), { limits: { ...LIMITS, maxOpen: 2 }, domain: () => domain });
+  const rows = [field("author_id"), field("published", "month")];
+  await rejects(model.setRows(rows), "validation", /expanded/);
+  expect(model.table().unavailable).toBe(false); // the same search: the table it had is still current
+  domain = [["priority", "=", "normal"]];
+  await rejects(model.setRows(rows), "validation", /expanded/);
+  expect(model.table().unavailable).toBe(true);
+});
+
+/// (partial: a Group By the table cannot take is refused in its own words and the facet goes, so the chip says what the rows are)
+test("a Group By refused for size names the Group By, removes its facet and keeps the rows it had", async () => {
+  settings["web.pivot_max_open_headers"] = 3;
+  try {
+    const { root, of } = await startApp("/erp/action-20?view_type=pivot");
+    await ready(root);
+    const panel = await searchPanel(root);
+    groupByItem(panel, "By author").click();
+    await vi.waitFor(() => expect(cells(root, ".pivot-row-header")).toEqual(["Total", "Ada", "Bo", "None"]));
+    groupByItem(panel, "By month").click();
+    await vi.waitFor(() => expect(document.body.textContent).toContain("Group By removed:"));
+    expect(document.body.textContent).toMatch(/Group By removed: The table would have more than 3 expanded headers/);
+    expect(root.querySelector(".erp-facet-groupBy")).toBeNull();
+    expect(cells(root, ".pivot-row-header")).toEqual(["Total", "Ada", "Bo", "None"]);
+    // A filter after the refusal keeps the rows the table has: there is no Group By left to apply.
+    [...document.querySelectorAll<HTMLButtonElement>("dialog button")].find(button => button.textContent === "Close")!.click();
+    root.querySelector<HTMLInputElement>(".search-input")!.value = "Normal";
+    const reads = of("formatted_read_grouping_sets").length;
+    root.querySelector<HTMLFormElement>(".search-form")!.dispatchEvent(new Event("submit", { cancelable: true }));
+    await vi.waitFor(() => expect(of("formatted_read_grouping_sets").length).toBeGreaterThan(reads));
+    await vi.waitFor(() => expect(cells(root, ".pivot-row-header")).toEqual(["Total", "Ada"]));
+  } finally { settings["web.pivot_max_open_headers"] = 20; }
+});
+
+/// (partial: the address bound reached by a Group By is not worded as a header problem)
+test("a Group By whose table would not fit in the address says so in Group By terms and removes its facet", async () => {
+  const long = (letter: string): string => letter.repeat(400);
+  served = ["a", "b", "c", "d", "e", "f"].map((letter, index): Rec => ({ id: index + 1, priority: "normal", state: "draft", author: 1, size: 1, weight: 0, published: false, name: long(letter) }));
+  const { root } = await startApp("/erp/action-20?view_type=pivot");
+  await ready(root);
+  const panel = await searchPanel(root);
+  const select = panel.querySelector<HTMLSelectElement>(".erp-custom-group-select")!;
+  select.value = "name"; select.dispatchEvent(new Event("change"));
+  await vi.waitFor(() => expect(cells(root, ".pivot-row-header").length).toBe(7));
+  groupByItem(panel, "By author").click();
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Group By removed:"));
+  expect(document.body.textContent).toContain("Group By removed: This table is too large to keep in the page address. Choose fewer Group By fields or narrow the search.");
+  expect(document.body.textContent).not.toContain("Collapse some headers");
+  expect(root.querySelector(".erp-facet-groupBy")).toBeNull();
+});
+
+/// (partial: the depth of a header is named for assistive technology)
+test("a pivot header button states its level and axis in an aria-description", async () => {
+  const { root } = await mounted([pivotField("priority", "row", "Priority"), pivotField("state", "row", "State"), pivotField("author_id", "col", "Author"), pivotField("size", "measure", "Size")]);
+  expect(header(root, "row", []).hasAttribute("aria-description")).toBe(false); // the Total has its own name
+  expect(header(root, "row", [k("normal")]).getAttribute("aria-description")).toBe("Row level 1"); // the arch's rows start expanded
+  expect(header(root, "row", [k("normal"), k("draft")]).getAttribute("aria-description")).toBe("Row level 2");
+  expect(header(root, "col", [k(1)]).getAttribute("aria-description")).toBe("Column level 1");
 });

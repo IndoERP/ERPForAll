@@ -82,6 +82,7 @@ async fn assert_attachment_rows_untouched(fixture: &NativeFixture) {
         "base.attachment_gc",
         "base.attachment_owner_heartbeat",
         "base.attachment_reconcile",
+        "base.attachment_usage_compact",
     ]
     .into_iter()
     .map(|kind| (kind.to_owned(), "ready".to_owned(), 0, false))
@@ -100,7 +101,7 @@ async fn a_server_without_the_setting_starts_no_runner() {
         .query_one(
             "SELECT count(*) FROM erp_job WHERE kind NOT IN \
              ('base.attachment_gc', 'base.attachment_clean_staging', 'base.attachment_reconcile', \
-             'base.attachment_owner_heartbeat')",
+             'base.attachment_owner_heartbeat','base.attachment_usage_compact')",
             &[],
         )
         .await

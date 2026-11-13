@@ -1,0 +1,16 @@
+# Overrides of the parent template "chart": a changed value, a cleared field and a removed record.
+[[record]]
+model = "example.account"
+key = "bank"
+[record.fields]
+name = "Current account"
+
+[[record]]
+model = "example.account"
+key = "cash"
+clear_fields = ["note"]
+
+[[record]]
+model = "example.account"
+key = "misc"
+tombstone = true

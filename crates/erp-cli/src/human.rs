@@ -424,6 +424,77 @@ pub(crate) fn owner_maintenance_orm(config: &ServerConfig) -> Result<Orm> {
     .build()?)
 }
 
+/// The startup refusal of an owner without the maintenance privileges; a fixed text, so the
+/// supervisor's sanitized error may show it (`server_runtime::known_gc_cause`).
+pub(crate) const MAINTENANCE_PRIVILEGES_MISSING: &str = "Attachment maintenance owner lacks required blob, ownership, accounting or control-data privileges.";
+
+struct AttachmentGenerationFence;
+impl erp_orm::Refresh for AttachmentGenerationFence {
+    fn refresh<'a>(
+        &'a self,
+        changes: &'a erp_orm::Changes,
+    ) -> erp_orm::BoxFuture<'a, erp_fields::Result<erp_orm::Refreshed>> {
+        // A minimal owner ORM never reloads or invokes package hooks. On a registry change (a
+        // regression sets it too) supervision replaces it with the next request generation and
+        // transactions on this one refuse immediately. It installs no request policy, so a
+        // policy-only change leaves nothing to rebuild: the request ORM applies that in place and
+        // spawns no replacement, so superseding here would stop maintenance (review S1).
+        let outcome = if changes.registry || changes.regression {
+            erp_orm::Refreshed::Superseded
+        } else {
+            erp_orm::Refreshed::InPlace
+        };
+        Box::pin(async move { Ok(outcome) })
+    }
+}
+
+/// Fixed native attachment handlers use this minimal owner ORM. Package/Wasm methods,
+/// constraints, computes, unlink hooks and request policy are deliberately not installed.
+pub(crate) async fn attachment_maintenance_orm(config: &ServerConfig, source: &Orm) -> Result<Orm> {
+    let mut tx = source.begin(SUPERUSER_ID).await?;
+    let attachments = tx
+        .env()
+        .generation_attachment::<erp_sdk::blob::AttachmentRuntime>()?;
+    tx.rollback().await?;
+    // Capacity follows the validated jobs.workers_per_db node setting, plus one control
+    // connection for lease/checkpoint work. It cannot become an unbounded independent pool.
+    let pool_size = usize::try_from(source.job_settings().workers_per_db())
+        .map_err(|_| failed("jobs.workers_per_db exceeds the node connection range"))?
+        .checked_add(1)
+        .ok_or_else(|| failed("jobs.workers_per_db owner connection range overflow"))?;
+    let mut builder = Orm::builder(
+        Arc::clone(source.registry()),
+        pool_with_size(config.owner_connection(), pool_size)?,
+    )
+    .generation_attachment(erp_orm::GenerationAttachment::new(
+        Arc::clone(source.registry()),
+        attachments,
+    ))
+    .job_settings(source.job_settings().clone());
+    if let Some(signal) = source.signal() {
+        builder =
+            builder.signal(Signal::new(signal.applied()).with_refresh(AttachmentGenerationFence));
+    }
+    let orm = builder.build()?;
+    let mut tx = orm
+        .begin_opts(
+            erp_orm::BeginOptions::new(SUPERUSER_ID).isolation(erp_orm::Isolation::ReadCommitted),
+        )
+        .await?;
+    // Cleanup admission and the heartbeat read pg_control_system(): a revoked EXECUTE refuses here.
+    let rows=tx.query("SELECT has_table_privilege('ir_blob','DELETE') AND has_table_privilege('ir_blob_upload','DELETE') AND has_table_privilege('ir_blob_inline','DELETE') AND has_table_privilege('ir_blob_usage_delta','DELETE') AND has_table_privilege('ir_blob_usage_base','UPDATE') AND has_table_privilege('ir_blob_owner_state','UPDATE') AND has_function_privilege('pg_catalog.pg_control_system()','EXECUTE')",&[]).await?;
+    let admitted: bool = rows
+        .first()
+        .ok_or_else(|| failed("attachment maintenance privilege check returned no row"))?
+        .try_get(0)
+        .map_err(|_| failed("invalid attachment maintenance privilege result"))?;
+    if !admitted {
+        return Err(erp_fields::Error::access(MAINTENANCE_PRIVILEGES_MISSING).into());
+    }
+    tx.rollback().await?;
+    Ok(orm)
+}
+
 async fn audit_maintain_async(args: &ServerArgs) -> Result<String> {
     let config = config(&args.config)?;
     let orm = owner_maintenance_orm(&config)?;

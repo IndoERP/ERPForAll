@@ -1,8 +1,70 @@
 #!/usr/bin/env python3
-"""Compare or replace the complete managed .d.ts set; never consult or modify git."""
+"""Compare or replace the complete managed .d.ts set; never consult or modify git.
+
+Also the shared helper of the two identity records (scripts/ui-generated.py, scripts/store-wire-generated.py):
+`cargo_identity` hashes the part of Cargo.lock and of the root Cargo.toml that one generator crate can see, so
+an unrelated slice's dependency or workspace-member change neither invalidates the record nor conflicts in it
+when staging moves (TOOL.GENERATED-MERGE). Python 3.10 compatible (no tomllib): the two files are read line by line.
+"""
 import argparse
+import hashlib
 from pathlib import Path
+import re
 import sys
+
+
+def _sha(text):
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def cargo_identity(root, crate):
+    """{"Cargo.lock": ..., "Cargo.toml": ...} digests restricted to the dependency closure of `crate`."""
+    blocks = {}
+    for block in (root / "Cargo.lock").read_text().split("[[package]]")[1:]:
+        name = re.search(r'^name = "([^"]+)"', block, re.M)
+        version = re.search(r'^version = "([^"]+)"', block, re.M)
+        if not name or not version:
+            raise ValueError("Cargo.lock: a package block without name or version")
+        blocks.setdefault(name.group(1), {})[version.group(1)] = block.rstrip() + "\n"
+    if crate not in blocks:
+        raise ValueError(f"Cargo.lock has no package {crate}")
+    closure, stack = {}, [(crate, v) for v in blocks[crate]]
+    while stack:
+        key = stack.pop()
+        if key in closure:
+            continue
+        closure[key] = blocks[key[0]][key[1]]
+        deps = re.search(r"^dependencies = \[(.*?)^\]", closure[key], re.M | re.S)
+        for dep in re.findall(r'"([^"]+)"', deps.group(1)) if deps else []:
+            name, *rest = dep.split(" ")
+            versions = [rest[0]] if rest else list(blocks.get(name, {}))
+            if not versions or any(v not in blocks.get(name, {}) for v in versions):
+                raise ValueError(f"Cargo.lock: dependency {dep} of {key[0]} has no package block")
+            stack.extend((name, v) for v in versions)
+    names = {name for name, _ in closure}
+    kept, section, skipping = [], "", False
+    for line in (root / "Cargo.toml").read_text().splitlines():
+        if skipping:
+            skipping = line.strip() != "]"
+            continue
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if line.startswith("["):
+            section = line.strip()
+        elif section == "[workspace]" and re.match(r"(members|exclude)\s*=", line):
+            skipping = line.rstrip().endswith("[")  # a one-line `exclude = [...]` is dropped alone
+            continue
+        elif section == "[workspace.dependencies]":
+            entry = re.match(r"([A-Za-z0-9_-]+) = (.*)$", line)
+            if not entry or entry.group(2).count("{") != entry.group(2).count("}") \
+                    or entry.group(2).count("[") != entry.group(2).count("]"):
+                raise ValueError(f"Cargo.toml: unsupported line in [workspace.dependencies]: {line!r}")
+            package = re.search(r'package\s*=\s*"([^"]+)"', entry.group(2))
+            if entry.group(1) not in names and not (package and package.group(1) in names):
+                continue
+        kept.append(line.rstrip())
+    return {"Cargo.lock": _sha("".join(closure[k] for k in sorted(closure))),
+            "Cargo.toml": _sha("\n".join(kept))}
 
 
 def declarations(directory):

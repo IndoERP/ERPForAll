@@ -427,8 +427,8 @@ export class PivotModel {
       this.accept(this.snapshotOf(state)); // Expand all fills the open set from the data: it must still fit the address
       this.held = held; this.heldDomain = domain; this.state = state; this.stale = false;
     } catch (error) {
-      // A new search refused after its read must not leave the old search's figures on screen; a refused change under the same search keeps its table.
-      if (fresh) this.stale = true;
+      // A new search refused after its read must not leave the old search's figures on screen (also when it arrives as a refused Group By); a refused change under the same search keeps its table.
+      if (fresh || JSON.stringify(domain) !== JSON.stringify(this.heldDomain)) this.stale = true;
       throw error;
     }
   }
@@ -539,6 +539,14 @@ export class PivotModel {
       if (this.state.axes[axisIndex(axis)].open.has(pk(path)) === open) return;
       await this.applyNow(open ? this.expandEdit(axis, path, field) : this.collapseEdit(axis, path));
     });
+  }
+
+  /** The search's Group By sets the row groupings (reference `pivot_model.js`): in the order given, every level expanded, what header clicks added is
+   *  forgotten. `null` returns to the arch's rows. The columns are not touched. Reads the whole table again. */
+  setRows(fields: readonly PivotField[] | null): Promise<void> {
+    const levels = fields ?? this.config.rows;
+    if (levels.length > PIVOT_MAX_LEVELS) return Promise.reject(new ClientError("validation", `The pivot groups by at most ${PIVOT_MAX_LEVELS} fields on an axis.`));
+    return this.change(state => { state.axes[0] = { levels: [...levels], open: new Map(), all: true, full: true }; }, { full: true });
   }
 
   expandAll(): Promise<void> { return this.change(state => { for (const axis of state.axes) { axis.all = axis.levels.length > 0; axis.open = new Map(); axis.full = true; } }, { full: true }); }

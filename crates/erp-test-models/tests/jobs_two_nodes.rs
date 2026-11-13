@@ -129,7 +129,7 @@ async fn the_survivor_resumes_from_the_durable_progress_and_the_deposed_owner_is
     let late = claimed.clone();
     let run_a = tokio::spawn({
         let node = node_a.clone();
-        async move { node.run_claimed(claimed).await }
+        async move { node.run_claimed(claimed).await.unwrap() }
     });
     tokio::time::timeout(Duration::from_secs(10), REACHED.notified())
         .await
@@ -150,7 +150,7 @@ async fn the_survivor_resumes_from_the_durable_progress_and_the_deposed_owner_is
     exec(&h, "UPDATE erp_job SET run_after = clock_timestamp()").await;
     let taken = node_b.claim(1).await.unwrap().into_iter().next().unwrap();
     assert_eq!(taken.epoch(), 2);
-    node_b.run_claimed(taken).await;
+    node_b.run_claimed(taken).await.unwrap();
     let seen = ITEMS.lock().unwrap().clone();
     let by_a: Vec<u32> = seen
         .iter()
@@ -168,7 +168,7 @@ async fn the_survivor_resumes_from_the_durable_progress_and_the_deposed_owner_is
         "done|8"
     );
     // the deposed owner wakes up late and tries to go on: its epoch is stale, nothing is written
-    node_a.run_claimed(late).await;
+    node_a.run_claimed(late).await.unwrap();
     assert_eq!(cell(&h, "SELECT count(*)::text FROM erp_job").await, "0");
     assert_eq!(
         cell(&h, "SELECT count(*)::text FROM erp_job_run").await,

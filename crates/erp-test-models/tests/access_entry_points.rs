@@ -986,6 +986,31 @@ const AUDIT_ELEVATION: &str = "returns the given environment in superuser mode, 
 /// leave the engine. replaces them with scoped elevation blocks where it can.
 const SUDO_SITES: &[(&str, usize, &str)] = &[
     (
+        "account/ledger/account.rs::_compute_root_id",
+        1,
+        "the compute of an account's root node reads `account.root` by the names derived from the codes of the accounts being computed; root nodes are derived rows without a company, and the stored value must not depend on which reader triggered the compute (a later release)",
+    ),
+    (
+        "account/ledger/account.rs::store_code",
+        1,
+        "the inverse of `code` and `create` store the code row of (account, root company) after the ORM checked the caller's create or write right on the account; the row belongs to the root company of the tree, which a branch user's company rule on `account.code.mapping` would hide",
+    ),
+    (
+        "account/ledger/code.rs::codes_by_account",
+        1,
+        "reads the code rows of the given accounts in the root company for the computes of `code` and `root_id` and for the code checks; the callers pass accounts their environment already holds, and the rows belong to the root company of the tree, outside a branch user's company rule (029)",
+    ),
+    (
+        "account/ledger/root.rs::ensure_roots",
+        1,
+        "creates the missing `account.root` nodes for the prefixes of a code that is being stored; called from the create and write of a code row after their own access checks; root nodes are derived rows nobody creates by hand",
+    ),
+    (
+        "account/numbering/mod.rs::from_settings",
+        1,
+        "reads the global lock-wait setting of journal entry numbering; the framework reads its own configuration, and a user who posts needs no settings group; the value is a bounded number and is not returned to the caller (a later release)",
+    ),
+    (
         "erp-orm/audit/persist.rs::audited_superuser_env",
         1,
         "the environment of a flagged server action's run, returned only after the elevation was recorded for the audit row; the caller's own right to run the action was checked first by base",

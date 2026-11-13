@@ -125,7 +125,8 @@ async fn cancelling_a_running_job_stops_it_at_its_next_fence() {
     assert_eq!(support::jobs::state(&h, jobs[0]).await, "running");
     runner
         .run_claimed(claimed.into_iter().next().unwrap())
-        .await;
+        .await
+        .unwrap();
     assert_eq!(cell(&h, "SELECT count(*)::text FROM erp_job").await, "0");
     assert_eq!(history(&h).await, "cancelled");
     assert_eq!(runner.metrics().cancelled, 1);

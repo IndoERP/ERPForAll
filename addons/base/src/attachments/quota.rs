@@ -14,15 +14,60 @@ pub(crate) fn sql_bytes(bytes: u64) -> Result<i64> {
         .map_err(|_| Error::validation("Attachment byte count exceeds the database range."))
 }
 
+/// The soft storage quota of an inline creation. Unknown legacy occupancy refuses it only when a
+/// quota is configured: without one there is no budget those unknown bytes could exceed
+/// (review S3). Staging admission refuses on unknown occupancy always ([`admit`]).
 pub(crate) async fn check_storage(
     tx: &mut Transaction,
     limits: &AttachmentLimits,
     requested: u64,
 ) -> Result<()> {
+    if limits.quota_bytes.is_some() {
+        refuse_unknown_occupancy(tx).await?;
+    }
+    check_quota(tx, limits, requested).await
+}
+
+/// Unknown legacy occupancy must be resolved by maintenance first: an admission cannot assume
+/// those bytes are zero.
+async fn refuse_unknown_occupancy(tx: &mut Transaction) -> Result<()> {
+    let unknown = tx
+        .query(
+            "SELECT EXISTS (SELECT 1 FROM ir_blob_upload WHERE reservation_unknown)",
+            &[],
+        )
+        .await?;
+    let unknown: bool = unknown
+        .first()
+        .ok_or_else(|| Error::db("Attachment recovery query returned no row."))?
+        .try_get(0)
+        .map_err(|e| col_error("attachment recovery", e))?;
+    if unknown {
+        return Err(blob_error(BlobError::AccountingUnavailable));
+    }
+    Ok(())
+}
+
+async fn check_quota(
+    tx: &mut Transaction,
+    limits: &AttachmentLimits,
+    requested: u64,
+) -> Result<()> {
+    let policy = super::settings::Policy::load(tx).await?;
     let Some(limit) = limits.quota_bytes else {
         return Ok(());
     };
-    let rows = tx.query("SELECT ((SELECT bytes FROM ir_blob_usage_base WHERE id=1) + COALESCE((SELECT sum(bytes) FROM ir_blob_usage_delta),0))::text", &[]).await?;
+    // One snapshot for base and deltas. The extra row is an overflow sentinel, never
+    // silently excluded from the sum. A stalled compactor cannot make admission scan history.
+    let rows = tx.query("WITH pending AS MATERIALIZED (SELECT bytes FROM ir_blob_usage_delta ORDER BY id LIMIT $1) SELECT (b.bytes + COALESCE((SELECT sum(bytes) FROM pending),0))::text, (SELECT count(*) FROM pending)::int8 FROM ir_blob_usage_base b WHERE id=1", &[&(policy.delta_read + 1)]).await?;
+    let count: i64 = rows
+        .first()
+        .ok_or_else(|| Error::db("Attachment usage base is missing."))?
+        .try_get(1)
+        .map_err(|e| col_error("attachment usage backlog", e))?;
+    if count > policy.delta_read {
+        return Err(blob_error(BlobError::AccountingUnavailable));
+    }
     let text: String = rows
         .first()
         .ok_or_else(|| Error::db("Attachment usage base is missing."))?
@@ -80,13 +125,9 @@ pub(crate) async fn admit(
         .try_get(0)
         .map_err(|e| col_error("pending uploads", e))?;
     if pending >= i64::from(limits.pending_uploads_per_subject) {
-        return Err(Error::new(
-            erp_sdk::ErrorKind::ResourceExhausted,
-            format!(
-                "The limit of {} pending uploads is reached. Wait for attachment cleanup, then retry.",
-                limits.pending_uploads_per_subject
-            ),
-        ));
+        return Err(blob_error(BlobError::PendingUploads {
+            limit: limits.pending_uploads_per_subject,
+        }));
     }
     let bytes = |index| -> Result<u64> {
         let text: String = row
@@ -105,7 +146,9 @@ pub(crate) async fn admit(
         reserved,
         limits.staging_max_bytes,
     )?;
-    check_storage(tx, limits, reserved).await
+    // Hard staging admission cannot assume unknown bytes are zero, quota or not.
+    refuse_unknown_occupancy(tx).await?;
+    check_quota(tx, limits, reserved).await
 }
 
 /// A bounded maintenance-only compaction. DELETE RETURNING chooses actual visible rows;

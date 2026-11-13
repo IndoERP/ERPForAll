@@ -75,6 +75,9 @@ async fn garbage(f: &Fixture) -> i64 {
         .unlink(&mut tx)
         .await
         .unwrap();
+    tx.commit().await.unwrap();
+    drop(tx);
+    let mut tx = rc(f).await;
     gc::mark_unreferenced(&mut tx, 100).await.unwrap();
     tx.commit().await.unwrap();
     blob

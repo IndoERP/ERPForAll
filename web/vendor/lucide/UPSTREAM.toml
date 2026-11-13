@@ -662,6 +662,16 @@ upstream = "icons/square-check-big.svg"
 sha256 = "3329bc2e10145074994ffe4cc21e99103c22ccbdb9f651588cf4aed0238fd9d7"
 
 [[files]]
+path = "icons/square-minus.svg"
+upstream = "icons/square-minus.svg"
+sha256 = "8cf96ec7eeb02ad4954c3f57e099543dcf99f29008fbd139d9757e4bda660f67"
+
+[[files]]
+path = "icons/square-plus.svg"
+upstream = "icons/square-plus.svg"
+sha256 = "c0856053827b2796170556f874a3017f7cb8d5b7a53bbb00f95600891fc76cc1"
+
+[[files]]
 path = "icons/stethoscope.svg"
 upstream = "icons/stethoscope.svg"
 sha256 = "a5621a048bcb911d4d51a6b8e6b5821dc68b0e7554dc001389ee9bc5f251c3ad"

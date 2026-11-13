@@ -43,6 +43,10 @@ pub struct AttachmentLimits {
     pub pending_uploads_per_subject: u32,
     /// How long an upload may wait to be linked.
     pub upload_ttl_secs: u64,
+    /// Maximum time without new body bytes, independent of the durable intent lifetime.
+    pub upload_idle_timeout_secs: u64,
+    /// Maximum total receive time; capped by `upload_ttl_secs` at admission.
+    pub upload_receive_timeout_secs: u64,
     /// How often the store fingerprint is checked again.
     pub fingerprint_recheck_secs: u64,
     /// Streaming operations (an upload's stage, a content proof, a deep verification read) one
@@ -63,6 +67,8 @@ impl Default for AttachmentLimits {
             staging_max_bytes: 4 * 1024 * 1024 * 1024,
             pending_uploads_per_subject: 100,
             upload_ttl_secs: 86_400,
+            upload_idle_timeout_secs: 30,
+            upload_receive_timeout_secs: 600,
             fingerprint_recheck_secs: 300,
             stream_permits_per_node: 32,
         }
@@ -166,6 +172,8 @@ struct RawAttachments {
     staging_max_bytes: Option<u64>,
     pending_uploads_per_subject: Option<u32>,
     upload_ttl_secs: Option<u64>,
+    upload_idle_timeout_secs: Option<u64>,
+    upload_receive_timeout_secs: Option<u64>,
     fingerprint_recheck_secs: Option<u64>,
     stream_permits_per_node: Option<u32>,
     encryption: Option<String>,
@@ -358,6 +366,13 @@ impl AttachmentConfig {
         }
         if let Some(v) = raw.upload_ttl_secs {
             limits.upload_ttl_secs = bounded("upload_ttl_secs", v, 60, 7 * 86_400)?;
+        }
+        if let Some(v) = raw.upload_idle_timeout_secs {
+            limits.upload_idle_timeout_secs = bounded("upload_idle_timeout_secs", v, 1, 300)?;
+        }
+        if let Some(v) = raw.upload_receive_timeout_secs {
+            limits.upload_receive_timeout_secs =
+                bounded("upload_receive_timeout_secs", v, 10, 86_400)?;
         }
         if let Some(v) = raw.fingerprint_recheck_secs {
             limits.fingerprint_recheck_secs = bounded("fingerprint_recheck_secs", v, 10, 3_600)?;

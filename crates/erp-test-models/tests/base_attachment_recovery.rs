@@ -564,7 +564,9 @@ async fn exact_predecessor_schema_upgrades_without_inventing_ownership() {
     assert!(absent().await);
     client.batch_execute("INSERT INTO ir_blob_store(store_key,fingerprint) VALUES('main','predecessor'); INSERT INTO ir_blob(sha256,size,store_id) VALUES(decode(repeat('ab',32),'hex'),17,1); INSERT INTO ir_blob_upload(store_id,subject_user,expires_at,reserved_bytes) VALUES(1,1,now()+interval '1 day',23); INSERT INTO ir_blob_gc_hold(until,reason) VALUES(now()+interval '1 day','predecessor hold')").await.unwrap();
     let state_sql = "SELECT jsonb_build_object('store',(SELECT jsonb_agg(to_jsonb(t) ORDER BY t.id) FROM ir_blob_store t),'blob',(SELECT jsonb_agg(to_jsonb(t) ORDER BY t.id) FROM ir_blob t),'upload',(SELECT jsonb_agg(to_jsonb(t) ORDER BY t.id) FROM ir_blob_upload t),'hold',(SELECT jsonb_agg(to_jsonb(t) ORDER BY t.id) FROM ir_blob_gc_hold t),'usage',(SELECT jsonb_agg(to_jsonb(t) ORDER BY t.id) FROM ir_blob_usage_base t),'delta',(SELECT jsonb_agg(to_jsonb(t) ORDER BY t.id) FROM ir_blob_usage_delta t))::text";
+    let kept_sql = "SELECT jsonb_build_object('store',(SELECT jsonb_agg(to_jsonb(t) ORDER BY t.id) FROM ir_blob_store t),'blob',(SELECT jsonb_agg(to_jsonb(t) ORDER BY t.id) FROM ir_blob t),'hold',(SELECT jsonb_agg(to_jsonb(t) ORDER BY t.id) FROM ir_blob_gc_hold t))::text";
     let before: String = client.query_one(state_sql, &[]).await.unwrap().get(0);
+    let kept_before: String = client.query_one(kept_sql, &[]).await.unwrap().get(0);
     client.batch_execute("BEGIN").await.unwrap();
     client
         .batch_execute(erp_addon_base::attachments::schema::BLOB_DDL)
@@ -575,14 +577,33 @@ async fn exact_predecessor_schema_upgrades_without_inventing_ownership() {
     assert_eq!(e.as_db_error().unwrap().message(), "division by zero");
     client.batch_execute("ROLLBACK").await.unwrap();
     assert!(absent().await);
-    for _ in 0..2 {
-        client
-            .batch_execute(erp_addon_base::attachments::schema::BLOB_DDL)
-            .await
-            .unwrap();
-    }
+    // the rolled-back upgrade left every row as it was
+    let rolled_back: String = client.query_one(state_sql, &[]).await.unwrap().get(0);
+    assert_eq!(rolled_back, before);
+    client
+        .batch_execute(erp_addon_base::attachments::schema::BLOB_DDL)
+        .await
+        .unwrap();
+    let first: String = client.query_one(state_sql, &[]).await.unwrap().get(0);
+    client
+        .batch_execute(erp_addon_base::attachments::schema::BLOB_DDL)
+        .await
+        .unwrap();
+    // a repeated upgrade changes nothing
     let after: String = client.query_one(state_sql, &[]).await.unwrap().get(0);
-    assert_eq!(after, before);
+    assert_eq!(after, first);
+    // stores, blobs and holds are carried over exactly
+    let kept_after: String = client.query_one(kept_sql, &[]).await.unwrap().get(0);
+    assert_eq!(kept_after, kept_before);
+    // Quota version 3 (quota.sql) rebuilds the accounting from the authoritative rows: the
+    // predecessor's receiving upload has no known size, so it is fenced for cleanup with no
+    // reservation instead of keeping a guessed one, the usage base is the sum of the blobs and
+    // the reservations, and no delta is pending.
+    let quota = client.query_one("SELECT (SELECT count(*) FROM ir_blob_upload), (SELECT count(*) FROM ir_blob_upload WHERE reservation_unknown AND state=3 AND reserved_bytes=0 AND cleanup_error IS NOT NULL), (SELECT bytes::text FROM ir_blob_usage_base WHERE id=1), (SELECT (COALESCE((SELECT sum(size) FROM ir_blob),0)+COALESCE((SELECT sum(reserved_bytes) FROM ir_blob_upload),0))::text), (SELECT count(*) FROM ir_blob_usage_delta)", &[]).await.unwrap();
+    assert_eq!((quota.get::<_, i64>(0), quota.get::<_, i64>(1)), (1, 1));
+    assert_eq!(quota.get::<_, String>(2), quota.get::<_, String>(3));
+    assert_eq!(quota.get::<_, String>(2), "17");
+    assert_eq!(quota.get::<_, i64>(4), 0);
     assert_eq!(client.query_one("SELECT (SELECT count(*) FROM ir_blob_owner_claim)+(SELECT count(*) FROM ir_blob_owner_recovery)+(SELECT count(*) FROM ir_blob_owner_state)+(SELECT count(*) FROM ir_blob_owner_identity)",&[]).await.unwrap().get::<_,i64>(0),0);
     drop(client);
     db.cleanup().await.unwrap();

@@ -90,9 +90,21 @@ async fn require_maintenance(tx: &mut Transaction, env: &Env) -> Result<()> {
 ///
 /// # Errors
 ///
-/// The database's. Meant to run in `READ COMMITTED` (the job kind's isolation) so the
-/// `NOT EXISTS` sees committed references; the foreign key protects under any isolation.
+/// Requires maintenance authority and READ COMMITTED before mutation. Holds pause marking;
+/// ownership admission remains mandatory at the external removal phases. SQL failures propagate.
 pub async fn mark_unreferenced(tx: &mut Transaction, limit: i64) -> Result<MarkReport> {
+    if !(1..=CHUNK).contains(&limit) {
+        return Err(Error::validation(
+            "Attachment cleanup batch is 1 to 1000 rows.",
+        ));
+    }
+    require_maintenance(tx, &tx.env()).await?;
+    super::cleanup::start(tx).await?;
+    if held(tx).await? {
+        return Ok(MarkReport::default());
+    }
+    // Metadata marking removes no object. External removal still requires per-store admission
+    // at both sweep phases; it cannot be authorized by a marking result.
     let rows = tx
         .query(
             "WITH claimed AS ( \
@@ -416,6 +428,7 @@ pub async fn clean_staging(tx: &mut Transaction, env: &Env, limit: i64) -> Resul
         });
     }
     let rt = runtime(env)?;
+    let retention = super::settings::Policy::load(tx).await?.composer_retention as f64;
     let mut report = CleanReport::default();
     // Each store is admitted once per chunk, before any row lock (the coordinator lock is held
     // for the whole chunk); rows of a refused store are left in place and counted as skipped.
@@ -516,9 +529,9 @@ pub async fn clean_staging(tx: &mut Transaction, env: &Env, limit: i64) -> Resul
             "DELETE FROM ir_attachment WHERE id IN ( \
                  SELECT id FROM ir_attachment \
                  WHERE res_model = ANY($1::text[]) AND coalesce(res_id, 0) = 0 AND res_field IS NULL \
-                   AND create_date < now() - interval '24 hours' \
+                   AND create_date < now() - make_interval(secs=>$3::float8) \
                  ORDER BY id LIMIT $2 FOR UPDATE SKIP LOCKED)",
-            &[&placeholders, &limit],
+            &[&placeholders, &limit, &retention],
         )
         .await?;
     Ok(report)
@@ -552,6 +565,20 @@ pub async fn reconcile_chunk(
     after_id: i64,
     limit: i64,
 ) -> Result<ReconcileReport> {
+    if !(1..=CHUNK).contains(&limit) {
+        return Err(Error::validation(
+            "Attachment cleanup batch is 1 to 1000 rows.",
+        ));
+    }
+    require_maintenance(tx, env).await?;
+    super::cleanup::start(tx).await?;
+    if held(tx).await? {
+        return Ok(ReconcileReport {
+            last_id: after_id,
+            ..ReconcileReport::default()
+        });
+    }
+    // Reconcile reads external bytes to prove referenced content; it never removes store objects.
     let rt = runtime(env)?;
     let rows = tx
         .query(
@@ -780,11 +807,6 @@ pub async fn release_hold(tx: &mut Transaction, id: i64) -> Result<()> {
 
 // ---- the jobs ----------------------------------------------------------------------------
 
-/// How often the recurring kinds run again.
-const GC_EVERY: Duration = Duration::from_secs(900);
-const CLEAN_EVERY: Duration = Duration::from_secs(900);
-const RECONCILE_EVERY: Duration = Duration::from_secs(6 * 3600);
-
 struct GcJob;
 struct CleanJob;
 struct ReconcileJob;
@@ -963,12 +985,35 @@ fn take_carried(slot: &Carried) -> std::result::Result<(RefusedSince, Option<i64
         })
 }
 
+/// The policy a chunk of the running handler loaded last, for the run between its chunks.
+type PolicySlot = Arc<Mutex<Option<super::settings::Policy>>>;
+
+/// Load the validated policy inside a working chunk and keep it for the run. A chunk of its own
+/// would commit before any work and reset the attempt count, so a handler that fails every run
+/// would never reach its `max_attempts` nor back off (review S2; `CompactUsageJob` does the same).
+async fn load_policy(tx: &mut Transaction, slot: &PolicySlot) -> Result<super::settings::Policy> {
+    let policy = super::settings::Policy::load(tx).await?;
+    *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(policy);
+    Ok(policy)
+}
+
+/// The policy the last committed chunk loaded.
+fn loaded_policy(slot: &PolicySlot) -> std::result::Result<super::settings::Policy, JobError> {
+    let policy = *slot.lock().unwrap_or_else(PoisonError::into_inner);
+    policy.ok_or_else(|| {
+        JobError::from(Error::programming(
+            "Attachment maintenance produced no policy snapshot.",
+        ))
+    })
+}
+
 impl JobHandler for GcJob {
     fn run<'a>(
         &'a self,
         ctx: &'a mut JobContext<'_>,
     ) -> BoxFuture<'a, std::result::Result<RunOutcome, JobError>> {
         Box::pin(async move {
+            let slot = PolicySlot::default();
             let mut refused = RefusedSince::from_progress(ctx.progress()?)?;
             let mut now: Option<i64>;
             // Phase A: until the queue is empty
@@ -976,12 +1021,15 @@ impl JobHandler for GcJob {
                 let carried: Carried = Arc::new(Mutex::new(None));
                 let sink = Arc::clone(&carried);
                 let prior = refused.clone();
+                let policy_slot = Arc::clone(&slot);
                 let report = ctx
                     .chunk(move |tx| {
                         let sink = Arc::clone(&sink);
                         let prior = prior.clone();
+                        let policy_slot = Arc::clone(&policy_slot);
                         Box::pin(async move {
-                            let report = mark_unreferenced(tx, CHUNK).await?;
+                            let policy = load_policy(tx, &policy_slot).await?;
+                            let report = mark_unreferenced(tx, policy.batch).await?;
                             let (progress, next) = merge_refused(
                                 erp_sdk::serde_json::json!({"phase": "mark", "claimed": report.claimed, "marked": report.marked}),
                                 &prior,
@@ -993,7 +1041,7 @@ impl JobHandler for GcJob {
                     })
                     .await?;
                 refused = take_carried(&carried)?.0;
-                if report.processed < CHUNK as u64 {
+                if report.processed < loaded_policy(&slot)?.batch as u64 {
                     break;
                 }
                 if ctx.budget_exhausted() {
@@ -1007,14 +1055,17 @@ impl JobHandler for GcJob {
                 let carried: Carried = Arc::new(Mutex::new(None));
                 let carry = Arc::clone(&carried);
                 let prior = refused.clone();
+                let policy_slot = Arc::clone(&slot);
                 ctx.chunk(move |tx| {
                     let sink = Arc::clone(&sink);
                     let carry = Arc::clone(&carry);
                     let prior = prior.clone();
+                    let policy_slot = Arc::clone(&policy_slot);
                     Box::pin(async move {
                         let env = tx.env();
                         let grace = runtime(&env)?.limits().gc_grace_secs;
-                        let mark = sweep_mark(tx, grace, CHUNK).await?;
+                        let policy = load_policy(tx, &policy_slot).await?;
+                        let mark = sweep_mark(tx, grace, policy.batch).await?;
                         let at = db_epoch(tx).await?;
                         let count = mark.ids.len() as u64;
                         let checked = (!mark.held).then_some((at, mark.refused.as_slice()));
@@ -1062,7 +1113,9 @@ impl JobHandler for GcJob {
                 }
             }
             refused_too_long(&refused, now)?;
-            Ok(RunOutcome::RescheduleAfter(GC_EVERY))
+            Ok(RunOutcome::RescheduleAfter(Duration::from_secs(
+                loaded_policy(&slot)?.gc_interval,
+            )))
         })
     }
 }
@@ -1073,19 +1126,23 @@ impl JobHandler for CleanJob {
         ctx: &'a mut JobContext<'_>,
     ) -> BoxFuture<'a, std::result::Result<RunOutcome, JobError>> {
         Box::pin(async move {
+            let slot = PolicySlot::default();
             let mut refused = RefusedSince::from_progress(ctx.progress()?)?;
             let mut now: Option<i64>;
             loop {
                 let carried: Carried = Arc::new(Mutex::new(None));
                 let carry = Arc::clone(&carried);
                 let prior = refused.clone();
+                let policy_slot = Arc::clone(&slot);
                 let report = ctx
                     .chunk(move |tx| {
                         let carry = Arc::clone(&carry);
                         let prior = prior.clone();
+                        let policy_slot = Arc::clone(&policy_slot);
                         Box::pin(async move {
                             let env = tx.env();
-                            let r = clean_staging(tx, &env, CHUNK).await?;
+                            let policy = load_policy(tx, &policy_slot).await?;
+                            let r = clean_staging(tx, &env, policy.batch).await?;
                             let at = db_epoch(tx).await?;
                             let n = r.consumed + r.expired + r.abandoned;
                             let checked = (!r.held).then_some((at, r.refused.as_slice()));
@@ -1110,7 +1167,9 @@ impl JobHandler for CleanJob {
                 }
             }
             refused_too_long(&refused, now)?;
-            Ok(RunOutcome::RescheduleAfter(CLEAN_EVERY))
+            Ok(RunOutcome::RescheduleAfter(Duration::from_secs(
+                loaded_policy(&slot)?.cleanup_interval,
+            )))
         })
     }
 }
@@ -1121,16 +1180,20 @@ impl JobHandler for ReconcileJob {
         ctx: &'a mut JobContext<'_>,
     ) -> BoxFuture<'a, std::result::Result<RunOutcome, JobError>> {
         Box::pin(async move {
+            let slot = PolicySlot::default();
             let after = Arc::new(Mutex::new(0i64));
             loop {
                 let cursor = Arc::clone(&after);
+                let policy_slot = Arc::clone(&slot);
                 let report = ctx
                     .chunk(move |tx| {
                         let cursor = Arc::clone(&cursor);
+                        let policy_slot = Arc::clone(&policy_slot);
                         Box::pin(async move {
                             let env = tx.env();
                             let from = *cursor.lock().unwrap_or_else(PoisonError::into_inner);
-                            let r = reconcile_chunk(tx, &env, from, CHUNK).await?;
+                            let policy = load_policy(tx, &policy_slot).await?;
+                            let r = reconcile_chunk(tx, &env, from, policy.batch).await?;
                             *cursor.lock().unwrap_or_else(PoisonError::into_inner) = r.last_id;
                             Ok(ChunkResult::more(
                                 erp_sdk::serde_json::json!({"after": r.last_id, "queued": r.queued, "revived": r.revived}),
@@ -1140,14 +1203,16 @@ impl JobHandler for ReconcileJob {
                         })
                     })
                     .await?;
-                if report.processed < CHUNK as u64 {
+                if report.processed < loaded_policy(&slot)?.batch as u64 {
                     break;
                 }
                 if ctx.budget_exhausted() {
                     return Ok(RunOutcome::Continue);
                 }
             }
-            Ok(RunOutcome::RescheduleAfter(RECONCILE_EVERY))
+            Ok(RunOutcome::RescheduleAfter(Duration::from_secs(
+                loaded_policy(&slot)?.reconcile_interval,
+            )))
         })
     }
 }
@@ -1220,6 +1285,76 @@ static GC_JOB: GcJob = GcJob;
 static CLEAN_JOB: CleanJob = CleanJob;
 static RECONCILE_JOB: ReconcileJob = ReconcileJob;
 static VERIFY_JOB: VerifyJob = VerifyJob;
+struct CompactUsageJob;
+static COMPACT_USAGE_JOB: CompactUsageJob = CompactUsageJob;
+impl JobHandler for CompactUsageJob {
+    fn run<'a>(
+        &'a self,
+        ctx: &'a mut JobContext<'_>,
+    ) -> BoxFuture<'a, std::result::Result<RunOutcome, JobError>> {
+        Box::pin(async move {
+            let interval = Arc::new(std::sync::atomic::AtomicU64::new(0));
+            loop {
+                let interval = Arc::clone(&interval);
+                let report = ctx
+                    .chunk(move |tx| {
+                        let interval = Arc::clone(&interval);
+                        Box::pin(async move {
+                            let policy = super::settings::Policy::load(tx).await?;
+                            let folded = compact_usage(tx, policy.compact_batch).await?;
+                            interval.store(
+                                policy.compact_interval,
+                                std::sync::atomic::Ordering::Release,
+                            );
+                            Ok(ChunkResult::more(
+                                erp_sdk::serde_json::json!({"folded":folded}),
+                                folded,
+                                None,
+                            ))
+                        })
+                    })
+                    .await?;
+                if report.processed == 0 || ctx.budget_exhausted() {
+                    break;
+                }
+            }
+            let seconds = interval.load(std::sync::atomic::Ordering::Acquire);
+            if seconds == 0 {
+                return Err(JobError::from(Error::programming(
+                    "Usage compaction produced no interval.",
+                )));
+            }
+            Ok(RunOutcome::RescheduleAfter(Duration::from_secs(seconds)))
+        })
+    }
+}
+erp_sdk::jobs::register_job_kind!(
+    COMPACT_KIND,
+    JobKindDecl::new(
+        "base",
+        "base.attachment_usage_compact",
+        HandlerRef::Native(&COMPACT_USAGE_JOB)
+    )
+    .principal(PrincipalPolicy::System)
+    .elevated()
+    .timeouts(TimeoutClass::Maintenance)
+    .isolation(KindIsolation::ReadCommitted)
+    .max_attempts(5)
+);
+
+/// Fixed compiled owner allowlist. An addon's elevated flag never joins this set.
+/// Every declaration is validated again by the job runner before it can claim or execute.
+pub fn maintenance_kinds() -> [&'static JobKindDecl; 6] {
+    [
+        &GC_KIND,
+        &CLEAN_KIND,
+        &RECONCILE_KIND,
+        &VERIFY_KIND,
+        &HEARTBEAT_KIND,
+        &COMPACT_KIND,
+    ]
+}
+
 static HEARTBEAT_JOB: super::ownership::HeartbeatJob = super::ownership::HeartbeatJob::new();
 
 // The owner heartbeat: without it no store-backed cleanup is ever admitted.
@@ -1304,13 +1439,14 @@ const SCHEDULES: [(&str, u64); 3] = [
 /// store as the System principal, which is the same elevated store access D5 isolates.
 /// The owner heartbeat is elevated as well: on a served node its ordinary runner would claim it and fail
 /// on the runtime role's read-only grant until the row is a dead letter.
-pub const ELEVATED_KINDS: [&str; 5] = [
+pub const ELEVATED_KINDS: [&str; 6] = [
     "base.attachment_gc",
     "base.attachment_clean_staging",
     "base.attachment_reconcile",
     "base.attachment_verify",
     // writes the store's owner marker and the owner state as the System principal
     "base.attachment_owner_heartbeat",
+    "base.attachment_usage_compact",
 ];
 
 /// The transaction advisory lock [`ensure_missing_schedules`] takes before it looks for the
@@ -1388,6 +1524,23 @@ pub async fn ensure_missing_schedules(tx: &mut Transaction, env: &Env) -> Result
             .first_run(When::After(Duration::from_secs(delay)));
         tx.job_upsert_recurring(env, spec).await?;
     }
+    let policy = super::settings::Policy::load(tx).await?;
+    let compact_kind = "base.attachment_usage_compact";
+    if tx
+        .query(
+            "SELECT 1 FROM erp_job WHERE kind=$1 AND state<>'dead'",
+            &[&compact_kind],
+        )
+        .await?
+        .is_empty()
+    {
+        tx.job_upsert_recurring(
+            env,
+            RecurringSpec::new(compact_kind, JobKey::new(compact_kind)?)
+                .first_run(When::After(Duration::from_secs(policy.compact_interval))),
+        )
+        .await?;
+    }
     // The owner heartbeat (it opens the observation window that admits store-backed cleanup) runs under the
     // ownership singleton its handler requires, not under its kind, so it is kept apart from SCHEDULES.
     let live = tx
@@ -1408,7 +1561,7 @@ pub async fn ensure_missing_schedules(tx: &mut Transaction, env: &Env) -> Result
 }
 
 /// Fold a bounded batch of usage deltas into the base without changing visible usage.
-/// This maintenance primitive is not scheduled by this slice.
+/// The isolated native usage-compaction job schedules this primitive.
 ///
 /// # Errors
 /// Refuses non-System/non-READ-COMMITTED maintenance and an invalid batch size; propagates SQL errors.

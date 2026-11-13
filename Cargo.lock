@@ -1116,7 +1116,13 @@ checksum = "00d174d5400e5e8fd687ad1049e2f578285fa914201b1af7e8b112a4546bd826"
 name = "erp-addon-account"
 version = "0.1.0"
 dependencies = [
+ "erp-addon-analytic",
+ "erp-addon-base",
+ "erp-addon-product",
+ "erp-addon-uom",
  "erp-sdk",
+ "erp-testkit",
+ "tokio",
  "toml 0.8.23",
 ]
 
@@ -1638,6 +1644,7 @@ dependencies = [
 name = "erp-modules"
 version = "0.1.0"
 dependencies = [
+ "csv",
  "deadpool-postgres",
  "erp-data",
  "erp-expr",
@@ -1862,6 +1869,8 @@ dependencies = [
  "axum",
  "bytes",
  "dhat",
+ "erp-addon-account",
+ "erp-addon-analytic",
  "erp-addon-base",
  "erp-addon-mail",
  "erp-addon-product",

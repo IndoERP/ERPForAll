@@ -1328,9 +1328,13 @@ async fn lot_product_key_is_synchronized_and_stable() {
     // a second synchronization is a no-op: nothing dropped or added again
     tx.init_models(&[]).await.unwrap();
     assert_eq!(lot_product_constraints(&mut tx).await, fresh);
-    // existing tables without the key (the foreign keys go first: they depend on the unique)
+    // existing tables without the key (the foreign keys go first: they depend on the unique; the move
+    // line tables' lot keys depend on it too, and come back with the same sync)
     tx.batch(
-        "ALTER TABLE stock_quant DROP CONSTRAINT stock_quant_lot_product; \
+        "ALTER TABLE stock_move_line DROP CONSTRAINT stock_move_line_lot_product; \
+         ALTER TABLE stock_move_line_correction DROP CONSTRAINT stock_move_line_correction_old_lot_product; \
+         ALTER TABLE stock_move_line_correction DROP CONSTRAINT stock_move_line_correction_new_lot_product; \
+         ALTER TABLE stock_quant DROP CONSTRAINT stock_quant_lot_product; \
          ALTER TABLE stock_serial_position DROP CONSTRAINT stock_serial_position_lot_product; \
          ALTER TABLE stock_lot DROP CONSTRAINT stock_lot_id_product",
     )

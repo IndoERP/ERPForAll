@@ -1,0 +1,9 @@
+id,name,model_id/id,group_id/id,operation,domain
+access_account_sequence_chain_user,account.sequence.chain.user,model_account_sequence_chain,base.group_user,r,
+access_account_account_user,account.account.user,model_account_account,base.group_user,r,
+access_account_account_manager,account.account.manager,model_account_account,account.group_account_manager,crud,
+access_account_account_tag_user,account.account.tag.user,model_account_account_tag,base.group_user,r,
+access_account_account_tag_accountant,account.account.tag.accountant,model_account_account_tag,account.group_account_user,crud,
+access_account_root_readonly,account.root.readonly,model_account_root,account.group_account_readonly,r,
+access_account_code_mapping_readonly,account.code.mapping.readonly,model_account_code_mapping,account.group_account_readonly,r,
+access_account_code_mapping_manager,account.code.mapping.manager,model_account_code_mapping,account.group_account_manager,ru,

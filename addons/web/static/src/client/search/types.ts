@@ -18,6 +18,9 @@ export interface SearchFacet {
   optionId?: string;
   /** The declared group-by item (or `custom`) a `groupBy` facet stands for. */
   groupById?: string;
+  /** Every grouping of a `groupBy` facet in the order chosen (`field` or `field:interval`); the first is `groupByField`. */
+  groupByFields?: string[];
+  groupByIds?: string[];
 }
 
 export interface AutocompleteItem {
@@ -55,9 +58,9 @@ export interface GroupByItem {
   custom?: boolean;
 }
 
-/** The kinds a list can be grouped by in this client (date granularity and many2many arrive with slice 2). */
+/** The scalar grouping kinds shared with legacy consumers; owners separately admit temporal fields. */
 export const GROUPABLE_KINDS = ["boolean", "char", "integer", "selection", "many2one"] as const;
-export type GroupableKind = typeof GROUPABLE_KINDS[number];
+export type GroupableKind = typeof GROUPABLE_KINDS[number] | "date" | "datetime";
 /** A field the server reports as groupable (`fields_get` attribute `groupable`), in a kind this client groups by. */
 export interface GroupableField<K extends string = GroupableKind> {
   name: string;
@@ -65,13 +68,15 @@ export interface GroupableField<K extends string = GroupableKind> {
   kind: K;
   selection: readonly (readonly [string, string])[] | null;
 }
-/** The active grouping, kept in memory so a list reopened from a record's breadcrumb is grouped again. */
-export interface GroupByState { id: string; label: string; field: GroupableField }
+/** The intervals a date grouping may use, as the menus list them. */
+export const GROUP_INTERVALS: readonly (readonly [string, string])[] = [["year", "Year"], ["quarter", "Quarter"], ["month", "Month"], ["week", "Week"], ["day", "Day"]];
 /** What the Group By menu offers: the search view's declared items, the groupable fields and the declared items left out, each with its reason. */
+export interface ListAggregate { field: string; kind: "integer" | "float" | "monetary"; op: "sum" | "avg" | "min" | "max"; currency?: string }
 export interface GroupByCatalogue {
-  items: { id: string; description: string; fieldName: string; /** A date interval the item groups by (the pivot view only). */ interval?: string }[];
+  items: { id: string; description: string; fieldName: string; /** A temporal interval declared by the search view. */ interval?: string }[];
   fields: GroupableField[];
   skipped: { description: string; reason: string }[];
+  aggregates?: ListAggregate[];
 }
 
 export interface FavoriteItem {
@@ -94,5 +99,14 @@ export interface SearchModelOptions {
   /** Records of `relation` whose name matches, for a many2one's expandable suggestions. */
   nameSearch?: (relation: string, name: string) => Promise<{ id: number; display_name: string }[]>;
   /** Present when the list can be grouped: loads the catalogue the Group By menu shows (once, on first use). */
-  groupBy?: { load: () => Promise<GroupByCatalogue> };
+  groupBy?: {
+    load: () => Promise<GroupByCatalogue>;
+    /** The owner enables ordered dimensions and date intervals (lists and pivots). */
+    multiple?: boolean;
+    /** List state belongs in search_groupby; pivot keeps its separate address contract. */
+    persist?: boolean;
+    accept?: (params: URLSearchParams) => void;
+    /** The most groupings a facet holds when `multiple` (the owner's own bound). */
+    maxLevels?: number;
+  };
 }

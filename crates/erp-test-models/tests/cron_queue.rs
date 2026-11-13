@@ -537,7 +537,8 @@ async fn write_and_unlink_keep_the_job_row_in_step_and_refuse_while_running() {
     let _ = tx.rollback().await;
     runner
         .run_claimed(claimed.into_iter().next().unwrap())
-        .await;
+        .await
+        .unwrap();
     // finished: it can go, and its job row goes with it
     let mut tx = h.begin().await.unwrap();
     let records = tx.env().records("ir.cron").unwrap().browse([id]).unwrap();

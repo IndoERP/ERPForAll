@@ -106,6 +106,13 @@ fn now(_ctx: &DefaultContext) -> Value {
             "CHECK (quantity_product_uom = round((div((\"quantity\" * \"uom_factor\" * (10::numeric ^ \"product_unit_digits\"::numeric)), \"product_uom_factor\") + CASE WHEN 2 * abs((\"quantity\" * \"uom_factor\" * (10::numeric ^ \"product_unit_digits\"::numeric)) - div((\"quantity\" * \"uom_factor\" * (10::numeric ^ \"product_unit_digits\"::numeric)), \"product_uom_factor\") * \"product_uom_factor\") >= abs(\"product_uom_factor\") THEN sign((\"quantity\" * \"uom_factor\" * (10::numeric ^ \"product_unit_digits\"::numeric))) * sign(\"product_uom_factor\") ELSE 0 END) * (10::numeric ^ (-\"product_unit_digits\"::numeric)), \"product_unit_digits\"))",
             "The quantity in the product unit must be the quantity converted with the stored unit factors and digits."
         ),
+        // target of the move line's composite key `stock_move_line_move_company_product` (
+        // D2.2 I1); `stock_move.rs` sorts before `stock_move_line.rs`, so it exists first
+        (
+            "_id_company_product",
+            "UNIQUE (id, company_id, product_id)",
+            "A stock move is unique with its company and product."
+        ),
     ],
     indexes = [index(
         name = "_open_product_location",

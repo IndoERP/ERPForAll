@@ -1,0 +1,29 @@
+[[record]]
+model = "example.account"
+key = "cash"
+[record.fields]
+name = "Cash"
+code = "12"
+note = "Petty cash"
+
+[[record]]
+model = "example.account"
+key = "bank"
+[record.fields]
+name = "Bank"
+code = "1100"
+note = "Main account"
+
+[[record]]
+model = "example.account"
+key = "sales"
+[record.fields]
+name = "Sales"
+code = "4000"
+
+[[record]]
+model = "example.account"
+key = "misc"
+[record.fields]
+name = "Miscellaneous"
+code = "9000"

@@ -10,9 +10,16 @@ publish.workspace = true
 
 [dependencies]
 erp-sdk = { workspace = true }
+erp-addon-base = { workspace = true }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
 toml = { workspace = true }
+erp-testkit = { workspace = true }
+erp-addon-base = { workspace = true }
+erp-addon-uom = { workspace = true }
+erp-addon-product = { workspace = true }
+erp-addon-analytic = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }

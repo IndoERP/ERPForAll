@@ -1,0 +1,22 @@
+[[record]]
+model = "example.rate"
+key = "std_2025"
+[record.fields]
+jurisdiction = "XX"
+key = "standard"
+value = "decimal:10 percent"
+valid_from = 2025-01-01
+valid_until = 2026-01-01
+source = "Example Tax Act, section 3"
+review_status = "reviewed"
+
+[[record]]
+model = "example.rate"
+key = "std_2026"
+[record.fields]
+jurisdiction = "XX"
+key = "standard"
+value = "decimal:12 percent"
+valid_from = 2026-01-01
+source = "Example Tax Act, section 3 as amended"
+review_status = "reviewed"

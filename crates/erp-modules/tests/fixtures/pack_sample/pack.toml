@@ -1,0 +1,66 @@
+# Tiny generic sample pack: documentation example and test data (task). No real country.
+format_version = 1
+pack_id = "example.sample"
+profile_id = "example.sample.generic"
+rule_release_id = "R1"
+pack_version = 1
+release_date = 2026-01-15
+jurisdictions = ["XX"]
+
+[schemas]
+"example.account" = "38cb9192a74c3789db957b40e5a72d18cdbf979589650fc15529fe44c1ff3ff3"
+"example.tax" = "72841bd5154052c1c64f84b13c8c14dba9d5388737ef5a6fa010d426683ade34"
+"example.rate" = "3a8529742338dc5ba52b62c9a52bfe8e2d652b160d04bae50e62f323080732a6"
+
+[origin]
+kind = "authored"
+publisher = "Example Publisher"
+licence = "MIT OR Apache-2.0"
+source_document = "Example Tax Act"
+source_version = "2026 consolidated text"
+verified_on = 2026-01-10
+reviewer = "Example Reviewer"
+review_status = "reviewed"
+
+[[files]]
+path = "data/accounts.toml"
+sha256 = "1f420be36afbd3851bf89b49daebedc45aa7a74fb895ed82a896160c305aedaa"
+kind = "records"
+model = "example.account"
+
+[[files]]
+path = "data/taxes.toml"
+sha256 = "1e82bee666b5580be8ba2c671704d2b204cd3f2a4301cbe9c49d47785f823d12"
+kind = "records"
+
+[[files]]
+path = "data/rates.toml"
+sha256 = "035c6dc4b725a7b50d7dde9e2450d59cff70fcc1f031f01daa279e6f307151a1"
+kind = "records"
+
+[[files]]
+path = "data/extra_accounts.csv"
+sha256 = "0ddea358a96b167604595b50a266d33852dcaaf645a7a520fa100f7a0db1c741"
+kind = "records"
+model = "example.account"
+
+[[files]]
+path = "data/translations.csv"
+sha256 = "05ffa7aea1a4d8a78b1f4b34beb98c4f13313d40ed4d349331cb6a764580c712"
+kind = "translations"
+
+[[files]]
+path = "data/child.toml"
+sha256 = "227b50ac043b4b85f7f4940e1ebdd6d24aabd9c13f28e01094a18b5a23f81773"
+kind = "records"
+
+[[template]]
+key = "chart"
+code_digits = 4
+country = "XX"
+files = ["data/accounts.toml", "data/extra_accounts.csv", "data/taxes.toml", "data/rates.toml", "data/translations.csv"]
+
+[[template]]
+key = "chart_child"
+parent = "chart"
+files = ["data/child.toml"]

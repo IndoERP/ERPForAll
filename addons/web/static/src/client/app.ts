@@ -17,11 +17,11 @@ import { headerMenuSearch } from "./header-search.js";
 import { resizeColumns } from "./columns.js";
 import { createListTabs, decodeSelectionCounts } from "./list-tabs.js";
 import { buildGroupByCatalogue, decodeGroupableFields } from "./group-by-catalogue.js";
-import { createGroupRow, decodeGroups, type GroupRow, type ListGroup } from "./list-groups.js";
-import { applyContext, archState, decodePivotFields, paramsState, PIVOT_PARAMS, PivotModel, readPivotView, resolveSpec, snapshotParams, type PivotGroupItem, type PivotLimits, type PivotParams, type PivotSnapshot } from "./pivot.js";
+import { createGroupRow, decodeGroups } from "./list-groups.js";
+import { applyContext, archState, decodePivotFields, paramsState, PIVOT_PARAMS, PIVOT_MAX_LEVELS, PivotModel, readPivotView, resolveSpec, snapshotParams, type PivotGroupItem, type PivotLimits, type PivotParams, type PivotSnapshot } from "./pivot.js";
 import { saveFile } from "./file-save.js";
 import { mountPivot, type PivotCellTarget } from "./pivot-view.js";
-import type { GroupByCatalogue, GroupableField, GroupByState } from "./search/types.js";
+import type { GroupByCatalogue, GroupableField } from "./search/types.js";
 import { createContext, decodeAst, evalAst, parseBoundedJson } from "../../../../../web/packages/expr/src/index.js";
 import { expressionValue, jsonValue } from "./field-relations.js";
 import { array, describeViews, integer, noExpression, object, text, type ButtonNode, type Description, type Field, type Node, type View } from "./metadata.js";
@@ -31,6 +31,8 @@ import { viewButton, ButtonDebouncer, ButtonHotkeys } from "./view-button.js";
 import { runUrlButton } from "./button-url.js";
 import { CurrencyDisplayCache } from "./field-currency.js";
 import { fieldWidgets, resolveFieldWidget } from "./registry.js";
+import { ListGroupModel, type ListGroupNode } from "./list-group-model.js";
+import type { ListGroupState } from "./list-group-state.js";
 import type { NumericLocale } from "./numeric-values.js";
 import "./fields.js";
 import { decodeEditorLocale as readEditorLocale, type EditorLocale } from "./datetime-values.js";
@@ -84,6 +86,13 @@ function listRouteOf(route: Route): Route {
   delete list.id;
   delete list.view_type;
   return list;
+}
+
+/** The route of a view switch. The pivot keeps its own state (`pivot_*`) and its search model refuses a list's `search_groupby`, so that one is not carried over. */
+function switchedRoute(route: Route, view: "list" | "form" | "pivot"): Route {
+  const next: Route = { ...route, id: view === "form" ? route.id : undefined, view_type: view };
+  if (view === "pivot") delete next.search_groupby;
+  return next;
 }
 
 /** Labels remain available to assistive technology and tooltips. */
@@ -191,10 +200,7 @@ export class HumanApp {
   }
   private userDropdown?: HTMLElement;
   private currentRootId: number | undefined;
-  /** The grouping of each list address, kept in memory so the breadcrumb back from a record restores it (a bounded window of the latest). */
-  private readonly groupings = new Map<string, GroupByState>();
-  /** Set by a list breadcrumb: the grouping the next mount of that list address takes back. */
-  private groupingToRestore: { key: string; state: GroupByState } | undefined;
+
   private listContext?: {
     ids: number[]; total: number; offset: number; limit: number;
     /** Loads the ids of another page of the same search and order, so the form pager can cross a page edge. */
@@ -2016,7 +2022,7 @@ export class HumanApp {
   }
 
   /** What a header can be expanded by: the model's groupable fields, its summable fields and the search view's group-by items. */
-  private async pivotCatalogue(model: string, context: Record<string, unknown>): Promise<{ groupable: ReturnType<typeof decodePivotFields>["groupable"]; measures: ReturnType<typeof decodePivotFields>["measures"]; items: PivotGroupItem[] }> {
+  private async pivotCatalogue(model: string, context: Record<string, unknown>): Promise<{ groupable: ReturnType<typeof decodePivotFields>["groupable"]; measures: ReturnType<typeof decodePivotFields>["measures"]; items: PivotGroupItem[]; /** What the search bar's Group By menu offers. */ groupBy: GroupByCatalogue }> {
     const [searchView, raw] = await Promise.all([
       this.viewDescriptions(model, [[null, "search"]], {}, context).catch((error: unknown) => {
         if (error instanceof ClientError && error.kind === "validation" && error.message.startsWith("No default view of type 'search'")) return undefined;
@@ -2039,7 +2045,8 @@ export class HumanApp {
       try { items.push({ id: item.id, description: item.description, field: resolveSpec(item.interval ? `${item.fieldName}:${item.interval}` : item.fieldName, decoded.groupable) }); }
       catch (error) { if (!(error instanceof ClientError)) throw error; catalogue.skipped.push({ description: item.description, reason: error.message }); }
     }
-    return { groupable: decoded.groupable, measures: decoded.measures, items };
+    // The menu offers the items the pivot can group by, never the ones it left out.
+    return { groupable: decoded.groupable, measures: decoded.measures, items, groupBy: { ...catalogue, items: catalogue.items.filter(item => items.some(found => found.id === item.id)) } };
   }
 
   /** The pivot view: the search bar's domain, grouped reads narrowed to the header that opens, the table, and its state in the address. */
@@ -2070,7 +2077,9 @@ export class HumanApp {
         const found = object(row);
         return { id: integer(found["id"], "relation id"), display_name: text(found["display_name"], "relation name") };
       }),
-      userId: this.userId, companyId: this.companyId, initialDomain: baseDomain
+      userId: this.userId, companyId: this.companyId, initialDomain: baseDomain,
+      // The search's Group By sets the rows (reference pivot_model.js), in the order chosen, with date intervals.
+      groupBy: { load: async () => catalogue.groupBy, multiple: true, maxLevels: PIVOT_MAX_LEVELS }
     });
     searchModel.loadFromUrlParams(new URL(routeUrl(route), window.location.origin).searchParams);
     if (route.search && !new URL(routeUrl(route), window.location.origin).searchParams.has("search_facets")) {
@@ -2085,10 +2094,13 @@ export class HumanApp {
       for (const key of PIVOT_PARAMS) delete proposed[key];
       return Object.assign(proposed, snapshotParams(snapshot));
     };
+    let groupingRows = false; // a search Group By is setting the rows: the address refusal then names what the user can change
     const accept = (snapshot: PivotSnapshot): void => {
       try { routeUrl(routeFor(snapshot)); }
       catch (error) {
-        if (error instanceof ClientError && error.kind === "validation") throw new ClientError("validation", "This table is too large to keep in the page address. Collapse some headers or show fewer measures first.");
+        if (error instanceof ClientError && error.kind === "validation") throw new ClientError("validation", groupingRows
+          ? "This table is too large to keep in the page address. Choose fewer Group By fields or narrow the search."
+          : "This table is too large to keep in the page address. Collapse some headers or show fewer measures first.");
         throw error;
       }
     };
@@ -2119,6 +2131,7 @@ export class HumanApp {
       download: { model: description.model, send: async posted => { const { blob, fileName } = await this.rpc.postFile("/erp/pivot/export", posted); saveFile(blob, fileName); } } });
 
     let request = 0; // the same stale-answer guard the list uses: request number, route generation, expiry
+    let appliedGroupBy = ""; // the search's groupings the rows follow; empty: the arch's (or the address's) rows
     const searchBar = createSearchBar(searchModel, () => this.run(async () => {
       const mine = ++request, current = (): boolean => mine === request && generation === this.generation && !this.expired;
       const parameters = new URLSearchParams();
@@ -2132,8 +2145,23 @@ export class HumanApp {
       for (const key of ["search", "search_facets", "search_filters", "search_groupby"] as const) { if (proposed[key] === undefined) delete route[key]; else route[key] = proposed[key]; }
       if (url !== this.currentUrl) { history.replaceState({ erpIndex: this.historyIndex }, "", url); this.currentUrl = url; }
       // The address is written before the read, as the list does: an answer that comes late never touches it.
-      try { await model.load(); }
-      finally { if (current()) pivot.render(); } // a failed read draws the table as unavailable
+      // A changed Group By sets the rows and reads the table (with the search); anything else reads it again and keeps the open headers.
+      const wanted = searchModel.getGroupBy();
+      try {
+        if (wanted.join(",") !== appliedGroupBy) {
+          groupingRows = true;
+          try { await model.setRows(wanted.length ? wanted.map(spec => resolveSpec(spec, config.groupable)) : null); }
+          catch (error) {
+            // The rows did not change: the facet would say otherwise, so it goes, and the refusal says so.
+            if (!(error instanceof ClientError) || error.kind !== "validation") throw error;
+            const facet = searchModel.getFacets().find(item => item.type === "groupBy");
+            if (facet) searchModel.removeFacet(facet.id);
+            appliedGroupBy = ""; // no facet now: the rows stay as they are, and a later filter reads them again instead of resetting them
+            throw new ClientError("validation", `Group By removed: ${error.message}`);
+          } finally { groupingRows = false; }
+          appliedGroupBy = wanted.join(",");
+        } else await model.load();
+      } finally { if (current()) pivot.render(); } // a failed read draws the table as unavailable
       // The reload keeps the expanded headers that still exist: the address follows.
       if (current()) writeAddress();
     }));
@@ -2160,12 +2188,6 @@ export class HumanApp {
     return { dispose: () => { pivot.dispose(); searchBar.dispose(); } };
   }
 
-  /** Going back to a list from a record: the next mount of that list address takes its kept grouping back. */
-  private armGroupingRestore(route: Route): void {
-    const key = routeUrl(listRouteOf(route)), state = this.groupings.get(key);
-    this.groupingToRestore = state ? { key, state } : undefined;
-  }
-
   /** What the Group By menu offers for `model`: the search view's declared items and the fields the server can group by. */
   private async groupByCatalogue(model: string, context: Record<string, unknown>): Promise<GroupByCatalogue> {
     const [searchView, fields] = await Promise.all([
@@ -2174,7 +2196,7 @@ export class HumanApp {
         if (error instanceof ClientError && error.kind === "validation" && error.message.startsWith("No default view of type 'search'")) return undefined;
         throw error;
       }),
-      this.rpc.call(model, "fields_get", { attributes: ["string", "type", "groupable", "selection"], context })
+      this.rpc.call(model, "fields_get", { attributes: ["string", "type", "groupable", "selection", "aggregator", "currency_field"], context })
     ]);
     let nodes: Node[] = [];
     if (searchView !== undefined) {
@@ -2182,20 +2204,20 @@ export class HumanApp {
       if (!search) throw new ClientError("server", "The search view description is missing.");
       nodes = search.nodes;
     }
-    return buildGroupByCatalogue(nodes, ast => jsonValue(evalAst(ast, createContext({ names: { context: expressionValue(context, 0), uid: expressionValue(this.userId, 0) } }))), decodeGroupableFields(fields));
+    return buildGroupByCatalogue(nodes, ast => jsonValue(evalAst(ast, createContext({ names: { context: expressionValue(context, 0), uid: expressionValue(this.userId, 0) } }))), decodeGroupableFields(fields, true), true, true);
   }
 
   private async listView(staging: HTMLElement, panel: HTMLElement, actionTitle: string, description: Description, view: View, route: Route, generation: number, actionHelp?: string, availableViews?: [number | null, string][], scope?: {baseDomain: unknown[]; context: Record<string, unknown>; hasForm: boolean; canCreate: boolean}): Promise<{ dispose: () => void; settle: () => void }> {
     const context = scope?.context ?? this.context, baseDomain = scope?.baseDomain ?? [], hasForm = scope?.hasForm ?? true, canCreate = scope?.canCreate ?? hasForm;
     const fieldStops: (() => void)[] = [];
-    const groupStops = new Map<string, (() => void)[]>();
+    let groupedModel: ListGroupModel | undefined;
     const currencies = new CurrencyDisplayCache();
     let offset = 0, order = "id asc", request = 0, pageSize = view.pageLimit ?? 40;
     const officeBlue = document.documentElement.dataset["officeTheme"] === "office-blue";
     panel.classList.add("control-panel-list");
     const selectedIds = new Set<number>();
-    // Groups the user opened (by group key); a new search or grouping starts folded again, a sort or page keeps them.
-    const openGroups = new Set<string>();
+    // Groups the user opened (by group key); a new search, grouping or page starts folded again; a sort keeps them unless it moves the page or orders the groups.
+    const resetGroups = (): void => { groupedModel?.dispose(); searchModel.clearListState(); };
     const columnWidths = new Map<string, number>();
     let settleColumns: (() => void) | undefined;
 
@@ -2210,7 +2232,6 @@ export class HumanApp {
         get url() { return routeUrl(listRouteOf(route)); },
         isFormView: false,
         onSelected: async () => {
-          this.armGroupingRestore(route);
           await this.navigate(listRouteOf(route), false, false, undefined, { autosave: true });
         }
       });
@@ -2251,27 +2272,37 @@ export class HumanApp {
       userId: this.userId,
       companyId: this.companyId,
       initialDomain: baseDomain,
-      groupBy: { load: () => this.groupByCatalogue(description.model, context) }
+      groupBy: { load: () => this.groupByCatalogue(description.model, context), multiple: true, maxLevels: 32, persist: true, accept: params => {
+        if (!params.has("search_groupby")) return;
+        const proposed = { ...route };
+        for (const key of ["search", "search_facets", "search_filters", "search_groupby"] as const) { const value = params.get(key); if (value === null) delete proposed[key]; else proposed[key] = value; }
+        try { routeUrl(proposed); }
+        catch (error) {
+          if (error instanceof ClientError && error.kind === "validation") throw new ClientError("validation", "This search is too large to keep in the page address. Remove a filter or a Group By field first.");
+          throw error;
+        }
+      } }
     });
 
     // Restore search state from route and URL search params
     const urlParams = new URL(routeUrl(route), window.location.origin).searchParams;
+    if (urlParams.has("search_groupby")) await searchModel.loadGroupByCatalogue();
     searchModel.loadFromUrlParams(urlParams);
+    const restoredList = searchModel.getListState();
+    if (restoredList) { offset = restoredList.offset;
+      if (restoredList.limit !== undefined) {
+        if (![20, 40, 50, 80, pageSize].includes(restoredList.limit)) throw new ClientError("validation", "Invalid grouping page size.");
+        pageSize = restoredList.limit;
+      }
+      if (restoredList.order) {
+      if (!view.fields.some(field => restoredList.order.startsWith(`${field.name} `)) && restoredList.order !== "id asc") throw new ClientError("validation", "Invalid grouping sort.");
+      order = restoredList.order;
+    } }
     if (route.search && !urlParams.has("search_facets")) {
       const field = searchModel.getSearchableFields().find(f => f.name === "name") ?? searchModel.getSearchableFields()[0];
       if (!field) throw new ClientError("unsupported", "Text search is not available for this model.");
       searchModel.addFieldFacet(field.name, route.search);
     }
-
-    const rememberGrouping = (): void => {
-      const key = routeUrl(listRouteOf(route)), state = searchModel.exportGroupBy();
-      if (!state) { this.groupings.delete(key); return; }
-      this.groupings.delete(key); this.groupings.set(key, state);
-      if (this.groupings.size > 32) this.groupings.delete(this.groupings.keys().next().value!);
-    };
-    const toRestore = this.groupingToRestore;
-    this.groupingToRestore = undefined;
-    if (toRestore && toRestore.key === routeUrl(listRouteOf(route))) searchModel.restoreGroupBy(toRestore.state);
 
     const updateUrlWithSearch = (): void => {
       const parameters = new URLSearchParams();
@@ -2289,11 +2320,11 @@ export class HumanApp {
         if (proposed[key] === undefined) delete route[key];
         else route[key] = proposed[key];
       }
-      if (newUrl !== this.currentUrl) {
+      // While the list is still being staged the address is the previous page's (a record, a pivot): `navigate` writes the list's own.
+      if (newUrl !== this.currentUrl && results.isConnected) {
         history.replaceState({ erpIndex: this.historyIndex }, "", newUrl);
         this.currentUrl = newUrl;
       }
-      rememberGrouping();
     };
 
     const results = el("div", undefined, "table-scroll list-results");
@@ -2312,7 +2343,7 @@ export class HumanApp {
       this.run(async () => {
         route.list_tab = token ?? "all";
         offset = 0;
-        openGroups.clear();
+        resetGroups();
         updateUrlWithSearch();
         await load();
       });
@@ -2322,7 +2353,7 @@ export class HumanApp {
 
     const searchBar = createSearchBar(searchModel, () => this.run(async () => {
       offset = 0;
-      openGroups.clear();
+      resetGroups();
       updateUrlWithSearch();
       await load();
     }));
@@ -2344,7 +2375,7 @@ export class HumanApp {
               const wanted = chosen === "both" || chosen === (filter.id === "filter_active" ? "active" : "archived");
               if (filter.isActive !== wanted) searchModel.toggleFilter(filter.id);
             }
-            offset = 0; openGroups.clear(); updateUrlWithSearch(); await load();
+            offset = 0; resetGroups(); updateUrlWithSearch(); await load();
           })
         });
         activeSelect.element.classList.add("list-active-filter");
@@ -2403,10 +2434,12 @@ export class HumanApp {
     const count = el("span", "", "pager-count muted");
     const previous = actionButton("Previous", () => this.run(async () => {
       offset = Math.max(0, offset - pageSize);
+      searchModel.clearListState(); // another page of groups: the open groups were of this one
       await load();
     }), "pager-btn pager-prev");
     const next = actionButton("Next", () => this.run(async () => {
       offset += pageSize;
+      searchModel.clearListState();
       await load();
     }), "pager-btn pager-next");
     previous.replaceChildren(icon("chevron-left")); previous.setAttribute("aria-label", "Previous page"); previous.title = "Previous page";
@@ -2434,7 +2467,7 @@ export class HumanApp {
       for (const [, vType] of availableViews) {
         if (vType === "list" || vType === "form" || vType === "pivot") {
           const vBtn = button(vType.charAt(0).toUpperCase() + vType.slice(1), () => this.run(async () => {
-            await this.navigate({ ...route, id: vType === "form" ? route.id : undefined, view_type: vType as "list" | "form" | "pivot" });
+            await this.navigate(switchedRoute(route, vType));
           }), `view-btn ${vType === "list" ? "active" : ""}`);
           vBtn.setAttribute("aria-label", `${vType} view`);
           decorateViewButton(vBtn, vType);
@@ -2465,7 +2498,7 @@ export class HumanApp {
       const allowedPageSizes = [...new Set([20, 40, 50, 80, pageSize])].sort((a, b) => a - b);
       const pageSizeControl = createChoiceDropdown({ label: "Rows per page", value: String(pageSize),
         choices: allowedPageSizes.map(size => ({ value: String(size), label: `${size} rows / page` })),
-        onChange: chosen => this.run(async () => { pageSize = Number(chosen); offset = 0; await load(); }) });
+        onChange: chosen => this.run(async () => { pageSize = Number(chosen); offset = 0; searchModel.clearListState(); await load(); }) });
       pageSizeControl.element.classList.add("list-page-size");
       // An item of the pager's menu that opens its own choices.
       pageSizeControl.trigger.setAttribute("role", "menuitem");
@@ -2485,21 +2518,25 @@ export class HumanApp {
         context: context
       }));
     };
-    // One-field grouping: the group rows and their count, one page of groups at a time (web_read_group).
-    // The groups follow the list's sort only when it sorts by the grouping field itself.
-    const fetchGroups = async (from: number, base: unknown[], field: GroupableField): Promise<Record<string, unknown>> => {
-      return object(await this.rpc.call(description.model, "web_read_group", {
-        domain: tabs ? tabs.rowDomain(base) : base,
-        groupby: [field.name],
-        aggregates: ["__count"],
-        offset: from,
-        limit: pageSize,
-        ...(order.startsWith(`${field.name} `) ? { order } : {}),
-        context: context
-      }));
+    const activeAggregates = () => searchModel.getGroupAggregates().filter(a => view.fields.some(field => field.name === a.field && !field.invisible));
+    const fetchGroups = async (from: number, base: unknown[], specs = searchModel.getGroupBy()): Promise<Record<string, unknown>> => object(await this.rpc.call(description.model, "web_read_group", {
+      domain: tabs ? tabs.rowDomain(base) : base, groupby: specs,
+      aggregates: [...new Set(["__count", ...activeAggregates().flatMap(a => [`${a.field}:${a.op}`, ...(a.currency ? [`${a.currency}:array_agg_distinct`] : [])])])],
+      offset: from, limit: pageSize,
+      ...(order.startsWith(`${specs[0]?.split(":")[0]} `) ? { order } : {}), context
+    }));
+    const validateGrouping = (open: ListGroupState["open"]): ListGroupState => {
+      const state: ListGroupState = { v: 1, by: searchModel.getGroupBy(), offset, limit: pageSize, order, open };
+      try { routeUrl({ ...route, search_groupby: JSON.stringify(state) }); }
+      catch (error) {
+        if (error instanceof ClientError && error.kind === "validation") throw new ClientError("validation", "Too many groups are open to keep in the page address. Close some groups first.");
+        throw error;
+      }
+      return state;
     };
-    // The records of one opened group: the list's domain and sort, the group's own domain, its first page.
-    const fetchGroupRecords = async (extra: unknown[]): Promise<Record<string, unknown>> => fetchRows(0, [...searchModel.getDomain(), ...extra]);
+    const writeGrouping = (open: ListGroupState["open"]): void => {
+      searchModel.setListState(validateGrouping(open)); updateUrlWithSearch();
+    };
     const page = async (from: number): Promise<{ ids: number[]; total: number }> => {
       const answer = await fetchRows(from);
       return {
@@ -2518,9 +2555,11 @@ export class HumanApp {
     };
     const load = async (): Promise<void> => {
       const mine = ++request, base = searchModel.getDomain();
-      const groupName = searchModel.getGroupBy()[0], grouping = groupName === undefined ? undefined : searchModel.getGroupableField(groupName);
+      const savedOpen = searchModel.getListState()?.open ?? [];
+      groupedModel?.dispose();
+      const groupName = searchModel.getGroupBy()[0], grouping = groupName === undefined ? undefined : searchModel.getGroupableField(groupName.split(":")[0]!);
       if (groupName !== undefined && !grouping) throw new ClientError("validation", `Cannot group by ${groupName}.`);
-      const fetchMain = (from: number, domain: unknown[]): Promise<Record<string, unknown>> => grouping ? fetchGroups(from, domain, grouping) : fetchRows(from, domain);
+      const fetchMain = (from: number, domain: unknown[]): Promise<Record<string, unknown>> => grouping ? fetchGroups(from, domain) : fetchRows(from, domain);
       tabs?.element.setAttribute("aria-busy", "true");
       let loaded: [Record<string, unknown>, unknown];
       try {
@@ -2548,8 +2587,15 @@ export class HumanApp {
       selectedIds.clear();
       let groups: ReturnType<typeof decodeGroups> | undefined;
       if (grouping) {
-        try { groups = decodeGroups(response, grouping, pageSize); }
+        try { groups = decodeGroups(response, grouping, pageSize, { spec: groupName!, aggregates: activeAggregates() }); }
         catch (error) { tabs?.invalidate(); markListUnavailable(); throw error; }
+        // The groups shrank under an offset from the address, a reload or Back: show the last page, as a group's own pager does.
+        if (offset > 0 && offset >= groups.length) {
+          offset = groups.length ? Math.floor((groups.length - 1) / pageSize) * pageSize : 0;
+          try { response = await fetchMain(offset, base); groups = decodeGroups(response, grouping, pageSize, { spec: groupName!, aggregates: activeAggregates() }); }
+          catch (error) { if (mine !== request || generation !== this.generation || this.expired) return; tabs?.invalidate(); markListUnavailable(); throw error; }
+          if (mine !== request || generation !== this.generation || this.expired) return;
+        }
       }
       const length = groups ? groups.length : integer(response["length"], "record count");
       // Grouped: `rows` holds the records of the open groups, and the pager counts groups.
@@ -2568,6 +2614,7 @@ export class HumanApp {
           const pageButton = button(String(number), () => this.run(async () => {
             pagerDropdown?.close(true);
             offset = (number - 1) * pageSize;
+            searchModel.clearListState();
             await load();
             if (panel.isConnected) pagerToggle.focus();
           }), "pager-page");
@@ -2634,6 +2681,8 @@ export class HumanApp {
         th.setAttribute("aria-sort", isSorted ? (isAsc ? "ascending" : "descending") : "none");
         const sortBtn = button(field.label, () => this.run(async () => {
           order = `${field.name} ${isSorted && isAsc ? "desc" : "asc"}`;
+          // Back to the first page, or the groups themselves reordered: the open groups may not be on the page that follows.
+          if (offset > 0 || field.name === searchModel.getGroupBy()[0]?.split(":")[0]) searchModel.clearListState();
           offset = 0;
           await load();
         }), "sort-button");
@@ -2649,8 +2698,7 @@ export class HumanApp {
       settleColumns = resizeColumns(table, view.fields.filter(field => !field.invisible), columnWidths);
 
       for (const stop of fieldStops.splice(0)) stop();
-      for (const stops of groupStops.values()) for (const stop of stops.splice(0)) stop();
-      groupStops.clear();
+
       const buildRow = (raw: unknown, stops: (() => void)[]): HTMLTableRowElement => {
         const record = object(raw), id = integer(record["id"], "record id"), row = el("tr");
         row.setAttribute("data-id", String(id));
@@ -2725,58 +2773,101 @@ export class HumanApp {
       updateSelectionUI();
 
       if (groups) {
-        // Group rows, all folded unless the user had opened them; opening one loads its first page of records.
-        const columns = 1 + view.fields.filter(field => !field.invisible).length;
-        const shownNodes = new Map<string, HTMLElement[]>(), shownRecords = new Map<string, unknown[]>();
-        // Groups whose records are being read: a second open of the same group would insert its rows twice.
-        const pending = new Set<string>();
-        const showGroup = async (group: ListGroup, head: GroupRow): Promise<void> => {
-          if (pending.has(group.key) || head.isExpanded()) return;
-          pending.add(group.key); head.setBusy(true);
-          try { await openGroup(group, head); }
-          finally { pending.delete(group.key); head.setBusy(false); }
-        };
-        const openGroup = async (group: ListGroup, head: GroupRow): Promise<void> => {
-          const answer = await fetchGroupRecords(group.domain);
-          if (mine !== request || generation !== this.generation || this.expired) return;
-          const records = array(answer["records"], "records"), total = integer(answer["length"], "record count");
-          const stops: (() => void)[] = [];
-          groupStops.set(group.key, stops);
-          const nodes: HTMLElement[] = records.map(raw => buildRow(raw, stops));
-          if (total > records.length) {
-            const note = el("tr", undefined, "list-group-note"), cell = el("td", `Showing the first ${records.length} of ${total} records. Paging inside a group is not available yet.`);
-            cell.colSpan = columns; note.append(cell); nodes.push(note);
+        const visible = view.fields.filter(field => !field.invisible), columns = 1 + visible.length;
+        const model = new ListGroupModel({
+          dimensions: searchModel.getGroupBy().map(spec => {
+            const field = searchModel.getGroupableField(spec.split(":")[0]!);
+            if (!field) throw new ClientError("validation", `Cannot group by ${spec}.`);
+            return { spec, field };
+          }), aggregates: activeAggregates(), limit: pageSize,
+          groups: (extra, specs, from) => fetchGroups(from, [...base, ...extra], specs),
+          records: (extra, from) => fetchRows(from, [...base, ...extra]),
+          accept: open => { validateGrouping(open); }
+        });
+        groupedModel = model; model.adopt(response);
+        const current = () => mine === request && generation === this.generation && !this.expired;
+        const render = (focus?: { path: string; control?: "previous" | "next" }): void => {
+          if (!current()) return;
+          const aggregates = activeAggregates(); // once per drawing, not per row and column
+          // A redraw removes the control that was pressed: it takes focus again, unless the user has moved on (as the pivot does).
+          const keepFocus = body.contains(document.activeElement) || !document.activeElement || document.activeElement === document.body;
+          for (const stop of fieldStops.splice(0)) stop();
+          body.replaceChildren(); rows = [];
+          const append = (nodes: ListGroupNode[]): void => { for (const node of nodes) {
+            const head = createGroupRow({ group: node.group, columns, level: node.depth + 1, onToggle: () => {
+              if (node.busy && !node.expanded) return;
+              this.run(async () => {
+                try {
+                  if (node.expanded) model.close(node);
+                  else { const opening = model.open(node); head.setBusy(node.busy); await opening; }
+                  if (current()) writeGrouping(model.opened());
+                } finally { head.setBusy(false); head.setExpanded(node.expanded); render({ path: node.path }); }
+              });
+            } });
+            head.row.dataset["groupPath"] = node.path;
+            head.toggle.style.paddingInlineStart = `calc(${node.depth} * var(--list-cell-x))`;
+            head.setExpanded(node.expanded); head.setBusy(node.busy);
+            const firstAggregate = visible.findIndex(field => aggregates.some(a => a.field === field.name));
+            if (firstAggregate >= 0) {
+              head.row.cells[0]!.colSpan = Math.max(1, firstAggregate + 1);
+              for (const field of visible.slice(firstAggregate)) {
+                const cell = el("td", undefined, "list-number");
+                const a = aggregates.find(a => a.field === field.name);
+                if (a) {
+                  const value = node.group.aggregates?.[`${a.field}:${a.op}`];
+                  if (value !== null && value !== false) {
+                    const ids = a.currency ? node.group.aggregates?.[`${a.currency}:array_agg_distinct`] : undefined;
+                    if (a.kind === "monetary" && (!Array.isArray(ids) || ids.length !== 1 || !Number.isSafeInteger(ids[0]) || Number(ids[0]) <= 0)) {
+                      cell.textContent = "Unavailable"; cell.title = "An aggregate needs one known currency. Mixed-currency conversion is not available yet.";
+                    } else {
+                      const adapter = resolveFieldWidget(field.kind, "list");
+                      const values = { [field.name]: value, ...(a.currency && Array.isArray(ids) ? { [a.currency]: ids[0] } : {}) };
+                      const handle = adapter.render({ field: { ...field, readonly: true, ...(a.op === "avg" && field.kind === "integer" ? { kind: "float" as const } : {}) }, value, values, fields: view.fields, viewContext: "list", rpc: this.rpc, context, currencies, numericLocale: this.numericLocale, editorLocale: this.editorLocale, messages: this.messages, run: this.run, report: error => this.reportError(error), signal: this.lifetime.signal, change: () => { throw new ClientError("validation", "Group aggregates cannot be edited."); } });
+                      fieldStops.push(handle.dispose); cell.append(handle.node);
+                    }
+                  }
+                }
+                head.row.append(cell);
+              }
+            }
+            body.append(head.row);
+            if (node.error) {
+              const row = el("tr", undefined, "list-group-note"), cell = el("td"); cell.colSpan = columns;
+              const message = el("span", `Could not load ${node.group.label}: ${node.error}`); message.setAttribute("role", "alert");
+              cell.append(message, button("Retry", () => this.run(async () => { try { await model.page(node, node.offset); if (current()) writeGrouping(model.opened()); } finally { render({ path: node.path }); } })));
+              row.append(cell); body.append(row);
+            }
+            if (node.expanded) {
+              if (node.children.length) append(node.children);
+              for (const record of node.records) { rows.push(record); body.append(buildRow(record, fieldStops)); }
+              if (!node.error && node.total > pageSize) {
+                const row = el("tr", undefined, "list-group-note"), cell = el("td"); cell.colSpan = columns;
+                const page = (from: number, control: "previous" | "next") => this.run(async () => { try { await model.page(node, from); if (current()) writeGrouping(model.opened()); } finally { render({ path: node.path, control }); } });
+                const previous = button("Previous", () => page(Math.max(0, node.offset - pageSize), "previous")), next = button("Next", () => page(node.offset + pageSize, "next"));
+                previous.dataset["groupPath"] = node.path; previous.dataset["groupControl"] = "previous";
+                next.dataset["groupPath"] = node.path; next.dataset["groupControl"] = "next";
+                previous.setAttribute("aria-label", `Previous page of ${node.group.label}`); next.setAttribute("aria-label", `Next page of ${node.group.label}`);
+                previous.disabled = node.busy || node.offset === 0; next.disabled = node.busy || node.offset + pageSize >= node.total;
+                cell.append(previous, el("span", `${node.offset + 1}–${Math.min(node.offset + pageSize, node.total)} / ${node.total}`, "list-group-page-count"), next);
+                row.append(cell); body.append(row);
+              }
+            }
+          } };
+          append(model.roots);
+          const shown = new Set(rows.map(row => integer(object(row)["id"], "record id")));
+          for (const id of selectedIds) if (!shown.has(id)) selectedIds.delete(id);
+          updateSelectionUI();
+          if (focus && keepFocus) {
+            const target = focus.control && body.querySelector<HTMLButtonElement>(`button[data-group-control="${focus.control}"][data-group-path="${focus.path}"]:not(:disabled)`);
+            (target || body.querySelector<HTMLButtonElement>(`[data-group-path="${focus.path}"] .list-group-toggle`))?.focus();
           }
-          head.row.after(...nodes);
-          shownNodes.set(group.key, nodes); shownRecords.set(group.key, records);
-          rows = [...rows, ...records];
-          head.setExpanded(true); openGroups.add(group.key);
-          updateSelectionUI();
+          settleColumns?.();
         };
-        const hideGroup = (group: ListGroup, head: GroupRow): void => {
-          for (const node of shownNodes.get(group.key) ?? []) node.remove();
-          for (const stop of groupStops.get(group.key)?.splice(0) ?? []) stop();
-          const records = shownRecords.get(group.key) ?? [];
-          for (const record of records) selectedIds.delete(integer(object(record)["id"], "record id"));
-          rows = rows.filter(record => !records.includes(record));
-          shownNodes.delete(group.key); shownRecords.delete(group.key); groupStops.delete(group.key);
-          head.setExpanded(false); openGroups.delete(group.key);
-          updateSelectionUI();
-        };
-        const heads: [ListGroup, GroupRow][] = [];
-        for (const group of groups.groups) {
-          const head: GroupRow = createGroupRow({ group, columns, onToggle: () => { if (!pending.has(group.key)) this.run(async () => { if (head.isExpanded()) hideGroup(group, head); else await showGroup(group, head); }); } });
-          body.append(head.row); heads.push([group, head]);
-        }
-        // Reopen the groups the user had open, together; one that fails is named, never silently left closed.
-        const reopen = heads.filter(([group]) => openGroups.has(group.key));
-        const outcomes = await Promise.allSettled(reopen.map(([group, head]) => showGroup(group, head)));
-        const failed = reopen.filter((_, index) => outcomes[index]!.status === "rejected");
-        for (const [group] of failed) openGroups.delete(group.key);
-        if (failed.length && mine === request) {
-          const first = outcomes.find((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected")!;
-          this.notice(`Could not reopen ${failed.map(([group]) => group.label).join(", ")}: ${errorMessage(first.reason)}`);
-        }
+        render();
+        try {
+          const missing = await model.restore(savedOpen);
+          if (current()) { if (missing.length) this.notice("Some saved groups are no longer in these results."); writeGrouping(model.opened()); render(); }
+        } catch (error) { if (current()) { render(); this.notice(`Could not restore grouped records: ${errorMessage(error)}`); } }
       }
 
       if (!shown) {
@@ -2806,7 +2897,7 @@ export class HumanApp {
 
     try { await load(); } catch (error) { disposeActionMenu(); disposeQuickFilters(); disposePageSize(); searchBar.dispose(); throw error; }
     return {
-      dispose: () => { for (const stop of fieldStops.splice(0)) stop(); for (const stops of groupStops.values()) for (const stop of stops.splice(0)) stop(); groupStops.clear(); disposeActionMenu(); disposeQuickFilters(); disposePageSize(); searchBar.dispose(); },
+      dispose: () => { for (const stop of fieldStops.splice(0)) stop(); groupedModel?.dispose(); disposeActionMenu(); disposeQuickFilters(); disposePageSize(); searchBar.dispose(); },
       settle: () => { settleColumns?.(); }
     };
   }
@@ -3118,7 +3209,7 @@ export class HumanApp {
       for (const [, vType] of availableViews) {
         if (vType === "list" || vType === "form" || vType === "pivot") {
           const vBtn = button(vType.charAt(0).toUpperCase() + vType.slice(1), () => runFormAction(async () => {
-            await this.navigate({ ...route, id: vType === "form" ? route.id : undefined, view_type: vType as "list" | "form" | "pivot" });
+            await this.navigate(switchedRoute(route, vType));
           }), `view-btn ${vType === "form" ? "active" : ""}`);
           vBtn.setAttribute("aria-label", `${vType} view`);
           decorateViewButton(vBtn, vType);
@@ -3226,7 +3317,6 @@ export class HumanApp {
       renderBreadcrumbs(breadcrumbs, this.breadcrumbs, {
         isSmall,
         onNavigate: async item => this.run(async () => {
-          if (!item.isFormView) this.armGroupingRestore(item.route);
           await this.navigate(item.route, false, false, undefined, { autosave: true });
         }),
         report: error => this.reportError(error)

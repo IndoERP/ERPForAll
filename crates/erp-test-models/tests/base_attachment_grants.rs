@@ -272,6 +272,15 @@ async fn quota_accounting_is_append_only_and_requests_cannot_remove_content() {
             "{err}"
         );
     }
+    let error = runtime
+        .batch_execute("UPDATE ir_blob_upload SET reservation_unknown=false")
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), Some(&SqlState::INSUFFICIENT_PRIVILEGE));
+    assert_eq!(
+        error.as_db_error().unwrap().message(),
+        "permission denied for table ir_blob_upload"
+    );
     for sql in [
         format!("GRANT UPDATE(bytes) ON ir_blob_usage_delta TO {quoted}"),
         "GRANT DELETE ON ir_blob TO PUBLIC".to_owned(),

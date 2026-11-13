@@ -96,6 +96,7 @@ pub struct StockStorageCategoryCapacity {
         comodel = "product.product",
         ondelete = "cascade",
         index = "btree_not_null",
+        check_company = true,
         string = "Product"
     )]
     pub product_id: Option<RecId>,
@@ -105,6 +106,7 @@ pub struct StockStorageCategoryCapacity {
         comodel = "stock.package.type",
         ondelete = "cascade",
         index = "btree_not_null",
+        check_company = true,
         string = "Package Type"
     )]
     pub package_type_id: Option<RecId>,
@@ -112,6 +114,16 @@ pub struct StockStorageCategoryCapacity {
     /// addon stores no binary floats.
     #[field(float, digits = 0, required = true)]
     pub quantity: Decimal,
+    /// The category's company, stored so the product and package type links are company-checked
+    /// (51,55`).
+    #[field(
+        many2one,
+        comodel = "res.company",
+        related = "storage_category_id.company_id",
+        store = true,
+        string = "Company"
+    )]
+    pub company_id: Option<RecId>,
 }
 
 /// `stock.package.type`: a kind of box, pallet or tote.

@@ -230,11 +230,24 @@ async fn deleting_one_of_two_attachments_keeps_the_shared_content() {
         .unlink(&mut tx)
         .await
         .unwrap();
+    tx.commit().await.unwrap();
+    drop(tx);
+    let mut tx =
+        f.h.orm()
+            .begin_opts(
+                erp_orm::BeginOptions::new(f.h.principal())
+                    .isolation(erp_orm::Isolation::ReadCommitted),
+            )
+            .await
+            .unwrap();
     // the content is still there for the other attachment, and a collection leaves it alone
     let report = erp_addon_base::attachments::gc::mark_unreferenced(&mut tx, 100)
         .await
         .unwrap();
     assert_eq!(report.marked, 0, "still referenced");
+    tx.commit().await.unwrap();
+    drop(tx);
+    let mut tx = f.h.begin().await.unwrap();
     let handle = attachments::open(&mut tx, ids[1].get()).await.unwrap();
     assert_eq!(handle.read_to_vec(100).await.unwrap(), b"shared bytes");
     tx.commit().await.unwrap();
@@ -463,7 +476,7 @@ async fn a_declared_type_mismatch_is_refused_and_leaves_nothing_after_cleanup() 
     assert_eq!(err.kind(), ErrorKind::Validation);
     assert_eq!(
         err.message(),
-        "declared content type image/png does not match the content, which is text/html (and fenced cleanup pending; the committed reservation is retained)"
+        "declared content type image/png does not match the content, which is text/html"
     );
     assert_eq!(
         scalar(

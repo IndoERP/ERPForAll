@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<!--
+Default data of the ledger configuration models. The reference ships no accounts, roots or code
+     mappings of its own: accounts come from a chart template and roots follow the codes.
+-->
+<erp>
+  <data noupdate="1">
+    <!-- Master tags of the cash-flow statement (direct method). -->
+    <record id="account_tag_operating" model="account.account.tag">
+      <field name="name">Operating Activities</field>
+      <field name="applicability">accounts</field>
+    </record>
+    <record id="account_tag_financing" model="account.account.tag">
+      <field name="name">Financing Activities</field>
+      <field name="applicability">accounts</field>
+    </record>
+    <record id="account_tag_investing" model="account.account.tag">
+      <field name="name">Investing &amp; Extraordinary Activities</field>
+      <field name="applicability">accounts</field>
+    </record>
+  </data>
+</erp>

@@ -288,7 +288,7 @@ arena({kind:"form",record_mode:"record",children:[{kind:"header",children:[lendB
  formField("create_uid"),formField("create_date"),formField("write_uid"),formField("write_date")
 ]}]},{kind:"chatter",reload_on_post:true,reload_on_attachment:false,reload_on_activity:false,reload_on_follower:false,open_attachments:false,has_activities:true}]});
 const description = {wire_major:1,registry_version:"fixture-r1",description_version:"fixture-d1",model:"acceptance_notes.note",fields:{"acceptance_notes.note":fields},notices:[],views:[
- {identity:{kind:"stored",id:1},type:"list",schema_major:1,renderer:"web.list",root:0,nodes:[{kind:"list",children:[1,2],page_limit:80,...(officeBlue ? {search_panel:{kind:"selection",field:{model:"acceptance_notes.note",name:"priority"},label:"Priority",enable_counters:true,expand:true,default_value:null,notice:null}} : {})},{...formField("name"),widget:"char"},formField("priority")]},
+ {identity:{kind:"stored",id:1},type:"list",schema_major:1,renderer:"web.list",root:0,nodes:[{kind:"list",children:[1,2,3],page_limit:80,...(officeBlue ? {search_panel:{kind:"selection",field:{model:"acceptance_notes.note",name:"priority"},label:"Priority",enable_counters:true,expand:true,default_value:null,notice:null}} : {})},{...formField("name"),widget:"char"},formField("priority"),formField("print_run")]},
  {identity:{kind:"stored",id:2},type:"form",schema_major:1,renderer:"web.form",root:0,nodes:formNodes},
  // The pivot of the analysis action: notes by priority (rows) and format (columns), measured in print run.
  {identity:{kind:"stored",id:6},type:"pivot",schema_major:1,renderer:"web.pivot",root:0,nodes:[{kind:"pivot",children:[1,2,3],disable_linking:false,display_quantity:false},
@@ -421,6 +421,7 @@ const server = createServer(async (request, response) => {
     else if (pathname === "/erp/json/2/res.users/web_read") value = [{ id: 2, name: "Rendering fixture user", email: "operator@example.com", phone: "+62 21 555 0100", lang: "en_US", color_scheme: "system", notification_type: "email", tz: "Asia/Jakarta" }];
     else if (pathname === "/erp/json/2/res.partner/fields_get") value = Object.fromEntries(body.allfields.map(field => [field, { selection: field === "lang" ? [["en_US", "English (US)"], ["id_ID", "Indonesian"]] : field === "tz" ? [["Asia/Jakarta", "Asia/Jakarta"], ["UTC", "UTC"]] : [] }]));
     else if (pathname === "/erp/json/2/ir.module.module/get_views") value = addonsDescription;
+    else if (pathname.endsWith("/erp_addon_detail")) value = { wire_major: 1, registry_version: "fixture-r1", name: "acceptance_notes", label: "Sample Library", summary: "Shared notes for a distributed office team.", description: "Keeps meeting notes, decisions and follow-ups in one searchable place.", author: "ERPForAll", available_version: "1.0", installed_version: "1.0", state: "installed", dependencies: { items: ["web", "base"], next_cursor: null }, dependents: { items: [], next_cursor: null }, menus: { items: [{ id: 1, name: "Notes", label: "Notes" }, { id: 2, name: "acceptance_notes_all", label: "All notes" }], next_cursor: null }, views: { items: [{ id: 1, name: "acceptance.notes.form", kind: "form", model: "acceptance.note" }, { id: 2, name: "acceptance.notes.list", kind: "list", model: "acceptance.note" }], next_cursor: null }, upgrade_refusal: null, uninstall_refusal: "Uninstall impact cannot describe package runtime lifecycle callbacks; unsupported until a later release" };
     else if (pathname.endsWith("/erp_available_addons")) value = { wire_major: 1, addons: [{ name: "acceptance_notes", label: "Shared notes for a distributed office team", version: "1.0", state: "installed", installable: true, summary: "Long catalogue content remains readable and constrained on narrow screens.", category: "Productivity", author: "ERPForAll", application: true, website: "", license: "LGPL-3", depends: ["web"] }] };
     else if (pathname === "/erp/json/2/ir.config.setting/get_views") value = settingsDescription;
     else if (pathname === "/erp/json/2/ir.config.setting/erp_describe") value = { wire_major: 1, registry_version: "fixture-r1", scope: body.scope, items: settingsPanelItems, declarations: [...(officeBlue && officeInstalled ? [{ key: "theme_office_blue.appearance", kind: "selection", label: "Database appearance (refresh after saving)", choices: [["default", "Default"], ["office-blue", "Office Blue"]], writable: true, app: "theme_office_blue", block: "General", sequence: 100 }] : []), { key: "acceptance_notes.enabled", kind: "boolean", label: "Enable shared notes", help: "Everyone in the company can read and edit a note that is marked shared.", choices: null, writable: true, app: "acceptance_notes", block: "General", sequence: 100 }, { key: "acceptance_notes.colour", kind: "selection", label: "Default note colour", help: "New notes start with this colour.", choices: [["yellow", "Yellow"], ["blue", "Blue"], ["green", "Green"]], writable: true, app: "acceptance_notes", block: "General", sequence: 110 }, { key: "acceptance_notes.archive_days", kind: "integer", label: "Archive after (days)", help: "Notes that were not touched for this long are archived.", choices: null, writable: true, app: "acceptance_notes", block: "General", sequence: 120 }, { key: "acceptance_notes.mail_to", kind: "string", label: "Notification e-mail", help: "Digest of new shared notes goes to this address.", choices: null, writable: true, app: "acceptance_notes", block: "Sharing", sequence: 200 }, { key: "acceptance_notes.public_link", kind: "boolean", label: "Allow public links", help: "A shared note may be opened without signing in.", choices: null, writable: true, app: "acceptance_notes", block: "Sharing", sequence: 210 }] };
@@ -432,12 +433,20 @@ const server = createServer(async (request, response) => {
     else if (pathname.endsWith("/get_views") && body.views?.[0]?.[1] === "search") value = searchDescription;
     else if (pathname === "/erp/json/2/acceptance_notes.note/fields_get") {
       // The list's group-by menu asks for four attributes; the pivot also asks which fields sum (`aggregator`).
-      if (body.attributes.includes("aggregator")) { assert.deepEqual(body.attributes, ["string", "type", "groupable", "selection", "aggregator"]); value = pivotFieldList; }
+      if (body.attributes.includes("currency_field")) { assert.deepEqual(body.attributes, ["string", "type", "groupable", "selection", "aggregator", "currency_field"]); value = {...groupableFields, print_run:pivotFieldList.print_run}; }
+      else if (body.attributes.includes("aggregator")) { assert.deepEqual(body.attributes, ["string", "type", "groupable", "selection", "aggregator"]); value = pivotFieldList; }
       else { assert.deepEqual(body.attributes, ["string", "type", "groupable", "selection"]); value = groupableFields; }
     }
     else if (pathname === "/erp/json/2/acceptance_notes.note/web_read_group") {
-      assert.deepEqual(body.groupby, ["priority"]); assert.deepEqual(body.aggregates, ["__count"]); groupReads.push(body);
-      value = { groups: [{ priority: "normal", __count: 2, __extra_domain: [["priority", "=", "normal"]] }, { priority: "high", __count: 1, __extra_domain: [["priority", "=", "high"]] }, { priority: false, __count: 1, __extra_domain: [["priority", "=", false]] }], length: 3 };
+      assert.deepEqual(body.aggregates, ["__count", "print_run:sum"]); groupReads.push(body);
+      const spec = body.groupby[0];
+      const groups = spec === "priority" ? [
+        { priority: "normal", "print_run:sum": 12000, __count: 2, __extra_domain: [["priority", "=", "normal"]] },
+        { priority: "high", "print_run:sum": 800, __count: 1, __extra_domain: [["priority", "=", "high"]] },
+        { priority: false, "print_run:sum": 0, __count: 1, __extra_domain: [["priority", "=", false]] }
+      ] : spec === "name" ? [{ name: note, "print_run:sum": 12000, __count: 1, __extra_domain: [["name", "=", note]] }] : spec === "create_date:month" ? [{ "create_date:month": ["2026-11-01 00:00:00", "November 2026"], "print_run:sum": 12000, __count: 1, __extra_domain: [["create_date", ">=", "2026-11-01 00:00:00"], ["create_date", "<", "2026-12-01 00:00:00"]] }] : undefined;
+      assert.ok(groups, `unexpected list grouping ${spec}`);
+      value = { groups: groups.slice(body.offset, body.offset + body.limit), length: groups.length };
     }
     else if (pathname === "/erp/json/2/acceptance_notes.note/formatted_read_grouping_sets") { pivotReads.push(body); value = pivotAnswer(body.grouping_sets, body.aggregates, body.domain); }
     else if (pathname.endsWith("/get_views")) value = description;
@@ -474,10 +483,11 @@ const server = createServer(async (request, response) => {
       const matches = body.domain.every(condition => {
         assert.ok(Array.isArray(condition)); assert.equal(condition.length, 3);
         if (condition[0] === "priority") { assert.equal(condition[1], "="); return priorityValue === condition[2]; }
-        assert.equal(condition[0], "name"); assert.equal(condition[1], "ilike");
-        return note.toLowerCase().includes(condition[2].toLowerCase());
+        if (condition[0] === "create_date") { assert.ok([">=", "<"].includes(condition[1])); return true; }
+        assert.equal(condition[0], "name"); assert.ok(["ilike", "="].includes(condition[1]));
+        return condition[1] === "=" ? note === condition[2] : note.toLowerCase().includes(condition[2].toLowerCase());
       });
-      const records = matches ? [{ id: 5, name: note, priority: priorityValue }, ...(selectionFixture ? [{ id: 6, name: "Second fixture row", priority: priorityValue }] : [])] : [];
+      const records = matches ? [{ id: 5, name: note, priority: priorityValue, print_run:12000 }, ...(selectionFixture ? [{ id: 6, name: "Second fixture row", priority: priorityValue }] : [])] : [];
       value = { length: records.length, records };
     }
     else if (pathname.endsWith("/web_name_search")) {
@@ -759,17 +769,18 @@ try {
   };
   // The grouped list, end to end in the compiled client: the Group By menu loads its choices, groups by a declared
   // item, group rows start folded, Enter opens one (its records are read with the group's domain), the page never
-  // scrolls sideways, and the group row is as tall as a record row. The grouping is not in the address, so a reload
-  // returns the plain list for the scenes that follow.
+  // scrolls sideways, and the group row is as tall as a record row. Nested and temporal groups survive reload;
+  // the probe removes its grouping before returning to the remaining scenes.
   const groupedListProbe = async prefix => {
     const savedPriority = priorityValue; priorityValue = "normal";
+    await evaluate('[...document.querySelectorAll(".client-notification-close")].forEach(button => button.click())');
     try {
       await call("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
       await evaluate('document.querySelector(".search-menu-toggle").click()');
-      await wait('document.querySelectorAll(".erp-groupby-section .erp-search-menu-item").length === 1');
+      await wait('document.querySelectorAll(".erp-groupby-section .erp-search-menu-item").length === 2');
       assert.equal(await evaluate('document.querySelector(".erp-groupby-section .erp-search-menu-item").textContent'), "Priority");
-      assert.match(await evaluate('document.querySelector(".erp-groupby-section").textContent'), /Created by month \(a date interval is not available yet\)/);
-      assert.deepEqual(await evaluate('[...document.querySelectorAll(".erp-custom-group-select option")].map(option => option.textContent)'), ["Add Custom Group", "Name", "Priority"]);
+      assert.match(await evaluate('document.querySelector(".erp-groupby-section").textContent'), /Created by month/);
+      assert.deepEqual(await evaluate('[...document.querySelectorAll(".erp-custom-group-select option")].map(option => option.textContent)'), ["Add Custom Group", "Name", "Priority", "Year", "Quarter", "Month", "Week", "Day", "Print run"]);
       await evaluate('document.querySelector(".erp-groupby-section .erp-search-menu-item").click()');
       await wait('document.querySelectorAll(".list-group-row").length === 3');
       assert.deepEqual(groupReads.at(-1).groupby, ["priority"]);
@@ -796,6 +807,30 @@ try {
       await evaluate('document.querySelector(".list-group-toggle").focus()');
       await call("Input.dispatchKeyEvent", { type: "keyDown", key: "ArrowLeft", code: "ArrowLeft" });
       await wait('document.querySelector(".list-group-toggle").getAttribute("aria-expanded") === "false" && document.querySelectorAll(".list-table tbody tr[data-id]").length === 0');
+      // A second dimension loads groups under its parent; the state survives a real reload.
+      await evaluate('document.querySelector(".search-menu-toggle").click()');
+      await evaluate('(() => { const s=document.querySelector(".erp-custom-group-select"); s.value="name"; s.dispatchEvent(new Event("change")); })()');
+      await wait('JSON.parse(new URL(location.href).searchParams.get("search_groupby"))?.by?.length === 2');
+      await call("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape" });
+      await evaluate('document.querySelector(".list-group-toggle").click()');
+      await wait('document.querySelectorAll(".list-group-row").length === 4');
+      assert.deepEqual(groupReads.at(-1).groupby, ["name"]);
+      await shot(`${prefix}-grouped-nested-1440`, 1440, 900);
+      // The old page also shows four rows and one open group: a marker that only the old document carries says the reload happened.
+      await evaluate('window.__beforeReload = true');
+      await call("Page.reload");
+      await wait('window.__beforeReload === undefined && document.querySelectorAll(".list-group-row").length === 4 && document.querySelector(".erp-facet-groupBy .erp-facet-remove") !== null');
+      assert.equal(await evaluate('JSON.parse(new URL(location.href).searchParams.get("search_groupby")).open.length'), 1);
+      await evaluate('document.querySelector(".erp-facet-groupBy .erp-facet-remove").click()');
+      await wait('document.querySelector(".list-group-row") === null');
+      await evaluate('document.querySelector(".search-menu-toggle").click()');
+      await wait('document.querySelectorAll(".erp-groupby-section .erp-search-menu-item").length === 2');
+      await evaluate('[...document.querySelectorAll(".erp-groupby-section .erp-search-menu-item")].find(b=>b.textContent.includes("Created by month")).click()');
+      await wait('document.querySelector(".list-group-label")?.textContent === "November 2026"');
+      await call("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape" });
+      await shot(`${prefix}-grouped-month-390`, 390, 844);
+      await evaluate('document.querySelector(".erp-facet-groupBy .erp-facet-remove").click()');
+      await wait('document.querySelector(".list-group-row") === null');
     } finally { priorityValue = savedPriority; }
     await call("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
     await call("Page.reload");
@@ -832,6 +867,24 @@ try {
     assert.equal(await evaluate('document.querySelector("[role=toolbar]").getAttribute("aria-label")'), "Main actions");
     await shot(`${prefix}-pivot-1440`, 1440, 900);
     await phone("plain");
+    // every header is a node (closed or opened), a level is indented 24px; the search's Group By sets the rows.
+    assert.equal(await evaluate('document.querySelector(".pivot-row-total .pivot-row-header").classList.contains("pivot-node-opened")'), true);
+    assert.equal(await evaluate(`${rowButton("Normal")}.closest("th").classList.contains("pivot-node-closed")`), true);
+    await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))'); // the desktop width is applied
+    assert.equal(await evaluate(`getComputedStyle(${rowButton("Normal")}.closest("th")).paddingInlineStart`), "36px", "a row level is indented 24px");
+    await evaluate('document.querySelector(".search-menu-toggle").click()');
+    await wait('document.querySelector(".erp-custom-group-select") !== null');
+    await evaluate('(() => { const select = document.querySelector(".erp-custom-group-select"); select.value = "pub_year"; select.dispatchEvent(new Event("change")); })()');
+    await wait('document.querySelector(".erp-facet-groupBy") !== null');
+    await wait(`[...document.querySelectorAll(".pivot-row-header")].map(cell => cell.textContent.trim()).join("|") === "Total|1974|1980|1951|2005|2006|None"`);
+    assert.deepEqual(pivotReads.at(-1).grouping_sets, [[], ["format"], ["pub_year"], ["pub_year", "format"]]);
+    assert.equal(await evaluate('new URL(location.href).searchParams.get("pivot_rows")'), "pub_year");
+    await shot(`${prefix}-pivot-groupby-1440`, 1440, 900);
+    await evaluate('document.querySelector(".erp-facet-groupBy .erp-facet-remove").click()');
+    await wait(`[...document.querySelectorAll(".pivot-row-header")].map(cell => cell.textContent.trim()).join("|") === "Total|Normal|High|Draft|None"`);
+    assert.equal(await evaluate('new URL(location.href).searchParams.has("pivot_rows")'), false, "the arch's rows leave the address clean");
+    await key("Escape");
+    await wait('document.querySelector(".erp-search-menu-panel").style.display === "none"');
     // Expand Normal by the publication year from the menu: one read, narrowed to the header, and the header keeps focus.
     await evaluate(`${rowButton("Normal")}.click()`);
     await wait('document.querySelector(".pivot-field-menu.open") !== null');
@@ -2009,6 +2062,15 @@ try {
     await shot(`fixture-addons-${width}`,width,height);
     assert.ok(await evaluate('document.documentElement.scrollWidth <= innerWidth'), `addons fit ${width}px`);
   }
+  await evaluate('document.querySelector(".addon-tile").click()');
+  await wait('document.querySelector(".addon-detail") !== null');
+  for (const [width,height] of [[1440,900],[1280,800],[768,1024],[390,1400]]) {
+    await shot(`fixture-addon-detail-${width}`,width,height);
+    assert.ok(await evaluate('document.documentElement.scrollWidth <= innerWidth'), `addon detail fits ${width}px`);
+    assert.equal(await evaluate('document.querySelector(".addon-detail").textContent.includes("a later release")'), false, "no task id on the addon detail page");
+  }
+  await evaluate('document.querySelector(".addon-detail-back").click()');
+  await wait('document.querySelector(".addon-tile") !== null');
   await evaluate('document.querySelector(".addon-info-btn").click()');
   await wait('document.querySelector(".addon-info-dialog")?.open === true');
   assert.equal(await evaluate('document.activeElement.closest(".addon-info-dialog") !== null'), true);

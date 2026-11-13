@@ -192,7 +192,8 @@ async fn a_checkpoint_of_a_deposed_run_is_refused_and_writes_nothing() {
     exec(&h, "UPDATE erp_job SET lease_epoch = lease_epoch + 1").await;
     runner
         .run_claimed(claimed.into_iter().next().unwrap())
-        .await;
+        .await
+        .unwrap();
     assert_eq!(
         cell(
             &h,

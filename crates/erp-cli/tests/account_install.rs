@@ -18,6 +18,15 @@ fn addons_dir() -> PathBuf {
         .join("addons")
 }
 
+async fn strings(tx: &mut erp_sdk::Transaction, sql: &str) -> Vec<String> {
+    tx.query(sql, &[])
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| row.get::<_, String>(0))
+        .collect()
+}
+
 #[tokio::test]
 async fn account_and_analytic_install_on_base_and_product() {
     let db = TestDb::create().await.unwrap();
@@ -76,4 +85,104 @@ async fn account_and_analytic_install_on_base_and_product() {
         assert_eq!(rows.len(), 1, "module row {name}");
         assert_eq!(rows[0].get::<_, String>(0), "installed", "state of {name}");
     }
+    // the chain model's access rows and its declared lock-wait setting. Boxed: the two halves of
+    // this test in one future overflow the default test-thread stack in a debug build.
+    Box::pin(async {
+        let access = client
+            .query(
+                "SELECT coalesce(g.module || '.' || g.name, '-') || '/' || a.operation, \
+                 coalesce(a.generated, false) FROM ir_access a JOIN ir_model m ON m.id = a.model_id \
+                 LEFT JOIN ir_model_data g ON g.model = 'res.groups' AND g.res_id = a.group_id \
+                 WHERE m.model = $1::text ORDER BY 1",
+                &[&erp_addon_account::numbering::CHAIN_MODEL],
+            )
+            .await
+            .unwrap();
+        let permissions: Vec<String> = access
+            .iter()
+            .filter(|r| !r.get::<_, bool>(1))
+            .map(|r| r.get(0))
+            .collect();
+        assert_eq!(permissions, ["base.group_user/r"], "chain permissions");
+        assert_eq!(
+            access.iter().filter(|r| r.get::<_, bool>(1)).count(),
+            1,
+            "the company restriction generated from company_access"
+        );
+        let mut tx = outcome.orm.begin(SUPERUSER_ID).await.unwrap();
+        let wait = erp_addon_account::numbering::LockWait::from_settings(&mut tx)
+            .await
+            .unwrap();
+        assert_eq!(
+            wait.millis(),
+            erp_addon_account::numbering::LOCK_WAIT_DEFAULT_MS
+        );
+        tx.rollback().await.unwrap();
+    })
+    .await;
+
+    let mut tx = outcome.orm.begin(SUPERUSER_ID).await.unwrap();
+
+    // mappings (accounts come from a chart template, roots follow the codes)
+    let tags = strings(
+        &mut tx,
+        "SELECT d.name || '=' || t.name || '/' || t.applicability FROM ir_model_data d \
+         JOIN account_account_tag t ON t.id = d.res_id \
+         WHERE d.module = 'account' AND d.model = 'account.account.tag' ORDER BY d.name",
+    )
+    .await;
+    assert_eq!(
+        tags,
+        [
+            "account_tag_financing=Financing Activities/accounts",
+            "account_tag_investing=Investing & Extraordinary Activities/accounts",
+            "account_tag_operating=Operating Activities/accounts",
+        ]
+    );
+    for table in ["account_account", "account_root", "account_account_code"] {
+        let count = strings(&mut tx, &format!("SELECT count(*)::text FROM {table}")).await;
+        assert_eq!(count, ["0"], "{table} has no default records");
+    }
+
+    // the Accounting > Configuration menus and the three groups are installed
+    let menus = strings(&mut tx, "SELECT name FROM ir_model_data WHERE module = 'account' AND model = 'ir.ui.menu' ORDER BY name").await;
+    assert_eq!(
+        menus,
+        [
+            "menu_account_tag",
+            "menu_action_account_form",
+            "menu_finance",
+            "menu_finance_configuration"
+        ]
+    );
+    let groups = strings(&mut tx, "SELECT name FROM ir_model_data WHERE module = 'account' AND model = 'res.groups' ORDER BY name").await;
+    assert_eq!(
+        groups,
+        [
+            "group_account_manager",
+            "group_account_readonly",
+            "group_account_user"
+        ]
+    );
+
+    let tag = tx.env().records("account.account.tag").unwrap();
+    let master = tag
+        .search(
+            &mut tx,
+            &erp_sdk::Domain::condition("name", erp_sdk::Operator::Eq, "Operating Activities")
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(master.len(), 1);
+    let error = master.unlink(&mut tx).await.unwrap_err();
+    assert!(
+        error.message().contains(
+            "You cannot delete this account tag (Operating Activities), it is used on the chart of account definition."
+        ),
+        "{:?}",
+        error.message()
+    );
+    tx.rollback().await.unwrap();
+    db.cleanup().await.unwrap();
 }

@@ -10,5 +10,11 @@ exact_only = true
 # Data order: security/account_security.xml first, then the default data of each
 # model (data/*.xml), then views and report actions, then menus after the actions they point to, and
 # security/ir.access.csv last. No demo files until the onboarding slice. Tests/manifest_order.rs holds it.
-data = []
+data = [
+    "security/account_security.xml",
+    "data/account_data.xml",
+    "views/account_views.xml",
+    "views/account_menus.xml",
+    "security/ir.access.csv",
+]
 demo = []

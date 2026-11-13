@@ -302,6 +302,7 @@ pub mod test_field_access;
 pub mod test_jobs_fixtures;
 pub mod test_login_selection;
 pub mod test_mixed_constraint;
+pub mod test_numbering;
 pub mod test_o2m_order;
 pub mod test_read_group;
 pub mod test_rel;

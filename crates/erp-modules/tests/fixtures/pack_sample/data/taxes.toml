@@ -1,0 +1,16 @@
+[[record]]
+model = "example.tax"
+key = "vat_std"
+[record.fields]
+name = "Standard rate"
+account = "sales"
+rate = "decimal:10.0 percent"
+factor = "ratio:11/12 factor"
+
+[[record]]
+model = "example.tax"
+key = "vat_reduced"
+[record.fields]
+name = "Reduced rate"
+account = "sales"
+rate = "decimal:5 percent"

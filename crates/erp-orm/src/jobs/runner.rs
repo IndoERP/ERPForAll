@@ -94,8 +94,52 @@ where
 
 pub(crate) type NodeViewFn = Arc<dyn LiveNodes>;
 
+#[derive(Default)]
+enum KindSelection {
+    #[default]
+    All,
+    Maintenance(Vec<&'static JobKindDecl>),
+}
+impl KindSelection {
+    fn admits(&self, decl: &JobKindDecl) -> bool {
+        match self {
+            Self::All => true,
+            Self::Maintenance(kinds) => kinds.iter().any(|k| std::ptr::eq(*k, decl)),
+        }
+    }
+    fn validate(&self) -> Result<()> {
+        let kinds = match self {
+            Self::All => return Ok(()),
+            Self::Maintenance(kinds) => kinds,
+        };
+        if kinds.is_empty() {
+            return Err(Error::programming(
+                "A maintenance runner requires at least one admitted kind.",
+            ));
+        }
+        let linked = super::linked_kinds();
+        for decl in kinds {
+            let registered = linked.iter().any(|k| std::ptr::eq(*k, *decl));
+            if !registered
+                || !matches!(decl.handler, super::HandlerRef::Native(_))
+                || decl.principal != super::PrincipalPolicy::System
+                || decl.timeouts != super::TimeoutClass::Maintenance
+                || decl.isolation != super::KindIsolation::ReadCommitted
+            {
+                return Err(Error::programming(format!(
+                    "Maintenance runner kind '{}' must be an exact registered native System declaration with Maintenance timeouts and ReadCommitted isolation.",
+                    decl.name
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
 pub(crate) struct Inner {
     pub orm: Orm,
+    selection: KindSelection,
+    excluded: Vec<&'static str>,
     pub resolver: Arc<dyn JobPrincipalResolver>,
     pub owner: Uuid,
     pub node: Option<NodeViewFn>,
@@ -107,10 +151,6 @@ pub(crate) struct Inner {
     pub wake: tokio::sync::Notify,
     /// The wake-up of the `erp_jobs` channel through the signal listener, when the ORM has one.
     pub listener_wake: Option<Arc<tokio::sync::Notify>>,
-    /// Registered kinds this runner never claims: the names given to
-    /// [`JobRunnerBuilder::exclude_kinds`] and, with [`JobRunnerBuilder::exclude_elevated`], every
-    /// elevated declaration. The only filter of its kind.
-    pub excluded: Vec<&'static str>,
     #[cfg(feature = "test-faults")]
     pub hooks: Mutex<Option<Arc<dyn RunnerHooks>>>,
 }
@@ -138,6 +178,8 @@ pub struct JobRunnerBuilder {
     owner: Option<Uuid>,
     node: Option<NodeViewFn>,
     process_slots: Option<Arc<Semaphore>>,
+    database_slots: Option<Arc<Semaphore>>,
+    selection: KindSelection,
     excluded: Vec<&'static str>,
     exclude_elevated: bool,
 }
@@ -168,6 +210,8 @@ impl JobRunner {
             owner: None,
             node: None,
             process_slots: None,
+            database_slots: None,
+            selection: KindSelection::All,
             excluded: Vec::new(),
             exclude_elevated: false,
         }
@@ -222,20 +266,22 @@ impl JobRunner {
 
     /// The kinds this binary can run against this database: every registered kind, except step
     /// kinds whose model the registry does not have (an older or partial binary never claims a
-    /// kind it cannot run), and the kinds excluded at build
-    /// ([`JobRunnerBuilder::exclude_kinds`]). This one list feeds every claim statement and the
-    /// next-due query, so an excluded kind is never claimed and so never run by this runner.
+    /// kind it cannot run).
     pub(crate) fn claimable_kinds(&self) -> Vec<&'static JobKindDecl> {
         let registry = self.inner.orm.registry();
         super::linked_kinds()
             .into_iter()
-            .filter(|decl| !self.inner.excluded.contains(&decl.name))
+            .filter(|decl| self.admits_kind(decl))
             .filter(|decl| match decl.handler {
                 super::HandlerRef::Step { model, .. } => registry.model(model).is_some(),
                 super::HandlerRef::Native(_) => true,
             })
             .filter(|decl| !self.at_kind_cap(decl))
             .collect()
+    }
+
+    pub(crate) fn admits_kind(&self, decl: &JobKindDecl) -> bool {
+        self.inner.selection.admits(decl) && !self.inner.excluded.contains(&decl.name)
     }
 
     /// Whether this process already runs its share of a kind's `max_concurrency`.
@@ -418,10 +464,17 @@ impl JobRunner {
     #[doc(hidden)]
     pub async fn reap(&self, batch: u32) -> Result<ReapReport> {
         let settings = self.settings();
+        let (only, excluded): (Option<Vec<&str>>, Vec<&str>) = match &self.inner.selection {
+            KindSelection::All => (None, self.inner.excluded.clone()),
+            KindSelection::Maintenance(kinds) => (
+                Some(kinds.iter().map(|k| k.name).collect()),
+                self.inner.excluded.clone(),
+            ),
+        };
         let limit = i64::from(batch.clamp(1, 1_000));
         let mut tx = self.inner.orm.begin_opts(claim::claim_options()?).await?;
         let outcome = async {
-            let expired = tx.query(REAP_SELECT_SQL, &[&limit]).await?;
+            let expired = tx.query(REAP_SELECT_SQL, &[&limit, &only, &excluded]).await?;
             if expired.is_empty() {
                 return Ok(ReapReport::default());
             }
@@ -535,6 +588,7 @@ pub(crate) fn default_backoff(settings: &JobSettings) -> Backoff {
 const REAP_SELECT_SQL: &str = "\
 SELECT id, kind, attempts, max_attempts FROM erp_job
  WHERE state = 'running' AND lease_until < clock_timestamp()
+   AND ($2::text[] IS NULL OR kind=ANY($2)) AND NOT(kind=ANY($3::text[]))
  ORDER BY lease_until
  FOR UPDATE SKIP LOCKED
  LIMIT $1";
@@ -580,22 +634,32 @@ impl JobRunnerBuilder {
         self
     }
 
-    /// Never claim the jobs of `kinds` (the ordinary runner works with the runtime
-    /// ORM and excludes the elevated attachment maintenance kinds, which only an isolated
-    /// maintenance runner may run). An excluded job stays `ready` with its attempts untouched.
-    /// Nothing is excluded by default: the composition that builds the runner opts in. Calling
-    /// it again adds to the list. See [`exclude_elevated`](Self::exclude_elevated) to exclude by
-    /// the declarations' flag instead of by name. The reaper is not affected (it returns expired leases of any
-    /// kind and runs nothing).
+    /// Share the same database slot pool between ordinary and maintenance runners of one
+    /// database. The composition root supplies one pool sized to `jobs.workers_per_db` and
+    /// also shares `process_slots`; otherwise each runner has its own database pool.
+    pub fn database_slots(mut self, slots: Arc<Semaphore>) -> Self {
+        self.database_slots = Some(slots);
+        self
+    }
+
+    /// Admit only these exact registered native System maintenance declarations. Validation
+    /// happens at build; an empty list, unregistered copy, Step, caller-principal, default
+    /// timeout or non-ReadCommitted declaration is refused. Selection applies to claiming,
+    /// next-due, reaping and execution. The trusted composition root must supply only its fixed
+    /// built-in set; payloads and addon data must never choose this set.
+    pub fn maintenance_kinds(mut self, kinds: &[&'static JobKindDecl]) -> Self {
+        self.selection = KindSelection::Maintenance(kinds.to_vec());
+        self
+    }
+
+    /// Exclude registered names from claiming, execution and reaping. Calls are additive.
+    /// Unregistered names are refused at build, preserving the existing public contract.
     pub fn exclude_kinds(mut self, kinds: impl IntoIterator<Item = &'static str>) -> Self {
         self.excluded.extend(kinds);
         self
     }
 
-    /// Never claim an elevated kind (`JobKindDecl::elevated`): at build, the name of
-    /// every registered kind whose declaration is elevated joins the excluded list. Like
-    /// [`exclude_kinds`](Self::exclude_kinds), the default is to exclude nothing; the composition
-    /// of an ordinary (non-maintenance) runner opts in.
+    /// Exclude every registered elevated kind from this ordinary runner.
     pub fn exclude_elevated(mut self) -> Self {
         self.exclude_elevated = true;
         self
@@ -605,9 +669,10 @@ impl JobRunnerBuilder {
     ///
     /// # Errors
     ///
-    /// `Programming` naming a kind given to [`exclude_kinds`](Self::exclude_kinds) that is not
-    /// registered in this binary; `Internal` when no entropy is available for the owner identity.
+    /// `Internal` when no entropy is available for the owner identity; `Programming` when
+    /// selected kind declarations do not satisfy the execution boundary.
     pub fn build(mut self) -> Result<JobRunner> {
+        self.selection.validate()?;
         let registered = super::enqueue::kind_map();
         if let Some(unknown) = self
             .excluded
@@ -615,8 +680,7 @@ impl JobRunnerBuilder {
             .find(|kind| !registered.contains_key(**kind))
         {
             return Err(Error::programming(format!(
-                "JobRunner::exclude_kinds names the job kind '{unknown}', which is not registered \
-                 in this binary"
+                "JobRunner::exclude_kinds names the job kind '{unknown}', which is not registered in this binary"
             )));
         }
         if self.exclude_elevated {
@@ -625,6 +689,13 @@ impl JobRunnerBuilder {
                     self.excluded.push(decl.name);
                 }
             }
+        }
+        if let KindSelection::Maintenance(kinds) = &self.selection
+            && kinds.iter().any(|decl| self.excluded.contains(&decl.name))
+        {
+            return Err(Error::programming(
+                "Maintenance runner inclusion conflicts with excluded kinds.",
+            ));
         }
         let owner = match self.owner {
             Some(owner) => owner,
@@ -637,7 +708,9 @@ impl JobRunnerBuilder {
         let process_slots = self
             .process_slots
             .unwrap_or_else(|| Arc::new(Semaphore::new(settings.workers() as usize)));
-        let db_slots = Arc::new(Semaphore::new(settings.workers_per_db() as usize));
+        let db_slots = self
+            .database_slots
+            .unwrap_or_else(|| Arc::new(Semaphore::new(settings.workers_per_db() as usize)));
         let listener_wake = match self.orm.signal() {
             Some(signal) => Some(signal.subscribe(&crate::signal::NotifyChannel::new(
                 super::wake::JOBS_CHANNEL,
@@ -647,6 +720,8 @@ impl JobRunnerBuilder {
         let orm_id = self.orm.id();
         let inner = Arc::new(Inner {
             orm: self.orm,
+            selection: self.selection,
+            excluded: self.excluded,
             resolver: self.resolver,
             owner,
             node: self.node,
@@ -657,7 +732,6 @@ impl JobRunnerBuilder {
             counters: Counters::default(),
             wake: tokio::sync::Notify::new(),
             listener_wake,
-            excluded: self.excluded,
             #[cfg(feature = "test-faults")]
             hooks: Mutex::new(None),
         });

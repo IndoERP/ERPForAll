@@ -5,7 +5,7 @@ Upstream: https://github.com/lucide-icons/lucide, release **1.61.0**, commit
 Official usage/license: https://lucide.dev/guide/lucide and https://lucide.dev/license.
 
 Only the SVGs the client uses are included: its controls plus a curated set of business icons that
-app menus pick from (155 in all). `UPSTREAM.toml` pins every pristine
+app menus pick from (157 in all). `UPSTREAM.toml` pins every pristine
 SVG and the complete upstream LICENSE by SHA-256. The existing vendor checker
 retrieves those exact commit URLs and verifies bytes; no full icon package is shipped.
 The license includes Lucide ISC and the applicable Feather MIT attribution.

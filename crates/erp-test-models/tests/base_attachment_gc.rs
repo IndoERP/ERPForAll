@@ -60,7 +60,7 @@ async fn blobs(f: &Fixture) -> i64 {
 }
 
 async fn phase_a(f: &Fixture) -> (u64, u64) {
-    let mut tx = f.h.begin().await.unwrap();
+    let mut tx = rc(f).await;
     let r = mark_unreferenced(&mut tx, 100).await.unwrap();
     tx.commit().await.unwrap();
     drop(tx);
@@ -346,7 +346,7 @@ async fn reconcile_queues_unreferenced_blobs_that_the_triggers_missed() {
     );
     tx.commit().await.unwrap();
     drop(tx);
-    let mut tx = f.h.begin().await.unwrap();
+    let mut tx = rc(&f).await;
     let env = tx.env();
     let report = reconcile_chunk(&mut tx, &env, 0, 100).await.unwrap();
     tx.commit().await.unwrap();
@@ -420,14 +420,14 @@ async fn reconcile_reports_a_busy_node_as_busy_not_as_missing_content() {
     tx.commit().await.unwrap();
     drop(tx);
     let held = f.rt.try_stream_permit().unwrap();
-    let mut tx = f.h.begin().await.unwrap();
+    let mut tx = rc(&f).await;
     let env = tx.env();
     let err = reconcile_chunk(&mut tx, &env, 0, 100).await.unwrap_err();
     assert_eq!(err.kind(), ErrorKind::Lock, "{err:?}");
     let _ = tx.rollback().await;
     drop(tx);
     drop(held);
-    let mut tx = f.h.begin().await.unwrap();
+    let mut tx = rc(&f).await;
     let env = tx.env();
     let report = reconcile_chunk(&mut tx, &env, 0, 100).await.unwrap();
     tx.commit().await.unwrap();
@@ -916,4 +916,42 @@ fn the_elevated_declarations_are_exactly_the_elevated_kinds() {
     let mut listed = ELEVATED_KINDS.to_vec();
     listed.sort_unstable();
     assert_eq!(flagged, listed);
+}
+
+#[tokio::test]
+async fn usage_compactor_has_one_schedule_and_is_excluded_from_ordinary_execution() {
+    let f = fixture(limits()).await;
+    attachments::gc::ensure_schedules(f.h.orm()).await.unwrap();
+    attachments::gc::ensure_schedules(f.h.orm()).await.unwrap();
+    assert_eq!(scalar(&f.h,"SELECT count(*) FROM erp_job WHERE kind='base.attachment_usage_compact' AND state<>'dead'").await,1);
+    assert!(attachments::gc::ELEVATED_KINDS.contains(&"base.attachment_usage_compact"));
+    f.h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn metadata_maintenance_refuses_repeatable_read_before_mutation() {
+    let f = fixture(limits()).await;
+    for reconcile in [false, true] {
+        let mut tx = f.h.begin().await.unwrap();
+        let env = tx.env();
+        let err = if reconcile {
+            reconcile_chunk(&mut tx, &env, 0, 10)
+                .await
+                .map(|_| ())
+                .unwrap_err()
+        } else {
+            mark_unreferenced(&mut tx, 10)
+                .await
+                .map(|_| ())
+                .unwrap_err()
+        };
+        assert_eq!(err.kind(), ErrorKind::Programming);
+        assert_eq!(
+            err.message(),
+            "The garbage collection sweep runs in a READ COMMITTED transaction (its job kinds do): a REPEATABLE READ snapshot predates the hold lock and could miss a hold."
+        );
+        tx.rollback().await.unwrap();
+        drop(tx);
+    }
+    f.h.cleanup().await.unwrap();
 }

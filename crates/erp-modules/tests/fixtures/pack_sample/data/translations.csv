@@ -1,0 +1,4 @@
+model,key,field,lang,text
+example.account,cash,name,fr,Caisse
+example.account,cash,name,pt_BR,Caixa
+example.account,misc,name,fr,Divers

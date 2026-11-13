@@ -292,3 +292,96 @@ fn storage_capacity_refuses_a_second_row_for_one_product() {
         db.cleanup().await.unwrap();
     });
 }
+
+/// `addons/stock/tests/schema.rs`)
+///
+/// A capacity row of a category of one company refuses a product restricted to another company and
+/// accepts one of its own (S2).
+#[test]
+fn storage_capacity_refuses_a_product_of_another_company() {
+    run(async {
+        let db = TestDb::create().await.unwrap();
+        let orm = install(&db).await;
+        let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+        let rows = tx
+            .query(
+                "SELECT id, currency_id FROM res_company ORDER BY id LIMIT 1",
+                &[],
+            )
+            .await
+            .unwrap();
+        let a: i64 = rows[0].get(0);
+        let currency: i64 = rows[0].get(1);
+        let b = tx
+            .env()
+            .records("res.company")
+            .unwrap()
+            .create(
+                &mut tx,
+                vec![
+                    RawVals::new()
+                        .set_cell("name", Cell::Str("Other".into()))
+                        .set_cell("currency_id", Cell::Id(currency)),
+                ],
+            )
+            .await
+            .unwrap()
+            .ids()[0];
+        let category = tx
+            .env()
+            .records("stock.storage.category")
+            .unwrap()
+            .create(
+                &mut tx,
+                vec![
+                    RawVals::new()
+                        .set_cell("name", Cell::Str("Shelves A".into()))
+                        .set_cell("company_id", Cell::Id(a)),
+                ],
+            )
+            .await
+            .unwrap()
+            .ids()[0];
+        let mut products = Vec::new();
+        for (company, name) in [(a, "Bolt A"), (b, "Bolt B")] {
+            products.push(
+                tx.env()
+                    .records("product.product")
+                    .unwrap()
+                    .create(
+                        &mut tx,
+                        vec![
+                            RawVals::new()
+                                .set_cell("name", Cell::Str(name.into()))
+                                .set_cell("company_id", Cell::Id(company)),
+                        ],
+                    )
+                    .await
+                    .unwrap()
+                    .ids()[0],
+            );
+        }
+        let capacity = move |product: i64| {
+            RawVals::new()
+                .set_cell("storage_category_id", Cell::Id(category))
+                .set_cell("product_id", Cell::Id(product))
+                .set_cell("quantity", Cell::Decimal(Decimal::from(3)))
+        };
+        let capacities = tx.env().records("stock.storage.category.capacity").unwrap();
+        let foreign = products[1];
+        let refused = capacities.clone();
+        let error = tx
+            .savepoint(async move |tx| refused.create(tx, vec![capacity(foreign)]).await)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::UserError, "{error:?}");
+        assert!(error.message().contains("company"), "{}", error.message());
+        capacities
+            .create(&mut tx, vec![capacity(products[0])])
+            .await
+            .unwrap();
+        tx.rollback().await.unwrap();
+        drop(tx);
+        db.cleanup().await.unwrap();
+    });
+}

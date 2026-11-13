@@ -169,10 +169,17 @@ fn retry_delay(inner: &Inner, claimed: &ClaimedJob, attempt: u32) -> Result<Dura
 
 impl JobRunner {
     /// Run one claimed job to the end of its run: the handler, then the transition that takes the
-    /// job out of `running`. Never panics and never returns an error: what cannot be written is
-    /// logged and left to the lease (the reaper returns the job).
+    /// job out of `running`. Settlement failures are logged and left to the lease.
+    ///
+    /// # Errors
+    /// `Access` before any execution or settlement if this runner does not admit the kind.
     #[doc(hidden)]
-    pub async fn run_claimed(&self, claimed: ClaimedJob) {
+    pub async fn run_claimed(&self, claimed: ClaimedJob) -> Result<()> {
+        if !self.admits_kind(claimed.decl) {
+            return Err(Error::access(
+                "The claimed job kind is not admitted by this runner.",
+            ));
+        }
         let inner = Arc::clone(&self.inner);
         let _running = RunningGuard::new(Arc::clone(&inner), claimed.decl.name);
         let settings = inner.orm.job_settings();
@@ -188,7 +195,7 @@ impl JobRunner {
                 error: None,
             };
             self.settle(&claimed, release).await;
-            return;
+            return Ok(());
         }
         let ctx = match JobContext::new(Arc::clone(&inner), claimed.clone()) {
             Ok(ctx) => ctx,
@@ -203,7 +210,7 @@ impl JobRunner {
                     },
                 )
                 .await;
-                return;
+                return Ok(());
             }
         };
         let mut task: JoinHandle<_> = tokio::spawn(drive(ctx));
@@ -314,6 +321,7 @@ impl JobRunner {
             }
             Err(error) => self.fail(&claimed, error, &state).await,
         }
+        Ok(())
     }
 
     /// Apply a transition; a lost lease is counted, not an error.
@@ -513,11 +521,16 @@ impl JobRunner {
             let runner = self.clone();
             let permits = self.permits()?;
             runs.spawn(async move {
-                runner.run_claimed(job).await;
+                let result = runner.run_claimed(job).await;
                 drop(permits);
+                result
             });
         }
-        while runs.join_next().await.is_some() {}
+        while let Some(result) = runs.join_next().await {
+            result.map_err(|error| {
+                Error::internal("A claimed job task ended unexpectedly.").with_source(error)
+            })??;
+        }
         Ok(TickReport {
             claimed: count,
             reaped,
@@ -555,7 +568,11 @@ impl JobRunner {
 
     async fn run_loop(self, mut stop: watch::Receiver<bool>) {
         let mut running: JoinSet<()> = JoinSet::new();
-        if let Err(error) = super::retention::ensure_core_schedules(&self.inner.orm).await {
+        // An isolated owner runner cannot create or manipulate schedules outside its fixed set.
+        if (self.admits_kind(&super::retention::history_retention_decl())
+            || self.admits_kind(&super::retention::dead_expiry_decl()))
+            && let Err(error) = super::retention::ensure_core_schedules(&self.inner.orm).await
+        {
             tracing::error!(target: "erp::jobs", error = %error, "the core job schedules could not be ensured; retention will not run until the next start");
         }
         // one more claim a notify interval after a wake-up covers the hints that were suppressed
@@ -587,7 +604,9 @@ impl JobRunner {
                                     Ok(permits) => {
                                         let runner = self.clone();
                                         running.spawn(async move {
-                                            runner.run_claimed(job).await;
+                                            if let Err(error) = runner.run_claimed(job).await {
+                                                tracing::error!(target: "erp::jobs", error = %error, "claimed job refused by runner boundary; lease retained");
+                                            }
                                             drop(permits);
                                         });
                                     }

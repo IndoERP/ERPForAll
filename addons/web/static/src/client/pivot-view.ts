@@ -187,7 +187,8 @@ export function mountPivot(options: PivotViewOptions): PivotView {
     [...root.querySelectorAll<HTMLElement>("[data-pivot-header]")].find(node => node.dataset["pivotHeader"] === key)?.focus();
   };
 
-  const headerButton = (axis: "row" | "col", header: { path: string[]; label: string; open: boolean }): HTMLElement => {
+  /** A header is a node (reference `pivot_renderer.xml`): the icon says closed or opened, the whole cell is the target, the button inside is what the keyboard and a screen reader use. */
+  const headerButton = (axis: "row" | "col", header: { path: string[]; label: string; open: boolean }, cell: HTMLElement): HTMLElement => {
     const key = headerKey(axis, header.path);
     const next = model.levelAt(axis, header.path.length);
     const canExpand = next !== undefined || model.config.groupable.size > 0;
@@ -201,7 +202,12 @@ export function mountPivot(options: PivotViewOptions): PivotView {
     if (!header.path.length) node.setAttribute("aria-label", `Total, ${axis === "row" ? "rows" : "columns"}${header.open && next ? ` grouped by ${next.label}` : ""}`);
     const needsMenu = !header.open && next === undefined;
     if (needsMenu) node.setAttribute("aria-haspopup", "menu");
-    node.append(icon("chevron-right"), el("span", label, "pivot-toggle-label"));
+    node.title = label;
+    // The depth is only padding for the eye: say it in words too.
+    if (header.path.length) node.setAttribute("aria-description", `${axis === "row" ? "Row" : "Column"} level ${header.path.length}`);
+    node.append(icon(header.open ? "square-minus" : "square-plus"), el("span", label, "pivot-toggle-label"));
+    cell.classList.add("pivot-node", header.open ? "pivot-node-opened" : "pivot-node-closed");
+    cell.addEventListener("click", event => { if (!node.contains(event.target as Node)) node.click(); });
     const activate = (): void => {
       if (header.open) act(() => model.collapse(axis, header.path), key);
       else if (next) act(() => model.expand(axis, header.path), key);
@@ -241,7 +247,7 @@ export function mountPivot(options: PivotViewOptions): PivotView {
       if (depth === 0) tr.append(corner);
       for (const header of cells) {
         const cell = th(`pivot-col-header${header.path.length ? "" : " pivot-total"}`, "col", { colSpan: header.span * m, rowSpan: header.rowSpan });
-        cell.append(headerButton("col", header));
+        cell.append(headerButton("col", header, cell));
         tr.append(cell);
       }
       if (depth === 0 && totalColumn) {
@@ -280,7 +286,7 @@ export function mountPivot(options: PivotViewOptions): PivotView {
       const tr = el("tr", undefined, row.path.length ? "pivot-row" : "pivot-row pivot-row-total");
       const header = th(`pivot-row-header${row.path.length ? "" : " pivot-total"}`, "row");
       header.style.setProperty("--pivot-depth", String(row.depth));
-      header.append(headerButton("row", row));
+      header.append(headerButton("row", row, header));
       tr.append(header);
       columns.forEach((col, index) => {
         const isTotalColumn = totalColumn && index === columns.length - 1;

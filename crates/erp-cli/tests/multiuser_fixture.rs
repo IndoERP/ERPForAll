@@ -244,3 +244,70 @@ fn setup_and_body_panics_keep_the_failure_and_cleanup_owned_resources() {
         probe.lock().unwrap().take().unwrap().assert_removed();
     }
 }
+
+#[test]
+fn boundary_subjects_are_ordinary_and_can_use_an_independent_process() {
+    use multiuser_fixture::UserSpec;
+    run(|fixture| {
+        let a = fixture.user(Subject::A).company;
+        let b = fixture.user(Subject::B).company;
+        let user = fixture.provision(UserSpec {
+            login: "boundary-multi",
+            company: a,
+            companies: vec![a, b],
+            groups: vec![fixture.group("group_user")],
+        });
+        assert_ne!(user.id, fixture.user(Subject::A).id);
+        assert_eq!(user.companies, vec![a, b]);
+        let manager_group = fixture.xmlid("product", "group_product_manager");
+        let manager = fixture.provision(UserSpec {
+            login: "boundary-manager",
+            company: a,
+            companies: vec![a],
+            groups: vec![manager_group],
+        });
+        let groups = success(&fixture.rpc(
+            Subject::Admin,
+            "res.users",
+            "read",
+            json!({
+                "ids":[manager.id], "fields":["all_group_ids"]
+            }),
+        ));
+        let groups = groups[0]["all_group_ids"].as_array().unwrap();
+        assert!(groups.contains(&json!(manager_group)));
+        assert!(!groups.contains(&json!(fixture.group("group_system"))));
+        let mut peer = fixture.native.peer();
+        for port in [fixture.native.port, peer.port] {
+            let row = success(&user.rpc_on(
+                port,
+                "res.users",
+                "read",
+                json!({
+                    "ids":[user.id], "fields":["id", "login"]
+                }),
+            ));
+            assert_eq!(row[0]["id"], user.id);
+            assert_eq!(row[0]["login"], "boundary-multi");
+            let row = success(&fixture.rpc_on(
+                port,
+                Subject::A,
+                "res.users",
+                "read",
+                json!({
+                    "ids":[fixture.user(Subject::A).id], "fields":["id"]
+                }),
+            ));
+            assert_eq!(row[0]["id"], fixture.user(Subject::A).id);
+        }
+        peer.server.stop();
+        success(&user.rpc_on(
+            fixture.native.port,
+            "res.users",
+            "read",
+            json!({
+                "ids":[user.id], "fields":["id"]
+            }),
+        ));
+    });
+}

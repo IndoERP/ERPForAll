@@ -23,9 +23,11 @@ pub mod recovery;
 mod runtime;
 pub mod schema;
 mod service;
+pub(crate) mod settings;
 mod topology;
 mod types;
 mod upload;
+mod upload_reader;
 
 pub use model::IrAttachment;
 pub use pending::{PendingLimitExceeded, create_pending};

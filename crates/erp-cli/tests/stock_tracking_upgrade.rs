@@ -6,7 +6,8 @@
 //! These are current-schema lifecycle fixtures, NOT previous-binary evidence. Each installs the
 //! current `stock`, then drops the five tracking tables (`stock_serial_position`, `stock_quant`,
 //! `stock_lot_name_scope`, `stock_lot`, `stock_package`) to stand in for a database that had stock
-//! before. Unlike such a database it keeps the tracking models' `ir_model`,
+//! before, after the three move line tables that reference
+//! them (such a database had none of those either). Unlike such a database it keeps the tracking models' `ir_model`,
 //! field, access and `ir_model_data` rows, which the earlier stock never wrote. A higher manifest
 //! version is presented by rewinding the installed version marker (`latest_version`) below the
 //! manifest's, not by a second manifest: the engine compares only those two values. A changed
@@ -28,8 +29,12 @@ use erp_orm::Context;
 use erp_sdk::ErrorKind;
 use erp_testkit::TestDb;
 
-/// The tracking tables, dropped in an order their foreign keys allow.
-const TRACKING_TABLES: [&str; 5] = [
+/// The tracking tables and the move line tables that reference them, dropped in an order their
+/// foreign keys allow.
+const TRACKING_TABLES: [&str; 8] = [
+    "stock_move_line_correction",
+    "stock_move_line_serial",
+    "stock_move_line",
     "stock_serial_position",
     "stock_quant",
     "stock_lot_name_scope",

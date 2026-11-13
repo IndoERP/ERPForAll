@@ -7,3 +7,6 @@ erp_sdk::addon!(
     depends = ["base", "product", "analytic"],
     exact_only = true
 );
+
+pub mod ledger;
+pub mod numbering;

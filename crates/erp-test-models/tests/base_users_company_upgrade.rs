@@ -101,7 +101,7 @@ fn refusal(ids: &str, companies: usize) -> String {
 }
 
 #[tokio::test]
-async fn upgrade_fills_membership_and_the_default_from_it() {
+async fn upgrade_fills_defaults_without_widening_memberships() {
     let h = harness().await;
     let mut tx = h.begin().await.unwrap();
     let usd = currency(&mut tx).await;
@@ -111,9 +111,9 @@ async fn upgrade_fills_membership_and_the_default_from_it() {
     // R1a: a default company that is not among the allowed ones: the user takes its lowest-id
     // active allowed company and gets no new row (a migration never widens access)
     let r1 = old_user(&mut tx, "r1", true, Some(third), &[first, archived]).await;
-    // R1b: no active allowed company (only an archived one): the default company is added
-    let r1_archived = old_user(&mut tx, "r1_archived", true, Some(first), &[archived]).await;
-    // R1b again: no allowed company at all, and an inactive user is filled too
+    // R1b: inactive users without an active allowed company stay unchanged
+    let r1_archived = old_user(&mut tx, "r1_archived", false, Some(first), &[archived]).await;
+    // R1b again: no allowed company at all
     let r1_inactive = old_user(&mut tx, "r1_inactive", false, Some(first), &[]).await;
     // R2: no default, allowed companies: the lowest-id active one among them
     let r2 = old_user(&mut tx, "r2", true, None, &[third, archived, first]).await;
@@ -141,18 +141,7 @@ async fn upgrade_fills_membership_and_the_default_from_it() {
     assert_eq!(of(&after, right), Some(first));
     assert_eq!(of(&after, superuser), None);
     let rows_after = memberships(&mut tx).await;
-    // only R1b added rows: the default company of each of its users; R1a added none
-    let mut added: Vec<(i64, i64)> = rows_after
-        .iter()
-        .filter(|row| !rows_before.contains(row))
-        .copied()
-        .collect();
-    added.sort_unstable();
-    let mut expected = vec![(r1_archived, first), (r1_inactive, first)];
-    expected.sort_unstable();
-    assert_eq!(added, expected);
-    assert!(rows_before.iter().all(|row| rows_after.contains(row)));
-    assert!(rows_after.iter().all(|row| row.0 != superuser));
+    assert_eq!(rows_after, rows_before);
 
     // the ORM reads the new values, not a cached old one
     let read = users_support::records(&tx, "res.users", &[r1, r2])
@@ -205,7 +194,7 @@ async fn upgrade_refuses_unassignable_active_users() {
     let first = company(&mut tx, "First", usd, true).await;
     let archived = company(&mut tx, "Archived", usd, false).await;
     // fillable users are in the same database: nothing of them is written when it refuses
-    let fillable = old_user(&mut tx, "fillable", true, Some(first), &[]).await;
+    let fillable = old_user(&mut tx, "fillable", true, None, &[first]).await;
     let none = old_user(&mut tx, "none", true, None, &[]).await;
     let only_archived = old_user(&mut tx, "only_archived", true, None, &[archived]).await;
     // inactive users never refuse
@@ -221,8 +210,124 @@ async fn upgrade_refuses_unassignable_active_users() {
     // nothing was written
     assert_eq!(defaults(&mut tx).await, before.0);
     assert_eq!(memberships(&mut tx).await, before.1);
-    assert!(!before.1.contains(&(fillable, first)));
+    assert_eq!(of(&before.0, fillable), None);
     drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+fn r1b_refusal(ids: &str) -> String {
+    format!(
+        "base 1.10 refused: active users {ids} have a default company outside their allowed \
+         companies and no active allowed company. Set each user's default and allowed companies \
+         in Settings > Users with the current release, then upgrade again."
+    )
+}
+
+#[tokio::test]
+async fn upgrade_refuses_active_r1b_before_filling_other_users() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    let usd = currency(&mut tx).await;
+    let first = company(&mut tx, "First", usd, true).await;
+    let archived = company(&mut tx, "Archived", usd, false).await;
+    let third = company(&mut tx, "Third", usd, true).await;
+    let empty = old_user(&mut tx, "empty", true, Some(first), &[]).await;
+    let archived_only = old_user(&mut tx, "archived_only", true, Some(first), &[archived]).await;
+    old_user(&mut tx, "r1a", true, Some(third), &[first]).await;
+    old_user(&mut tx, "r2", true, None, &[first]).await;
+    let before = (defaults(&mut tx).await, memberships(&mut tx).await);
+
+    let error = assign_user_companies(&mut tx).await.unwrap_err();
+    assert_error(
+        &error,
+        ErrorKind::Validation,
+        &r1b_refusal(&format!("{empty}, {archived_only}")),
+    );
+    assert_eq!(defaults(&mut tx).await, before.0);
+    assert_eq!(memberships(&mut tx).await, before.1);
+    tx.rollback().await.unwrap();
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn upgrade_refuses_active_r1b_with_the_only_company() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    let usd = currency(&mut tx).await;
+    let only = company(&mut tx, "Only", usd, true).await;
+    let user = old_user(&mut tx, "outside", true, Some(only), &[]).await;
+    old_user(&mut tx, "r3a", true, None, &[]).await;
+    let before = (defaults(&mut tx).await, memberships(&mut tx).await);
+
+    let error = assign_user_companies(&mut tx).await.unwrap_err();
+    assert_error(
+        &error,
+        ErrorKind::Validation,
+        &r1b_refusal(&user.to_string()),
+    );
+    assert_eq!(defaults(&mut tx).await, before.0);
+    assert_eq!(memberships(&mut tx).await, before.1);
+    tx.rollback().await.unwrap();
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn upgrade_preserves_inactive_r1b_and_allowed_archived_defaults() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    let usd = currency(&mut tx).await;
+    let first = company(&mut tx, "First", usd, true).await;
+    let archived = company(&mut tx, "Archived", usd, false).await;
+    old_user(&mut tx, "inactive_empty", false, Some(first), &[]).await;
+    old_user(
+        &mut tx,
+        "inactive_archived",
+        false,
+        Some(first),
+        &[archived],
+    )
+    .await;
+    old_user(
+        &mut tx,
+        "allowed_archived",
+        true,
+        Some(archived),
+        &[archived],
+    )
+    .await;
+    let before = (defaults(&mut tx).await, memberships(&mut tx).await);
+
+    for _ in 0..2 {
+        assign_user_companies(&mut tx).await.unwrap();
+        assert_eq!(defaults(&mut tx).await, before.0);
+        assert_eq!(memberships(&mut tx).await, before.1);
+    }
+    tx.rollback().await.unwrap();
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn upgrade_bounds_r1b_refusal_ids() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    let usd = currency(&mut tx).await;
+    let only = company(&mut tx, "Only", usd, true).await;
+    let mut ids = Vec::new();
+    for n in 0..51 {
+        ids.push(old_user(&mut tx, &format!("outside_{n}"), true, Some(only), &[]).await);
+    }
+    let before = (defaults(&mut tx).await, memberships(&mut tx).await);
+    let mut listed = ids[..50].iter().map(i64::to_string).collect::<Vec<_>>();
+    listed.push("and 1 more".to_owned());
+    let error = assign_user_companies(&mut tx).await.unwrap_err();
+    assert_error(
+        &error,
+        ErrorKind::Validation,
+        &r1b_refusal(&listed.join(", ")),
+    );
+    assert_eq!(defaults(&mut tx).await, before.0);
+    assert_eq!(memberships(&mut tx).await, before.1);
+    tx.rollback().await.unwrap();
     h.cleanup().await.unwrap();
 }
 

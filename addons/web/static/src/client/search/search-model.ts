@@ -1,7 +1,9 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import type { Field } from "../metadata.js";
 import { ClientError } from "../transport.js";
-import type { AutocompleteItem, FavoriteItem, FilterItem, GroupableField, GroupByCatalogue, GroupByItem, GroupByState, SearchFacet, SearchModelOptions } from "./types.js";
+import type { AutocompleteItem, FavoriteItem, FilterItem, GroupableField, GroupByCatalogue, GroupByItem, SearchFacet, SearchModelOptions } from "./types.js";
+import { decodeListState, type ListGroupState } from "../list-group-state.js";
+import { GROUP_INTERVALS } from "./types.js";
 
 const MAX_PARAM = 2048;
 const MAX_ITEMS = 32;
@@ -42,8 +44,8 @@ function orDomains(domains: unknown[][]): unknown[] {
 }
 
 /** Bounded state for the human client's currently supported search subset.
- * Grouping by one field (declared item or custom field) is supported; nested grouping, a grouping kept in the
- * address, favorites and general search-arch interpretation remain milestone work.
+ * Owners enable ordered grouping and temporal intervals; lists also persist grouping in the address.
+ * Favorites and general search-arch interpretation remain milestone work.
  */
 export class SearchModel {
   readonly model: string;
@@ -60,10 +62,11 @@ export class SearchModel {
   private deferredNotification = false;
   private readonly nameSearch: SearchModelOptions["nameSearch"];
   private readonly groupByLoader: SearchModelOptions["groupBy"];
+  private readonly multipleGroupBy: boolean;
+  private readonly maxGroupLevels: number;
+  private listState: ListGroupState | undefined;
   private catalogue: GroupByCatalogue | undefined;
   private catalogueLoad: Promise<void> | undefined;
-  /** The field of a grouping restored from memory, known before the catalogue is loaded. */
-  private restoredField: GroupableField | undefined;
   /** Names of the related records picked from suggestions, keyed `field:id`, for their facets. */
   private readonly recordNames = new Map<string, string>();
 
@@ -76,6 +79,8 @@ export class SearchModel {
     this.initialDomain = options.initialDomain ?? [];
     this.nameSearch = options.nameSearch;
     this.groupByLoader = options.groupBy;
+    this.multipleGroupBy = options.groupBy?.multiple === true;
+    this.maxGroupLevels = options.groupBy?.maxLevels ?? 6;
     if (this.fields.get("active")?.kind === "boolean") {
       this.filters.push(
         { id: "filter_active", description: "Active", domain: [["active", "=", true]], isActive: false, groupNumber: 1 },
@@ -125,6 +130,8 @@ export class SearchModel {
   }
   getFacets(): SearchFacet[] { return structuredClone(this.facets); }
   getFilters(): FilterItem[] { this.refreshDates(); return structuredClone(this.filters); }
+  /** True when the owner groups by several fields and by date intervals (the pivot view). */
+  hasGroupByIntervals(): boolean { return this.multipleGroupBy; }
   /** True when this list can be grouped (the owner supplied a catalogue loader). */
   hasGroupBy(): boolean { return this.groupByLoader !== undefined; }
   /** True once the Group By catalogue is loaded; `getGroupBys` lists the declared items only from then on. */
@@ -143,58 +150,69 @@ export class SearchModel {
   private activeGroupBy(): SearchFacet | undefined { return this.facets.find(f => f.type === "groupBy"); }
   /** The search view's declared group-by items, then the active custom one, each with its active state. */
   getGroupBys(): GroupByItem[] {
-    const active = this.activeGroupBy();
-    const result: GroupByItem[] = (this.catalogue?.items ?? []).map(item => ({ ...item, isActive: active?.groupById === item.id }));
-    if (active?.groupById?.startsWith("custom:")) result.push({ id: active.groupById, description: active.values[0]!, fieldName: active.groupByField!, isActive: true, custom: true });
+    const active = this.activeGroupBy(), ids = active?.groupByIds ?? [];
+    const result: GroupByItem[] = (this.catalogue?.items ?? []).map(item => ({ ...item, isActive: ids.includes(item.id) }));
+    ids.forEach((id, index) => { if (id.startsWith("custom:")) result.push({ id, description: active!.values[index]!, fieldName: active!.groupByFields![index]!, isActive: true, custom: true }); });
     return result;
   }
   /** The fields "Add Custom Group" offers: the ones the server reports as groupable. */
   getGroupableFields(): GroupableField[] { return structuredClone(this.catalogue?.fields ?? []); }
   /** One groupable field by name, once the catalogue is loaded. */
   getGroupableField(name: string): GroupableField | undefined {
-    const found = this.catalogue?.fields.find(field => field.name === name) ?? (this.restoredField?.name === name ? this.restoredField : undefined);
+    const found = this.catalogue?.fields.find(field => field.name === name);
     return found && structuredClone(found);
-  }
-  /** The active grouping, to keep while a record is open. */
-  exportGroupBy(): GroupByState | undefined {
-    const active = this.activeGroupBy(), field = active?.groupByField === undefined ? undefined : this.getGroupableField(active.groupByField);
-    return active && field ? { id: active.groupById!, label: active.values[0]!, field } : undefined;
-  }
-  /** Turn a kept grouping back on (no catalogue needed). */
-  restoreGroupBy(state: GroupByState): void {
-    if (!this.groupByLoader) return groupingUnavailable();
-    this.commitMutation(() => { this.restoredField = state.field; this.activateGroupBy(state.id, state.field.name, state.label); });
   }
   /** Declared group-by items the menu leaves out, each with its reason. */
   getSkippedGroupBys(): { description: string; reason: string }[] { return structuredClone(this.catalogue?.skipped ?? []); }
   getFavorites(): FavoriteItem[] { return []; }
-  /** The fields the list is grouped by, outermost first. One at most until nested groups (slice 2). */
-  getGroupBy(): string[] { const active = this.activeGroupBy(); return active ? [active.groupByField!] : []; }
-  private activateGroupBy(id: string, fieldName: string, label: string): void {
-    if (this.activeGroupBy()) throw new ClientError("unsupported", "Grouping by more than one field (nested groups) is not available yet. Remove the current grouping first.");
-    this.checkCapacity();
-    this.facets.push({ id: GROUP_BY_FACET, type: "groupBy", title: "Group By", values: [label], separator: ">", groupByField: fieldName, groupById: id });
+  clearListState(): void { this.listState = undefined; }
+  getListState(): ListGroupState | undefined { return this.listState && structuredClone(this.listState); }
+  setListState(state: ListGroupState): void { this.listState = decodeListState(state); }
+  getGroupAggregates() { return structuredClone(this.catalogue?.aggregates ?? []); }
+  /** The groupings, outermost first: `field`, or `field:interval` for a date grouped by an interval. One at most unless the owner groups by several. */
+  getGroupBy(): string[] { return [...this.activeGroupBy()?.groupByFields ?? []]; }
+  private activateGroupBy(id: string, spec: string, label: string): void {
+    const active = this.activeGroupBy();
+    if (active?.groupByFields?.includes(spec)) return;
+    this.listState = undefined;
+    if (!active) {
+      this.checkCapacity();
+      this.facets.push({ id: GROUP_BY_FACET, type: "groupBy", title: "Group By", values: [label], separator: ">", groupByField: spec, groupById: id, groupByFields: [spec], groupByIds: [id] });
+    } else {
+      if (!this.multipleGroupBy) throw new ClientError("unsupported", "Grouping by more than one field (nested groups) is not available yet. Remove the current grouping first.");
+      if (active.groupByIds!.length >= this.maxGroupLevels) invalid(`group by: at most ${this.maxGroupLevels} fields`);
+      active.groupByIds!.push(id); active.groupByFields!.push(spec); active.values.push(label);
+    }
     this.notify();
   }
   /** Turn a declared item on or off. */
   toggleGroupBy(id: string): void {
     if (!this.groupByLoader) return groupingUnavailable();
     this.commitMutation(() => {
-      const active = this.activeGroupBy();
-      if (active?.groupById === id) { this.removeFacet(active.id); return; }
+      const active = this.activeGroupBy(), at = active?.groupByIds?.indexOf(id) ?? -1;
+      if (active && at >= 0) {
+        this.listState = undefined;
+        if (active.groupByIds!.length === 1) { this.removeFacet(active.id); return; }
+        for (const list of [active.groupByIds!, active.groupByFields!, active.values]) list.splice(at, 1);
+        active.groupById = active.groupByIds![0]; active.groupByField = active.groupByFields![0];
+        this.notify(); return;
+      }
       const item = this.catalogue?.items.find(candidate => candidate.id === id);
       if (!item) return invalid("group by item");
-      this.activateGroupBy(item.id, item.fieldName, item.description);
+      this.activateGroupBy(item.id, item.interval ? `${item.fieldName}:${item.interval}` : item.fieldName, item.description);
     });
   }
-  /** Group by one groupable field chosen from the field list. */
-  addCustomGroupBy(fieldName: string): void {
+  /** Group by one groupable field chosen from the field list; a date field may carry its interval as `field:interval`. */
+  addCustomGroupBy(spec: string): void {
     if (!this.groupByLoader) return groupingUnavailable();
     this.commitMutation(() => {
+      const [fieldName, interval, ...rest] = spec.split(":");
       const field = this.catalogue?.fields.find(candidate => candidate.name === fieldName);
-      if (!field) return invalid("group by field");
-      if (this.activeGroupBy()?.groupByField === fieldName) return;
-      this.activateGroupBy(`custom:${fieldName}`, fieldName, field.label);
+      const intervalLabel = GROUP_INTERVALS.find(([key]) => key === interval)?.[1];
+      const dated = (field?.kind as string) === "date" || (field?.kind as string) === "datetime";
+      if (!field || rest.length || (this.groupByLoader?.persist && dated && interval === undefined) || (interval !== undefined && !(this.multipleGroupBy && dated && intervalLabel))) return invalid("group by field");
+      if (this.activeGroupBy()?.groupByIds?.includes(`custom:${spec}`)) return;
+      this.activateGroupBy(`custom:${spec}`, spec, intervalLabel ? `${field.label}: ${intervalLabel}` : field.label);
     });
   }
   saveFavorite(_name: string, _isDefault: boolean, _isShared: boolean): FavoriteItem { return favoritesUnavailable(); }
@@ -294,15 +312,18 @@ export class SearchModel {
   }
   /** Roll back failed admission before any subscriber can observe a new domain or chip. */
   private commitMutation(change: () => void): void {
-    const before = structuredClone({facets:this.facets,filters:this.filters,sequence:this.sequence});
+    const before = structuredClone({facets:this.facets,filters:this.filters,sequence:this.sequence,listState:this.listState});
     let notify = false;
     this.mutating = true; this.deferredNotification = false;
     try {
       change();
-      this.serializeToUrlParams(new URLSearchParams());
+      // The owner folds every open group on any search change, so the address is checked without them: a filter is not refused for the groups it closes.
+      const kept = this.listState; this.listState = undefined;
+      try { const params = new URLSearchParams(); this.serializeToUrlParams(params); this.groupByLoader?.accept?.(params); }
+      finally { this.listState = kept; }
       notify = this.deferredNotification;
     } catch (error) {
-      this.facets = before.facets; this.filters = before.filters; this.sequence = before.sequence;
+      this.facets = before.facets; this.filters = before.filters; this.sequence = before.sequence; this.listState = before.listState;
       throw error;
     } finally { this.mutating = false; this.deferredNotification = false; }
     if (notify) this.notify();
@@ -407,6 +428,7 @@ export class SearchModel {
     return structuredClone(domain);
   }
   clearAll(): void {
+    this.listState = undefined;
     this.facets = []; this.filters = this.filters.filter(f => !f.custom);
     for (const filter of this.filters) { filter.isActive = false; for (const option of filter.dateOptions ?? []) option.isActive = false; }
     this.notify();
@@ -422,14 +444,21 @@ export class SearchModel {
     const encoded = entries.map(([key, value]) => [key, value.length ? JSON.stringify(value) : ""] as const);
     for (const [key, value] of encoded) if (value.length > MAX_PARAM) invalid(`${key}: exceeds 2048 characters`);
     for (const [key, value] of encoded) { if (value) params.set(key, value); else params.delete(key); }
-    params.delete("search_groupby"); params.delete("search");
+    if (this.groupByLoader?.persist && this.getGroupBy().length) {
+      const state = this.listState ? { ...this.listState, by: this.getGroupBy() } : this.getGroupBy();
+      const value = JSON.stringify(state);
+      if (value.length > MAX_PARAM) invalid("search_groupby: exceeds 2048 characters");
+      params.set("search_groupby", value);
+    } else params.delete("search_groupby");
+    params.delete("search");
   }
 
   /** Validate everything in isolation before replacing state or notifying subscribers. */
   loadFromUrlParams(params: URLSearchParams): boolean {
     const keys = ["search_facets", "search_filters", "search_groupby"];
     if (!keys.some(key => params.has(key))) return false;
-    const staging = new SearchModel({ model: this.model, fields: this.fields, viewFields: this.viewFields, initialDomain: this.initialDomain });
+    const staging = new SearchModel({ model: this.model, fields: this.fields, viewFields: this.viewFields, initialDomain: this.initialDomain, groupBy: this.groupByLoader });
+    staging.catalogue = this.catalogue;
     for (const key of keys) {
       const raw = params.get(key);
       if (raw === null) continue;
@@ -437,8 +466,16 @@ export class SearchModel {
       let data: unknown;
       try { data = JSON.parse(raw); } catch { return invalid(key); }
       try {
+        if (key === "search_groupby") {
+          if (!this.groupByLoader?.persist) { if (!Array.isArray(data) || data.length) groupingFromAddress(); continue; }
+          const state = decodeListState(data);
+          for (const spec of state.by) {
+            const declared = this.catalogue?.items.find(item => (item.interval ? `${item.fieldName}:${item.interval}` : item.fieldName) === spec);
+            if (declared) staging.toggleGroupBy(declared.id); else staging.addCustomGroupBy(spec);
+          }
+          staging.listState = state; continue;
+        }
         const values = items(data, key);
-        if (key === "search_groupby") { if (values.length) groupingFromAddress(); continue; }
         const seen = new Set<string>();
         for (const item of values) {
           const identity = JSON.stringify(item);
@@ -465,7 +502,7 @@ export class SearchModel {
         throw error;
       }
     }
-    this.facets = staging.facets; this.filters = staging.filters; this.sequence = staging.sequence;
+    this.facets = staging.facets; this.filters = staging.filters; this.sequence = staging.sequence; this.listState = staging.listState;
     this.notify(); return true;
   }
 }

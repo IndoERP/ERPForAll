@@ -1256,3 +1256,138 @@ async fn removal_and_topology_version_tables() {
     drop(tx);
     h.cleanup().await.unwrap();
 }
+
+/// A create refused by the company check: a user error that names the company crossover.
+async fn assert_crossover(tx: &mut Transaction, model: &str, vals: RawVals, what: &str) {
+    let error = create(tx, model, vals).await.unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::UserError, "{what}: {error:?}");
+    assert!(
+        error.message().contains("company"),
+        "{what}: {}",
+        error.message()
+    );
+}
+
+/// Cross-company links on the topology models are refused: a warehouse naming another company's
+/// location, an operation type naming another company's location, a child location under another
+/// company's parent, and a capacity row naming a package type of another company than its category. A shared (company-less) target is accepted.
+/// (S2, S5)
+#[tokio::test]
+async fn cross_company_links_are_refused() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    let a = company(&mut tx, "Company A").await;
+    let b = company(&mut tx, "Company B").await;
+    warehouse(&mut tx, a, "WH A", "WA").await;
+    let b_view = location_in(&mut tx, "BV", "view", None, Some(b))
+        .await
+        .ids()[0];
+    let b_stock = location_in(&mut tx, "BS", "internal", Some(b_view), Some(b))
+        .await
+        .ids()[0];
+    // warehouse of A with a location of B
+    assert_crossover(
+        &mut tx,
+        "stock.warehouse",
+        RawVals::new()
+            .set_cell("name", text("WH X"))
+            .set_cell("code", text("WX"))
+            .set_cell("company_id", Cell::Id(a))
+            .set_cell("view_location_id", Cell::Id(b_view))
+            .set_cell("lot_stock_id", Cell::Id(b_stock)),
+        "warehouse locations",
+    )
+    .await;
+    // operation type of A with a location of B
+    assert_crossover(
+        &mut tx,
+        "stock.picking.type",
+        RawVals::new()
+            .set_cell("name", text("Receipts"))
+            .set_cell("company_id", Cell::Id(a))
+            .set_cell("default_location_src_id", Cell::Id(b_stock))
+            .set_cell("default_location_dest_id", Cell::Id(b_stock)),
+        "operation type location",
+    )
+    .await;
+    // child location of A under a parent of B (the parent_of rule accepts only the company's own
+    // or a parent company's location), while a shared parent is accepted
+    assert_crossover(
+        &mut tx,
+        "stock.location",
+        RawVals::new()
+            .set_cell("name", text("Child"))
+            .set_cell("usage", text("internal"))
+            .set_cell("location_id", Cell::Id(b_view))
+            .set_cell("company_id", Cell::Id(a)),
+        "child location",
+    )
+    .await;
+    let shared = location(&mut tx, "Shared", "view", None).await.ids()[0];
+    create(
+        &mut tx,
+        "stock.location",
+        RawVals::new()
+            .set_cell("name", text("Under shared"))
+            .set_cell("usage", text("internal"))
+            .set_cell("location_id", Cell::Id(shared))
+            .set_cell("company_id", Cell::Id(a)),
+    )
+    .await
+    .unwrap();
+    // capacity rows: the category's company decides
+    let category = create(
+        &mut tx,
+        "stock.storage.category",
+        RawVals::new()
+            .set_cell("name", text("Shelves A"))
+            .set_cell("company_id", Cell::Id(a)),
+    )
+    .await
+    .unwrap()
+    .ids()[0];
+    let package_b = create(
+        &mut tx,
+        "stock.package.type",
+        RawVals::new()
+            .set_cell("name", text("Box B"))
+            .set_cell("company_id", Cell::Id(b)),
+    )
+    .await
+    .unwrap()
+    .ids()[0];
+    let capacity = |field: &'static str, target: i64| {
+        RawVals::new()
+            .set_cell("storage_category_id", Cell::Id(category))
+            .set_cell(field, Cell::Id(target))
+            .set_cell("quantity", Cell::Decimal(Decimal::from(3)))
+    };
+    assert_crossover(
+        &mut tx,
+        "stock.storage.category.capacity",
+        capacity("package_type_id", package_b),
+        "capacity package type",
+    )
+    .await;
+    // the same category's own company is accepted
+    let package_a = create(
+        &mut tx,
+        "stock.package.type",
+        RawVals::new()
+            .set_cell("name", text("Box A"))
+            .set_cell("company_id", Cell::Id(a)),
+    )
+    .await
+    .unwrap()
+    .ids()[0];
+    create(
+        &mut tx,
+        "stock.storage.category.capacity",
+        capacity("package_type_id", package_a),
+    )
+    .await
+    .unwrap();
+    tx.rollback().await.unwrap();
+    drop(tx);
+    h.cleanup().await.unwrap();
+}

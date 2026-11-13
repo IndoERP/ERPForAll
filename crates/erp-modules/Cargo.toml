@@ -15,6 +15,8 @@ thiserror = { workspace = true }
 serde = { workspace = true }
 tracing = { workspace = true }
 toml = { workspace = true }
+# Flat typed rows of localization pack data files.
+csv = { workspace = true }
 indexmap = { workspace = true }
 erp-data = { workspace = true }
 erp-expr = { workspace = true }

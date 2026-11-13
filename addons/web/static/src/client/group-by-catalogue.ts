@@ -1,7 +1,7 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import { ClientError } from "./transport.js";
 import type { Node, SearchFilterNode } from "./metadata.js";
-import { GROUPABLE_KINDS, type GroupableField, type GroupableKind, type GroupByCatalogue } from "./search/types.js";
+import { GROUPABLE_KINDS, type GroupableField, type GroupableKind, type GroupByCatalogue, type ListAggregate } from "./search/types.js";
 
 const MAX_FIELDS = 4096;
 const FIELD_NAME = /^[a-z_][a-z0-9_]*$/;
@@ -10,15 +10,22 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 
 /** The fields the server reports as groupable (`fields_get` with `string`, `type`, `groupable`, `selection`),
  *  and for every other readable field why it is left out. */
-export function decodeGroupableFields(raw: unknown): { groupable: Map<string, GroupableField>; excluded: Map<string, string> } {
+export function decodeGroupableFields(raw: unknown, intervals = false): { groupable: Map<string, GroupableField>; excluded: Map<string, string>; aggregates: ListAggregate[] } {
   if (!isRecord(raw) || Object.keys(raw).length > MAX_FIELDS) return invalid("field list");
+  const aggregates: ListAggregate[] = [];
   const groupable = new Map<string, GroupableField>(), excluded = new Map<string, string>();
   for (const [name, value] of Object.entries(raw)) {
     if (!FIELD_NAME.test(name) || !isRecord(value)) return invalid("field description");
     const label = value["string"], type = value["type"], flag = value["groupable"];
     if (typeof label !== "string" || typeof type !== "string" || typeof flag !== "boolean") return invalid(`description of field ${name}`);
+    if (intervals && Object.hasOwn(value, "aggregator")) {
+      const op = value["aggregator"], currency = value["currency_field"];
+      if (!["integer", "float", "monetary"].includes(type) || !["sum", "avg", "min", "max"].includes(String(op))) return invalid(`aggregator of field ${name}`);
+      if (currency !== undefined && (typeof currency !== "string" || !FIELD_NAME.test(currency) || !Object.hasOwn(raw, currency))) return invalid(`currency of field ${name}`);
+      aggregates.push({ field: name, kind: type as ListAggregate["kind"], op: op as ListAggregate["op"], ...(typeof currency === "string" ? { currency } : {}) });
+    }
     if (!flag || name === "id") { excluded.set(name, "the server cannot group by it"); continue; }
-    if (!(GROUPABLE_KINDS as readonly string[]).includes(type)) { excluded.set(name, `grouping by ${type} fields is not available yet`); continue; }
+    if (!(GROUPABLE_KINDS as readonly string[]).includes(type) && !(intervals && ["date", "datetime"].includes(type))) { excluded.set(name, `grouping by ${type} fields is not available yet`); continue; }
     let selection: GroupableField["selection"] = null;
     if (type === "selection") {
       const pairs = value["selection"];
@@ -30,15 +37,15 @@ export function decodeGroupableFields(raw: unknown): { groupable: Map<string, Gr
     }
     groupable.set(name, { name, label, kind: type as GroupableKind, selection });
   }
-  return { groupable, excluded };
+  return { groupable, excluded, aggregates };
 }
 
 /** Collect the search view's `<filter context="{'group_by': ...}">` items in view order. `evaluate` reads the
  *  filter's context expression; a filter whose context cannot be read or names a grouping this slice cannot
  *  show is returned in `skipped` with its reason, never dropped silently. A filter with another context is
  *  not a grouping item and is left to the filter menu. */
-export function buildGroupByCatalogue(nodes: readonly Node[], evaluate: (context: NonNullable<SearchFilterNode["context"]>) => unknown, fields: ReturnType<typeof decodeGroupableFields>, intervals = false): GroupByCatalogue {
-  const catalogue: GroupByCatalogue = { items: [], fields: [...fields.groupable.values()], skipped: [] };
+export function buildGroupByCatalogue(nodes: readonly Node[], evaluate: (context: NonNullable<SearchFilterNode["context"]>) => unknown, fields: Pick<ReturnType<typeof decodeGroupableFields>, "groupable" | "excluded"> & { aggregates?: ListAggregate[] }, intervals = false, defaultInterval = false): GroupByCatalogue {
+  const catalogue: GroupByCatalogue = { items: [], fields: [...fields.groupable.values()], skipped: [], ...(intervals ? { aggregates: fields.aggregates ?? [] } : {}) };
   const names = new Set<string>();
   let position = 0;
   const visit = (node: Node): void => {
@@ -52,11 +59,14 @@ export function buildGroupByCatalogue(nodes: readonly Node[], evaluate: (context
       const skip = (reason: string): void => { catalogue.skipped.push({ description: node.label, reason }); };
       if (Array.isArray(spec)) return skip("it groups by several fields, which is not available yet");
       if (typeof spec !== "string" || !spec) return skip("its group_by is not a field name");
-      // The pivot view groups dates by an interval (`field:month`); the list does not yet.
-      const [fieldName, interval, ...rest] = spec.split(":");
+      // The pivot reads a bare date as month itself (`resolveSpec`); the list needs the item to say so.
+      const [fieldName, declared, ...rest] = spec.split(":");
+      let interval = declared;
       if (interval !== undefined && (!intervals || rest.length || !["day", "week", "month", "quarter", "year"].includes(interval))) return skip("a date interval is not available yet");
       const field = fields.groupable.get(fieldName!);
       if (!field) return skip(fields.excluded.get(fieldName!) ?? `field ${fieldName} is not readable here`);
+      if (interval !== undefined && !["date", "datetime"].includes(field.kind)) return skip("only date fields accept an interval");
+      if (defaultInterval && interval === undefined && ["date", "datetime"].includes(field.kind)) interval = "month";
       if (names.has(name)) return skip(`another item is already named ${name}`);
       names.add(name);
       catalogue.items.push({ id: `groupby_${name}`, description: node.label, fieldName: field.name, ...(interval !== undefined ? { interval } : {}) });

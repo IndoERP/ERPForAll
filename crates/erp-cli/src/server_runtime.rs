@@ -1,4 +1,4 @@
-//! Production membership and supervised maintenance around the existing HTTP application.
+//! Served membership and supervised maintenance around the existing HTTP application.
 use std::{sync::Arc, time::Duration};
 
 use erp_modules::ModuleSystem;
@@ -109,6 +109,7 @@ fn known_gc_cause(message: &str) -> Option<&'static str> {
         "authentication collection sweep range overflowed",
         "authentication collection lease is implausibly far in the future",
         "authentication collection due time is implausibly far in the future",
+        crate::human::MAINTENANCE_PRIVILEGES_MISSING,
     ];
     KNOWN.iter().copied().find(|known| {
         message == *known
@@ -315,6 +316,7 @@ async fn serve_member(
     let event_owner = crate::human::owner_maintenance_orm(config)?;
     membership.request_ready().await?;
     let (stop, mut stopped) = tokio::sync::watch::channel(false);
+    let job_stop = stopped.clone();
     let http = Arc::clone(app).serve_until(listener, async {
         stopped
             .wait_for(|stop| *stop)
@@ -322,11 +324,14 @@ async fn serve_member(
             .map_err(|_| std::io::Error::other("server shutdown control ended"))?;
         Ok(())
     });
+    let jobs = maintenance(app, config, membership, job_stop);
+    tokio::pin!(jobs);
+    let mut jobs_finished = false;
     let trigger = async {
         tokio::select! {
             received = term.recv() => signal_received(received),
             received = interrupt.recv() => signal_received(received),
-            result = maintenance(app, config, membership) => result,
+            result = &mut jobs => { jobs_finished=true; result },
             result = gc_maintenance(app, &schedule) => result,
             result = event_upkeep_maintenance(app, &event_owner) => result,
         }
@@ -342,6 +347,12 @@ async fn serve_member(
     )
     .await;
     *deadline = Some(outcome.deadline);
+    if !jobs_finished {
+        tokio::time::timeout_at(outcome.deadline, &mut jobs)
+            .await
+            .map_err(|_| failed("attachment job runners exceeded the shutdown deadline"))?
+            .map_err(|e| failed(format!("attachment job shutdown failed: {e}")))?;
+    }
     outcome
         .result
         .map_err(|error| failed(format!("HTTP server stopped: {error}")))
@@ -683,43 +694,112 @@ pub(crate) fn log_event_upkeep(
 /// The job runner of this process for `orm`, when the configuration asks for one (4):
 /// `jobs_run_in_app = true`. It claims only while the node is ready and divides the database cap
 /// by the live workers of the registry.
-fn spawn_job_runner(
+struct JobRunners {
+    ordinary: Option<erp_orm::jobs::JobRunnerHandle>,
+    attachments: Option<erp_orm::jobs::JobRunnerHandle>,
+}
+impl JobRunners {
+    async fn shutdown(self) {
+        async fn stop(handle: Option<erp_orm::jobs::JobRunnerHandle>) {
+            if let Some(handle) = handle {
+                handle.shutdown().await;
+            }
+        }
+        tokio::join!(stop(self.ordinary), stop(self.attachments));
+    }
+    /// The runner whose task ended, if one did.
+    fn finished(&self) -> Option<&'static str> {
+        if self.ordinary.as_ref().is_some_and(|r| r.is_finished()) {
+            Some("job runner")
+        } else if self.attachments.as_ref().is_some_and(|r| r.is_finished()) {
+            Some("attachment maintenance runner")
+        } else {
+            None
+        }
+    }
+}
+async fn spawn_job_runners(
     orm: &erp_orm::Orm,
     config: &ServerConfig,
     membership: &NodeMembership,
-) -> std::io::Result<Option<erp_orm::jobs::JobRunnerHandle>> {
-    if !config.jobs_run_in_app() {
-        return Ok(None);
-    }
-    let view = membership.subscribe();
-    let runner = erp_orm::jobs::JobRunner::builder(
-        orm.clone(),
-        erp_security::jobs::SecurityJobPrincipalResolver,
-    )
-    .node_view(move || view.borrow().clone())
-    // this runner works with the runtime ORM; every kind declared elevated (the
-    // attachment maintenance kinds, `erp_addon_base::attachments::gc::ELEVATED_KINDS`) is left to
-    // the isolated maintenance runner.
-    .exclude_elevated()
-    .build()
-    .map_err(|error| {
+) -> std::io::Result<JobRunners> {
+    let process = Arc::new(tokio::sync::Semaphore::new(
+        orm.job_settings().workers() as usize
+    ));
+    let database = Arc::new(tokio::sync::Semaphore::new(
+        orm.job_settings().workers_per_db() as usize,
+    ));
+    let build_error = |e: erp_fields::Error| {
         std::io::Error::other(format!(
-            "could not build the job runner: {}",
-            sanitized_cause(&error)
+            "could not build job runner: {}",
+            sanitized_cause(&e)
         ))
-    })?;
-    Ok(Some(runner.spawn()))
+    };
+    let ordinary = if config.jobs_run_in_app() {
+        let view = membership.subscribe();
+        Some(
+            erp_orm::jobs::JobRunner::builder(
+                orm.clone(),
+                erp_security::jobs::SecurityJobPrincipalResolver,
+            )
+            .node_view(move || view.borrow().clone())
+            .process_slots(Arc::clone(&process))
+            .database_slots(Arc::clone(&database))
+            .exclude_elevated()
+            .build()
+            .map_err(build_error)?,
+        )
+    } else {
+        None
+    };
+    // Construct and admit both before spawning either: partial startup cannot leave a runner detached.
+    let attachments = if config.attachment_maintenance_run_in_app() {
+        let owner = crate::human::attachment_maintenance_orm(config, orm)
+            .await
+            .map_err(|e| {
+                // The ORM's error is boxed inside `CliError::Access`: hand it over itself, so its
+                // kind and a known fixed message survive sanitizing.
+                let cause = match &e {
+                    CliError::Access(error) => sanitized_cause(error.as_ref()),
+                    other => sanitized_cause(other),
+                };
+                std::io::Error::other(format!("could not start attachment maintenance: {cause}"))
+            })?;
+        let view = membership.subscribe();
+        Some(
+            erp_orm::jobs::JobRunner::builder(
+                owner,
+                erp_security::jobs::SecurityJobPrincipalResolver,
+            )
+            .node_view(move || view.borrow().clone())
+            .process_slots(process)
+            .database_slots(database)
+            .maintenance_kinds(&erp_addon_base::attachments::gc::maintenance_kinds())
+            .build()
+            .map_err(build_error)?,
+        )
+    } else {
+        tracing::warn!(
+            "attachment maintenance execution is disabled on this node; schedule rows alone do not run cleanup"
+        );
+        None
+    };
+    Ok(JobRunners {
+        ordinary: ordinary.map(|r| r.spawn()),
+        attachments: attachments.map(|r| r.spawn()),
+    })
 }
 
 async fn maintenance(
     app: &WebApp,
     config: &ServerConfig,
     membership: &NodeMembership,
+    mut stopped: tokio::sync::watch::Receiver<bool>,
 ) -> std::io::Result<()> {
     let mut auth = app.current_auth().await;
     let options = erp_orm::signal::ListenerOptions::default();
     // the runner subscribes to its wake-up channel when it is built: before the listener starts
-    let mut runner = spawn_job_runner(auth.orm(), config, membership)?;
+    let mut runners = spawn_job_runners(auth.orm(), config, membership).await?;
     let mut listener = auth
         .orm()
         .spawn_signal_listener(config.runtime_connection(), tokio_postgres::NoTls, options)
@@ -733,6 +813,11 @@ async fn maintenance(
     refresh.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
         tokio::select! {
+            _ = stopped.changed() => {
+                listener.shutdown().await;
+                runners.shutdown().await;
+                return Ok(());
+            }
             _ = refresh.tick() => {
                 if matches!(membership.readiness(), erp_orm::node::Readiness::Unready(erp_orm::node::UnreadyReason::IdentityConflict)) {
                     return Err(std::io::Error::other("node identity conflict; restart the process"));
@@ -741,15 +826,15 @@ async fn maintenance(
                 let current = app.current_auth().await;
                 if !Arc::ptr_eq(&auth, &current) {
                     listener.shutdown().await;
-                    if let Some(old) = runner.take() {
-                        old.shutdown().await;
-                    }
+                    runners.shutdown().await;
                     auth = current;
-                    runner = spawn_job_runner(auth.orm(), config, membership)?;
+                    runners = spawn_job_runners(auth.orm(), config, membership).await?;
                     listener = auth.orm().spawn_signal_listener(config.runtime_connection(), tokio_postgres::NoTls, options)
                         .map_err(|error| std::io::Error::other(format!("could not restart registry signal listener: {}", sanitized_cause(&error))))?;
                 } else if listener.is_finished() {
                     return Err(std::io::Error::other("registry signal listener ended without a replacement generation"));
+                } else if let Some(runner) = runners.finished() {
+                    return Err(std::io::Error::other(format!("the {runner} ended without a replacement generation")));
                 }
             }
         }

@@ -147,8 +147,25 @@ pub enum BlobError {
     /// Receiving exceeded the lifetime of its durable intent; no body work may outlive cleanup eligibility.
     #[error("The upload intent expired before receiving completed.")]
     UploadExpired,
+    /// No body bytes arrived within the idle receive interval.
+    #[error("No upload data arrived before the timeout. Try uploading again.")]
+    UploadIdleTimeout,
+    /// The absolute receive deadline elapsed, even if bytes kept arriving.
+    #[error("The upload took too long. Try uploading again.")]
+    UploadReceiveTimeout,
+    /// The subject already has the maximum number of pending uploads.
+    #[error("Too many uploads are pending. Complete an upload or try again shortly.")]
+    PendingUploads {
+        /// Configured pending-upload bound, for trusted diagnostics.
+        limit: u32,
+    },
+    /// Quota accounting needs maintenance before another upload can be admitted.
+    #[error("Attachment uploads are temporarily unavailable. Try again shortly.")]
+    AccountingUnavailable,
     /// Storage quota or a hard staging-byte budget was exhausted.
-    #[error("QuotaExceeded: {budget} uses {used} bytes; requested {requested}, limit {limit}")]
+    #[error(
+        "This file cannot be uploaded because the attachment storage limit has been reached. Contact an administrator."
+    )]
     QuotaExceeded {
         /// Stable budget identity: database quota, database staging or subject staging.
         budget: &'static str,
@@ -201,6 +218,8 @@ impl BlobError {
                 retryable: true,
                 ..
             } | Self::Busy { .. }
+                | Self::AccountingUnavailable
+                | Self::PendingUploads { .. }
         )
     }
 }

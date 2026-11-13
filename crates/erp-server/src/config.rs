@@ -65,6 +65,7 @@ struct RawConfig {
     http_max_connection_age_secs: Option<u64>,
     /// Run the job queue's runner in this process (4); absent means off.
     jobs_run_in_app: Option<bool>,
+    attachment_maintenance_run_in_app: Option<bool>,
     audit_read_policy: Option<toml::Value>,
     /// The attachment store table. Its keys are validated by `erp-blob`, which
     /// reads this same file; here it is only allowed to exist.
@@ -133,6 +134,7 @@ pub struct ServerConfig {
     assets: PathBuf,
     connections: ConnectionLimits,
     jobs_run_in_app: bool,
+    attachment_maintenance_run_in_app: bool,
     audit_read_policy: erp_rpc::ReadAuditPolicy,
     attachments: String,
 }
@@ -329,6 +331,9 @@ impl ServerConfig {
             assets: resolve(&raw.assets_manifest),
             connections,
             jobs_run_in_app: raw.jobs_run_in_app.unwrap_or(false),
+            attachment_maintenance_run_in_app: raw
+                .attachment_maintenance_run_in_app
+                .unwrap_or(false),
             attachments,
             audit_read_policy: read_audit_policy(raw.audit_read_policy)?,
         })
@@ -406,6 +411,12 @@ impl ServerConfig {
         self.jobs_run_in_app
     }
 
+    /// Whether this node runs the fixed elevated attachment handlers (default off).
+    /// Node configuration: selects this process's execution topology before opening its owner pool.
+    pub fn attachment_maintenance_run_in_app(&self) -> bool {
+        self.attachment_maintenance_run_in_app
+    }
+
     /// D14 scalar and byte-budget relationships admitted at startup.
     /// Getters do not imply runtime implementation of the corresponding future facilities.
     pub fn startup_limits(&self) -> &StartupLimits {
@@ -449,6 +460,7 @@ impl erp_orm::node::SharedSettings for ServerConfig {
             assets: _,
             connections,
             jobs_run_in_app: _,
+            attachment_maintenance_run_in_app: _,
             // Canonical policy is described in the registered RpcConfig section.
             audit_read_policy: _,
             // judged by the attachment topology check, not by settings agreement
@@ -473,6 +485,7 @@ impl erp_orm::node::SharedSettings for ServerConfig {
             "server.assets_manifest",
             "server.startup_limits",
             "server.jobs_run_in_app",
+            "server.attachment_maintenance_run_in_app",
         ] {
             out.node(name)?;
         }
