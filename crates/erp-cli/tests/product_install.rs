@@ -570,11 +570,18 @@ fn company_and_branch_scoping_for_a_real_user() {
 }
 
 /// Installed-schema upgrade exercise; legacy shape/version are simulated explicitly.
-/// This does not claim an old-binary install was executed.
+/// This does not claim an old-binary install was executed. The last case upgrades `base`, `product`
+/// and `web` in one run, as a deployment does: `base`'s schema step comes first and must leave the
+/// vendor table to `product`'s step, after its pre-migration filled the new required unit.
+/// changes its table, also when `base` is upgraded with it)
 #[test]
 fn supplier_unit_upgrade_preserves_terms_and_refuses_invalid_sources() {
     big_stack(async {
-        for invalid in [false, true] {
+        for (invalid, modules) in [
+            (false, &["product"][..]),
+            (true, &["product"][..]),
+            (false, &["base", "product", "web"][..]),
+        ] {
             let db = TestDb::create().await.unwrap();
             let (system, orm) = install(&db).await;
             let main = xid(&orm, "base", "main_company").await;
@@ -640,7 +647,13 @@ fn supplier_unit_upgrade_preserves_terms_and_refuses_invalid_sources() {
             tx.commit().await.unwrap();
             let env = system.system_env(Context::new());
             let result = system
-                .button_immediate_upgrade(&env, &[ModuleName::new("product").unwrap()])
+                .button_immediate_upgrade(
+                    &env,
+                    &modules
+                        .iter()
+                        .map(|m| ModuleName::new(*m).unwrap())
+                        .collect::<Vec<_>>(),
+                )
                 .await;
             if invalid {
                 let error = match result {
@@ -679,7 +692,7 @@ fn supplier_unit_upgrade_preserves_terms_and_refuses_invalid_sources() {
                     .get(0);
                 assert_eq!(version, "1.0.0");
             } else {
-                let upgraded = result.unwrap();
+                let upgraded = result.unwrap_or_else(|e| panic!("upgrade of {modules:?}: {e:?}"));
                 assert!(
                     upgraded.post_commit.is_clean(),
                     "{:?}",

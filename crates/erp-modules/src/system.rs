@@ -5021,6 +5021,25 @@ fn affected_models<'r>(
         .collect()
 }
 
+/// A module still to come in this run (`later`) creates the model's table or owns one of its
+/// stored columns or table objects. The registry of an update run holds every module from the
+/// start, while the reference syncs at a module's step only what the modules loaded so far
+/// declare: syncing now would change that module's
+/// table before its pre-migrations ran. The model waits for that module's step, where it is
+/// among the affected models again. Declarations without columns (the `web` extension of `base`
+/// every model inherits, a non-stored field) do not hold a model back.
+fn waits_for_later(model: &erp_registry::ModelSpec, later: &[ModuleName]) -> bool {
+    let is_later = |addon: &str| later.iter().any(|m| m.as_str() == addon);
+    model
+        .fields
+        .iter()
+        .any(|f| f.store && f.modules.iter().any(|a| is_later(a)))
+        || model.mro.iter().any(|d| {
+            is_later(d.addon)
+                && ((d.name == model.name && !d.is_extension()) || !d.table_objects.is_empty())
+        })
+}
+
 /// Installed modules (or ones to upgrade or remove) whose dependency is not installed: an
 /// inconsistent database, checked against the whole catalog (lead review A; the graph only sees
 /// the rows of its states, so it would drop the dependent as "missing dependency" instead). In an
@@ -5359,7 +5378,8 @@ impl<'s> Run<'s> {
             }
             match node.state() {
                 ModuleState::ToInstall => {
-                    self.update_schema(tx, limits, &module).await?;
+                    self.update_schema(tx, limits, &module, pending_after(pending, &module)?)
+                        .await?;
                     let demo = self.demo_for(catalog, &module, &manifest)?;
                     let demo = self
                         .load_files(
@@ -5428,7 +5448,8 @@ impl<'s> Run<'s> {
                             )
                             .await?;
                         }
-                        self.update_schema(tx, limits, &module).await?;
+                        self.update_schema(tx, limits, &module, pending_after(pending, &module)?)
+                            .await?;
                         let mode = ConvertMode::Update;
                         let demo = self
                             .load_files(tx, session.as_deref_mut(), &module, &manifest, mode, demo)
@@ -5463,7 +5484,13 @@ impl<'s> Run<'s> {
                         self.finish_module(catalog, &module, &manifest, demo)?;
                     } else {
                         if !self.demo_only {
-                            self.update_schema(tx, limits, &module).await?;
+                            self.update_schema(
+                                tx,
+                                limits,
+                                &module,
+                                pending_after(pending, &module)?,
+                            )
+                            .await?;
                         }
                         let mode = ConvertMode::Init;
                         let demo = self
@@ -5663,11 +5690,14 @@ impl<'s> Run<'s> {
     }
 
     /// Create or alter the tables of the module's affected models, then `init()` on each.
+    /// `later` are the modules of the run still to come after `module`; a model
+    /// one of them still changes waits for its step ([`waits_for_later`]).
     async fn update_schema(
         &self,
         tx: &mut Transaction,
         limits: Limits,
         module: &ModuleName,
+        later: &[ModuleName],
     ) -> Result<()> {
         if module.as_str() == "base" {
             check_stored_states(tx)
@@ -5675,7 +5705,23 @@ impl<'s> Run<'s> {
                 .map_err(step_error(module, ModuleStep::Schema, None))?;
         }
         let registry = Arc::clone(tx.registry());
-        let models = affected_models(&registry, module);
+        let (models, waiting): (Vec<_>, Vec<_>) = affected_models(&registry, module)
+            .into_iter()
+            .partition(|m| !waits_for_later(m, later));
+        // a waiting model is synced at a later module's step only if that module is among its
+        // contributors, so none is ever left unsynced
+        if let Some(model) = waiting.iter().find(|m| {
+            !m.mro
+                .iter()
+                .any(|d| later.iter().any(|l| l.as_str() == d.addon))
+        }) {
+            return Err(Error::InvariantViolation {
+                message: format!(
+                    "model {} waits for a later module of the run that does not contribute to it",
+                    model.name
+                ),
+            });
+        }
         let ids: Vec<erp_registry::ModelId> = models
             .iter()
             .filter(|m| m.has_generic_table())

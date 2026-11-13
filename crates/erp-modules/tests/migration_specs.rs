@@ -1360,3 +1360,61 @@ async fn max_migration_files_out_of_range_is_refused_at_build() {
     }
     db.cleanup().await.unwrap();
 }
+
+// ---- schema steps of one run wait for a later module's pre-migration --------------------------
+
+/// `y` declares `mig.item` with rows; `x` 1.1 extends it with a required column that its
+/// pre-migration adds and fills. Upgraded together, `y`'s schema step comes first and must leave
+/// the column to `x`'s step: syncing it there would refuse a required column without default on
+/// a table with rows before `x`'s pre-migration ran.
+/// changes its table, when the module only extends the model)
+#[tokio::test]
+async fn pre_migration_runs_before_an_earlier_module_syncs_its_column() {
+    let addons = Addons::new();
+    addons.file(
+        "y",
+        "models/item.toml",
+        "[[model]]\nname = \"mig.item\"\ndescription = \"Item\"\n\n\
+         [[model.field]]\nname = \"name\"\ntype = \"char\"\n",
+    );
+    let db = TestDb::create().await.unwrap();
+    let (system, orm, admin) = installed_y_x(&addons, &db, |b| b).await;
+    exec(
+        &orm,
+        "INSERT INTO mig_item (name) VALUES ('first'), ('second')",
+    )
+    .await;
+    addons.file(
+        "x",
+        "models/item.toml",
+        "[[model]]\nextend = \"mig.item\"\n\n\
+         [[model.field]]\nname = \"code\"\ntype = \"char\"\nrequired = true\n",
+    );
+    addons.file(
+        "x",
+        "migrations/1.1/pre-a.sql",
+        "ALTER TABLE mig_item ADD COLUMN code varchar;\n\
+         UPDATE mig_item SET code = 'legacy-' || name;\n",
+    );
+
+    let outcome = upgrade_y_x(&addons, &system, &admin)
+        .await
+        .unwrap_or_else(|e| panic!("upgrade of y and x: {e:?}"));
+    assert_eq!(outcome.upgraded, vec![n("y"), n("x")]);
+    assert_eq!(
+        rows(&outcome.orm, "SELECT code FROM mig_item ORDER BY name").await,
+        vec![
+            vec![Some("legacy-first".to_owned())],
+            vec![Some("legacy-second".to_owned())],
+        ]
+    );
+    let nullable = rows(
+        &outcome.orm,
+        "SELECT is_nullable::text FROM information_schema.columns \
+         WHERE table_name = 'mig_item' AND column_name = 'code'",
+    )
+    .await;
+    assert_eq!(nullable, vec![vec![Some("NO".to_owned())]]);
+    drop(system);
+    db.cleanup().await.unwrap();
+}
