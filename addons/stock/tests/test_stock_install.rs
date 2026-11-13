@@ -1,8 +1,7 @@
 //! Native addon skeletons and manifest integration tests for the M7 inventory family.
 //!
-//! The graph is the trimmed one: addons that
-//! are not on `main` yet (`account`, `sale`, ...) are absent, so the tests accept only the 12 M7
-//! addons plus `base`, `web`, `uom` and `product` as dependency targets and fail on anything else.
+//! Stock remains below accounting. The valuation bridge additionally loads account/analytic;
+//! unknown dependency targets still fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "tests")]
 
 use erp_sdk::AddonDescriptor;
@@ -34,6 +33,8 @@ fn all_addons() -> Vec<&'static AddonDescriptor> {
         &erp_addon_web::ADDON,
         &erp_addon_uom::ADDON,
         &erp_addon_product::ADDON,
+        &erp_addon_analytic::ADDON,
+        &erp_addon_account::ADDON,
     ];
     all.extend(m7_addons());
     all
@@ -144,7 +145,7 @@ fn inventory_addon_descriptors_and_manifest_graph() {
     let known: BTreeSet<&str> = deps_map
         .keys()
         .copied()
-        .chain(["base", "web", "uom", "product"])
+        .chain(["base", "web", "uom", "product", "analytic", "account"])
         .collect();
     for (name, deps) in &deps_map {
         for dep in *deps {
@@ -201,6 +202,8 @@ fn inventory_addon_descriptors_and_manifest_graph() {
         "N8: stock must not depend, even transitively, on stock_account"
     );
     assert!(transitive("stock_account").contains("stock"));
+    assert!(transitive("stock_account").contains("account"));
+    assert!(!transitive("stock").contains("account"));
     assert!(deps_map["stock"].contains(&"product"));
     assert!(deps_map["stock_landed_costs"].contains(&"purchase_stock"));
     assert!(deps_map["stock_delivery"].contains(&"sale_stock"));

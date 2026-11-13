@@ -388,10 +388,12 @@ pub struct StockMove {
         string = "Origin return move"
     )]
     pub origin_returned_move_id: Option<RecId>,
-    /// Owner the quants must belong to when the move is done.
+    /// Owner the quants must belong to when the move is done. `restrict` on delete:
+    /// the reference sets it null, which would silently unrestrict the move.
     #[field(
         many2one,
         comodel = "res.partner",
+        ondelete = "restrict",
         index = "btree_not_null",
         string = "Owner"
     )]

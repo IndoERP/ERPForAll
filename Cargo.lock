@@ -1252,6 +1252,8 @@ dependencies = [
 name = "erp-addon-stock"
 version = "0.1.0"
 dependencies = [
+ "erp-addon-account",
+ "erp-addon-analytic",
  "erp-addon-barcodes",
  "erp-addon-barcodes_gs1_nomenclature",
  "erp-addon-base",
@@ -1277,8 +1279,19 @@ dependencies = [
 name = "erp-addon-stock_account"
 version = "0.1.0"
 dependencies = [
+ "erp-addon-account",
+ "erp-addon-analytic",
+ "erp-addon-barcodes",
+ "erp-addon-barcodes_gs1_nomenclature",
+ "erp-addon-base",
+ "erp-addon-product",
  "erp-addon-stock",
+ "erp-addon-uom",
+ "erp-addon-web",
  "erp-sdk",
+ "erp-testkit",
+ "tokio",
+ "toml 0.8.23",
 ]
 
 [[package]]
@@ -1515,6 +1528,7 @@ dependencies = [
  "erp-addon-product-mail",
  "erp-addon-sample_library_wasm",
  "erp-addon-stock",
+ "erp-addon-stock_account",
  "erp-addon-theme-office-blue",
  "erp-addon-uom",
  "erp-addon-web",

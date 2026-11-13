@@ -88,6 +88,35 @@ pub struct OrgDoc {
         column2 = "org_id"
     )]
     pub follower_org_ids: Vec<RecId>,
+    #[field(many2one, comodel = "test_access.org_folder")]
+    pub folder_id: Option<RecId>,
+}
+
+/// A folder of organisation documents (it has no rule of its own): its many2one, one2many and
+/// many2many into `org_doc` carry the document rule into a search on folders, and `upper_id`
+/// nests one folder level above that.
+#[model(
+    name = "test_access.org_folder",
+    description = "Access Org Folder",
+    addon = "test_access"
+)]
+pub struct OrgFolder {
+    #[field(char)]
+    pub name: Option<Arc<str>>,
+    #[field(many2one, comodel = "test_access.org_doc")]
+    pub main_doc_id: Option<RecId>,
+    #[field(one2many, comodel = "test_access.org_doc", inverse_name = "folder_id")]
+    pub doc_ids: Vec<RecId>,
+    #[field(
+        many2many,
+        comodel = "test_access.org_doc",
+        relation = "test_access_org_folder_doc_rel",
+        column1 = "folder_id",
+        column2 = "doc_id"
+    )]
+    pub shared_doc_ids: Vec<RecId>,
+    #[field(many2one, comodel = "test_access.org_folder")]
+    pub upper_id: Option<RecId>,
 }
 
 /// A group of the tests' resolver (its id is the `GroupId`).

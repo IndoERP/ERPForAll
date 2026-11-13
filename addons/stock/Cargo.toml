@@ -18,6 +18,8 @@ erp-addon-barcodes_gs1_nomenclature = { workspace = true }
 workspace = true
 
 [dev-dependencies]
+erp-addon-account = { workspace = true }
+erp-addon-analytic = { workspace = true }
 erp-testkit = { workspace = true }
 toml = { workspace = true }
 erp-addon-base = { workspace = true }

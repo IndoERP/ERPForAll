@@ -1633,3 +1633,345 @@ async fn deleting_a_line_removes_its_serial_rows() {
     drop(tx);
     f.h.cleanup().await.unwrap();
 }
+
+// ---- Changing a product's tracking while lots, serials or open lines exist.
+// The decision reads the tracking tables written here by plain SQL; the product's `tracking` field and
+// its write path come with, which calls the check with the old and the new value.
+
+use erp_addon_stock::tracking::{Tracking, TrackingChange, check_tracking_change};
+
+const QUANT_SQL: &str = "INSERT INTO stock_quant (company_id, product_id, location_id, lot_id, \
+    quantity, reserved_quantity, in_date) VALUES ($1, $2, $3, $4, $5::text::numeric, 0, now())";
+const POSITION_SQL: &str = "INSERT INTO stock_serial_position (company_id, product_id, lot_id, \
+    location_id, quantity) VALUES ($1, $2, $3, $4, $5::text::numeric)";
+
+fn change(product_id: i64, from: Tracking, to: Tracking) -> TrackingChange {
+    TrackingChange {
+        product_id,
+        from,
+        to,
+    }
+}
+
+/// One quant row of the fixture's company and first location (`lot` empty for an untracked quant).
+async fn put_quant(f: &Fixture, tx: &mut Transaction, product: i64, lot: Option<i64>, qty: &str) {
+    tx.execute(QUANT_SQL, &[&f.company, &product, &f.location, &lot, &qty])
+        .await
+        .unwrap();
+}
+
+async fn put_position(f: &Fixture, tx: &mut Transaction, lot: i64, qty: &str) {
+    tx.execute(
+        POSITION_SQL,
+        &[&f.company, &f.product, &lot, &f.location, &qty],
+    )
+    .await
+    .unwrap();
+}
+
+/// The refusal text.6 for `product` (its display name read from the ORM) and `count`.
+async fn blocked_message(tx: &mut Transaction, product: i64, count: i64) -> String {
+    let name = tx
+        .env()
+        .records("product.product")
+        .unwrap()
+        .browse(vec![product])
+        .unwrap()
+        .cell(tx, "display_name")
+        .await
+        .unwrap();
+    let Cell::Str(name) = name else {
+        panic!("display_name is not text: {name:?}")
+    };
+    format!(
+        "Tracking of {name} cannot be changed while it has stock or open operations with lots or \
+         serial numbers ({count} found). Converting existing stock is not available yet (task \
+         a later release)."
+    )
+}
+
+/// field that calls it is's)
+#[tokio::test]
+async fn serial_stock_on_hand_blocks_a_tracking_change() {
+    let f = fixture().await;
+    let mut tx = f.h.begin().await.unwrap();
+    // (a) a serial product with one serial on hand: its quant and its position
+    put_quant(&f, &mut tx, f.product, Some(f.lot), "1").await;
+    put_position(&f, &mut tx, f.lot, "1").await;
+    let expected = blocked_message(&mut tx, f.product, 1).await;
+    for to in [Tracking::Untracked, Tracking::Lot] {
+        let error = check_tracking_change(&mut tx, &[change(f.product, Tracking::Serial, to)])
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Validation, "{error:?}");
+        assert_eq!(error.message(), expected, "to {to:?}");
+    }
+    // (b) a product with no rows converts: nothing names it
+    check_tracking_change(
+        &mut tx,
+        &[change(
+            f.other_product,
+            Tracking::Untracked,
+            Tracking::Serial,
+        )],
+    )
+    .await
+    .unwrap();
+    check_tracking_change(
+        &mut tx,
+        &[change(
+            f.other_product,
+            Tracking::Serial,
+            Tracking::Untracked,
+        )],
+    )
+    .await
+    .unwrap();
+    tx.rollback().await.unwrap();
+    drop(tx);
+    f.h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn open_serial_lines_block_a_tracking_change() {
+    let f = fixture().await;
+    let mut tx = f.h.begin().await.unwrap();
+    let line = insert(&mut tx, &line_sql(&f, f.mv, &[("child_mode", "true")]))
+        .await
+        .unwrap();
+    for lot in [f.lot, f.second_lot] {
+        let lot = lot.to_string();
+        insert(&mut tx, &child_sql(line, f.mv, &[("lot_id", lot.as_str())]))
+            .await
+            .unwrap();
+    }
+    let expected = blocked_message(&mut tx, f.product, 2).await;
+    let error = check_tracking_change(
+        &mut tx,
+        &[change(f.product, Tracking::Serial, Tracking::Lot)],
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Validation, "{error:?}");
+    assert_eq!(error.message(), expected);
+    // an inactive child is not open work
+    tx.execute("UPDATE stock_move_line_serial SET active = false", &[])
+        .await
+        .unwrap();
+    check_tracking_change(
+        &mut tx,
+        &[change(f.product, Tracking::Serial, Tracking::Lot)],
+    )
+    .await
+    .unwrap();
+    tx.rollback().await.unwrap();
+    drop(tx);
+    f.h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn conversions_that_rewrite_nothing_are_allowed_with_stock() {
+    let f = fixture().await;
+    let mut tx = f.h.begin().await.unwrap();
+    // untracked stock (no lot) and a lot-bearing quant plus an open line naming a lot
+    put_quant(&f, &mut tx, f.product, None, "5").await;
+    // untracked stock with no lot anywhere goes to lot or serial, nothing is rewritten
+    for to in [Tracking::Lot, Tracking::Serial] {
+        check_tracking_change(&mut tx, &[change(f.product, Tracking::Untracked, to)])
+            .await
+            .unwrap();
+    }
+    put_quant(&f, &mut tx, f.other_product, Some(f.other_product_lot), "3").await;
+    let lot = f.lot.to_string();
+    insert(&mut tx, &line_sql(&f, f.mv, &[("lot_id", lot.as_str())]))
+        .await
+        .unwrap();
+    for (product, from, to) in [
+        // untracked stock stays lot-less (the reference only warns)
+        (f.product, Tracking::Untracked, Tracking::Lot),
+        // lots stay on their quants and lines, and an untracked product's quants are summed whatever
+        // their lot
+        (f.other_product, Tracking::Lot, Tracking::Untracked),
+        (f.product, Tracking::Lot, Tracking::Untracked),
+        // no change at all
+        (f.other_product, Tracking::Serial, Tracking::Serial),
+        (f.other_product, Tracking::Lot, Tracking::Lot),
+    ] {
+        check_tracking_change(&mut tx, &[change(product, from, to)])
+            .await
+            .unwrap_or_else(|e| panic!("{from:?} to {to:?}: {e:?}"));
+    }
+    tx.rollback().await.unwrap();
+    drop(tx);
+    f.h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn what_blocks_a_conversion_is_stock_and_open_work_with_lots() {
+    let f = fixture().await;
+    let mut tx = f.h.begin().await.unwrap();
+    let lots_to_serial = |p: i64| [change(p, Tracking::Lot, Tracking::Serial)];
+    // a lot quant of quantity 3 blocks lot to serial; a zero row and a done line do not
+    put_quant(&f, &mut tx, f.other_product, Some(f.other_product_lot), "0").await;
+    check_tracking_change(&mut tx, &lots_to_serial(f.other_product))
+        .await
+        .unwrap();
+    let lot = f.lot.to_string();
+    insert(
+        &mut tx,
+        &line_sql(
+            &f,
+            f.mv,
+            &[
+                ("lot_id", lot.as_str()),
+                ("membership", "'done'"),
+                ("done_at", "now()"),
+            ],
+        ),
+    )
+    .await
+    .unwrap();
+    check_tracking_change(&mut tx, &lots_to_serial(f.product))
+        .await
+        .unwrap();
+    put_quant(&f, &mut tx, f.product, Some(f.lot), "3").await;
+    let expected = blocked_message(&mut tx, f.product, 1).await;
+    let error = check_tracking_change(&mut tx, &lots_to_serial(f.product))
+        .await
+        .unwrap_err();
+    assert_eq!(error.message(), expected);
+    // an open line naming the lot is the same lot, counted once; a second open line with another
+    // lot makes two
+    let open = |lot: i64, picked: &str| {
+        let lot = lot.to_string();
+        (lot, picked.to_owned())
+    };
+    for (lot, picked) in [open(f.lot, "false"), open(f.second_lot, "true")] {
+        insert(
+            &mut tx,
+            &line_sql(
+                &f,
+                f.second_move,
+                &[("lot_id", lot.as_str()), ("picked", picked.as_str())],
+            ),
+        )
+        .await
+        .unwrap();
+    }
+    let expected = blocked_message(&mut tx, f.product, 2).await;
+    let error = check_tracking_change(&mut tx, &lots_to_serial(f.product))
+        .await
+        .unwrap_err();
+    assert_eq!(error.message(), expected);
+    // a batch is refused as a whole, naming the lowest blocked product; one unblocked product in it
+    // does not matter
+    let error = check_tracking_change(
+        &mut tx,
+        &[
+            change(f.other_product, Tracking::Lot, Tracking::Serial),
+            change(f.product, Tracking::Lot, Tracking::Serial),
+        ],
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.message(), expected);
+    tx.rollback().await.unwrap();
+    drop(tx);
+    f.h.cleanup().await.unwrap();
+}
+
+/// A selection value outside none, lot and serial is refused by name, never read as untracked.
+#[test]
+fn unknown_tracking_value_is_refused() {
+    assert_eq!(Tracking::from_selection(None).unwrap(), Tracking::Untracked);
+    assert_eq!(
+        Tracking::from_selection(Some("lot")).unwrap(),
+        Tracking::Lot
+    );
+    assert_eq!(
+        Tracking::from_selection(Some("serial")).unwrap(),
+        Tracking::Serial
+    );
+    let error = Tracking::from_selection(Some("batch")).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Validation);
+    assert!(error.message().contains("'batch'"), "{}", error.message());
+}
+
+/// S2): a lot product with a lot on hand cannot become serial through untracked either
+#[tokio::test]
+async fn lot_to_untracked_to_serial_is_refused_like_lot_to_serial() {
+    let f = fixture().await;
+    let mut tx = f.h.begin().await.unwrap();
+    put_quant(&f, &mut tx, f.product, Some(f.lot), "3").await;
+    // step one is allowed, step two names the lot rows
+    check_tracking_change(
+        &mut tx,
+        &[change(f.product, Tracking::Lot, Tracking::Untracked)],
+    )
+    .await
+    .unwrap();
+    let expected = blocked_message(&mut tx, f.product, 1).await;
+    let error = check_tracking_change(
+        &mut tx,
+        &[change(f.product, Tracking::Untracked, Tracking::Serial)],
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Validation, "{error:?}");
+    assert_eq!(error.message(), expected);
+    // an open line naming a lot blocks the second step the same way
+    tx.execute("UPDATE stock_quant SET quantity = 0", &[])
+        .await
+        .unwrap();
+    let lot = f.second_lot.to_string();
+    insert(&mut tx, &line_sql(&f, f.mv, &[("lot_id", lot.as_str())]))
+        .await
+        .unwrap();
+    assert!(
+        check_tracking_change(
+            &mut tx,
+            &[change(f.product, Tracking::Untracked, Tracking::Serial)],
+        )
+        .await
+        .is_err()
+    );
+    tx.rollback().await.unwrap();
+    drop(tx);
+    f.h.cleanup().await.unwrap();
+}
+
+/// untracked, lot and serial with a lot quant on hand): a step is free when it keeps the mode or touches only untracked and lot; a path is
+/// accepted exactly when every step is free, so no sequence of free steps ends serial or leaves it
+#[tokio::test]
+async fn no_two_step_path_defeats_the_tracking_check() {
+    let f = fixture().await;
+    let mut tx = f.h.begin().await.unwrap();
+    put_quant(&f, &mut tx, f.product, Some(f.lot), "3").await;
+    let modes = [Tracking::Untracked, Tracking::Lot, Tracking::Serial];
+    let free =
+        |a: Tracking, b: Tracking| a == b || (a != Tracking::Serial && b != Tracking::Serial);
+    for a in modes {
+        for b in modes {
+            for c in modes {
+                let mut accepted = true;
+                for (from, to) in [(a, b), (b, c)] {
+                    if check_tracking_change(&mut tx, &[change(f.product, from, to)])
+                        .await
+                        .is_err()
+                    {
+                        accepted = false;
+                        break;
+                    }
+                }
+                assert_eq!(
+                    accepted,
+                    free(a, b) && free(b, c),
+                    "{a:?} -> {b:?} -> {c:?}"
+                );
+            }
+        }
+    }
+    tx.rollback().await.unwrap();
+    drop(tx);
+    f.h.cleanup().await.unwrap();
+}

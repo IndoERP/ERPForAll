@@ -201,8 +201,13 @@ fn real_rows(rows: FxHashSet<RecId>, spec: &ModelSpec) -> Result<FxHashSet<RealI
         .collect()
 }
 
-pub(crate) fn bypass_traversals(domain: &Domain) -> Result<Domain> {
-    if !has_checked_traversal(domain) {
+/// `domain` is on `model`.
+pub(crate) fn bypass_traversals(
+    registry: &erp_registry::Registry,
+    model: &ModelSpec,
+    domain: &Domain,
+) -> Result<Domain> {
+    if !has_checked_traversal(registry, model, domain) {
         return Ok(domain.clone());
     }
     let mut failure: Option<Error> = None;
@@ -213,36 +218,11 @@ pub(crate) fn bypass_traversals(domain: &Domain) -> Result<Domain> {
         let Some(condition) = node.as_condition() else {
             return node.clone();
         };
-        let operator = match condition.operator() {
-            Operator::Any => Operator::AnyBypass,
-            Operator::NotAny => Operator::NotAnyBypass,
-            other => other,
-        };
-        let value = match condition.value() {
-            Value::Domain(sub) => match bypass_traversals(sub) {
-                Ok(sub) => Value::Domain(sub),
-                Err(error) => {
-                    failure = Some(error);
-                    return node.clone();
-                }
-            },
-            // a reference query holds a predicate on its target model: its traversals bypass too
-            // (Amendment 1)
-            value if let Some(query) = ReferenceQuery::of(value) => {
-                match bypass_traversals(query.sub()) {
-                    Ok(sub) => query.with_sub(sub).into_value(),
-                    Err(error) => {
-                        failure = Some(error);
-                        return node.clone();
-                    }
-                }
-            }
-            other => other.clone(),
-        };
-        match Domain::condition(condition.field_expr(), operator, value) {
-            Ok(done) => done,
+        match bypass_condition(registry, model, condition) {
+            Ok(Some(done)) => done,
+            Ok(None) => node.clone(),
             Err(error) => {
-                failure = Some(error.into());
+                failure = Some(error);
                 node.clone()
             }
         }
@@ -253,18 +233,89 @@ pub(crate) fn bypass_traversals(domain: &Domain) -> Result<Domain> {
     }
 }
 
-fn has_checked_traversal(domain: &Domain) -> bool {
+/// The relational head of a path condition (`head.rest`) on `model`: its comodel and the rest.
+fn relational_path<'r>(
+    registry: &'r erp_registry::Registry,
+    model: &ModelSpec,
+    field_expr: &'r str,
+) -> Option<(&'r str, &'r str, &'r ModelSpec)> {
+    let (head, rest) = field_expr.split_once('.')?;
+    if rest.is_empty() {
+        return None;
+    }
+    let comodel = registry.model(model.field(head)?.ty.comodel()?)?;
+    Some((head, rest, comodel))
+}
+
+/// The comodel a sub-domain of `field_expr` on `model` is on, when the registry knows it (an
+/// unknown field fails in the optimizer that sees the domain next).
+fn sub_model<'r>(
+    registry: &'r erp_registry::Registry,
+    model: &ModelSpec,
+    field_expr: &str,
+) -> Option<&'r ModelSpec> {
+    registry.model(model.field(field_expr)?.ty.comodel()?)
+}
+
+fn bypass_condition(
+    registry: &erp_registry::Registry,
+    model: &ModelSpec,
+    condition: &erp_domain::Condition,
+) -> Result<Option<Domain>> {
+    if let Some((head, rest, comodel)) = relational_path(registry, model, condition.field_expr()) {
+        let sub = Domain::condition(rest, condition.operator(), condition.value().clone())?;
+        let sub = bypass_traversals(registry, comodel, &sub)?;
+        return Domain::condition(head, Operator::AnyBypass, Value::Domain(sub))
+            .map(Some)
+            .map_err(Error::from);
+    }
+    let operator = match condition.operator() {
+        Operator::Any => Operator::AnyBypass,
+        Operator::NotAny => Operator::NotAnyBypass,
+        other => other,
+    };
+    let value = match condition.value() {
+        Value::Domain(sub) => match sub_model(registry, model, condition.field_expr()) {
+            Some(comodel) => Value::Domain(bypass_traversals(registry, comodel, sub)?),
+            // an unknown field: the optimizer refuses it next
+            None => Value::Domain(sub.clone()),
+        },
+        // a reference query holds a predicate on its target model: its traversals bypass too
+        // (Amendment 1)
+        value if let Some(query) = ReferenceQuery::of(value) => {
+            let target = crate::search_method::reference_target(registry, query)?;
+            query
+                .with_sub(bypass_traversals(registry, target, query.sub())?)
+                .into_value()
+        }
+        other => other.clone(),
+    };
+    Domain::condition(condition.field_expr(), operator, value)
+        .map(Some)
+        .map_err(Error::from)
+}
+
+fn has_checked_traversal(
+    registry: &erp_registry::Registry,
+    model: &ModelSpec,
+    domain: &Domain,
+) -> bool {
     match domain.kind() {
         DomainKind::True | DomainKind::False | DomainKind::Custom(_) => false,
-        DomainKind::Not(child) => has_checked_traversal(child),
-        DomainKind::And(children) | DomainKind::Or(children) => {
-            children.iter().any(has_checked_traversal)
-        }
+        DomainKind::Not(child) => has_checked_traversal(registry, model, child),
+        DomainKind::And(children) | DomainKind::Or(children) => children
+            .iter()
+            .any(|c| has_checked_traversal(registry, model, c)),
         DomainKind::Condition(condition) => {
             matches!(condition.operator(), Operator::Any | Operator::NotAny)
-                || matches!(condition.value(), Value::Domain(sub) if has_checked_traversal(sub))
-                || ReferenceQuery::of(condition.value())
-                    .is_some_and(|query| has_checked_traversal(query.sub()))
+                || relational_path(registry, model, condition.field_expr()).is_some()
+                || matches!(condition.value(), Value::Domain(sub)
+                    if sub_model(registry, model, condition.field_expr())
+                        .is_some_and(|co| has_checked_traversal(registry, co, sub)))
+                || ReferenceQuery::of(condition.value()).is_some_and(|query| {
+                    crate::search_method::reference_target(registry, query)
+                        .is_ok_and(|target| has_checked_traversal(registry, target, query.sub()))
+                })
         }
     }
 }
@@ -309,7 +360,11 @@ impl Transaction {
         op: Operation,
     ) -> Result<Domain> {
         let access = self.access_domain(env, model, op)?;
-        bypass_traversals(access.domain())
+        bypass_traversals(
+            self.registry(),
+            self.registry().model_by_id(model),
+            access.domain(),
+        )
     }
 
     /// New records are kept (their origin
@@ -632,7 +687,7 @@ impl Transaction {
         if restriction.is_true() {
             return Ok(ids.iter().copied().collect());
         }
-        let predicate = bypass_traversals(restriction.domain())?;
+        let predicate = bypass_traversals(env.registry(), spec, restriction.domain())?;
         let probe = Records::from_parts(
             env.clone(),
             spec.id,
@@ -787,7 +842,7 @@ impl Transaction {
         let mut selects: Vec<String> = Vec::with_capacity(columns.len());
         let mut compiled: Vec<Arc<Compiled>> = Vec::with_capacity(columns.len());
         for column in &columns {
-            let predicate = bypass_traversals(column.domain())?;
+            let predicate = bypass_traversals(&registry, spec, column.domain())?;
             let c =
                 crate::search::compile_predicate_at(self, &probe, &predicate, params.len()).await?;
             match c.constant {
@@ -930,7 +985,9 @@ impl Transaction {
         }
         let su = Records::empty(env.engine_sudo(), spec.id)
             .browse_ids(shown.iter().map(|(_, id)| *id).collect::<Vec<_>>());
-        let cells = su.cells(self, "display_name").await?;
+        // read for the asking reader: a label that depends on its reader (a vendor code in a product
+        // label) must not answer with the superuser's view in an access error
+        let cells = self.display_names_for(&su, env).await?;
         for ((i, _), cell) in shown.into_iter().zip(cells) {
             names[i] = match cell {
                 Cell::Str(name) => Some(name.to_string()),
@@ -970,7 +1027,7 @@ impl Transaction {
         {
             return Ok(None);
         }
-        let predicate = bypass_traversals(access.domain())?;
+        let predicate = bypass_traversals(env.registry(), spec, access.domain())?;
         let probe = Records::from_parts(
             env.clone(),
             spec.id,

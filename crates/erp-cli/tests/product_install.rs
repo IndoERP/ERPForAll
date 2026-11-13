@@ -411,6 +411,67 @@ fn company_and_branch_scoping_for_a_real_user() {
             .await
             .unwrap()
             .ids()[0];
+        let shared = templates
+            .search(
+                &mut tx,
+                &erp_sdk::Domain::condition("name", erp_sdk::Operator::Eq, "Shared product")
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .ids()[0];
+        let shared_variant = tx
+            .env()
+            .records("product.product")
+            .unwrap()
+            .search(
+                &mut tx,
+                &erp_sdk::Domain::condition("product_tmpl_id", erp_sdk::Operator::Eq, shared)
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .ids()[0];
+        let vendor = tx
+            .env()
+            .records("res.partner")
+            .unwrap()
+            .create(
+                &mut tx,
+                vec![RawVals::new().set_cell("name", Cell::Str("Shared vendor".into()))],
+            )
+            .await
+            .unwrap()
+            .ids()[0];
+        let mut supplier_ids = Vec::new();
+        for company in [Some(main), Some(branch), Some(other), None] {
+            let suppliers = tx
+                .env()
+                .with_company(main)
+                .unwrap()
+                .records("product.supplierinfo")
+                .unwrap();
+            let row = suppliers
+                .create(
+                    &mut tx,
+                    vec![
+                        RawVals::new()
+                            .set_cell("partner_id", Cell::Id(vendor))
+                            .set_cell("product_id", Cell::Id(shared_variant))
+                            .set_cell(
+                                "company_id",
+                                match company {
+                                    Some(id) => Cell::Id(id),
+                                    None => Cell::Null,
+                                },
+                            )
+                            .set_cell("price", Cell::Decimal(erp_sdk::Decimal::ONE)),
+                    ],
+                )
+                .await
+                .unwrap();
+            supplier_ids.push(row.ids()[0]);
+        }
         tx.commit().await.unwrap();
         drop(tx);
 
@@ -446,6 +507,25 @@ fn company_and_branch_scoping_for_a_real_user() {
             visible_items.ids(),
             vec![parent_item],
             "a branch user reads the parent company's pricelist rules, not another company's"
+        );
+        let product = utx
+            .env()
+            .records("product.product")
+            .unwrap()
+            .browse([shared_variant])
+            .unwrap();
+        let eligible: erp_orm::Records = product
+            .call(
+                &mut utx,
+                "_get_filtered_sellers",
+                (erp_addon_product::SellerQuery::default().with_quantity(None),),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            eligible.ids(),
+            vec![supplier_ids[1], supplier_ids[3]],
+            "a real branch user selects branch/shared rows, excluding readable ancestor rows and hidden unrelated rows"
         );
 
         // same barcode in a disjoint company is allowed
@@ -486,6 +566,150 @@ fn company_and_branch_scoping_for_a_real_user() {
         assert!(err.message().contains("SECRET-X"), "{}", err.message());
         utx.rollback().await.unwrap();
         db.cleanup().await.unwrap();
+    });
+}
+
+/// Installed-schema upgrade exercise; legacy shape/version are simulated explicitly.
+/// This does not claim an old-binary install was executed.
+#[test]
+fn supplier_unit_upgrade_preserves_terms_and_refuses_invalid_sources() {
+    big_stack(async {
+        for invalid in [false, true] {
+            let db = TestDb::create().await.unwrap();
+            let (system, orm) = install(&db).await;
+            let main = xid(&orm, "base", "main_company").await;
+            let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+            let env = tx.env().with_company(main).unwrap();
+            let vendor = env
+                .records("res.partner")
+                .unwrap()
+                .create(
+                    &mut tx,
+                    vec![RawVals::new().set_cell("name", Cell::Str("Upgrade vendor".into()))],
+                )
+                .await
+                .unwrap()
+                .ids()[0];
+            let template = env
+                .records("product.template")
+                .unwrap()
+                .create(
+                    &mut tx,
+                    vec![RawVals::new().set_cell("name", Cell::Str("Upgrade part".into()))],
+                )
+                .await
+                .unwrap();
+            let template_id = template.ids()[0];
+            let unit = template.cell(&mut tx, "uom_id").await.unwrap();
+            let row = env
+                .records("product.supplierinfo")
+                .unwrap()
+                .create(
+                    &mut tx,
+                    vec![
+                        RawVals::new()
+                            .set_cell("partner_id", Cell::Id(vendor))
+                            .set_cell("product_tmpl_id", Cell::Id(template_id))
+                            .set_cell("company_id", Cell::Null)
+                            .set_cell("price", Cell::Decimal(erp_sdk::Decimal::new(1234, 2))),
+                    ],
+                )
+                .await
+                .unwrap()
+                .ids()[0];
+            tx.flush().await.unwrap();
+            tx.batch(
+                "ALTER TABLE product_supplierinfo DROP COLUMN uom_id;
+                ALTER TABLE product_supplierinfo ALTER COLUMN min_qty DROP NOT NULL;
+                UPDATE product_supplierinfo SET min_qty = NULL;
+                UPDATE ir_module_module SET latest_version = '1.0.0' WHERE name = 'product';",
+            )
+            .await
+            .unwrap();
+            if invalid {
+                tx.batch("ALTER TABLE product_template ALTER COLUMN uom_id DROP NOT NULL")
+                    .await
+                    .unwrap();
+                tx.execute(
+                    "UPDATE product_template SET uom_id = NULL WHERE id=$1",
+                    &[&template_id],
+                )
+                .await
+                .unwrap();
+            }
+            tx.commit().await.unwrap();
+            let env = system.system_env(Context::new());
+            let result = system
+                .button_immediate_upgrade(&env, &[ModuleName::new("product").unwrap()])
+                .await;
+            if invalid {
+                let error = match result {
+                    Err(error) => error,
+                    Ok(_) => panic!("bad legacy product link must refuse upgrade"),
+                };
+                let error = match error {
+                    erp_modules::Error::StepFailed { source, .. } => *source,
+                    other => other,
+                };
+                match error {
+                    erp_modules::Error::MigrationFailed { source, .. } => {
+                        assert_eq!(source.kind(), erp_sdk::ErrorKind::Validation);
+                        assert_eq!(
+                            source.message(),
+                            format!(
+                                "Vendor unit migration refused 1 supplier rows with missing or inconsistent product/unit links; first IDs: {row}."
+                            )
+                        );
+                    }
+                    other => panic!("unexpected upgrade error: {other:?}"),
+                }
+                let client = db.pool().get().await.unwrap();
+                let column: bool = client.query_one("SELECT EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid='product_supplierinfo'::regclass AND attname='uom_id' AND NOT attisdropped)",&[]).await.unwrap().get(0);
+                assert!(
+                    !column,
+                    "failed lifecycle must roll back the added unit column"
+                );
+                let version: String = client
+                    .query_one(
+                        "SELECT latest_version FROM ir_module_module WHERE name='product'",
+                        &[],
+                    )
+                    .await
+                    .unwrap()
+                    .get(0);
+                assert_eq!(version, "1.0.0");
+            } else {
+                let upgraded = result.unwrap();
+                assert!(
+                    upgraded.post_commit.is_clean(),
+                    "{:?}",
+                    upgraded.post_commit
+                );
+                let mut tx = upgraded.orm.begin(SUPERUSER_ID).await.unwrap();
+                let row = tx
+                    .env()
+                    .records("product.supplierinfo")
+                    .unwrap()
+                    .browse([row])
+                    .unwrap();
+                assert_eq!(row.cell(&mut tx, "uom_id").await.unwrap(), unit);
+                assert_eq!(row.cell(&mut tx, "company_id").await.unwrap(), Cell::Null);
+                assert_eq!(
+                    row.cell(&mut tx, "price").await.unwrap(),
+                    Cell::Decimal(erp_sdk::Decimal::new(1234, 2))
+                );
+                assert_eq!(
+                    row.cell(&mut tx, "min_qty").await.unwrap(),
+                    Cell::Decimal(erp_sdk::Decimal::ZERO)
+                );
+                tx.rollback().await.unwrap();
+                drop(tx);
+                drop(upgraded);
+            }
+            drop(system);
+            drop(orm);
+            db.cleanup().await.unwrap();
+        }
     });
 }
 
@@ -627,6 +851,96 @@ fn every_product_view_is_served_to_a_product_manager() {
             audit_tx.commit().await.unwrap();
         }
         let service = RpcService::new(orm.clone(), Host, RpcConfig::default());
+        let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+        let env = tx.env().with_company(main).unwrap();
+        let vendor = env
+            .records("res.partner")
+            .unwrap()
+            .create(
+                &mut tx,
+                vec![RawVals::new().set_cell("name", Cell::Str("RPC vendor".into()))],
+            )
+            .await
+            .unwrap()
+            .ids()[0];
+        let mut templates = Vec::new();
+        for name in ["RPC supplier part", "RPC other part"] {
+            templates.push(
+                env.records("product.template")
+                    .unwrap()
+                    .create(
+                        &mut tx,
+                        vec![RawVals::new().set_cell("name", Cell::Str(name.into()))],
+                    )
+                    .await
+                    .unwrap()
+                    .ids()[0],
+            );
+        }
+        let variant = env
+            .records("product.product")
+            .unwrap()
+            .search(
+                &mut tx,
+                &erp_sdk::Domain::condition("product_tmpl_id", erp_sdk::Operator::Eq, templates[0])
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .ids()[0];
+        tx.commit().await.unwrap();
+        let response = service.call(RpcCall::json2("/json/2/product.supplierinfo/create",
+            serde_json::to_vec(&serde_json::json!({"vals_list":[{"partner_id":vendor,"product_id":variant,"price":"100","discount":"15","min_qty":"1.25"}]})).unwrap(),
+            Caller::Principal(principal.clone()))).await;
+        assert_eq!(
+            response.status(),
+            200,
+            "{}",
+            String::from_utf8_lossy(response.body())
+        );
+        let created: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        let supplier = created[0].as_i64().unwrap();
+        let response = service.call(RpcCall::json2("/json/2/product.supplierinfo/read",
+            serde_json::to_vec(&serde_json::json!({"ids":[supplier],"load":null,"fields":["product_tmpl_id","company_id","price_discounted","min_qty"]})).unwrap(),
+            Caller::Principal(principal.clone()))).await;
+        assert_eq!(
+            response.status(),
+            200,
+            "{}",
+            String::from_utf8_lossy(response.body())
+        );
+        let read: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(read[0]["product_tmpl_id"], templates[0]);
+        assert_eq!(read[0]["company_id"], main);
+        assert_eq!(read[0]["price_discounted"], 85);
+        assert_eq!(read[0]["min_qty"].to_string(), "1.25");
+        let response = service.call(RpcCall::json2("/json/2/product.supplierinfo/onchange",
+            serde_json::to_vec(&serde_json::json!({"ids":[supplier],"values":{"partner_id":vendor,"product_id":variant,"product_tmpl_id":templates[1]},"field_names":["product_tmpl_id"],"fields_spec":{"product_id":{},"product_tmpl_id":{},"uom_id":{}}})).unwrap(),
+            Caller::Principal(principal.clone()))).await;
+        assert_eq!(
+            response.status(),
+            200,
+            "{}",
+            String::from_utf8_lossy(response.body())
+        );
+        let onchange: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(onchange["value"]["product_id"], false, "{onchange}");
+        let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+        let stored = tx
+            .env()
+            .records("product.supplierinfo")
+            .unwrap()
+            .browse([supplier])
+            .unwrap();
+        assert_eq!(
+            stored.cell(&mut tx, "product_id").await.unwrap(),
+            Cell::Id(variant)
+        );
+        assert_eq!(
+            stored.cell(&mut tx, "product_tmpl_id").await.unwrap(),
+            Cell::Id(templates[0])
+        );
+        tx.rollback().await.unwrap();
         let mut refused = Vec::new();
         for (id, model, kind) in &views {
             for mobile in [false, true] {
@@ -1002,4 +1316,474 @@ fn product_and_stock_install_together() {
         );
         db.cleanup().await.unwrap();
     });
+}
+
+#[test]
+fn installed_product_labels_respect_supplier_acl_on_rpc_and_relations() {
+    big_stack(async {
+        let db = TestDb::create().await.unwrap();
+        let (_system, installed) = install(&db).await;
+        let main = xid(&installed, "base", "main_company").await;
+        let group = xid(&installed, "base", "group_user").await;
+        let unit = xid(&installed, "uom", "product_uom_unit").await;
+        let mut seed = installed.begin(SUPERUSER_ID).await.unwrap();
+        let env = seed.env().with_company(main).unwrap();
+        let currency = env
+            .records("res.company")
+            .unwrap()
+            .browse([main])
+            .unwrap()
+            .cell(&mut seed, "currency_id")
+            .await
+            .unwrap();
+        let template = env
+            .records("product.template")
+            .unwrap()
+            .create(
+                &mut seed,
+                vec![
+                    RawVals::new()
+                        .set_cell("name", Cell::Str("Public chair".into()))
+                        .set_cell("default_code", Cell::Str("PUBLIC".into())),
+                ],
+            )
+            .await
+            .unwrap();
+        let variant = env
+            .records("product.product")
+            .unwrap()
+            .search(
+                &mut seed,
+                &erp_sdk::Domain::condition(
+                    "product_tmpl_id",
+                    erp_sdk::Operator::Eq,
+                    template.ids()[0],
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        let vendor = env
+            .records("res.partner")
+            .unwrap()
+            .create(
+                &mut seed,
+                vec![RawVals::new().set_cell("name", Cell::Str("Label vendor".into()))],
+            )
+            .await
+            .unwrap()
+            .ids()[0];
+        env.records("product.supplierinfo")
+            .unwrap()
+            .create(
+                &mut seed,
+                vec![
+                    RawVals::new()
+                        .set_cell("partner_id", Cell::Id(vendor))
+                        .set_cell("product_tmpl_id", Cell::Id(template.ids()[0]))
+                        .set_cell("product_id", Cell::Id(variant.ids()[0]))
+                        .set_cell("currency_id", currency)
+                        .set_cell("company_id", Cell::Id(main))
+                        .set_cell("product_code", Cell::Str("PRIVATE".into()))
+                        .set_cell(
+                            "product_name",
+                            Cell::Str("Private supplier description".into()),
+                        ),
+                ],
+            )
+            .await
+            .unwrap();
+        let packaging = env
+            .records("product.uom")
+            .unwrap()
+            .create(
+                &mut seed,
+                vec![
+                    RawVals::new()
+                        .set_cell("product_id", Cell::Id(variant.ids()[0]))
+                        .set_cell("uom_id", Cell::Id(unit))
+                        .set_cell("barcode", Cell::Str("LABEL-HOLDER".into())),
+                ],
+            )
+            .await
+            .unwrap()
+            .ids()[0];
+        let admin_group = xid(&installed, "base", "group_system").await;
+        env.records("res.users")
+            .unwrap()
+            .create(
+                &mut seed,
+                vec![
+                    RawVals::new()
+                        .set_cell("name", Cell::Str("Label admin".into()))
+                        .set_cell("login", Cell::Str("label-admin".into()))
+                        .set_cell("company_id", Cell::Id(main))
+                        .set_commands(
+                            "company_ids",
+                            [Command::Set(vec![RecId::from_real(main).unwrap()])],
+                        )
+                        .set_commands(
+                            "group_ids",
+                            [Command::Set(vec![RecId::from_real(admin_group).unwrap()])],
+                        ),
+                ],
+            )
+            .await
+            .unwrap();
+        let user = env
+            .records("res.users")
+            .unwrap()
+            .create(
+                &mut seed,
+                vec![
+                    RawVals::new()
+                        .set_cell("name", Cell::Str("Label reader".into()))
+                        .set_cell("login", Cell::Str("label-reader".into()))
+                        .set_cell("company_id", Cell::Id(main))
+                        .set_commands(
+                            "company_ids",
+                            [Command::Set(vec![RecId::from_real(main).unwrap()])],
+                        )
+                        .set_commands(
+                            "group_ids",
+                            [Command::Set(vec![RecId::from_real(group).unwrap()])],
+                        ),
+                ],
+            )
+            .await
+            .unwrap()
+            .ids()[0];
+        seed.commit().await.unwrap();
+        drop(seed);
+        let allowed_orm = product_policy_orm(&installed, &db).await;
+        let mut switched = allowed_orm.begin(SUPERUSER_ID).await.unwrap();
+        let switched_env = switched
+            .env()
+            .with_user(user)
+            .with_context([("partner_id", erp_sdk::Value::Int(vendor))]);
+        assert!(
+            switched_env.companies().unwrap().is_empty(),
+            "fixture must use an unresolved switch without explicit companies"
+        );
+        assert_eq!(
+            switched
+                .companies(&switched_env)
+                .await
+                .unwrap()
+                .iter()
+                .map(|id| id.get())
+                .collect::<Vec<_>>(),
+            [main]
+        );
+        let visible = switched_env
+            .records("product.product")
+            .unwrap()
+            .browse(variant.ids().iter().copied())
+            .unwrap();
+        assert_eq!(
+            visible.cell(&mut switched, "display_name").await.unwrap(),
+            Cell::Str("[PRIVATE] Private supplier description".into())
+        );
+        switched.rollback().await.unwrap();
+        drop(switched);
+        drop(allowed_orm);
+        // Remove actual installed read ACLs, rather than assuming the base user lacks them.
+        let mut seed = installed.begin(SUPERUSER_ID).await.unwrap();
+        seed.execute("DELETE FROM ir_access WHERE model_id IN (SELECT id FROM ir_model WHERE model = 'product.supplierinfo') AND operation = 'r'", &[]).await.unwrap();
+        seed.commit().await.unwrap();
+        drop(seed);
+        let orm = product_policy_orm(&installed, &db).await;
+        let mut tx = orm.begin(UserId::new(user).unwrap()).await.unwrap();
+        assert!(
+            !tx.env()
+                .records("product.supplierinfo")
+                .unwrap()
+                .has_access(&mut tx, erp_orm::Operation::Read)
+                .await
+                .unwrap()
+        );
+        let reader = tx
+            .env()
+            .clone()
+            .with_context([("partner_id", erp_sdk::Value::Int(vendor))]);
+        let product = reader
+            .records("product.product")
+            .unwrap()
+            .browse(variant.ids().iter().copied())
+            .unwrap();
+        for (field, expected) in [
+            ("display_name", "[PUBLIC] Public chair"),
+            ("code", "PUBLIC"),
+            ("partner_ref", "[PUBLIC] Public chair"),
+        ] {
+            assert_eq!(
+                product.cell(&mut tx, field).await.unwrap(),
+                Cell::Str(expected.into())
+            );
+        }
+        let linked = reader
+            .records("product.uom")
+            .unwrap()
+            .browse([packaging])
+            .unwrap()
+            .read(&mut tx, &["product_id"])
+            .await
+            .unwrap();
+        assert_eq!(
+            linked[0]["product_id"],
+            erp_sdk::Value::list([
+                erp_sdk::Value::Int(variant.ids()[0]),
+                erp_sdk::Value::str("[PUBLIC] Public chair")
+            ])
+        );
+        let principal = tx.env().principal().clone();
+        tx.rollback().await.unwrap();
+        drop(tx);
+        let service = RpcService::new(orm, Host, RpcConfig::default());
+        let response = service.call(RpcCall::json2("/json/2/product.product/read",
+            serde_json::to_vec(&serde_json::json!({"ids": [variant.ids()[0]], "fields": ["display_name", "code", "partner_ref"], "context": {"partner_id": vendor}})).unwrap(), Caller::Principal(principal))).await;
+        assert_eq!(
+            response.status(),
+            200,
+            "{}",
+            String::from_utf8_lossy(response.body())
+        );
+        let result: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(
+            result[0]["display_name"], "[PUBLIC] Public chair",
+            "{result}"
+        );
+        assert_eq!(result[0]["code"], "PUBLIC", "{result}");
+        assert_eq!(
+            result[0]["partner_ref"], "[PUBLIC] Public chair",
+            "{result}"
+        );
+        db.cleanup().await.unwrap();
+    });
+}
+
+/// the label its reader may see)
+///
+/// A debugging internal user (`base.group_no_one`) is denied a product by a record rule while
+/// `partner_id` of a vendor with a supplier row is in the context: the error lists the product by
+/// the vendor label while the user may read supplier rows, and by the public label once that read
+/// access is removed (cycle 12 review round 3, M1: the listing read the label as superuser).
+#[test]
+fn installed_access_error_lists_a_product_by_the_label_its_reader_may_see() {
+    big_stack(async {
+        let db = TestDb::create().await.unwrap();
+        let (_system, installed) = install(&db).await;
+        let main = xid(&installed, "base", "main_company").await;
+        let internal = xid(&installed, "base", "group_user").await;
+        let mut seed = installed.begin(SUPERUSER_ID).await.unwrap();
+        let env = seed.env().with_company(main).unwrap();
+        // the install does not seed `base.group_no_one`: name a group so before the policy compiles
+        let no_one = env
+            .records("res.groups")
+            .unwrap()
+            .create(
+                &mut seed,
+                vec![RawVals::new().set_cell("name", Cell::Str("Technical features".into()))],
+            )
+            .await
+            .unwrap()
+            .ids()[0];
+        env.records("ir.model.data")
+            .unwrap()
+            .create(
+                &mut seed,
+                vec![
+                    RawVals::new()
+                        .set_cell("module", Cell::Str("base".into()))
+                        .set_cell("name", Cell::Str("group_no_one".into()))
+                        .set_cell("model", Cell::Str("res.groups".into()))
+                        .set_cell("res_id", Cell::Id(no_one))
+                        .set_cell("noupdate", Cell::Bool(true)),
+                ],
+            )
+            .await
+            .unwrap();
+        let currency = env
+            .records("res.company")
+            .unwrap()
+            .browse([main])
+            .unwrap()
+            .cell(&mut seed, "currency_id")
+            .await
+            .unwrap();
+        let template = env
+            .records("product.template")
+            .unwrap()
+            .create(
+                &mut seed,
+                vec![
+                    RawVals::new()
+                        .set_cell("name", Cell::Str("Public chair".into()))
+                        .set_cell("default_code", Cell::Str("PUBLIC".into())),
+                ],
+            )
+            .await
+            .unwrap();
+        let variant = env
+            .records("product.product")
+            .unwrap()
+            .search(
+                &mut seed,
+                &erp_sdk::Domain::condition(
+                    "product_tmpl_id",
+                    erp_sdk::Operator::Eq,
+                    template.ids()[0],
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap()
+            .ids()[0];
+        let vendor = env
+            .records("res.partner")
+            .unwrap()
+            .create(
+                &mut seed,
+                vec![RawVals::new().set_cell("name", Cell::Str("Label vendor".into()))],
+            )
+            .await
+            .unwrap()
+            .ids()[0];
+        env.records("product.supplierinfo")
+            .unwrap()
+            .create(
+                &mut seed,
+                vec![
+                    RawVals::new()
+                        .set_cell("partner_id", Cell::Id(vendor))
+                        .set_cell("product_tmpl_id", Cell::Id(template.ids()[0]))
+                        .set_cell("product_id", Cell::Id(variant))
+                        .set_cell("currency_id", currency)
+                        .set_cell("company_id", Cell::Id(main))
+                        .set_cell("product_code", Cell::Str("PRIVATE".into()))
+                        .set_cell(
+                            "product_name",
+                            Cell::Str("Private supplier description".into()),
+                        ),
+                ],
+            )
+            .await
+            .unwrap();
+        // a user write needs an administrator to remain (as in the test above)
+        let admin_group = xid(&installed, "base", "group_system").await;
+        env.records("res.users")
+            .unwrap()
+            .create(
+                &mut seed,
+                vec![
+                    RawVals::new()
+                        .set_cell("name", Cell::Str("Debug admin".into()))
+                        .set_cell("login", Cell::Str("debug-admin".into()))
+                        .set_cell("company_id", Cell::Id(main))
+                        .set_commands(
+                            "company_ids",
+                            [Command::Set(vec![RecId::from_real(main).unwrap()])],
+                        )
+                        .set_commands(
+                            "group_ids",
+                            [Command::Set(vec![RecId::from_real(admin_group).unwrap()])],
+                        ),
+                ],
+            )
+            .await
+            .unwrap();
+        let user = env
+            .records("res.users")
+            .unwrap()
+            .create(
+                &mut seed,
+                vec![
+                    RawVals::new()
+                        .set_cell("name", Cell::Str("Debug reader".into()))
+                        .set_cell("login", Cell::Str("debug-reader".into()))
+                        .set_cell("company_id", Cell::Id(main))
+                        .set_commands(
+                            "company_ids",
+                            [Command::Set(vec![RecId::from_real(main).unwrap()])],
+                        )
+                        .set_commands(
+                            "group_ids",
+                            [Command::Set(vec![
+                                RecId::from_real(internal).unwrap(),
+                                RecId::from_real(no_one).unwrap(),
+                            ])],
+                        ),
+                ],
+            )
+            .await
+            .unwrap()
+            .ids()[0];
+        // a global record rule that hides this one product from read
+        seed.execute(
+            "INSERT INTO ir_access (name, model_id, group_id, operation, domain, active) \
+             SELECT 'hide the label product', id, NULL, 'r', $1, true FROM ir_model \
+             WHERE model = 'product.product'",
+            &[&format!("[('id', '!=', {variant})]")],
+        )
+        .await
+        .unwrap();
+        seed.commit().await.unwrap();
+        drop(seed);
+        // the access error of a read of the product, as the debugging reader with the vendor in context
+        let denied = async |orm: &Orm| {
+            let mut tx = orm.begin(UserId::new(user).unwrap()).await.unwrap();
+            let reader = tx
+                .env()
+                .with_debug(true)
+                .with_context([("partner_id", erp_sdk::Value::Int(vendor))]);
+            let error = reader
+                .records("product.product")
+                .unwrap()
+                .browse([variant])
+                .unwrap()
+                .cell(&mut tx, "display_name")
+                .await
+                .unwrap_err();
+            tx.rollback().await.unwrap();
+            assert_eq!(error.kind(), erp_sdk::ErrorKind::Access, "{error}");
+            error.message().to_owned()
+        };
+        let with_supplier_read = denied(&product_policy_orm(&installed, &db).await).await;
+        assert!(
+            with_supplier_read.contains("[PRIVATE] Private supplier description"),
+            "{with_supplier_read}"
+        );
+        let mut seed = installed.begin(SUPERUSER_ID).await.unwrap();
+        seed.execute("DELETE FROM ir_access WHERE model_id IN (SELECT id FROM ir_model WHERE model = 'product.supplierinfo') AND operation = 'r'", &[]).await.unwrap();
+        seed.commit().await.unwrap();
+        drop(seed);
+        let without = denied(&product_policy_orm(&installed, &db).await).await;
+        assert!(
+            without.contains(&format!(
+                "[PUBLIC] Public chair (product.product: {variant})"
+            )),
+            "{without}"
+        );
+        assert!(
+            !without.contains("PRIVATE") && !without.contains("Private supplier description"),
+            "{without}"
+        );
+        db.cleanup().await.unwrap();
+    });
+}
+
+async fn product_policy_orm(installed: &Orm, db: &TestDb) -> Orm {
+    let source = PolicySource::build(Arc::clone(installed.registry()), db.pool().clone())
+        .await
+        .unwrap();
+    Orm::builder(Arc::clone(installed.registry()), db.pool().clone())
+        .require_core_tables(erp_security::auth::core_tables())
+        .require_core_tables(erp_addon_base::partner_hierarchy::core_tables())
+        .resolver(Resolver::for_registry(installed.registry()).unwrap())
+        .policy(Arc::new(source) as Arc<dyn erp_orm::PolicyProvider>)
+        .impls(erp_modules::base_models::IMPLS.iter().copied())
+        .constraints(erp_modules::base_models::CONSTRAINTS.iter().copied())
+        .unlink_hook(erp_data::model_data::UNLINK_HOOK)
+        .build()
+        .unwrap()
 }

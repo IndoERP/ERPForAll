@@ -90,10 +90,19 @@ pub struct Reply {
     pub body: String,
 }
 pub fn request(port: u16, method: &str, path: &str, headers: &[(&str, &str)], body: &str) -> Reply {
+    request_within(port, method, path, headers, body, Duration::from_secs(30))
+}
+/// As [`request`], waiting up to `wait` for the reply (an install of a whole application).
+pub fn request_within(
+    port: u16,
+    method: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    body: &str,
+    wait: Duration,
+) -> Reply {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
-    stream
-        .set_read_timeout(Some(Duration::from_secs(30)))
-        .unwrap();
+    stream.set_read_timeout(Some(wait)).unwrap();
     let mut wire = format!(
         "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\nContent-Length: {}\r\n",
         body.len()

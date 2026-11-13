@@ -1,5 +1,10 @@
 //! Supplierinfo tests including BUG-088 invariant.
-#![allow(clippy::unwrap_used, clippy::expect_used, reason = "tests")]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "tests"
+)]
 
 mod support;
 
@@ -49,7 +54,7 @@ async fn test_supplierinfo_date_validity() {
 
     let currency_id = match tmpl.cell(&mut tx, "currency_id").await.unwrap() {
         Cell::Id(id) => id,
-        _ => 1,
+        other => panic!("fixture currency must be an id, found {other:?}"),
     };
 
     // Start date > End date should fail
@@ -70,9 +75,11 @@ async fn test_supplierinfo_date_validity() {
         )
         .await;
 
-    assert!(
-        err.is_err(),
-        "Start date greater than end date must be refused"
+    let err = err.unwrap_err();
+    assert_eq!(err.kind(), erp_sdk::ErrorKind::Validation);
+    assert_eq!(
+        err.message(),
+        "The start date of the vendor price agreement cannot exceed the end date."
     );
 }
 
@@ -128,7 +135,7 @@ async fn test_supplierinfo_variant_template_mismatch_refused_bug_088() {
 
     let currency_id = match tmpl1.cell(&mut tx, "currency_id").await.unwrap() {
         Cell::Id(id) => id,
-        _ => 1,
+        other => panic!("fixture currency must be an id, found {other:?}"),
     };
 
     // Find variant of template 2
@@ -150,8 +157,10 @@ async fn test_supplierinfo_variant_template_mismatch_refused_bug_088() {
         )
         .await;
 
-    assert!(
-        err.is_err(),
-        "BUG-088: Mismatched variant and template must be refused"
+    let err = err.unwrap_err();
+    assert_eq!(err.kind(), erp_sdk::ErrorKind::Validation);
+    assert_eq!(
+        err.message(),
+        format!("Supplierinfo variant {var2_id} does not belong to product template {tmpl1_id}.")
     );
 }

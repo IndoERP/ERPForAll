@@ -62,6 +62,7 @@ pub struct SchemaSyncOptions {
     fill_batch: NonZeroU32,
     lock_timeouts: StepTimeouts,
     lifecycle: bool,
+    sql_roles: crate::SqlRoleBindings,
 }
 
 /// The timeouts of the statements of a step: two `lock_timeout`s, each within `1 ms..=i32::MAX ms`
@@ -119,6 +120,7 @@ impl SchemaSyncOptions {
                 diagnostic: erp_sql::conflict::DIAGNOSTIC_TIMEOUT,
             },
             lifecycle: false,
+            sql_roles: crate::SqlRoleBindings::new(),
         }
     }
 
@@ -219,6 +221,21 @@ impl SchemaSyncOptions {
     /// Whether [`Self::lifecycle`] is set.
     pub const fn is_lifecycle(&self) -> bool {
         self.lifecycle
+    }
+
+    /// The database roles of the SQL object role bindings (A2; default: none). A
+    /// lifecycle synchronization validates every configured one, gives the `SECURITY DEFINER`
+    /// functions to the definer role and reconciles the declared grants; an object that names a
+    /// binding not configured here is refused by name.
+    #[must_use]
+    pub const fn sql_roles(mut self, roles: crate::SqlRoleBindings) -> Self {
+        self.sql_roles = roles;
+        self
+    }
+
+    /// The role bindings set by [`Self::sql_roles`].
+    pub const fn sql_role_bindings(&self) -> crate::SqlRoleBindings {
+        self.sql_roles
     }
 
     /// The row threshold above which a table is large; `None` for [`Self::inline`].

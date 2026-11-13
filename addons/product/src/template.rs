@@ -22,6 +22,10 @@ pub struct ProductTemplate {
     #[field(char, required = true, translate = true, index = "trigram")]
     pub name: Option<Arc<str>>,
 
+    /// Contextual catalog label including the internal reference when requested.
+    #[field(char, compute = "_compute_display_name")]
+    pub display_name: Option<Arc<str>>,
+
     /// Display sequence order.
     #[field(integer, default = 1)]
     pub sequence: i32,
@@ -176,6 +180,29 @@ pub struct ProductTemplate {
 
 #[methods(ProductTemplate, addon = "product")]
 impl ProductTemplate {
+    /// Template labels preserve the caller's code-display preferences.
+    #[compute(depends = ["name", "default_code"], depends_context = ["display_default_code", "formatted_display_name", "lang"])]
+    async fn _compute_display_name(
+        this: &RecordSet<ProductTemplate>,
+        tx: &mut Transaction,
+        out: &mut Assign<'_, ProductTemplate>,
+    ) -> Result<()> {
+        let names = this.mapped(tx, ProductTemplate::NAME).await?;
+        let codes = this.mapped(tx, ProductTemplate::DEFAULT_CODE).await?;
+        for (index, (name, code)) in names.into_iter().zip(codes).enumerate() {
+            let label = name
+                .filter(|v| !v.is_empty())
+                .map(|name| crate::names::format_label(this.env(), &name, code.as_deref()))
+                .transpose()?;
+            out.set(
+                index,
+                ProductTemplate::DISPLAY_NAME,
+                label.map(Arc::<str>::from),
+            )?;
+        }
+        Ok(())
+    }
+
     /// The web client's action
     /// normalizer (`erp_normalize_action_result`) admits `default_<field>` keys and, for a
     /// current-window action, boolean `create` and `active_test`; any other key is refused.

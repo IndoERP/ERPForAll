@@ -458,11 +458,24 @@ async fn orderpoint_table_columns_indexes_and_creation_defaults() {
     )
     .await;
     let found = constraints(&mut tx, "stock_warehouse_orderpoint").await;
+    // the business key is a declared key (S3): the registry's unique form, which
+    // reads a NULL as a value (every part is required here, so it changes nothing)
     assert_eq!(
         found.get("stock_warehouse_orderpoint_product_location_check"),
-        Some(&"UNIQUE (product_id, location_id, company_id)".to_owned()),
+        Some(&"UNIQUE NULLS NOT DISTINCT (product_id, location_id, company_id)".to_owned()),
         "{found:?}"
     );
+    for finite in [
+        "daily_demand",
+        "product_max_qty",
+        "product_min_qty",
+        "qty_to_order_manual",
+    ] {
+        assert!(
+            found.contains_key(&format!("stock_warehouse_orderpoint_finite_{finite}")),
+            "{finite}: {found:?}"
+        );
+    }
     // the declared indexes, and the framework's default one on the two optional links; the unique
     // key leads with the product, so the product has none of its own, and no scheduler index
     // exists yet (DEFERRED_PERFORMANCE)
@@ -476,6 +489,7 @@ async fn orderpoint_table_columns_indexes_and_creation_defaults() {
     .iter()
     .map(|field| format!("stock_warehouse_orderpoint__{field}_index"))
     .collect();
+    expected.sort_unstable();
     expected.sort_unstable();
     assert_eq!(
         plain_indexes(&mut tx, "stock_warehouse_orderpoint").await,
@@ -846,6 +860,61 @@ async fn putaway_rule_links_must_share_the_rule_company() {
     .await
     .unwrap_err();
     assert_crossover(&error, "package_type_ids", "Package Type", "Foreign Box");
+    tx.rollback().await.unwrap();
+    drop(tx);
+    f.h.cleanup().await.unwrap();
+}
+
+/// The four orderpoint quantities are finite numbers whatever writes them (
+/// S4); the sibling stock tables carry the same checks. No spec case covers the finite checks, so the
+/// test carries no tag.
+#[tokio::test]
+async fn orderpoint_quantities_must_be_finite() {
+    let f = fixture().await;
+    let mut tx = f.h.begin().await.unwrap();
+    let rule = create_in(
+        &mut tx,
+        Some(f.company),
+        "stock.warehouse.orderpoint",
+        orderpoint_vals(&f),
+    )
+    .await
+    .unwrap();
+    let id = rule.rec_ids()[0].get();
+    for (column, label) in [
+        ("product_min_qty", "minimum"),
+        ("product_max_qty", "maximum"),
+        ("daily_demand", "daily demand"),
+        ("qty_to_order_manual", "manual order quantity"),
+    ] {
+        for bad in ["NaN", "Infinity", "-Infinity"] {
+            let sql = format!(
+                "UPDATE stock_warehouse_orderpoint SET {column} = $1::text::numeric WHERE id = $2"
+            );
+            let error = tx
+                .savepoint(async |tx| tx.execute(&sql, &[&bad, &id]).await)
+                .await
+                .expect_err(&sql);
+            assert_eq!(error.sqlstate(), Some("23514"), "{column} {bad}: {error:?}");
+            assert_eq!(
+                error.constraint(),
+                Some(format!("stock_warehouse_orderpoint_finite_{column}").as_str()),
+                "{column} {bad}: {error:?}"
+            );
+            assert_eq!(
+                error.message(),
+                format!("{PREFIX}The {label} of a replenishment rule must be a finite number."),
+                "{column} {bad}"
+            );
+        }
+    }
+    // a finite value, a negative one and an empty manual quantity stay legal
+    tx.execute(
+        "UPDATE stock_warehouse_orderpoint SET product_min_qty = -1.5, qty_to_order_manual = NULL WHERE id = $1",
+        &[&id],
+    )
+    .await
+    .unwrap();
     tx.rollback().await.unwrap();
     drop(tx);
     f.h.cleanup().await.unwrap();

@@ -17,6 +17,9 @@ use erp_modules::{AddonIndex, InitOptions, ModuleName, ModuleSystem};
 use erp_orm::{Context, Orm, RawVals, SUPERUSER_ID};
 use erp_testkit::TestDb;
 
+#[path = "support/install_defaults.rs"]
+mod install_defaults;
+
 fn system(db: &TestDb) -> ModuleSystem {
     let mut index = AddonIndex::new(true);
     index.add_dev_path(
@@ -108,41 +111,9 @@ fn stock_installs_its_default_topology_records() {
         let db = TestDb::create().await.unwrap();
         let orm = install(&db).await;
 
-        let removals = strings(
-            &orm,
-            "SELECT d.name || '=' || r.method || '/' || (r.name->>'en_US') FROM ir_model_data d \
-             JOIN product_removal r ON r.id = d.res_id \
-             WHERE d.module = 'stock' AND d.model = 'product.removal' ORDER BY d.name",
-        )
-        .await;
-        assert_eq!(
-            removals,
-            [
-                "removal_closest=closest/Closest Location",
-                "removal_fifo=fifo/First In First Out (FIFO)",
-                "removal_least_packages=least_packages/Least Packages",
-                "removal_lifo=lifo/Last In First Out (LIFO)",
-            ]
-        );
-
-        let locations = strings(
-            &orm,
-            "SELECT d.name || '=' || l.usage || '/' || l.complete_name || '/' || l.active::text \
-             || '/' || coalesce(l.company_id::text, 'shared') || '/' || count(p.id)::text \
-             FROM ir_model_data d JOIN stock_location l ON l.id = d.res_id \
-             LEFT JOIN stock_location_policy p ON p.location_id = l.id AND NOT p.forbid_negative \
-             WHERE d.module = 'stock' AND d.model = 'stock.location' \
-             GROUP BY d.name, l.id ORDER BY d.name",
-        )
-        .await;
-        assert_eq!(
-            locations,
-            [
-                "stock_location_customers=customer/Customers/true/shared/1",
-                "stock_location_inter_company=transit/Inter-company transit/false/shared/1",
-                "stock_location_suppliers=supplier/Vendors/true/shared/1",
-            ]
-        );
+        for (sql, expected) in install_defaults::STOCK {
+            assert_eq!(strings(&orm, sql).await, *expected, "{sql}");
+        }
         let unguarded = strings(
             &orm,
             "SELECT l.id::text FROM stock_location l \
@@ -153,28 +124,6 @@ fn stock_installs_its_default_topology_records() {
             unguarded.is_empty(),
             "locations without policy row: {unguarded:?}"
         );
-
-        let routes = strings(
-            &orm,
-            "SELECT d.name || '=' || (r.name->>'en_US') || '/' || r.active::text || '/' || \
-             r.sequence::text || '/' || r.product_selectable::text || '/' || \
-             r.product_categ_selectable::text || '/' || coalesce(r.company_id::text, 'shared') \
-             FROM ir_model_data d JOIN stock_route r ON r.id = d.res_id \
-             WHERE d.module = 'stock' AND d.model = 'stock.route' ORDER BY d.name",
-        )
-        .await;
-        assert_eq!(
-            routes,
-            ["route_warehouse0_mto=Replenish on Order (MTO)/false/5/true/true/shared"]
-        );
-
-        let versions = strings(
-            &orm,
-            "SELECT d.name || '=' || v.generation::text FROM stock_topology_version v \
-             LEFT JOIN ir_model_data d ON d.res_id = v.id AND d.model = 'stock.topology.version'",
-        )
-        .await;
-        assert_eq!(versions, ["stock_topology_version=0"]);
 
         for table in [
             "stock_warehouse",

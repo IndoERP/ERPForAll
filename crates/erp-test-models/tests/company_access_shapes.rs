@@ -17,7 +17,7 @@ use std::sync::{Arc, PoisonError, RwLock};
 use erp_fields::FieldType;
 use erp_orm::{
     AccessPolicy, BeginOptions, BoxFuture, CompanyId, GroupId, PolicyProvider, Principal,
-    PrincipalBuilder, QualifiedXmlId, Resolution, Transaction, UserId,
+    PrincipalBuilder, QualifiedXmlId, ReadGroup, Resolution, Transaction, UserId,
 };
 use erp_registry::{ModelSpec, Registry, RegistryBuilder};
 use erp_sdk::Domain;
@@ -394,6 +394,110 @@ async fn owner_chains_admit_what_the_owner_admits() {
             "p {active:?}: want {want:?} of {} rows",
             parts.len()
         );
+    }
+}
+
+/// `parent_of company_ids`, the product template-line shape)
+/// A plain search, `search_count`, a `read_group` count and searches through the edge itself
+/// (`owner_id.name`, `owner_id any`), which inline the owner's own read rule, as a user in the
+/// branch B and a user in its parent R: exactly the repartitions the restriction admits.
+#[tokio::test]
+async fn parent_edge_with_an_ancestor_owner_through_every_entry_point() {
+    let (h, policy) = harness().await;
+    let reg = Arc::clone(h.registry());
+    let m = |short: &str| reg.model(&format!("{P}{short}")).unwrap();
+    let mut tx = h.begin().await.unwrap();
+    seed_companies(&mut tx).await;
+    let owners = seed_records(&mut tx, m("m2"), &[vec![B], vec![R], vec![S], vec![F]]).await;
+    let mut parts = Vec::new(); // (id, owner company)
+    for (owner, oc) in &owners {
+        let id = insert_child(
+            &mut tx,
+            m("p"),
+            &[("company_id", None), ("owner_id", Some(*owner))],
+        )
+        .await;
+        parts.push((id, oc[0]));
+    }
+    tx.commit().await.unwrap();
+    let model = format!("{P}p");
+    let by_edge = [
+        (
+            "owner_id.name",
+            Domain::condition("owner_id.name", erp_sdk::Operator::Eq, "r").unwrap(),
+        ),
+        (
+            "owner_id any",
+            Domain::condition(
+                "owner_id",
+                erp_sdk::Operator::Any,
+                Domain::condition("name", erp_sdk::Operator::Eq, "r").unwrap(),
+            )
+            .unwrap(),
+        ),
+    ];
+    for (active, who) in [(vec![B], "branch user in B"), (vec![R], "parent user in R")] {
+        let want: BTreeSet<i64> = parts
+            .iter()
+            .filter(|(_, oc)| admits(false, true, false, &[*oc], &active))
+            .map(|(id, _)| *id)
+            .collect();
+        assert!(
+            !want.is_empty() && want.len() < parts.len(),
+            "{who}: not vacuous: {want:?}"
+        );
+        let mut tx = h
+            .orm()
+            .begin_opts(BeginOptions::for_principal(principal(&*policy, &active)))
+            .await
+            .unwrap();
+        let records = tx.env().records(&model).unwrap();
+        // (i) a plain search
+        assert_eq!(visible(&mut tx, &model).await, want, "{who}: search");
+        // (j) search_count
+        let count = records
+            .search_count(&mut tx, &Domain::TRUE, None)
+            .await
+            .unwrap_or_else(|e| panic!("{who}: search_count: {e}"));
+        assert_eq!(
+            usize::try_from(count).unwrap(),
+            want.len(),
+            "{who}: search_count"
+        );
+        // (k) a read_group count
+        let groups = records
+            .read_group(
+                &mut tx,
+                ReadGroup::new(Domain::TRUE).aggregates(["__count"]),
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{who}: read_group: {e}"));
+        assert_eq!(
+            format!("{groups:?}"),
+            format!(
+                "{:?}",
+                vec![vec![erp_fields::Value::Int(
+                    i64::try_from(want.len()).unwrap()
+                )]]
+            ),
+            "{who}: read_group"
+        );
+        // through the edge: the owner's own rule applies inside the condition
+        for (label, domain) in &by_edge {
+            tx.capture_statements(true);
+            let found = records.search(&mut tx, domain).await;
+            let statements = tx.captured().len();
+            tx.capture_statements(false);
+            let found: BTreeSet<i64> = found
+                .unwrap_or_else(|e| panic!("{who}: {label}: {e}"))
+                .ids()
+                .into_iter()
+                .collect();
+            eprintln!("{who}: {label}: {statements} statement(s)");
+            assert_eq!(found, want, "{who}: {label}");
+            assert!(statements <= 1, "{who}: {label}: {statements} statements");
+        }
+        drop(tx);
     }
 }
 

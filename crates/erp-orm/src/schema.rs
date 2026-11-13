@@ -3556,7 +3556,7 @@ impl Transaction {
         // S0 of the addon-owned SQL objects: every refusal before any DDL
         let has_provenance = cat.tables.contains(crate::schema_sqlobj::OBJECT_TABLE);
         let mut sql_objects = self
-            .plan_sql_objects(registry, has_provenance, specs, options.is_lifecycle())
+            .plan_sql_objects(registry, has_provenance, specs, options)
             .await?;
 
         self.check_not_null(&not_null_checks).await?;

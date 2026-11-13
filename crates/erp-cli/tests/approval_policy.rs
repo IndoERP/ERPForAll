@@ -255,6 +255,23 @@ impl Fixture {
         }
     }
 
+    /// An active user Approve or Deny revision for the tests of resolution: the model refuses to
+    /// create one (nothing consults policies yet), so it is created archived and
+    /// activated by SQL. These tests therefore no longer prove that a model-admitted active
+    /// revision resolves; the slice that removes the fence (and
+    /// ) restores them by creating the revisions active again.
+    async fn create_unfenced(&self, uid: i64, vals: RawVals) -> Result<i64, Error> {
+        let id = self
+            .create(uid, vals.set_cell("active", Cell::Bool(false)))
+            .await?;
+        self.sql(
+            "UPDATE ir_approval_policy SET active = true WHERE id = $1",
+            &[&id],
+        )
+        .await;
+        Ok(id)
+    }
+
     async fn write(&self, uid: i64, id: i64, vals: RawVals) -> Result<(), Error> {
         let mut tx = self.begin(uid).await;
         let records = tx.env().records(MODEL).unwrap().browse([id]).unwrap();
@@ -516,8 +533,8 @@ async fn the_most_specific_revision_wins_for_every_pair_of_levels_body() {
                 } else {
                     (make("strong", strong, "allow"), make("weak", weak, "deny"))
                 };
-                let a = f.create(admin, first).await.unwrap();
-                let b = f.create(admin, second).await.unwrap();
+                let a = f.create_unfenced(admin, first).await.unwrap();
+                let b = f.create_unfenced(admin, second).await.unwrap();
                 let strong_id = if weak_first { b } else { a };
                 assert_eq!(
                     f.resolve(admin, &[], &call).await.unwrap(),
@@ -543,7 +560,7 @@ async fn the_most_specific_revision_wins_for_every_pair_of_levels_body() {
     assert_eq!(pairs, 15);
     // Another model's or method's revision never selects the call.
     let other = f
-        .create(
+        .create_unfenced(
             admin,
             select(
                 policy("other", "write", "deny"),
@@ -555,7 +572,7 @@ async fn the_most_specific_revision_wins_for_every_pair_of_levels_body() {
         .await
         .unwrap();
     let elsewhere = f
-        .create(
+        .create_unfenced(
             admin,
             select(
                 policy("elsewhere", "write", "deny"),
@@ -579,7 +596,7 @@ async fn the_most_specific_revision_wins_for_every_pair_of_levels_body() {
     );
     // A revision of another effect never selects the call either.
     let destructive = f
-        .create(
+        .create_unfenced(
             admin,
             select(policy("delete", "destructive", "deny"), None, None, None),
         )
@@ -610,7 +627,7 @@ async fn equal_selectors_are_refused_and_companies_must_agree_body() {
         )
         .await;
     let first = f
-        .create(
+        .create_unfenced(
             admin,
             select(
                 policy("first", "write", "deny"),
@@ -793,7 +810,7 @@ async fn only_administrators_write_and_revisions_are_immutable_body() {
     assert_eq!(error.message(), denied(Operation::Create));
 
     let id = f
-        .create(
+        .create_unfenced(
             admin,
             approvers(
                 select(
@@ -841,13 +858,21 @@ async fn only_administrators_write_and_revisions_are_immutable_body() {
         "Approval policy revisions cannot be deleted; archive them instead.",
     );
     f.archive(admin, id).await;
-    f.write(
-        admin,
-        id,
-        RawVals::new().set_cell("active", Cell::Bool(true)),
+    // reactivating a user Approve revision is fenced; SQL restores the old state
+    let error = f
+        .write(
+            admin,
+            id,
+            RawVals::new().set_cell("active", Cell::Bool(true)),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Validation, "{error}");
+    f.sql(
+        "UPDATE ir_approval_policy SET active = true WHERE id = $1",
+        &[&id],
     )
-    .await
-    .unwrap();
+    .await;
 
     // The write-time refusals: each names the revision, nothing persists.
     let before: i64 =
@@ -1041,7 +1066,7 @@ async fn eligible_approvers_exclude_the_requester_and_follow_current_membership_
     .await;
 
     let id = f
-        .create(
+        .create_unfenced(
             admin,
             approvers(
                 select(
@@ -1185,7 +1210,7 @@ async fn administrators_only_manage_the_revisions_of_their_companies_body() {
         )
     };
     let b_deny = f
-        .create(
+        .create_unfenced(
             admin_b,
             approvers(of_b("b approve", "approve"), &[approver_b], &[deciders_b]),
         )
@@ -1233,7 +1258,7 @@ async fn administrators_only_manage_the_revisions_of_their_companies_body() {
     assert_eq!(error.kind(), ErrorKind::Access, "{error}");
     // its own company and all companies stay open to it
     let a_own = f
-        .create(
+        .create_unfenced(
             admin_a,
             select(
                 policy("a own", "write", "deny"),
@@ -1244,7 +1269,7 @@ async fn administrators_only_manage_the_revisions_of_their_companies_body() {
         )
         .await
         .unwrap();
-    f.create(
+    f.create_unfenced(
         admin_a,
         select(
             policy("everywhere", "destructive", "deny"),
@@ -1374,7 +1399,7 @@ async fn the_effect_of_a_call_comes_from_the_registry_body() {
         .await;
     f.refresh().await;
     let deny = f
-        .create(
+        .create_unfenced(
             admin,
             select(
                 policy("no deletes", "destructive", "deny"),
@@ -1437,7 +1462,7 @@ async fn a_widened_call_meets_the_revisions_of_every_allowed_company_body() {
     f.refresh().await;
     // A refuses every write-effect call on partners; B has no revision
     let a_deny = f
-        .create(
+        .create_unfenced(
             admin_a,
             select(
                 policy("a deny", "write", "deny"),
@@ -1496,7 +1521,7 @@ async fn a_widened_call_meets_the_revisions_of_every_allowed_company_body() {
     // A known company of the new records outside the caller's allowed companies is resolved too.
     f.archive(admin_a, a_deny).await;
     let c_deny = f
-        .create(
+        .create_unfenced(
             admin_c,
             select(
                 policy("c deny", "write", "deny"),
@@ -1545,7 +1570,7 @@ async fn a_widened_approval_needs_an_approver_of_every_allowed_company_body() {
     let approver_ab = f.user("approver-ab", &[b, a], &[f.group_user]).await;
     f.refresh().await;
     let id = f
-        .create(
+        .create_unfenced(
             admin,
             approvers(
                 select(
@@ -1587,5 +1612,150 @@ async fn a_widened_approval_needs_an_approver_of_every_allowed_company_body() {
              0169 D2).",
         ),
     );
+    f.db.cleanup().await.unwrap();
+}
+
+/// `true` when no active revision named `fenced` exists.
+async fn no_active_fenced_revision(f: &Fixture) -> bool {
+    let rows =
+        f.db.client()
+            .await
+            .unwrap()
+            .query(
+                "SELECT id::int8 FROM ir_approval_policy WHERE name = 'fenced' AND active",
+                &[],
+            )
+            .await
+            .unwrap();
+    rows.is_empty()
+}
+
+const FENCED_TAIL: &str = "is not available yet in this release. Save the revision archived to \
+                           prepare it.";
+
+#[test]
+fn an_active_user_approve_or_deny_revision_is_refused_until_enforcement_exists() {
+    run(an_active_user_approve_or_deny_revision_is_refused_until_enforcement_exists_body);
+}
+
+async fn an_active_user_approve_or_deny_revision_is_refused_until_enforcement_exists_body() {
+    let f = fixture().await;
+    let admin = f
+        .user("fence-admin", &[f.main], &[f.group_user, f.group_system])
+        .await;
+    let approver = f.user("fence-approver", &[f.main], &[f.group_user]).await;
+    let fenced = |name: &str, id: i64| {
+        format!(
+            "Approval policy revision '{name}' (id {id}): requiring approval for or denying calls \
+             of users {FENCED_TAIL}"
+        )
+    };
+    let wanted = |outcome: &str| {
+        let vals = select(
+            policy("fenced", "write", outcome),
+            None,
+            Some("res.partner"),
+            None,
+        );
+        if outcome == "approve" {
+            approvers(vals, &[approver], &[])
+        } else {
+            vals
+        }
+    };
+
+    for outcome in ["approve", "deny"] {
+        // create active: refused (the error names the row it inserted, then the transaction rolls back)
+        let error = f.create(admin, wanted(outcome)).await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Validation, "{outcome}: {error}");
+        assert!(error.message().ends_with(FENCED_TAIL), "{error}");
+        assert!(no_active_fenced_revision(&f).await);
+
+        // archived: created, stays archived; activating it (write or action_unarchive) is refused
+        let id = f
+            .create(admin, wanted(outcome).set_cell("active", Cell::Bool(false)))
+            .await
+            .unwrap();
+        let error = f
+            .write(
+                admin,
+                id,
+                RawVals::new().set_cell("active", Cell::Bool(true)),
+            )
+            .await
+            .unwrap_err();
+        validation(&error, &fenced("fenced", id));
+        let mut tx = f.begin(admin).await;
+        let archived = tx.env().records(MODEL).unwrap().browse([id]).unwrap();
+        let error = archived.action_unarchive(&mut tx).await.unwrap_err();
+        tx.rollback().await.unwrap();
+        assert_eq!(error.kind(), ErrorKind::Validation, "{error}");
+        assert!(error.message().ends_with(FENCED_TAIL), "{error}");
+        assert!(no_active_fenced_revision(&f).await);
+        // revisions are never deleted through the model; SQL clears the row for the next round
+        f.sql("DELETE FROM ir_approval_policy WHERE id = $1", &[&id])
+            .await;
+    }
+
+    // the superuser is not exempt
+    let mut tx = f.orm.begin(SUPERUSER_ID).await.unwrap();
+    let error = tx
+        .env()
+        .records(MODEL)
+        .unwrap()
+        .create(&mut tx, vec![wanted("deny")])
+        .await
+        .unwrap_err();
+    tx.rollback().await.unwrap();
+    assert_eq!(error.kind(), ErrorKind::Validation, "{error}");
+    assert!(error.message().ends_with(FENCED_TAIL), "{error}");
+
+    // a data file is not exempt: the loader reaches the model's create
+    let mut tx = f.orm.begin(SUPERUSER_ID).await.unwrap();
+    let mut session = erp_data::load::LoadSession::new(erp_data::load::SessionOptions::new(
+        "20.0",
+        Arc::new(erp_data::load::NoFiles),
+    ));
+    session.begin_operation(["base"]).unwrap();
+    let operations = erp_data::parse_xml_str(
+        "<erp><record id=\"fenced_by_file\" model=\"ir.approval.policy\">\
+         <field name=\"name\">fenced</field><field name=\"principal_kind\">user</field>\
+         <field name=\"effect\">write</field><field name=\"outcome\">deny</field></record></erp>",
+        "fenced.xml",
+        "base",
+        false,
+    )
+    .unwrap();
+    let mut operations = operations.into_iter().map(Ok);
+    let file =
+        erp_data::load::FileContext::new("base", "fenced.xml", erp_data::ConvertMode::Update);
+    let error = Box::pin(session.load_file(&mut tx, &file, &mut operations))
+        .await
+        .unwrap_err();
+    assert_eq!(error.orm_kind(), Some(ErrorKind::Validation), "{error}");
+    tx.rollback().await.unwrap();
+    assert!(no_active_fenced_revision(&f).await);
+
+    // a database that already holds an active one (made by SQL): a copy is never active, archiving
+    // is allowed, and every other combination is created
+    let old = f.create_unfenced(admin, wanted("approve")).await.unwrap();
+    let mut tx = f.begin(admin).await;
+    let source = tx.env().records(MODEL).unwrap().browse([old]).unwrap();
+    let error = source.copy(&mut tx, None).await.unwrap_err();
+    tx.rollback().await.unwrap();
+    // the tie with the original is refused before the fence is reached: one outcome, a refusal
+    assert_eq!(error.kind(), ErrorKind::Validation, "{error}");
+    f.archive(admin, old).await;
+    assert!(no_active_fenced_revision(&f).await);
+    f.create(admin, policy("fenced", "write", "allow"))
+        .await
+        .unwrap();
+    f.create(
+        admin,
+        policy("fenced agent", "write", "deny")
+            .set_cell("principal_kind", Cell::Str("agent".into())),
+    )
+    .await
+    .unwrap();
     f.db.cleanup().await.unwrap();
 }

@@ -8136,6 +8136,10 @@ fn data_only_refusal(entry: &AddonEntry) -> Option<String> {
     check_addon_dir(dir, dir, 0, &mut seen)
 }
 
+/// The refusal rule for a folder holding a Rust crate: it is a native addon, and this binary was
+/// not built with it, so neither the native nor the data-only route can install it.
+const NOT_LINKED_NATIVE: &str = "a native addon's Rust crate: this binary does not link the addon";
+
 /// The allowlist walk of [`data_only_refusal`]. `top` is the addon folder, `at` the directory read.
 fn check_addon_dir(top: &Path, at: &Path, depth: usize, seen: &mut usize) -> Option<String> {
     let listing = match fs::read_dir(at) {
@@ -8197,7 +8201,7 @@ fn check_addon_dir(top: &Path, at: &Path, depth: usize, seen: &mut usize) -> Opt
                                 "no static/ directory: browser code needs the asset pipeline",
                             );
                         }
-                        "src" => return reason("no Rust sources"),
+                        "src" => return reason(NOT_LINKED_NATIVE),
                         _ => {
                             return reason(
                                 "only models/, views/, data/, demo/ and security/ directories",
@@ -8209,7 +8213,7 @@ fn check_addon_dir(top: &Path, at: &Path, depth: usize, seen: &mut usize) -> Opt
                         && matches!(extension, "md" | "rst" | "txt" | "");
                     match name.as_str() {
                         "manifest.toml" => {}
-                        "Cargo.toml" | "build.rs" => return reason("no Rust crate"),
+                        "Cargo.toml" | "build.rs" => return reason(NOT_LINKED_NATIVE),
                         _ if readme => {}
                         _ => return reason("only manifest.toml and README files at the top level"),
                     }

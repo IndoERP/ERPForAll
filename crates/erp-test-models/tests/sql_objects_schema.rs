@@ -1129,7 +1129,7 @@ async fn unowned_definer_undeclared_and_missing_objects_are_refused() {
         .unwrap();
     tx.commit().await.unwrap();
 
-    // SECURITY DEFINER waits for the role bindings (D4)
+    // SECURITY DEFINER needs a configured definer role binding; none is configured by default
     let definer = function(
         "fn_definer",
         SqlFunctionDecl::new(
@@ -1142,8 +1142,8 @@ async fn unowned_definer_undeclared_and_missing_objects_are_refused() {
     );
     refused(
         sync(&h, build(vec![move_model(&[])], vec![definer]).unwrap()).await,
-        "SQL object 'test_sqlobj/fn_definer': SECURITY DEFINER needs the definer role binding of \
-         a later release",
+        "SQL object 'test_sqlobj/fn_definer': role binding 'definer' is not configured; the \
+         operator names its database role in the schema sync role bindings",
     );
 
     // an installed object no longer declared while its addon is installed (D11)

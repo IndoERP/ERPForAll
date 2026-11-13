@@ -658,3 +658,121 @@ fn failure_debug_redacts_the_refused_key() {
     let none = SyncApplyFailure::from(Error::internal("x"));
     assert!(format!("{none:?}").contains("refused: None"));
 }
+
+mod insert_fill {
+    use erp_registry::{AddonDescriptor, FieldDecl, ModelDecl, Registry, RegistryBuilder};
+
+    use super::*;
+
+    static ADDON: AddonDescriptor = AddonDescriptor {
+        name: "test_sync_fill",
+        depends: &["base"],
+        exact_only: false,
+    };
+
+    static FIELDS: [FieldDecl; 7] = [
+        FieldDecl::integer("k"),
+        FieldDecl::integer("n"),
+        FieldDecl::integer("a"),
+        FieldDecl::datetime("received").required(true),
+        FieldDecl::datetime("counted"),
+        FieldDecl::integer("twice").generated("k * 2"),
+        FieldDecl::char("code"),
+    ];
+
+    static OTHER: [FieldDecl; 1] = [FieldDecl::datetime("received")];
+
+    fn registry() -> Registry {
+        let stock: &'static ModelDecl = Box::leak(Box::new(
+            ModelDecl::new("test_sync_fill", "t.stock").fields(&FIELDS),
+        ));
+        let other: &'static ModelDecl = Box::leak(Box::new(
+            ModelDecl::new("test_sync_fill", "t.other").fields(&OTHER),
+        ));
+        RegistryBuilder::new([&ADDON])
+            .linked(false)
+            .with_decls([stock, other])
+            .build()
+            .unwrap()
+    }
+
+    fn at(day: u8) -> DateTime {
+        DateTime::from_parts(
+            erp_fields::Date::from_ymd(2026, 5, u32::from(day)).unwrap(),
+            10,
+            0,
+            0,
+            0,
+        )
+        .unwrap()
+    }
+
+    /// B7: the fills are insert columns only, the transaction time is `now()` in UTC, a
+    /// bound value is the parameter after the arrays, and the update arm never names a fill.
+    #[test]
+    fn insert_fills_render_on_the_insert_arm_only() {
+        let registry = registry();
+        let model = registry.model("t.stock").unwrap();
+        let filled = apply()
+            .with_insert_fill(model, "received", InsertFill::TransactionTime)
+            .unwrap()
+            .with_insert_fill(model, "counted", InsertFill::Value(at(3)))
+            .unwrap();
+        let sql = filled.statement().unwrap();
+        assert!(
+            sql.contains("INSERT INTO \"t_stock\" AS \"__t\" (\"k\", \"n\", \"a\", \"received\", \"counted\")"),
+            "{sql}"
+        );
+        assert!(
+            sql.contains("SELECT \"k\", \"n\", \"a\", (now() AT TIME ZONE 'UTC'), $4::timestamp FROM \"__in\""),
+            "{sql}"
+        );
+        let update = &sql[sql.find("DO UPDATE SET").unwrap()..];
+        assert!(
+            !update.contains("received") && !update.contains("counted"),
+            "{sql}"
+        );
+        assert_eq!(filled.insert_fill_values(), vec![at(3)]);
+        assert!(apply().insert_fill_values().is_empty());
+    }
+
+    /// B7: every refusal names its reason at build time.
+    #[test]
+    fn insert_fills_are_validated_by_name() {
+        let registry = registry();
+        let model = registry.model("t.stock").unwrap();
+        let other = registry.model("t.other").unwrap();
+        let fill = InsertFill::TransactionTime;
+        let prefix = "H27 InvalidDefinition: t.stock: insert fill";
+        for (model, column, reason) in [
+            (
+                other,
+                "received",
+                "model t.other has table t_other, not t_stock",
+            ),
+            (model, "nope", "column nope does not exist on model t.stock"),
+            (model, "twice", "column twice is a generated column"),
+            (model, "k", "column k is a grain or measure column"),
+            (model, "n", "column n is a grain or measure column"),
+            (
+                model,
+                "code",
+                "column code is not a stored timestamp column",
+            ),
+        ] {
+            refuse(
+                apply().with_insert_fill(model, column, fill),
+                ErrorKind::Programming,
+                &format!("{prefix} {reason}"),
+            );
+        }
+        refuse(
+            apply()
+                .with_insert_fill(model, "received", fill)
+                .unwrap()
+                .with_insert_fill(model, "received", InsertFill::Value(at(1))),
+            ErrorKind::Programming,
+            &format!("{prefix} column received is named twice"),
+        );
+    }
+}

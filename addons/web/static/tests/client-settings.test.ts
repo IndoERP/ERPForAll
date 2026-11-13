@@ -460,3 +460,51 @@ test("Settings rejects a selection outside declared choices with its server erro
   await expect(settingsView(document.createElement("div"), rpc, [], job => { void job(); }, () => {}, {}, ["global"]))
     .rejects.toMatchObject({kind:"server",message:"Setting value is outside its declared choices."});
 });
+
+/// (partial: nested settings keys, accessible help, default restoration and normal CAS save)
+test("jobs settings retain nested keys and expose catalogue help and default restoration", async () => {
+  const writes: Record<string, unknown>[] = [];
+  const key = "base.jobs.poll_interval_secs";
+  const rpc = new RpcClient(async (path, init) => {
+    const args = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    let response: Record<string, unknown>;
+    if (String(path).endsWith("erp_describe")) response = {
+      wire_major: 1, registry_version: "r1", scope: args["scope"],
+      declarations: [{ key, label: "Poll interval (seconds)", kind: "integer", default: 5, choices: null, writable: true, app: "base", block: "Background Jobs", sequence: 100, help: "Default: 5 seconds. Allowed: 1 to 300 seconds." }],
+      items: [{ kind: "info", key: "base.jobs_configuration_status", label: "Configuration status", app: "base", block: "Background Jobs", sequence: 0, value: "Stored configuration", detail: "Running jobs use process configuration until live settings integration is delivered." }]
+    };
+    else if (String(path).endsWith("erp_write_values")) {
+      writes.push(args); response = { wire_major: 1, scope: args["scope"], revision: "8", values: [{ key, value: 5, source: "stored" }] };
+    } else response = { wire_major: 1, scope: args["scope"], revision: "7", values: [{ key, value: 10, source: "stored" }] };
+    return new Response(JSON.stringify(response), { headers: { "Content-Type": "application/json" } });
+  }, () => {});
+  const host = document.createElement("div"); document.body.append(host);
+  const handle = await settingsView(host, rpc, [], job => { void job(); }, () => {}, {}, ["global"]);
+  const input = host.querySelector<HTMLInputElement>(`input[name="${key}"]`)!;
+  const helpId = input.getAttribute("aria-describedby");
+  expect(helpId).toBeTruthy();
+  expect(document.getElementById(helpId!)?.textContent).toBe("Default: 5 seconds. Allowed: 1 to 300 seconds.");
+  expect(host.textContent).toContain("Running jobs use process configuration until live settings integration is delivered.");
+  const reset = host.querySelector<HTMLButtonElement>(`button[data-setting-default="${key}"]`)!;
+  expect(reset).not.toBeNull(); reset.click();
+  expect(input.value).toBe("5");
+  await handle.save();
+  expect(writes[0]?.["expected_revision"]).toBe("7");
+  expect(writes[0]?.["changes"]).toEqual([{ key, value: 5 }]);
+  handle.dispose?.();
+});
+
+test("settings refuse malformed help and defaults instead of enabling an invalid reset", async () => {
+  for (const [help, defaultValue, message] of [[42, 5, "Invalid setting help."], ["Bounds", false, "Invalid setting default."]] as const) {
+    const rpc = new RpcClient(async (path, init) => {
+      const args = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      const response = String(path).endsWith("erp_describe")
+        ? { wire_major: 1, registry_version: "r1", scope: args["scope"], declarations: [{ key: "base.jobs.poll_interval_secs", label: "Poll", kind: "integer", default: defaultValue, choices: null, writable: true, app: "base", block: "Jobs", sequence: 100, help }] }
+        : { wire_major: 1, scope: args["scope"], revision: "0", values: [{ key: "base.jobs.poll_interval_secs", value: 5, source: "default" }] };
+      return new Response(JSON.stringify(response), { headers: { "Content-Type": "application/json" } });
+    }, () => {});
+    const host = document.createElement("div"); document.body.append(host);
+    await expect(settingsView(host, rpc, [], job => { void job(); }, () => {}, {}, ["global"])).rejects.toMatchObject({ kind: "server", message });
+    host.remove();
+  }
+});

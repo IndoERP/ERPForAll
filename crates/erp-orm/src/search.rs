@@ -527,7 +527,63 @@ async fn compile_domain(
     compile_domain_at(tx, records, domain, unaccent, 0).await
 }
 
-fn prepare_sql_domain(tx: &Transaction, records: &Records, domain: &Domain) -> Result<Domain> {
+/// [`prepare_sql_domain`] with the rules it inlines (a comodel's read rule in a relational
+/// condition, the predicate of an `access` condition) resolved first when they hold
+/// hierarchy conditions: completion stops on such a rule, which is resolved as
+/// [`search_access`] resolves a search's own rule (expanded under the predicate context, start
+/// records found as the superuser), and completion runs again. Each round adds one rule, so this
+/// ends.
+async fn prepare_sql_domain_resolved(
+    tx: &mut Transaction,
+    records: &Records,
+    domain: &Domain,
+) -> Result<Domain> {
+    let mut rules = crate::prepare::NestedRules::default();
+    loop {
+        let error = match prepare_sql_domain(tx, records, domain, &rules) {
+            Ok(prepared) => return Ok(prepared),
+            Err(error) => error,
+        };
+        let Some(key) = rules.take_missing() else {
+            return Err(error);
+        };
+        let env = records.env();
+        let (model, rule) = match key {
+            crate::prepare::NestedRule::Read(model) => {
+                let security = predicate_records(&Records::empty(env.clone(), model));
+                let rule = tx.access_predicate(env, model, Operation::Read)?;
+                let rule = crate::search_method::expand_policy(
+                    tx,
+                    security.env(),
+                    security.spec(),
+                    &rule,
+                )?;
+                tx.prepare_access_for_domain(security.env(), &rule).await?;
+                (model, rule)
+            }
+            crate::prepare::NestedRule::Access(model, op) => {
+                let spec = env.registry().model_by_id(model);
+                let lookup = crate::access::TxAccess::new(tx, env);
+                let Some(rule) = crate::optimize::AccessLookup::resolve(&lookup, spec, op)? else {
+                    return Err(error);
+                };
+                (model, rule)
+            }
+        };
+        let security = predicate_records(&Records::empty(env.clone(), model));
+        let rule = crate::hierarchy::resolve(tx, &security.engine_sudo(), &rule, true).await?;
+        if !rules.insert(key, rule) {
+            return Err(error);
+        }
+    }
+}
+
+fn prepare_sql_domain(
+    tx: &Transaction,
+    records: &Records,
+    domain: &Domain,
+    rules: &crate::prepare::NestedRules,
+) -> Result<Domain> {
     let env = records.env();
     tx.validate_cached_search_language(env)?;
     let spec = records.spec();
@@ -535,7 +591,7 @@ fn prepare_sql_domain(tx: &Transaction, records: &Records, domain: &Domain) -> R
     let tz = ZoneTz::new(env.tz());
     let now = now_utc()?;
     {
-        let lookup = crate::access::TxAccess::new(tx, env);
+        let lookup = crate::access::TxAccess::new(tx, env).with_rules(rules);
         let optimized = optimize_domain(
             &OptimizeCtx {
                 registry: env.registry(),
@@ -555,6 +611,7 @@ fn prepare_sql_domain(tx: &Transaction, records: &Records, domain: &Domain) -> R
                 tz: &tz,
                 now,
                 access: &lookup,
+                rules,
             },
             spec,
             &optimized,
@@ -574,7 +631,7 @@ async fn compile_domain_at(
     let _search_scope = crate::search_method::scope(tx)?;
     let env = records.env();
     let spec = records.spec();
-    let prepared = prepare_sql_domain(tx, records, domain)?;
+    let prepared = prepare_sql_domain_resolved(tx, records, domain).await?;
     let registry = env.registry();
     let context = WhereContext {
         registry,
@@ -2287,7 +2344,14 @@ impl Records {
             } else {
                 self.clone()
             };
-            let prepared = prepare_sql_domain(tx, &records, domain)?;
+            // no hierarchy resolution here (no queries before the provider runs): a comodel
+            // rule that needs one is refused by name
+            let prepared = prepare_sql_domain(
+                tx,
+                &records,
+                domain,
+                &crate::prepare::NestedRules::default(),
+            )?;
             dependencies.extend(erp_sql::filter::where_fields(
                 &prepared,
                 &WhereContext {

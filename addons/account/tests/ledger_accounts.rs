@@ -940,3 +940,106 @@ async fn a_caller_stores_a_code_only_in_a_tree_of_its_own_companies() {
     assert_refused(&error, "belongs to no company you are working in");
     tx.rollback().await.unwrap();
 }
+
+fn code_row(company: i64, code: &str) -> Command {
+    Command::create(
+        RawVals::new()
+            .set_cell("company_id", Cell::Id(company))
+            .set_cell("code", text(code)),
+    )
+}
+
+fn company_set(companies: &[i64]) -> Command {
+    Command::set(companies.iter().map(|c| RecId::from_real(*c).unwrap()))
+}
+
+async fn code_rows(tx: &mut Transaction, account: i64) -> Vec<(i64, String)> {
+    tx.query(
+        "SELECT company_id::int8, code FROM account_account_code WHERE account_id = $1 ORDER BY company_id",
+        &[&account],
+    )
+    .await
+    .unwrap()
+    .iter()
+    .map(|row| (row.get(0), row.get(1)))
+    .collect()
+}
+
+#[tokio::test]
+async fn codes_by_company_given_while_creating_the_account() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    let root = company(&mut tx, "Root", None).await;
+    let other = company(&mut tx, "Other", None).await;
+    let stranger = company(&mut tx, "Stranger", None).await;
+    let both = tx
+        .env()
+        .with_company(other)
+        .unwrap()
+        .with_company(root)
+        .unwrap()
+        .records("account.account")
+        .unwrap();
+    // the form's save: the account without a `code` value and one create command per row
+    let vals = |name: &str, rows: Vec<Command>| {
+        RawVals::new()
+            .set_cell("name", text(name))
+            .set_cell("account_type", text("asset_current"))
+            .set_commands("company_ids", vec![company_set(&[root, other])])
+            .set_commands("code_mapping_ids", rows)
+    };
+    // (a) the active company, (b) the other company of the account
+    let account = create(
+        &both,
+        &mut tx,
+        vals(
+            "Two codes",
+            vec![code_row(root, "1010"), code_row(other, "2020")],
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        code_rows(&mut tx, account.ids()[0]).await,
+        vec![(root, "1010".to_owned()), (other, "2020".to_owned())]
+    );
+    // (c) a company the account does not belong to
+    let error = create(
+        &both,
+        &mut tx,
+        vals("Foreign", vec![code_row(stranger, "3030")]),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error.message().contains("company inconsistencies") || error.kind() == ErrorKind::Access,
+        "{error:?}"
+    );
+    // (d) the access answer for a caller who does not hold the company needs a non-superuser
+    // fixture (the harness loads no groups or access rows): not covered here. What is covered:
+    // an account of the active company alone cannot carry a row of another company.
+    let error = create(
+        &accounts(&tx, root),
+        &mut tx,
+        vals("Unheld", vec![code_row(other, "4040")])
+            .set_commands("company_ids", vec![company_set(&[root])]),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error.message().contains("company inconsistencies"),
+        "{error:?}"
+    );
+    // the plain `code` and a row for the same root in one call: the explicit row wins
+    let account = create(
+        &both,
+        &mut tx,
+        vals("Both", vec![code_row(root, "5050")]).set_cell("code", text("6060")),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        code_rows(&mut tx, account.ids()[0]).await,
+        vec![(root, "5050".to_owned())]
+    );
+}

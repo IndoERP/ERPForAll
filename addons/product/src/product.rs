@@ -96,6 +96,14 @@ pub struct ProductProduct {
     #[field(char, compute = "_compute_display_name")]
     pub display_name: Option<Arc<str>>,
 
+    /// Internal or reader-authorized partner-specific reference.
+    #[field(char, compute = "_compute_partner_reference")]
+    pub code: Option<Arc<str>>,
+
+    /// Partner-specific description with its reference, or the ordinary display name.
+    #[field(char, compute = "_compute_partner_reference")]
+    pub partner_ref: Option<Arc<str>>,
+
     /// Template attribute values forming this variant combination.
     #[field(
         many2many,
@@ -127,95 +135,164 @@ impl ProductProduct {
         this.mapped(tx, ProductProduct::STANDARD_PRICE).await
     }
 
-    /// Compute display_name formatted with default_code, template name, and attributes.
-    #[compute(
-        depends = [
-            "name",
-            "default_code",
-            "product_template_attribute_value_ids",
-            "product_template_attribute_value_ids.product_attribute_value_id.name"
-        ],
-        depends_context = ["display_default_code", "formatted_display_name", "partner_id"]
-    )]
+    /// Labels use reader-authorized supplier rows, loaded once for this batch.
+    #[compute(depends = [
+        "name", "default_code", "product_tmpl_id", "product_template_attribute_value_ids",
+        "product_template_attribute_value_ids.product_attribute_value_id.name",
+        "product_tmpl_id.seller_ids.product_name", "product_tmpl_id.seller_ids.product_code",
+        "product_tmpl_id.seller_ids.partner_id", "product_tmpl_id.seller_ids.company_id",
+        "product_tmpl_id.seller_ids.product_id", "product_tmpl_id.seller_ids.sequence",
+        "product_tmpl_id.seller_ids.min_qty", "product_tmpl_id.seller_ids.price"
+    ], depends_context = ["display_default_code", "formatted_display_name", "partner_id", "seller_id", "company_id", "lang", "label_reader"])]
     async fn _compute_display_name(
         this: &RecordSet<ProductProduct>,
         tx: &mut Transaction,
         out: &mut Assign<'_, ProductProduct>,
     ) -> Result<()> {
-        let ctx = this.env().context();
-        let display_code = ctx
-            .get("display_default_code")
-            .map(|v| v.is_truthy())
-            .unwrap_or(true);
-        let formatted = ctx
-            .get("formatted_display_name")
-            .map(|v| v.is_truthy())
-            .unwrap_or(false);
-        let partner_id = ctx.get("partner_id").and_then(|v| match v {
-            Value::Int(i) => Some(i),
-            _ => None,
-        });
-
-        let tmpl_model = this.env().records("product.template")?;
-        let tmpl_ids = this.mapped(tx, ProductProduct::PRODUCT_TMPL_ID).await?;
+        let names = crate::names::template_names(this, tx).await?;
         let codes = this.mapped(tx, ProductProduct::DEFAULT_CODE).await?;
+        let templates = this.mapped(tx, ProductProduct::PRODUCT_TMPL_ID).await?;
+        let template_ids: Vec<i64> = templates
+            .iter()
+            .flatten()
+            .filter(|id| !id.is_new())
+            .map(|id| id.get())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let sellers = crate::names::sellers(this.env(), tx, &template_ids).await?;
         let combinations = combination_names(this, tx).await?;
-
-        for (index, (tmpl_opt, code_opt)) in tmpl_ids.into_iter().zip(codes).enumerate() {
-            let tmpl_id = tmpl_opt
-                .ok_or_else(|| Error::validation("Product variant missing template link"))?;
-            // browse_ids, not browse: in a new variant's first onchange the template is a new record too.
-            let tmpl = tmpl_model.browse_ids([tmpl_id]);
-            let mut name = match tmpl.cell(tx, "name").await? {
-                Cell::Str(s) => s.to_string(),
-                _ => String::new(),
-            };
-
-            let mut code = code_opt.as_deref().unwrap_or("").to_string();
-
-            // Check if partner_id is in context for supplierinfo override
-            if let Some(pid) = partner_id {
-                let seller_model = this.env().records("product.supplierinfo")?;
-                let current_var_id = this.as_records().rec_ids()[index].get();
-                let d_partner = Domain::condition("partner_id", Operator::Eq, pid)?;
-                let d_prod = Domain::condition("product_id", Operator::Eq, current_var_id)?;
-                let d_tmpl = Domain::condition("product_tmpl_id", Operator::Eq, tmpl_id.get())?;
-                let domain = d_partner & (d_prod | d_tmpl);
-                let sellers = seller_model.search(tx, &domain).await?;
-                if !sellers.is_empty() {
-                    let seller = seller_model.browse(vec![sellers.rec_ids()[0].get()])?;
-                    if let Cell::Str(pname) = seller.cell(tx, "product_name").await?
-                        && !pname.is_empty()
-                    {
-                        name = pname.to_string();
-                    }
-                    if let Cell::Str(pcode) = seller.cell(tx, "product_code").await?
-                        && !pcode.is_empty()
-                    {
-                        code = pcode.to_string();
-                    }
-                }
-            }
-
-            // The attribute values follow whichever name is shown, the vendor's included.
-            if !combinations[index].is_empty() {
-                name = format!("{name} ({})", combinations[index]);
-            }
-
-            // Format display name
-            let res = if formatted {
-                if !code.is_empty() {
-                    format!("{name}\t--{code}--")
-                } else {
-                    name
-                }
-            } else if display_code && !code.is_empty() {
-                format!("[{code}] {name}")
+        let company = crate::names::context_id(this.env(), "company_id")?;
+        let explicit = crate::names::context_id(this.env(), "seller_id")?;
+        for index in 0..this.len() {
+            let variant = this.as_records().rec_ids()[index].get();
+            let template = templates[index]
+                .ok_or_else(|| Error::validation("Product variant missing template link"))?
+                .get();
+            let name = names[index].as_deref().unwrap_or("");
+            let eligible: Vec<_> = sellers
+                .iter()
+                .filter(|row| {
+                    row.template == template && row.variant.is_none_or(|id| id == variant)
+                })
+                .collect();
+            let selected: Vec<_> = if let Some(id) = explicit {
+                eligible
+                    .iter()
+                    .copied()
+                    .filter(|row| row.id == id)
+                    .filter(|row| company.is_none_or(|id| row.company.is_none_or(|c| c == id)))
+                    .collect()
             } else {
-                name
+                let specific = eligible.iter().any(|row| row.variant == Some(variant));
+                eligible
+                    .iter()
+                    .copied()
+                    .filter(|row| {
+                        if specific {
+                            row.variant == Some(variant)
+                        } else {
+                            row.variant.is_none()
+                        }
+                    })
+                    .filter(|row| company.is_none_or(|id| row.company.is_none_or(|c| c == id)))
+                    .collect()
             };
+            let append_combination = |base: &str| {
+                if combinations[index].is_empty() {
+                    base.to_owned()
+                } else {
+                    format!("{base} ({})", combinations[index])
+                }
+            };
+            let mut labels = Vec::new();
+            for row in selected {
+                let label = crate::names::format_label(
+                    this.env(),
+                    &append_combination(row.name.as_deref().unwrap_or(name)),
+                    row.code.as_deref().or(codes[index].as_deref()),
+                )?;
+                if !labels.contains(&label) {
+                    labels.push(label);
+                }
+            }
+            if labels.is_empty() {
+                labels.push(crate::names::format_label(
+                    this.env(),
+                    &append_combination(name),
+                    codes[index].as_deref(),
+                )?);
+            }
+            out.set(
+                index,
+                ProductProduct::DISPLAY_NAME,
+                Some(Arc::<str>::from(labels.join(", "))),
+            )?;
+        }
+        Ok(())
+    }
 
-            out.set(index, ProductProduct::DISPLAY_NAME, Some(res.into()))?;
+    /// Code and partner_ref retain their own selection rules rather than borrowing display-name selection.
+    #[compute(depends = [
+        "name", "default_code", "display_name", "product_tmpl_id",
+        "product_tmpl_id.seller_ids.product_name", "product_tmpl_id.seller_ids.product_code",
+        "product_tmpl_id.seller_ids.partner_id", "product_tmpl_id.seller_ids.company_id",
+        "product_tmpl_id.seller_ids.product_id", "product_tmpl_id.seller_ids.sequence",
+        "product_tmpl_id.seller_ids.min_qty", "product_tmpl_id.seller_ids.price"
+    ], depends_context = ["partner_id", "seller_id", "company_id", "display_default_code", "formatted_display_name", "lang", "label_reader"])]
+    async fn _compute_partner_reference(
+        this: &RecordSet<ProductProduct>,
+        tx: &mut Transaction,
+        out: &mut Assign<'_, ProductProduct>,
+    ) -> Result<()> {
+        let names = crate::names::template_names(this, tx).await?;
+        let codes = this.mapped(tx, ProductProduct::DEFAULT_CODE).await?;
+        let labels = this.mapped(tx, ProductProduct::DISPLAY_NAME).await?;
+        let templates = this.mapped(tx, ProductProduct::PRODUCT_TMPL_ID).await?;
+        let ids: Vec<i64> = templates
+            .iter()
+            .flatten()
+            .filter(|id| !id.is_new())
+            .map(|id| id.get())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let sellers = crate::names::sellers(this.env(), tx, &ids).await?;
+        let partner = crate::names::context_id(this.env(), "partner_id")?;
+        for index in 0..this.len() {
+            let variant = this.as_records().rec_ids()[index].get();
+            let template = templates[index]
+                .ok_or_else(|| Error::validation("Product variant missing template link"))?
+                .get();
+            let matching = || {
+                sellers
+                    .iter()
+                    .filter(|row| row.template == template && Some(row.partner) == partner)
+            };
+            let mut code = codes[index].clone();
+            for row in matching().filter(|row| row.variant.is_none_or(|id| id == variant)) {
+                code = row.code.clone().or_else(|| codes[index].clone());
+                if row.variant == Some(variant) {
+                    break;
+                }
+            }
+            let reference = match matching().next() {
+                Some(row) => {
+                    let name = row
+                        .name
+                        .as_deref()
+                        .or(codes[index].as_deref())
+                        .or(names[index].as_deref())
+                        .unwrap_or("");
+                    match code.as_deref().filter(|v| !v.is_empty()) {
+                        Some(code) => Some(Arc::<str>::from(format!("[{code}] {name}"))),
+                        None => Some(Arc::<str>::from(name)),
+                    }
+                }
+                None => labels[index].clone(),
+            };
+            out.set(index, ProductProduct::CODE, code)?;
+            out.set(index, ProductProduct::PARTNER_REF, reference)?;
         }
         Ok(())
     }

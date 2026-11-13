@@ -6,8 +6,9 @@
 use erp_fields::Result;
 
 use super::decl::{
-    SqlConditionDecl, SqlDep, SqlEvent, SqlFunctionDecl, SqlLanguage, SqlLevel, SqlObjectDecl,
-    SqlObjectKindDecl, SqlResult, SqlTiming, SqlTriggerDecl,
+    SqlBinding, SqlConditionDecl, SqlDep, SqlEvent, SqlFunctionDecl, SqlLanguage, SqlLevel,
+    SqlObjectDecl, SqlObjectKindDecl, SqlResult, SqlSecurity, SqlTableGrantDecl, SqlTiming,
+    SqlTriggerDecl,
 };
 use super::graph::{SqlTransition, SqlTriggerShape};
 use super::{SqlObjectLimits, within};
@@ -70,7 +71,75 @@ pub(crate) fn check(
         SqlObjectKindDecl::Function(f) => check_function(who, f, limits).map(|()| None),
         SqlObjectKindDecl::Trigger(t) => check_trigger(who, t).map(Some),
         SqlObjectKindDecl::Condition(c) => check_condition(who, c, limits).map(|()| None),
+        SqlObjectKindDecl::TableGrant(g) => check_table_grant(who, g).map(|()| None),
     }
+}
+
+/// The first item listed twice in `items`, if any.
+fn repeated<T: Ord + Copy>(items: &[T]) -> Option<T> {
+    let mut sorted = items.to_vec();
+    sorted.sort_unstable();
+    sorted.windows(2).find(|w| w[0] == w[1]).map(|w| w[0])
+}
+
+/// EXECUTE grants (A2): never to `schema_owner` (it owns invoker functions and is a member of the
+/// definer), never to the owner of a definer function, never on a trigger function (a trigger
+/// runs it without EXECUTE), each binding once.
+fn check_execute(who: Who<'_>, f: &SqlFunctionDecl) -> Result<()> {
+    if f.result == SqlResult::Trigger && !f.execute.is_empty() {
+        return Err(err!(
+            who,
+            "a function returning trigger is run by its triggers; EXECUTE is not granted on it"
+        ));
+    }
+    for binding in f.execute {
+        let owner = match binding {
+            SqlBinding::SchemaOwner => true,
+            SqlBinding::Definer => f.security == SqlSecurity::Definer,
+            SqlBinding::Maintenance | SqlBinding::Request => false,
+        };
+        if owner {
+            return Err(err!(
+                who,
+                "binding '{binding}' owns the function; EXECUTE is not granted to it"
+            ));
+        }
+    }
+    if let Some(binding) = repeated(f.execute) {
+        return Err(err!(
+            who,
+            "binding '{binding}' is granted EXECUTE more than once"
+        ));
+    }
+    Ok(())
+}
+
+/// A table grant policy (A2, contract §5): to `request` or `definer` only (`schema_owner` owns the
+/// table, `maintenance` executes declared entry points only), at least one operation, each once.
+fn check_table_grant(who: Who<'_>, g: &SqlTableGrantDecl) -> Result<()> {
+    match g.binding {
+        SqlBinding::Request | SqlBinding::Definer => {}
+        SqlBinding::SchemaOwner => {
+            return Err(err!(
+                who,
+                "binding 'schema_owner' owns the table; it takes no grant"
+            ));
+        }
+        SqlBinding::Maintenance => {
+            return Err(err!(
+                who,
+                "binding 'maintenance' executes declared entry points only; it takes no table \
+                 grant"
+            ));
+        }
+    }
+    if g.ops.is_empty() {
+        return Err(err!(who, "a table grant lists no operation"));
+    }
+    if let Some(op) = repeated(g.ops) {
+        return Err(err!(who, "operation {} is listed more than once", op.sql()));
+    }
+    Ok(())
 }
 
 fn check_function(who: Who<'_>, f: &SqlFunctionDecl, limits: &SqlObjectLimits) -> Result<()> {
@@ -116,6 +185,7 @@ fn check_function(who: Who<'_>, f: &SqlFunctionDecl, limits: &SqlObjectLimits) -
     if f.result == SqlResult::Trigger && !f.args.is_empty() {
         return Err(err!(who, "a function returning trigger takes no arguments"));
     }
+    check_execute(who, f)?;
     within(who, "dependencies", f.deps.len(), limits.dependencies)?;
     // sorted copy of references only (bounded above): duplicates are adjacent
     let mut deps: Vec<&SqlDep> = f.deps.iter().collect();
@@ -286,6 +356,7 @@ pub(crate) fn decl_bytes(decl: &SqlObjectDecl) -> Option<usize> {
         SqlObjectKindDecl::Condition(c) => {
             sum(&[c.sqlstate.len(), c.identifier.len(), c.message.len()])?
         }
+        SqlObjectKindDecl::TableGrant(g) => g.model.len(),
     };
     own.checked_add(decl.key.len())
 }

@@ -14,6 +14,13 @@ pub enum StockError {
         /// The location whose policy row was written.
         location_id: i64,
     },
+    /// A tracking change would leave lot or serial rows the new mode cannot hold (6).
+    TrackingChangeBlocked {
+        /// Display name of the product.
+        product: String,
+        /// Lots, serial numbers or open serial rows found.
+        count: i64,
+    },
 }
 
 impl fmt::Display for StockError {
@@ -23,6 +30,12 @@ impl fmt::Display for StockError {
                 f,
                 "Location {location_id} cannot forbid negative stock yet: the negative-stock \
                  guard is not supported until a later release."
+            ),
+            Self::TrackingChangeBlocked { product, count } => write!(
+                f,
+                "Tracking of {product} cannot be changed while it has stock or open operations with \
+                 lots or serial numbers ({count} found). Converting existing stock is not available \
+                 yet (a later release)."
             ),
         }
     }

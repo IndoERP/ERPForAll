@@ -380,12 +380,16 @@ async fn test_user_settings_refuse_unknown_keys_and_the_public_user() {
     f.finish().await;
 }
 
-/// The lock classes of the two addons are the ones registered in `erp_sql::locks`, and distinct.
+/// The lock classes of the addons are the ones registered in `erp_sql::locks`, and distinct.
 #[test]
 fn the_addon_lock_classes_are_registered_and_distinct() {
     assert_eq!(
         erp_addon_mail::message_attachments::PENDING_LOCK_CLASS,
         erp_sql::locks::MAIL_PENDING_UPLOAD_LOCK_CLASS
+    );
+    assert_eq!(
+        erp_addon_account::fiscal::PERIOD_LOCK_CLASS,
+        erp_sql::locks::ACCOUNT_FISCAL_PERIOD_LOCK_CLASS
     );
     let all = [
         1701,
@@ -393,6 +397,7 @@ fn the_addon_lock_classes_are_registered_and_distinct() {
         erp_sql::locks::JOBS_LOCK_CLASS,
         erp_sql::locks::MAIL_SCHEDULED_THREAD_LOCK_CLASS,
         erp_sql::locks::MAIL_PENDING_UPLOAD_LOCK_CLASS,
+        erp_sql::locks::ACCOUNT_FISCAL_PERIOD_LOCK_CLASS,
     ];
     let unique: std::collections::BTreeSet<_> = all.iter().collect();
     assert_eq!(unique.len(), all.len());

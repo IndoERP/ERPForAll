@@ -228,12 +228,27 @@ async fn resolve_groups(
     Ok(resolved)
 }
 
+type GroupContributions = Vec<(String, Vec<erp_sdk::settings::SettingGroupDecl>)>;
+fn group_contributions(env: &Env, installed: &BTreeSet<String>) -> Result<GroupContributions> {
+    let mut groups = Vec::new();
+    for entry in erp_sdk::settings::GROUP_CONTRIBUTIONS {
+        if installed.contains(entry.addon.name) {
+            same_descriptor(env, entry.addon)?;
+            groups.push((entry.addon.name.to_owned(), (entry.declarations)()?));
+        }
+    }
+    Ok(groups)
+}
 async fn registry(env: &Env, tx: &mut Transaction) -> Result<SettingsRegistry> {
     let installed = installed_addons(env);
     let mut references = BTreeSet::new();
     let contributions = setting_contributions(env, &installed, &mut references)?;
     let resolved = resolve_groups(tx, references).await?;
-    SettingsRegistry::build(contributions, &installed, |group| resolved.contains(group))
+    let registry =
+        SettingsRegistry::build(contributions, &installed, |group| resolved.contains(group))?
+            .with_groups(group_contributions(env, &installed)?, &installed)?;
+    crate::jobs_settings::require(&registry)?;
+    Ok(registry)
 }
 
 fn unsupported_item() -> Error {
@@ -373,12 +388,14 @@ async fn published(env: &Env, tx: &mut Transaction) -> Result<Published> {
     let resolved = resolve_groups(tx, references).await?;
     let registry =
         SettingsRegistry::build(contributions, &installed, |group| resolved.contains(group))?
+            .with_groups(group_contributions(env, &installed)?, &installed)?
             .with_items(
                 items,
                 &installed,
                 |group| resolved.contains(group),
                 |owner, target| link_available(env, &links, owner, target).is_some(),
             )?;
+    crate::jobs_settings::require(&registry)?;
     Ok(Published {
         registry,
         resolvers,
@@ -476,6 +493,13 @@ fn json(value: &Value) -> Result<Json> {
         _ => Err(invalid()),
     }
 }
+fn stored_error(key: &str) -> Error {
+    if key.starts_with("base.jobs.") {
+        Error::validation(format!("Stored setting {key} is invalid."))
+    } else {
+        corrupt()
+    }
+}
 fn stored(decl: &SettingDecl, text: &str) -> Result<Value> {
     if text.len() > MAX_STORED_VALUE_BYTES {
         return Err(corrupt());
@@ -531,17 +555,20 @@ pub async fn describe(
                 ));
             }
         };
-        result.push(wire::SettingDescription::new(
-            decl.key().into(),
-            decl.label().into(),
-            kind,
-            scalar(decl.default_value())?,
-            choices,
-            permits(env, tx, decl.write_groups()).await?,
-            decl.target_app().into(),
-            decl.block_title().into(),
-            decl.display_sequence(),
-        ));
+        result.push(
+            wire::SettingDescription::new(
+                decl.key().into(),
+                decl.label().into(),
+                kind,
+                scalar(decl.default_value())?,
+                choices,
+                permits(env, tx, decl.write_groups()).await?,
+                decl.target_app().into(),
+                decl.block_title().into(),
+                decl.display_sequence(),
+            )
+            .with_help(decl.help_text().map(str::to_owned)),
+        );
     }
     // Defence in depth: the scope check (`authorize_scope` -> `check_access`, whose model check reads
     // `env.companies()` first) already refuses a bad company context; this keeps that true if a later scope
@@ -690,13 +717,17 @@ pub async fn read_values(
     for key in &keys {
         declared(&registry, env, tx, kind, key, false).await?;
     }
+    let expanded = registry.expanded_keys(&keys)?;
+    for key in &expanded {
+        declared(&registry, env, tx, kind, key, false).await?;
+    }
     // Read revision and values in a single statement; READ COMMITTED cannot mix revisions.
     // Keep a present key when withholding oversized/corrupt text. Its NULL projection below
     // must decode as the existing corruption error, never as an absent/default setting.
     let sql = format!(
         "SELECT s.revision, v.setting_key, CASE WHEN octet_length(v.value_text) <= {MAX_STORED_VALUE_BYTES} THEN v.value_text END FROM ir_config_setting_scope s LEFT JOIN ir_config_setting_value v ON v.scope_id=s.id AND v.setting_key=ANY($2) WHERE s.identity=$1"
     );
-    let rows = tx.query(&sql, &[&identity, &keys]).await?;
+    let rows = tx.query(&sql, &[&identity, &expanded]).await?;
     let mut current = "0".to_owned();
     let mut values = BTreeMap::new();
     for row in rows {
@@ -704,18 +735,30 @@ pub async fn read_values(
         revision(&current).map_err(|_| corrupt())?;
         let key: Option<String> = row.try_get(1).map_err(|_| corrupt())?;
         if let Some(key) = key {
-            let text: String = row.try_get(2).map_err(|_| corrupt())?;
+            let text: String = row.try_get(2).map_err(|_| stored_error(&key))?;
             values.insert(key, text);
         }
     }
-    let mut result = Vec::new();
-    for key in keys {
+    let mut complete = BTreeMap::new();
+    let mut sources = BTreeMap::new();
+    for key in expanded {
         let decl = registry.get(&key).ok_or_else(|| Error::access(DENIED))?;
         let (value, source) = match values.get(&key) {
-            Some(text) => (stored(decl, text)?, wire::ValueSource::Stored),
+            Some(text) => (
+                stored(decl, text).map_err(|_| stored_error(&key))?,
+                wire::ValueSource::Stored,
+            ),
             None => (decl.default_value().clone(), wire::ValueSource::Default),
         };
-        result.push(wire::SettingEntry::new(key, scalar(&value)?, source));
+        complete.insert(key.clone(), value);
+        sources.insert(key, source);
+    }
+    registry.validate_groups(&complete)?;
+    let mut result = Vec::new();
+    for key in keys {
+        let value = complete.get(&key).ok_or_else(corrupt)?;
+        let source = sources.remove(&key).ok_or_else(corrupt)?;
+        result.push(wire::SettingEntry::new(key, scalar(value)?, source));
     }
     Ok(SettingsValues::new(scope, current, result))
 }
@@ -739,9 +782,24 @@ pub async fn write_values(
     let (identity, company, kind) = identity(&scope)?;
     let registry = registry(env, tx).await?;
     for (key, value) in &changes {
-        declared(&registry, env, tx, kind, key, true)
-            .await?
-            .validate(value)?;
+        let decl = declared(&registry, env, tx, kind, key, true).await?;
+        // a value of the wrong kind or out of bounds is refused naming the key and its bounds
+        if !key.starts_with("base.jobs.") && !decl.kind().fits(value) {
+            return Err(Error::validation(format!(
+                "{key} takes {}.",
+                decl.kind().describe()
+            )));
+        }
+        decl.validate(value).map_err(|error| {
+            if key.starts_with("base.jobs.") {
+                Error::validation(format!(
+                    "Invalid value for {key}; use the declared integer range."
+                ))
+                .with_source(error)
+            } else {
+                error
+            }
+        })?;
     }
     // Savepoint guarantees callers cannot catch an error and commit a successful prefix.
     tx.savepoint(async |tx| {
@@ -756,7 +814,15 @@ pub async fn write_values(
         authorize_scope(env, tx, &scope).await?;
         env.records("ir.config.setting")?.check_access(tx, erp_sdk::Operation::Write).await?;
         for (key, _) in &changes { declared(&registry, env, tx, kind, key, true).await?; }
-        let old = read_values(env, tx, scope.clone(), keys.clone()).await?;
+        let expanded = registry.expanded_keys(&keys)?;
+        let old = read_values(env, tx, scope.clone(), expanded).await?;
+        let previous: BTreeMap<_, _> = old.values.into_iter().map(|entry| (entry.key, entry.value)).collect();
+        let mut proposed = BTreeMap::new();
+        for (key, value) in &previous {
+            proposed.insert(key.clone(), from_json(serde_json::to_value(value).map_err(|_| corrupt())?)?);
+        }
+        for (key, value) in &changes { proposed.insert(key.clone(), value.clone()); }
+        registry.validate_groups(&proposed)?;
         let subject = env.uid().to_string();
         let actor = match env.principal().actor() {
             Some(erp_sdk::Actor::ApiKey { id, .. }) => format!("api_key:{}", id.get()),
@@ -766,8 +832,9 @@ pub async fn write_values(
             Some(_) => return Err(Error::validation("Unsupported audit actor; requires a later release actor mapping.")),
         };
         let mut result = Vec::new();
-        for ((key,value), previous) in changes.iter().zip(old.values) {
-            let old_text = serde_json::to_string(&previous.value).map_err(|_| corrupt())?;
+        for (key,value) in &changes {
+            let old_value = previous.get(key).ok_or_else(corrupt)?;
+            let old_text = serde_json::to_string(old_value).map_err(|_| corrupt())?;
             let text = serde_json::to_string(&scalar(value)?).map_err(|_| invalid())?;
             tx.execute("INSERT INTO ir_config_setting_value(scope_id,setting_key,value_text) VALUES ($1,$2,$3) ON CONFLICT(scope_id,setting_key) DO UPDATE SET value_text=EXCLUDED.value_text", &[&scope_id, &key, &text]).await?;
             tx.execute("INSERT INTO ir_config_setting_audit(scope_id,actor,setting_key,old_value,new_value,revision,subject_uid,create_date) VALUES ($1,$2,$3,$4,$5,$6,$7,CURRENT_TIMESTAMP AT TIME ZONE 'UTC')", &[&scope_id,&actor,&key,&old_text,&text,&next,&subject]).await?;

@@ -220,6 +220,41 @@ impl Transaction {
         Ok((company, fallback))
     }
 
+    /// The company map draft `record` holds once `scalar` is assigned to `field` for the
+    /// environment's company: its current map (copied from its origin, or its default) with that
+    /// company's entry set and every other company's entry untouched. The draft
+    /// holds a map like a stored record, so a read in another company
+    /// projects that company's value. Nothing is written to the database.
+    pub(crate) async fn draft_property_map(
+        &mut self,
+        record: &Records,
+        field: &erp_registry::FieldSpec,
+        scalar: &Cell,
+    ) -> Result<Cell> {
+        let spec = record.spec();
+        let &[id] = record.rec_ids() else {
+            return Err(Error::programming(format!(
+                "{}.{}: a draft company value is assigned to one record at a time",
+                spec.name, field.name
+            )));
+        };
+        if !id.is_new() {
+            return Err(Error::programming(format!(
+                "{}.{}: draft company values belong to new records only",
+                spec.name, field.name
+            )));
+        }
+        refuse_draft_link(spec, field, scalar)?;
+        // prepares the fallbacks and copies the origin's map (or the default) first
+        self.ensure(record, field.id).await?;
+        let base = self
+            .cache
+            .get(spec.id, field.id, id)
+            .ok_or_else(|| Error::programming("a draft company map was not cached by ensure"))?;
+        let (company, fallback) = self.property_context(record.env(), spec.id, field.id)?;
+        crate::company_dependent::apply(&field.ty, &base, company, scalar, &fallback)
+    }
+
     /// Never attribute a previous company's dirty map to a later writer. Flush at origin changes.
     pub(crate) async fn property_write_origin(
         &mut self,
@@ -252,6 +287,22 @@ impl Transaction {
         }
         Ok(())
     }
+}
+
+/// A company map stores database ids only: a many2one to an unsaved record has no id to store.
+pub(crate) fn refuse_draft_link(
+    spec: &ModelSpec,
+    field: &erp_registry::FieldSpec,
+    value: &Cell,
+) -> Result<()> {
+    if matches!(value, Cell::Id(raw) if *raw < 0) {
+        return Err(Error::validation(format!(
+            "{}.{}: a company-dependent many2one to an unsaved record is not supported until \
+             a later release",
+            spec.name, field.name
+        )));
+    }
+    Ok(())
 }
 
 pub(crate) fn check_required(

@@ -12,11 +12,33 @@ use erp_sdk::prelude::*;
     description = "Minimum Inventory Rule",
     order = "location_id, company_id, id",
     company_access = direct(field = "company_id", branch = "exact", empty = "deny"),
-    constraints = [(
-        "_product_location_check",
-        "UNIQUE (product_id, location_id, company_id)",
-        "A replenishment rule already exists for this product on this location."
+    keys = [key(
+        name = "_product_location_check",
+        fields = ["product_id", "location_id", "company_id"],
+        message = "A replenishment rule already exists for this product on this location."
     )],
+    constraints = [
+        (
+            "_finite_product_min_qty",
+            "CHECK (product_min_qty <> 'NaN' AND product_min_qty <> 'Infinity' AND product_min_qty <> '-Infinity')",
+            "The minimum of a replenishment rule must be a finite number."
+        ),
+        (
+            "_finite_product_max_qty",
+            "CHECK (product_max_qty <> 'NaN' AND product_max_qty <> 'Infinity' AND product_max_qty <> '-Infinity')",
+            "The maximum of a replenishment rule must be a finite number."
+        ),
+        (
+            "_finite_daily_demand",
+            "CHECK (daily_demand <> 'NaN' AND daily_demand <> 'Infinity' AND daily_demand <> '-Infinity')",
+            "The daily demand of a replenishment rule must be a finite number."
+        ),
+        (
+            "_finite_qty_to_order_manual",
+            "CHECK (qty_to_order_manual <> 'NaN' AND qty_to_order_manual <> 'Infinity' AND qty_to_order_manual <> '-Infinity')",
+            "The manual order quantity of a replenishment rule must be a finite number."
+        ),
+    ],
 )]
 pub struct StockWarehouseOrderpoint {
     #[field(char, required = true, copy = false)]

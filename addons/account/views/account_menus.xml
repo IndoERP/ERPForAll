@@ -5,6 +5,9 @@
     <menuitem id="menu_finance_configuration" name="Configuration" sequence="90">
       <menuitem id="menu_action_account_form" name="Chart of Accounts" action="action_account_form" sequence="10"/>
       <menuitem id="menu_account_tag" name="Account Tags" action="action_account_tag" sequence="20"/>
+      <menuitem id="menu_action_account_journal_form" name="Journals" action="action_account_journal_form" groups="account.group_account_manager" sequence="30"/>
+      <menuitem id="menu_action_account_journal_group_list" name="Ledgers" action="action_account_journal_group_list" sequence="40"/>
     </menuitem>
   </menuitem>
+  <menuitem id="menu_account_fiscal_period" name="Fiscal Periods" parent="menu_finance_configuration" action="action_account_fiscal_period" sequence="30"/>
 </erp>

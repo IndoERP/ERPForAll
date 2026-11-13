@@ -1092,7 +1092,8 @@ object!(/// One visible native declaration; policy internals stay on the server.
         default: SettingValue, #[serde(deserialize_with="required_nullable")] choices: Option<Vec<(String,String)>>, writable: bool,
         #[serde(default)] app: String,
         #[serde(default = "default_setting_block")] block: String,
-        #[serde(default = "default_setting_sequence")] sequence: u32 });
+        #[serde(default = "default_setting_sequence")] sequence: u32,
+        #[serde(default, skip_serializing_if="Option::is_none")] help: Option<String> });
 
 fn default_setting_block() -> String {
     "General".into()
@@ -1456,6 +1457,11 @@ impl SettingsDescription {
     }
 }
 impl SettingDescription {
+    /// Attach bounded native declaration help, displayed as text by the client.
+    pub fn with_help(mut self, help: Option<String>) -> Self {
+        self.help = help;
+        self
+    }
     /// Describe one permitted setting without exposing its group policy.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -1479,6 +1485,7 @@ impl SettingDescription {
             app,
             block,
             sequence,
+            help: None,
         }
     }
 }

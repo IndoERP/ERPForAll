@@ -9,9 +9,9 @@ use std::fmt;
 use erp_fields::{Error, Result};
 
 use super::decl::{
-    SqlColumnSet, SqlCompareColumn, SqlConditionDecl, SqlDeferral, SqlDep, SqlFunctionDecl,
-    SqlLanguage, SqlObjectDecl, SqlObjectKindDecl, SqlObjectManifest, SqlResult, SqlSecurity,
-    SqlType, SqlVolatility,
+    SqlBinding, SqlColumnSet, SqlCompareColumn, SqlConditionDecl, SqlDeferral, SqlDep,
+    SqlFunctionDecl, SqlLanguage, SqlObjectDecl, SqlObjectKindDecl, SqlObjectManifest, SqlResult,
+    SqlSecurity, SqlTableOp, SqlType, SqlVolatility,
 };
 use super::validate::{Who, check, check_key, decl_bytes, describe_dep};
 use super::{SqlObjectLimits, within};
@@ -169,6 +169,8 @@ pub enum SqlObjectKind {
     Trigger(SqlTrigger),
     /// A condition.
     Condition(SqlCondition),
+    /// A restricted table grant policy.
+    TableGrant(SqlTableGrant),
 }
 
 /// A validated function.
@@ -219,6 +221,34 @@ impl SqlFunction {
     /// Security mode.
     pub fn security(&self) -> SqlSecurity {
         self.0.security
+    }
+    /// The bindings granted EXECUTE; PUBLIC never is.
+    pub fn execute(&self) -> &'static [SqlBinding] {
+        self.0.execute
+    }
+}
+
+/// A validated restricted table grant policy: `binding` holds exactly `ops` on the table of
+/// `model`.
+#[derive(Debug)]
+pub struct SqlTableGrant {
+    model: SqlModelRef,
+    binding: SqlBinding,
+    ops: &'static [SqlTableOp],
+}
+
+impl SqlTableGrant {
+    /// The model whose table the policy restricts.
+    pub fn model(&self) -> &SqlModelRef {
+        &self.model
+    }
+    /// The binding granted the operations (`request` or `definer`).
+    pub fn binding(&self) -> SqlBinding {
+        self.binding
+    }
+    /// The operations, each once.
+    pub fn ops(&self) -> &'static [SqlTableOp] {
+        self.ops
     }
 }
 
@@ -491,7 +521,9 @@ fn resolve_one(
                                                trigger"
                     ));
                 }
-                SqlObjectKindDecl::Trigger(_) | SqlObjectKindDecl::Condition(_) => {
+                SqlObjectKindDecl::Trigger(_)
+                | SqlObjectKindDecl::Condition(_)
+                | SqlObjectKindDecl::TableGrant(_) => {
                     return Err(err!(
                         id.who(),
                         "trigger function '{function}' is not a function"
@@ -513,6 +545,18 @@ fn resolve_one(
             (references, SqlObjectKind::Trigger(trigger))
         }
         SqlObjectKindDecl::Condition(c) => (Vec::new(), SqlObjectKind::Condition(SqlCondition(c))),
+        SqlObjectKindDecl::TableGrant(g) => {
+            let model = model_ref(registry, reach, id, g.model)?;
+            let grant = SqlTableGrant {
+                model: model.clone(),
+                binding: g.binding,
+                ops: g.ops,
+            };
+            (
+                vec![SqlReference::Model(model)],
+                SqlObjectKind::TableGrant(grant),
+            )
+        }
     };
     Ok(SqlObject {
         id,
@@ -602,11 +646,13 @@ fn allow_list(registry: &Registry, id: SqlObjectId, columns: &SqlColumnSet) -> R
 }
 
 /// Physical identities: function schema + name + argument types, trigger table + name,
-/// condition SQLSTATE + identifier. The later object in identity order is refused.
+/// condition SQLSTATE + identifier, grant policy table + binding. The later object in identity
+/// order is refused.
 fn check_collisions(objects: &[SqlObject]) -> Result<()> {
     let mut functions: BTreeMap<(&str, &str, &[SqlType]), SqlObjectId> = BTreeMap::new();
     let mut triggers: BTreeMap<(&str, &str), SqlObjectId> = BTreeMap::new();
     let mut conditions: BTreeMap<(&str, &str), SqlObjectId> = BTreeMap::new();
+    let mut grants: BTreeMap<(&str, SqlBinding), SqlObjectId> = BTreeMap::new();
     for object in objects {
         let (what, previous) = match &object.kind {
             SqlObjectKind::Function(SqlFunction(f)) => (
@@ -623,6 +669,13 @@ fn check_collisions(objects: &[SqlObject]) -> Result<()> {
             SqlObjectKind::Condition(SqlCondition(c)) => (
                 format!("condition {} '{}'", c.sqlstate, c.identifier),
                 conditions.insert((c.sqlstate, c.identifier), object.id),
+            ),
+            SqlObjectKind::TableGrant(g) => (
+                format!(
+                    "a grant policy for binding '{}' on table '{}'",
+                    g.binding, g.model.table
+                ),
+                grants.insert((g.model.table.as_str(), g.binding), object.id),
             ),
         };
         if let Some(other) = previous {

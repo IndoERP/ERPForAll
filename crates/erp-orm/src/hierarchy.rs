@@ -30,7 +30,7 @@ use crate::env::Env;
 use crate::records::Records;
 
 /// Whether a domain (sub-domains included) holds a hierarchy condition.
-fn has_hierarchy(domain: &Domain) -> bool {
+pub(crate) fn has_hierarchy(domain: &Domain) -> bool {
     match domain.kind() {
         DomainKind::Not(child) => has_hierarchy(child),
         DomainKind::And(children) | DomainKind::Or(children) => children.iter().any(has_hierarchy),

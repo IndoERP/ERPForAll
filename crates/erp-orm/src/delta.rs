@@ -179,6 +179,9 @@ async fn run(
         bound.push(grain_column(batch, i, g.ty())?);
     }
     bound.extend(measure_columns(apply, batch)?);
+    for value in apply.insert_fill_values() {
+        bound.push((Box::new(value) as Bound, Type::TIMESTAMP));
+    }
     let params: Vec<(&(dyn ToSql + Sync), Type)> = bound
         .iter()
         .map(|(value, ty)| (value.as_ref(), ty.clone()))

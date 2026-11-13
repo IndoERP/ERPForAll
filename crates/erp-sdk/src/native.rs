@@ -12,8 +12,9 @@ pub mod jobs {
     pub use erp_orm::jobs::{
         Backoff, CancelToken, ChunkReport, ChunkResult, EnqueueOutcome, EnqueueRequest, HandlerRef,
         HistoryPolicy, ItemKey, ItemsChunk, JobContext, JobError, JobHandler, JobKey, JobKindDecl,
-        JobKindRequirement, JobRef, KindIsolation, MAX_CANCEL_KEYS, OnDuplicate, PrincipalPolicy,
-        Priority, RecurringSpec, RunAs, RunOutcome, StepArgs, StepOutcome, TimeoutClass, When,
+        JobKindRequirement, JobRef, JobSettings, KindIsolation, MAX_CANCEL_KEYS, OnDuplicate,
+        PrincipalPolicy, Priority, RecurringSpec, RunAs, RunOutcome, Setting, StepArgs,
+        StepOutcome, TimeoutClass, When,
     };
     pub use erp_orm::register_job_kind;
 }
@@ -22,9 +23,10 @@ pub mod jobs {
 /// guarded apply., "Synchronous guarded apply".
 pub mod delta {
     pub use erp_orm::delta::{
-        AppliedRow, CanonicalKey, DeltaLimits, GrainColumn, GrainType, GrainValue, MeasureColumn,
-        MeasureGuard, MeasureType, MeasureValue, MeasureVector, NettedBatch, ProjectionShape,
-        RESERVED_COLUMNS, SyncApplied, SyncApply, SyncApplyFailure, Uuid16, apply_synchronous,
+        AppliedRow, CanonicalKey, DeltaLimits, GrainColumn, GrainType, GrainValue, InsertFill,
+        MeasureColumn, MeasureGuard, MeasureType, MeasureValue, MeasureVector, NettedBatch,
+        ProjectionShape, RESERVED_COLUMNS, SyncApplied, SyncApply, SyncApplyFailure, Uuid16,
+        apply_synchronous,
     };
 }
 

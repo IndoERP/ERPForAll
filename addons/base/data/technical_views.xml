@@ -789,4 +789,16 @@
     <field name="sequence" eval="20"/>
   </record>
   <menuitem id="technical_job_runs_menu" name="Job Runs" parent="technical_automation_menu" action="technical_job_run_action" groups="base.group_system" sequence="20"/>
+  <record id="technical_jobs_settings_form" model="ir.ui.view">
+    <field name="name">ir.config.setting.jobs.form</field>
+    <field name="model">ir.config.setting</field>
+    <field name="arch" type="xml"><form record_mode="service"><widget name="web.settings" scope_kinds="global" app="base"/></form></field>
+  </record>
+  <record id="technical_jobs_settings_action" model="ir.actions.act_window">
+    <field name="name">Background Job Settings</field>
+    <field name="res_model">ir.config.setting</field>
+    <field name="view_mode">form</field>
+    <field name="view_id" ref="technical_jobs_settings_form"/>
+  </record>
+  <menuitem id="technical_jobs_settings_menu" name="Background Job Settings" parent="technical_automation_menu" action="technical_jobs_settings_action" groups="base.group_system" sequence="15"/>
 </erp>

@@ -8,7 +8,7 @@ use erp_sdk::prelude::*;
     description = "Product Category",
     parent_store = true,
     parent_name = "parent_id",
-    order = "name, id",
+    order = "parent_id desc, name asc",
     rec_name = "complete_name",
     rec_names_search = ["complete_name", "name"],
     company_access = direct(field = "company_id", branch = "ancestor", empty = "allow"),
@@ -21,6 +21,10 @@ pub struct ProductCategory {
     /// Complete hierarchical name ('Parent / Child').
     #[field(char, compute = "_compute_complete_name")]
     pub complete_name: Option<Arc<str>>,
+
+    /// Category label; complete_name itself always retains the full hierarchy.
+    #[field(char, compute = "_compute_display_name")]
+    pub display_name: Option<Arc<str>>,
 
     /// Parent category in tree.
     #[field(
@@ -50,26 +54,69 @@ pub struct ProductCategory {
 
 #[methods(ProductCategory, addon = "product")]
 impl ProductCategory {
+    /// Quick creation writes the actual name field, never its computed rec_name.
+    #[method(override)]
+    async fn name_create(
+        this: &RecordSet<ProductCategory>,
+        tx: &mut Transaction,
+        name: String,
+        _sup: Super,
+    ) -> Result<(i64, Arc<str>)> {
+        let created = this
+            .as_records()
+            .create(
+                tx,
+                vec![RawVals::new().set_cell("name", Cell::Str(name.into()))],
+            )
+            .await?;
+        let label = match created.cell(tx, "display_name").await? {
+            Cell::Str(label) => label,
+            other => {
+                return Err(Error::programming(format!(
+                    "product.category.name_create expected a label, got {other:?}"
+                )));
+            }
+        };
+        let [id] = created.rec_ids() else {
+            return Err(Error::programming(
+                "product.category.name_create expected exactly one created category",
+            ));
+        };
+        Ok((id.get(), label))
+    }
+
+    /// Contextual category labels do not alter the complete hierarchy value.
+    #[compute(depends = ["name", "complete_name"], depends_context = ["hierarchical_naming", "lang"])]
+    async fn _compute_display_name(
+        this: &RecordSet<ProductCategory>,
+        tx: &mut Transaction,
+        out: &mut Assign<'_, ProductCategory>,
+    ) -> Result<()> {
+        let hierarchical = crate::names::context_flag(this.env(), "hierarchical_naming", true)?;
+        let values = if hierarchical {
+            this.mapped(tx, ProductCategory::COMPLETE_NAME).await?
+        } else {
+            this.mapped(tx, ProductCategory::NAME).await?
+        };
+        for (index, value) in values.into_iter().enumerate() {
+            out.set(index, ProductCategory::DISPLAY_NAME, value)?;
+        }
+        Ok(())
+    }
+
     /// Compute recursive complete_name ('Parent / Child').
-    #[compute(depends = ["name", "parent_id.complete_name"], depends_context = ["hierarchical_naming"])]
+    #[compute(depends = ["name", "parent_id.complete_name"], depends_context = ["lang"])]
     async fn _compute_complete_name(
         this: &RecordSet<ProductCategory>,
         tx: &mut Transaction,
         out: &mut Assign<'_, ProductCategory>,
     ) -> Result<()> {
-        let hierarchical = this
-            .env()
-            .context()
-            .get("hierarchical_naming")
-            .map(|v| v.is_truthy())
-            .unwrap_or(true);
-
         let names = this.mapped(tx, ProductCategory::NAME).await?;
         let parent_ids = this.mapped(tx, ProductCategory::PARENT_ID).await?;
 
         for (index, (name_opt, parent_opt)) in names.into_iter().zip(parent_ids).enumerate() {
             let name = name_opt.as_deref().unwrap_or("");
-            if !hierarchical || parent_opt.is_none() {
+            if parent_opt.is_none() {
                 out.set(index, ProductCategory::COMPLETE_NAME, Some(name.into()))?;
             } else if let Some(parent_id) = parent_opt {
                 let parent_records = this

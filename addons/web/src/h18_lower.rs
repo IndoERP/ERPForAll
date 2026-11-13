@@ -2052,6 +2052,9 @@ fn build_entry<'a, N: Node<'a>>(
                                     })
                                 })?;
                             }
+                            if let Some(app) = node.attr("app") {
+                                object.set("app", |value| value.text(app))?;
+                            }
                             Ok(())
                         })
                     })?;

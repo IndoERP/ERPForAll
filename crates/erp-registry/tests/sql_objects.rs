@@ -18,6 +18,7 @@ use erp_registry::{
     SqlObjectManifest, SqlReference, SqlResult, SqlScalar, SqlTiming, SqlTransition,
     SqlTriggerDecl, SqlTriggerShape, SqlType,
 };
+use erp_registry::{SqlBinding, SqlSecurity, SqlTableGrantDecl, SqlTableOp};
 
 static SQA: AddonDescriptor = AddonDescriptor {
     name: "test_sqa",
@@ -1234,4 +1235,129 @@ fn conditions_are_found_by_sqlstate_and_identifier() {
     assert!(graph.condition("ERP01", "sqa_unknown").is_none());
     assert!(graph.condition("23505", "sqa_unbalanced").is_none());
     assert!(graph.condition("ERP01", "").is_none());
+}
+
+fn table_grant(
+    key: &'static str,
+    binding: SqlBinding,
+    ops: &'static [SqlTableOp],
+) -> SqlObjectDecl {
+    SqlObjectDecl::table_grant("test_sqa", key, SqlTableGrantDecl::new(MOVE, binding, ops))
+}
+
+/// `erp-test-models/tests/sql_objects_security.rs`)
+/// Role bindings are symbolic and closed: EXECUTE goes to `request`, `maintenance` or the
+/// `definer` of an invoker function, never to the binding that owns the function or on a trigger
+/// function; a table grant policy goes to `request` or `definer` with a non-empty set of
+/// SELECT/INSERT/UPDATE/DELETE, once per table and binding.
+#[test]
+fn spec_ormx_051_role_bindings_are_validated_at_registry_build() {
+    use SqlBinding::{Definer, Maintenance, Request, SchemaOwner};
+    use SqlTableOp::{Insert, Select};
+    let entry = |execute: &'static [SqlBinding], security: SqlSecurity| {
+        function(
+            "test_sqa",
+            "fn_entry",
+            sql("sqa_entry", "SELECT 1")
+                .security(security)
+                .grant_execute(execute),
+        )
+    };
+    let registry = Build::new(vec![
+        entry(&[Request, Maintenance], SqlSecurity::Definer),
+        table_grant("grant_request", Request, &[Insert]),
+        table_grant("grant_definer", Definer, &[Select, Insert]),
+    ])
+    .run()
+    .unwrap();
+    let graph = registry.sql_objects();
+    let SqlObjectKind::Function(f) = graph.get("test_sqa", "fn_entry").unwrap().kind() else {
+        panic!("fn_entry is a function");
+    };
+    assert_eq!(f.execute(), &[Request, Maintenance]);
+    let SqlObjectKind::TableGrant(g) = graph.get("test_sqa", "grant_definer").unwrap().kind()
+    else {
+        panic!("grant_definer is a table grant");
+    };
+    assert_eq!(
+        (g.model().table(), g.binding(), g.ops()),
+        ("sqa_move", Definer, &[Select, Insert][..])
+    );
+    assert_eq!(
+        graph.get("test_sqa", "grant_definer").unwrap().references(),
+        &[SqlReference::Model(g.model().clone())]
+    );
+    // an invoker function may be executed by the definer (a definer body calls it)
+    Build::new(vec![entry(&[Definer], SqlSecurity::Invoker)])
+        .run()
+        .unwrap();
+
+    let prefix = "SQL object 'test_sqa/fn_entry': ";
+    for (decl, reason) in [
+        (
+            entry(&[SchemaOwner], SqlSecurity::Invoker),
+            "binding 'schema_owner' owns the function; EXECUTE is not granted to it",
+        ),
+        (
+            entry(&[Definer], SqlSecurity::Definer),
+            "binding 'definer' owns the function; EXECUTE is not granted to it",
+        ),
+        (
+            entry(&[Request, Request], SqlSecurity::Invoker),
+            "binding 'request' is granted EXECUTE more than once",
+        ),
+        (
+            function(
+                "test_sqa",
+                "fn_entry",
+                SqlFunctionDecl::new(
+                    "sqa_entry",
+                    SqlLanguage::PlPgSql,
+                    SqlResult::Trigger,
+                    "BEGIN RETURN NEW; END",
+                )
+                .grant_execute(&[Request]),
+            ),
+            "a function returning trigger is run by its triggers; EXECUTE is not granted on it",
+        ),
+    ] {
+        refused_decls(vec![decl], &format!("{prefix}{reason}"));
+    }
+    for (decl, message) in [
+        (
+            table_grant("grant", SchemaOwner, &[Select]),
+            "SQL object 'test_sqa/grant': binding 'schema_owner' owns the table; it takes no grant",
+        ),
+        (
+            table_grant("grant", Maintenance, &[Select]),
+            "SQL object 'test_sqa/grant': binding 'maintenance' executes declared entry points \
+             only; it takes no table grant",
+        ),
+        (
+            table_grant("grant", Request, &[]),
+            "SQL object 'test_sqa/grant': a table grant lists no operation",
+        ),
+        (
+            table_grant("grant", Request, &[Insert, Select, Insert]),
+            "SQL object 'test_sqa/grant': operation INSERT is listed more than once",
+        ),
+        (
+            SqlObjectDecl::table_grant(
+                "test_sqa",
+                "grant",
+                SqlTableGrantDecl::new("sqa.absent", Request, &[Insert]),
+            ),
+            "SQL object 'test_sqa/grant': model 'sqa.absent' is not in the registry",
+        ),
+    ] {
+        refused_decls(vec![decl], message);
+    }
+    refused_decls(
+        vec![
+            table_grant("grant_a", Request, &[Insert]),
+            table_grant("grant_b", Request, &[Select]),
+        ],
+        "SQL object 'test_sqa/grant_b': a grant policy for binding 'request' on table 'sqa_move' \
+         is also declared by 'test_sqa/grant_a'",
+    );
 }

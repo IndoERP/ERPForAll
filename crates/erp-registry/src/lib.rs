@@ -84,13 +84,14 @@ pub use spec::{
 };
 pub use sqlobj::SqlObjectLimits;
 pub use sqlobj::decl::{
-    SqlBodyRender, SqlColumnSet, SqlCompareColumn, SqlConditionDecl, SqlDeferral, SqlDep, SqlEvent,
-    SqlFunctionDecl, SqlLanguage, SqlLevel, SqlObjectDecl, SqlObjectManifest, SqlResult, SqlScalar,
-    SqlSecurity, SqlTiming, SqlTriggerDecl, SqlType, SqlVolatility,
+    SqlBinding, SqlBodyRender, SqlColumnSet, SqlCompareColumn, SqlConditionDecl, SqlDeferral,
+    SqlDep, SqlEvent, SqlFunctionDecl, SqlLanguage, SqlLevel, SqlObjectDecl, SqlObjectManifest,
+    SqlResult, SqlScalar, SqlSecurity, SqlTableGrantDecl, SqlTableOp, SqlTiming, SqlTriggerDecl,
+    SqlType, SqlVolatility,
 };
 pub use sqlobj::graph::{
     SqlCondition, SqlFunction, SqlModelRef, SqlObject, SqlObjectGraph, SqlObjectId, SqlObjectKind,
-    SqlReference, SqlTransition, SqlTrigger, SqlTriggerShape,
+    SqlReference, SqlTableGrant, SqlTransition, SqlTrigger, SqlTriggerShape,
 };
 pub use statement_cache::{ModelStatementCache, SelectShape, StatementCache};
 pub use transient_policy::{

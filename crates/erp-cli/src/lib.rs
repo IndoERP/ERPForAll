@@ -21,6 +21,7 @@ mod human;
 pub mod identity;
 mod live;
 pub mod module;
+pub mod native_addons;
 pub mod node;
 mod pivot_export;
 pub mod scaffold;

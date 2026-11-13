@@ -8,20 +8,8 @@ fn linked_addon_receipts_are_per_addon_and_versioned() {
         .iter()
         .map(|(name, _)| *name)
         .collect();
-    assert_eq!(
-        names,
-        [
-            "acceptance_notes",
-            "base",
-            "barcodes",
-            "mail",
-            "product",
-            "product_mail",
-            "theme_office_blue",
-            "uom",
-            "web"
-        ]
-    );
+    // one receipt per linked native addon, in the order of the one list
+    assert_eq!(names, erp_cli::native_addons::LINKED);
     for (_, identity) in LINKED_ADDON_IDENTITIES {
         let encoded = identity
             .strip_prefix("addon-v1:")

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! Stock balances (`stock.quant`) and serial positions (`stock.serial.position`): tables only.
-//! Both are projections of the stock ledger (2), written by the
-//! transition units; nothing here writes them.
+//! Stock balances (`stock.quant`) and serial positions (`stock.serial.position`): tables.
+//! Both are projections of the stock ledger (2). Quants are written
+//! only by [`crate::quant_engine`]; the ORM refuses generic writes of their balance
+//! columns (`crate::quant_guards`). Serial positions get their writer
+//! in a later slice, after.
 
 use erp_sdk::DefaultContext;
 use erp_sdk::prelude::*;
@@ -144,6 +146,14 @@ pub struct StockQuant {
         string = "Reserved Quantity"
     )]
     pub reserved_quantity: Decimal,
+    /// On hand minus reserved, signed; not stored.
+    #[field(
+        float,
+        digits = "Product Unit",
+        compute = "_compute_available_quantity",
+        string = "Available Quantity"
+    )]
+    pub available_quantity: Decimal,
     /// Incoming date, the FIFO order of the key.
     #[field(
         datetime,

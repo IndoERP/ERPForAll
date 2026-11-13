@@ -12,6 +12,10 @@ use std::{env, fs};
 
 #[path = "../erp-modules/src/artifact_paths.rs"]
 mod artifact_paths;
+// The one list of linked native addons (src/native_addons.rs); only LINKED is read here.
+#[allow(dead_code, reason = "the build script reads only the linked names")]
+#[path = "src/native_addons/names.rs"]
+mod native_names;
 
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_FILES: usize = 20_000;
@@ -171,6 +175,10 @@ fn native_identity() -> Result<(), Box<dyn Error>> {
             .join("../erp-modules/src/artifact_paths.rs")
             .display()
     );
+    println!(
+        "cargo:rerun-if-changed={}",
+        manifest.join("src/native_addons/names.rs").display()
+    );
     let root = manifest
         .parent()
         .and_then(Path::parent)
@@ -178,17 +186,7 @@ fn native_identity() -> Result<(), Box<dyn Error>> {
     let mut output = String::from(
         "/// Per-addon content receipts compiled with the CLI's native addons.\npub const LINKED_ADDON_IDENTITIES: &[(&str, &str)] = &[\n",
     );
-    for name in [
-        "acceptance_notes",
-        "base",
-        "barcodes",
-        "mail",
-        "product",
-        "product_mail",
-        "theme_office_blue",
-        "uom",
-        "web",
-    ] {
+    for name in native_names::LINKED {
         let digest = identity(name, &root.join("addons").join(name))?;
         output.push_str(&format!("    ({name:?}, {digest:?}),\n"));
     }

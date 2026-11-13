@@ -14,6 +14,9 @@
 //! (move lines, serial rows and correction rows on the lines' shared id
 //! sequence), schema only;
 //! and the replenishment configuration tables (orderpoints, putaway rules), schema only.
+//!
+//! Behaviour so far: the quant engine ([`quant_engine`]: signed balance changes in
+//! key order, availability reads) with the quant model and location quant guards (`quant_guards`).
 
 erp_sdk::addon!(
     name = "stock",
@@ -35,6 +38,7 @@ pub mod route;
 pub mod stock_move;
 pub mod stock_move_line;
 pub mod storage;
+pub mod tracking;
 pub mod warehouse;
 
 pub use error::StockError;
@@ -53,3 +57,13 @@ pub use stock_move_line::{
 };
 pub use storage::{StockPackageType, StockStorageCategory, StockStorageCategoryCapacity};
 pub use warehouse::{StockPickingType, StockWarehouse};
+
+// The quant engine and its guards: the one write path of `stock.quant` balances,
+// the availability reads, and the location usage and archive guards over stock.
+pub mod quant_engine;
+mod quant_guards;
+
+pub use quant_engine::{
+    QuantBalance, QuantChange, QuantError, QuantFilter, QuantKey, apply_quant_changes,
+    available_quantity, gather_quants,
+};

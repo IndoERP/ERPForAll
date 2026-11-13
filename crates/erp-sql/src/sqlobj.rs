@@ -8,8 +8,8 @@
 use erp_fields::{Error, Result};
 use erp_registry::{
     SqlCompareColumn, SqlDeferral, SqlFunction, SqlLanguage, SqlObject, SqlObjectGraph,
-    SqlObjectKind, SqlReference, SqlResult, SqlScalar, SqlSecurity, SqlTransition, SqlTrigger,
-    SqlTriggerShape, SqlType, SqlVolatility,
+    SqlObjectKind, SqlReference, SqlResult, SqlScalar, SqlSecurity, SqlTableOp, SqlTransition,
+    SqlTrigger, SqlTriggerShape, SqlType, SqlVolatility,
 };
 
 use crate::quote;
@@ -158,6 +158,57 @@ pub fn create_function(
         search_path_clause(schemas),
         dollar_quote(body)?
     ))
+}
+
+/// `REVOKE ALL ON FUNCTION … FROM PUBLIC`: sent in the batch that creates the function (A2), so
+/// no statement of the transaction sees it executable by PUBLIC.
+pub fn revoke_public(f: &SqlFunction) -> String {
+    format!("REVOKE ALL ON FUNCTION {} FROM PUBLIC", signature(f))
+}
+
+/// The EXECUTE reconciliation of `f`: every privilege of PUBLIC and of the `bound` roles revoked,
+/// then EXECUTE granted to `execute` (a subset of `bound`). Roles come quoted from the caller's
+/// role validation; no declaration text reaches the statement but validated identifiers.
+pub fn function_grants(f: &SqlFunction, bound: &[String], execute: &[String]) -> String {
+    let sig = signature(f);
+    let mut sql = format!("REVOKE ALL ON FUNCTION {sig} FROM PUBLIC");
+    for role in bound {
+        sql.push_str(&format!(";\nREVOKE ALL ON FUNCTION {sig} FROM {role}"));
+    }
+    for role in execute {
+        sql.push_str(&format!(";\nGRANT EXECUTE ON FUNCTION {sig} TO {role}"));
+    }
+    sql
+}
+
+/// The ownership transfer of a `SECURITY DEFINER` function to the quoted `definer` role (A2).
+/// PostgreSQL requires the new owner to hold CREATE on the function's schema, so the definer holds
+/// it for the one statement and loses it again in the same batch.
+pub fn transfer_to_definer(f: &SqlFunction, definer: &str) -> String {
+    let schema = quote(f.schema());
+    format!(
+        "GRANT CREATE ON SCHEMA {schema} TO {definer};\nALTER FUNCTION {} OWNER TO \
+         {definer};\nREVOKE CREATE ON SCHEMA {schema} FROM {definer}",
+        signature(f)
+    )
+}
+
+/// The reconciliation of a restricted table: every privilege of PUBLIC and of the `bound` roles
+/// revoked, then each `(role, operations)` of `grants` granted. Roles come quoted.
+pub fn table_grants(table: &str, bound: &[String], grants: &[(String, &[SqlTableOp])]) -> String {
+    let table = quote(table);
+    let mut sql = format!("REVOKE ALL ON TABLE {table} FROM PUBLIC");
+    for role in bound {
+        sql.push_str(&format!(";\nREVOKE ALL ON TABLE {table} FROM {role}"));
+    }
+    for (role, ops) in grants {
+        let ops: Vec<&str> = ops.iter().map(|op| op.sql()).collect();
+        sql.push_str(&format!(
+            ";\nGRANT {} ON TABLE {table} TO {role}",
+            ops.join(", ")
+        ));
+    }
+    sql
 }
 
 /// Fixed spellings, also in the canonical payload (never Rust variant names).

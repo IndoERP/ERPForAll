@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! This slice holds the account record with its type rules, tags, hierarchy and per-company
-//! code. What needs journals, journal items or taxes (journal currency and type checks, deletion
-//! guard, taxes on off-balance accounts, opening balances, merge) arrives with the slice that
-//! owns those tables; lists each case and its slice.
+//! code; the journal checks (currency, default-account type) run in `crate::journal`. What needs
+//! journal items or taxes (deletion guard, taxes on off-balance accounts, opening balances, merge)
+//! arrives with the slice that owns those tables;
+//! lists each case and its slice.
 
 use std::collections::BTreeMap;
 
@@ -60,13 +61,6 @@ pub struct AccountAccount {
         string = "Code"
     )]
     pub code: Option<Arc<str>>,
-    /// The codes of the account, one per root company.
-    #[field(
-        one2many,
-        comodel = "account.code.mapping",
-        inverse_name = "account_id"
-    )]
-    pub code_mapping_ids: Vec<RecId>,
     /// Archived accounts stay on posted entries but cannot be picked.
     #[field(boolean, default = true)]
     pub active: bool,
@@ -148,6 +142,15 @@ pub struct AccountAccount {
         string = "Companies"
     )]
     pub company_ids: Vec<RecId>,
+    /// The codes of the account, one per root company. Declared after `company_ids` on purpose:
+    /// x2many values of a create are written in field order, and the company check of a code row
+    /// reads the account's companies, which must be written first.
+    #[field(
+        one2many,
+        comodel = "account.code.mapping",
+        inverse_name = "account_id"
+    )]
+    pub code_mapping_ids: Vec<RecId>,
     /// Optional tags for custom reporting.
     #[field(
         many2many,
@@ -411,7 +414,14 @@ impl AccountAccount {
                             )
                         })?,
                 };
-                store_code(tx, this.env(), root, id, code).await?;
+                // a code row of the same call for this root company is the code: it wins over `code`
+                // shortcut: one lookup per account with a code, group by root if creates with codes get large
+                if !codes_by_account(tx, this.env(), &[id], root)
+                    .await?
+                    .contains_key(&id)
+                {
+                    store_code(tx, this.env(), root, id, code).await?;
+                }
             }
         }
         Ok(created)
@@ -459,8 +469,9 @@ impl AccountAccount {
         Ok(())
     }
 
-    /// An account has a company, and a bank or cash account only one. The check
-    /// that no journal item sits in a company being removed comes with the journal item model.
+    /// An account has a company, and a bank or cash account only one; the journals
+    /// using it keep their company among its companies. The check that no journal
+    /// item sits in a company being removed comes with the journal item model.
     #[constrains("company_ids", "account_type")]
     async fn _check_company_consistency(
         this: &RecordSet<AccountAccount>,
@@ -506,7 +517,25 @@ impl AccountAccount {
                 lines.join("\n")
             )));
         }
-        Ok(())
+        crate::journal::check_journal_companies(tx, this.env(), &ids).await
+    }
+
+    /// The foreign currency of a journal and of its default account agree.
+    #[constrains("currency_id")]
+    async fn _check_journal_consistency(
+        this: &RecordSet<AccountAccount>,
+        tx: &mut Transaction,
+    ) -> Result<()> {
+        crate::journal::check_currency_consistency(tx, this.env(), &[], &this.ids()).await
+    }
+
+    /// An account used as a journal's default account keeps a type the journal allows.
+    #[constrains("account_type")]
+    async fn _check_journal_default_account_type(
+        this: &RecordSet<AccountAccount>,
+        tx: &mut Transaction,
+    ) -> Result<()> {
+        crate::journal::check_accounts_as_default(tx, this.env(), &this.ids()).await
     }
 }
 

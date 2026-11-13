@@ -203,7 +203,9 @@ async fn persisted_settings() {
         assert_eq!(error.kind(), erp_sdk::ErrorKind::Validation);
         assert!(matches!(
             error.message(),
-            "Invalid settings request." | "invalid declared setting or value"
+            "Invalid settings request."
+                | "invalid declared setting or value"
+                | "base.test_enabled takes true or false."
         ));
     }
     let too_many = (0..257)

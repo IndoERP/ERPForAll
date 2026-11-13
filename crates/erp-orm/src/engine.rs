@@ -373,6 +373,20 @@ fn cache_key(tx: &Transaction, env: &Env, keys: &[&str], sudo: bool) -> Result<V
                     .first()
                     .map_or(Value::False, |company| Value::Int(company.get())),
                 "company_bound" => crate::related_company::cache_key_part(tx, env)?,
+                "label_reader" => {
+                    let reader = env.label_reader();
+                    let binding = tx.binding(reader)?;
+                    let mut bytes = reader.principal().binding_bytes();
+                    bytes.extend_from_slice(&tx.policy().snapshot().id().get().to_be_bytes());
+                    bytes.extend_from_slice(&binding.groups().get().to_be_bytes());
+                    bytes.extend_from_slice(&binding.resolution().epoch().get().to_be_bytes());
+                    let companies = tx.companies_now(reader)?;
+                    bytes.extend_from_slice(&(companies.len() as u64).to_be_bytes());
+                    for company in companies {
+                        bytes.extend_from_slice(&company.get().to_be_bytes());
+                    }
+                    Value::Bytes(bytes.into())
+                }
                 "uid" if sudo => Value::Int(env.uid()),
                 "uid" => Value::list([Value::Int(env.uid()), Value::Bool(env.su())]),
                 "lang" => ctx.lang().map_or(Value::False, Value::str),
@@ -924,10 +938,28 @@ impl Transaction {
         let registry = Arc::clone(records.env().registry());
         let spec = registry.model_by_id(records.model_id());
         let fs = spec.field_by_id(field);
-        let cell = crate::write::default_cell(records, spec, fs)?.unwrap_or(Cell::Null);
+        let default = crate::write::default_cell(records, spec, fs)?;
+        if fs.company_dependent && default.is_none() {
+            // no override: the draft reads the company's fallback
+            return self.slot_set(
+                &Slot::Plain,
+                records.model_id(),
+                field,
+                ids.iter().map(|id| (*id, Cell::Null)),
+            );
+        }
+        let cell = default.unwrap_or(Cell::Null);
         // a default (static or a `default_<field>` context key from the caller) reaches the cache
         // like an assigned value, so HTML goes through the field's policy first (review r1 M3)
         let cell = self.admit_html_cell(spec, fs, cell)?;
+        // a draft holds a company map: the default is the environment's company's entry
+        let to_map = |tx: &Self, cell: Cell| -> Result<Cell> {
+            if !fs.company_dependent {
+                return Ok(cell);
+            }
+            let (company, fallback) = tx.property_context(records.env(), spec.id, field)?;
+            crate::company_dependent::apply(&fs.ty, &Cell::Null, company, &cell, &fallback)
+        };
         if matches!(fs.ty, erp_fields::FieldType::Monetary { .. }) {
             // A default fill (also reached by reads) is bounded like any monetary operation:
             // refuse before the compact staging buffer is allocated.
@@ -965,17 +997,19 @@ impl Transaction {
                 true,
             )
             .await?;
-            let cells =
-                ids.iter()
-                    .enumerate()
-                    .map(|(i, id)| {
-                        rows[i][slot].take().map(|cell| (*id, cell)).ok_or_else(|| {
-                            Error::programming("Monetary default staging lost an input")
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
+            let cells = ids
+                .iter()
+                .enumerate()
+                .map(|(i, id)| {
+                    let cell = rows[i][slot].take().ok_or_else(|| {
+                        Error::programming("Monetary default staging lost an input")
+                    })?;
+                    Ok((*id, to_map(self, cell)?))
+                })
+                .collect::<Result<Vec<_>>>()?;
             return self.slot_set(&Slot::Plain, records.model_id(), field, cells);
         }
+        let cell = to_map(self, cell)?;
         self.slot_set(
             &Slot::Plain,
             records.model_id(),

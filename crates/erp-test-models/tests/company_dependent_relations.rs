@@ -844,3 +844,82 @@ async fn a_user_without_unlink_access_to_the_target_changes_no_map() {
     drop(tx);
     h.cleanup().await.unwrap();
 }
+
+#[tokio::test]
+async fn drafts_read_references_only_through_readable_origins() {
+    let h = ruled_harness(false).await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let env = company(&tx.env(), 1);
+    let target = tag(&mut tx, &env, "target", None).await.ids()[0];
+    let shown = holder_raw(&mut tx, "shown", "null_id", json!({"1": target})).await;
+    let hidden = holder_raw(&mut tx, "hidden", "null_id", json!({"1": target})).await;
+    tx.commit().await.unwrap();
+
+    let mut tx = h.begin_as(7).await.unwrap();
+    let user = company(&tx.env(), 1);
+    let holders = user.records("prel.holder").unwrap();
+    let origin = |id: i64| Some(erp_fields::RecId::from_real(id).unwrap());
+    // a readable origin: the draft reads its reference, and the compute over it follows the draft
+    let draft = tx
+        .new_record(&holders, erp_orm::RawVals::new(), origin(shown), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        draft.cell(&mut tx, "null_id").await.unwrap(),
+        Cell::Id(target)
+    );
+    assert_eq!(
+        draft.value(&mut tx, "null_state").await.unwrap(),
+        Value::str("set")
+    );
+    draft
+        .write_values(&mut tx, &vals(&[("null_id", Value::False)]))
+        .await
+        .unwrap();
+    assert_eq!(draft.cell(&mut tx, "null_id").await.unwrap(), Cell::Null);
+    assert_eq!(
+        draft.value(&mut tx, "null_state").await.unwrap(),
+        Value::str("empty")
+    );
+    // a draft never points at an unsaved record through a company map
+    let unsaved = tx
+        .new_record(
+            &user.records("prel.tag").unwrap(),
+            erp_orm::RawVals::new(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let link = erp_orm::RawVals::new().set_cell("null_id", Cell::Id(unsaved.rec_ids()[0].get()));
+    let result = tx
+        .savepoint(async |tx| draft.write(tx, link.clone()).await)
+        .await;
+    error(
+        result.unwrap_err(),
+        ErrorKind::Validation,
+        "prel.holder.null_id: a company-dependent many2one to an unsaved record is not supported until a later release",
+    );
+    // a hidden origin: the draft's read is refused like the stored record's, twice
+    let secret = tx
+        .new_record(&holders, erp_orm::RawVals::new(), origin(hidden), None)
+        .await
+        .unwrap();
+    let stored = holders
+        .browse([hidden])
+        .unwrap()
+        .cell(&mut tx, "null_id")
+        .await
+        .unwrap_err();
+    for _ in 0..2 {
+        let refused = secret.cell(&mut tx, "null_id").await.unwrap_err();
+        assert_eq!(refused.kind(), ErrorKind::Access);
+        assert_eq!(refused.message(), stored.message());
+    }
+    // nothing of the draft reached the table
+    tx.flush().await.unwrap();
+    assert_eq!(raw(&mut tx, "null_id", shown).await, json!({"1": target}));
+    drop(tx);
+    h.cleanup().await.unwrap();
+}

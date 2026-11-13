@@ -986,6 +986,31 @@ const AUDIT_ELEVATION: &str = "returns the given environment in superuser mode, 
 /// leave the engine. replaces them with scoped elevation blocks where it can.
 const SUDO_SITES: &[(&str, usize, &str)] = &[
     (
+        "account/fiscal/settings.rs::read",
+        1,
+        "reads the fiscal calendar settings (year end, horizon) of a root company for period creation; the framework reads its own configuration, and a user whose entry needs a period needs no settings group; the values are bounded and are not returned to the caller (a later release)",
+    ),
+    (
+        "account/journal/mod.rs::check_accounts_as_default",
+        1,
+        "the account side of the default-account type rule: finds the journals, of any company and archived ones included, that use the accounts being written as default account; a shared account is used by journals the writer's company rule hides, and the constraint must not depend on who triggers it; only the journal type and the account id are read (099)",
+    ),
+    (
+        "account/journal/mod.rs::check_default_account_types",
+        1,
+        "reads only `account_type` of the default accounts of the journals or accounts being checked, so the type rule does not depend on which accounts the caller's company rule shows; nothing read is returned to the caller (099)",
+    ),
+    (
+        "account/journal/mod.rs::next_code",
+        1,
+        "proposes a free journal code: reads the codes of the company's and its parent companies' journals, archived and rule-hidden ones included, because `UNIQUE (company_id, code)` counts them all; only the codes are read, and only the chosen free code reaches the caller",
+    ),
+    (
+        "account/journal/settings.rs::read",
+        1,
+        "reads the global journal settings (code length, proposed prefixes, allowed account types) for the journal checks; the framework reads its own configuration, and creating a journal needs no settings group; the values are bounded and only named in refusals (098, 099)",
+    ),
+    (
         "account/ledger/account.rs::_compute_root_id",
         1,
         "the compute of an account's root node reads `account.root` by the names derived from the codes of the accounts being computed; root nodes are derived rows without a company, and the stored value must not depend on which reader triggered the compute (a later release)",
@@ -1359,6 +1384,11 @@ const SUDO_SITES: &[(&str, usize, &str)] = &[
         "erp-orm/search.rs::name_search_with",
         1,
         "display names of records the search already filtered for the caller",
+    ),
+    (
+        "erp-orm/search.rs::prepare_sql_domain_resolved",
+        1,
+        "a comodel's read rule or an `access` condition's predicate inlined into the caller's domain resolves its hierarchy start records as superuser, as the search's own rule does (the reference ERP evaluates the predicate so, models.py:4907-4929); the resolved rule still filters the caller's rows",
     ),
     (
         "erp-orm/search.rs::read_restriction_at",

@@ -100,17 +100,7 @@ impl Node {
         let builder = if native {
             builder
                 .native_artifact_identities(crate::identity::native_artifact_identities()?)
-                .code([
-                    &erp_addon_base::ADDON,
-                    &erp_addon_barcodes::ADDON,
-                    &erp_addon_uom::ADDON,
-                    &erp_addon_mail::ADDON,
-                    &erp_addon_product::ADDON,
-                    &erp_addon_product_mail::ADDON,
-                    &erp_addon_web::ADDON,
-                    &erp_addon_acceptance_notes::ADDON,
-                    &erp_addon_theme_office_blue::ADDON,
-                ])
+                .code(crate::native_addons::DESCRIPTORS.iter().copied())
                 .view_types(erp_addon_web::view_type_contributions())
                 .lifecycle_hook(Arc::new(crate::ui_assets::AssetLifecycle::new(
                     crate::ui_assets::host_options()?,

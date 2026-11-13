@@ -801,6 +801,15 @@ const TECHNICAL_ACCESS_MENU: (&str, &str, &str) = (
     "settings_access_action",
 );
 
+/// The Background Job Settings entry opens the Settings service page on the jobs settings
+/// (menu, category, action, form view; no list or search view).
+const TECHNICAL_JOBS_SETTINGS: (&str, &str, &str, &str) = (
+    "technical_jobs_settings_menu",
+    "technical_automation_menu",
+    "technical_jobs_settings_action",
+    "technical_jobs_settings_form",
+);
+
 async fn base_xmlid(client: &tokio_postgres::Client, model: &str, name: &str) -> i64 {
     let rows = client
         .query(
@@ -1025,6 +1034,8 @@ async fn technical_menu_and_views() {
     expected_ids.insert("technical_menu".to_owned());
     expected_ids.extend(TECHNICAL_CATEGORIES.iter().map(|id| (*id).to_owned()));
     expected_ids.insert(TECHNICAL_ACCESS_MENU.0.to_owned());
+    let (jobs_menu, jobs_category, jobs_action, jobs_form) = TECHNICAL_JOBS_SETTINGS;
+    expected_ids.extend([jobs_menu, jobs_action, jobs_form].map(str::to_owned));
     for screen in &TECHNICAL_SCREENS {
         expected_ids.insert(screen.menu.to_owned());
         expected_ids.insert(screen.action.to_owned());
@@ -1078,6 +1089,29 @@ async fn technical_menu_and_views() {
         Some(format!("ir.actions.act_window,{access_action_id}"))
     );
     assert_eq!(groups, ["group_system"]);
+    let jobs_menu_id = base_xmlid(&client, "ir.ui.menu", jobs_menu).await;
+    let jobs_action_id = base_xmlid(&client, "ir.actions.act_window", jobs_action).await;
+    let jobs_form_id = base_xmlid(&client, "ir.ui.view", jobs_form).await;
+    let (parent, action, groups) = menu_row(&client, jobs_menu_id).await;
+    assert_eq!(parent, Some(category_ids[jobs_category]));
+    assert_eq!(
+        action,
+        Some(format!("ir.actions.act_window,{jobs_action_id}"))
+    );
+    assert_eq!(groups, ["group_system"]);
+    let row = client
+        .query_one(
+            "SELECT a.res_model, a.view_mode, a.view_id::bigint, v.model, v.type \
+             FROM ir_act_window a JOIN ir_ui_view v ON v.id = a.view_id WHERE a.id = $1",
+            &[&jobs_action_id],
+        )
+        .await
+        .unwrap();
+    assert_eq!(row.get::<_, String>(0), "ir.config.setting");
+    assert_eq!(row.get::<_, String>(1), "form");
+    assert_eq!(row.get::<_, Option<i64>>(2), Some(jobs_form_id));
+    assert_eq!(row.get::<_, String>(3), "ir.config.setting");
+    assert_eq!(row.get::<_, String>(4), "form");
 
     struct Loaded {
         menu: i64,

@@ -227,20 +227,24 @@ pub struct StockPicking {
         string = "Contact"
     )]
     pub partner_id: Option<RecId>,
-    /// Owner assigned to the products on validation.
+    /// Owner assigned to the products on validation. `restrict` on delete, as the
+    /// quant owner: the reference sets it null, which would strip the owner of a done transfer.
     #[field(
         many2one,
         comodel = "res.partner",
+        ondelete = "restrict",
         index = "btree_not_null",
         string = "Assign Owner"
     )]
     pub owner_id: Option<RecId>,
+    /// The reference key `(company_id, name)`
+    /// leads with it, so it has no index of its own.
     #[field(
         many2one,
         comodel = "res.company",
         required = true,
         ondelete = "restrict",
-        index = true,
+        index = false,
         string = "Company"
     )]
     pub company_id: Option<RecId>,

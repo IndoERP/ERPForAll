@@ -11,8 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use erp_fields::{Error, ErrorKind, Result};
 use erp_registry::{
-    ModelSpec, Registry, SqlCompareColumn, SqlFunction, SqlLanguage, SqlObject, SqlObjectId,
-    SqlObjectKind, SqlReference, SqlSecurity,
+    ModelSpec, Registry, SqlCompareColumn, SqlFunction, SqlLanguage, SqlObject, SqlObjectGraph,
+    SqlObjectId, SqlObjectKind, SqlReference,
 };
 use erp_sql::sqlobj;
 use sha2::{Digest as _, Sha256};
@@ -134,6 +134,9 @@ pub(crate) struct SqlObjectSync<'r> {
     lifecycle: bool,
     create_tables: bool,
     ran: bool,
+    /// The validated role bindings (B4); `None` when the registry declares no SQL object.
+    roles: Option<crate::schema_sqlobj_roles::BoundRoles>,
+    graph: &'r SqlObjectGraph,
 }
 
 impl SqlObjectSync<'_> {
@@ -157,22 +160,25 @@ impl SqlObjectSync<'_> {
 }
 
 impl Transaction {
-    /// S0: read provenance and the catalog, refuse D2, D4, D6, D7, D11, shape changes and
-    /// drift, decide per object, refuse A6. No DDL. `provenance` says whether the provenance
-    /// table exists; `synced` are the specs this sync creates or alters.
+    /// S0: read provenance and the catalog, refuse D2, D6, D7, D11, shape changes and drift,
+    /// validate the role bindings of `options` (B4), decide per object, refuse A6. No DDL.
+    /// `provenance` says whether the provenance table exists; `synced` are the specs this sync
+    /// creates or alters.
     pub(crate) async fn plan_sql_objects<'r>(
         &mut self,
         registry: &'r Registry,
         provenance: bool,
         synced: &[&ModelSpec],
-        lifecycle: bool,
+        options: &crate::SchemaSyncOptions,
     ) -> Result<SqlObjectSync<'r>> {
         let graph = registry.sql_objects();
         let mut sync = SqlObjectSync {
             items: Vec::new(),
-            lifecycle,
+            lifecycle: options.is_lifecycle(),
             create_tables: !provenance && !graph.objects().is_empty(),
             ran: false,
+            roles: None,
+            graph,
         };
         if graph.objects().is_empty() && !provenance {
             return Ok(sync);
@@ -337,14 +343,6 @@ impl Transaction {
                     } else {
                         Phase::Early
                     };
-                    // unconditional until B4, also over a provenance row (review r1 S-4)
-                    if f.security() == SqlSecurity::Definer {
-                        return Err(refuse(
-                            id,
-                            "SECURITY DEFINER needs the definer role binding of \
-                             a later release",
-                        ));
-                    }
                     if phase == Phase::Early && f.language() == SqlLanguage::Sql {
                         for reference in object.references() {
                             if let SqlReference::Model(m) = reference
@@ -369,6 +367,9 @@ impl Transaction {
                     (Phase::Trigger, present, "trigger")
                 }
                 SqlObjectKind::Condition(_) => (Phase::Record, false, "condition"),
+                // no DDL and no provenance row: reconciled by the grant phase of every lifecycle
+                // sync (B4)
+                SqlObjectKind::TableGrant(_) => continue,
                 _ => return Err(refuse(id, "its kind is installed by a later SQLOBJ slice")),
             };
             // a catalog-derived body is rendered in S2; its declaration covers the renderer
@@ -412,6 +413,20 @@ impl Transaction {
             });
         }
         sync.admit()?;
+        // B4: the bindings are validated before any DDL, over the tables that exist now
+        let mut schemas: Vec<String> = vec![current.clone()];
+        for item in &sync.items {
+            for schema in &item.schemas {
+                if !schemas.contains(schema) {
+                    schemas.push(schema.clone());
+                }
+            }
+        }
+        let existing: Vec<&str> = existing.into_iter().collect();
+        let roles = self
+            .check_sql_roles(graph, options.sql_role_bindings(), &existing, schemas)
+            .await?;
+        sync.roles = Some(roles);
         Ok(sync)
     }
 
@@ -556,7 +571,11 @@ impl Transaction {
                 Action::Create => false,
                 Action::Replace => true,
             };
-            let sql = sqlobj::create_function(f, body, &item.schemas, replace)?;
+            let mut sql = sqlobj::create_function(f, body, &item.schemas, replace)?;
+            if !replace {
+                // B4: in the creating batch, so PUBLIC never holds EXECUTE on it
+                sql = format!("{sql};\n{}", sqlobj::revoke_public(f));
+            }
             self.sql_object_ddl(item.object.id(), &sql).await?;
             sync.ran = true;
         }
@@ -592,10 +611,15 @@ impl Transaction {
             self.sql_object_ddl(item.object.id(), &sql).await?;
             sync.ran = true;
         }
+        // B4: ownership and grants, only in a lifecycle sync (A6; `admit` refused any other one
+        // that would change an object)
+        if let (true, Some(roles)) = (sync.lifecycle, &sync.roles) {
+            self.grant_sql_objects(sync.graph, roles).await?;
+        }
         Ok(())
     }
 
-    async fn sql_object_ddl(&mut self, id: SqlObjectId, sql: &str) -> Result<()> {
+    pub(crate) async fn sql_object_ddl(&mut self, id: SqlObjectId, sql: &str) -> Result<()> {
         self.batch(sql).await.map_err(|e| {
             Error::new(
                 e.kind(),
@@ -750,9 +774,10 @@ impl Transaction {
     /// # Errors
     ///
     /// `Programming` for the refusals (an object outside a lifecycle sync (A6), a
-    /// shape change, an unowned object of the same identity, SECURITY DEFINER, a table that
-    /// does not exist, an object recorded but no longer declared, drift); the DDL's errors,
-    /// naming the object.
+    /// shape change, an unowned object of the same identity, a role binding an object names but
+    /// the options leave unset, a table that does not exist, an object recorded but no longer
+    /// declared, drift); `Access` for an unsafe role binding or a privilege a bound role or
+    /// PUBLIC holds beyond the declaration (A2); the DDL's errors, naming the object.
     pub async fn init_sql_objects(&mut self, options: &crate::SchemaSyncOptions) -> Result<()> {
         let registry = std::sync::Arc::clone(self.registry());
         let (saved, lock_timeout) = self.set_schema_limits(false).await?;
@@ -766,7 +791,7 @@ impl Transaction {
             .map_err(|e| unreadable("provenance table", e))?
             .ok_or_else(missing_flag)?;
         let mut sync = self
-            .plan_sql_objects(&registry, present, &[], options.is_lifecycle())
+            .plan_sql_objects(&registry, present, &[], options)
             .await?;
         self.install_sql_objects_early(&mut sync).await?;
         self.install_sql_objects_derived(&mut sync).await?;

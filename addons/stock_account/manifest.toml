@@ -4,6 +4,6 @@ category = "Inventory"
 author = "Arkana"
 license = "MIT OR Apache-2.0"
 version = "1.0.0"
-depends = ["stock"]
+depends = ["base", "stock", "account"]
 data = []
 exact_only = true

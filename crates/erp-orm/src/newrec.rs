@@ -24,6 +24,10 @@
 //!   origin and `UPDATE` for each new line whose values differ from its origin's, the inverse
 //!   fields left out. Writing such a value on database records converts it
 //!   the same way, so new lines assigned to a database record are created.
+//! - **Company-dependent fields** keep a company map in the new record's cache, as stored records
+//!   do: an explicit value or a default is the environment's company entry, an origin's
+//!   map is the start value, and a read projects the reading environment's company. Write commands
+//!   carry that company's scalar.
 
 use std::sync::Arc;
 
@@ -118,13 +122,6 @@ impl Transaction {
     ) -> Result<Records> {
         self.admit_records(model).await?;
         let spec = model.spec();
-        if let Some(field) = spec.fields.iter().find(|field| field.company_dependent) {
-            return Err(crate::company_dependent_runtime::unsupported(
-                spec.name,
-                field.name,
-                "new-record construction",
-            ));
-        }
         crate::database_generated::check_write_names(self, spec, vals.names())?;
         if !spec.has_table() {
             return Err(Error::programming(format!(
@@ -314,8 +311,11 @@ impl Transaction {
             }
         }
         let mut many2ones: Vec<(FieldId, Cell)> = Vec::new();
-        for (field, cell) in plain {
-            if matches!(field.ty, FieldType::Many2one { .. }) {
+        for (field, mut cell) in plain {
+            if field.company_dependent {
+                // a map holds no single target: no inverse one2many lists the draft
+                cell = self.draft_property_map(record, field, &cell).await?;
+            } else if matches!(field.ty, FieldType::Many2one { .. }) {
                 many2ones.push((field.id, cell.clone()));
             }
             let slot = self.slot(record.env(), model_id, field.id)?;
@@ -993,11 +993,12 @@ impl Transaction {
         skip: &[FieldId],
     ) -> Result<RawVals> {
         let mut vals = RawVals::new();
+        self.prepare_draft_properties(env, spec, id).await?;
         for field in &spec.fields {
             if !writable(field, skip) {
                 continue;
             }
-            let Some(cell) = self.cache.get(spec.id, field.id, id) else {
+            let Some(cell) = self.draft_cell(env, spec, field, id)? else {
                 continue;
             };
             if field.ty.is_x2many() {
@@ -1050,11 +1051,12 @@ impl Transaction {
             Arc::from([origin]),
             Arc::from([origin]),
         );
+        self.prepare_draft_properties(env, spec, id).await?;
         for field in &spec.fields {
             if !writable(field, skip) {
                 continue;
             }
-            let Some(cell) = self.cache.get(spec.id, field.id, id) else {
+            let Some(cell) = self.draft_cell(env, spec, field, id)? else {
                 continue;
             };
             if field.ty.is_x2many() {
@@ -1093,6 +1095,46 @@ impl Transaction {
             }
         }
         Ok(vals)
+    }
+
+    /// The company fallbacks a projection of draft `id` needs, prepared once for all its
+    /// company-dependent fields, and only when one of them is cached (an uncached field is not
+    /// written, so a draft without company values needs no current company).
+    async fn prepare_draft_properties(
+        &mut self,
+        env: &Env,
+        spec: &ModelSpec,
+        id: RecId,
+    ) -> Result<()> {
+        if spec
+            .fields
+            .iter()
+            .any(|f| f.company_dependent && self.cache.contains(spec.id, f.id, id))
+        {
+            self.prepare_properties(env, spec).await?;
+        }
+        Ok(())
+    }
+
+    /// The cached value of draft `id` in write format's input: a company map is projected to the
+    /// environment's company, the only company a create or write stores.
+    fn draft_cell(
+        &self,
+        env: &Env,
+        spec: &ModelSpec,
+        field: &FieldSpec,
+        id: RecId,
+    ) -> Result<Option<Cell>> {
+        if !self.cache.contains(spec.id, field.id, id) {
+            return Ok(None);
+        }
+        if field.company_dependent {
+            return Ok(self
+                .cells_of(env, spec.id, field.id, &[id])?
+                .into_iter()
+                .next());
+        }
+        Ok(self.cache.get(spec.id, field.id, id))
     }
 }
 

@@ -93,17 +93,7 @@ async fn run(
         .map_err(|e| CliError::Execution(format!("could not start the WebAssembly host: {e}")))?;
     let packages = WasmPackages::new(Arc::new(HostLoader::new(Arc::new(host), Limits::default())));
     let builder = ModuleSystem::builder(pool, index)
-        .code([
-            &erp_addon_base::ADDON,
-            &erp_addon_barcodes::ADDON,
-            &erp_addon_uom::ADDON,
-            &erp_addon_mail::ADDON,
-            &erp_addon_product::ADDON,
-            &erp_addon_product_mail::ADDON,
-            &erp_addon_web::ADDON,
-            &erp_addon_acceptance_notes::ADDON,
-            &erp_addon_theme_office_blue::ADDON,
-        ])
+        .code(crate::native_addons::DESCRIPTORS.iter().copied())
         .view_types(erp_addon_web::view_type_contributions())
         // Native lifecycle operations must retain and validate authentication's framework DDL
         // at this composition site, just as the serving node does.

@@ -225,6 +225,9 @@ pub(crate) struct TxAccess<'a> {
     tx: &'a Transaction,
     env: &'a Env,
     stack: RefCell<Vec<(ModelId, Operation)>>,
+    /// Inlined predicates whose hierarchy conditions were resolved beforehand;
+    /// `None`: a predicate that holds one is inlined as it is and refused by the optimizer.
+    rules: Option<&'a crate::prepare::NestedRules>,
 }
 
 /// Most `access` hops one resolution may take (a bound besides the cycle check: a long acyclic
@@ -237,6 +240,16 @@ impl<'a> TxAccess<'a> {
             tx,
             env,
             stack: RefCell::new(Vec::new()),
+            rules: None,
+        }
+    }
+
+    /// This lookup taking the predicates it inlines from `rules` when they hold hierarchy
+    /// conditions (see [`crate::prepare::NestedRules`]).
+    pub(crate) fn with_rules(self, rules: &'a crate::prepare::NestedRules) -> Self {
+        Self {
+            rules: Some(rules),
+            ..self
         }
     }
 
@@ -403,7 +416,18 @@ impl crate::optimize::AccessLookup for TxAccess<'_> {
             .access_domain(&env, model.id, op)
             .and_then(|access| self.resolve_nested(model, access.domain()));
         self.stack.borrow_mut().pop();
-        result.map(Some)
+        let domain = result?;
+        // the outermost predicate holds every nested one: resolved as a whole
+        match self.rules {
+            Some(rules) if self.stack.borrow().is_empty() => rules
+                .rule(
+                    crate::prepare::NestedRule::Access(model.id, op),
+                    model,
+                    domain,
+                )
+                .map(Some),
+            _ => Ok(Some(domain)),
+        }
     }
 }
 

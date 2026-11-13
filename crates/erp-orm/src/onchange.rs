@@ -567,7 +567,12 @@ impl Transaction {
         let cells = cells
             .into_iter()
             .map(|(fid, cell)| {
-                self.admit_html_cell(spec, spec.field_by_id(fid), cell)
+                let field = spec.field_by_id(fid);
+                // a company map's scalar was admitted before it was encoded (or comes stored)
+                if field.company_dependent {
+                    return Ok((fid, cell));
+                }
+                self.admit_html_cell(spec, field, cell)
                     .map(|cell| (fid, cell))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -772,7 +777,23 @@ async fn seed_lines(
         if missing.is_empty() {
             continue;
         }
-        let cells = origin_records.cells(tx, name).await?;
+        let mut cells = origin_records.cells(tx, name).await?;
+        if field.company_dependent {
+            // a line draft holds the stored company map, as the form's record does
+            // (`build_record`): the public read above ran the checks and cached the maps
+            cells = origins
+                .iter()
+                .map(|o| {
+                    tx.cache.get(comodel, field.id, *o).ok_or_else(|| {
+                        Error::programming(format!(
+                            "onchange: the company map of '{name}' read for {o} of '{}' is not \
+                             cached",
+                            model.name
+                        ))
+                    })
+                })
+                .collect::<Result<_>>()?;
+        }
         if cells.len() != origins.len() {
             return Err(Error::programming(format!(
                 "onchange: {} values of '{name}' for {} lines of '{}'",
@@ -1022,6 +1043,11 @@ fn update_cache<'a>(
                 )?;
                 let json_cell = tx.admit_html_cell(model, field, json_cell)?;
                 cells.push((field.id, json_cell));
+            } else if field.company_dependent {
+                // the form's value for the environment's company, other companies' kept
+                let scalar = tx.admit_html_cell(model, field, form_cell(model, name, value)?)?;
+                let map = tx.draft_property_map(record, field, &scalar).await?;
+                cells.push((field.id, map));
             } else {
                 let cell = tx.admit_html_cell(model, field, form_cell(model, name, value)?)?;
                 cells.push((field.id, cell));
@@ -2455,6 +2481,16 @@ async fn build_record(
             tx.cache
                 .get(model.id, field.id, origin)
                 .unwrap_or(Cell::Null)
+        } else if field.company_dependent {
+            // the stored company map, so that the draft keeps every company's value (
+            // decision 1); the public read runs the field and record checks first
+            records.cells(tx, name).await?;
+            tx.cache.get(model.id, field.id, origin).ok_or_else(|| {
+                Error::programming(format!(
+                    "{}.{name}: the company map read for the onchange origin is not cached",
+                    model.name
+                ))
+            })?
         } else {
             let cell = single_cell(records.cells(tx, name).await?, records, name)?;
             origin_cell(tx, &env, field, cell, spec.get(name)).await?
@@ -2722,10 +2758,14 @@ async fn run_methods(
                 }
             }
             if field.change_default {
-                let cell = if let Ok(rec_id) = single_id(record) {
-                    tx.cache.get(model.id, field.id, rec_id)
-                } else {
-                    None
+                let cell = match single_id(record) {
+                    // the company's value, not the draft's company map
+                    Ok(rec_id) if field.company_dependent => tx
+                        .cells_of(record.env(), model.id, field.id, &[rec_id])?
+                        .into_iter()
+                        .next(),
+                    Ok(rec_id) => tx.cache.get(model.id, field.id, rec_id),
+                    Err(_) => None,
                 };
                 let val_str = match cell {
                     Some(Cell::Str(s)) => s.to_string(),

@@ -8,7 +8,7 @@
 //! `crates/erp-cli/tests/product_install.rs`.
 #![allow(dead_code, reason = "each test binary uses a subset")]
 
-use erp_addon_product::ProductProduct;
+use erp_addon_product::{ProductProduct, SellerQuery};
 use erp_sdk::prelude::*;
 use erp_testkit::Harness;
 
@@ -35,6 +35,21 @@ pub struct ModelData {
 /// the context key `test_cost_probe` holds a number, so the other tests see the default.
 #[methods(ProductProduct, addon = "test_product")]
 impl CostProbe {
+    /// Exercise native seller dispatch without replacing the base eligibility implementation.
+    #[method(override)]
+    async fn _prepare_sellers(
+        this: &RecordSet<ProductProduct>,
+        tx: &mut Transaction,
+        query: SellerQuery,
+        sup: Super,
+    ) -> Result<Records> {
+        let rows: Records = sup.call(tx, this.as_records(), (query,)).await?;
+        match this.env().context().get("test_seller_probe") {
+            Some(Value::Bool(true)) => Ok(rows.browse_ids([])),
+            _ => Ok(rows),
+        }
+    }
+
     #[method(override)]
     async fn _get_standard_price(
         this: &RecordSet<ProductProduct>,
@@ -69,12 +84,23 @@ pub async fn unit_id(h: &Harness) -> i64 {
 
 /// A harness with the default unit "Units" seeded under `uom.product_uom_unit`.
 pub async fn base_harness() -> Harness {
+    harness_with_policy(
+        erp_testkit::DomainPolicy::builder(erp_testkit::Otherwise::Allow)
+            .build()
+            .unwrap(),
+    )
+    .await
+}
+
+/// Product fixtures under a caller-supplied access policy.
+pub async fn harness_with_policy(policy: erp_testkit::DomainPolicy) -> Harness {
     let h = Harness::builder([
         &erp_addon_base::ADDON,
         &erp_addon_uom::ADDON,
         &erp_addon_product::ADDON,
         &ADDON,
     ])
+    .policy(policy)
     .build()
     .await
     .unwrap();
@@ -169,4 +195,17 @@ pub async fn seed_company(h: &Harness, name: &str) -> i64 {
         .get();
     tx.commit().await.unwrap();
     company
+}
+
+/// A many2one consumer of product display names for disclosure regressions.
+#[model(
+    name = "test_product.label_holder",
+    description = "Product Label Holder",
+    addon = "test_product"
+)]
+pub struct LabelHolder {
+    #[field(char)]
+    pub name: Option<Arc<str>>,
+    #[field(many2one, comodel = "product.product")]
+    pub product_id: Option<RecId>,
 }

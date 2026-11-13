@@ -403,7 +403,9 @@ export async function settingsView(
           infoBox = undefined;
           const choices = declaration["choices"];
           const current = baseline.get(key);
-          const helpStr = typeof declaration["help"] === "string" ? declaration["help"] : undefined;
+          const rawHelp = declaration["help"];
+          if (rawHelp !== undefined && rawHelp !== null && (typeof rawHelp !== "string" || !rawHelp || rawHelp.length > 1024)) throw new ClientError("server", "Invalid setting help.");
+          const helpStr = typeof rawHelp === "string" ? rawHelp : undefined;
 
           if ((kind === "selection") !== (choices !== null)) throw new ClientError("server", "Setting choices do not match the declared type.");
           if (kind === "boolean" && typeof current !== "boolean" || ["integer", "float"].includes(kind) && typeof current !== "number" || ["string", "selection"].includes(kind) && typeof current !== "string") throw new ClientError("server", "Setting value does not match the declared type.");
@@ -459,6 +461,24 @@ export async function settingsView(
             input = field; inputNode = field;
           }
           input.id = `setting-${key}`; titleSpan.htmlFor = input.id; input.name = key;
+          if (helpEl) {
+            helpEl.id = `setting-help-${key}`; input.setAttribute("aria-describedby", helpEl.id);
+          }
+          if (helpEl && kind !== "selection") {
+            const defaultValue = declaration["default"];
+            if (typeof defaultValue !== typeof current || typeof defaultValue === "number" && (!Number.isFinite(defaultValue) || kind === "integer" && !Number.isSafeInteger(defaultValue))) throw new ClientError("server", "Invalid setting default.");
+            const reset = el("button", "Use default", "settings-action-link");
+            reset.type = "button"; reset.dataset["settingDefault"] = key; reset.dataset["readonly"] = String(!writable);
+            reset.setAttribute("aria-label", `Use default for ${labelStr}`);
+            reset.addEventListener("click", () => {
+              if (disposed || pending || !writable) return;
+              const value = declaration["default"];
+              edit(value);
+              if (input instanceof HTMLInputElement) { input.value = String(value); input.checked = value === true; }
+              input.focus();
+            });
+            rightPane.append(reset);
+          }
           input.dataset["readonly"] = String(!writable);
 
           if (kind === "boolean") {

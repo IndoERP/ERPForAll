@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Vendor prices pointing at the vendor partners of the base demo. The price breaks (min_qty) of one vendor and product show the quantity tiers. -->
+<!-- Vendor prices of the main company (a data file is loaded with no active company, so each row names its company) pointing at the vendor partners of the base demo. The price breaks (min_qty) of one vendor and product show the quantity tiers. -->
 <erp>
   <record id="supplierinfo_demo_01" model="product.supplierinfo">
+    <field name="company_id" ref="base.main_company"/>
     <field name="partner_id" ref="base.partner_demo_mitra_kayu"/>
     <field name="product_tmpl_id" ref="product_demo_meja"/>
     <field name="product_code">MK-MEJA-01</field>
@@ -12,6 +13,7 @@
     <field name="delay">7</field>
   </record>
   <record id="supplierinfo_demo_02" model="product.supplierinfo">
+    <field name="company_id" ref="base.main_company"/>
     <field name="partner_id" ref="base.partner_demo_mitra_kayu"/>
     <field name="product_tmpl_id" ref="product_demo_meja"/>
     <field name="product_code">MK-MEJA-01</field>
@@ -22,6 +24,7 @@
     <field name="delay">7</field>
   </record>
   <record id="supplierinfo_demo_03" model="product.supplierinfo">
+    <field name="company_id" ref="base.main_company"/>
     <field name="partner_id" ref="base.partner_demo_mitra_kayu"/>
     <field name="product_tmpl_id" ref="product_demo_rak"/>
     <field name="product_code">MK-RAK-02</field>
@@ -32,6 +35,7 @@
     <field name="delay">5</field>
   </record>
   <record id="supplierinfo_demo_04" model="product.supplierinfo">
+    <field name="company_id" ref="base.main_company"/>
     <field name="partner_id" ref="base.partner_demo_baja_sentosa"/>
     <field name="product_tmpl_id" ref="product_demo_meja"/>
     <field name="product_code">BS-FRM-10</field>
@@ -42,6 +46,7 @@
     <field name="delay">10</field>
   </record>
   <record id="supplierinfo_demo_05" model="product.supplierinfo">
+    <field name="company_id" ref="base.main_company"/>
     <field name="partner_id" ref="base.partner_demo_baja_sentosa"/>
     <field name="product_tmpl_id" ref="product_demo_kabel"/>
     <field name="product_code">BS-KBL-5</field>
@@ -52,6 +57,7 @@
     <field name="delay">3</field>
   </record>
   <record id="supplierinfo_demo_06" model="product.supplierinfo">
+    <field name="company_id" ref="base.main_company"/>
     <field name="partner_id" ref="base.partner_demo_kopi_gunung"/>
     <field name="product_tmpl_id" ref="product_demo_kopi"/>
     <field name="product_code">KG-ARB-250</field>
@@ -62,6 +68,7 @@
     <field name="delay">4</field>
   </record>
   <record id="supplierinfo_demo_07" model="product.supplierinfo">
+    <field name="company_id" ref="base.main_company"/>
     <field name="partner_id" ref="base.partner_demo_kopi_gunung"/>
     <field name="product_tmpl_id" ref="product_demo_robusta"/>
     <field name="product_code">KG-ROB-KG</field>
@@ -72,6 +79,7 @@
     <field name="delay">4</field>
   </record>
   <record id="supplierinfo_demo_08" model="product.supplierinfo">
+    <field name="company_id" ref="base.main_company"/>
     <field name="partner_id" ref="base.partner_demo_kopi_gunung"/>
     <field name="product_tmpl_id" ref="product_demo_teh"/>
     <field name="product_code">KG-TEH-6</field>
@@ -82,6 +90,7 @@
     <field name="delay">6</field>
   </record>
   <record id="supplierinfo_demo_09" model="product.supplierinfo">
+    <field name="company_id" ref="base.main_company"/>
     <field name="partner_id" ref="base.partner_demo_cipta_digital"/>
     <field name="product_tmpl_id" ref="product_demo_laptop"/>
     <field name="product_code">CD-LP14</field>
@@ -92,6 +101,7 @@
     <field name="delay">14</field>
   </record>
   <record id="supplierinfo_demo_10" model="product.supplierinfo">
+    <field name="company_id" ref="base.main_company"/>
     <field name="partner_id" ref="base.partner_demo_cipta_digital"/>
     <field name="product_tmpl_id" ref="product_demo_mouse"/>
     <field name="product_code">CD-MS-W</field>
@@ -102,6 +112,7 @@
     <field name="delay">7</field>
   </record>
   <record id="supplierinfo_demo_11" model="product.supplierinfo">
+    <field name="company_id" ref="base.main_company"/>
     <field name="partner_id" ref="base.partner_demo_cipta_digital"/>
     <field name="product_tmpl_id" ref="product_demo_kertas"/>
     <field name="product_code">CD-A4-500</field>

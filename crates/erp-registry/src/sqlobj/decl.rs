@@ -64,10 +64,22 @@ impl SqlObjectDecl {
             kind: SqlObjectKindDecl::Condition(decl),
         }
     }
+
+    /// A restricted table grant policy owned by `addon` under the local `key` (A2).
+    pub const fn table_grant(
+        addon: &'static str,
+        key: &'static str,
+        decl: SqlTableGrantDecl,
+    ) -> Self {
+        Self {
+            addon,
+            key,
+            kind: SqlObjectKindDecl::TableGrant(decl),
+        }
+    }
 }
 
-/// What a raw declaration declares. Foreign keys, checks, table options and grants come with later
-/// slices.
+/// What a raw declaration declares. Foreign keys, checks and table options come with later slices.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum SqlObjectKindDecl {
     /// A function.
@@ -76,6 +88,90 @@ pub(crate) enum SqlObjectKindDecl {
     Trigger(SqlTriggerDecl),
     /// A condition (SQLSTATE plus identifier with a static public message).
     Condition(SqlConditionDecl),
+    /// A restricted table grant policy.
+    TableGrant(SqlTableGrantDecl),
+}
+
+/// The four role bindings amendment A2. Symbolic: the operator configures which
+/// database role each one is; a declaration names a binding, never a role. Closed: a binding an
+/// addon could name but core does not know cannot be written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SqlBinding {
+    /// The role schema sync runs as: owns the tables, triggers and invoker functions.
+    SchemaOwner,
+    /// A NOLOGIN role that owns the `SECURITY DEFINER` functions and holds only the table
+    /// privileges its declared grant policies list.
+    Definer,
+    /// The maintenance pool's login role: EXECUTE on declared entry points only.
+    Maintenance,
+    /// The request (runtime) role.
+    Request,
+}
+
+impl SqlBinding {
+    /// The binding's name as errors and documentation spell it (`schema_owner`, `definer`,
+    /// `maintenance`, `request`).
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::SchemaOwner => "schema_owner",
+            Self::Definer => "definer",
+            Self::Maintenance => "maintenance",
+            Self::Request => "request",
+        }
+    }
+}
+
+impl std::fmt::Display for SqlBinding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// A table privilege a grant policy may list (contract §5): a closed set. `TRUNCATE`,
+/// `REFERENCES`, `TRIGGER`, `MAINTAIN` and DDL cannot be granted to a binding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SqlTableOp {
+    /// `SELECT`
+    Select,
+    /// `INSERT`
+    Insert,
+    /// `UPDATE`
+    Update,
+    /// `DELETE`
+    Delete,
+}
+
+impl SqlTableOp {
+    /// The SQL privilege name.
+    pub const fn sql(self) -> &'static str {
+        match self {
+            Self::Select => "SELECT",
+            Self::Insert => "INSERT",
+            Self::Update => "UPDATE",
+            Self::Delete => "DELETE",
+        }
+    }
+}
+
+/// A raw restricted grant policy: on the table of `model`, `binding` holds exactly `ops`. A table
+/// with at least one policy is restricted: every configured binding without a policy on it holds
+/// nothing there, and PUBLIC holds nothing.
+#[derive(Debug, Clone, Copy)]
+pub struct SqlTableGrantDecl {
+    pub(crate) model: &'static str,
+    pub(crate) binding: SqlBinding,
+    pub(crate) ops: &'static [SqlTableOp],
+}
+
+impl SqlTableGrantDecl {
+    /// `binding` holds exactly `ops` on the table of `model`.
+    pub const fn new(model: &'static str, binding: SqlBinding, ops: &'static [SqlTableOp]) -> Self {
+        Self {
+            model,
+            binding,
+            ops,
+        }
+    }
 }
 
 /// A builtin PostgreSQL scalar type (A3; a wider vocabulary needs an amendment).
@@ -194,6 +290,7 @@ pub struct SqlFunctionDecl {
     pub(crate) security: SqlSecurity,
     pub(crate) deps: &'static [SqlDep],
     pub(crate) derived: Option<(SqlColumnSet, SqlBodyRender)>,
+    pub(crate) execute: &'static [SqlBinding],
 }
 
 impl SqlFunctionDecl {
@@ -216,6 +313,7 @@ impl SqlFunctionDecl {
             security: SqlSecurity::Invoker,
             deps: &[],
             derived: None,
+            execute: &[],
         }
     }
 
@@ -269,6 +367,14 @@ impl SqlFunctionDecl {
     #[must_use]
     pub const fn deps(mut self, deps: &'static [SqlDep]) -> Self {
         self.deps = deps;
+        self
+    }
+
+    /// The bindings granted EXECUTE (A2). PUBLIC never is, and nothing is by default:
+    /// a function no binding may execute is still run by its triggers.
+    #[must_use]
+    pub const fn grant_execute(mut self, bindings: &'static [SqlBinding]) -> Self {
+        self.execute = bindings;
         self
     }
 }

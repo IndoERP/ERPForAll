@@ -1990,13 +1990,8 @@ async fn write_protected(
             .clear_pending(fid, records.rec_ids());
         let mut changed = Vec::new();
         if field.company_dependent {
-            if records.rec_ids().iter().any(|id| id.is_new()) {
-                return Err(crate::company_dependent_runtime::unsupported(
-                    spec.name,
-                    field.name,
-                    "new-record writes",
-                ));
-            }
+            // drafts keep their map in the cache only: never dirty, no baseline
+            crate::company_dependent_runtime::refuse_draft_link(spec, field, &cell)?;
             tx.ensure(records, fid).await?;
             let (company, fallback) = tx.property_context(&env, model, fid)?;
             for (i, id) in records.rec_ids().iter().enumerate() {
@@ -2010,7 +2005,10 @@ async fn write_protected(
                 } else {
                     &cell
                 };
-                crate::company_dependent_runtime::check_required(spec, field, scalar)?;
+                // a draft may hold no value yet for a required field: checked at save (onchange)
+                if !id.is_new() {
+                    crate::company_dependent_runtime::check_required(spec, field, scalar)?;
+                }
                 let old = tx.cache.get(model, fid, *id).ok_or_else(|| {
                     Error::programming("Company-dependent write lost its loaded map")
                 })?;
@@ -2019,13 +2017,15 @@ async fn write_protected(
                 if !force && old.same_value(&new) {
                     continue;
                 }
-                tx.properties_mut()
-                    .baselines
-                    .entry((model, fid, *id))
-                    .or_insert(old);
+                if !id.is_new() {
+                    tx.properties_mut()
+                        .baselines
+                        .entry((model, fid, *id))
+                        .or_insert(old);
+                }
                 tx.cache
                     .model_mut(model)
-                    .set(fid, storage, *id, new, stored)?;
+                    .set(fid, storage, *id, new, stored && !id.is_new())?;
                 // a cell is dirty from here on: an error in a later field must poison the
                 // transaction (`poison_after`), not leave an unbound dirty cell
                 tx.note_mutation();

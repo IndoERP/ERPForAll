@@ -2,6 +2,8 @@
 //! Runtime property storage; SQL query parity remains with QUERY.
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "tests")]
 
+mod support;
+
 use erp_fields::{Cell, Decimal, Error, ErrorKind, Value};
 use erp_orm::{Env, ReadGroup, Records, RecordsAs, SearchOptions, Transaction, ir_default};
 use erp_test_models::base_users;
@@ -363,7 +365,7 @@ async fn rollback_discards_pending_company_mutations() {
 }
 
 #[tokio::test]
-async fn queries_project_properties_and_new_records_still_refuse() {
+async fn queries_project_properties_and_never_find_drafts() {
     let h = harness().await;
     let mut tx = h.begin().await.unwrap();
     seed(&mut tx).await;
@@ -394,13 +396,21 @@ async fn queries_project_properties_and_new_records_still_refuse() {
             .ids(),
         other.ids()
     );
-    error(
-        tx.new_record(&rec, erp_orm::RawVals::new(), None, None)
-            .await
-            .unwrap_err(),
-        ErrorKind::Programming,
-        "property.runtime.note: company-dependent new-record construction is not supported until a later release",
+    // a draft holding the searched value is not a row: the search still finds two records
+    let draft = tx
+        .new_record(
+            &rec,
+            erp_orm::RawVals::new().set_cell("note", Cell::Str("hidden".into())),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        draft.value(&mut tx, "note").await.unwrap(),
+        Value::str("hidden")
     );
+    assert_eq!(rec.search(&mut tx, &domain).await.unwrap().ids(), rec.ids());
     assert_eq!(
         rec.search(&mut tx, &erp_sdk::Domain::TRUE)
             .await
@@ -1179,10 +1189,30 @@ mod native_consumer {
     erp_sdk::addon!(name = "property_native_consumer", depends = ["base"]);
     #[model(name = "property.computed", addon = "property_native_consumer")]
     pub struct Computed {
+        #[field(char)]
+        pub name: Option<Arc<str>>,
         #[field(char, company_dependent = true)]
         pub note: Option<Arc<str>>,
         #[field(char, compute = "_copy_note")]
         pub note_copy: Option<Arc<str>>,
+        #[field(integer, company_dependent = true)]
+        pub count: i32,
+        #[field(many2one, comodel = "property.computed", company_dependent = true)]
+        pub tag_id: Option<RecId>,
+        #[field(integer, compute = "_double_count")]
+        pub count_double: i32,
+        #[field(many2one, comodel = "property.computed")]
+        pub parent_id: Option<RecId>,
+        #[field(one2many, comodel = "property.computed", inverse_name = "parent_id")]
+        pub child_ids: Vec<RecId>,
+        #[field(integer, compute = "_child_total")]
+        pub child_total: i32,
+        #[field(integer, compute = "_child_tagged")]
+        pub child_tagged: i32,
+        #[field(integer, company_dependent = true, default = 4)]
+        pub quota: i32,
+        #[field(html, company_dependent = true)]
+        pub body: Option<Arc<str>>,
     }
     #[methods(Computed, addon = "property_native_consumer")]
     impl Computed {
@@ -1191,6 +1221,43 @@ mod native_consumer {
             for i in batch.indices() {
                 let note = batch.get(i, Computed::NOTE)?;
                 batch.set(i, Computed::NOTE_COPY, note)?;
+            }
+            Ok(())
+        }
+        #[compute(depends = ["count"], depends_context = ["company"])]
+        fn _double_count(batch: &mut Batch<'_, Computed>) -> Result<()> {
+            for i in batch.indices() {
+                let count = batch.get(i, Computed::COUNT)?;
+                batch.set(i, Computed::COUNT_DOUBLE, count.saturating_mul(2))?;
+            }
+            Ok(())
+        }
+        #[compute(depends = ["child_ids.count"], depends_context = ["company"])]
+        fn _child_total(batch: &mut Batch<'_, Computed>) -> Result<()> {
+            for i in batch.indices() {
+                let children = batch.get(i, Computed::CHILD_IDS)?;
+                let total = batch
+                    .values_of(Computed::COUNT, &children)?
+                    .iter()
+                    .fold(0_i32, |sum, count| sum.saturating_add(*count));
+                batch.set(i, Computed::CHILD_TOTAL, total)?;
+            }
+            Ok(())
+        }
+        #[compute(depends = ["child_ids.tag_id"], depends_context = ["company"])]
+        fn _child_tagged(batch: &mut Batch<'_, Computed>) -> Result<()> {
+            for i in batch.indices() {
+                let children = batch.get(i, Computed::CHILD_IDS)?;
+                let tagged = batch
+                    .values_of(Computed::TAG_ID, &children)?
+                    .iter()
+                    .filter(|tag| tag.is_some())
+                    .count();
+                batch.set(
+                    i,
+                    Computed::CHILD_TAGGED,
+                    i32::try_from(tagged).unwrap_or(i32::MAX),
+                )?;
             }
             Ok(())
         }
@@ -1445,6 +1512,604 @@ async fn no_company_supplied_properties_refuse_without_partial_create() {
             "company-dependent fields require a current company",
         );
     }
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+fn raw_vals(items: &[(&str, Cell)]) -> erp_orm::RawVals {
+    items
+        .iter()
+        .fold(erp_orm::RawVals::new(), |raw, (name, cell)| {
+            raw.set_cell((*name).to_owned(), cell.clone())
+        })
+}
+async fn stored_map(tx: &mut Transaction, table: &str, column: &str, id: i64) -> serde_json::Value {
+    let sql = format!("SELECT {column} FROM {table} WHERE id = $1");
+    tx.query(&sql, &[&id]).await.unwrap()[0].get(0)
+}
+async fn rows(tx: &mut Transaction, table: &str) -> i64 {
+    let sql = format!("SELECT count(*) FROM {table}");
+    tx.query(&sql, &[]).await.unwrap()[0].get(0)
+}
+
+#[tokio::test]
+async fn drafts_hold_company_values_and_write_nothing() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let one = company(&tx.env(), 1);
+    let two = company(&tx.env(), 2);
+    default(&mut tx, &one, "fallback one", Some(1), None).await;
+    default(&mut tx, &one, "fallback two", Some(2), None).await;
+    let origin = create(
+        &mut tx,
+        &one,
+        &[
+            ("name", Value::str("Origin")),
+            ("note", Value::str("origin one")),
+            ("count", Value::Int(7)),
+        ],
+    )
+    .await;
+    origin
+        .with_env(two.clone())
+        .write_values(
+            &mut tx,
+            &vals(&[("note", Value::str("origin two")), ("count", Value::Int(9))]),
+        )
+        .await
+        .unwrap();
+    tx.flush().await.unwrap();
+    let before = rows(&mut tx, "property_runtime").await;
+    let model = one.records("property.runtime").unwrap();
+
+    // an explicit value belongs to the environment's company; another company reads its fallback
+    let draft = tx
+        .new_record(
+            &model,
+            raw_vals(&[("note", Cell::Str("draft".into())), ("count", Cell::Int(3))]),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        draft.value(&mut tx, "note").await.unwrap(),
+        Value::str("draft")
+    );
+    assert_eq!(draft.value(&mut tx, "count").await.unwrap(), Value::Int(3));
+    let draft_two = draft.with_env(two.clone());
+    assert_eq!(
+        draft_two.value(&mut tx, "note").await.unwrap(),
+        Value::str("fallback two")
+    );
+    assert_eq!(
+        draft_two.value(&mut tx, "count").await.unwrap(),
+        Value::Int(0)
+    );
+
+    // neither a value nor an origin: each company's fallback
+    let empty = tx
+        .new_record(&model, erp_orm::RawVals::new(), None, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        empty.value(&mut tx, "note").await.unwrap(),
+        Value::str("fallback one")
+    );
+    assert_eq!(
+        empty
+            .with_env(two.clone())
+            .value(&mut tx, "note")
+            .await
+            .unwrap(),
+        Value::str("fallback two")
+    );
+
+    // a default fills the environment company's entry only
+    let defaulted = model.with_env(one.with_context([("default_note", Value::str("context"))]));
+    let with_default = tx
+        .new_record(&defaulted, erp_orm::RawVals::new(), None, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        with_default.value(&mut tx, "note").await.unwrap(),
+        Value::str("context")
+    );
+    assert_eq!(
+        with_default
+            .with_env(two.clone())
+            .value(&mut tx, "note")
+            .await
+            .unwrap(),
+        Value::str("fallback two")
+    );
+
+    // an origin: the origin's value in each company
+    let copy = tx
+        .new_record(
+            &model,
+            erp_orm::RawVals::new(),
+            Some(origin.rec_ids()[0]),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        copy.value(&mut tx, "note").await.unwrap(),
+        Value::str("origin one")
+    );
+    assert_eq!(copy.value(&mut tx, "count").await.unwrap(), Value::Int(7));
+    let copy_two = copy.with_env(two.clone());
+    assert_eq!(
+        copy_two.value(&mut tx, "note").await.unwrap(),
+        Value::str("origin two")
+    );
+    assert_eq!(
+        copy_two.value(&mut tx, "count").await.unwrap(),
+        Value::Int(9)
+    );
+
+    // a write on the draft changes its environment's company only, in either company
+    copy.write_values(&mut tx, &vals(&[("note", Value::str("edited"))]))
+        .await
+        .unwrap();
+    copy_two
+        .write_values(&mut tx, &vals(&[("count", Value::Int(11))]))
+        .await
+        .unwrap();
+    assert_eq!(
+        copy.value(&mut tx, "note").await.unwrap(),
+        Value::str("edited")
+    );
+    assert_eq!(copy.value(&mut tx, "count").await.unwrap(), Value::Int(7));
+    assert_eq!(
+        copy_two.value(&mut tx, "note").await.unwrap(),
+        Value::str("origin two")
+    );
+    assert_eq!(
+        copy_two.value(&mut tx, "count").await.unwrap(),
+        Value::Int(11)
+    );
+
+    // no draft value reaches the database
+    tx.flush().await.unwrap();
+    assert_eq!(rows(&mut tx, "property_runtime").await, before);
+    let id = origin.ids()[0];
+    assert_eq!(
+        stored_map(&mut tx, "property_runtime", "note", id).await,
+        json!({"1": "origin one", "2": "origin two"})
+    );
+    assert_eq!(
+        stored_map(&mut tx, "property_runtime", "count", id).await,
+        json!({"1": 7, "2": 9})
+    );
+
+    // a draft's company values from its origin cost no more statements than the stored read
+    const FIELDS: [&str; 4] = ["note", "count", "truth", "tag_id"];
+    tx.invalidate_all().await.unwrap();
+    let start = tx.query_count();
+    for field in FIELDS {
+        origin.cell(&mut tx, field).await.unwrap();
+    }
+    let stored_reads = tx.query_count() - start;
+    tx.invalidate_all().await.unwrap();
+    let fresh = tx
+        .new_record(
+            &model,
+            erp_orm::RawVals::new(),
+            Some(origin.rec_ids()[0]),
+            None,
+        )
+        .await
+        .unwrap();
+    let start = tx.query_count();
+    for field in FIELDS {
+        fresh.cell(&mut tx, field).await.unwrap();
+    }
+    let draft_reads = tx.query_count() - start;
+    println!(
+        "company-dependent reads of {} fields: stored record {stored_reads} statements, draft \
+         with origin {draft_reads} statements",
+        FIELDS.len()
+    );
+    assert!(
+        draft_reads <= stored_reads,
+        "draft {draft_reads} > stored {stored_reads}"
+    );
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn draft_lines_write_the_environment_company_value() {
+    let h = Harness::builder([
+        &base_users::ADDON,
+        &erp_addon_base::ADDON,
+        &native_consumer::ADDON,
+    ])
+    .build()
+    .await
+    .unwrap();
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let one = company(&tx.env(), 1);
+    ir_default::set(
+        &mut tx,
+        &one,
+        "property.computed",
+        "count",
+        &Value::Int(5),
+        None,
+        Some(erp_fields::RecId::from_real(2).unwrap()),
+        None,
+    )
+    .await
+    .unwrap();
+    let model = one.records("property.computed").unwrap();
+    let mut values = erp_orm::RawVals::new();
+    values.insert_commands(
+        "child_ids".into(),
+        vec![erp_orm::Command::Create(raw_vals(&[
+            ("name", Cell::Str("Line".into())),
+            ("count", Cell::Int(3)),
+        ]))],
+    );
+    let draft = tx.new_record(&model, values, None, None).await.unwrap();
+    for (env, expected) in [(one.clone(), 3), (company(&one, 2), 5)] {
+        let commands = draft
+            .with_env(env)
+            .x2many_commands(&mut tx, "child_ids")
+            .await
+            .unwrap();
+        match commands.as_slice() {
+            [erp_orm::Command::Set(ids), erp_orm::Command::Create(line)] => {
+                assert!(ids.is_empty());
+                assert_eq!(line.get("count"), Some(&Cell::Int(expected)));
+            }
+            other => panic!("unexpected commands {other:?}"),
+        }
+    }
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+async fn rpc_harness() -> erp_testkit::RpcHarness {
+    support::rpc::harness_with_policy(
+        &[&erp_addon_base::ADDON, &native_consumer::ADDON],
+        erp_testkit::RulesPolicy::new(support::rpc::FixturePolicy).unwrap(),
+        erp_rpc::RpcConfig::default(),
+        false,
+    )
+    .await
+}
+fn alice_in(company: i64) -> erp_rpc::Caller {
+    erp_rpc::Caller::Principal(
+        support::rpc::principal_with(support::rpc::ALICE, &[company], 1)
+            .build()
+            .unwrap(),
+    )
+}
+async fn json2(
+    h: &erp_testkit::RpcHarness,
+    method: &str,
+    body: serde_json::Value,
+    company: i64,
+) -> serde_json::Value {
+    let path = format!("/json/2/property.computed/{method}");
+    let response = support::rpc::call(h, &path, &body.to_string(), alice_in(company)).await;
+    assert_eq!(
+        response.status(),
+        200,
+        "{method} in company {company}: {body}"
+    );
+    support::rpc::ok(&response)
+}
+
+#[tokio::test]
+async fn onchange_and_create_over_rpc_keep_company_values_apart() {
+    let h = rpc_harness().await;
+    let mut tx = h.harness().begin().await.unwrap();
+    seed(&mut tx).await;
+    let env = company(&tx.env(), 1);
+    let tag = env
+        .records("property.computed")
+        .unwrap()
+        .create_values(&mut tx, &[vals(&[("name", Value::str("Tag"))])])
+        .await
+        .unwrap()
+        .ids()[0];
+    for (field, value, company) in [("tag_id", Value::Int(tag), 1), ("count", Value::Int(5), 2)] {
+        ir_default::set(
+            &mut tx,
+            &env,
+            "property.computed",
+            field,
+            &value,
+            None,
+            Some(erp_fields::RecId::from_real(company).unwrap()),
+            None,
+        )
+        .await
+        .unwrap();
+    }
+    tx.commit().await.unwrap();
+    let mut tx = h.harness().begin().await.unwrap();
+    let before = rows(&mut tx, "property_computed").await;
+    drop(tx);
+    let spec = json!({
+        "name": {}, "count": {}, "count_double": {},
+        "tag_id": {"fields": {"display_name": {}}}
+    });
+
+    // first call: each company's fallback is the default, the compute follows it
+    let first = json!({"values": {}, "field_names": [], "fields_spec": spec});
+    let one = json2(&h, "onchange", first.clone(), 1).await;
+    let two = json2(&h, "onchange", first, 2).await;
+    let stored = json2(
+        &h,
+        "web_read",
+        json!({"ids": [tag], "specification": {"tag_id": {"fields": {"display_name": {}}}}}),
+        1,
+    )
+    .await;
+    // the draft's many2one has the wire shape of a stored record's (the tag reads the fallback)
+    assert_eq!(one["value"]["tag_id"], stored[0]["tag_id"]);
+    assert_eq!(one["value"]["tag_id"]["id"], json!(tag));
+    assert_eq!(one["value"]["count"], json!(0));
+    assert_eq!(one["value"]["count_double"], json!(0));
+    assert_eq!(two["value"]["count"], json!(5));
+    assert_eq!(two["value"]["count_double"], json!(10));
+    assert_eq!(two["value"]["tag_id"], json!(false));
+
+    // a changed company value is an onchange input; the compute over it recomputes in the draft
+    let changed = json2(
+        &h,
+        "onchange",
+        json!({
+            "values": {"name": "Draft", "count": 4, "count_double": 0, "tag_id": tag},
+            "field_names": ["count"], "fields_spec": spec
+        }),
+        1,
+    )
+    .await;
+    assert_eq!(changed["value"]["count_double"], json!(8));
+
+    // save goes through create: the caller's company only
+    let id = json2(
+        &h,
+        "create",
+        json!({"vals_list": [{"name": "Saved", "count": 4, "tag_id": tag}]}),
+        1,
+    )
+    .await[0]
+        .as_i64()
+        .unwrap();
+    let read = json!({"ids": [id], "fields": ["count", "count_double", "tag_id"], "load": ""});
+    assert_eq!(
+        json2(&h, "read", read.clone(), 1).await,
+        json!([{"id": id, "count": 4, "count_double": 8, "tag_id": tag}])
+    );
+    assert_eq!(
+        json2(&h, "read", read.clone(), 2).await,
+        json!([{"id": id, "count": 5, "count_double": 10, "tag_id": false}])
+    );
+
+    // an edit form's draft starts from the stored map; its change writes nothing
+    let edited = json2(
+        &h,
+        "onchange",
+        json!({
+            "ids": [id],
+            "values": {"name": "Saved", "count": 6, "count_double": 10, "tag_id": null},
+            "field_names": ["count"], "fields_spec": spec
+        }),
+        2,
+    )
+    .await;
+    assert_eq!(edited["value"]["count_double"], json!(12));
+    assert_eq!(
+        json2(&h, "read", read.clone(), 2).await,
+        json!([{"id": id, "count": 5, "count_double": 10, "tag_id": false}])
+    );
+    let mut tx = h.harness().begin().await.unwrap();
+    assert_eq!(rows(&mut tx, "property_computed").await, before + 1);
+    // the tag equals company 1's fallback, so only the count is an override
+    assert_eq!(
+        stored_map(&mut tx, "property_computed", "count", id).await,
+        json!({"1": 4})
+    );
+    let tag_map: Option<serde_json::Value> = tx
+        .query("SELECT tag_id FROM property_computed WHERE id = $1", &[&id])
+        .await
+        .unwrap()[0]
+        .get(0);
+    assert_eq!(tag_map, None);
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn edit_form_lines_keep_their_company_maps() {
+    let h = rpc_harness().await;
+    let mut tx = h.harness().begin().await.unwrap();
+    seed(&mut tx).await;
+    let env = company(&tx.env(), 1);
+    let model = env.records("property.computed").unwrap();
+    let tag = model
+        .create_values(&mut tx, &[vals(&[("name", Value::str("Tag"))])])
+        .await
+        .unwrap()
+        .ids()[0];
+    for (field, value) in [("count", Value::Int(5)), ("tag_id", Value::Int(tag))] {
+        ir_default::set(
+            &mut tx,
+            &env,
+            "property.computed",
+            field,
+            &value,
+            None,
+            Some(erp_fields::RecId::from_real(1).unwrap()),
+            None,
+        )
+        .await
+        .unwrap();
+    }
+    let parent = model
+        .create_values(&mut tx, &[vals(&[("name", Value::str("Parent"))])])
+        .await
+        .unwrap()
+        .ids()[0];
+    let lines = model
+        .create_values(
+            &mut tx,
+            &[
+                vals(&[
+                    ("name", Value::str("Valued")),
+                    ("parent_id", Value::Int(parent)),
+                ]),
+                vals(&[
+                    ("name", Value::str("Nulled")),
+                    ("parent_id", Value::Int(parent)),
+                ]),
+            ],
+        )
+        .await
+        .unwrap()
+        .ids();
+    tx.flush().await.unwrap();
+    // a value in both companies, and explicit nulls that suppress company 1's fallbacks
+    for (id, count, tag_map) in [
+        (lines[0], json!({"1": 7, "2": 9}), json!({"1": tag})),
+        (lines[1], json!({"1": null}), json!({"1": null})),
+    ] {
+        tx.execute(
+            "UPDATE property_computed SET count = $1, tag_id = $2 WHERE id = $3",
+            &[&count, &tag_map, &id],
+        )
+        .await
+        .unwrap();
+    }
+    tx.commit().await.unwrap();
+    let read = json!({"ids": lines, "fields": ["count", "tag_id"], "load": ""});
+    assert_eq!(
+        json2(&h, "read", read, 1).await,
+        json!([
+            {"id": lines[0], "count": 7, "tag_id": tag},
+            {"id": lines[1], "count": 0, "tag_id": false}
+        ])
+    );
+    let spec = json!({
+        "name": {}, "child_total": {}, "child_tagged": {},
+        "child_ids": {"fields": {"name": {}, "count": {}, "tag_id": {}}}
+    });
+    // stale computed values in the form make the recomputed ones part of the answer
+    // company 1: the edited line's new values, the other line's explicit nulls
+    let one = json2(
+        &h,
+        "onchange",
+        json!({
+            "ids": [parent],
+            "values": {
+                "name": "Parent", "child_total": -1, "child_tagged": -1,
+                "child_ids": [[1, lines[0], {"count": 8, "tag_id": null}]]
+            },
+            "field_names": ["child_ids"], "fields_spec": spec
+        }),
+        1,
+    )
+    .await;
+    assert_eq!(one["value"]["child_total"], json!(8));
+    assert_eq!(one["value"]["child_tagged"], json!(0));
+    // company 2: the edited line's company 2 value; the other line has no company 2 entry
+    let two = json2(
+        &h,
+        "onchange",
+        json!({
+            "ids": [parent],
+            "values": {
+                "name": "Parent", "child_total": -1, "child_tagged": -1,
+                "child_ids": [[1, lines[0], {"count": 10}]]
+            },
+            "field_names": ["child_ids"], "fields_spec": spec
+        }),
+        2,
+    )
+    .await;
+    assert_eq!(two["value"]["child_total"], json!(10));
+    // nothing was written
+    let mut tx = h.harness().begin().await.unwrap();
+    assert_eq!(
+        stored_map(&mut tx, "property_computed", "count", lines[0]).await,
+        json!({"1": 7, "2": 9})
+    );
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn drafts_take_static_defaults_and_admit_html_per_company() {
+    let h = Harness::builder([
+        &base_users::ADDON,
+        &erp_addon_base::ADDON,
+        &native_consumer::ADDON,
+    ])
+    .build()
+    .await
+    .unwrap();
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let one = company(&tx.env(), 1);
+    let two = company(&tx.env(), 2);
+    let model = one.records("property.computed").unwrap();
+    let input = "<p>kept</p><script>dropped()</script>";
+    // the stored record's value for the same input is the reference
+    let stored = model
+        .create_values(&mut tx, &[vals(&[("body", Value::str(input))])])
+        .await
+        .unwrap();
+    let expected = stored.value(&mut tx, "body").await.unwrap();
+    assert_ne!(expected, Value::str(input));
+    // the static default is the environment company's value; another company has no default entry
+    let draft = tx
+        .new_record(
+            &model,
+            raw_vals(&[("body", Cell::Str(input.into()))]),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(draft.value(&mut tx, "quota").await.unwrap(), Value::Int(4));
+    assert_eq!(
+        draft
+            .with_env(two.clone())
+            .value(&mut tx, "quota")
+            .await
+            .unwrap(),
+        Value::Int(0)
+    );
+    // the Html value is admitted like a stored one, for the environment company only
+    assert_eq!(draft.value(&mut tx, "body").await.unwrap(), expected);
+    assert_eq!(
+        draft
+            .with_env(two.clone())
+            .value(&mut tx, "body")
+            .await
+            .unwrap(),
+        Value::False
+    );
+    // a write on the draft in company 2 is admitted the same way and leaves company 1's value
+    draft
+        .with_env(two.clone())
+        .write_values(&mut tx, &vals(&[("body", Value::str(input))]))
+        .await
+        .unwrap();
+    assert_eq!(
+        draft.with_env(two).value(&mut tx, "body").await.unwrap(),
+        expected
+    );
+    assert_eq!(draft.value(&mut tx, "body").await.unwrap(), expected);
     drop(tx);
     h.cleanup().await.unwrap();
 }

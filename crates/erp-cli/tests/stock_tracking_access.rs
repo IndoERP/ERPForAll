@@ -192,6 +192,38 @@ fn internal_user_is_refused_on_tracking_tables_until_access_rows_ship() {
             assert_eq!(error.kind(), erp_fields::ErrorKind::Access, "{model}");
             assert_eq!(error.message(), refusal("create", description, model));
         }
+        // the quant unlink guard runs the model access check before its own refusal
+        let error = tx
+            .env()
+            .records("stock.quant")
+            .unwrap()
+            .unlink(&mut tx)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), erp_fields::ErrorKind::Access);
+        assert_eq!(error.message(), refusal("delete", "Quants", "stock.quant"));
+        // the quant upsert guard runs the model access checks before its own refusal
+        let error = tx
+            .env()
+            .records("stock.quant")
+            .unwrap()
+            .upsert(&mut tx, erp_sdk::UpsertCall::new("_key"))
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), erp_fields::ErrorKind::Access);
+        assert_eq!(error.message(), refusal("create", "Quants", "stock.quant"));
+        // the quant copy guard runs the create access check before its own refusal
+        let error = tx
+            .env()
+            .records("stock.quant")
+            .unwrap()
+            .browse([1])
+            .unwrap()
+            .copy(&mut tx, None)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), erp_fields::ErrorKind::Access);
+        assert_eq!(error.message(), refusal("create", "Quants", "stock.quant"));
         tx.rollback().await.unwrap();
         drop(tx);
         db.cleanup().await.unwrap();

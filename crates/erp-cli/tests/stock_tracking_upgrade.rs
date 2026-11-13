@@ -239,6 +239,11 @@ async fn upgrade(system: &ModuleSystem, case: &str) -> Result<(), (ErrorKind, St
             Ok(())
         }
         Err(erp_modules::Error::Orm(error)) => Err((error.kind(), error.message().to_owned())),
+        // a refused schema step names the module and step around the ORM error
+        Err(erp_modules::Error::StepFailed { source, .. }) => match *source {
+            erp_modules::Error::Orm(error) => Err((error.kind(), error.message().to_owned())),
+            other => panic!("expected an ORM error in the step, got {other:?}"),
+        },
         Err(other) => panic!("expected an ORM error, got {other:?}"),
     };
     eprintln!("stock_tracking_upgrade case={case} result={result:?}");
@@ -332,5 +337,284 @@ fn plain_upgrade_with_changed_files_is_refused_whatever_the_version() {
             assert_eq!(module_state(&db).await, "installed");
             db.cleanup().await.unwrap();
         }
+    });
+}
+
+/// Install `stock`, put one product, one lot of it, one quant and one serial position in the
+/// tracking tables, then drop the S1 constraints: a database from `main` before they existed, with
+/// rows. With `mismatch` the quant and the position name the first product's lot under the second
+/// product (`main` had no guard to stop that).
+async fn stock_with_rows_and_no_s1_constraints(db: &TestDb, mismatch: bool) {
+    let system = builder(db).build().unwrap();
+    let initialized = system.initialize(InitOptions::new()).await.unwrap();
+    assert!(initialized.post_commit.is_clean());
+    let installed = system
+        .button_immediate_install(&system.system_env(Context::new()), &stock())
+        .await
+        .unwrap();
+    assert!(installed.post_commit.is_clean());
+    let orm = installed.orm;
+    let mut tx = orm.begin(erp_orm::SUPERUSER_ID).await.unwrap();
+    let mut products = Vec::new();
+    for name in ["Row Product A", "Row Product B"] {
+        let template = tx
+            .env()
+            .records("product.template")
+            .unwrap()
+            .create(
+                &mut tx,
+                vec![erp_orm::RawVals::new().set_cell("name", erp_fields::Cell::Str(name.into()))],
+            )
+            .await
+            .unwrap()
+            .ids()[0];
+        let row = tx
+            .query(
+                "SELECT id FROM product_product WHERE product_tmpl_id = $1",
+                &[&template],
+            )
+            .await
+            .unwrap();
+        products.push(row[0].get::<_, i64>(0));
+    }
+    let lot = tx
+        .env()
+        .records("stock.lot")
+        .unwrap()
+        .create(
+            &mut tx,
+            vec![
+                erp_orm::RawVals::new()
+                    .set_cell("name", erp_fields::Cell::Str("LOT-ROWS".into()))
+                    .set_cell("product_id", erp_fields::Cell::Id(products[0])),
+            ],
+        )
+        .await
+        .unwrap()
+        .ids()[0];
+    tx.commit().await.unwrap();
+    drop(tx);
+    drop(orm);
+    let row_product = if mismatch { products[1] } else { products[0] };
+    let client = db.client().await.unwrap();
+    for constraint in [
+        "ALTER TABLE stock_quant DROP CONSTRAINT stock_quant_lot_product",
+        "ALTER TABLE stock_serial_position DROP CONSTRAINT stock_serial_position_lot_product",
+        // the move line tables hold keys on it too; the upgrade puts them back
+        "ALTER TABLE stock_lot DROP CONSTRAINT stock_lot_id_product CASCADE",
+    ] {
+        client.batch_execute(constraint).await.unwrap();
+    }
+    let company: i64 = client
+        .query_one(
+            "SELECT res_id FROM ir_model_data WHERE module = 'base' AND name = 'main_company'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let location: i64 = client
+        .query_one(
+            "SELECT res_id FROM ir_model_data WHERE module = 'stock' AND name = 'stock_location_customers'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    client
+        .execute(
+            "INSERT INTO stock_quant (company_id, product_id, location_id, lot_id, quantity, \
+             reserved_quantity, in_date) VALUES ($1, $2, $3, $4, 1, 0, now())",
+            &[&company, &row_product, &location, &lot],
+        )
+        .await
+        .unwrap();
+    client
+        .execute(
+            "INSERT INTO stock_serial_position (company_id, product_id, lot_id, location_id, quantity) \
+             VALUES ($1, $2, $3, $4, 1)",
+            &[&company, &row_product, &lot, &location],
+        )
+        .await
+        .unwrap();
+    assert_eq!(s1_constraints(db).await, Vec::<String>::new());
+}
+
+/// every row names its own product's lot; S1)
+#[test]
+fn upgrade_with_rows_that_match_adds_the_lot_product_keys() {
+    run(async {
+        let db = TestDb::create().await.unwrap();
+        stock_with_rows_and_no_s1_constraints(&db, false).await;
+        let system = builder(&db).build().unwrap();
+        assert_eq!(upgrade(&system, "R1 matching rows").await, Ok(()));
+        assert_eq!(s1_constraints(&db).await, all_s1());
+        db.cleanup().await.unwrap();
+    });
+}
+
+/// naming the key, and adds none; S1)
+#[test]
+fn upgrade_with_a_row_naming_another_products_lot_is_refused_by_name() {
+    run(async {
+        let db = TestDb::create().await.unwrap();
+        stock_with_rows_and_no_s1_constraints(&db, true).await;
+        let system = builder(&db).build().unwrap();
+        let (kind, message) = upgrade(&system, "R2 mismatching rows").await.unwrap_err();
+        assert_eq!(kind, ErrorKind::Validation, "{message}");
+        // the database error mapper words every foreign-key violation as a blocked delete (the same
+        // wording `tracking_schema` pins); the constraint it names is what identifies the refusal
+        assert!(
+            message.contains("'Quants' (stock.quant)")
+                && message.contains("'stock_quant_lot_product'"),
+            "{message}"
+        );
+        assert_eq!(s1_constraints(&db).await, Vec::<String>::new());
+        assert_eq!(module_state(&db).await, "installed");
+        db.cleanup().await.unwrap();
+    });
+}
+
+/// Install the current `stock` and return its system, for the cases that put an older definition back
+/// by SQL and upgrade (S8: the three definition changes of that slice).
+async fn installed_stock(db: &TestDb) {
+    let system = builder(db).build().unwrap();
+    let initialized = system.initialize(InitOptions::new()).await.unwrap();
+    assert!(initialized.post_commit.is_clean());
+    let installed = system
+        .button_immediate_install(&system.system_env(Context::new()), &stock())
+        .await
+        .unwrap();
+    assert!(installed.post_commit.is_clean());
+}
+
+async fn one_text(db: &TestDb, sql: &str) -> Option<String> {
+    db.client()
+        .await
+        .unwrap()
+        .query(sql, &[])
+        .await
+        .unwrap()
+        .first()
+        .map(|r| r.get(0))
+}
+
+const ORDERPOINT_KEY: &str = "stock_warehouse_orderpoint_product_location_check";
+
+/// UNIQUE constraint of the same name with the declared key form, and adds the four finite checks)
+#[test]
+fn upgrade_replaces_a_same_named_constraint_with_the_key_form() {
+    run(async {
+        let db = TestDb::create().await.unwrap();
+        installed_stock(&db).await;
+        let client = db.client().await.unwrap();
+        // the schema before: a raw UNIQUE and no finite checks
+        client
+            .batch_execute(&format!(
+                "ALTER TABLE stock_warehouse_orderpoint DROP CONSTRAINT {ORDERPOINT_KEY}; \
+                 ALTER TABLE stock_warehouse_orderpoint ADD CONSTRAINT {ORDERPOINT_KEY} \
+                   UNIQUE (product_id, location_id, company_id); \
+                 COMMENT ON CONSTRAINT {ORDERPOINT_KEY} ON stock_warehouse_orderpoint \
+                   IS 'UNIQUE (product_id, location_id, company_id)'; \
+                 ALTER TABLE stock_warehouse_orderpoint \
+                   DROP CONSTRAINT stock_warehouse_orderpoint_finite_product_min_qty, \
+                   DROP CONSTRAINT stock_warehouse_orderpoint_finite_product_max_qty, \
+                   DROP CONSTRAINT stock_warehouse_orderpoint_finite_daily_demand, \
+                   DROP CONSTRAINT stock_warehouse_orderpoint_finite_qty_to_order_manual"
+            ))
+            .await
+            .unwrap();
+        let def = format!(
+            "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = '{ORDERPOINT_KEY}'"
+        );
+        assert_eq!(
+            one_text(&db, &def).await.as_deref(),
+            Some("UNIQUE (product_id, location_id, company_id)")
+        );
+        let system = builder(&db).build().unwrap();
+        assert_eq!(upgrade(&system, "S8 orderpoint key").await, Ok(()));
+        assert_eq!(
+            one_text(&db, &def).await.as_deref(),
+            Some("UNIQUE NULLS NOT DISTINCT (product_id, location_id, company_id)")
+        );
+        let finite = one_text(
+            &db,
+            "SELECT count(*)::text FROM pg_constraint WHERE conname LIKE 'stock_warehouse_orderpoint_finite_%'",
+        )
+        .await;
+        assert_eq!(finite.as_deref(), Some("4"));
+        db.cleanup().await.unwrap();
+    });
+}
+
+#[test]
+fn upgrade_turns_the_owner_links_into_restrict() {
+    run(async {
+        let db = TestDb::create().await.unwrap();
+        installed_stock(&db).await;
+        let client = db.client().await.unwrap();
+        let links = [
+            ("stock_picking", "owner_id"),
+            ("stock_move", "restrict_partner_id"),
+        ];
+        for (table, column) in links {
+            client
+                .batch_execute(&format!(
+                    "ALTER TABLE {table} DROP CONSTRAINT {table}_{column}_fkey; \
+                     ALTER TABLE {table} ADD CONSTRAINT {table}_{column}_fkey \
+                       FOREIGN KEY ({column}) REFERENCES res_partner (id) ON DELETE SET NULL"
+                ))
+                .await
+                .unwrap();
+        }
+        let action = |table: &'static str, column: &'static str| {
+            format!(
+                "SELECT confdeltype::text FROM pg_constraint WHERE conname = '{table}_{column}_fkey'"
+            )
+        };
+        for (table, column) in links {
+            assert_eq!(
+                one_text(&db, &action(table, column)).await.as_deref(),
+                Some("n")
+            );
+        }
+        let system = builder(&db).build().unwrap();
+        assert_eq!(upgrade(&system, "S8 owner links").await, Ok(()));
+        for (table, column) in links {
+            assert_eq!(
+                one_text(&db, &action(table, column)).await.as_deref(),
+                Some("r"),
+                "{table}.{column}"
+            );
+        }
+        db.cleanup().await.unwrap();
+    });
+}
+
+/// declares in place)
+#[test]
+fn upgrade_keeps_the_picking_company_index_the_model_no_longer_declares() {
+    run(async {
+        let db = TestDb::create().await.unwrap();
+        installed_stock(&db).await;
+        let client = db.client().await.unwrap();
+        client
+            .batch_execute(
+                "CREATE INDEX stock_picking__company_id_index ON stock_picking (company_id)",
+            )
+            .await
+            .unwrap();
+        let system = builder(&db).build().unwrap();
+        assert_eq!(upgrade(&system, "S8 company index").await, Ok(()));
+        let left = one_text(
+            &db,
+            "SELECT indexname FROM pg_indexes WHERE schemaname = current_schema() \
+             AND indexname = 'stock_picking__company_id_index'",
+        )
+        .await;
+        // schema sync never drops an index the registry no longer declares: an upgraded database keeps
+        // the redundant index (harmless, one more write cost); a new database never has it
+        assert_eq!(left.as_deref(), Some("stock_picking__company_id_index"));
+        db.cleanup().await.unwrap();
     });
 }

@@ -61,6 +61,7 @@ macro_rules! reach_cte {
 "
     };
 }
+pub(crate) use reach_cte;
 
 /// For each owner (`$2`): whether the role or a role it reaches holds the `ADMIN OPTION` on the
 /// owner or on a member of it (it can make itself a member of the owner), and whether it is a
@@ -174,11 +175,11 @@ impl Reached {
 }
 
 /// What a grant is about, for its messages.
-pub(crate) struct Grant {
+pub(crate) struct Grant<'a> {
     /// The entry point, for the principal refusal (`Transaction::grant_node_role`).
     pub(crate) call: &'static str,
     /// The tables the grant changes.
-    pub(crate) tables: &'static [&'static str],
+    pub(crate) tables: &'a [&'a str],
     /// The role being set up ("the heartbeat role").
     pub(crate) grantee: &'static str,
     /// The message for a missing table.
@@ -217,7 +218,7 @@ impl Transaction {
     /// or a predefined role that reaches every table ([`DATA_ROLES`]), refused through the role
     /// that leads there. Returns the role quoted for the
     /// statement. The checks hold when the grant runs (see the module documentation).
-    pub(crate) async fn check_grantee(&mut self, grant: &Grant, role: &str) -> Result<String> {
+    pub(crate) async fn check_grantee(&mut self, grant: &Grant<'_>, role: &str) -> Result<String> {
         self.require_system_full(grant.call)?;
         if role.is_empty() || role.len() > MAX_ROLE_LEN || role.contains('\0') {
             return Err(Error::new(

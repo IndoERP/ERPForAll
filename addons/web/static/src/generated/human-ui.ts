@@ -978,7 +978,9 @@ app: string,
 /** Wire member `block`. */
 block: string,
 /** Wire member `sequence`. */
-sequence: number, };
+sequence: number,
+/** Wire member `help`. */
+help?: string | null, };
 export type ValueSource = "default" | "stored";
 export type SettingsValues = {
 /** Wire member `wire_major`. */

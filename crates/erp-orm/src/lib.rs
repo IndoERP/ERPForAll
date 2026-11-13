@@ -126,6 +126,8 @@ mod schema_company;
 pub mod schema_generated;
 mod schema_index;
 mod schema_sqlobj;
+mod schema_sqlobj_roles;
+pub use schema_sqlobj_roles::SqlRoleBindings;
 mod schema_steps;
 pub use schema_company::CompanyMigrationPolicy;
 mod search;

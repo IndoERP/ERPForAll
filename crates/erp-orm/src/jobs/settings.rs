@@ -59,6 +59,11 @@ macro_rules! settings {
                 self.spec().name
             }
 
+            /// Whether this setting governs database-wide behavior rather than node capacity.
+            pub fn is_shared(self) -> bool {
+                self.spec().scope == Scope::Shared
+            }
+
             /// The default value.
             pub fn default_value(self) -> u64 {
                 self.spec().default

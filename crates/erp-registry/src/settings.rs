@@ -42,6 +42,43 @@ pub enum SettingKind {
         choices: Vec<(String, String)>,
     },
 }
+impl SettingKind {
+    /// Whether `value` has this kind and lies inside its bounds (no coercion).
+    #[must_use]
+    pub fn fits(&self, value: &Value) -> bool {
+        match (self, value) {
+            (SettingKind::Boolean, Value::Bool(_)) => true,
+            (SettingKind::String { max_bytes }, Value::Str(value)) => value.len() <= *max_bytes,
+            (SettingKind::Integer { min, max }, Value::Int(value)) => value >= min && value <= max,
+            (SettingKind::Float { min, max }, Value::Float(value)) => {
+                value.is_finite() && value >= min && value <= max
+            }
+            (SettingKind::Selection { choices }, Value::Str(value)) => {
+                choices.iter().any(|(key, _)| key == value.as_ref())
+            }
+            _ => false,
+        }
+    }
+    /// What a value of this kind is, with its bounds, for a refusal: "a whole number from 1 to
+    /// 32". Never contains the refused value, which may be a secret.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        match self {
+            SettingKind::Boolean => "true or false".to_owned(),
+            SettingKind::String { max_bytes } => format!("a text of at most {max_bytes} bytes"),
+            SettingKind::Integer { min, max } => format!("a whole number from {min} to {max}"),
+            SettingKind::Float { min, max } => format!("a number from {min} to {max}"),
+            SettingKind::Selection { choices } => format!(
+                "one of {}",
+                choices
+                    .iter()
+                    .map(|(key, _)| key.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }
+    }
+}
 /// Additional pure native validation after intrinsic kind/range validation.
 pub type Validator = fn(&Value) -> Result<()>;
 /// Validated declaration. A registry binds its owner to the contributing installed addon.
@@ -59,6 +96,7 @@ pub struct SettingDecl {
     app: String,
     block: String,
     sequence: u32,
+    help: Option<String>,
 }
 impl std::fmt::Debug for SettingDecl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -80,6 +118,9 @@ fn qualified(key: &str) -> bool {
         return false;
     };
     key.len() <= 128 && name(addon) && name(local)
+}
+fn setting_key(key: &str) -> bool {
+    key.len() <= 128 && key.contains('.') && key.split('.').all(name)
 }
 fn name(value: &str) -> bool {
     !value.is_empty()
@@ -109,7 +150,7 @@ impl SettingDecl {
         kind: SettingKind,
         default: Value,
     ) -> Result<Self> {
-        if !qualified(key)
+        if !setting_key(key)
             || label.is_empty()
             || label.len() > 256
             || label.chars().any(char::is_control)
@@ -132,6 +173,7 @@ impl SettingDecl {
             app: default_app,
             block: "General".into(),
             sequence: 100,
+            help: None,
         };
         setting.validate(&setting.default)?;
         Ok(setting)
@@ -271,25 +313,27 @@ impl SettingDecl {
     /// # Errors
     /// Wrong type, intrinsic bound violation or custom validation failure.
     pub fn validate(&self, value: &Value) -> Result<()> {
-        let valid = match (&self.kind, value) {
-            (SettingKind::Boolean, Value::Bool(_)) => true,
-            (SettingKind::String { max_bytes }, Value::Str(value)) => value.len() <= *max_bytes,
-            (SettingKind::Integer { min, max }, Value::Int(value)) => value >= min && value <= max,
-            (SettingKind::Float { min, max }, Value::Float(value)) => {
-                value.is_finite() && value >= min && value <= max
-            }
-            (SettingKind::Selection { choices }, Value::Str(value)) => {
-                choices.iter().any(|(key, _)| key == value.as_ref())
-            }
-            _ => false,
-        };
-        if !valid {
+        if !self.kind.fits(value) {
             return Err(invalid());
         }
         if let Some(validator) = self.validator {
             validator(value)?;
         }
         Ok(())
+    }
+    /// Add bounded descriptive help, including units and catalogue-derived bounds.
+    /// # Errors
+    /// Invalid, empty or oversized text.
+    pub fn help(mut self, text: &str) -> Result<Self> {
+        if text.is_empty() || text.len() > 1024 || text.chars().any(char::is_control) {
+            return Err(invalid());
+        }
+        self.help = Some(text.into());
+        Ok(self)
+    }
+    /// Optional explanatory text; never interpreted as markup.
+    pub fn help_text(&self) -> Option<&str> {
+        self.help.as_deref()
     }
     /// Addon-qualified identity.
     pub fn key(&self) -> &str {
@@ -670,12 +714,77 @@ impl PanelItemValue {
         Ok(Self::Record { id })
     }
 }
+/// Maximum settings in a pure validation group and in one expanded service snapshot.
+pub const MAX_GROUP_MEMBERS: usize = 256;
+/// Pure validation of a complete typed group. No database or caller capability is passed.
+pub type GroupValidator = fn(&BTreeMap<String, Value>) -> Result<()>;
+/// Validated native group metadata, bound to its installed declaring addon at publication.
+///
+/// ```
+/// use erp_registry::settings::SettingGroupDecl;
+/// let group = SettingGroupDecl::new("my_addon.limits", &["my_addon.low", "my_addon.high"], |_values| Ok(()))?;
+/// assert_eq!(group.key(), "my_addon.limits");
+/// assert_eq!(group.members().count(), 2);
+/// # Ok::<(), erp_fields::Error>(())
+/// ```
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct SettingGroupDecl {
+    key: String,
+    members: BTreeSet<String>,
+    validate: GroupValidator,
+}
+impl std::fmt::Debug for SettingGroupDecl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SettingGroupDecl")
+            .field("key", &self.key)
+            .field("members", &self.members)
+            .finish_non_exhaustive()
+    }
+}
+fn invalid_group() -> Error {
+    Error::validation("invalid declared setting group")
+}
+impl SettingGroupDecl {
+    /// Declare unique same-addon members, checked for existence/scope/defaults at publication.
+    /// # Errors
+    /// Invalid identity, duplicate/empty/oversized membership or a member owned by another addon.
+    pub fn new(key: &str, members: &[&str], validate: GroupValidator) -> Result<Self> {
+        let owner = key.split_once('.').ok_or_else(invalid_group)?.0;
+        if !setting_key(key) || members.is_empty() || members.len() > MAX_GROUP_MEMBERS {
+            return Err(invalid_group());
+        }
+        let mut unique = BTreeSet::new();
+        for member in members {
+            if !setting_key(member)
+                || member.split_once('.').map(|p| p.0) != Some(owner)
+                || !unique.insert((*member).to_owned())
+            {
+                return Err(invalid_group());
+            }
+        }
+        Ok(Self {
+            key: key.into(),
+            members: unique,
+            validate,
+        })
+    }
+    /// Stable group identity.
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+    /// All group keys in deterministic order.
+    pub fn members(&self) -> impl Iterator<Item = &str> {
+        self.members.iter().map(String::as_str)
+    }
+}
 /// Immutable installed-addon declarations: settings, and the panel items published next to them.
 /// No secret setting kind exists in this contract.
 #[derive(Debug, Default)]
 pub struct SettingsRegistry {
     settings: BTreeMap<String, SettingDecl>,
     items: BTreeMap<String, PanelItemDecl>,
+    groups: BTreeMap<String, SettingGroupDecl>,
 }
 impl SettingsRegistry {
     /// Bind declarations to their actual contributing installed addon and resolve all policy references.
@@ -713,7 +822,95 @@ impl SettingsRegistry {
         Ok(Self {
             settings: entries,
             items: BTreeMap::new(),
+            groups: BTreeMap::new(),
         })
+    }
+    /// Bind pure groups to installed owners and validate their complete declared defaults.
+    /// # Errors
+    /// Invalid owner, duplicate group, absent member, mixed scope or invalid default snapshot.
+    pub fn with_groups(
+        mut self,
+        contributions: Vec<(String, Vec<SettingGroupDecl>)>,
+        installed: &BTreeSet<String>,
+    ) -> Result<Self> {
+        for (owner, groups) in contributions {
+            if !installed.contains(&owner) {
+                return Err(invalid_group());
+            }
+            for group in groups {
+                if group.key.split_once('.').map(|p| p.0) != Some(owner.as_str())
+                    || self.groups.contains_key(&group.key)
+                {
+                    return Err(invalid_group());
+                }
+                let mut scope = None;
+                let mut defaults = BTreeMap::new();
+                for member in &group.members {
+                    let decl = self.get(member).ok_or_else(invalid_group)?;
+                    if scope.is_some_and(|old| old != decl.scope()) {
+                        return Err(invalid_group());
+                    }
+                    scope = Some(decl.scope());
+                    defaults.insert(member.clone(), decl.default_value().clone());
+                }
+                (group.validate)(&defaults)?;
+                self.groups.insert(group.key.clone(), group);
+            }
+        }
+        Ok(self)
+    }
+    /// Expand requested keys to complete affected groups (including overlapping dependencies), without changing caller authority.
+    /// # Errors
+    /// The expanded snapshot exceeds the bounded service admission size.
+    pub fn expanded_keys(&self, keys: &[String]) -> Result<Vec<String>> {
+        let mut expanded: BTreeSet<String> = keys.iter().cloned().collect();
+        loop {
+            let before = expanded.len();
+            for group in self.groups.values() {
+                if group.members.iter().any(|key| expanded.contains(key)) {
+                    expanded.extend(group.members.iter().cloned());
+                    if expanded.len() > MAX_GROUP_MEMBERS {
+                        return Err(invalid_group());
+                    }
+                }
+            }
+            if expanded.len() == before {
+                break;
+            }
+        }
+        if expanded.len() > MAX_GROUP_MEMBERS {
+            return Err(invalid_group());
+        }
+        Ok(expanded.into_iter().collect())
+    }
+    /// Validate every fully supplied group, rejecting an incomplete affected snapshot.
+    /// # Errors
+    /// Missing members or a native group validation error. Overlapping groups are checked once.
+    pub fn validate_groups(&self, values: &BTreeMap<String, Value>) -> Result<()> {
+        for group in self.groups.values() {
+            if group.members.iter().any(|key| values.contains_key(key)) {
+                if !group.members.iter().all(|key| values.contains_key(key)) {
+                    return Err(invalid_group());
+                }
+                let snapshot = group
+                    .members
+                    .iter()
+                    .map(|key| {
+                        values
+                            .get(key)
+                            .cloned()
+                            .map(|value| (key.clone(), value))
+                            .ok_or_else(invalid_group)
+                    })
+                    .collect::<Result<BTreeMap<_, _>>>()?;
+                (group.validate)(&snapshot)?;
+            }
+        }
+        Ok(())
+    }
+    /// Whether the complete required group was linked and published.
+    pub fn group(&self, key: &str) -> Option<&SettingGroupDecl> {
+        self.groups.get(key)
     }
     /// Add the installed panel items under the same ownership rule as settings.
     ///

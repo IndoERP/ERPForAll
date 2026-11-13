@@ -382,6 +382,15 @@ impl Stored {
         ))
     }
 
+    /// An Approve or Deny revision for users: nothing consults policies, dispatches or executes
+    /// approvals yet, so an active one would state a control that silently does nothing (Allow
+    /// restricts nothing; agent and service revisions are a separate open decision). Temporary fence (create and
+    /// activation both pass `check_revisions`), removed by the slice that ships enforcement
+    /// (and). Archiving is never refused.
+    fn is_user_restriction(&self) -> bool {
+        self.outcome != Outcome::Allow && self.kind == PrincipalKind::User
+    }
+
     /// The specificity of the selector after the company: method 2, model 1, wildcard 0 (B8).
     fn level(&self) -> u8 {
         match (&self.model, &self.method) {
@@ -478,6 +487,7 @@ async fn check_revisions(env: &Env, tx: &mut Transaction, ids: &[i64]) -> Result
     );
     let rows = tx.query(&sql, &[&ids]).await?;
     let mut labels = BTreeMap::new();
+    let mut fenced = None;
     for row in &rows {
         let revision = stored(row)?;
         let named: i64 = row.try_get(9).map_err(|_| unreadable("approvers"))?;
@@ -500,6 +510,9 @@ async fn check_revisions(env: &Env, tx: &mut Transaction, ids: &[i64]) -> Result
             );
         }
         labels.insert(revision.id, revision.label());
+        if fenced.is_none() && revision.active && revision.is_user_restriction() {
+            fenced = Some(revision.label());
+        }
     }
     let inactive = tx
         .query(
@@ -517,6 +530,13 @@ async fn check_revisions(env: &Env, tx: &mut Transaction, ids: &[i64]) -> Result
             "Approval policy revision {}: user {user} is not an active internal user and cannot \
              approve.",
             labels.get(&policy).ok_or_else(|| unreadable("policy_id"))?
+        )));
+    }
+    // after every other refusal, so a revision that is wrong in another way still says so first
+    if let Some(label) = fenced {
+        return Err(Error::validation(format!(
+            "Approval policy revision {label}: requiring approval for or denying calls of users is not \
+             available yet in this release. Save the revision archived to prepare it."
         )));
     }
     Ok(())

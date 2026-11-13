@@ -20,7 +20,8 @@
 //! modified: the guard is data (floors) the database enforces in the same statement, and the
 //! refusal text is attributed from the returned rows without parsing any message.
 
-use erp_fields::{ColumnType, ErrorKind};
+use erp_fields::{ColumnType, DateTime, ErrorKind};
+use erp_registry::ModelSpec;
 
 use super::*;
 use crate::upsert::{ConflictAction, KeyColumn, SetAction, Upsert, key_match};
@@ -321,7 +322,8 @@ struct ResolvedGuard {
 /// declaration (contract D1 `apply_statement`). The table must hold the grain and measure columns
 /// under their declared names, an `id` column, and the grain key constraint
 /// ([`ProjectionShape::grain_key_definition`]) under the given name; other columns (a receipt
-/// date, addon state) are never read or written by the statement.
+/// date, addon state) are never read or written by the statement, except a column named by
+/// [`SyncApply::with_insert_fill`], which the insert arm writes (amended B7).
 ///
 /// Scope: the statement writes the table directly, without access rules, cache update or write
 /// hooks, so it is for tables whose writes the consumer's adapter owns.
@@ -331,6 +333,25 @@ pub struct SyncApply {
     table: String,
     constraint: String,
     guards: Vec<ResolvedGuard>,
+    fills: Vec<(String, InsertFill)>,
+}
+
+/// The insert-only value of a column outside the grain and measures
+/// ([`SyncApply::with_insert_fill`], amendment B7). A `NOT NULL` column without a database
+/// default needs one: PostgreSQL checks `NOT NULL` on the proposed row before it resolves the
+/// conflict, so without a value the statement fails even for a key that exists, and schema sync refuses
+/// a database default set outside the ORM. A closed set: the caller never passes SQL text.
+///
+/// **Insert-only.** The value is written only when the statement inserts the key; a row that exists
+/// keeps its stored value, and the update arm never names the column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum InsertFill {
+    /// `now()` in UTC: the start time of the transaction, so every row the transaction inserts gets
+    /// the same value.
+    TransactionTime,
+    /// This timestamp (UTC, without time zone), bound as one statement parameter after the arrays.
+    Value(DateTime),
 }
 
 impl SyncApply {
@@ -406,7 +427,82 @@ impl SyncApply {
             table: table.to_owned(),
             constraint: constraint.to_owned(),
             guards: resolved,
+            fills: Vec::new(),
         })
+    }
+
+    /// Fill `column` of `model` on the insert arm only ([`InsertFill`]). Refused (Programming
+    /// `H27 InvalidDefinition`) when `model` is not the model of the apply's table, or the column
+    /// does not exist on it, is a generated column, is a grain or measure column, is named twice, or
+    /// is not a stored `timestamp` column.
+    pub fn with_insert_fill(
+        mut self,
+        model: &ModelSpec,
+        column: &str,
+        fill: InsertFill,
+    ) -> Result<Self> {
+        let name = self.shape.name();
+        if model.table != self.table {
+            return Err(invalid(
+                name,
+                format!(
+                    "insert fill model {} has table {}, not {}",
+                    model.name, model.table, self.table
+                ),
+            ));
+        }
+        let Some(field) = model.field(column) else {
+            return Err(invalid(
+                name,
+                format!(
+                    "insert fill column {column} does not exist on model {}",
+                    model.name
+                ),
+            ));
+        };
+        if field.is_generated() {
+            return Err(invalid(
+                name,
+                format!("insert fill column {column} is a generated column"),
+            ));
+        }
+        if self.shape.grain().iter().any(|g| g.name == column)
+            || self.shape.measures().iter().any(|m| m.name == column)
+        {
+            return Err(invalid(
+                name,
+                format!("insert fill column {column} is a grain or measure column"),
+            ));
+        }
+        if self.fills.iter().any(|(c, _)| c == column) {
+            return Err(invalid(
+                name,
+                format!("insert fill column {column} is named twice"),
+            ));
+        }
+        if field.column() != Some(ColumnType::Timestamp) {
+            return Err(invalid(
+                name,
+                format!("insert fill column {column} is not a stored timestamp column"),
+            ));
+        }
+        self.fills.push((column.to_owned(), fill));
+        Ok(self)
+    }
+
+    /// The values of the [`InsertFill::Value`] fills, in declaration order: the statement's
+    /// parameters after the grain and measure arrays.
+    ///
+    /// Only `erp_orm::delta::apply_synchronous` may use it.
+    #[doc(hidden)]
+    pub fn insert_fill_values(&self) -> Vec<DateTime> {
+        self.fills
+            .iter()
+            .filter_map(|(_, f)| match f {
+                InsertFill::Value(v) => Some(*v),
+                InsertFill::TransactionTime => None,
+            })
+            .collect()
     }
 
     /// The projection shape.
@@ -505,6 +601,24 @@ impl SyncApply {
         );
         let guard = update.join(" AND ");
         let filter = format!("(({}) OR {exists})", insert.join(" AND "));
+        let mut next = self.shape.grain().len() + self.shape.measures().len();
+        let fill_sql: Vec<String> = self
+            .fills
+            .iter()
+            .map(|(_, f)| match f {
+                InsertFill::TransactionTime => "(now() AT TIME ZONE 'UTC')".to_owned(),
+                InsertFill::Value(_) => {
+                    next += 1;
+                    format!("${next}::timestamp")
+                }
+            })
+            .collect();
+        let fills: Vec<(&str, &str)> = self
+            .fills
+            .iter()
+            .zip(&fill_sql)
+            .map(|((c, _), e)| (c.as_str(), e.as_str()))
+            .collect();
         Ok(crate::upsert::upsert(
             &Upsert::new(
                 &self.table,
@@ -516,6 +630,7 @@ impl SyncApply {
                     audit: &[],
                 },
             )
+            .insert_exprs(&fills)
             .returning(&returning)
             .update_guard(Some(&guard))
             .insert_filter(Some(&filter)),

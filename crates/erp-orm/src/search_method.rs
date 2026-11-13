@@ -887,7 +887,7 @@ pub(crate) fn expand_policy(
     domain: &Domain,
 ) -> Result<Domain> {
     let expanded = expand_for_model(tx, env, model, domain, false)?;
-    crate::access::bypass_traversals(&expanded)
+    crate::access::bypass_traversals(tx.registry(), model, &expanded)
 }
 
 fn expand_domain_with_budget(

@@ -2185,6 +2185,8 @@ fn catalog<'a>(
         let catalog = system.human_catalog().await.map_err(module_error)?;
         for (name, reason) in &catalog.refused {
             // Loud, never a silent skip: an operator sees why an addon of the directory is absent.
+            // A native addon this binary leaves out on purpose logs that reason, not the file rule.
+            let reason = crate::native_addons::not_linked_reason(name.as_str()).unwrap_or(reason);
             eprintln!("addon catalogue: {name} is not offered for installation: {reason}");
         }
         let names: Vec<&str> = catalog.offered.iter().map(|m| m.name().as_str()).collect();

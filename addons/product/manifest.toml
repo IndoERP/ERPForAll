@@ -4,7 +4,7 @@ summary = "Manage product templates, variants, pricelists, and vendor agreements
 category = "Sales/Sales"
 author = "ERPForAll"
 license = "MIT OR Apache-2.0"
-version = "1.0.0"
+version = "1.1.0"
 depends = ["base", "uom"]
 data = [
     "security/product_security.xml",

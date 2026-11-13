@@ -676,3 +676,289 @@ async fn a_child_of_rule_grants_the_subtree_of_a_hidden_start_record() {
     drop(tx);
     h.cleanup().await.unwrap();
 }
+
+// ----- a hierarchy rule of the comodel inside a relational condition -----------
+
+const FOLDER: &str = "test_access.org_folder";
+
+/// The document rule in the shape of the product rules
+/// (`['|', ('company_id', '=', False), ('company_id', 'parent_of', company_ids)]`), the
+/// organisations standing in for companies.
+fn doc_company_rule() -> Domain {
+    Domain::or([
+        cond("org_id", Operator::Eq, false),
+        cond(
+            "org_id",
+            Operator::ParentOf,
+            erp_sdk::domain::Value::Param(PrincipalParam::CompanyIds),
+        ),
+    ])
+}
+
+/// One folder per document (its main document, the document in its one2many and in its
+/// many2many) and one folder below each of those (`upper_id`).
+struct Folders {
+    by_doc: [i64; 5],
+    below: [i64; 5],
+}
+
+impl Folders {
+    fn all(&self) -> BTreeSet<i64> {
+        self.by_doc.iter().chain(&self.below).copied().collect()
+    }
+}
+
+async fn folders(h: &Harness, o: &Orgs) -> Folders {
+    let rows: Vec<_> = o
+        .docs
+        .iter()
+        .map(|d| {
+            row(&[
+                ("main_doc_id", Value::Int(*d)),
+                ("shared_doc_ids", Value::List(vec![Value::Int(*d)].into())),
+            ])
+        })
+        .collect();
+    let by_doc: [i64; 5] = create(h, FOLDER, &rows).await.try_into().unwrap();
+    for (folder, doc) in by_doc.iter().zip(o.docs) {
+        write(h, DOC, &[doc], &[("folder_id", Value::Int(*folder))]).await;
+    }
+    let rows: Vec<_> = by_doc
+        .iter()
+        .map(|f| row(&[("upper_id", Value::Int(*f))]))
+        .collect();
+    let below = create(h, FOLDER, &rows).await.try_into().unwrap();
+    Folders { by_doc, below }
+}
+
+/// `name ilike 'of'`: every document.
+fn any_doc() -> Domain {
+    cond("name", Operator::ILike, "of")
+}
+
+/// The branch user (company C: the documents of A, B, C and of nobody) and the parent user
+/// (company A: the documents of A and of nobody), each with the indexes of the documents the
+/// rule lets them read.
+const USERS: [(i64, &[usize], &str); 2] = [
+    (DEMO, &[0, 1, 2, 4], "branch user in C"),
+    (OTHER, &[0, 4], "parent user in A"),
+];
+
+/// Search folders with `domain` as both users; `expected(visible document indexes)` is the
+/// folder set each must get. Prints and bounds the statements of each search (one, as the
+/// top-level form of the rule).
+async fn folders_by(
+    domain: impl Fn(&Orgs) -> Domain,
+    expected: impl Fn(&Folders, &[usize]) -> BTreeSet<i64>,
+    label: &str,
+) {
+    let h = harness(rule(DOC, doc_company_rule())).await;
+    let o = orgs(&h).await;
+    assert_eq!((o.a, o.c), (1, 3), "ids double as company ids");
+    let f = folders(&h, &o).await;
+    let domain = domain(&o);
+    for (uid, visible, who) in USERS {
+        let company = if uid == DEMO { o.c } else { o.a };
+        let mut tx = begin_as(&h, uid, &[company]).await;
+        // the rule itself, at the top level, as the reference point
+        let docs: BTreeSet<i64> = visible.iter().map(|i| o.docs[*i]).collect();
+        assert_eq!(search(&mut tx, DOC).await, docs, "{who}: documents");
+        tx.capture_statements(true);
+        let found = tx
+            .env()
+            .records(FOLDER)
+            .unwrap()
+            .search(&mut tx, &domain)
+            .await;
+        let statements = tx.captured().len();
+        tx.capture_statements(false);
+        let found: BTreeSet<i64> = found
+            .unwrap_or_else(|e| panic!("{label}, {who}: {e}"))
+            .ids()
+            .into_iter()
+            .collect();
+        eprintln!("{label}, {who}: {statements} statement(s)");
+        assert_eq!(found, expected(&f, visible), "{label}, {who}");
+        assert!(statements <= 1, "{label}, {who}: {statements} statements");
+        drop(tx);
+    }
+    h.cleanup().await.unwrap();
+}
+
+fn by_doc(f: &Folders, visible: &[usize]) -> BTreeSet<i64> {
+    visible.iter().map(|i| f.by_doc[*i]).collect()
+}
+
+/// (a) `any` through a many2one into a model whose rule walks `parent_of company_ids`: the
+/// folders whose main document the user may read, as the branch and as the parent user.
+#[tokio::test]
+async fn any_through_a_many2one_applies_the_comodel_hierarchy_rule() {
+    folders_by(
+        |_| cond("main_doc_id", Operator::Any, any_doc()),
+        by_doc,
+        "many2one any",
+    )
+    .await;
+}
+
+/// (b) `any` through a one2many.
+#[tokio::test]
+async fn any_through_a_one2many_applies_the_comodel_hierarchy_rule() {
+    folders_by(
+        |_| cond("doc_ids", Operator::Any, any_doc()),
+        by_doc,
+        "one2many any",
+    )
+    .await;
+}
+
+/// (c) `any` through a many2many.
+#[tokio::test]
+async fn any_through_a_many2many_applies_the_comodel_hierarchy_rule() {
+    folders_by(
+        |_| cond("shared_doc_ids", Operator::Any, any_doc()),
+        by_doc,
+        "many2many any",
+    )
+    .await;
+}
+
+/// (d) A dotted path (`main_doc_id.name`), the same condition as (a).
+#[tokio::test]
+async fn a_dotted_path_applies_the_comodel_hierarchy_rule() {
+    folders_by(
+        |_| cond("main_doc_id.name", Operator::ILike, "of"),
+        by_doc,
+        "dotted path",
+    )
+    .await;
+}
+
+/// (e) `not any`: the folders without a readable main document (a document the rule hides
+/// counts as no document), the folders below included.
+#[tokio::test]
+async fn not_any_applies_the_comodel_hierarchy_rule() {
+    folders_by(
+        |_| cond("main_doc_id", Operator::NotAny, any_doc()),
+        |f, visible| &f.all() - &by_doc(f, visible),
+        "many2one not any",
+    )
+    .await;
+}
+
+/// (f) Two levels: through a folder without a rule into the documents
+/// (`upper_id.main_doc_id.name`), and through the documents, their folder and the documents
+/// again (`main_doc_id.folder_id.main_doc_id.name`, the rule at both nested levels).
+#[tokio::test]
+async fn two_levels_apply_the_comodel_hierarchy_rule() {
+    folders_by(
+        |_| cond("upper_id.main_doc_id.name", Operator::ILike, "of"),
+        |f, visible| visible.iter().map(|i| f.below[*i]).collect(),
+        "two levels, rule at the inner one",
+    )
+    .await;
+    folders_by(
+        |_| {
+            cond(
+                "main_doc_id",
+                Operator::Any,
+                cond(
+                    "folder_id",
+                    Operator::Any,
+                    cond("main_doc_id", Operator::Any, any_doc()),
+                ),
+            )
+        },
+        by_doc,
+        "two levels, rule at both",
+    )
+    .await;
+}
+
+/// (h) A rule's own relational condition traverses as the superuser (the comodel's rule does
+/// not apply inside it) and its own hierarchy condition through the relation is
+/// resolved like one at its top level: a folder rule `main_doc_id.org_id parent_of
+/// company_ids` lets each user read the folders of the documents of its company and above
+/// (the document of nobody does not satisfy it).
+#[tokio::test]
+async fn a_rule_with_a_hierarchy_condition_through_a_relation() {
+    let folder_rule = cond(
+        "main_doc_id.org_id",
+        Operator::ParentOf,
+        erp_sdk::domain::Value::Param(PrincipalParam::CompanyIds),
+    );
+    let policy = DomainPolicy::builder(Otherwise::Allow)
+        .rule(DOC, Operation::Read, doc_company_rule())
+        .rule(FOLDER, Operation::Read, folder_rule)
+        .build()
+        .unwrap();
+    let h = harness(policy).await;
+    let o = orgs(&h).await;
+    let f = folders(&h, &o).await;
+    for (uid, visible, who) in USERS {
+        let company = if uid == DEMO { o.c } else { o.a };
+        let mut tx = begin_as(&h, uid, &[company]).await;
+        let with_org: Vec<usize> = visible.iter().copied().filter(|i| *i != 4).collect();
+        assert_eq!(
+            search(&mut tx, FOLDER).await,
+            by_doc(&f, &with_org),
+            "{who}"
+        );
+        // and a search through the folders' relation on top of that rule
+        let found: BTreeSet<i64> = tx
+            .env()
+            .records(FOLDER)
+            .unwrap()
+            .search(&mut tx, &cond("doc_ids", Operator::Any, any_doc()))
+            .await
+            .unwrap_or_else(|e| panic!("{who}: {e}"))
+            .ids()
+            .into_iter()
+            .collect();
+        assert_eq!(found, by_doc(&f, &with_org), "{who}: through doc_ids");
+        drop(tx);
+    }
+    h.cleanup().await.unwrap();
+}
+
+/// The `access` operator on a many2one inlines the comodel's rule, its
+/// hierarchy condition included: the folders whose main document the user may read.
+#[tokio::test]
+async fn the_access_operator_inlines_the_comodel_hierarchy_rule() {
+    folders_by(
+        |_| cond("main_doc_id", Operator::Access, "read"),
+        by_doc,
+        "access operator",
+    )
+    .await;
+}
+
+/// A folder rule `main_doc_id.name ilike 'of'` admits every folder with a main document, also
+/// those whose document the user cannot read.
+#[tokio::test]
+async fn a_dotted_path_in_a_rule_does_not_apply_the_comodel_rule() {
+    let policy = DomainPolicy::builder(Otherwise::Allow)
+        .rule(DOC, Operation::Read, doc_company_rule())
+        .rule(
+            FOLDER,
+            Operation::Read,
+            cond("main_doc_id.name", Operator::ILike, "of"),
+        )
+        .build()
+        .unwrap();
+    let h = harness(policy).await;
+    let o = orgs(&h).await;
+    let f = folders(&h, &o).await;
+    for (uid, visible, who) in USERS {
+        let company = if uid == DEMO { o.c } else { o.a };
+        let mut tx = begin_as(&h, uid, &[company]).await;
+        assert!(visible.len() < 5, "{who}: some documents are hidden");
+        assert_eq!(
+            search(&mut tx, FOLDER).await,
+            by_doc(&f, &[0, 1, 2, 3, 4]),
+            "{who}"
+        );
+        drop(tx);
+    }
+    h.cleanup().await.unwrap();
+}

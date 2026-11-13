@@ -6,7 +6,8 @@ use erp_sdk::settings::{MAX_ITEM_DETAIL_BYTES, PanelItemDecl, PanelItemValue, Se
 
 /// The keys base declares here. `ir_config_setting::published` refuses a registry that lacks one: the
 /// declarations are a link-time registration that a binary can drop.
-pub(crate) const KEYS: [&str; 8] = [
+pub(crate) const KEYS: [&str; 9] = [
+    "base.jobs_configuration_status",
     "base.active_users",
     "base.manage_users",
     "base.languages",
@@ -26,6 +27,11 @@ fn place(item: PanelItemDecl, block: &str, sequence: u32) -> Result<PanelItemDec
 }
 fn items() -> Result<Vec<PanelItemDecl>> {
     Ok(vec![
+        PanelItemDecl::info("base.jobs_configuration_status", "Configuration status")?
+            .block("Background Jobs")?
+            .sequence(90)
+            .scope(erp_sdk::settings::ScopeKind::Global)
+            .access(&[SETTINGS_ADMIN])?,
         place(
             PanelItemDecl::info("base.active_users", "Active Users")?,
             "Users",
@@ -96,6 +102,8 @@ fn resolve<'a>(
 ) -> erp_sdk::BoxFuture<'a, Result<PanelItemValue>> {
     Box::pin(async move {
         match key {
+            "base.jobs_configuration_status" => PanelItemValue::info(Value::str("Stored configuration"))?
+                .detail("Values saved here are stored configuration. Running jobs use process configuration until live settings integration is delivered."),
             "base.active_users" => {
                 count(env, tx, "res.users", true, ("Active User", "Active Users")).await
             }

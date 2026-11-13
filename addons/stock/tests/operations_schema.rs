@@ -880,12 +880,22 @@ async fn picking_columns_defaults_and_indexes() {
         ("user_id", true),
         ("scheduled_date", false),
         ("picking_type_id", false),
-        ("company_id", false),
         ("location_id", false),
         ("location_dest_id", false),
     ] {
         assert_btree(&mut tx, "stock_picking", field, not_null).await;
     }
+    // the company leads the reference key, so it has no index of its own (N1)
+    let own_company_index: i64 = tx
+        .query(
+            "SELECT count(*) FROM pg_indexes WHERE schemaname = current_schema() \
+             AND tablename = 'stock_picking' AND indexname = 'stock_picking__company_id_index'",
+            &[],
+        )
+        .await
+        .unwrap()[0]
+        .get(0);
+    assert_eq!(own_company_index, 0);
     let probe = probe_definition(
         &mut tx,
         "stock_picking",
@@ -1761,6 +1771,83 @@ async fn picking_and_move_links_must_share_the_row_company() {
     )
     .await
     .unwrap();
+    tx.rollback().await.unwrap();
+    drop(tx);
+    f.h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn deleting_a_partner_who_owns_a_transfer_or_restricts_a_move_is_refused() {
+    let f = fixture().await;
+    let mut tx = f.h.begin().await.unwrap();
+    let picking = create_picking(
+        &mut tx,
+        f.company,
+        picking_vals(&f, f.company, f.picking_type, "OWN/1")
+            .set_cell("owner_id", Cell::Id(f.partner)),
+    )
+    .await
+    .unwrap();
+    let blocked = |model: &str, description: &str| {
+        format!(
+            "{PREFIX}Another model is using the record you are trying to delete.\n\nThe \
+             troublemaker is: '{description}' ({model})"
+        )
+    };
+    let delete = async |tx: &mut Transaction| {
+        tx.savepoint(async |tx| {
+            tx.execute("DELETE FROM res_partner WHERE id = $1", &[&f.partner])
+                .await
+        })
+        .await
+    };
+    let error = delete(&mut tx).await.unwrap_err();
+    assert_eq!(error.sqlstate(), Some("23001"), "{error:?}");
+    assert!(
+        error
+            .message()
+            .starts_with(&blocked("stock.picking", "Transfer")),
+        "{}",
+        error.message()
+    );
+    let owner: Option<i64> = tx
+        .query(
+            "SELECT owner_id FROM stock_picking WHERE id = $1",
+            &[&picking],
+        )
+        .await
+        .unwrap()[0]
+        .get(0);
+    assert_eq!(owner, Some(f.partner));
+    tx.execute(
+        "UPDATE stock_picking SET owner_id = NULL WHERE id = $1",
+        &[&picking],
+    )
+    .await
+    .unwrap();
+    let mv = create_move(
+        &mut tx,
+        f.company,
+        move_vals(&f, f.company).set_cell("restrict_partner_id", Cell::Id(f.partner)),
+    )
+    .await
+    .unwrap();
+    let error = delete(&mut tx).await.unwrap_err();
+    assert_eq!(error.sqlstate(), Some("23001"), "{error:?}");
+    assert!(
+        error
+            .message()
+            .starts_with(&blocked("stock.move", "Stock Move")),
+        "{}",
+        error.message()
+    );
+    tx.execute(
+        "UPDATE stock_move SET restrict_partner_id = NULL WHERE id = $1",
+        &[&mv],
+    )
+    .await
+    .unwrap();
+    assert_eq!(delete(&mut tx).await.unwrap(), 1);
     tx.rollback().await.unwrap();
     drop(tx);
     f.h.cleanup().await.unwrap();

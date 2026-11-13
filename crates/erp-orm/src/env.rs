@@ -775,6 +775,25 @@ impl Env {
         }
     }
 
+    /// The original consumer of an internally elevated display-name read.
+    ///
+    /// Without an indirect label consumer this is the environment itself. Addons reading
+    /// sensitive label inputs must check and read them through this environment; it grants
+    /// no additional authority. Direct caller elevation retains its ordinary semantics.
+    ///
+    /// ```no_run
+    /// # async fn example(env: &erp_orm::Env, tx: &mut erp_orm::Transaction) -> erp_fields::Result<()> {
+    /// let inputs = env.label_reader().records("sensitive.input")?;
+    /// if inputs.has_access(tx, erp_orm::Operation::Read).await? {
+    ///     // Search/read permitted inputs through `inputs`, preserving this reader.
+    /// }
+    /// # Ok(()) }
+    /// ```
+    #[must_use]
+    pub fn label_reader(&self) -> &Self {
+        self.company_bound_reader()
+    }
+
     /// The original consumer for company-bound related reads and their cache identity.
     /// Ordinary environments are their own reader; the snapshot never contains another one.
     pub(crate) fn company_bound_reader(&self) -> &Env {

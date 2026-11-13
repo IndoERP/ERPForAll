@@ -72,8 +72,8 @@ async fn policy_changes_leave_audit_rows() {
     let created = call(
         &h,
         "/json/2/ir.approval.policy/create",
-        &json!({"vals_list": [{"name": "deny deletes", "principal_kind": "user",
-            "effect": "destructive", "outcome": "deny"}]})
+        &json!({"vals_list": [{"name": "allow deletes", "principal_kind": "user",
+            "effect": "destructive", "outcome": "allow"}]})
         .to_string(),
         alice(),
     )
@@ -81,7 +81,7 @@ async fn policy_changes_leave_audit_rows() {
     ok(&created);
     let id: i64 = sql_one(
         &h,
-        "SELECT id::text FROM ir_approval_policy WHERE name = 'deny deletes'",
+        "SELECT id::text FROM ir_approval_policy WHERE name = 'allow deletes'",
     )
     .await
     .parse()
@@ -156,7 +156,7 @@ async fn policy_changes_leave_audit_rows() {
             &format!("SELECT name || '/' || active::text FROM ir_approval_policy WHERE id = {id}")
         )
         .await,
-        "deny deletes/false"
+        "allow deletes/false"
     );
     h.cleanup().await.unwrap();
 }
@@ -175,14 +175,16 @@ async fn a_method_revision_of_an_earlier_effect_fails_closed() {
         &h,
         "/json/2/ir.approval.policy/create",
         &json!({"vals_list": [{"name": "no widened", "principal_kind": "user", "effect": "read",
-            "model": "test_rpc.effects", "method": "widened", "outcome": "deny"}]})
+            "model": "test_rpc.effects", "method": "widened", "outcome": "deny",
+            "active": false}]})
         .to_string(),
         alice(),
     )
     .await);
+    // the model refuses an active user Deny revision, so SQL activates it
     let id: i64 = sql_one(
         &h,
-        "SELECT id::text FROM ir_approval_policy WHERE name = 'no widened'",
+        "UPDATE ir_approval_policy SET active = true WHERE name = 'no widened' RETURNING id::text",
     )
     .await
     .parse()

@@ -857,25 +857,17 @@ fn assert_crossover(error: &Error, field: &str, label: &str, value: &str) {
     );
 }
 
-/// Company consistency of the quant and serial position links (68,77`
-/// declare it on product, lot and owner; the location is consistent there because the quant company is the
-/// location's): a row of "Main Company" is refused with a product, lot, location, owner or assigned user of
-/// "Other Company", and accepted with shared ones and a lot of its own company. No spec case covers the quant
-/// links yet, so the test carries no tag.
+/// Company consistency of the serial position links (68,77`
+/// declare it on the quant's product, lot and owner): a row of "Main Company" is refused with a product,
+/// lot or location of "Other Company", and accepted with shared ones and a lot of its own company. Quants
+/// are no longer created through the ORM: the quant engine checks the same links
+/// (`quant_engine.rs`, `key_parts_of_another_company_are_refused`). No spec case covers the links yet,
+/// so the test carries no tag.
 #[tokio::test]
-async fn quant_and_serial_position_links_must_share_the_row_company() {
+async fn serial_position_links_must_share_the_row_company() {
     let f = fixture().await;
     let mut tx = f.h.begin().await.unwrap();
     let own_lot = lot(&mut tx, f.product, Some(f.company), "LOT-A").await;
-    let quant_vals = || {
-        RawVals::new()
-            .set_cell("company_id", Cell::Id(f.company))
-            .set_cell("product_id", Cell::Id(f.product))
-            .set_cell("location_id", Cell::Id(f.location))
-            .set_cell("lot_id", Cell::Id(own_lot))
-            .set_cell("owner_id", Cell::Id(f.partner))
-            .set_cell("quantity", Cell::Decimal(Decimal::ONE))
-    };
     let position_vals = || {
         RawVals::new()
             .set_cell("company_id", Cell::Id(f.company))
@@ -885,10 +877,12 @@ async fn quant_and_serial_position_links_must_share_the_row_company() {
             .set_cell("quantity", Cell::Decimal(Decimal::ONE))
     };
     for (field, label, target, value) in foreign_targets(&f, &mut tx).await {
+        if !matches!(field, "product_id" | "lot_id" | "location_id") {
+            continue;
+        }
         // the lot belongs to the row's product (composite key, S1): a foreign
-        // product comes with a lot of its own in the product's company (a shared lot of a company
-        // product is refused at its create), or the database refuses the row before the company
-        // check runs
+        // product comes with a lot of its own in the product's company, or the database refuses the
+        // row before the company check runs
         let lot_id = if field == "product_id" {
             lot(&mut tx, target, Some(f.other_company), "LOT-F").await
         } else {
@@ -898,11 +892,11 @@ async fn quant_and_serial_position_links_must_share_the_row_company() {
             .savepoint(async |tx| {
                 tx.env()
                     .with_company(f.company)?
-                    .records("stock.quant")?
+                    .records("stock.serial.position")?
                     .create(
                         tx,
                         vec![
-                            quant_vals()
+                            position_vals()
                                 .set_cell("lot_id", Cell::Id(lot_id))
                                 .set_cell(field, Cell::Id(target)),
                         ],
@@ -911,37 +905,12 @@ async fn quant_and_serial_position_links_must_share_the_row_company() {
             })
             .await
             .unwrap_err();
+        // the serial position's lot field has no label of its own
+        let label = if field == "lot_id" { "Lot" } else { label };
         assert_crossover(&error, field, label, value);
-        if matches!(field, "product_id" | "lot_id" | "location_id") {
-            let error = tx
-                .savepoint(async |tx| {
-                    tx.env()
-                        .with_company(f.company)?
-                        .records("stock.serial.position")?
-                        .create(
-                            tx,
-                            vec![
-                                position_vals()
-                                    .set_cell("lot_id", Cell::Id(lot_id))
-                                    .set_cell(field, Cell::Id(target)),
-                            ],
-                        )
-                        .await
-                })
-                .await
-                .unwrap_err();
-            // the serial position's lot field has no label of its own
-            let label = if field == "lot_id" { "Lot" } else { label };
-            assert_crossover(&error, field, label, value);
-        }
     }
-    // shared product, location and owner, and a lot of the row's company: accepted
+    // shared product and location, and a lot of the row's company: accepted
     let env = tx.env().with_company(f.company).unwrap();
-    env.records("stock.quant")
-        .unwrap()
-        .create(&mut tx, vec![quant_vals()])
-        .await
-        .unwrap();
     env.records("stock.serial.position")
         .unwrap()
         .create(&mut tx, vec![position_vals()])
@@ -1360,6 +1329,24 @@ async fn lot_product_key_is_synchronized_and_stable() {
     }
     tx.init_models(&[]).await.unwrap();
     assert_eq!(lot_product_constraints(&mut tx).await, restored);
+    tx.rollback().await.unwrap();
+    drop(tx);
+    f.h.cleanup().await.unwrap();
+}
+
+/// The tracking change check counts rows by product (cycle 12 N8): the
+/// declarations give each of the two tables an index led by `product_id`.
+#[tokio::test]
+async fn position_and_quant_have_an_index_led_by_the_product() {
+    let f = fixture().await;
+    let mut tx = f.h.begin().await.unwrap();
+    for table in ["stock_serial_position", "stock_quant"] {
+        assert_eq!(
+            index_definition(&mut tx, &format!("{table}__product_id_index")).await,
+            "btree (product_id)",
+            "{table}"
+        );
+    }
     tx.rollback().await.unwrap();
     drop(tx);
     f.h.cleanup().await.unwrap();

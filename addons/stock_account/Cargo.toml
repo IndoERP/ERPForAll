@@ -11,6 +11,20 @@ publish.workspace = true
 [dependencies]
 erp-sdk = { workspace = true }
 erp-addon-stock = { workspace = true }
+erp-addon-account = { workspace = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+erp-testkit = { workspace = true }
+erp-addon-base = { workspace = true }
+erp-addon-web = { workspace = true }
+erp-addon-uom = { workspace = true }
+erp-addon-product = { workspace = true }
+erp-addon-barcodes = { workspace = true }
+erp-addon-barcodes_gs1_nomenclature = { workspace = true }
+erp-addon-account = { workspace = true }
+erp-addon-analytic = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
+toml = { workspace = true }

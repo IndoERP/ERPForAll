@@ -19,6 +19,11 @@ erp-addon-product-mail = { workspace = true }
 erp-addon-web.workspace = true
 erp-addon-acceptance-notes.workspace = true
 erp-addon-theme-office-blue.workspace = true
+# accounting and inventory: linked, so a served node offers them
+erp-addon-analytic.workspace = true
+erp-addon-account.workspace = true
+erp-addon-barcodes_gs1_nomenclature.workspace = true
+erp-addon-stock.workspace = true
 erp-server.workspace = true
 erp-views.workspace = true
 erp-sdk.workspace = true
@@ -50,13 +55,9 @@ sha2.workspace = true
 rustix = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
+erp-addon-stock_account = { workspace = true }
 erp-addon-web = { workspace = true, features = ["test-support"] }
 erp-addon-uom = { workspace = true }
-erp-addon-stock = { workspace = true }
-erp-addon-account = { workspace = true }
-erp-addon-analytic = { workspace = true }
-erp-addon-barcodes = { workspace = true }
-erp-addon-barcodes_gs1_nomenclature = { workspace = true }
 erp-addon-sample_library_wasm = { path = "../../examples/wasm/sample_library_wasm", default-features = false }
 erp-testkit = { workspace = true }
 # a minimal component for the package tests

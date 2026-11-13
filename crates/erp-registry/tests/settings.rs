@@ -614,3 +614,208 @@ fn settings_registry_publishes_items_with_unique_keys_and_checked_references() {
             .is_ok()
     );
 }
+
+#[test]
+fn nested_job_keys_preserve_policy_identity_grammar() {
+    let decl = SettingDecl::integer(
+        "base.jobs.chunk.default.lock_ms",
+        "Lock (ms)",
+        ScopeKind::Global,
+        5000,
+        (100, 60000),
+    )
+    .unwrap();
+    assert_eq!(decl.key(), "base.jobs.chunk.default.lock_ms");
+    let error = decl
+        .access(&["base.group.system"], &["base.group_system"])
+        .unwrap_err();
+    assert_eq!(error.kind(), erp_fields::ErrorKind::Validation);
+    assert_eq!(error.message(), "invalid declared setting or value");
+    for key in ["base..jobs", "base.jobs.", "base.jobs.Bad", "base.jobs.a\n"] {
+        let error = SettingDecl::integer(key, "Job", ScopeKind::Global, 1, (1, 2)).unwrap_err();
+        assert_eq!(error.kind(), erp_fields::ErrorKind::Validation);
+        assert_eq!(error.message(), "invalid declared setting or value");
+    }
+}
+
+#[test]
+fn groups_validate_complete_defaults_and_proposed_values() {
+    use erp_registry::settings::{SettingGroupDecl, SettingsRegistry};
+    use std::collections::{BTreeMap, BTreeSet};
+    fn ordered(values: &BTreeMap<String, Value>) -> erp_fields::Result<()> {
+        match (values.get("base.jobs.low"), values.get("base.jobs.high")) {
+            (Some(Value::Int(low)), Some(Value::Int(high))) if low <= high => Ok(()),
+            _ => Err(erp_fields::Error::validation(
+                "base.jobs.low must not exceed base.jobs.high.",
+            )),
+        }
+    }
+    let make = |low, high| {
+        SettingsRegistry::build(
+            vec![(
+                "base".into(),
+                vec![
+                    SettingDecl::integer("base.jobs.low", "Low", ScopeKind::Global, low, (1, 100))
+                        .unwrap()
+                        .access(&["base.group_system"], &["base.group_system"])
+                        .unwrap(),
+                    SettingDecl::integer(
+                        "base.jobs.high",
+                        "High",
+                        ScopeKind::Global,
+                        high,
+                        (1, 100),
+                    )
+                    .unwrap()
+                    .access(&["base.group_system"], &["base.group_system"])
+                    .unwrap(),
+                ],
+            )],
+            &BTreeSet::from(["base".into()]),
+            |_| true,
+        )
+        .unwrap()
+    };
+    let group = || {
+        SettingGroupDecl::new("base.jobs", &["base.jobs.low", "base.jobs.high"], ordered).unwrap()
+    };
+    let installed = BTreeSet::from(["base".into()]);
+    let invalid = make(20, 10)
+        .with_groups(vec![("base".into(), vec![group()])], &installed)
+        .unwrap_err();
+    assert_eq!(invalid.kind(), erp_fields::ErrorKind::Validation);
+    assert_eq!(
+        invalid.message(),
+        "base.jobs.low must not exceed base.jobs.high."
+    );
+    let registry = make(10, 20)
+        .with_groups(vec![("base".into(), vec![group()])], &installed)
+        .unwrap();
+    assert_eq!(
+        registry.expanded_keys(&["base.jobs.low".into()]).unwrap(),
+        vec!["base.jobs.high", "base.jobs.low"]
+    );
+    let values = BTreeMap::from([
+        ("base.jobs.low".into(), Value::Int(30)),
+        ("base.jobs.high".into(), Value::Int(20)),
+    ]);
+    let error = registry.validate_groups(&values).unwrap_err();
+    assert_eq!(error.kind(), erp_fields::ErrorKind::Validation);
+    assert_eq!(
+        error.message(),
+        "base.jobs.low must not exceed base.jobs.high."
+    );
+    assert!(
+        registry
+            .validate_groups(&BTreeMap::from([
+                ("base.jobs.low".into(), Value::Int(20)),
+                ("base.jobs.high".into(), Value::Int(20))
+            ]))
+            .is_ok()
+    );
+    for members in [
+        vec![],
+        vec!["base.jobs.low", "base.jobs.low"],
+        vec!["other.jobs.low"],
+    ] {
+        let error = SettingGroupDecl::new("base.jobs", &members, ordered).unwrap_err();
+        assert_eq!(error.kind(), erp_fields::ErrorKind::Validation);
+        assert_eq!(error.message(), "invalid declared setting group");
+    }
+}
+
+#[test]
+fn invalid_group_publication_never_adds_an_unvalidated_group() {
+    use erp_registry::settings::{SettingGroupDecl, SettingsRegistry};
+    use std::collections::BTreeSet;
+    let installed = BTreeSet::from(["base".into()]);
+    let group =
+        || SettingGroupDecl::new("base.jobs", &["base.low", "base.high"], |_| Ok(())).unwrap();
+    let registry = |scope| {
+        SettingsRegistry::build(
+            vec![(
+                "base".into(),
+                vec![
+                    SettingDecl::integer("base.low", "Low", ScopeKind::Global, 1, (1, 10))
+                        .unwrap()
+                        .access(&["base.group_system"], &["base.group_system"])
+                        .unwrap(),
+                    SettingDecl::integer("base.high", "High", scope, 2, (1, 10))
+                        .unwrap()
+                        .access(&["base.group_system"], &["base.group_system"])
+                        .unwrap(),
+                ],
+            )],
+            &installed,
+            |_| true,
+        )
+        .unwrap()
+    };
+    for result in [
+        registry(ScopeKind::Company).with_groups(vec![("base".into(), vec![group()])], &installed),
+        registry(ScopeKind::Global).with_groups(vec![("other".into(), vec![group()])], &installed),
+        registry(ScopeKind::Global)
+            .with_groups(vec![("base".into(), vec![group(), group()])], &installed),
+        registry(ScopeKind::Global).with_groups(
+            vec![(
+                "base".into(),
+                vec![SettingGroupDecl::new("base.jobs", &["base.missing"], |_| Ok(())).unwrap()],
+            )],
+            &installed,
+        ),
+    ] {
+        let error = result.unwrap_err();
+        assert_eq!(error.kind(), erp_fields::ErrorKind::Validation);
+        assert_eq!(error.message(), "invalid declared setting group");
+    }
+}
+
+#[test]
+fn overlapping_groups_require_complete_bounded_snapshots() {
+    use erp_registry::settings::{MAX_GROUP_MEMBERS, SettingGroupDecl, SettingsRegistry};
+    use std::collections::{BTreeMap, BTreeSet};
+    let installed = BTreeSet::from(["base".to_owned()]);
+    let keys: Vec<_> = (0..=MAX_GROUP_MEMBERS)
+        .map(|i| format!("base.value{i}"))
+        .collect();
+    let declarations = keys
+        .iter()
+        .map(|key| {
+            SettingDecl::integer(key, "Value", ScopeKind::Global, 1, (1, 10))
+                .unwrap()
+                .access(&["base.group_system"], &["base.group_system"])
+                .unwrap()
+        })
+        .collect();
+    let registry =
+        SettingsRegistry::build(vec![("base".into(), declarations)], &installed, |_| true).unwrap();
+    let a = SettingGroupDecl::new("base.first", &[&keys[0], &keys[1]], |_| Ok(())).unwrap();
+    let b = SettingGroupDecl::new("base.second", &[&keys[1], &keys[2]], |_| Ok(())).unwrap();
+    let registry = registry
+        .with_groups(vec![("base".into(), vec![a, b])], &installed)
+        .unwrap();
+    assert_eq!(
+        registry.expanded_keys(&[keys[0].clone()]).unwrap(),
+        keys[..3].to_vec()
+    );
+    let error = registry
+        .validate_groups(&BTreeMap::from([(keys[0].clone(), Value::Int(1))]))
+        .unwrap_err();
+    assert_eq!(error.kind(), erp_fields::ErrorKind::Validation);
+    assert_eq!(error.message(), "invalid declared setting group");
+    let members: Vec<_> = keys[..MAX_GROUP_MEMBERS]
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let wide = SettingGroupDecl::new("base.wide", &members, |_| Ok(())).unwrap();
+    let last = SettingGroupDecl::new("base.last", &[&keys[0], &keys[MAX_GROUP_MEMBERS]], |_| {
+        Ok(())
+    })
+    .unwrap();
+    let registry = registry
+        .with_groups(vec![("base".into(), vec![wide, last])], &installed)
+        .unwrap();
+    let error = registry.expanded_keys(&[keys[0].clone()]).unwrap_err();
+    assert_eq!(error.kind(), erp_fields::ErrorKind::Validation);
+    assert_eq!(error.message(), "invalid declared setting group");
+}

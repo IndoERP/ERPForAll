@@ -45,6 +45,7 @@ pub mod ir_model_fields_groups;
 pub mod ir_sequence;
 pub mod ir_ui_menu;
 pub mod ir_ui_view;
+mod jobs_settings;
 pub mod migrations;
 pub mod money;
 mod partner_address;

@@ -438,8 +438,12 @@ impl<'a> Rewriter<'a> {
             return self.search_display_name(operator, value).map(Some);
         }
         if matches!(operator, Operator::ChildOf | Operator::ParentOf) {
+            // resolved before optimization (`crate::hierarchy`, comodel rules in
+            // `crate::prepare`): one that arrives here would reach SQL unprepared
             return Err(Error::programming(format!(
-                "the hierarchy condition {condition:?} reached FULL optimization unresolved"
+                "the hierarchy condition {condition:?} on {}.{} reached FULL optimization \
+                 unresolved",
+                self.spec.name, field.name
             )));
         }
         if field.ty.is_x2many()

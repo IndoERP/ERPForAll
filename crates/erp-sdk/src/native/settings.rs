@@ -129,3 +129,39 @@ macro_rules! settings_panel_items {
             $crate::settings::PanelContribution::new(&crate::ADDON, $factory, $resolver);
     };
 }
+
+/// Pure group factories use the same installed native-addon identity as scalar declarations.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct GroupContribution {
+    /// Actual installed addon descriptor.
+    pub addon: &'static crate::AddonDescriptor,
+    /// Bounded native group declarations.
+    pub declarations: fn() -> crate::Result<Vec<SettingGroupDecl>>,
+}
+impl GroupContribution {
+    /// Bind a pure group factory to its native addon.
+    pub const fn new(
+        addon: &'static crate::AddonDescriptor,
+        declarations: fn() -> crate::Result<Vec<SettingGroupDecl>>,
+    ) -> Self {
+        Self {
+            addon,
+            declarations,
+        }
+    }
+}
+/// Only entries from installed, identity-checked addons are used.
+#[linkme::distributed_slice]
+pub static GROUP_CONTRIBUTIONS: [GroupContribution];
+/// Register this addon's pure settings groups using its generated descriptor.
+#[macro_export]
+#[allow(clippy::crate_in_macro_def, reason = "the invoking addon owns ADDON")]
+macro_rules! setting_groups {
+    ($factory:path) => {
+        #[$crate::__private::linkme::distributed_slice($crate::settings::GROUP_CONTRIBUTIONS)]
+        #[linkme(crate = $crate::__private::linkme)]
+        static SETTINGS_GROUP_CONTRIBUTION: $crate::settings::GroupContribution =
+            $crate::settings::GroupContribution::new(&crate::ADDON, $factory);
+    };
+}

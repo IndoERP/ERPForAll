@@ -123,6 +123,8 @@ fn keys(description: &SettingsDescription) -> Vec<&str> {
             SettingsItem::Info { key, .. } | SettingsItem::Link { key, .. } => key.as_str(),
             other => panic!("unknown item {other:?}"),
         })
+        // This suite inventories the General overview and its private probes; jobs policy has its own suite.
+        .filter(|key| *key != "base.jobs_configuration_status")
         .collect()
 }
 /// `(label, value, detail, block, sequence)` of an information row.

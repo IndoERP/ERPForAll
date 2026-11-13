@@ -12,8 +12,14 @@
 //! Each completed sub-domain is optimized to FULL for its comodel and completed recursively. A
 //! sub-domain that becomes `FALSE` turns the condition into a constant (`any` → `FALSE`, `not any`
 //! → `TRUE`), so a known-empty query costs no sub-select.
+//!
+//! A comodel's rule can hold a hierarchy condition (`company_id parent_of company_ids`, the
+//! product rules). Resolving one needs queries and completion runs none, so the rule comes from
+//! [`NestedRules`], resolved beforehand the way a search resolves its own rule; a rule that is not
+//! there stops completion, and the caller resolves it and completes again.
 
 use std::any::Any;
+use std::cell::Cell;
 use std::sync::Arc;
 
 use erp_domain::{Domain, ExternalValue, Opaque, OpaqueKind, Operator, OptimizationLevel, Value};
@@ -67,6 +73,58 @@ impl RecordsQuery {
     }
 }
 
+/// Which inlined rule a [`NestedRules`] entry is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NestedRule {
+    /// The read rule of a comodel, inlined into the sub-domain of an `any` / `not any`.
+    Read(ModelId),
+    /// The predicate an `access` condition inlines: the model's rules of the
+    /// operation, its own `access` conditions resolved.
+    Access(ModelId, Operation),
+}
+
+/// The inlined rules whose hierarchy conditions are resolved before completion (see the module
+/// documentation), and the first one completion found missing.
+#[derive(Default)]
+pub(crate) struct NestedRules {
+    resolved: Vec<(NestedRule, Domain)>,
+    missing: Cell<Option<NestedRule>>,
+}
+
+impl NestedRules {
+    /// The rule completion stopped on, cleared.
+    pub(crate) fn take_missing(&self) -> Option<NestedRule> {
+        self.missing.take()
+    }
+
+    /// Add the resolved form of `key`; `false` when it was already there (completion cannot
+    /// have stopped on it then).
+    pub(crate) fn insert(&mut self, key: NestedRule, rule: Domain) -> bool {
+        if self.resolved.iter().any(|(k, _)| *k == key) {
+            return false;
+        }
+        self.resolved.push((key, rule));
+        true
+    }
+
+    /// `rule` (the inlined rule `key`), or its resolved form when it holds a hierarchy
+    /// condition; refused (and recorded as missing) when that form is not here yet.
+    pub(crate) fn rule(&self, key: NestedRule, model: &ModelSpec, rule: Domain) -> Result<Domain> {
+        if !crate::hierarchy::has_hierarchy(&rule) {
+            return Ok(rule);
+        }
+        if let Some((_, resolved)) = self.resolved.iter().find(|(k, _)| *k == key) {
+            return Ok(resolved.clone());
+        }
+        self.missing.set(Some(key));
+        Err(Error::programming(format!(
+            "the rule of '{}' holds a hierarchy condition that was not resolved before it was \
+             inlined into another condition",
+            model.name
+        )))
+    }
+}
+
 /// What completing sub-domains needs.
 pub(crate) struct PrepareCtx<'a> {
     pub(crate) tx: &'a Transaction,
@@ -75,6 +133,8 @@ pub(crate) struct PrepareCtx<'a> {
     pub(crate) now: PrimitiveDateTime,
     /// The `access` operator's lookup.
     pub(crate) access: &'a dyn AccessLookup,
+    /// Comodel rules with their hierarchy conditions resolved.
+    pub(crate) rules: &'a NestedRules,
 }
 
 impl PrepareCtx<'_> {
@@ -114,8 +174,12 @@ impl PrepareCtx<'_> {
             tz: &tz,
             now: self.now,
             access: self.access,
+            rules: self.rules,
         };
         let predicate = crate::search_method::expand_policy(self.tx, &env, comodel, &predicate)?;
+        let predicate = self
+            .rules
+            .rule(NestedRule::Read(comodel.id), comodel, predicate)?;
         let optimized = fixed.full(comodel, &predicate)?;
         prepare(&fixed, comodel, &optimized)
     }
