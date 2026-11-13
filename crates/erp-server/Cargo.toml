@@ -36,6 +36,7 @@ sysinfo.workspace = true
 flate2 = "1.1"
 brotli = "=8.0.4"
 tokio-postgres.workspace = true
+tokio-util.workspace = true
 
 [lints]
 workspace = true
@@ -43,4 +44,4 @@ workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 rustix = { workspace = true, features = ["process"] }
-tokio = { workspace = true, features = ["io-util", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["io-util", "rt-multi-thread", "test-util"] }

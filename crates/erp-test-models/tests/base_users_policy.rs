@@ -9,10 +9,13 @@
     reason = "tests"
 )]
 
+mod company_rows_support;
 mod users_support;
 
 use std::sync::Arc;
 
+use company_rows_support::UserKind::Internal;
+use company_rows_support::fixture_user;
 use erp_orm::{Orm, PolicyProvider, UserId};
 use erp_sdk::{Error, ErrorKind, Transaction, Value};
 use erp_security::resolver::Resolver;
@@ -85,25 +88,6 @@ async fn access(
     .await;
 }
 
-async fn new_user(client: &Client, login: &str, groups: &[i64]) -> i64 {
-    let uid = one(
-        client,
-        "INSERT INTO res_users (name, login, active, share) VALUES ($1, $1, true, false) \
-         RETURNING id::int8",
-        &[&login],
-    )
-    .await;
-    for g in groups {
-        exec(
-            client,
-            "INSERT INTO res_groups_users_rel (uid, gid) VALUES ($1, $2)",
-            &[&uid, g],
-        )
-        .await;
-    }
-    uid
-}
-
 fn pool(h: &Harness, size: usize) -> erp_testkit::deadpool_postgres::Pool {
     erp_orm::pool::create_pool(h.db().config(), size).unwrap()
 }
@@ -152,6 +136,9 @@ async fn spec_sec_033_users_write_only_user_writeable_fields_on_the_compiled_pol
     let system = group(&client, "Administrator", "base.group_system").await;
     let users_model = model(&client, "res.users", "User").await;
     let groups_model = model(&client, "res.groups", "Access Groups").await;
+    // installation emits the generated company restriction of the two models; these databases
+    // have no installation
+    company_rows_support::insert_generated(&client, h.registry(), &["res.users"]).await;
     access(
         &client,
         "internal users read users",
@@ -188,9 +175,10 @@ async fn spec_sec_033_users_write_only_user_writeable_fields_on_the_compiled_pol
         None,
     )
     .await;
-    let admin = new_user(&client, "admin", &[internal, system]).await;
-    let me = new_user(&client, "me", &[internal]).await;
-    let boss = new_user(&client, "boss", &[internal, system]).await;
+    let company = company_rows_support::fixture_company(&client).await;
+    let admin = fixture_user(&client, "admin", &[internal, system], Internal, company).await;
+    let me = fixture_user(&client, "me", &[internal], Internal, company).await;
+    let boss = fixture_user(&client, "boss", &[internal, system], Internal, company).await;
     let orm = production_orm(&h).await;
 
     // `lang` must name an installed language: this database installed none
@@ -236,7 +224,6 @@ async fn spec_sec_033_users_write_only_user_writeable_fields_on_the_compiled_pol
         ("login", s("changed")),
         ("active", Value::Bool(true)),
         ("share", Value::Bool(true)),
-        ("company_id", int(1)),
         ("company_ids", set_cmd(&[])),
     ] {
         let err: Error = own
@@ -314,5 +301,167 @@ async fn spec_sec_033_users_write_only_user_writeable_fields_on_the_compiled_pol
         .get(0);
     assert_eq!(login, "admin2");
     drop(client);
+    h.cleanup().await.unwrap();
+}
+
+/// An internal user changes their own default company inside their allowed companies, through
+/// the compiled policy: `company_id` is `user_writeable`, `company_ids` is not, and a company the
+/// user is not allowed in is refused by the membership check, not by the field mask.
+#[tokio::test]
+async fn spec_company_031_users_change_their_default_company_within_their_companies() {
+    let h = harness().await;
+    let client = connect(&h).await;
+    let internal = group(&client, "Internal User", "base.group_user").await;
+    // the field mask of res.users looks the group up by its external id
+    group(&client, "Administrator", "base.group_system").await;
+    let users_model = model(&client, "res.users", "User").await;
+    company_rows_support::insert_generated(&client, h.registry(), &["res.users"]).await;
+    access(
+        &client,
+        "internal users read users",
+        users_model,
+        internal,
+        "r",
+        None,
+    )
+    .await;
+    access(
+        &client,
+        "internal users write themselves",
+        users_model,
+        internal,
+        "u",
+        Some("[('id', '=', user.id)]"),
+    )
+    .await;
+    let currency = erp_testkit::fixtures::seed_currency(&client).await.unwrap();
+    let mut companies = Vec::new();
+    for name in ["Alpha", "Beta", "Gamma"] {
+        companies.push(
+            one(
+                &client,
+                "INSERT INTO res_company (name, currency_id, active) VALUES ($1, $2, true) \
+                 RETURNING id::int8",
+                &[&name, &currency],
+            )
+            .await,
+        );
+    }
+    let [a, b, c] = [companies[0], companies[1], companies[2]];
+    // default company A, allowed in A and B
+    let me = fixture_user(&client, "me", &[internal], Internal, a).await;
+    exec(
+        &client,
+        "INSERT INTO res_company_users_rel (user_id, cid) VALUES ($1, $2)",
+        &[&me, &b],
+    )
+    .await;
+    let orm = production_orm(&h).await;
+
+    let mut tx = begin(&orm, me).await;
+    let own = tx.env().records("res.users").unwrap().browse([me]).unwrap();
+    // inside the allowed companies
+    own.write_values(&mut tx, &map(&[("company_id", int(b))]))
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    drop(tx);
+    let stored: i64 = one(
+        &client,
+        "SELECT company_id::int8 FROM res_users WHERE id = $1",
+        &[&me],
+    )
+    .await;
+    assert_eq!(stored, b);
+
+    // the allowed companies stay with the administrators
+    let mut tx = begin(&orm, me).await;
+    let own = tx.env().records("res.users").unwrap().browse([me]).unwrap();
+    let err: Error = own
+        .write_values(&mut tx, &map(&[("company_ids", set_cmd(&[a, b, c]))]))
+        .await
+        .unwrap_err();
+    assert_error(&err, ErrorKind::Access, &denied("company_ids"));
+    drop(tx);
+
+    // a company outside them
+    let mut tx = begin(&orm, me).await;
+    let own = tx.env().records("res.users").unwrap().browse([me]).unwrap();
+    let err: Error = own
+        .write_values(&mut tx, &map(&[("company_id", int(c))]))
+        .await
+        .unwrap_err();
+    assert_error(
+        &err,
+        ErrorKind::Validation,
+        "The default company of the user me is not one of the user's allowed companies \
+         (Alpha, Beta).",
+    );
+    // the company the user may not read is not named
+    assert!(!err.to_string().contains("Gamma"), "{err}");
+    drop(tx);
+    let stored: i64 = one(
+        &client,
+        "SELECT company_id::int8 FROM res_users WHERE id = $1",
+        &[&me],
+    )
+    .await;
+    assert_eq!(stored, b);
+    drop(client);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn audit_group_selection_refreshes_database_membership() {
+    let h = harness().await;
+    let client = connect(&h).await;
+    let internal = group(&client, "Internal", "base.group_user").await;
+    let selected = group(&client, "Audit selected", "test.audit_selected").await;
+    let parent = group(&client, "Audit parent", "test.audit_parent").await;
+    exec(
+        &client,
+        "INSERT INTO res_groups_implied_rel (gid, hid) VALUES ($1, $2)",
+        &[&parent, &selected],
+    )
+    .await;
+    let company = company_rows_support::fixture_company(&client).await;
+    let uid = fixture_user(
+        &client,
+        "audit-selected",
+        &[internal, parent],
+        Internal,
+        company,
+    )
+    .await;
+    let orm = production_orm(&h).await;
+    let ids = [erp_orm::QualifiedXmlId::parse("test.audit_selected").unwrap()];
+    let mut tx = begin(&orm, uid).await;
+    let env = tx.env();
+    assert!(
+        tx.group_membership(&env)
+            .await
+            .unwrap()
+            .has_any_effective_xmlid(&ids)
+            .unwrap()
+    );
+    tx.rollback().await.unwrap();
+    exec(
+        &client,
+        "DELETE FROM res_groups_users_rel WHERE uid=$1 AND gid=$2",
+        &[&uid, &parent],
+    )
+    .await;
+    let mut tx = begin(&orm, uid).await;
+    let env = tx.env();
+    assert!(
+        !tx.group_membership(&env)
+            .await
+            .unwrap()
+            .has_any_effective_xmlid(&ids)
+            .unwrap()
+    );
+    tx.rollback().await.unwrap();
+    drop(client);
+    drop(orm);
     h.cleanup().await.unwrap();
 }

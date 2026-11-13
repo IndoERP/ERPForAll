@@ -57,7 +57,7 @@ const descriptionOf = (nodes: unknown[]) => ({
     } }]);
   });
   afterEach(() => {
-    app?.dispose(); app = undefined;
+    app?.dispose(); app = undefined; delete document.documentElement.dataset["theme"];
     if (modalDescriptor) Object.defineProperty(HTMLDialogElement.prototype, "showModal", modalDescriptor);
     if (closeDescriptor) Object.defineProperty(HTMLDialogElement.prototype, "close", closeDescriptor);
     vi.restoreAllMocks(); vi.unstubAllGlobals(); document.body.replaceChildren(); history.replaceState(null, "", "/");
@@ -69,7 +69,7 @@ const descriptionOf = (nodes: unknown[]) => ({
   };
   type Respond = (path: string, body: Record<string, unknown>) => Promise<Response | undefined> | Response | undefined;
   /** Mount the client without waiting for its first page; a fixture may hold any response. */
-  const launch = (respond: Respond) => {
+  const launch = (respond: Respond, resolveTheme = false) => {
     history.replaceState(null, "", "/erp/action-20?id=5&view_type=form");
     const calls: { path: string; body: Record<string, unknown> }[] = [];
     const book = { state: "available" };
@@ -78,7 +78,8 @@ const descriptionOf = (nodes: unknown[]) => ({
       calls.push({ path, body });
       const custom = await respond(path, body);
       if (custom) return custom;
-      const value = path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ id: 10, parent_id: null, label: "Books", action_id: 20, children: [], icon: null }] }
+      const value = path.endsWith("get_res_users_settings") ? { homemenu_config: null }
+        : path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, label: "Books", action_id: 20, children: [], icon: null }] }
         : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, { wire_major: 1, id: 20, name: "Books", model: "test.book", target: "current", views: [{ id: 1, type: "form" }], domain: null, context: null }, descriptionOf(bookForm))
         : path.endsWith("get_views") ? descriptionOf(bookForm)
         : path.endsWith("erp_normalize_action_result") ? { wire_major: 1, result: { kind: "none" } }
@@ -90,7 +91,7 @@ const descriptionOf = (nodes: unknown[]) => ({
     }));
     const root = host();
     app = new HumanApp(root, bootstrap);
-    return { root, calls, started: app.start() };
+    return { root, calls, started: app.start(resolveTheme) };
   };
   const start = async (respond: Respond) => {
     const { root, calls, started } = launch(respond);
@@ -170,6 +171,86 @@ test("confirm saves new wizard before method and closes with one caller reload",
   expect(calls.filter(c => c.path.endsWith("confirm_loan"))).toHaveLength(1);
   await vi.waitFor(() => expect(calls.filter(c => c.path.includes("test.book/web_read")).length).toBe(before + 1));
   expect(location.href).toBe(url);
+});
+
+/// (partial: mounted client with explicit HTTP fixtures; button clicked right after field edit runs after commit)
+test("Confirm loan clicked right after editing a field commits the field and executes the button", async () => {
+  const { calls } = await setup();
+  const input = document.querySelector<HTMLInputElement>(".wizard-dialog input[name='name']")!;
+  input.value = "Updated Borrower";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+  dialogButton("Confirm loan").click();
+  await vi.waitFor(() => expect(document.querySelector(".wizard-dialog")).toBeNull());
+  const method = calls.find(c => c.path.endsWith("confirm_loan"));
+  expect(method).toBeDefined();
+  const save = calls.find(c => c.path.includes("test.wizard/web_save"));
+  expect(save).toBeDefined();
+  expect(save!.body["vals"]).toMatchObject({ name: "Updated Borrower" });
+});
+
+/// (partial: mounted client with explicit HTTP fixtures; second change during in-flight commit is queued)
+test("a second change during an in-flight commit is queued and runs sequentially", async () => {
+  let resolveFirstOnchange!: () => void;
+  const gate = new Promise<void>(resolve => { resolveFirstOnchange = resolve; });
+  let onchangeCount = 0;
+  let ready = false;
+  await setup(undefined, undefined, path => {
+    if (path.includes("test.wizard/onchange") && ready) {
+      onchangeCount++;
+      if (onchangeCount === 1) {
+        return gate.then(() => json({ value: {} }));
+      }
+      return json({ value: {} });
+    }
+    return undefined;
+  });
+  ready = true;
+  const input = document.querySelector<HTMLInputElement>(".wizard-dialog input[name='name']")!;
+  input.value = "First Edit";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+  await vi.waitFor(() => expect(onchangeCount).toBe(1));
+
+  input.value = "Second Edit";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+
+  resolveFirstOnchange();
+  await vi.waitFor(() => expect(onchangeCount).toBe(2));
+  expect(presented).toEqual([]);
+});
+
+/// (partial: mounted client with explicit HTTP fixtures; failed commit restores input focus)
+test("failed field commit restores focus to the editing input", async () => {
+  let ready = false;
+  await setup(undefined, undefined, path => {
+    if (path.includes("test.wizard/onchange") && ready) {
+      return new Response(JSON.stringify({ name: "erp.exceptions.UserError", message: "Invalid value." }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    return undefined;
+  });
+  ready = true;
+  const input = document.querySelector<HTMLInputElement>(".wizard-dialog input[name='name']")!;
+  input.focus();
+  expect(document.activeElement).toBe(input);
+  input.value = "Failing Value";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+  // In real browsers, disabling an active element drops focus to body.
+  document.body.tabIndex = -1;
+  document.body.focus();
+  expect(document.activeElement).not.toBe(input);
+
+  await vi.waitFor(() => expect(presented).toContainEqual(expect.objectContaining({ message: "Invalid value." })));
+  document.querySelector<HTMLButtonElement>("[data-error-close]")?.click();
+  await vi.waitFor(() => expect(document.querySelector(".client-error-dialog")).toBeNull());
+  expect(input.disabled).toBe(false);
+  const currentInput = document.querySelector<HTMLInputElement>(".wizard-dialog input[name='name']")!;
+  await vi.waitFor(() => expect(document.activeElement).toBe(currentInput));
 });
 
 /// (partial: mounted client with explicit HTTP fixtures; installed backend acceptance remains)
@@ -597,13 +678,13 @@ test("equal wizard confirmation captions preserve cancellation separately from a
   dialogButton("Confirm loan").click();
   await vi.waitFor(() => expect(document.querySelectorAll(".choice-dialog .message-dialog-footer button")).toHaveLength(2));
   const choices = [...document.querySelectorAll<HTMLButtonElement>(".choice-dialog .message-dialog-footer button")];
-  expect(choices.map(button => button.textContent)).toEqual(["Same", "Same"]); choices[1]!.click();
+  expect(choices.map(button => button.textContent)).toEqual(["Same", "Same"]); choices[0]!.click();
   await vi.waitFor(() => expect(document.querySelector(".choice-dialog")).toBeNull());
   await vi.waitFor(() => expect(dialogButton("Confirm loan")?.disabled).toBe(false));
   expect(calls.filter(call => call.path.includes("test.wizard/web_save") || call.path.endsWith("/confirm_loan"))).toHaveLength(0);
   dialogButton("Confirm loan").click();
   await vi.waitFor(() => expect(document.querySelectorAll(".choice-dialog .message-dialog-footer button")).toHaveLength(2));
-  document.querySelector<HTMLButtonElement>(".choice-dialog .message-dialog-footer button")!.click();
+  document.querySelector<HTMLButtonElement>(".choice-dialog .message-dialog-footer [data-default-action]")!.click();
   await vi.waitFor(() => expect(calls.filter(call => call.path.endsWith("/confirm_loan"))).toHaveLength(1));
   expect(calls.filter(call => call.path.includes("test.wizard/web_save"))).toHaveLength(1);
 });
@@ -624,8 +705,8 @@ test("title-only wizard controls retain named confirmation defaults without over
     await vi.waitFor(() => expect(document.querySelector(".choice-dialog")).not.toBeNull());
     let dialog = document.querySelector<HTMLDialogElement>(".choice-dialog")!;
     expect(document.getElementById(dialog.getAttribute("aria-labelledby")!)?.textContent).toBe("Run wizard operation");
-    expect(dialog.querySelector(".message-dialog-footer button")?.textContent).toBe("Run wizard operation");
-    expect(document.activeElement).toBe(dialog.querySelector(".message-dialog-footer button"));
+    expect(dialog.querySelector(".message-dialog-footer [data-default-action]")?.textContent).toBe("Run wizard operation");
+    expect(document.activeElement).toBe(dialog.querySelector(".message-dialog-footer [data-default-action]"));
     dialog.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", bubbles: true, cancelable: true}));
     await vi.waitFor(() => expect(dialog.isConnected).toBe(false));
     expect(calls.filter(call => call.path.includes("test.wizard/web_save") || call.path.endsWith("/confirm_loan"))).toHaveLength(0);
@@ -726,6 +807,7 @@ const preferencesFixtures = (path: string, body: Record<string, unknown>): Respo
   if (path.endsWith("res.users/web_read")) return json([{ id: 2, name: "Operator", lang: "en_US" }]);
   if (path.endsWith("res.users/onchange")) return json({ value: {} });
   if (path.endsWith("res.partner/fields_get")) return json(Object.fromEntries((body["allfields"] as string[]).map(name => [name, { selection: name === "lang" ? languageChoices : [] }])));
+  if (path.endsWith("res.users/read")) return json([{ id: 2, color_scheme: "system" }]);
   if (path.endsWith("res.users/web_save")) return json([{ id: 2, name: "Operator", lang: (body["vals"] as Record<string, unknown>)["lang"] ?? "en_US" }]);
   if (path.endsWith("res.users/preference_save")) return json({ type: "ir.actions.act_window_close" });
   return undefined;
@@ -744,7 +826,7 @@ const openPreferences = async () => {
 test("the user menu lists My Preferences above Sign out and opens the dialog on the current user", async () => {
   const { root, calls, entry } = await openPreferences();
   const menu = [...root.querySelector(".user-dropdown")!.children];
-  expect(entry.textContent).toBe("My Preferences");
+  expect(entry.textContent).toBe("My preferences");
   expect(menu.indexOf(entry)).toBeGreaterThan(-1);
   expect(menu.indexOf(entry)).toBeLessThan(menu.findIndex(node => node.tagName === "FORM"));
   expect(root.querySelector(".user-dropdown")!.classList.contains("open")).toBe(false);
@@ -756,7 +838,7 @@ test("the user menu lists My Preferences above Sign out and opens the dialog on 
 });
 
 const held = () => { let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; }); return { gate, release }; };
-const menusOf = () => json({ wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ id: 10, parent_id: null, label: "Books", action_id: 20, children: [], icon: null }] });
+const menusOf = () => json({ wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, label: "Books", action_id: 20, children: [], icon: null }] });
 
 /// (partial: mounted client with explicit HTTP fixtures; chosen before the first page has started loading)
 test("My Preferences chosen while the menus load still opens after the first page starts", async () => {
@@ -892,6 +974,83 @@ test("a method answer that leaves the dialog open does not reload the page", asy
   await vi.waitFor(() => expect(dialogButton("Update Preferences").disabled).toBe(false));
   expect(document.querySelector(".wizard-dialog")).not.toBeNull();
   expect(reload).not.toHaveBeenCalled();
+});
+
+const profileDescription = () => {
+  const field = (name: string, widget = "char") => ({ ...fieldNode(name, widget), field: { model: "res.users", name } });
+  return { ...descriptionOf([
+    { kind: "form", record_mode: "record", children: [1, 7] },
+    { kind: "sheet", children: [2] },
+    { kind: "title", children: [3, 5, 6] },
+    { kind: "heading", level: 1, children: [4] },
+    field("name"), field("email", "email"), field("phone", "phone"),
+    { kind: "footer", children: [8, 9] },
+    { ...buttonNode({ name: "preference_save", label: "Update Preferences" }) },
+    { kind: "cancel_button", label: "Cancel", variant: "secondary", modifiers: modifiers() }
+  ]), model: "res.users", fields: { "res.users": { name: textField("Name"), email: textField("Email"), phone: textField("Phone") } } };
+};
+const profileFixtures = (scheme: unknown) => (path: string, body: Record<string, unknown>): Response | undefined => {
+  if (path.endsWith("res.users/get_views")) return json(profileDescription());
+  if (path.endsWith("res.users/web_read")) return json([{ id: 2, name: "Operator", email: "op@example.com", phone: "+62 21 555 0100" }]);
+  if (path.endsWith("res.users/read")) return json([{ id: 2, color_scheme: scheme }]);
+  if (path.endsWith("erp_describe")) return json({ wire_major: 1, registry_version: "r1", scope: body["scope"], declarations: [] });
+  return preferencesFixtures(path, body);
+};
+
+/// (partial: mounted client; the dialog's title block is drawn as a profile header)
+test("My Preferences draws the user's initial, the heading and an icon on the e-mail and phone rows", async () => {
+  const session = await start(profileFixtures("system"));
+  session.root.querySelector<HTMLButtonElement>(".user-dropdown-preferences")!.click();
+  await vi.waitFor(() => expect(document.querySelector(".wizard-dialog .form-title-profile")).not.toBeNull());
+  const block = document.querySelector<HTMLElement>(".wizard-dialog .form-title-profile")!;
+  expect(block.querySelector(".user-avatar")!.getAttribute("data-letter")).toBe("O");
+  expect(block.querySelector<HTMLInputElement>("h1 input")!.value).toBe("Operator");
+  expect([...block.querySelectorAll(".form-title-row > svg")].map(svg => svg.getAttribute("data-icon"))).toEqual(["mail", "phone"]);
+  expect([...block.querySelectorAll<HTMLInputElement>(".form-title-row input")].map(input => input.value)).toEqual(["op@example.com", "+62 21 555 0100"]);
+});
+
+/// (partial: mounted client; the saved scheme is read and applied when the application starts)
+test("the saved colour scheme is applied at start, and a failed read is reported without stopping the start", async () => {
+  const dark = launch(profileFixtures("dark"), true);
+  await dark.started;
+  expect(document.documentElement.dataset["theme"]).toBe("dark");
+  expect(dark.calls.find(c => c.path.endsWith("res.users/read"))!.body).toMatchObject({ ids: [2], fields: ["color_scheme"] });
+  app?.dispose(); app = undefined; delete document.documentElement.dataset["theme"]; document.body.replaceChildren();
+  const broken = launch(profileFixtures("sepia"), true);
+  await broken.started;
+  await vi.waitFor(() => expect(broken.root.querySelector(".form-header")).not.toBeNull());
+  expect(document.documentElement.dataset["theme"]).toBeUndefined();
+  await vi.waitFor(() => expect(presented.some(error => (error as Error).message === "Invalid colour scheme.")).toBe(true));
+});
+
+/// (partial: mounted client; a refused e-mail keeps its message visible in the profile header)
+test("an invalid e-mail in the profile header shows its message, not only a red border", async () => {
+  vi.spyOn(HTMLInputElement.prototype, "validationMessage", "get").mockReturnValue("Enter a valid e-mail address.");
+  const session = await start(profileFixtures("system"));
+  session.root.querySelector<HTMLButtonElement>(".user-dropdown-preferences")!.click();
+  await vi.waitFor(() => expect(document.querySelector(".wizard-dialog .form-title-profile")).not.toBeNull());
+  const input = document.querySelector<HTMLInputElement>(".wizard-dialog .form-title-row input[type=email]")!;
+  input.value = "foo"; input.dispatchEvent(new Event("input", { bubbles: true }));
+  const error = document.querySelector<HTMLElement>(".wizard-dialog .form-title-row .field-error")!;
+  expect(error.hidden).toBe(false);
+  expect(error.textContent).toBe("Enter a valid e-mail address.");
+  expect(input.getAttribute("aria-invalid")).toBe("true");
+  // not the visually hidden caption: the hiding rule is written for the caption only, and the caption stays out of its reach
+  expect(error.matches(".field-label > span:not(.field-error):not(.field-help)")).toBe(false);
+  expect(getComputedStyle(error).clipPath).not.toBe("inset(50%)");
+});
+
+/// (partial: mounted client; Update Preferences applies the new scheme before the reload)
+test("Update Preferences applies the saved colour scheme and then reloads the page", async () => {
+  const session = await start(profileFixtures("light"));
+  const reload = vi.fn(() => { expect(document.documentElement.dataset["theme"]).toBe("light"); });
+  app!.reloadPage = reload;
+  session.root.querySelector<HTMLButtonElement>(".user-dropdown-preferences")!.click();
+  await vi.waitFor(() => expect(document.querySelector(".wizard-dialog .form-title-profile")).not.toBeNull());
+  await vi.waitFor(() => expect(dialogButton("Update Preferences").disabled).toBe(false));
+  dialogButton("Update Preferences").click();
+  await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+  expect(session.calls.filter(c => c.path.endsWith("res.users/read"))).toHaveLength(1);
 });
 
 const altKey = (key: string): KeyboardEvent => new KeyboardEvent("keydown", { key, code: `Key${key.toUpperCase()}`, altKey: true, bubbles: true, cancelable: true });
@@ -1105,8 +1264,12 @@ test("a submission answered with the identity confirmation is sent again exactly
   await vi.waitFor(() => expect(heading()).toBe("Confirm your identity"));
   await vi.waitFor(() => expect(dialogButton("Confirm").disabled).toBe(false));
   await confirmIdentity();
+  const sent = () => session.calls.filter(c => c.path.endsWith("change.password.own/change_password"));
+  // the dialog closes before the kept operation is sent again: wait for that call, then settle so a stray third send shows up
+  await vi.waitFor(() => expect(sent()).toHaveLength(2));
   await vi.waitFor(() => expect(document.querySelector(".wizard-dialog")).toBeNull());
-  const changes = session.calls.filter(c => c.path.endsWith("change.password.own/change_password"));
+  await new Promise(resolve => setTimeout(resolve, 50));
+  const changes = sent();
   expect(changes).toHaveLength(2);
   expect(changes[1]!.body).toEqual(changes[0]!.body);
   expect(session.calls.filter(c => c.path.endsWith("/run_check"))).toHaveLength(2);
@@ -1124,4 +1287,23 @@ test("an interrupted resubmission is reported as unknown and not sent a third ti
   await vi.waitFor(() => expect(presented).toContainEqual(expect.objectContaining({ kind: "ambiguous" })));
   await new Promise(resolve => setTimeout(resolve, 50));
   expect(session.calls.filter(c => c.path.endsWith("change.password.own/change_password"))).toHaveLength(2);
+  // the read-only outcome: the app holds the uncertain-method state, so it counts as dirty and refuses to leave
+  const state = app as unknown as { uncertainMethod: boolean; isDirty(): boolean };
+  expect(state.uncertainMethod).toBe(true);
+  expect(state.isDirty()).toBe(true);
+});
+
+/// Second review pass: the way back from a related form keeps the related list identity and the origin record crumb.
+test("a form opened from a related list keeps the origin crumb and returns to the same related list", async () => {
+  const {root} = await relatedSetup();
+  await openRelated(root);
+  await vi.waitFor(()=>expect(root.querySelector(".list-table")).not.toBeNull());
+  const actionId = new URL(location.href).searchParams.get("method_action");
+  expect(actionId).not.toBeNull();
+  root.querySelector<HTMLButtonElement>('.list-table tbody button.link')!.click();
+  await vi.waitFor(()=>expect(root.querySelector('input[name="name"]')).not.toBeNull());
+  expect(root.querySelector(".breadcrumb-origin")).not.toBeNull();
+  root.querySelector<HTMLButtonElement>(".breadcrumb-back")!.click();
+  await vi.waitFor(()=>expect(root.querySelector(".list-table")).not.toBeNull());
+  expect(new URL(location.href).searchParams.get("method_action")).toBe(actionId);
 });

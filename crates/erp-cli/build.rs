@@ -181,8 +181,10 @@ fn native_identity() -> Result<(), Box<dyn Error>> {
     for name in [
         "acceptance_notes",
         "base",
+        "barcodes",
         "mail",
         "product",
+        "product_mail",
         "theme_office_blue",
         "uom",
         "web",

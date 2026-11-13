@@ -1,0 +1,677 @@
+{
+  "SPDX-License-Identifier": "MIT OR Apache-2.0",
+  "format_version": 1,
+  "values": [
+    {
+      "name": "0-missing",
+      "input": {
+        "tag": "missing"
+      },
+      "hex": "00"
+    },
+    {
+      "name": "1-null",
+      "input": {
+        "tag": "null"
+      },
+      "hex": "01"
+    },
+    {
+      "name": "2-bool",
+      "input": {
+        "tag": "bool",
+        "value": false
+      },
+      "hex": "0200"
+    },
+    {
+      "name": "3-bool",
+      "input": {
+        "tag": "bool",
+        "value": true
+      },
+      "hex": "0201"
+    },
+    {
+      "name": "4-int",
+      "input": {
+        "tag": "int",
+        "value": "-9223372036854775808"
+      },
+      "hex": "03000000142d39323233333732303336383534373735383038"
+    },
+    {
+      "name": "5-int",
+      "input": {
+        "tag": "int",
+        "value": "0"
+      },
+      "hex": "030000000130"
+    },
+    {
+      "name": "6-int",
+      "input": {
+        "tag": "int",
+        "value": "9223372036854775807"
+      },
+      "hex": "030000001339323233333732303336383534373735383037"
+    },
+    {
+      "name": "7-xid",
+      "input": {
+        "tag": "xid",
+        "value": "18446744073709551615"
+      },
+      "hex": "03000000143138343436373434303733373039353531363135"
+    },
+    {
+      "name": "8-numeric",
+      "input": {
+        "tag": "numeric",
+        "value": "-0.000"
+      },
+      "hex": "040000000130"
+    },
+    {
+      "name": "9-numeric",
+      "input": {
+        "tag": "numeric",
+        "value": "-123.4500"
+      },
+      "hex": "04000000072d3132332e3435"
+    },
+    {
+      "name": "10-numeric",
+      "input": {
+        "tag": "numeric",
+        "value": "1.23e-20"
+      },
+      "hex": "0400000018302e30303030303030303030303030303030303030313233"
+    },
+    {
+      "name": "11-numeric",
+      "input": {
+        "tag": "numeric",
+        "value": "9007199254740992.1"
+      },
+      "hex": "0400000012393030373139393235343734303939322e31"
+    },
+    {
+      "name": "12-text",
+      "input": {
+        "tag": "text",
+        "value": "é\r\n東京"
+      },
+      "hex": "050000000ac3a90d0ae69db1e4baac"
+    },
+    {
+      "name": "13-text",
+      "input": {
+        "tag": "text",
+        "value": "é"
+      },
+      "hex": "050000000365cc81"
+    },
+    {
+      "name": "14-timestamp",
+      "input": {
+        "tag": "timestamp",
+        "value": "-1"
+      },
+      "hex": "06000000022d31"
+    },
+    {
+      "name": "15-timestamp",
+      "input": {
+        "tag": "timestamp",
+        "value": "1794376800123456"
+      },
+      "hex": "060000001031373934333736383030313233343536"
+    },
+    {
+      "name": "16-uuid",
+      "input": {
+        "tag": "uuid",
+        "value": "00112233445566778899aabbccddeeff"
+      },
+      "hex": "0700112233445566778899aabbccddeeff"
+    },
+    {
+      "name": "17-bytes",
+      "input": {
+        "tag": "bytes",
+        "value": "00ff80"
+      },
+      "hex": "080000000300ff80"
+    },
+    {
+      "name": "18-array",
+      "input": {
+        "tag": "array",
+        "value": []
+      },
+      "hex": "0900000000"
+    },
+    {
+      "name": "19-array",
+      "input": {
+        "tag": "array",
+        "value": [
+          {
+            "tag": "null"
+          },
+          {
+            "tag": "int",
+            "value": "-1"
+          }
+        ]
+      },
+      "hex": "09000000020103000000022d31"
+    },
+    {
+      "name": "20-object",
+      "input": {
+        "tag": "object",
+        "value": [
+          [
+            "é",
+            {
+              "tag": "array",
+              "value": [
+                {
+                  "tag": "bool",
+                  "value": true
+                }
+              ]
+            }
+          ],
+          [
+            "a",
+            {
+              "tag": "object",
+              "value": []
+            }
+          ],
+          [
+            "",
+            {
+              "tag": "missing"
+            }
+          ]
+        ]
+      },
+      "hex": "0a00000003000000000000000001610a0000000000000002c3a909000000010201"
+    }
+  ],
+  "rows": [
+    {
+      "columns": [
+        [
+          "actor_id",
+          {
+            "tag": "null"
+          }
+        ],
+        [
+          "actor_kind",
+          {
+            "tag": "null"
+          }
+        ],
+        [
+          "args_digest",
+          {
+            "tag": "null"
+          }
+        ],
+        [
+          "attempt",
+          {
+            "tag": "int",
+            "value": "1"
+          }
+        ],
+        [
+          "causation_id",
+          {
+            "tag": "null"
+          }
+        ],
+        [
+          "company_ids",
+          {
+            "tag": "array",
+            "value": []
+          }
+        ],
+        [
+          "correlation_id",
+          {
+            "tag": "null"
+          }
+        ],
+        [
+          "create_date",
+          {
+            "tag": "timestamp",
+            "value": "1794376800123456"
+          }
+        ],
+        [
+          "delegating_user_id",
+          {
+            "tag": "null"
+          }
+        ],
+        [
+          "effect",
+          {
+            "tag": "null"
+          }
+        ],
+        [
+          "encoded_bytes",
+          {
+            "tag": "int",
+            "value": "0"
+          }
+        ],
+        [
+          "entry_id",
+          {
+            "tag": "uuid",
+            "value": "00112233445566778899aabbccddeeff"
+          }
+        ],
+        [
+          "entry_kind",
+          {
+            "tag": "text",
+            "value": "change"
+          }
+        ],
+        [
+          "error_class",
+          {
+            "tag": "null"
+          }
+        ],
+        [
+          "events",
+          {
+            "tag": "array",
+            "value": []
+          }
+        ],
+        [
+          "id",
+          {
+            "tag": "int",
+            "value": "1"
+          }
+        ],
+        [
+          "method",
+          {
+            "tag": "null"
+          }
+        ],
+        [
+          "model",
+          {
+            "tag": "null"
+          }
+        ],
+        [
+          "operation_id",
+          {
+            "tag": "uuid",
+            "value": "102132435465768798a9bacbdcedfe0f"
+          }
+        ],
+        [
+          "origin",
+          {
+            "tag": "text",
+            "value": "internal"
+          }
+        ],
+        [
+          "original_operation_id",
+          {
+            "tag": "null"
+          }
+        ],
+        [
+          "outcome",
+          {
+            "tag": "text",
+            "value": "committed"
+          }
+        ],
+        [
+          "policy_generation",
+          {
+            "tag": "null"
+          }
+        ],
+        [
+          "principal_kind",
+          {
+            "tag": "text",
+            "value": "user"
+          }
+        ],
+        [
+          "redaction_version",
+          {
+            "tag": "null"
+          }
+        ],
+        [
+          "registry_generation",
+          {
+            "tag": "null"
+          }
+        ],
+        [
+          "schema_version",
+          {
+            "tag": "int",
+            "value": "1"
+          }
+        ],
+        [
+          "subject_id",
+          {
+            "tag": "int",
+            "value": "1"
+          }
+        ],
+        [
+          "target_ids",
+          {
+            "tag": "array",
+            "value": []
+          }
+        ],
+        [
+          "xid",
+          {
+            "tag": "xid",
+            "value": "42"
+          }
+        ]
+      ],
+      "sha256": "0b833c665255b2ecd1b6d66abcae4435c7030faff531f36c56bf59473f0324a3"
+    },
+    {
+      "columns": [
+        [
+          "actor_id",
+          {
+            "tag": "null"
+          }
+        ],
+        [
+          "actor_kind",
+          {
+            "tag": "null"
+          }
+        ],
+        [
+          "args_digest",
+          {
+            "tag": "null"
+          }
+        ],
+        [
+          "attempt",
+          {
+            "tag": "int",
+            "value": "1"
+          }
+        ],
+        [
+          "causation_id",
+          {
+            "tag": "null"
+          }
+        ],
+        [
+          "company_ids",
+          {
+            "tag": "array",
+            "value": []
+          }
+        ],
+        [
+          "correlation_id",
+          {
+            "tag": "null"
+          }
+        ],
+        [
+          "create_date",
+          {
+            "tag": "timestamp",
+            "value": "1794376800123456"
+          }
+        ],
+        [
+          "delegating_user_id",
+          {
+            "tag": "null"
+          }
+        ],
+        [
+          "effect",
+          {
+            "tag": "null"
+          }
+        ],
+        [
+          "encoded_bytes",
+          {
+            "tag": "int",
+            "value": "0"
+          }
+        ],
+        [
+          "entry_id",
+          {
+            "tag": "uuid",
+            "value": "00112233445566778899aabbccddeeff"
+          }
+        ],
+        [
+          "entry_kind",
+          {
+            "tag": "text",
+            "value": "change"
+          }
+        ],
+        [
+          "error_class",
+          {
+            "tag": "null"
+          }
+        ],
+        [
+          "events",
+          {
+            "tag": "array",
+            "value": [
+              {
+                "tag": "object",
+                "value": [
+                  [
+                    "kind",
+                    {
+                      "tag": "text",
+                      "value": "test"
+                    }
+                  ]
+                ]
+              }
+            ]
+          }
+        ],
+        [
+          "id",
+          {
+            "tag": "int",
+            "value": "2"
+          }
+        ],
+        [
+          "method",
+          {
+            "tag": "null"
+          }
+        ],
+        [
+          "model",
+          {
+            "tag": "text",
+            "value": "res.partner"
+          }
+        ],
+        [
+          "operation_id",
+          {
+            "tag": "uuid",
+            "value": "102132435465768798a9bacbdcedfe0f"
+          }
+        ],
+        [
+          "origin",
+          {
+            "tag": "text",
+            "value": "internal"
+          }
+        ],
+        [
+          "original_operation_id",
+          {
+            "tag": "null"
+          }
+        ],
+        [
+          "outcome",
+          {
+            "tag": "text",
+            "value": "committed"
+          }
+        ],
+        [
+          "policy_generation",
+          {
+            "tag": "null"
+          }
+        ],
+        [
+          "principal_kind",
+          {
+            "tag": "text",
+            "value": "user"
+          }
+        ],
+        [
+          "redaction_version",
+          {
+            "tag": "null"
+          }
+        ],
+        [
+          "registry_generation",
+          {
+            "tag": "null"
+          }
+        ],
+        [
+          "schema_version",
+          {
+            "tag": "int",
+            "value": "1"
+          }
+        ],
+        [
+          "subject_id",
+          {
+            "tag": "int",
+            "value": "1"
+          }
+        ],
+        [
+          "target_ids",
+          {
+            "tag": "array",
+            "value": [
+              {
+                "tag": "int",
+                "value": "4"
+              }
+            ]
+          }
+        ],
+        [
+          "xid",
+          {
+            "tag": "xid",
+            "value": "43"
+          }
+        ]
+      ],
+      "sha256": "805b914104dcf7c54b1e84d56a0d3bc292f1eb04b54a057c53465dc658b1c75b"
+    }
+  ],
+  "batch_sha256": "26b1d8878998e9ac2b3be3f1973f1249a9a714e780078444f645cc65583325de",
+  "seals": [
+    {
+      "incarnation": "00112233445566778899aabbccddeeff",
+      "epoch": 1,
+      "batch_no": 1,
+      "lower": [
+        "0",
+        0
+      ],
+      "upper": [
+        "43",
+        2
+      ],
+      "predecessor": "0000000000000000000000000000000000000000000000000000000000000000",
+      "sha256": "f3fc21f0f05a5e726d9cbeadbec654398066ba959988f2f6f9328e95e0971884"
+    },
+    {
+      "incarnation": "00112233445566778899aabbccddeeff",
+      "epoch": 2,
+      "batch_no": 1,
+      "lower": [
+        "43",
+        2
+      ],
+      "upper": [
+        "45",
+        4
+      ],
+      "predecessor": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "sha256": "cf09bb4b84bf4be8d77044b0e455f2afabf20f1ca73a59faa9db4b3b5205417a"
+    },
+    {
+      "incarnation": "00112233445566778899aabbccddeeff",
+      "epoch": 2,
+      "batch_no": 2,
+      "lower": [
+        "45",
+        4
+      ],
+      "upper": [
+        "47",
+        6
+      ],
+      "predecessor": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "sha256": "12bcfcd7ed6e30cbabf633e1db5b14aa46312eaa97e37b3f56756fc941f911e6"
+    }
+  ]
+}

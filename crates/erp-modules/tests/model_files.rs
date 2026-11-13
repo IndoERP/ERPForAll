@@ -1,18 +1,23 @@
 //! `models/*.toml` of data-only addons: parsing, strictness, limits, and the
 //! registry they produce. Pure: no database (the tables are exercised in erp-test-models
 //! `cross_addon`).
-#![allow(clippy::unwrap_used, clippy::expect_used, reason = "tests")]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "tests"
+)]
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use erp_fields::FieldType;
+use erp_fields::{ErrorKind, FieldType};
 use erp_modules::{
     Error, MAX_MODEL_FILE_BYTES, MAX_MODEL_FILES, MAX_MODEL_FILES_TOTAL_BYTES,
     MAX_MODELS_PER_ADDON, MAX_MODELS_PER_FILE, ModuleName, addon_descriptor, parse_model_file,
     read_manifest_from_dir, read_model_files,
 };
-use erp_registry::{DefaultValue, KindDef, ModelKind, Overlay, RegistryBuilder};
+use erp_registry::{AddonDescriptor, DefaultValue, KindDef, ModelKind, Overlay, RegistryBuilder};
 use tempfile::tempdir;
 
 const FILE: &str = "models/test.toml";
@@ -226,8 +231,8 @@ fn unknown_keys_are_refused_with_file_and_line() {
     assert_eq!(
         refused("[[model]]\nname = \"my.tag\"\ncolour = \"red\"\n"),
         "Model file 'models/test.toml:3': unknown field `colour`, expected one of `name`, \
-         `extend`, `inherit`, `description`, `table`, `order`, `rec_name`, `check_company_auto`, `company_match`, `company_access`, `eventful`, `transient`, \
-         `abstract`, `transient_max_age_seconds`, `transient_max_count`, `field`, `index`, `partition`, `exclude`, `key`"
+         `extend`, `inherit`, `description`, `table`, `order`, `rec_name`, `check_company_auto`, `company_match`, `company_access`, `eventful`, `audit_reads`, `transient`, \
+         `abstract`, `transient_max_age_seconds`, `transient_max_count`, `field`, `index`, `partition`, `exclude`, `key`, `sql_function`, `sql_trigger`, `sql_condition`, `sql_grant`, `persistence`"
     );
     assert_eq!(
         refused(
@@ -241,7 +246,8 @@ fn unknown_keys_are_refused_with_file_and_line() {
     );
     assert_eq!(
         refused("[unknown]\n"),
-        "Model file 'models/test.toml:1': unknown field `unknown`, expected `model`"
+        "Model file 'models/test.toml:1': unknown field `unknown`, expected one of `model`, \
+         `sql_function`, `sql_trigger`, `sql_condition`, `sql_grant`, `persistence`"
     );
 }
 
@@ -1647,8 +1653,111 @@ fn eventful_wrong_types_and_tableless_attributes_are_refused() {
                 "[[model]]\nname = 'test.eventful'\n{key} = false\n"
             )),
             format!(
-                "Model file 'models/test.toml:3': unknown field `{key}`, expected one of `name`, `extend`, `inherit`, `description`, `table`, `order`, `rec_name`, `check_company_auto`, `company_match`, `company_access`, `eventful`, `transient`, `abstract`, `transient_max_age_seconds`, `transient_max_count`, `field`, `index`, `partition`, `exclude`, `key`"
+                "Model file 'models/test.toml:3': unknown field `{key}`, expected one of `name`, `extend`, `inherit`, `description`, `table`, `order`, `rec_name`, `check_company_auto`, `company_match`, `company_access`, `eventful`, `audit_reads`, `transient`, `abstract`, `transient_max_age_seconds`, `transient_max_count`, `field`, `index`, `partition`, `exclude`, `key`, `sql_function`, `sql_trigger`, `sql_condition`, `sql_grant`, `persistence`"
             )
         );
     }
+}
+
+#[test]
+fn audit_reads_opt_in_is_read_from_model_files() {
+    let defs = parse_model_file(&my_addon(), FILE, "[[model]]\nname = 'test.audit_reads'\naudit_reads = true\n\n[[model]]\nextend = 'test.audit_reads'\naudit_reads = false\n").unwrap();
+    assert!(defs[0].audit_reads);
+    assert!(!defs[1].audit_reads);
+    assert!(
+        !parse_model_file(&my_addon(), FILE, "[[model]]\nname = 'test.plain'\n").unwrap()[0]
+            .audit_reads
+    );
+}
+
+#[test]
+fn audit_reads_wrong_type_is_refused() {
+    assert_eq!(
+        refused("[[model]]\nname = 'test.audited'\naudit_reads = 'true'\n"),
+        "Model file 'models/test.toml:3': invalid type: string \"true\", expected a boolean"
+    );
+}
+
+static MY_ADDON: AddonDescriptor = AddonDescriptor {
+    name: "my_addon",
+    depends: &["base"],
+    exact_only: false,
+};
+
+/// A model file that tries a function body, trigger, condition registration, grant or table
+/// persistence, at model or file level, as a value or a table, is refused Programming naming the
+/// key and the native-only surface; an unknown look-alike key is refused, not ignored; an
+/// ordinary runtime declaration still parses and composes. Overlays are built from typed
+/// `ModelDef`s and have no key through which SQL could be given.
+#[test]
+fn spec_ormx_039_runtime_inputs_cannot_declare_sql_objects() {
+    for key in [
+        "sql_function",
+        "sql_trigger",
+        "sql_condition",
+        "sql_grant",
+        "persistence",
+    ] {
+        let expected = format!("SQL object key '{key}' is native-only in a later release");
+        for (content, at) in [
+            // model level: the line of the model
+            (
+                format!("\n[[model]]\nname = \"m.t\"\n{key} = \"x\"\n"),
+                Some(2),
+            ),
+            (
+                format!("\n[[model]]\nname = \"m.t\"\n[[model.{key}]]\nname = \"x\"\n"),
+                Some(2),
+            ),
+            // file level: no line
+            (format!("{key} = \"x\"\n[[model]]\nname = \"m.t\"\n"), None),
+            (
+                format!("[[model]]\nname = \"m.t\"\n[[{key}]]\nname = \"x\"\n"),
+                None,
+            ),
+        ] {
+            let err = parse_model_file(&my_addon(), FILE, &content).unwrap_err();
+            let Error::ModelFile {
+                line,
+                message,
+                source,
+                ..
+            } = &err
+            else {
+                panic!("expected Error::ModelFile, got {err:?}");
+            };
+            assert_eq!(message, &expected, "{content}");
+            assert_eq!(
+                source.as_deref().map(erp_fields::Error::kind),
+                Some(ErrorKind::Programming),
+                "{content}"
+            );
+            assert_eq!(*line, at, "{content}");
+            let location = at.map_or(FILE.to_owned(), |at| format!("{FILE}:{at}"));
+            assert_eq!(
+                err.to_string(),
+                format!("Model file '{location}': {expected}")
+            );
+        }
+    }
+    assert!(
+        refused("[[model]]\nname = \"my.tag\"\nsql_view = \"x\"\n").starts_with(
+            "Model file 'models/test.toml:3': unknown field `sql_view`, expected one of"
+        )
+    );
+
+    let defs = parse_model_file(
+        &my_addon(),
+        FILE,
+        "[[model]]\nname = \"my.tag\"\n\n[[model.field]]\nname = \"label\"\ntype = \"char\"\n",
+    )
+    .unwrap();
+    let mut overlay = Overlay::new();
+    overlay.add_addon_defs(defs).unwrap();
+    let registry = RegistryBuilder::new([&MY_ADDON])
+        .linked(false)
+        .overlay(&overlay)
+        .build()
+        .unwrap();
+    assert!(registry.model("my.tag").unwrap().field("label").is_some());
 }

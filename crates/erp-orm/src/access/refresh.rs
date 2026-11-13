@@ -196,6 +196,8 @@ impl Transaction {
     /// As [`Transaction::ensure_policy_current`]; the resolver's errors.
     pub(crate) async fn prepare_access(&mut self, env: &Env) -> Result<()> {
         self.ensure_policy_current().await?;
+        // the switchers of `with_user` switches first, before any early return (A4)
+        self.resolve_switchers(env).await?;
         let principal = env.principal();
         // the subject whose companies bound the environment's (review S1): not the acting one
         // for a `System` principal made by `with_user(SUPERUSER_ID)`; none for the core's own
@@ -224,6 +226,66 @@ impl Transaction {
             )));
         };
         self.refresh.record(subject, resolution)
+    }
+
+    /// Resolve the switching principals of the pending `with_user` switches `env` carries
+    /// (A4), so the admission check ([`Transaction::check_env_block`]) decides them with
+    /// the switcher's binding instead of refusing an unresolved switcher: brings the policy up to
+    /// date, then reads every switcher the transaction has not resolved yet in one statement
+    /// through the resolver. Nothing when `env` carries no pending switch, when the policy does
+    /// not decide on groups, or without a resolver.
+    ///
+    /// # Errors
+    ///
+    /// As [`Transaction::ensure_policy_current`]; the resolver's errors.
+    pub(crate) fn prepare_switch<'a>(&'a mut self, env: &'a Env) -> crate::transaction::Admit<'a> {
+        if !env
+            .switches()
+            .iter()
+            .any(|switch| switch.pending_switcher().is_some())
+        {
+            return crate::transaction::Admit::Ready(Some(Ok(())));
+        }
+        // a named future with an erased body: the refresh flushes and may read records again
+        // through the entries that call this, so the body stays out of their future types
+        crate::transaction::Admit::Pending(Box::pin(async move {
+            self.ensure_policy_current().await?;
+            self.resolve_switchers(env).await
+        }))
+    }
+
+    /// The resolution half of [`Transaction::prepare_switch`], for a caller that brought the
+    /// policy up to date itself ([`Transaction::prepare_access`]).
+    async fn resolve_switchers(&mut self, env: &Env) -> Result<()> {
+        let mut subjects: Vec<UserId> = env
+            .switches()
+            .iter()
+            .filter_map(crate::principal::switch::Switch::pending_switcher)
+            .collect();
+        if subjects.is_empty() || !self.policy.needs_resolved_principals() {
+            return Ok(());
+        }
+        let Some(resolver) = self.shared.resolver.clone() else {
+            return Ok(());
+        };
+        subjects.sort_unstable();
+        subjects.dedup();
+        subjects.retain(|subject| !self.refresh.resolved.contains_key(subject));
+        if subjects.is_empty() {
+            return Ok(());
+        }
+        let resolutions = resolver.re_resolve(self, &subjects).await?;
+        if resolutions.len() != subjects.len() {
+            return Err(Error::programming(format!(
+                "the principal resolver resolved {} switching users for {} asked",
+                resolutions.len(),
+                subjects.len()
+            )));
+        }
+        for (subject, resolution) in subjects.iter().zip(&resolutions) {
+            self.refresh.record(*subject, resolution)?;
+        }
+        Ok(())
     }
 
     /// [`Transaction::prepare_access`] for the non-superuser form of `env` when `domain` has an

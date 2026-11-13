@@ -1,0 +1,11 @@
+error[E0451]: field `pieces` of struct `erp_sdk::ai::Instruction` is private
+ --> tests/ui/ai_tools/instruction_struct_literal.rs:6:19
+  |
+6 |     Instruction { pieces: Vec::new() }
+  |                   ^^^^^^ private field
+
+error: type `tools::InstructionPiece` is private
+ --> tests/ui/ai_tools/instruction_struct_literal.rs:6:27
+  |
+6 |     Instruction { pieces: Vec::new() }
+  |                           ^^^^^^^^^^ private type

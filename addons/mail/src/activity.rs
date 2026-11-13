@@ -849,13 +849,14 @@ impl MailActivity {
 
     /// Mark the activities done: post a message with the feedback on each record (subtype
     /// `mail.mt_activities`, authored by the current user, posted privileged so an assignee
-    /// without access to the record can complete), then archive them and store the feedback
-    /// . Returns the first message's id.
+    /// without access to the record can complete), then archive them and store the feedback.
+    /// Returns the first message's id.
     ///
     /// # Errors
     /// `Validation` when `attachment_ids` is not empty (attachments come with) or the
     /// feedback is over the limit; `Access` as `write`.
     #[method]
+    #[rpc(effect = write)]
     async fn action_feedback(
         this: &RecordSet<MailActivity>,
         tx: &mut Transaction,
@@ -867,6 +868,50 @@ impl MailActivity {
             .call::<_, Vec<i64>>(tx, "_action_done", (feedback, attachment_ids))
             .await?;
         Ok(messages.first().copied())
+    }
+
+    /// The activity menu of the caller: their open activities counted per model, one count per
+    /// record, with the "Other Activities" group for activities without a readable document
+    /// (to 390). The answer is the map of
+    /// [`ActivityGroups::to_value`](crate::activity_menu::ActivityGroups::to_value); the logic is
+    /// [`activity_groups`](crate::activity_menu::activity_groups).
+    ///
+    /// # Errors
+    /// `Access` for a caller without the read right on activities (public and portal users);
+    /// `Validation` for an out-of-range `mail.activity.systray.limit`.
+    #[method]
+    #[rpc(effect = read, model)]
+    async fn erp_activity_groups(
+        this: &RecordSet<MailActivity>,
+        tx: &mut Transaction,
+    ) -> Result<Value> {
+        let groups = crate::activity_menu::activity_groups(this.env(), tx).await?;
+        Ok(groups.to_value())
+    }
+
+    /// The window action that opens one group of the activity menu in one state: `model` is the
+    /// group's model (`mail.activity` for "Other Activities"), `state` one of `all`, `overdue`,
+    /// `today` or `planned` (to 393). The logic is
+    /// [`activity_group_action`](crate::activity_menu::activity_group_action).
+    ///
+    /// # Errors
+    /// `Access` for a caller without the read right on activities; `Validation` for an unknown
+    /// state, a model without a group in the caller's menu, or more than 1000 records.
+    #[method]
+    #[rpc(effect = read, model)]
+    async fn erp_activity_group_action(
+        this: &RecordSet<MailActivity>,
+        tx: &mut Transaction,
+        model: String,
+        state: String,
+    ) -> Result<Value> {
+        // refuse a caller without the read right before any input is judged ((iv))
+        this.env()
+            .records("mail.activity")?
+            .check_access(tx, Operation::Read)
+            .await?;
+        let state = crate::activity_menu::OpenState::parse(&state)?;
+        crate::activity_menu::activity_group_action(this.env(), tx, &model, state).await
     }
 
     /// The done path of `action_feedback`; returns the posted messages' ids. An activity whose

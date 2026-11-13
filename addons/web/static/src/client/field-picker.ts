@@ -16,8 +16,9 @@ export function withRelationPicker(control:FieldControl, env:WidgetEnvironment):
   const scope=new AbortController();let picker:DialogHandle|undefined, dead=false;
   const abort=():void=>scope.abort();env.signal?.addEventListener('abort',abort,{once:true});
   const more=button('Search more…',()=>{
+    const query=more.dataset['query']??'';delete more.dataset['query'];
     if(dead||scope.signal.aborted||picker?.dialog.isConnected)return;
-    picker=selectCreateDialog({dialogs:messages.dialogs,rpc:env.rpc,model:field.relation!,title:`Choose ${field.label}`,domain:effective.domain,context:effective.context,
+    picker=selectCreateDialog({dialogs:messages.dialogs,rpc:env.rpc,model:field.relation!,title:`Choose ${field.label}`,query,domain:effective.domain,context:effective.context,
       select:choice=>{if(!dead&&!scope.signal.aborted)env.change(choice);},
       ...(field.options?.no_create || field.options?.no_create_edit ? {} : { createEdit:(input: { context: Record<string, unknown> })=>editRelation({dialogs:messages.dialogs,messages,editorLocale:env.editorLocale,numericLocale:env.numericLocale,rpc:env.rpc,model:field.relation!,context:input.context,report:env.report,signal:scope.signal}) }),
       report:env.report,signal:scope.signal});

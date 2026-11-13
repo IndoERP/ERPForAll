@@ -710,4 +710,83 @@
     <field name="sequence" eval="20"/>
   </record>
   <menuitem id="technical_modules_act_menu" name="Modules" parent="technical_modules_menu" action="technical_module_action" groups="base.group_system" sequence="10"/>
+
+  <!-- Automation Category & Menu -->
+  <menuitem id="technical_automation_menu" name="Automation" parent="technical_menu" sequence="55"/>
+
+  <!-- ir.job -->
+  <record id="technical_job_list" model="ir.ui.view">
+    <field name="name">ir.job.technical.list</field>
+    <field name="model">ir.job</field>
+    <field name="arch" type="xml"><list><field name="kind"/><field name="state"/><field name="priority"/><field name="attempts"/><field name="max_attempts"/><field name="run_after"/><field name="started_at"/><field name="items_done"/><field name="items_failed"/><field name="last_error_code"/></list></field>
+  </record>
+  <record id="technical_job_form" model="ir.ui.view">
+    <field name="name">ir.job.technical.form</field>
+    <field name="model">ir.job</field>
+    <field name="arch" type="xml"><form record_mode="record"><header><button name="action_hold" type="object" string="Hold" class="btn-secondary" invisible="state != 'ready'"/><button name="action_resume" type="object" string="Resume" class="btn-primary" invisible="state != 'held'"/><button name="action_cancel" type="object" string="Cancel" class="btn-danger" confirm="Cancel this job?" invisible="state == 'dead'"/><button name="action_requeue" type="object" string="Requeue" class="btn-primary" invisible="state != 'dead'"/><button name="action_discard" type="object" string="Discard" class="btn-secondary" confirm="Discard this dead letter?" invisible="state != 'dead'"/><field name="state" widget="statusbar" statusbar_visible="ready,running,held,dead"/></header><sheet><div class="oe_title"><h1><field name="kind"/></h1></div><group><group string="Execution"><field name="job_uuid"/><field name="priority"/><field name="attempts"/><field name="max_attempts"/><field name="failure_rank"/><field name="run_after"/><field name="enqueued_at"/><field name="started_at"/><field name="lease_until"/></group><group string="Identity &amp; Context"><field name="singleton_key"/><field name="dedup_key"/><field name="run_as_kind"/><field name="run_as_user"/><field name="run_as_company"/><field name="enqueued_by_user"/><field name="items_done"/><field name="items_failed"/><field name="items_remaining"/><field name="cancel_requested"/></group></group><notebook><page name="error" string="Error Details"><group><field name="last_error_code"/><field name="last_error_at"/><field name="dead_at"/></group><field name="last_error"/></page></notebook></sheet></form></field>
+  </record>
+  <record id="technical_job_search" model="ir.ui.view">
+    <field name="name">ir.job.technical.search</field>
+    <field name="model">ir.job</field>
+    <field name="arch" type="xml"><search><field name="kind"/><field name="job_uuid"/><field name="singleton_key"/><field name="dedup_key"/><field name="last_error_code"/><separator/><filter name="ready" string="Ready" domain="[('state', '=', 'ready')]"/><filter name="running" string="Running" domain="[('state', '=', 'running')]"/><filter name="held" string="Held" domain="[('state', '=', 'held')]"/><filter name="dead" string="Dead Letters" domain="[('state', '=', 'dead')]"/><separator/><filter name="has_failures" string="Has Failed Items" domain="[('items_failed', '&gt;', 0)]"/><group><filter name="group_by_state" string="State" context="{'group_by': 'state'}"/><filter name="group_by_kind" string="Kind" context="{'group_by': 'kind'}"/><filter name="group_by_priority" string="Priority" context="{'group_by': 'priority'}"/></group></search></field>
+  </record>
+  <record id="technical_job_action" model="ir.actions.act_window">
+    <field name="name">Background Jobs</field>
+    <field name="res_model">ir.job</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="technical_job_list"/>
+    <field name="search_view_id" ref="technical_job_search"/>
+    <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
+  </record>
+  <record id="technical_job_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_job_action"/>
+    <field name="view_id" ref="technical_job_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="technical_job_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_job_action"/>
+    <field name="view_id" ref="technical_job_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="technical_jobs_menu" name="Background Jobs" parent="technical_automation_menu" action="technical_job_action" groups="base.group_system" sequence="10"/>
+
+  <!-- ir.job.run -->
+  <record id="technical_job_run_list" model="ir.ui.view">
+    <field name="name">ir.job.run.technical.list</field>
+    <field name="model">ir.job.run</field>
+    <field name="arch" type="xml"><list><field name="kind"/><field name="outcome"/><field name="attempts"/><field name="enqueued_at"/><field name="finished_at"/><field name="items_done"/><field name="items_failed"/><field name="last_error_code"/></list></field>
+  </record>
+  <record id="technical_job_run_form" model="ir.ui.view">
+    <field name="name">ir.job.run.technical.form</field>
+    <field name="model">ir.job.run</field>
+    <field name="arch" type="xml"><form record_mode="record"><sheet><div class="oe_title"><h1><field name="kind"/></h1></div><group><group string="Execution"><field name="job_uuid"/><field name="outcome"/><field name="attempts"/><field name="enqueued_at"/><field name="started_at"/><field name="finished_at"/></group><group string="Details"><field name="run_as_kind"/><field name="run_as_user"/><field name="enqueued_by_user"/><field name="items_done"/><field name="items_failed"/><field name="last_error_code"/></group></group></sheet></form></field>
+  </record>
+  <record id="technical_job_run_search" model="ir.ui.view">
+    <field name="name">ir.job.run.technical.search</field>
+    <field name="model">ir.job.run</field>
+    <field name="arch" type="xml"><search><field name="kind"/><field name="job_uuid"/><field name="last_error_code"/><separator/><filter name="done" string="Done" domain="[('outcome', '=', 'done')]"/><filter name="cancelled" string="Cancelled" domain="[('outcome', '=', 'cancelled')]"/><filter name="discarded" string="Discarded" domain="[('outcome', '=', 'dead_discarded')]"/><filter name="expired" string="Expired" domain="[('outcome', '=', 'dead_expired')]"/><group><filter name="group_by_outcome" string="Outcome" context="{'group_by': 'outcome'}"/><filter name="group_by_kind" string="Kind" context="{'group_by': 'kind'}"/></group></search></field>
+  </record>
+  <record id="technical_job_run_action" model="ir.actions.act_window">
+    <field name="name">Job Runs</field>
+    <field name="res_model">ir.job.run</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="technical_job_run_list"/>
+    <field name="search_view_id" ref="technical_job_run_search"/>
+    <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
+  </record>
+  <record id="technical_job_run_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_job_run_action"/>
+    <field name="view_id" ref="technical_job_run_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="technical_job_run_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_job_run_action"/>
+    <field name="view_id" ref="technical_job_run_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="technical_job_runs_menu" name="Job Runs" parent="technical_automation_menu" action="technical_job_run_action" groups="base.group_system" sequence="20"/>
 </erp>

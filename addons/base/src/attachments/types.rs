@@ -34,6 +34,11 @@ impl UploadId {
         }
     }
 
+    /// The uniform refusal for an upload that cannot be linked, including duplicate inputs.
+    pub fn not_usable_error() -> Error {
+        upload_not_usable()
+    }
+
     pub(crate) fn from_db(text: String) -> Self {
         Self(text)
     }
@@ -299,6 +304,25 @@ impl BlobHandle {
     /// `Internal` (`AttachmentContentMissing`, never empty content) when the store has no such
     /// object; `Validation` for a range outside the content.
     pub async fn open(&self, range: Option<ByteRange>) -> Result<BlobRead> {
+        self.open_blob(range).await.map_err(|e| {
+            if matches!(e, erp_sdk::blob::BlobError::NotFound { .. }) {
+                Error::internal(format!(
+                    "AttachmentContentMissing: the content of attachment {} is missing \
+                     from the attachment store",
+                    self.attachment
+                ))
+            } else {
+                blob_error(e)
+            }
+        })
+    }
+
+    /// [`Self::open`] with the store's own error, so a caller can tell a missing object
+    /// (`NotFound`) from every other failure without reading a message.
+    pub(crate) async fn open_blob(
+        &self,
+        range: Option<ByteRange>,
+    ) -> std::result::Result<BlobRead, erp_sdk::blob::BlobError> {
         match &self.source {
             HandleSource::Empty => Ok(BlobRead {
                 total_size: 0,
@@ -316,11 +340,7 @@ impl BlobHandle {
                                 let end = usize::try_from(end).unwrap_or(usize::MAX);
                                 bytes.get(start..end).unwrap_or(&[]).to_vec()
                             }
-                            _ => {
-                                return Err(blob_error(erp_sdk::blob::BlobError::InvalidRange {
-                                    total,
-                                }));
-                            }
+                            _ => return Err(erp_sdk::blob::BlobError::InvalidRange { total }),
                         }
                     }
                 };
@@ -329,19 +349,7 @@ impl BlobHandle {
                     reader: Box::pin(Cursor::new(slice)),
                 })
             }
-            HandleSource::Store { store, key } => store.get(key, range).await.map_err(|e| {
-                let missing = matches!(e, erp_sdk::blob::BlobError::NotFound { .. });
-                let error = blob_error(e);
-                if missing {
-                    Error::internal(format!(
-                        "AttachmentContentMissing: the content of attachment {} is missing \
-                         from the attachment store",
-                        self.attachment
-                    ))
-                } else {
-                    error
-                }
-            }),
+            HandleSource::Store { store, key } => store.get(key, range).await,
         }
     }
 

@@ -113,7 +113,7 @@ object!(/// Authenticated identity, never credentials.
     Identity { uid: WireId, name: String, internal: bool });
 object!(/// Authorized company label.
     Company { id: WireId, name: String,
-        #[serde(default, deserialize_with="required_nullable")] parent_id: Option<WireId> });
+        #[serde(deserialize_with="required_nullable")] parent_id: Option<WireId> });
 object!(/// Authoritative user locale.
     Locale { lang: String, tz: String, decimal_point: String, thousands_sep: String,
         grouping: Vec<u8>, date_format: String, time_format: String });
@@ -125,7 +125,9 @@ object!(/// Ordered authorized menu forest.
     MenuTree { wire_major: WireMajor, registry_version: String, roots: Vec<WireId>, nodes: Vec<MenuNode> });
 object!(/// Menu node; its action remains separately authorized.
     MenuNode { id: WireId, #[serde(deserialize_with="required_nullable")] parent_id: Option<WireId>, children: Vec<WireId>, label: String,
-        #[serde(deserialize_with="required_nullable")] icon: Option<String>, #[serde(deserialize_with="required_nullable")] action_id: Option<WireId> });
+        #[serde(deserialize_with="required_nullable")] icon: Option<String>, #[serde(deserialize_with="required_nullable")] action_id: Option<WireId>,
+        /// Nonempty namespace of the oldest menu external ID, or null when absent/empty; never a permission grant.
+        #[serde(deserialize_with="required_nullable")] module: Option<String> });
 choice!(ActionTarget { Current, Main, New });
 choice!(ViewType {
     List,
@@ -184,6 +186,7 @@ object!(/// Caller-authorized action and its view descriptions, produced atomica
 choice!(FieldKind {
     Char,
     Text,
+    Html,
     Boolean,
     Integer,
     Float,
@@ -225,6 +228,7 @@ object!(/// Optional validated expression documents, never evaluation strings.
 object!(/// Empty options for the currently supported basic fields and Addons service.
     EmptyOptions {});
 choice!(RecordMode { Record, Service });
+choice!(PivotRole { Row, Col, Measure });
 choice!(ButtonType { Object });
 choice!(ButtonVariant {
     Primary,
@@ -381,6 +385,7 @@ object!(/// Closed optional presentation members; widget identity admission rest
         #[serde(default, skip_serializing_if="Option::is_none")] no_quick_create: Option<bool>,
         #[serde(default, skip_serializing_if="Option::is_none")] no_create_edit: Option<bool>,
         #[serde(default, skip_serializing_if="Option::is_none")] no_symbol: Option<bool>,
+        #[serde(default, skip_serializing_if="Option::is_none")] enable_formatting: Option<bool>,
         #[serde(default, skip_serializing_if="Option::is_none")] hide_trailing_zeros: Option<bool>,
         #[serde(default, skip_serializing_if="Option::is_none")] field_digits: Option<bool>,
         #[serde(default, skip_serializing_if="Option::is_none")] show_time: Option<bool>,
@@ -430,6 +435,7 @@ impl FieldPresentationOptions {
             no_quick_create: None,
             no_create_edit: None,
             no_symbol: None,
+            enable_formatting: None,
             hide_trailing_zeros: None,
             field_digits: None,
             show_time: None,
@@ -815,7 +821,7 @@ pub enum ViewNode {
         /// Closed widget-specific options.
         options: FieldOptions,
         /// Static boolean-literal overrides for this occurrence (`null` inherits model metadata;
-        /// invisible `null` means false)..
+        /// invisible `null` means false).
         modifiers: Modifiers,
         /// Display label.
         label: String,
@@ -839,6 +845,29 @@ pub enum ViewNode {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "schema-gen", ts(optional))]
         search_panel: Option<ListSearchPanel>,
+    },
+    /// Pivot root (slice 1).
+    Pivot {
+        /// Child arena indexes (only `pivot_field`).
+        children: Vec<u32>,
+        disable_linking: bool,
+        display_quantity: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "schema-gen", ts(optional))]
+        default_order: Option<String>,
+    },
+    /// One `<field>` of a pivot: a row grouping, a column grouping or a measure.
+    PivotField {
+        /// Accessible field handle.
+        field: FieldRef,
+        /// Display label.
+        label: String,
+        /// What the field does in the table.
+        role: PivotRole,
+        /// Date grouping interval: day, week, month, quarter or year (date and datetime row/column fields only).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "schema-gen", ts(optional))]
+        interval: Option<String>,
     },
     /// Search field filter node.
     SearchField {
@@ -992,12 +1021,86 @@ pub enum SettingValue {
     /// Finite float.
     Float(f64),
 }
-object!(/// Authorized non-secret settings declarations.
+object!(/// Authorized non-secret settings declarations, since, the page's information and link
+    /// rows (`items`, absent in older payloads and then empty).
     SettingsDescription { wire_major: WireMajor, registry_version: String,
-        scope: SettingsScope, declarations: Vec<SettingDescription> });
+        scope: SettingsScope, declarations: Vec<SettingDescription>,
+        #[serde(default)] items: Vec<SettingsItem> });
+/// Target of a settings link row: a window action, optionally opening one record, or a menu.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema-gen", derive(ts_rs::TS))]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[non_exhaustive]
+pub enum SettingsLinkTarget {
+    /// Open a window action.
+    Action {
+        /// Id of the `ir.actions.act_window` row.
+        id: WireId,
+        /// The record the action opens, or `null` to open it as declared.
+        #[serde(deserialize_with = "required_nullable")]
+        res_id: Option<WireId>,
+    },
+    /// Open a menu.
+    Menu {
+        /// Id of the `ir.ui.menu` row.
+        id: WireId,
+    },
+}
+/// One read-only information row or link row of a settings page. Items are never settings: their
+/// keys are refused by `erp_read_values` and `erp_write_values`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema-gen", derive(ts_rs::TS))]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[non_exhaustive]
+pub enum SettingsItem {
+    /// A value computed with the caller's rights.
+    Info {
+        /// Addon-qualified identity.
+        key: String,
+        /// Display label (the resolver may have chosen a singular or plural form).
+        label: String,
+        /// Settings app page.
+        app: String,
+        /// Block title within the page.
+        block: String,
+        /// Display sort sequence.
+        sequence: u32,
+        /// Scalar value, displayed as text.
+        value: SettingValue,
+        /// Secondary text under the value, lines separated by line feeds, or `null`.
+        #[serde(deserialize_with = "required_nullable")]
+        detail: Option<String>,
+    },
+    /// An arrow link to an action or a menu.
+    Link {
+        /// Addon-qualified identity.
+        key: String,
+        /// Display label.
+        label: String,
+        /// Settings app page.
+        app: String,
+        /// Block title within the page.
+        block: String,
+        /// Display sort sequence.
+        sequence: u32,
+        /// What the link opens.
+        target: SettingsLinkTarget,
+    },
+}
 object!(/// One visible native declaration; policy internals stay on the server.
     SettingDescription { key: String, label: String, kind: SettingKind,
-        default: SettingValue, #[serde(deserialize_with="required_nullable")] choices: Option<Vec<(String,String)>>, writable: bool });
+        default: SettingValue, #[serde(deserialize_with="required_nullable")] choices: Option<Vec<(String,String)>>, writable: bool,
+        #[serde(default)] app: String,
+        #[serde(default = "default_setting_block")] block: String,
+        #[serde(default = "default_setting_sequence")] sequence: u32 });
+
+fn default_setting_block() -> String {
+    "General".into()
+}
+
+const fn default_setting_sequence() -> u32 {
+    100
+}
 choice!(ValueSource { Default, Stored });
 object!(/// Scoped settings values and optimistic concurrency revision.
     SettingsValues { wire_major: WireMajor, scope: SettingsScope, revision: String,
@@ -1176,7 +1279,15 @@ impl MenuNode {
             label,
             icon,
             action_id,
+            module: None,
         }
+    }
+
+    /// Attach this menu's resolved provenance namespace, independently of its parent/action.
+    /// `None` denotes missing provenance or an empty namespace on the oldest external ID.
+    pub fn with_module(mut self, module: Option<String>) -> Self {
+        self.module = module;
+        self
     }
 }
 impl ActionView {
@@ -1334,11 +1445,19 @@ impl SettingsDescription {
             registry_version,
             scope,
             declarations,
+            items: Vec::new(),
         }
+    }
+    /// Attach the permitted information and link rows, already sorted by key.
+    #[must_use]
+    pub fn with_items(mut self, items: Vec<SettingsItem>) -> Self {
+        self.items = items;
+        self
     }
 }
 impl SettingDescription {
     /// Describe one permitted setting without exposing its group policy.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         key: String,
         label: String,
@@ -1346,6 +1465,9 @@ impl SettingDescription {
         default: SettingValue,
         choices: Option<Vec<(String, String)>>,
         writable: bool,
+        app: String,
+        block: String,
+        sequence: u32,
     ) -> Self {
         Self {
             key,
@@ -1354,6 +1476,9 @@ impl SettingDescription {
             default,
             choices,
             writable,
+            app,
+            block,
+            sequence,
         }
     }
 }
@@ -1425,6 +1550,7 @@ pub fn field_option_kind(widget: &str, key: &str) -> Option<FieldOptionKind> {
         "rows" => widget == "text",
         "type" => numeric,
         "digits" | "hide_trailing_zeros" => numeric || percentage,
+        "enable_formatting" => matches!(widget, "integer" | "float"),
         "no_symbol" => widget == "monetary" || percentage,
         "currency_field" | "field_digits" => widget == "monetary",
         "placeholder_field" => text || date || relation || selection_editor,
@@ -1469,6 +1595,7 @@ pub fn field_option_kind(widget: &str, key: &str) -> Option<FieldOptionKind> {
         "no_quick_create" => FieldOptionKind::Bool,
         "no_create_edit" => FieldOptionKind::Bool,
         "no_symbol" => FieldOptionKind::Bool,
+        "enable_formatting" => FieldOptionKind::Bool,
         "hide_trailing_zeros" => FieldOptionKind::Bool,
         "field_digits" => FieldOptionKind::Bool,
         "show_time" => FieldOptionKind::Bool,

@@ -45,3 +45,11 @@ fn transient_policy_refuses_what_is_not_a_plain_integer() {
 fn candidate_compute_refuses_what_cannot_be_read_only() {
     trybuild::TestCases::new().compile_fail("tests/ui/candidate/*.rs");
 }
+
+/// `assistant = offer` is the only value (not quoted, not repeated), needs an effect, and is never
+/// given with `effect = external` or `hide`; an unknown `#[rpc]` parameter names
+/// `assistant` among the accepted ones.
+#[test]
+fn rpc_assistant_offer_refuses_external_hide_and_other_values() {
+    trybuild::TestCases::new().compile_fail("tests/ui/rpc_assistant/*.rs");
+}

@@ -1,4 +1,4 @@
-//! The typed vocabulary of auth lifecycle events (the `events` array of a row).
+//! Typed auth lifecycle and owner-maintenance events (the `events` array of a row).
 //!
 //! No constructor takes a key string, digest, display prefix, key name, password, hash, token,
 //! cookie, login text, address, issuer subject or provider assertion (decision
@@ -59,6 +59,8 @@ pub enum RevokeCause {
     },
     /// Its owner was deactivated.
     UserDeactivated,
+    /// An operator revoked it on the owner connection (`erp auth emergency-revoke`).
+    Emergency,
 }
 
 impl RevokeCause {
@@ -74,6 +76,7 @@ impl RevokeCause {
                 json!({"kind": "programmatic", "by_key": by_key.get()})
             }
             Self::UserDeactivated => json!({"kind": "user_deactivated"}),
+            Self::Emergency => json!({"kind": "emergency"}),
         }
     }
 }
@@ -92,6 +95,8 @@ pub enum SessionCause {
     UserDeactivated,
     /// The database secret rotated.
     SecretRotated,
+    /// An operator revoked them on the owner connection (`erp auth emergency-revoke`).
+    Emergency,
 }
 
 impl SessionCause {
@@ -102,6 +107,34 @@ impl SessionCause {
             Self::PasswordChanged => "password_changed",
             Self::UserDeactivated => "user_deactivated",
             Self::SecretRotated => "secret_rotated",
+            Self::Emergency => "emergency",
+        }
+    }
+}
+
+/// Why an operator ran the emergency revocation. A closed list: no free text, ticket number or
+/// operator name reaches the audit row (decision D3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EmergencyReason {
+    /// A credential is known or suspected to be in the wrong hands.
+    Compromised,
+    /// A device or a stored credential was lost.
+    Lost,
+    /// The person or service left; their access ends.
+    Offboarding,
+    /// Any other incident response.
+    Incident,
+}
+
+impl EmergencyReason {
+    /// The text recorded in the row, and the value of `--reason`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Compromised => "compromised",
+            Self::Lost => "lost",
+            Self::Offboarding => "offboarding",
+            Self::Incident => "incident",
         }
     }
 }
@@ -263,6 +296,27 @@ impl UserSessionsRevoked {
     }
 }
 
+/// The header of one emergency revocation: why it ran and how many keys and sessions it ended.
+/// The ended credentials follow in the same row as [`ApiKeyRevoked`], [`SessionRevoked`] and
+/// [`UserSessionsRevoked`] events with cause `emergency`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmergencyRevocation {
+    reason: EmergencyReason,
+    keys: u32,
+    sessions: u32,
+}
+
+impl EmergencyRevocation {
+    /// An emergency revocation of `keys` API keys and `sessions` sessions.
+    pub fn new(reason: EmergencyReason, keys: u32, sessions: u32) -> Self {
+        Self {
+            reason,
+            keys,
+            sessions,
+        }
+    }
+}
+
 /// A password was changed (the password itself is never recorded).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PasswordChanged {
@@ -311,11 +365,77 @@ impl SecretRotated {
     }
 }
 
-/// A typed auth lifecycle event, recorded with
+/// Closed outcome of an owner-operated attachment peer probe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProbeOutcome {
+    /// A new attempt invalidated previous admission.
+    Started,
+    /// The attempt failed or was cancelled.
+    Failed,
+    /// Both transcripts and private cleanup were verified.
+    Verified,
+}
+impl ProbeOutcome {
+    fn text(self) -> &'static str {
+        match self {
+            Self::Started => "started",
+            Self::Failed => "failed",
+            Self::Verified => "verified",
+        }
+    }
+}
+/// Credential-free peer-probe result, committed with its durable evidence state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AttachmentProbeRecorded {
+    store: i16,
+    session: Uuid,
+    outcome: ProbeOutcome,
+    participants: Vec<String>,
+}
+impl AttachmentProbeRecorded {
+    /// Construct a bounded operator event containing node identifiers and a closed outcome.
+    /// Node names are retained after the current evidence row is replaced; host paths are excluded.
+    /// # Errors
+    /// `Programming` for invalid store/session or anything other than one or two distinct,
+    /// nonempty ASCII-graphic node identifiers of at most 63 bytes.
+    pub fn new(
+        store: i16,
+        session: Uuid,
+        outcome: ProbeOutcome,
+        participants: &[&str],
+    ) -> Result<Self> {
+        if store <= 0 || session.is_nil() {
+            return Err(erp_fields::Error::programming(
+                "Attachment probe audit requires a positive store and nonnil session",
+            ));
+        }
+        if !(1..=2).contains(&participants.len())
+            || participants.iter().any(|node| {
+                node.is_empty() || node.len() > 63 || !node.bytes().all(|b| b.is_ascii_graphic())
+            })
+            || (participants.len() == 2 && participants[0] == participants[1])
+        {
+            return Err(erp_fields::Error::programming(
+                "Attachment probe audit requires one or two distinct bounded node identifiers",
+            ));
+        }
+        Ok(Self {
+            store,
+            session,
+            outcome,
+            participants: participants.iter().map(|node| (*node).to_owned()).collect(),
+        })
+    }
+}
+
+/// A typed lifecycle or owner-maintenance event, recorded with
 /// [`Transaction::audit_auth`](crate::Transaction::audit_auth).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum AuthEvent {
+    /// An owner-operated attachment peer probe changed state.
+    AttachmentProbeRecorded(AttachmentProbeRecorded),
     /// A key was issued.
     ApiKeyIssued(ApiKeyIssued),
     /// A key was revoked.
@@ -334,12 +454,17 @@ pub enum AuthEvent {
     IdentityUnlinked(IdentityLink),
     /// The database secret rotated.
     DatabaseSecretRotated(SecretRotated),
+    /// An operator ended keys or sessions on the owner connection.
+    EmergencyRevocation(EmergencyRevocation),
 }
 
 impl AuthEvent {
     /// The event as the JSON object stored in the `events` array: stable keys, integers only.
     pub(crate) fn to_json(&self) -> Value {
         match self {
+            Self::AttachmentProbeRecorded(e) => {
+                json!({"type":"attachment","event":"attachment.peer_probe","store_id":e.store,"session":e.session.to_string(),"outcome":e.outcome.text(),"participants":e.participants})
+            }
             Self::ApiKeyIssued(e) => json!({
                 "type": "auth", "event": "api_key.issued",
                 "key_id": e.key.get(), "owner": e.owner.get(), "created_by": e.created_by.get(),
@@ -376,6 +501,10 @@ impl AuthEvent {
             Self::IdentityUnlinked(e) => identity_json("identity.unlinked", e),
             Self::DatabaseSecretRotated(e) => json!({
                 "type": "auth", "event": "database_secret.rotated", "new_kid": e.new_kid,
+            }),
+            Self::EmergencyRevocation(e) => json!({
+                "type": "auth", "event": "emergency.revocation",
+                "reason": e.reason.as_str(), "keys": e.keys, "sessions": e.sessions,
             }),
         }
     }

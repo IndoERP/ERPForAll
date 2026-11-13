@@ -1,6 +1,5 @@
 //! Which view a client gets: the default view of a
-//! model and type, and the `<type>_view_ref` context override
-//! .
+//! model and type, and the `<type>_view_ref` context override.
 //!
 //! A `*_view_ref` that cannot be used (not a qualified external id, not found, or a view of
 //! another model or type) falls back to the default view, and the reason is returned as a

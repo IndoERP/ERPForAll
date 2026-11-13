@@ -311,6 +311,10 @@ async fn acl(client: &Client, w: &World, own_orders: bool, fr_country: Option<i6
 }
 
 async fn policy_orm(h: &Harness) -> Orm {
+    // installation emits the generated company restrictions; this database has no installation
+    let client = support::connect(h).await;
+    support::insert_generated(&client, h.registry(), &["res.partner", "res.users"]).await;
+    drop(client);
     let source = PolicySource::build(Arc::clone(h.registry()), pool(h, 12))
         .await
         .unwrap();

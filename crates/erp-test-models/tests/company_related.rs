@@ -1,7 +1,7 @@
 //! Company-bound related reads (design, §6.3):
 //! a related field that does not declare `compute_sudo` is read as superuser for permissions, but
 //! every record reached through a company-scoped hop must belong to the reader's active
-//! companies (or to none). Own behaviour, so no SPEC tags (the case/070 tests stay
+//! companies (or to none). Own behaviour, so no SPEC tags (the/070 tests stay
 //! in `access_domains.rs`). Every compared value comes from our code.
 #![allow(
     clippy::unwrap_used,

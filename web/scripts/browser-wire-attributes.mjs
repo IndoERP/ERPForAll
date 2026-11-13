@@ -53,7 +53,7 @@ const server=createServer(async(req,res)=>{
   const body=JSON.parse(input);calls.push({path:pathname,body});let value;
   if(pathname.endsWith('erp_describe'))value={wire_major:1,registry_version:revision,scope:body.scope,declarations:[]};
   else if(pathname.endsWith('erp_read_values'))value={wire_major:1,scope:body.scope,revision:'1',values:[]};
-  else if(pathname.endsWith('erp_load_web_menus'))value={wire_major:1,registry_version:revision,roots:[10],nodes:[{id:10,parent_id:null,label:'Notes',action_id:actionId,children:[],icon:null}]};
+  else if(pathname.endsWith('erp_load_web_menus'))value={wire_major:1,registry_version:revision,roots:[10],nodes:[{ module: null,id:10,parent_id:null,label:'Notes',action_id:actionId,children:[],icon:null}]};
   else if(pathname.endsWith('erp_load_web_action_views'))value={action,views:description};
   else if(pathname.endsWith('erp_load_web_action'))value=action;
   else if(pathname.endsWith('get_views'))value=description;

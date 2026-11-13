@@ -1,4 +1,4 @@
-//! The files of a thread as the store carries them (design note
+//! The files of a thread as the store carries them (
 //! ): the attachments posted with a page of messages and
 //! the attachments panel of a record.
 //!
@@ -198,10 +198,16 @@ pub(crate) async fn stage_of_record(
     Ok((json!({"attachment_ids": ids, "has_more": has_more}), count))
 }
 
-/// Most composer files (uploaded, not yet posted) one user may hold at a time; a seventy-first is
+/// Most composer files (uploaded, not yet posted) one user may hold at a time; a fifty-first is
 /// refused until some are posted or removed (the unposted ones also expire, see
 /// the staging cleaner of the attachments addon, after 24 hours).
 pub const MAX_PENDING_PER_USER: i64 = 50;
+/// Historical advisory lock class, retained for compatibility. Pending admission now uses a
+/// transactional generation row; an advisory lock alone cannot refresh an older snapshot.
+/// Previously the first key that serialized uploads of one user
+/// (second key: `hashtext` of the user id); registered next to the other classes in
+/// `erp_sql::locks` (`MAIL_PENDING_UPLOAD_LOCK_CLASS`; a test pins the two equal).
+pub const PENDING_LOCK_CLASS: i32 = 1706;
 
 /// What `thread_upload` and `thread_attach` answer for the file they created.
 fn uploaded(row: &erp_sdk::Row) -> Result<Value> {
@@ -224,7 +230,7 @@ fn uploaded(row: &erp_sdk::Row) -> Result<Value> {
     Ok(Value::Map(Arc::new(out)))
 }
 
-/// A browser's upload of one file, as base64, for `record`: `composer` keeps it pending (no record,
+/// Adopt one bounded in-memory source or staged upload for `record`: `composer` keeps it pending (no record,
 /// its creator's alone, claimed by `thread_post`), otherwise it is attached to the record at once
 /// (the attachments panel). Content above the inline threshold is refused by name until the HTTP
 /// upload route exists. Public callers are refused; a pending file needs the access a
@@ -234,7 +240,7 @@ pub(crate) async fn upload(
     record: &Records,
     name: String,
     mimetype: Option<String>,
-    data: String,
+    content: AttachmentContent,
     composer: bool,
 ) -> Result<Value> {
     let env = record.env().clone();
@@ -248,35 +254,26 @@ pub(crate) async fn upload(
             "Public users cannot upload files to a thread.",
         ));
     }
-    let mut item = NewAttachment::new(name, AttachmentContent::Base64(data));
+    let mut item = NewAttachment::new(name, content);
     if let Some(m) = mimetype {
         item = item.declared(m);
     }
     if composer {
         let operation: Operation = record.call(tx, "_mail_post_access", ()).await?;
         record.check_access(tx, operation).await?;
-        let held = tx
-            .query(
-                "SELECT count(*)::int8 FROM ir_attachment \
-                 WHERE res_model = $1 AND coalesce(res_id, 0) = 0 AND create_uid = $2::int8",
-                &[&crate::post::COMPOSER_MODEL, &env.uid()],
-            )
-            .await?;
-        let held: i64 = held
-            .first()
-            .ok_or_else(|| Error::invariant("a count returned no row"))?
-            .try_get(0)
-            .map_err(|e| bad("count", e))?;
-        if held >= MAX_PENDING_PER_USER {
-            return Err(Error::validation(format!(
-                "At most {MAX_PENDING_PER_USER} uploaded files wait for a message; post or remove some first."
-            )));
-        }
-        item = item.pending_in(crate::post::COMPOSER_MODEL);
     } else {
+        record.check_access(tx, Operation::Write).await?;
         item = item.on(ParentRef::new(record.model_name().to_owned(), id));
     }
-    let created = attachments::create(tx, vec![item]).await?;
+    let created = if composer {
+        attachments::create_pending(tx, crate::post::COMPOSER_MODEL, usize::try_from(MAX_PENDING_PER_USER).map_err(|_| Error::invariant("The pending file limit must be positive."))?, vec![item]).await.map_err(|error| {
+            if std::error::Error::source(&error).is_some_and(|source| source.is::<attachments::PendingLimitExceeded>()) {
+                Error::validation(format!("At most {MAX_PENDING_PER_USER} uploaded files wait for a message; post or remove some first."))
+            } else { error }
+        })?
+    } else {
+        attachments::create(tx, vec![item]).await?
+    };
     let new_id = created
         .first()
         .map(|r| r.get())

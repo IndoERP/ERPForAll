@@ -430,12 +430,12 @@ mod tests {
     #[test]
     fn preview_refusal_retains_engine_composition_reason() {
         let error = uninstall_preview_refusal(Some(
-            erp_modules::UninstallCompositionBlocker::ConfiguredSignal,
+            erp_modules::UninstallCompositionBlocker::PackageRuntime,
         ));
         assert_eq!(error.kind(), erp_fields::ErrorKind::Validation);
         assert_eq!(
             error.message(),
-            "Native lifecycle opening with configured Signal is unsupported until a later release",
+            "Uninstall impact cannot describe package runtime lifecycle callbacks; unsupported until a later release",
         );
     }
 

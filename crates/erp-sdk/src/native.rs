@@ -5,7 +5,7 @@
 pub mod settings;
 
 /// The durable job queue: declare job kinds, enqueue jobs inside the business
-/// transaction, write handlers.. The `System` principal is not
+/// transaction, write handlers. The `System` principal is not
 /// part of this surface: a kind runs as the principal that enqueued it, and the registry refuses
 /// a kind that asks to run as the system unless it belongs to the core or to `base`.
 pub mod jobs {
@@ -16,6 +16,16 @@ pub mod jobs {
         Priority, RecurringSpec, RunAs, RunOutcome, StepArgs, StepOutcome, TimeoutClass, When,
     };
     pub use erp_orm::register_job_kind;
+}
+
+/// Transactional deltas: projection shapes, exact netting and the synchronous
+/// guarded apply., "Synchronous guarded apply".
+pub mod delta {
+    pub use erp_orm::delta::{
+        AppliedRow, CanonicalKey, DeltaLimits, GrainColumn, GrainType, GrainValue, MeasureColumn,
+        MeasureGuard, MeasureType, MeasureValue, MeasureVector, NettedBatch, ProjectionShape,
+        RESERVED_COLUMNS, SyncApplied, SyncApply, SyncApplyFailure, Uuid16, apply_synchronous,
+    };
 }
 
 /// The attachment blob store: the `AttachmentStore` trait, the stores, the
@@ -40,18 +50,23 @@ pub use erp_macros::{addon, extend, methods, migration, model, model_ref};
 /// The right to mark a transaction as loading `base`'s data; minted only by the ORM builder
 /// (`OrmBuilder::build_with_base_install_grant`). Not in the prelude.
 pub use erp_orm::BaseInstallGrant;
+/// What a transaction is opened for. Addon code that acts for a caller uses
+/// [`PrincipalHint::caller`], [`BeginOptions::caller`], [`Orm::begin_caller`] or
+/// [`Orm::env_caller`], which never produce the `System` principal (A4).
+pub use erp_orm::PrincipalHint;
 pub use erp_orm::{
     AccessPolicy, Actor, Assign, AsyncComputeSuper, Base, Batch, BeginOptions, BoxFuture, Cmd,
     Command, CompanyError, ComputeSuper, Context, Cursor, Env, Fetch, Field, FieldAccessCtx,
     FieldAccessSuper, FieldDenialDetail, FieldMask, FieldOp, FieldSearchContext,
-    FieldSearchRequest, FieldSearchSuper, Granularity, GroupValue, Groups, Inherits, Load,
-    MAX_NOTICE_MESSAGE_BYTES, MAX_NOTICES_PER_TRANSACTION, Many2one, Mapped, MemoStats, Model,
-    NAME_SEARCH_LIMIT, NameSearch, Notice, NoticeKind, OnchangeResult, OnchangeWarning, Operation,
-    Orm, OrmBuilder, OrmCacheKey, OrmConfig, Page, RawVals, ReadGroup, ReadGroupingSets, ReadTx,
-    RecordSet, Records, RecordsAs, ResCompany, ResUsers, Row, RowsStream, SUPERUSER_ID,
-    SearchOptions, SearchQuery, SelectionContext, SelectionLimits, SelectionSuper, SqlRow,
-    SqlValue, StaticPolicy, StreamOptions, Super, Transaction, TypedRelation, UnlinkHook, UserId,
-    Vals, X2many, X2manyValue,
+    FieldSearchRequest, FieldSearchSuper, Granularity, GroupValue, Groups, Inherits, Isolation,
+    Load, MAX_NOTICE_MESSAGE_BYTES, MAX_NOTICES_PER_TRANSACTION, Many2one, Mapped, MemoStats,
+    Model, NAME_SEARCH_LIMIT, NameSearch, Notice, NoticeKind, OnchangeResult, OnchangeWarning,
+    Operation, OperationIdentity, Orm, OrmBuilder, OrmCacheKey, OrmConfig, Page, RawVals,
+    ReadGroup, ReadGroupingSets, ReadTx, RecordSet, Records, RecordsAs, ResCompany, ResUsers, Row,
+    RowsStream, SUPERUSER_ID, SavepointOutcome, SearchOptions, SearchQuery, SelectionContext,
+    SelectionLimits, SelectionSuper, SqlRow, SqlValue, StaticPolicy, StreamOptions, Super,
+    Transaction, TypedRelation, UnlinkHook, UserId, Vals, X2many, X2manyValue,
+    missing_reset_target,
 };
 /// Business keys, upsert and row versions (addon guide "Keys, upsert and row
 /// versions").
@@ -65,7 +80,7 @@ pub use erp_orm::{
     BuildObjectOptions, BuildObjectReport, BuildOutcome, BuildTimeout, LockTimeout, ObjectKind,
 };
 /// Named capabilities: declare one with [`capability!`]; the
-/// `ir.capability` table maps it to groups..
+/// `ir.capability` table maps it to groups.
 pub use erp_orm::{Capability, capability};
 
 /// Leaf partitioning: the upkeep calls' arguments and report, and the declaration
@@ -80,22 +95,23 @@ pub use erp_orm::{
 };
 /// Declared access-rule operators (Amendment 1): declare one with [`rule_operator!`] and
 /// the policy compiler accepts its spelling in the domain text of `ir.access` rows on the model
-/// the declaration names..
+/// the declaration names.
 pub use erp_orm::{RULE_OPERATORS, RuleOperatorDecl, rule_operator};
 pub use erp_registry::{Partition, PartitionDecl, PartitionInterval, PartitionRetain};
-/// The audit trail: typed auth lifecycle events and the audited elevation of server actions
-/// . There is no free-text event API.
+/// The audit trail: typed auth lifecycle events and the audited elevation of server actions.
+/// There is no free-text event API.
 pub mod audit {
     pub use erp_orm::audit::{
-        ApiKeyIssued, ApiKeyRevoked, ApiKeysCollected, AuditError, AuditStoreState, AuthEvent,
-        ElevationReason, IdentityLink, KeyRouteScope, LinkedBy, PasswordChanged, RevokeCause,
+        ApiKeyIssued, ApiKeyRevoked, ApiKeysCollected, AttachmentProbeRecorded, AuditError,
+        AuditStoreState, AuthEvent, ElevationReason, EmergencyReason, EmergencyRevocation,
+        IdentityLink, KeyRouteScope, LinkedBy, PasswordChanged, ProbeOutcome, RevokeCause,
         SecretRotated, SessionCause, SessionRevoked, SuperuserAction, UserSessionsRevoked,
     };
 }
 
 /// Pure functions only; the drawing
 /// functions of `erp_orm::sequence` are not re-exported until their access check lands
-/// (`access_entry_points.rs` lists them as gaps)..
+/// (`access_entry_points.rs` lists them as gaps).
 pub mod sequence {
     pub use erp_orm::sequence::{
         FiscalYear, MAX_NAME_BYTES, MAX_PATTERN_PADDING, MAX_PATTERN_TEXT_BYTES, PeriodKey,
@@ -105,7 +121,7 @@ pub mod sequence {
 }
 /// Record access: what `#[access_domain]` overrides, grant sources and
 /// policy-source registrations ([`access::policy_source!`]) use. Principal values enter a domain
-/// only as parameters ([`access::PrincipalParam`])..
+/// only as parameters ([`access::PrincipalParam`]).
 pub mod access {
     pub use erp_domain::{NowKind, PrincipalParam, UserPath};
     pub use erp_orm::{
@@ -116,8 +132,7 @@ pub mod access {
     };
 }
 /// The query AST: a stored, versioned, validated `search_read` or `read_group`, built
-/// or parsed once and run later by whoever holds it, with that person's rights. See
-/// .
+/// or parsed once and run later by whoever holds it, with that person's rights.
 pub mod query {
     pub use erp_domain::query::*;
     pub use erp_fields::json::Json;
@@ -206,17 +221,18 @@ pub mod extensions {
 }
 
 /// Exposing methods over RPC: effect classes, the argument and result conversions
-/// `#[rpc]` methods use, and the exposure table..
+/// `#[rpc]` methods use, and the exposure table.
 pub mod rpc {
     pub use erp_orm::rpc::{
-        ArgError, Binary, BindError, Effect, Exposed, Exposure, ExposureTable, FromRpc, IntoRpc,
-        PRIMARY_READS, ParamSpec, PrimaryRead, Receiver, RpcArgs, json_type, null,
+        ArgError, ArgShape, Binary, BindError, Effect, Exposed, Exposure, ExposureTable, FromRpc,
+        IntoRpc, NotOffered, Offered, PRIMARY_READS, ParamSpec, PrimaryRead, Receiver, RpcArgs,
+        json_type, null,
     };
 }
 
 /// The view arch engine (`erp_views`): parsing, combining and validating
 /// view archs, and the pure half of the `ir.ui.view` records (`mode` rules, validation targets,
-/// typed errors)..
+/// typed errors).
 ///
 /// The list is explicit: an item `erp_views` adds reaches addons only when it is added here.
 pub mod views {
@@ -271,7 +287,7 @@ pub mod views {
         ReferenceVisitor, SchemaNode, SchemaProperty, SchemaReferences, SchemaVariant,
         ValidateView, ViewSchema, ViewTypeContribution, ViewTypeDecl, ViewTypeDeclBuilder,
         ViewTypeDeclFn, find_view_type, form_schema, is_valid_view_type_key, list_schema,
-        search_schema, validate_view_types,
+        pivot_schema, search_schema, validate_view_types,
     };
 
     /// Every native addon-declared view type linked into the application (H18).
@@ -301,7 +317,6 @@ pub mod views {
 }
 
 /// Addon migrations: what a `#[migration]` function receives and the stage names.
-/// .
 ///
 /// ```
 /// erp_sdk::addon!(name = "shop", depends = ["base"]);
@@ -334,6 +349,7 @@ pub mod views {
 /// ```
 pub mod migrations {
     pub use erp_data::migration::{MigrationFn, MigrationStage, SemverVersion};
+    pub use erp_orm::CompanyMigrationPolicy;
 }
 
 /// The context keys the data loader sets on the writes of a module operation
@@ -351,13 +367,15 @@ pub mod load_state {
 /// references name records; [`PrincipalError::InvalidXmlId`] says why a value does not parse.
 pub use erp_orm::{PrincipalError, QualifiedXmlId};
 
-/// What a typed auth event names (`audit::ApiKeyRevoked::new`): the key and its kind. See
-/// .
+/// What a typed auth event names (`audit::ApiKeyRevoked::new`): the key and its kind.
 pub use erp_orm::{ApiKeyId, KeyKind};
 
+/// A validated company id, as [`Transaction::companies`] returns them (the approval policy
+/// resolution of `base` names a request's companies with it).
+pub use erp_orm::CompanyId;
+
 /// Authentication: what `_check_credentials`
-/// overrides take and return, password hashing, the session-end hook and the user context. See
-/// .
+/// overrides take and return, password hashing, the session-end hook and the user context.
 pub mod auth {
     pub use erp_security::auth::apikey::ApiKeyHasher;
     pub use erp_security::auth::apikey_manage;
@@ -442,8 +460,8 @@ pub mod __private {
         dispatch::METHOD_IMPLS,
         onchange::{ONCHANGE_IMPLS, OnchangeImpl},
         rpc::{
-            BindError, Effect, FromRpc, IntoRpc, ParamSpec, RPC_IMPLS, Receiver, RpcArgs, RpcDecl,
-            RpcImpl,
+            ASSISTANT_OFFERS, AssistantOffer, BindError, Effect, FromRpc, IntoRpc, ParamSpec,
+            RPC_IMPLS, Receiver, RpcArgs, RpcDecl, RpcImpl,
         },
     };
     // Reserved bridge for base's framework-owned hierarchy fence (not an addon API).
@@ -452,8 +470,9 @@ pub mod __private {
     pub use erp_registry::{
         AddonDescriptor, CompanyAccessDecl, CompanyBranch, CompanyMatch, DEFAULT_TRACKING_SEQUENCE,
         EmptyCompany, ExclusionDecl, FieldDecl, GeneratedStorage, IndexDecl, IndexMethod, KeyDecl,
-        KindDecl, MODEL_DECLS, ModelDecl, ModelKind, PgExtension, SignalTriggerDecl, StaticValue,
-        TableObjectDecl, TableObjectKind, TemporalKeyDecl, TriggerSignal,
+        KindDecl, MODEL_DECLS, ModelDecl, ModelKind, PgExtension, SelectionOnDeleteDecl,
+        SignalTriggerDecl, StaticValue, TableObjectDecl, TableObjectKind, TemporalKeyDecl,
+        TriggerSignal,
     };
     pub use erp_registry::{PartitionDecl, PartitionInterval, PartitionRetain};
     pub use linkme;

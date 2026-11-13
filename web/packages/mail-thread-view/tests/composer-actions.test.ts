@@ -26,7 +26,7 @@ test("attach and the full composer are hidden with the task that owns them, and 
   const composer = rig.composer();
   expect(actionsOf(composer.element)).toEqual(["emoji"]);
   const button = composer.element.querySelector(".erp-mail-composer-action") as HTMLButtonElement;
-  expect(button.textContent).toBe(":)Add emoji");
+  expect(button.textContent).toBe("Add emoji");
   // The emoji goes in at the caret, and a mention after it moves with the text.
   type(composer.field, "ab @Ann", 1);
   rig.store.local("mail_ui.thread").set("mail.thread:7", { mentions: [{ start: 3, end: 7, partnerId: 1, text: "@Ann" }] });

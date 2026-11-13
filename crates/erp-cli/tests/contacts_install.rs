@@ -186,6 +186,10 @@ fn contacts_install_creates_every_record_by_xml_id() {
                 "contacts.menu_contacts",
                 "contacts.menu_contacts_config",
                 "contacts.menu_contacts_root",
+                "contacts.menu_country_group",
+                "contacts.menu_country_partner",
+                "contacts.menu_country_state_partner",
+                "contacts.menu_localisation",
             ]
         );
         let base_views = xml_ids(&orm, "base", "ir.ui.view").await;
@@ -355,6 +359,37 @@ fn partner_views_validate_and_serve_the_documented_fields() {
             filter_names.contains(&"archived"),
             "search lacks 'archived' filter: {filter_names:?}"
         );
+
+        // The group-by items a person can try in the list's Group By menu: each carries its grouping
+        // field in the filter's context expression.
+        let group_filters: Vec<&str> = views[2]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|n| n["kind"] == "search_filter" && n["context"].is_object())
+            .filter_map(|n| n["name"].as_str())
+            .collect();
+        assert_eq!(
+            group_filters,
+            ["group_city", "group_type"],
+            "search group-by filters: {group_filters:?}"
+        );
+        // Each context is `{'group_by': <field>}`: its string literals are the key, then the field.
+        let literals = |name: &str| -> Vec<String> {
+            views[2]["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|n| n["kind"] == "search_filter" && n["name"] == name)
+                .unwrap()["context"]["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|n| n["value"]["value"].as_str().map(str::to_owned))
+                .collect()
+        };
+        assert_eq!(literals("group_city"), ["group_by", "city"]);
+        assert_eq!(literals("group_type"), ["group_by", "type"]);
 
         let tags = get_views(&orm, "res.partner.category", &["list", "form"]).await;
         let tag_views = tags["views"].as_array().unwrap();

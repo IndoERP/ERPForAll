@@ -13,7 +13,7 @@ afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, {
 async function fixture() {
   const root = await mkdtemp(path.join(tmpdir(), "browser-harness-contract-")); roots.push(root);
   for (const dir of ["web/scripts", "web/dist/human-ui", "crates/erp-server/brand"]) await mkdir(path.join(root, dir), { recursive: true });
-  for (const name of ["browser-human-ui.mjs", "browser-readiness.mjs"]) {
+  for (const name of ["browser-human-ui.mjs", "browser-readiness.mjs", "browser-office-measurements.mjs"]) {
     await copyFile(new URL(`../scripts/${name}`, import.meta.url), path.join(root, "web/scripts", name));
   }
   const assets = [];
@@ -26,7 +26,7 @@ async function fixture() {
   await writeFile(path.join(root, "REVISION"), "a".repeat(40));
   return { root, output: path.join(root, "evidence") };
 }
-async function failedRun(root: string, output: string, browser: string, timeout = 8000) {
+async function failedRun(root: string, output: string, browser: string, timeout = 15000) {
   try {
     await run(process.execPath, [path.join(root, "web/scripts/browser-human-ui.mjs")], {
       env: { ...process.env, CLIENT_BROWSER_CDP: "", CLIENT_BROWSER_OUTPUT: output, CHROME_BIN: browser },

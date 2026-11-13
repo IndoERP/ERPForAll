@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<!--
+The default approval policy revisions: agent destructive and external calls need
+     approval. No approver is named and no Allow exception exists; both stay inert until the agent
+     parts are accepted (resolution refuses agent principals until then). No revision for
+     user principals is shipped (B6). 
+-->
+<erp noupdate="1">
+  <record id="approval_policy_agent_destructive" model="ir.approval.policy">
+    <field name="name">Agents: destructive calls need approval</field>
+    <field name="principal_kind">agent</field>
+    <field name="effect">destructive</field>
+    <field name="outcome">approve</field>
+  </record>
+  <record id="approval_policy_agent_external" model="ir.approval.policy">
+    <field name="name">Agents: external calls need approval</field>
+    <field name="principal_kind">agent</field>
+    <field name="effect">external</field>
+    <field name="outcome">approve</field>
+  </record>
+</erp>

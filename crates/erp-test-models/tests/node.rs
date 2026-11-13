@@ -1,4 +1,4 @@
-//! SCALE.NODES: the node registry on a real database (spec, design
+//! SCALE.NODES: the node registry on a real database (design
 //! ). Memberships run with a 250 ms interval and a lease of four
 //! intervals unless a test sets others, each on its own pool of one connection; faults are real
 //! database faults (a table lock, a refusing `CHECK`).
@@ -3174,4 +3174,53 @@ async fn short_heartbeat_seam_connects_to_the_real_tcp_cluster() {
         .unwrap()
         .get(0);
     assert_eq!(value, 1);
+}
+
+#[tokio::test]
+async fn read_audit_policy_mismatch_refuses_node_admission() {
+    use erp_rpc::{ReadAuditPolicy, RpcConfig};
+    let h = setup().await;
+    async fn node(h: &Harness, name: &'static str, policy: ReadAuditPolicy) -> NodeMembership {
+        let spec = Spec::app(name);
+        let config = RpcConfig::builder()
+            .read_audit_policy(policy)
+            .build()
+            .unwrap();
+        let warm = pool(h).await;
+        let identity = NodeIdentity::builder(spec.role, name, spec.host, build(), addons())
+            .settings(&config)
+            .unwrap()
+            .options(options(&spec))
+            .create(&warm)
+            .await
+            .unwrap();
+        NodeMembership::register(Arc::new(identity), warm)
+            .await
+            .unwrap()
+    }
+    let a = node(
+        &h,
+        "audit-policy-a",
+        ReadAuditPolicy::user_groups(&["base.group_user", "base.group_system"]).unwrap(),
+    )
+    .await;
+    a.request_ready().await.unwrap();
+    wait_ready(&a).await;
+    let b = node(
+        &h,
+        "audit-policy-b",
+        ReadAuditPolicy::user_groups(&["base.group_system", "base.group_user", "base.group_user"])
+            .unwrap(),
+    )
+    .await;
+    b.request_ready().await.unwrap();
+    wait_ready(&b).await;
+    let c = node(&h, "audit-policy-c", ReadAuditPolicy::all_users()).await;
+    let readiness = c.request_ready().await.unwrap();
+    assert_eq!(digest_mismatch(&readiness).sections(), ["rpc"]);
+    assert!(!c.is_serving());
+    c.shutdown().await.unwrap();
+    b.shutdown().await.unwrap();
+    a.shutdown().await.unwrap();
+    h.cleanup().await.unwrap();
 }

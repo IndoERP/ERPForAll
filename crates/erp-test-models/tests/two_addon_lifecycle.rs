@@ -1,6 +1,6 @@
 //! Two-addon extension integration suite.
 //! Tests full lifecycle A -> B -> upgrade A -> uninstall B -> uninstall A,
-//! and data-only module lifecycle .
+//! and data-only module lifecycle.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -86,14 +86,8 @@ fn setup_dev_folder() -> (TempDir, PathBuf) {
     let tmp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
     let dev_path = tmp.path().to_path_buf();
 
-    // 1. minimal base manifest
-    let base_dir = dev_path.join("base");
-    fs::create_dir_all(&base_dir).unwrap();
-    fs::write(
-        base_dir.join("manifest.toml"),
-        "name = 'Base'\nsummary = 'Kernel'\nversion = '1.0'\nauto_install = true\ncategory = 'Hidden'\n",
-    )
-    .unwrap();
+    // 1. stand-in base from the test kit (manifest plus what base's register hook needs)
+    erp_testkit::stand_in_base::write_stand_in_base(&dev_path).unwrap();
 
     // 2. copy test_addon_a, test_addon_b, test_data_only from crates/erp-test-models/addons
     let src_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("addons");

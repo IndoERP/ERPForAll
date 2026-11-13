@@ -38,19 +38,20 @@ const text = `${quiet} > input:not([type=checkbox]):not([type=radio]):not([type=
 test("editable form fields use one bottom rule, with the accent on hover and focus", () => {
   for (const selector of [text, `${quiet} > select`, `${relation} .many2one-control`, `${relation} .many2many-tags .tag-list`, `${quiet} .field-currency-value > input`, `${quiet} .field-copy-clipboard > input`]) {
     const body = last(selector);
-    expect(body).toMatch(/border:\s*1px solid transparent/);
-    expect(body).toMatch(/border-bottom-color:\s*var\(--field-rule\)/);
-    expect(body).toMatch(/background:\s*transparent/);
+    // No side or top border, so read-only and editable text start on one x; the bottom rule carries the field.
+    expect(body).toMatch(/border:\s*0 solid transparent/);
+    expect(body).toMatch(/border-bottom:\s*1px solid var\(--field-rule\)/);
+    expect(body).toMatch(/background-color:\s*transparent/);
   }
   expect(last(`${text}:hover`)).toMatch(/border-bottom-color:\s*var\(--accent\)/);
   const focus = last(`${text}:focus`);
-  expect(focus).toMatch(/box-shadow:\s*inset 0 -2px 0 var\(--accent\)/);
+  expect(focus).toMatch(/box-shadow:\s*var\(--shadow-field-focus\)/);
   // Opaque: the browser readability check reads the field's own background, and a translucent wash fails it.
-  expect(focus).toMatch(/background:\s*var\(--surface\)/);
+  expect(focus).toMatch(/background-color:\s*var\(--surface\)/);
   expect(last(`${relation} .many2one-control:focus-within`)).toBe(focus);
   // The quiet rule has its own token in both themes; an invalid field keeps a danger rule.
-  expect(last(":root")).toMatch(/--field-rule:\s*#[0-9a-f]{6}/i);
-  expect(last(':root[data-theme="dark"]')).toMatch(/--field-rule:\s*#[0-9a-f]{6}/i);
+  expect(rulesFor(":root").join(" ")).toMatch(/--field-rule:\s*#[0-9a-f]{6}/i);
+  expect(rulesFor(':root[data-theme="dark"]').join(" ")).toMatch(/--field-rule:\s*#[0-9a-f]{6}/i);
   expect(last(".record-form:not(.settings-form) .field-invalid.field-shell > input")).toMatch(/border-bottom-color:\s*var\(--danger\)/);
   // Read-only fields and settings forms are outside the quiet rule's selector by construction.
   expect(quiet).toContain(":not(.field-readonly)");
@@ -59,10 +60,10 @@ test("editable form fields use one bottom rule, with the accent on hover and foc
 
 test("every form title uses one borderless treatment and labels are not bold", () => {
   const [title, phoneTitle] = rulesFor(".record-form .form-title-heading input:not([type=checkbox])");
-  expect(phoneTitle).toMatch(/font-size:\s*23px\s*!important/);
+  expect(phoneTitle).toMatch(/font-size:\s*23px/);
   expect(title).toMatch(/font-size:\s*26px/);
-  expect(title).toMatch(/border:\s*1px solid transparent\s*!important/);
-  expect(title).toMatch(/border-bottom-color:\s*var\(--line\)\s*!important/);
+  expect(title).toMatch(/border:\s*0 solid transparent/);
+  expect(title).toMatch(/border-bottom:\s*1px solid var\(--line\)/);
   expect(last(".record-form .form-title-heading .field-label > span")).toBe(last(".record-form .form-title-field .field-label > span"));
   // Slice D: the caption is visually hidden (still read by assistive technology); the empty title shows it as placeholder.
   expect(last(".record-form .form-title-heading .field-label > span")).toMatch(/clip-path:\s*inset\(50%\)/);
@@ -72,7 +73,7 @@ test("every form title uses one borderless treatment and labels are not bold", (
 
 test("list rows are compact and breadcrumb links have no button frame", () => {
   expect(last(".list-table td button.link")).toMatch(/min-height:\s*24px/);
-  expect(last(".list-table td")).toMatch(/padding-block:\s*6px/);
+  expect(last(".list-table td")).toMatch(/height:\s*var\(--list-row-height\);\s*padding-block:\s*0/); // the row is one fixed height (36px) instead of 6px padding around a 24px link
   expect(last(".list-table .many2many-tags .tag-list")).toMatch(/min-height:\s*0/);
   expect(last(".form-breadcrumb-path button")).toMatch(/border:\s*0/);
   expect(last(".many2one-buttons .relation-search-more")).toMatch(/border:\s*0/);

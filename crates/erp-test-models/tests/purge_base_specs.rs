@@ -179,8 +179,8 @@ async fn a_restrict_reference_of_a_staying_model_fails_the_uninstall() {
 }
 
 /// A removed module's view goes with every view built on it, the extensions of staying modules
-/// included, and their external ids (the view model's `force_delete` cascade,
-/// ; review A-D3: the menu-with-children case, with the view tree this
+/// included, and their external ids (the view model's `force_delete` cascade;
+/// review A-D3: the menu-with-children case, with the view tree this
 /// branch has).
 #[tokio::test]
 async fn a_removed_modules_view_goes_with_the_views_built_on_it() {

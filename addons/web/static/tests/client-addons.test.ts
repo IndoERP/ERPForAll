@@ -79,30 +79,332 @@ test("addons screen renders app-tile grid with name, summary, state badge, and I
 
 const catalog = (addons: unknown[]) => new RpcClient(async () => new Response(JSON.stringify({ wire_major: 1, addons }), { headers: { "Content-Type": "application/json" } }), () => {});
 
-test("uninstall is a disabled button with an explanation: no dialog, no RPC, never re-enabled", async () => {
+/// (partial: addon detail view renders manifest metadata, dependencies, and created menus/views with pagination)
+test("addon detail view renders manifest metadata, dependencies, and created menus/views with pagination", async () => {
+  let detailCalls = 0;
+  const cursors: (string | undefined)[] = [];
+  const rpc = new RpcClient(async (path, init) => {
+    if (typeof path === "string" && path.includes("erp_addon_detail")) {
+      detailCalls++;
+      const body = JSON.parse(String(init?.body || "{}"));
+      cursors.push(body.dependencies_cursor);
+      if (body.dependencies_cursor === "dep_cur_1") {
+        return new Response(JSON.stringify({
+          dependencies: { items: ["web"], next_cursor: null },
+        }), { headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify({
+        wire_major: 1,
+        registry_version: "reg:1",
+        name: "acceptance_notes",
+        label: "Notes",
+        summary: "Collaborative note management",
+        description: "Full rich description of the Notes addon.",
+        author: "ERPForAll",
+        available_version: "2.1",
+        installed_version: "2.1",
+        state: "installed",
+        dependencies: { items: ["base"], next_cursor: "dep_cur_1" },
+        dependents: { items: ["sale_notes"], next_cursor: null },
+        menus: { items: [{ id: 101, name: "notes_menu", label: "Notes App" }], next_cursor: null },
+        views: { items: [{ id: 201, name: "notes.tree", model: "note.note", kind: "list" }], next_cursor: null },
+        upgrade_refusal: null,
+        uninstall_refusal: null,
+      }), { headers: { "Content-Type": "application/json" } });
+    }
+    return new Response(JSON.stringify({
+      wire_major: 1,
+      addons: [row({ name: "acceptance_notes", label: "Notes", version: "2.1", state: "installed", installable: true, summary: "Collaborative note management" })]
+    }), { headers: { "Content-Type": "application/json" } });
+  }, () => {});
+
+  const host = document.createElement("div"); document.body.append(host);
+  await addonsView(host, rpc, job => { void job(); }, () => {}, {});
+
+  const tile = host.querySelector<HTMLElement>('[data-addon="acceptance_notes"]')!;
+  tile.click();
+  await vi.waitFor(() => expect(host.querySelector(".addon-detail")).not.toBeNull());
+
+  const detail = host.querySelector(".addon-detail")!;
+  expect(detail).not.toBeNull();
+  expect(detail.querySelector(".addon-detail-title")?.textContent).toBe("Notes");
+  expect(detail.querySelector(".addon-technical-name")?.textContent).toBe("acceptance_notes");
+  expect(detail.querySelector(".addon-detail-summary")?.textContent).toBe("Collaborative note management");
+  expect(detail.querySelector(".addon-detail-description")?.textContent).toBe("Full rich description of the Notes addon.");
+
+  const facts = Object.fromEntries([...detail.querySelectorAll(".addon-detail-facts dt")].map(dt => [dt.textContent, dt.nextElementSibling?.textContent]));
+  expect(facts["Author"]).toBe("ERPForAll");
+  expect(facts["Version"]).toBe("2.1");
+  expect(facts["Installed version"]).toBe("2.1");
+
+  const depSection = detail.querySelectorAll(".addon-depends")[0]!;
+  expect(depSection.textContent).toContain("base");
+  const moreBtn = detail.querySelector<HTMLButtonElement>(".addon-detail-more");
+  expect(moreBtn).not.toBeNull();
+  moreBtn!.click();
+  await vi.waitFor(() => expect(detailCalls).toBe(2));
+  expect(cursors).toContain("dep_cur_1");
+  await vi.waitFor(() => expect(depSection.textContent).toContain("web"));
+
+  expect(detail.textContent).toContain("Notes App");
+  expect(detail.textContent).toContain("notes.tree");
+});
+
+/// (partial: addon detail back button restores catalog layout and focus)
+test("addon detail back button restores catalog layout and focus", async () => {
+  const rpc = new RpcClient(async (path) => {
+    if (typeof path === "string" && path.includes("erp_addon_detail")) {
+      return new Response(JSON.stringify({
+        wire_major: 1, registry_version: "reg:1", name: "acceptance_notes", label: "Notes",
+        summary: "Desc", description: "Desc", author: "A", available_version: "1", installed_version: "1",
+        state: "installed", dependencies: { items: [], next_cursor: null }, dependents: { items: [], next_cursor: null },
+        menus: { items: [], next_cursor: null }, views: { items: [], next_cursor: null },
+        upgrade_refusal: null, uninstall_refusal: null
+      }), { headers: { "Content-Type": "application/json" } });
+    }
+    return new Response(JSON.stringify({
+      wire_major: 1, addons: [row({ name: "acceptance_notes", label: "Notes", version: "1", state: "installed", installable: true })]
+    }), { headers: { "Content-Type": "application/json" } });
+  }, () => {});
+
+  const host = document.createElement("div"); document.body.append(host);
+  await addonsView(host, rpc, job => { void job(); }, () => {}, {});
+
+  const tile = host.querySelector<HTMLElement>('[data-addon="acceptance_notes"]')!;
+  tile.focus();
+  tile.click();
+  await vi.waitFor(() => expect(host.querySelector(".addon-detail")).not.toBeNull());
+
+  const backBtn = host.querySelector<HTMLButtonElement>(".addon-detail-back")!;
+  backBtn.click();
+  expect(host.querySelector(".addon-detail")).toBeNull();
+  expect(host.querySelector(".addons-layout")).not.toBeNull();
+  expect(document.activeElement).toBe(tile);
+});
+
+/// (partial: upgrade action requests explicit confirmation, calls /erp/module/upgrade, and reloads on success)
+test("upgrade action requests explicit confirmation, calls /erp/module/upgrade, and reloads on success", async () => {
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function (this: HTMLDialogElement) { this.open = true; } });
-  let calls = 0;
-  const rpc = new RpcClient(async () => {
-    calls++;
+  Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function (this: HTMLDialogElement) { this.open = false; } });
+  let writes = 0, reloaded = false;
+  Object.defineProperty(window, "location", { configurable: true, value: { reload: () => { reloaded = true; } } });
+
+  const rpc = new RpcClient(async (path, init) => {
+    if (String(path) === "/erp/module/upgrade") {
+      writes++;
+      const body = JSON.parse(String(init?.body || "{}"));
+      expect(body.modules).toEqual(["acceptance_notes"]);
+      return new Response(JSON.stringify({ upgraded: ["acceptance_notes"], installed: [], registry_version: "2", asset_version: "2" }), { headers: { "Content-Type": "application/json" } });
+    }
     return new Response(JSON.stringify({ wire_major: 1, addons: [row({ name: "acceptance_notes", label: "Notes", version: "1.0", state: "installed", installable: true })] }), { headers: { "Content-Type": "application/json" } });
   }, () => {});
+
   const host = document.createElement("div"); document.body.append(host);
-  const jobs: Promise<void>[] = [];
-  await addonsView(host, rpc, job => { jobs.push(job()); }, () => {}, {});
-  const uninstall = [...host.querySelectorAll("button")].find(b => b.textContent === "Uninstall")!;
-  expect(uninstall.disabled).toBe(true);
-  expect(uninstall.title).toContain("");
-  const note = host.querySelector(".addon-note")!;
-  expect(note.textContent).toBe("Uninstall is not available in the web client; use the erp module uninstall CLI command.");
-  expect(uninstall.getAttribute("aria-describedby")).toBe(note.id);
-  uninstall.click();
-  expect(document.querySelectorAll("dialog")).toHaveLength(0);
-  expect(jobs).toHaveLength(0); expect(calls).toBe(1);
-  // A refresh cycle (pending on, then off) must not re-enable it.
-  [...host.querySelectorAll("button")].find(b => b.textContent === "Refresh catalog")!.click();
-  await Promise.all(jobs);
-  expect(calls).toBe(2);
-  expect([...host.querySelectorAll("button")].find(b => b.textContent === "Uninstall")!.disabled).toBe(true);
+  const notices: string[] = [];
+  await addonsView(host, rpc, job => { void job().catch(() => {}); }, msg => notices.push(msg), {});
+
+  const upgradeBtn = host.querySelector<HTMLButtonElement>(".addon-upgrade")!;
+  upgradeBtn.click();
+
+  const cancelBtn = [...document.querySelectorAll<HTMLButtonElement>("dialog button")].find(b => b.textContent === "Cancel")!;
+  cancelBtn.click();
+  expect(writes).toBe(0);
+
+  await vi.waitFor(() => expect(upgradeBtn.disabled).toBe(false));
+  upgradeBtn.click();
+  await vi.waitFor(() => expect([...document.querySelectorAll<HTMLButtonElement>("dialog button")].find(b => b.textContent === "Upgrade")).toBeDefined());
+  const confirmBtn = [...document.querySelectorAll<HTMLButtonElement>("dialog button")].find(b => b.textContent === "Upgrade")!;
+  confirmBtn.click();
+
+  await vi.waitFor(() => expect(writes).toBe(1));
+  expect(reloaded).toBe(true);
+  expect(notices).toContain("Addon upgraded. Reloading the application…");
+});
+
+/// (partial: upgrade refusal in detail disables upgrade button and displays reason)
+test("upgrade refusal in detail disables upgrade button and displays reason", async () => {
+  const rpc = new RpcClient(async (path) => {
+    if (typeof path === "string" && path.includes("erp_addon_detail")) {
+      return new Response(JSON.stringify({
+        wire_major: 1, registry_version: "reg:1", name: "acceptance_notes", label: "Notes",
+        summary: "Desc", description: "Desc", author: "A", available_version: "1", installed_version: "1",
+        state: "installed", dependencies: { items: [], next_cursor: null }, dependents: { items: [], next_cursor: null },
+        menus: { items: [], next_cursor: null }, views: { items: [], next_cursor: null },
+        upgrade_refusal: "Installed addon source is unavailable to native upgrade", uninstall_refusal: null
+      }), { headers: { "Content-Type": "application/json" } });
+    }
+    return new Response(JSON.stringify({
+      wire_major: 1, addons: [row({ name: "acceptance_notes", label: "Notes", version: "1", state: "installed", installable: true })]
+    }), { headers: { "Content-Type": "application/json" } });
+  }, () => {});
+
+  const host = document.createElement("div"); document.body.append(host);
+  await addonsView(host, rpc, job => { void job(); }, () => {}, {});
+
+  const tile = host.querySelector<HTMLElement>('[data-addon="acceptance_notes"]')!;
+  tile.click();
+  await vi.waitFor(() => expect(host.querySelector(".addon-detail")).not.toBeNull());
+
+  const upgradeBtn = host.querySelector<HTMLButtonElement>(".addon-detail .addon-upgrade")!;
+  expect(upgradeBtn.disabled).toBe(true);
+  expect(upgradeBtn.title).toBe("Installed addon source is unavailable to native upgrade");
+  expect(host.querySelector(".addon-refusal-note")?.textContent).toBe("Installed addon source is unavailable to native upgrade");
+});
+
+/// (partial: uninstall preview refusal displays error and prevents confirmation dialog)
+test("uninstall preview refusal displays error and prevents confirmation dialog", async () => {
+  Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function (this: HTMLDialogElement) { this.open = true; } });
+  Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function (this: HTMLDialogElement) { this.open = false; } });
+
+  const rpc = new RpcClient(async (path) => {
+    if (typeof path === "string" && path.includes("erp_preview_uninstall")) {
+      return new Response(JSON.stringify({ error: { message: "Native uninstall preview requires a trusted-session engine bridge", name: "erp.exceptions.UserError" } }), { status: 400, headers: { "Content-Type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ wire_major: 1, addons: [row({ name: "acceptance_notes", label: "Notes", version: "1.0", state: "installed", installable: true })] }), { headers: { "Content-Type": "application/json" } });
+  }, () => {});
+
+  const host = document.createElement("div"); document.body.append(host);
+  const notices: string[] = [];
+  await addonsView(host, rpc, job => { void job().catch(() => {}); }, msg => notices.push(msg), {});
+
+  const uninstallBtn = host.querySelector<HTMLButtonElement>(".addon-uninstall")!;
+  uninstallBtn.click();
+
+  await vi.waitFor(() => expect(notices.length).toBeGreaterThan(0));
+  expect(notices[0]).toContain("Uninstall preview failed");
+  expect(document.querySelector(".addon-uninstall-dialog")).toBeNull();
+});
+
+/// (partial: uninstall confirmation dialog renders warning, affected modules, dropped models and exact record counts)
+test("uninstall confirmation dialog renders warning, affected modules, dropped models and exact record counts", async () => {
+  Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function (this: HTMLDialogElement) { this.open = true; } });
+  Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function (this: HTMLDialogElement) { this.open = false; this.dispatchEvent(new Event("close")); } });
+
+  const rpc = new RpcClient(async (path) => {
+    if (typeof path === "string" && path.includes("erp_preview_uninstall")) {
+      return new Response(JSON.stringify({
+        version: 1,
+        requested: ["acceptance_notes"],
+        resolved: ["acceptance_notes", "notes_extra"],
+        dropped_models: [
+          { model: "note.note", table: "note_note", row_count: "42" },
+          { model: "note.tag", table: "note_tag", row_count: "7" }
+        ],
+        metadata: [],
+        target_count: "49",
+        fingerprint: "fp_test_123"
+      }), { headers: { "Content-Type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ wire_major: 1, addons: [row({ name: "acceptance_notes", label: "Notes", version: "1.0", state: "installed", installable: true })] }), { headers: { "Content-Type": "application/json" } });
+  }, () => {});
+
+  const host = document.createElement("div"); document.body.append(host);
+  await addonsView(host, rpc, job => { void job(); }, () => {}, {});
+
+  const uninstallBtn = host.querySelector<HTMLButtonElement>(".addon-uninstall")!;
+  uninstallBtn.click();
+
+  await vi.waitFor(() => expect(document.querySelector(".addon-uninstall-dialog")).not.toBeNull());
+  const dialog = document.querySelector<HTMLDialogElement>(".addon-uninstall-dialog")!;
+  expect(dialog.open).toBe(true);
+  expect(dialog.querySelector(".addon-uninstall-title")?.textContent).toBe("Uninstall Notes?");
+  expect(dialog.querySelector(".addon-uninstall-warning")?.textContent).toContain("Uninstalling modules can be risky");
+
+  const mods = [...dialog.querySelectorAll(".addon-impact-modules li")].map(li => li.textContent);
+  expect(mods).toEqual(["acceptance_notes", "notes_extra"]);
+
+  const rows = [...dialog.querySelectorAll(".addon-impact-models-table tbody tr")].map(tr => [...tr.children].map(td => td.textContent));
+  expect(rows).toEqual([
+    ["note.note", "note_note", "42"],
+    ["note.tag", "note_tag", "7"]
+  ]);
+  expect(dialog.querySelector(".addon-impact-summary")?.textContent).toContain("49");
+});
+
+/// (partial: uninstall confirmation dialog traps focus and restores focus on escape/cancel)
+test("uninstall confirmation dialog traps focus and restores focus on escape/cancel", async () => {
+  Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function (this: HTMLDialogElement) { this.open = true; } });
+  Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function (this: HTMLDialogElement) { this.open = false; this.dispatchEvent(new Event("close")); } });
+
+  const rpc = new RpcClient(async (path) => {
+    if (typeof path === "string" && path.includes("erp_preview_uninstall")) {
+      return new Response(JSON.stringify({
+        version: 1, requested: ["acceptance_notes"], resolved: ["acceptance_notes"],
+        dropped_models: [], metadata: [], target_count: "0", fingerprint: "fp_test"
+      }), { headers: { "Content-Type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ wire_major: 1, addons: [row({ name: "acceptance_notes", label: "Notes", version: "1.0", state: "installed", installable: true })] }), { headers: { "Content-Type": "application/json" } });
+  }, () => {});
+
+  const host = document.createElement("div"); document.body.append(host);
+  await addonsView(host, rpc, job => { void job(); }, () => {}, {});
+
+  const uninstallBtn = host.querySelector<HTMLButtonElement>(".addon-uninstall")!;
+  uninstallBtn.focus();
+  uninstallBtn.click();
+
+  await vi.waitFor(() => expect(document.querySelector(".addon-uninstall-dialog")).not.toBeNull());
+  const dialog = document.querySelector<HTMLDialogElement>(".addon-uninstall-dialog")!;
+  const cancelBtn = dialog.querySelector<HTMLButtonElement>(".addon-uninstall-cancel")!;
+  const confirmBtn = dialog.querySelector<HTMLButtonElement>(".addon-uninstall-confirm")!;
+
+  expect(document.activeElement).toBe(cancelBtn);
+
+  dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", shiftKey: true }));
+  expect(document.activeElement).toBe(confirmBtn);
+
+  dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+  expect(document.querySelector(".addon-uninstall-dialog")).toBeNull();
+  expect(document.activeElement).toBe(uninstallBtn);
+});
+
+/// (partial: confirmed uninstall submits fingerprint to /erp/module/uninstall and handles 409 conflict)
+test("confirmed uninstall submits fingerprint to /erp/module/uninstall and handles 409 conflict", async () => {
+  Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function (this: HTMLDialogElement) { this.open = true; } });
+  Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function (this: HTMLDialogElement) { this.open = false; this.dispatchEvent(new Event("close")); } });
+
+  let uninstalls = 0, conflict = true;
+  const notices: string[] = [];
+
+  const rpc = new RpcClient(async (path, init) => {
+    if (typeof path === "string" && path.includes("erp_preview_uninstall")) {
+      return new Response(JSON.stringify({
+        version: 1, requested: ["acceptance_notes"], resolved: ["acceptance_notes"],
+        dropped_models: [], metadata: [], target_count: "0", fingerprint: "fp_123"
+      }), { headers: { "Content-Type": "application/json" } });
+    }
+    if (String(path) === "/erp/module/uninstall") {
+      uninstalls++;
+      const body = JSON.parse(String(init?.body || "{}"));
+      expect(body.modules).toEqual(["acceptance_notes"]);
+      expect(body.impact).toBe("fp_123");
+      if (conflict) {
+        conflict = false;
+        return new Response(JSON.stringify({ message: "Database state changed", name: "erp.exceptions.Conflict" }), { status: 409, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ uninstalled: ["acceptance_notes"], registry_version: "2", asset_version: "2" }), { headers: { "Content-Type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ wire_major: 1, addons: [row({ name: "acceptance_notes", label: "Notes", version: "1.0", state: "installed", installable: true })] }), { headers: { "Content-Type": "application/json" } });
+  }, () => {});
+
+  const host = document.createElement("div"); document.body.append(host);
+  await addonsView(host, rpc, job => { void job().catch(() => {}); }, msg => notices.push(msg), {});
+
+  const uninstallBtn = host.querySelector<HTMLButtonElement>(".addon-uninstall")!;
+  uninstallBtn.click();
+  await vi.waitFor(() => expect(document.querySelector(".addon-uninstall-dialog")).not.toBeNull());
+
+  document.querySelector<HTMLButtonElement>(".addon-uninstall-confirm")!.click();
+  await vi.waitFor(() => expect(uninstalls).toBe(1));
+  await vi.waitFor(() => expect(notices).toContain("Database state changed since preview. A fresh confirmation is required."));
+  await vi.waitFor(() => expect(document.querySelector(".addon-uninstall-dialog")).toBeNull());
+
+  await vi.waitFor(() => expect(host.querySelector<HTMLButtonElement>(".addon-uninstall")).not.toBeNull());
+  host.querySelector<HTMLButtonElement>(".addon-uninstall")!.click();
+  await vi.waitFor(() => expect(document.querySelector(".addon-uninstall-dialog")).not.toBeNull());
+  document.querySelector<HTMLButtonElement>(".addon-uninstall-confirm")!.click();
+  await vi.waitFor(() => expect(uninstalls).toBe(2));
+  await vi.waitFor(() => expect(notices).toContain("Addon uninstalled. Reloading the application…"));
 });
 
 test("an unknown addon state is a loud server error", async () => {
@@ -332,4 +634,80 @@ test("Load demo data asks for the irreversible confirmation and posts confirm=tr
   await Promise.all(jobs);
   expect(posts[0]).toEqual({ path: "/erp/module/force-demo", body: { confirm: true } });
   expect(errors).toHaveLength(1);
+});
+
+// Review S2/S3 (cycle 4): strict decoding, reported Load more failures, stale detail replies, Escape during uninstall.
+const detailDoc = (name: string, over: Record<string, unknown> = {}) => ({
+  wire_major: 1, registry_version: "reg:1", name, label: name.toUpperCase(), summary: "S", description: "D", author: "A", available_version: "1", installed_version: "1",
+  state: "installed", dependencies: { items: [], next_cursor: null }, dependents: { items: [], next_cursor: null },
+  menus: { items: [], next_cursor: null }, views: { items: [], next_cursor: null }, upgrade_refusal: null, uninstall_refusal: null, ...over });
+const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
+const twoAddons = { wire_major: 1, addons: ["aa", "bb"].map(name => row({ name, label: name, version: "1", state: "installed", installable: true })) };
+test("an addon detail missing a required field is an error naming the field, not an empty value", async () => {
+  const rpc = new RpcClient(async path => String(path).includes("erp_addon_detail") ? json({ ...detailDoc("aa"), description: undefined }) : json(twoAddons), () => {});
+  const host = document.createElement("div"); document.body.append(host);
+  const errors: unknown[] = [], jobs: Promise<void>[] = [];
+  await addonsView(host, rpc, job => { jobs.push(job().catch(error => { errors.push(error); })); }, () => {}, {});
+  host.querySelector<HTMLElement>('[data-addon="aa"]')!.click(); await Promise.all(jobs);
+  expect(String((errors[0] as Error).message)).toContain("addon detail description"); expect(host.querySelector(".addon-detail")).toBeNull();
+});
+test("a failed Load more request goes through run and is reported", async () => {
+  const rpc = new RpcClient(async (path, init) => {
+    if (!String(path).includes("erp_addon_detail")) return json(twoAddons);
+    return JSON.parse(String(init?.body)).dependencies_cursor ? new Response("{}", { status: 500 }) : json(detailDoc("aa", { dependencies: { items: ["base"], next_cursor: "c1" } }));
+  }, () => {});
+  const host = document.createElement("div"); document.body.append(host);
+  const errors: unknown[] = [], jobs: Promise<void>[] = [];
+  await addonsView(host, rpc, job => { jobs.push(job().catch(error => { errors.push(error); })); }, () => {}, {});
+  host.querySelector<HTMLElement>('[data-addon="aa"]')!.click(); await Promise.all(jobs);
+  host.querySelector<HTMLButtonElement>(".addon-detail-more")!.click(); await Promise.all(jobs);
+  expect(errors).toHaveLength(1); expect(host.querySelector<HTMLButtonElement>(".addon-detail-more")!.disabled).toBe(false);
+});
+test("a slow detail reply for an earlier click does not replace the later addon's page", async () => {
+  let releaseA!: () => void; const gateA = new Promise<void>(done => { releaseA = done; });
+  const rpc = new RpcClient(async (path, init) => {
+    if (!String(path).includes("erp_addon_detail")) return json(twoAddons);
+    const name = JSON.parse(String(init?.body)).name as string;
+    if (name === "aa") await gateA;
+    return json(detailDoc(name));
+  }, () => {});
+  const host = document.createElement("div"); document.body.append(host);
+  const jobs: Promise<void>[] = [];
+  await addonsView(host, rpc, job => { jobs.push(job()); }, () => {}, {});
+  host.querySelector<HTMLElement>('[data-addon="aa"]')!.click();
+  host.querySelector<HTMLElement>('[data-addon="bb"]')!.click();
+  await vi.waitFor(() => expect(host.querySelector(".addon-detail-title")?.textContent).toBe("BB"));
+  releaseA(); await Promise.all(jobs);
+  expect(host.querySelector(".addon-detail-title")?.textContent).toBe("BB");
+});
+test("an uninstall preview without its fingerprint is an error and no dialog opens", async () => {
+  const rpc = new RpcClient(async path => String(path).includes("erp_preview_uninstall")
+    ? json({ version: 1, requested: ["aa"], resolved: ["aa"], dropped_models: [], metadata: [], target_count: "0" }) : json(twoAddons), () => {});
+  const host = document.createElement("div"); document.body.append(host);
+  const errors: unknown[] = [], jobs: Promise<void>[] = [];
+  Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function (this: HTMLDialogElement) { this.open = true; } });
+  await addonsView(host, rpc, job => { jobs.push(job().catch(error => { errors.push(error); })); }, () => {}, {});
+  host.querySelector<HTMLButtonElement>(".addon-uninstall")!.click(); await Promise.all(jobs);
+  expect(String((errors[0] as Error).message)).toContain("fingerprint"); expect(document.querySelector(".addon-uninstall-dialog")).toBeNull();
+});
+test("Escape and the cancel event are ignored while the uninstall request runs", async () => {
+  Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function (this: HTMLDialogElement) { this.open = true; } });
+  Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function (this: HTMLDialogElement) { this.open = false; this.dispatchEvent(new Event("close")); } });
+  let release!: () => void, posts = 0; const gate = new Promise<void>(done => { release = done; });
+  const rpc = new RpcClient(async path => {
+    if (String(path).includes("erp_preview_uninstall")) return json({ version: 1, requested: ["aa"], resolved: ["aa"], dropped_models: [], metadata: [], target_count: "0", fingerprint: "fp" });
+    if (String(path) === "/erp/module/uninstall") { posts++; await gate; return new Response("{}", { status: 500 }); }
+    return json(twoAddons);
+  }, () => {});
+  const host = document.createElement("div"); document.body.append(host);
+  await addonsView(host, rpc, job => { void job().catch(() => {}); }, () => {}, {});
+  host.querySelector<HTMLButtonElement>(".addon-uninstall")!.click();
+  await vi.waitFor(() => expect(document.querySelector(".addon-uninstall-dialog")).not.toBeNull());
+  const dialog = document.querySelector<HTMLDialogElement>(".addon-uninstall-dialog")!;
+  document.querySelector<HTMLButtonElement>(".addon-uninstall-confirm")!.click();
+  await vi.waitFor(() => expect(posts).toBe(1));
+  dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+  const cancel = new Event("cancel", { cancelable: true }); dialog.dispatchEvent(cancel);
+  expect(cancel.defaultPrevented).toBe(true); expect(document.querySelector(".addon-uninstall-dialog")).not.toBeNull();
+  release();
 });

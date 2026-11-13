@@ -40,6 +40,9 @@ fn base_addon_stands_for_the_core_base_in_a_registry() {
     assert!(with_crate.model("res.users").is_some());
     assert!(with_crate.model("res.company").is_some());
     assert!(with_crate.model("res.currency").is_some());
+    assert!(with_crate.model("res.country").is_some());
+    assert!(with_crate.model("res.country.state").is_some());
+    assert!(with_crate.model("res.country.group").is_some());
     assert!(with_crate.model("res.lang").is_some());
     assert!(with_crate.model("ir.default").is_some());
     assert!(with_crate.model("ir.sequence").is_some());

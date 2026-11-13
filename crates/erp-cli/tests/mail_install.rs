@@ -87,6 +87,34 @@ async fn xmlid(tx: &mut Transaction, name: &str) -> i64 {
     rows[0].get(0)
 }
 
+/// is its partner when it has one; the company scope of contacts and users treats the system user as
+/// internal)
+#[tokio::test]
+async fn install_leaves_the_system_user_internal() {
+    let (db, system, orm) = Box::pin(installed()).await;
+    let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+    let rows = tx
+        .query(
+            "SELECT u.share, p.partner_share FROM res_users u \
+               LEFT JOIN res_partner p ON p.id = u.partner_id WHERE u.id = $1",
+            &[&SUPERUSER_ID.get()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1, "the system user has a row");
+    assert!(
+        !rows[0].get::<_, bool>(0),
+        "res_users.share of the system user"
+    );
+    // a partner the install gave it (when it has one) is internal too
+    if let Some(partner_share) = rows[0].get::<_, Option<bool>>(1) {
+        assert!(!partner_share, "res_partner.partner_share of its partner");
+    }
+    tx.rollback().await.unwrap();
+    drop((system, orm));
+    db.cleanup().await.unwrap();
+}
+
 /// The installed subtype rows by external id: (name, default, internal, sequence,
 /// track_recipients, res_model).
 type SubtypeRow = (String, bool, bool, i32, bool, Option<String>);

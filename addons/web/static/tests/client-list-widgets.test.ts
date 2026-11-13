@@ -86,7 +86,7 @@ test("list monetary loading and resolved output have no form labels or input con
 test("list unsafe monetary amounts retain a visible refusal instead of an empty successful cell", async () => {
   const rpc = new RpcClient(async () => new Response('[{"id":1,"symbol":"€","position":"before","decimal_places":2}]', { headers: { "Content-Type": "application/json" } }), () => {});
   const control = render({ ...field("amount", "monetary"), options: { currency_field: { model: "fixture.note", name: "currency_id" } } }, 0.125, { rpc, values: { currency_id: 1 } });
-  await vi.waitFor(() => expect(control.node.textContent).toBe("This amount cannot round-trip safely. Lossless monetary transport requires a later release."));
+  await vi.waitFor(() => expect(control.node.textContent).toBe("This amount cannot round-trip safely. Lossless monetary transport is not available."));
   expect(control.node.querySelector("input,label")).toBeNull(); expect(control.change).not.toHaveBeenCalled();
 });
 
@@ -120,7 +120,7 @@ async function listApp(kind: "float" | "char", widget: string, value: unknown) {
   const calls: string[] = [];
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input); calls.push(path);
-    const result = path.endsWith('erp_load_web_menus') ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] }
+    const result = path.endsWith('erp_load_web_menus') ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] }
       : path.endsWith('erp_load_web_action_views') ? { action, views: description }
       : path.endsWith('erp_load_web_action') ? action
       : path.endsWith('erp_describe') ? { wire_major: 1, registry_version: "r1", scope: { kind: "global" }, declarations: [] }
@@ -149,6 +149,10 @@ test("actual list keeps URL action and root record navigation outside one anothe
   expect(cell.querySelector('a')?.href).toBe("https://example.test/"); expect(cell.querySelector('[data-record-open]')).not.toBeNull();
   expect(cell.querySelector('[data-record-open] a,[data-record-open] input,[data-record-open] button')).toBeNull();
   expect(cell.querySelector('a')?.contains(cell.querySelector('[data-record-open]'))).toBe(false);
+  const openBtn = cell.querySelector<HTMLButtonElement>('[data-record-open]')!;
+  expect(openBtn.classList.contains("list-record-open")).toBe(true);
+  expect(openBtn.querySelector("svg.erp-icon")?.getAttribute("data-icon")).toBe("chevron-right");
+  expect(openBtn.textContent).not.toContain("↗");
 });
 
 /// (partial: clipped primary list text retains its full formatted hover value)

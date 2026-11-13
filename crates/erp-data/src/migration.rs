@@ -10,8 +10,8 @@
 use erp_orm::{BoxFuture, Transaction};
 use std::fmt;
 
-/// A `major.minor.patch` version: a module's installed or manifest version in its semver form
-/// , and the version a migration step targets.
+/// A `major.minor.patch` version: a module's installed or manifest version in its semver form,
+/// and the version a migration step targets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 pub struct SemverVersion {
     /// Major part.

@@ -10,7 +10,9 @@
 //! only (no serialization failure happens there). The steps that retry (database review round
 //! 3 DD-1, rust review round 3 RD-6): the login's phase B, both the failure count and the
 //! success statement (one statement each: a 40P01 rolls all of it back, so a rerun counts once
-//! and writes one session); `rotate`; `touch`; `logout`; the deletion after a refused session
+//! and writes one session; under custom selection or a bound rollout the success statement runs
+//! inside the guarded finalization transaction, which a 40P01 aborts as a whole, so the guard,
+//! the re-selection and the statement run again together); `rotate`; `touch`; `logout`; the deletion after a refused session
 //! check; the sessions a login ends; each collection batch. Read-only steps take no row lock and
 //! do not retry: the login's phase A and the settings reload.
 
@@ -29,7 +31,8 @@ use super::warn::WarnLimit;
 pub struct DeadlockRetries {
     /// The failure count of a login (phase B of a refusal).
     pub failure_write: u64,
-    /// The success statement of a login (phase B of a success).
+    /// The success statement of a login (phase B of a success); under custom selection or a bound
+    /// rollout, the whole guarded finalization that a deadlock aborted.
     pub success: u64,
     /// `Auth::rotate`.
     pub rotate: u64,
@@ -117,27 +120,35 @@ where
     let mut tries = 1;
     loop {
         match work().await {
-            Err(e)
-                if e.sqlstate().is_some_and(|code| retried.contains(&code))
-                    && tries < DEADLOCK_TRIES =>
-            {
-                let total = step.absorbed.fetch_add(1, Ordering::Relaxed) + 1;
-                let wait = backoff();
-                if step.warn.admit() {
-                    tracing::warn!(
-                        target: "erp::auth",
-                        "{name}: conflict on try {tries} of {DEADLOCK_TRIES}, running it again in \
-                         {} ms: {e} ({total} absorbed by this step so far; this line comes at most \
-                         once a second per step)",
-                        wait.as_millis()
-                    );
-                }
+            Err(e) if is_retried(retried, &e, tries) => {
+                absorb(step, name, tries, &e).await;
                 tries += 1;
-                tokio::time::sleep(wait).await;
             }
             other => return other,
         }
     }
+}
+
+/// Whether `e` is a conflict of `retried` with a try left after try number `tries`.
+pub(crate) fn is_retried(retried: &[&str], e: &erp_fields::Error, tries: u32) -> bool {
+    e.sqlstate().is_some_and(|code| retried.contains(&code)) && tries < DEADLOCK_TRIES
+}
+
+/// Count the conflict `e` of try `tries` in `step`, log it (rate limited) and sleep the backoff,
+/// for a caller whose rerun is more than a closure ([`retry`] does this itself).
+pub(crate) async fn absorb(step: &RetryStep, name: &str, tries: u32, e: &erp_fields::Error) {
+    let total = step.absorbed.fetch_add(1, Ordering::Relaxed) + 1;
+    let wait = backoff();
+    if step.warn.admit() {
+        tracing::warn!(
+            target: "erp::auth",
+            "{name}: conflict on try {tries} of {DEADLOCK_TRIES}, running it again in \
+             {} ms: {e} ({total} absorbed by this step so far; this line comes at most \
+             once a second per step)",
+            wait.as_millis()
+        );
+    }
+    tokio::time::sleep(wait).await;
 }
 
 /// 5 – 25 ms, jittered from the clock: the jitter only spreads retries apart, it has no

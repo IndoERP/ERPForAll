@@ -1,4 +1,4 @@
-//! PERF.STREAM-WINDOW (design notes–§3.7, §4.1, §9.3 and
+//! PERF.STREAM-WINDOW (–§3.7, §4.1, §9.3 and
 //! ): windowed reads through a SQL cursor (`Records::stream`)
 //! or id chunks (`Records::stream_records`). Each window equals `read_rows` of its records; the
 //! statements and round trips are pinned; a window leaves nothing in the cache; the cursor is

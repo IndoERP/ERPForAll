@@ -6,7 +6,9 @@
     reason = "test assertions"
 )]
 use erp_sdk::{Cell, Command, ErrorKind, RawVals, Records, Transaction, Value};
-use erp_testkit::Harness;
+use erp_testkit::{FieldPolicy, Harness};
+
+mod users_support;
 
 async fn harness() -> Harness {
     Harness::builder([&erp_addon_base::ADDON])
@@ -391,7 +393,7 @@ async fn active_default_user_blocks_ancestor_archive() {
     let usd = currency(&mut tx, "CBC").await;
     let root = company(&mut tx, "Protected", Some(usd), None).await;
     let branch = company(&mut tx, "Protected Branch", Some(usd), Some(root.ids()[0])).await;
-    tx.query("INSERT INTO res_users (name, login, active, company_id) VALUES ('Branch User', 'branch-user', true, $1) RETURNING id", &[&branch.ids()[0]]).await.unwrap();
+    tx.query("INSERT INTO res_users (name, login, active, company_id, share) VALUES ('Branch User', 'branch-user', true, $1, false) RETURNING id", &[&branch.ids()[0]]).await.unwrap();
     let error = root.action_archive(&mut tx).await.unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Validation);
     assert_eq!(
@@ -404,6 +406,50 @@ async fn active_default_user_blocks_ancestor_archive() {
         commit_error.message(),
         "The company Protected Branch cannot be archived because it is the default company of 1 active users."
     );
+    h.cleanup().await.unwrap();
+}
+
+/// names the one with the lowest id and its own user count, whatever the order of the selection)
+#[tokio::test]
+async fn archive_refusal_names_the_lowest_protected_company_with_its_count() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    let usd = currency(&mut tx, "CBG").await;
+    let low = company(&mut tx, "Low protected", Some(usd), None)
+        .await
+        .ids()[0];
+    let high = company(&mut tx, "High protected", Some(usd), None)
+        .await
+        .ids()[0];
+    assert!(low < high);
+    for (login, company) in [("low-a", low), ("low-b", low), ("high-a", high)] {
+        tx.execute(
+            "INSERT INTO res_users (name, login, active, company_id, share) VALUES ($1, $1, true, $2, false)",
+            &[&login, &company],
+        )
+        .await
+        .unwrap();
+    }
+    // the higher id comes first in the selection, so a loop in selection order would name it
+    let selection = tx
+        .env()
+        .records("res.company")
+        .unwrap()
+        .browse([high, low])
+        .unwrap();
+    let error = selection
+        .write(
+            &mut tx,
+            RawVals::new().set_cell("active", Cell::Bool(false)),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Validation);
+    assert_eq!(
+        error.message(),
+        "The company Low protected cannot be archived because it is the default company of 2 active users."
+    );
+    tx.rollback().await.unwrap();
     h.cleanup().await.unwrap();
 }
 
@@ -507,7 +553,16 @@ async fn active_user_cannot_acquire_an_archived_default_company() {
                 RawVals::new()
                     .set_cell("name", Cell::Str("Active assignment".into()))
                     .set_cell("login", Cell::Str("active-assignment".into()))
-                    .set_cell("company_id", Cell::Id(live.ids()[0])),
+                    .set_cell("company_id", Cell::Id(live.ids()[0]))
+                    // allowed in the archived company too, so the assignment below reaches the
+                    // archived-company refusal and not the membership one
+                    .set_commands(
+                        "company_ids",
+                        [Command::Set(vec![
+                            erp_sdk::RecId::from_real(live.ids()[0]).unwrap(),
+                            erp_sdk::RecId::from_real(archived.ids()[0]).unwrap(),
+                        ])],
+                    ),
             ],
         )
         .await
@@ -972,7 +1027,7 @@ async fn restrictive_rules_refuse_complete_subtree_mutations() {
         let hidden = company(&mut setup, "Hidden branch", Some(usd), Some(root.ids()[0])).await;
         let ids = [root.ids()[0], hidden.ids()[0]];
         let home = company(&mut setup, "Actor home", Some(usd), None).await;
-        setup.execute("INSERT INTO res_users (id,name,login,active,company_id) VALUES (2,'Lifecycle actor','lifecycle-actor',true,$1)", &[&home.ids()[0]]).await.unwrap();
+        setup.execute("INSERT INTO res_users (id,name,login,active,company_id,share) VALUES (2,'Lifecycle actor','lifecycle-actor',true,$1,false)", &[&home.ids()[0]]).await.unwrap();
         setup.commit().await.unwrap();
         for values in [
             RawVals::new().set_cell("active", Cell::Bool(false)),
@@ -1063,7 +1118,7 @@ async fn overlapping_selection_cannot_truncate_hidden_descendant_preflight() {
          $1::int8,$2::int8,true,($1::int8)::text || '/' || n::text || '/' FROM generate_series(100000,104094) n",
         &[&root_id, &usd],
     ).await.unwrap();
-    setup.execute("INSERT INTO res_users (id,name,login,active,company_id) VALUES (2,'Boundary actor','boundary-actor',true,$1)", &[&home.ids()[0]]).await.unwrap();
+    setup.execute("INSERT INTO res_users (id,name,login,active,company_id,share) VALUES (2,'Boundary actor','boundary-actor',true,$1,false)", &[&home.ids()[0]]).await.unwrap();
     setup.commit().await.unwrap();
     drop(setup);
     let companies = vec![erp_orm::CompanyId::new(root_id).unwrap()];
@@ -1233,6 +1288,386 @@ async fn company_parent_is_indexed() {
         .await
         .unwrap();
     assert!(!rows.is_empty(), "res_company.parent_id has no index");
+    tx.rollback().await.unwrap();
+    h.cleanup().await.unwrap();
+}
+
+// ----: a created company joins the creator's allowed companies ----------------
+
+/// The companies allowed to `user` by the stored relation rows, in id order. Pending writes are
+/// flushed first, so this reads what the ORM wrote, never a value the test typed.
+async fn allowed_of(tx: &mut Transaction, user: i64) -> Vec<i64> {
+    tx.flush().await.unwrap();
+    tx.query(
+        "SELECT cid::int8 FROM res_company_users_rel WHERE user_id = $1 ORDER BY cid",
+        &[&user],
+    )
+    .await
+    .unwrap()
+    .iter()
+    .map(|row| row.get(0))
+    .collect()
+}
+
+/// The users that hold company `cid` in their allowed companies, in id order.
+async fn holders_of(tx: &mut Transaction, cid: i64) -> Vec<i64> {
+    tx.flush().await.unwrap();
+    tx.query(
+        "SELECT user_id::int8 FROM res_company_users_rel WHERE cid = $1 ORDER BY user_id",
+        &[&cid],
+    )
+    .await
+    .unwrap()
+    .iter()
+    .map(|row| row.get(0))
+    .collect()
+}
+
+/// A database whose field policy keeps `company_ids` administrator-only, one company `Home` and an
+/// ordinary internal user `me` allowed in it only. Returns the harness, `me`, a currency and `Home`.
+async fn ordinary_creator() -> (Harness, i64, i64, i64) {
+    let policy = FieldPolicy::new().with_overrides();
+    let h = Harness::builder([&erp_addon_base::ADDON, &erp_data::model_data::ADDON])
+        .with_decls([erp_data::ir_model_data_decl()])
+        .policy(policy.clone())
+        .build()
+        .await
+        .unwrap();
+    policy.attach(h.registry()).unwrap();
+    let mut tx = h.begin().await.unwrap();
+    users_support::user_types_and_admin(&mut tx).await;
+    let usd = erp_testkit::fixtures::seed_currency_in(&mut tx)
+        .await
+        .unwrap();
+    let home = users_support::create(
+        &mut tx,
+        "res.company",
+        &[
+            ("name", users_support::s("Home")),
+            ("currency_id", users_support::int(usd)),
+        ],
+    )
+    .await;
+    let me = users_support::create(
+        &mut tx,
+        "res.users",
+        &[
+            ("name", users_support::s("Creator")),
+            ("login", users_support::s("creator")),
+            ("company_id", users_support::int(home)),
+            ("company_ids", users_support::set_cmd(&[home])),
+        ],
+    )
+    .await;
+    policy.join(me, "base.group_user");
+    tx.commit().await.unwrap();
+    (h, me, usd, home)
+}
+
+#[tokio::test]
+async fn superuser_creating_a_company_links_it_once() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    let usd = currency(&mut tx, "CL1").await;
+    let created = company(&mut tx, "Linked", Some(usd), None).await;
+    let id = created.ids()[0];
+    let superuser = erp_orm::SUPERUSER_ID.get();
+    assert_eq!(allowed_of(&mut tx, superuser).await, vec![id]);
+    // the creator is the superuser: one row, not two
+    assert_eq!(holders_of(&mut tx, id).await, vec![superuser]);
+    tx.rollback().await.unwrap();
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn batch_create_links_every_created_company() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    let usd = currency(&mut tx, "CL2").await;
+    let created = tx
+        .env()
+        .records("res.company")
+        .unwrap()
+        .create(
+            &mut tx,
+            vec![
+                RawVals::new()
+                    .set_cell("name", Cell::Str("First linked".into()))
+                    .set_cell("currency_id", Cell::Id(usd)),
+                RawVals::new()
+                    .set_cell("name", Cell::Str("Second linked".into()))
+                    .set_cell("currency_id", Cell::Id(usd)),
+            ],
+        )
+        .await
+        .unwrap();
+    let mut expected = created.ids();
+    expected.sort_unstable();
+    assert_eq!(expected.len(), 2);
+    assert_eq!(
+        allowed_of(&mut tx, erp_orm::SUPERUSER_ID.get()).await,
+        expected
+    );
+    tx.rollback().await.unwrap();
+    h.cleanup().await.unwrap();
+}
+
+/// creator still cannot write `company_ids` directly)
+#[tokio::test]
+async fn ordinary_creator_and_superuser_both_get_the_new_company() {
+    let (h, me, usd, home) = ordinary_creator().await;
+    let superuser = erp_orm::SUPERUSER_ID.get();
+    let mut tx = h.begin().await.unwrap();
+    let created = tx
+        .env()
+        .records("res.company")
+        .unwrap()
+        .with_user(me)
+        .create(
+            &mut tx,
+            vec![
+                RawVals::new()
+                    .set_cell("name", Cell::Str("Mine".into()))
+                    .set_cell("currency_id", Cell::Id(usd)),
+            ],
+        )
+        .await
+        .unwrap();
+    let id = created.ids()[0];
+    let mut expected = vec![home, id];
+    expected.sort_unstable();
+    assert_eq!(allowed_of(&mut tx, me).await, expected);
+    assert_eq!(holders_of(&mut tx, id).await, vec![superuser, me]);
+    // the creator reads the new company in its own environment. The harness policy does not
+    // restrict records, so this does not prove the membership refresh; that needs a resolving
+    // policy and is not covered here.
+    assert_eq!(
+        created.cell(&mut tx, "name").await.unwrap(),
+        Cell::Str("Mine".into())
+    );
+    // the allowed set changed, the default company did not
+    let own = users_support::records(&tx, "res.users", &[me]);
+    assert_eq!(
+        own.cell(&mut tx, "company_id").await.unwrap(),
+        Cell::Id(home)
+    );
+    tx.commit().await.unwrap();
+    drop(tx);
+
+    // the elevation covered the link only: the same user still cannot write the field
+    let mut tx = h.begin().await.unwrap();
+    let own = tx
+        .env()
+        .records("res.users")
+        .unwrap()
+        .with_user(me)
+        .browse([me])
+        .unwrap();
+    let error = own
+        .write_values(
+            &mut tx,
+            &users_support::map(&[("company_ids", users_support::set_cmd(&[home, id]))]),
+        )
+        .await
+        .unwrap_err();
+    users_support::assert_error(
+        &error,
+        ErrorKind::Access,
+        "You do not have enough rights to access the field \"company_ids\" on User \
+         (res.users). Please contact your system administrator.\n\nOperation: write",
+    );
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+/// company is linked like any other created company)
+#[tokio::test]
+async fn branch_created_through_a_command_is_linked_to_the_creator() {
+    let (h, me, usd, home) = ordinary_creator().await;
+    let superuser = erp_orm::SUPERUSER_ID.get();
+    let mut tx = h.begin().await.unwrap();
+    let root = tx
+        .env()
+        .records("res.company")
+        .unwrap()
+        .with_user(me)
+        .create(
+            &mut tx,
+            vec![
+                RawVals::new()
+                    .set_cell("name", Cell::Str("Linked root".into()))
+                    .set_cell("currency_id", Cell::Id(usd)),
+            ],
+        )
+        .await
+        .unwrap();
+    root.write(
+        &mut tx,
+        RawVals::new().set_commands(
+            "child_ids",
+            vec![Command::Create(
+                RawVals::new().set_cell("name", Cell::Str("Linked branch".into())),
+            )],
+        ),
+    )
+    .await
+    .unwrap();
+    let branch = root.related(&mut tx, "child_ids").await.unwrap();
+    assert_eq!(branch.len(), 1);
+    let branch = branch.ids()[0];
+    let mut expected = vec![home, root.ids()[0], branch];
+    expected.sort_unstable();
+    assert_eq!(allowed_of(&mut tx, me).await, expected);
+    assert_eq!(holders_of(&mut tx, branch).await, vec![superuser, me]);
+    tx.rollback().await.unwrap();
+    h.cleanup().await.unwrap();
+}
+
+/// allowed companies change)
+#[tokio::test]
+async fn refused_creator_changes_nobody_s_allowed_companies() {
+    let h = Harness::builder([&erp_addon_base::ADDON])
+        .policy(erp_orm::StaticPolicy::SuperuserOnly)
+        .build()
+        .await
+        .unwrap();
+    let mut setup = h.begin().await.unwrap();
+    let usd = currency(&mut setup, "CL3").await;
+    let home = company(&mut setup, "Home", Some(usd), None).await.ids()[0];
+    setup.execute(
+        "INSERT INTO res_users (id,name,login,active,company_id,share) VALUES (2,'Refused creator','refused-creator',true,$1,false)",
+        &[&home],
+    )
+    .await
+    .unwrap();
+    setup
+        .execute(
+            "INSERT INTO res_company_users_rel (user_id, cid) VALUES (2, $1)",
+            &[&home],
+        )
+        .await
+        .unwrap();
+    setup.commit().await.unwrap();
+    drop(setup);
+    let superuser = erp_orm::SUPERUSER_ID.get();
+    let mut before = h.begin().await.unwrap();
+    let super_before = allowed_of(&mut before, superuser).await;
+    let user_before = allowed_of(&mut before, 2).await;
+    let rows_before: i64 = before
+        .query("SELECT count(*) FROM res_company", &[])
+        .await
+        .unwrap()[0]
+        .get(0);
+    before.rollback().await.unwrap();
+    drop(before);
+
+    let mut tx = h.begin_as(2).await.unwrap();
+    let error = tx
+        .env()
+        .records("res.company")
+        .unwrap()
+        .create(
+            &mut tx,
+            vec![
+                RawVals::new()
+                    .set_cell("name", Cell::Str("Not allowed".into()))
+                    .set_cell("currency_id", Cell::Id(usd)),
+            ],
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Access, "{error:?}");
+    assert_eq!(
+        error.message(),
+        "You are not allowed to create 'Company' (res.company) records."
+    );
+    tx.rollback().await.unwrap();
+    drop(tx);
+
+    let mut after = h.begin().await.unwrap();
+    assert_eq!(allowed_of(&mut after, superuser).await, super_before);
+    assert_eq!(allowed_of(&mut after, 2).await, user_before);
+    let rows_after: i64 = after
+        .query("SELECT count(*) FROM res_company", &[])
+        .await
+        .unwrap()[0]
+        .get(0);
+    assert_eq!(rows_after, rows_before);
+    after.rollback().await.unwrap();
+    h.cleanup().await.unwrap();
+}
+
+/// Every `(user, company)` pair of the allowed-company relation, in order.
+async fn all_relations(tx: &mut Transaction) -> Vec<(i64, i64)> {
+    tx.flush().await.unwrap();
+    tx.query(
+        "SELECT user_id::int8, cid::int8 FROM res_company_users_rel ORDER BY 1, 2",
+        &[],
+    )
+    .await
+    .unwrap()
+    .iter()
+    .map(|row| (row.get(0), row.get(1)))
+    .collect()
+}
+
+#[tokio::test]
+async fn failing_link_fails_the_whole_create() {
+    let (h, _me, usd, _home) = ordinary_creator().await;
+    // an active user without a default company, as a database that predates the rule could hold
+    let mut setup = h.begin().await.unwrap();
+    let user: i64 = setup
+        .query(
+            "INSERT INTO res_users (name, login, active, company_id, share) VALUES ('No Default', 'no-default', true, NULL, false) RETURNING id::int8",
+            &[],
+        )
+        .await
+        .unwrap()[0]
+        .get(0);
+    setup.commit().await.unwrap();
+    drop(setup);
+
+    let mut tx = h.begin().await.unwrap();
+    let user_name: String = tx
+        .query("SELECT name FROM res_users WHERE id = $1", &[&user])
+        .await
+        .unwrap()[0]
+        .get(0);
+    let relations_before = all_relations(&mut tx).await;
+    let companies = tx.env().records("res.company").unwrap().with_user(user);
+    let error = tx
+        .savepoint(async |tx| {
+            companies
+                .create(
+                    tx,
+                    vec![
+                        RawVals::new()
+                            .set_cell("name", Cell::Str("Never created".into()))
+                            .set_cell("currency_id", Cell::Id(usd)),
+                    ],
+                )
+                .await
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Validation, "{error:?}");
+    assert_eq!(
+        error.message(),
+        format!(
+            "The user {user_name} has no default company. Choose one of the user's allowed companies."
+        )
+    );
+    tx.flush().await.unwrap();
+    let created: i64 = tx
+        .query(
+            "SELECT count(*)::int8 FROM res_company WHERE name = 'Never created'",
+            &[],
+        )
+        .await
+        .unwrap()[0]
+        .get(0);
+    assert_eq!(created, 0, "the refused create must leave no company");
+    assert_eq!(all_relations(&mut tx).await, relations_before);
     tx.rollback().await.unwrap();
     h.cleanup().await.unwrap();
 }

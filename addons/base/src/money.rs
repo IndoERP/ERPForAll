@@ -1,4 +1,4 @@
-//! Money and currency services (hook H41,;-D3).
+//! Money and currency services (hook H41;-D3).
 //!
 //! Everything here is exact decimal arithmetic through [`erp_sdk::money`]; no `f64` is involved
 //! anywhere on the path.

@@ -1,5 +1,5 @@
 //! Cleanup of transient (wizard) models: [`Orm::vacuum_transient`] (
-//! package B, spec).
+//! package B).
 //!
 //! Adopted: the
 //! same outcomes, the same `Records::unlink` method chain, age first and then count. Modified for

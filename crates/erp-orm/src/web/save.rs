@@ -206,7 +206,8 @@ pub(crate) async fn web_unlink(tx: &mut Transaction, records: &Records) -> Resul
                 ..
             }
         );
-        if !restrict || !rm.has_table() || !rf.has_column() {
+        // a company map is no foreign key: its restrict refusal is the unlink's own
+        if !restrict || !rm.has_table() || !rf.has_column() || rf.company_dependent {
             continue;
         }
         parts.push(format!(

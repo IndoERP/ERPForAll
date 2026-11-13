@@ -1,5 +1,5 @@
-//! RPC exposure tables and the dynamic argument binder (3 and 4;
-//! ;, §5.2, §6).
+//! RPC exposure tables and the dynamic argument binder (3 and 4,
+//! §5.2, §6).
 //!
 //! `#[rpc(effect = …)]` on a `#[method]` contributes an [`RpcImpl`] to [`RPC_IMPLS`]: the effect
 //! class, the receiver (records or `model`), the parameter table and a binder that turns keyword
@@ -35,7 +35,7 @@ use erp_fields::{Error, Result, Value, ValueMap};
 use erp_registry::{ModelId, Registry};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-pub use erp_registry::{Effect, ParamSpec, Receiver};
+pub use erp_registry::{ArgShape, Effect, ParamSpec, Receiver};
 
 use crate::Transaction;
 use crate::dispatch::{BoxFuture, Dispatch};
@@ -145,6 +145,112 @@ pub static PRIMARY_READS: [PrimaryRead];
 /// `#[rpc]` declarations linked into the binary.
 #[linkme::distributed_slice]
 pub static RPC_IMPLS: [RpcImpl];
+
+/// `#[rpc(effect = …, assistant = offer)]`: the author offers this implementation of a method to
+/// the assistant ((a); R3, R4). A method is offered
+/// only when every native implementation in its chain carries one ([`ExposureTable::assistant_offered`]).
+#[derive(Debug)]
+pub struct AssistantOffer {
+    /// Addon that declares it (only entries of installed addons count).
+    pub addon: &'static str,
+    /// Model of the declaration it belongs to (`_name` of the `#[methods]` target).
+    pub model: &'static str,
+    /// Method name.
+    pub method: &'static str,
+    /// Source file.
+    pub file: &'static str,
+    /// Source line.
+    pub line: u32,
+}
+
+/// Assistant opt-ins linked into the binary.
+#[linkme::distributed_slice]
+pub static ASSISTANT_OFFERS: [AssistantOffer];
+
+/// A method the assistant may propose (the catalog's input; (a)).
+#[derive(Debug, Clone)]
+pub struct Offered {
+    model: &'static str,
+    method: &'static str,
+    effect: Effect,
+    receiver: Receiver,
+    params: &'static [ParamSpec],
+}
+
+impl Offered {
+    /// The model the method is called on.
+    pub fn model(&self) -> &'static str {
+        self.model
+    }
+
+    /// The method.
+    pub fn method(&self) -> &'static str {
+        self.method
+    }
+
+    /// The chain's effect (never [`Effect::External`]).
+    pub fn effect(&self) -> Effect {
+        self.effect
+    }
+
+    /// Records or model method.
+    pub fn receiver(&self) -> Receiver {
+        self.receiver
+    }
+
+    /// The keyword parameters, every one with a closed shape.
+    pub fn params(&self) -> &'static [ParamSpec] {
+        self.params
+    }
+}
+
+/// Why a method is not offered to the assistant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NotOffered {
+    /// The model has no such method.
+    Unknown,
+    /// Hidden (`#[rpc(hide)]`) or internal (not exposed over RPC).
+    NotExposed,
+    /// Its effect is [`Effect::External`], never offered in AI1.
+    External,
+    /// No implementation opts in.
+    NotOptedIn,
+    /// An implementation in the chain (define or override) does not opt in: it may add
+    /// behaviour its author did not offer, so the offer is withdrawn.
+    ChainOverrideWithoutOptIn {
+        /// The addon of the first such implementation, newest first.
+        addon: &'static str,
+    },
+    /// A WebAssembly implementation is in the chain.
+    WebAssembly,
+    /// A parameter has no closed schema.
+    OpenParameter {
+        /// The parameter.
+        param: &'static str,
+        /// Why its shape is open.
+        reason: &'static str,
+    },
+}
+
+impl fmt::Display for NotOffered {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unknown => f.write_str("no such method"),
+            Self::NotExposed => f.write_str("not exposed over RPC"),
+            Self::External => f.write_str("effect = external is never offered"),
+            Self::NotOptedIn => f.write_str("its author did not offer it to the assistant"),
+            Self::ChainOverrideWithoutOptIn { addon } => write!(
+                f,
+                "addon '{addon}' implements it without offering it to the assistant"
+            ),
+            Self::WebAssembly => f.write_str("a WebAssembly implementation is in its chain"),
+            Self::OpenParameter { param, reason } => {
+                write!(f, "parameter '{param}' has no closed schema ({reason})")
+            }
+        }
+    }
+}
 
 /// Where a declaration comes from, for error messages and tooling.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -265,7 +371,14 @@ fn wire_params(params: &[WasmRpcParam]) -> Result<&'static [ParamSpec]> {
     }
     let leaked: &'static [ParamSpec] = Box::leak(
         key.iter()
-            .map(|(name, required, expected)| ParamSpec::new(name, *required, expected))
+            .map(|(name, required, expected)| {
+                ParamSpec::with_shape(
+                    name,
+                    *required,
+                    expected,
+                    ArgShape::Open("WebAssembly method"),
+                )
+            })
             .collect::<Vec<_>>()
             .into_boxed_slice(),
     );
@@ -574,7 +687,12 @@ pub enum Exposure {
 pub struct ExposureTable {
     entries: FxHashMap<ModelId, FxHashMap<&'static str, Exposure>>,
     data: FxHashMap<ModelId, FxHashMap<&'static str, DataCallable>>,
+    /// The assistant status of every exposed chain that some installed offer names.
+    offers: OfferTable,
 }
+
+/// The assistant status of each (model, method) an installed offer names.
+type OfferTable = FxHashMap<ModelId, FxHashMap<&'static str, Result<Offered, NotOffered>>>;
 
 impl ExposureTable {
     /// Build the table from the linked declarations, core's own and `extra`, for the models of
@@ -697,7 +815,43 @@ impl ExposureTable {
                 }
             }
         }
-        Ok(Self { entries, data })
+        let offers = resolve_offers(registry, dispatch, &entries, &installed)?;
+        Ok(Self {
+            entries,
+            data,
+            offers,
+        })
+    }
+
+    /// Whether the assistant may propose `model.method`, and why not (R4): exposed, not
+    /// external, every native implementation of the chain opted in with
+    /// `#[rpc(…, assistant = offer)]`, no WebAssembly implementation, closed parameters.
+    ///
+    /// # Errors
+    ///
+    /// [`NotOffered`] naming the first condition that fails.
+    pub fn assistant_offered(&self, model: ModelId, method: &str) -> Result<&Offered, NotOffered> {
+        match self.offers.get(&model).and_then(|m| m.get(method)) {
+            Some(Ok(offered)) => Ok(offered),
+            Some(Err(why)) => Err(why.clone()),
+            None => Err(match self.get(model, method) {
+                None => NotOffered::Unknown,
+                Some(Exposure::Exposed(e)) if e.effect == Effect::External => NotOffered::External,
+                Some(Exposure::Exposed(_)) => NotOffered::NotOptedIn,
+                Some(Exposure::Hidden { .. } | Exposure::Internal) => NotOffered::NotExposed,
+            }),
+        }
+    }
+
+    /// Every offered method of the registry, sorted by model name, then method.
+    pub fn assistant_offers(&self) -> Vec<&Offered> {
+        let mut out: Vec<&Offered> = self
+            .offers
+            .values()
+            .flat_map(|methods| methods.values().filter_map(|r| r.as_ref().ok()))
+            .collect();
+        out.sort_unstable_by_key(|o| (o.model, o.method));
+        out
     }
 
     /// How `model.method` answers; `None` when the method is unknown on the model.
@@ -724,6 +878,124 @@ impl ExposureTable {
         out.sort_unstable_by_key(|(name, _)| *name);
         out
     }
+}
+
+/// Check the installed [`ASSISTANT_OFFERS`] against the exposure of their declaring model (an
+/// offer of a method that is not exposed, is external or has an open parameter fails the build),
+/// then resolve every concrete model's chain that an offer names (R4).
+fn resolve_offers(
+    registry: &Registry,
+    dispatch: &Dispatch,
+    entries: &FxHashMap<ModelId, FxHashMap<&'static str, Exposure>>,
+    installed: &FxHashSet<&str>,
+) -> Result<OfferTable> {
+    use crate::dispatch::MethodDispatchTarget;
+    // sorted, so the first refused offer does not depend on link order
+    let mut offers: Vec<&AssistantOffer> = ASSISTANT_OFFERS
+        .iter()
+        .filter(|o| installed.contains(o.addon))
+        .collect();
+    offers.sort_by_key(|o| (o.addon, o.model, o.method, o.file, o.line));
+    let mut out = OfferTable::default();
+    if offers.is_empty() {
+        return Ok(out);
+    }
+    for offer in &offers {
+        let refuse = |why: String| {
+            Error::programming(format!(
+                "{}.{}: the assistant offer at {}:{} (addon '{}') {why}",
+                offer.model, offer.method, offer.file, offer.line, offer.addon
+            ))
+        };
+        // An offer is written by the `#[rpc(…, assistant = offer)]` macro next to the addon's own
+        // `#[rpc(effect = …)]` declaration; an entry registered without one is refused.
+        let declared = RPC_IMPLS.iter().any(|imp| {
+            imp.addon == offer.addon
+                && imp.model == offer.model
+                && imp.method == offer.method
+                && matches!(imp.decl, RpcDecl::Expose { .. })
+        });
+        if !declared {
+            return Err(refuse(
+                "has no #[rpc(effect = …)] declaration of that addon for the method".into(),
+            ));
+        }
+        let Some(model) = registry.model_id(offer.model) else {
+            return Err(refuse("names a model that is not in the registry".into()));
+        };
+        let exposure = entries.get(&model).and_then(|e| e.get(offer.method));
+        let Some(Exposure::Exposed(exposed)) = exposure else {
+            return Err(refuse("names a method that is not exposed over RPC".into()));
+        };
+        if exposed.effect == Effect::External {
+            return Err(refuse(format!(
+                "names a method with effect = external (set by {}), which is never offered",
+                exposed.effect_from
+            )));
+        }
+        if let Some((param, reason)) = open_param(exposed.params) {
+            return Err(refuse(format!(
+                "names a method whose parameter '{param}' has no closed schema ({reason})"
+            )));
+        }
+    }
+    let offered: FxHashSet<(&str, &str, &str)> = offers
+        .iter()
+        .map(|o| (o.addon, o.model, o.method))
+        .collect();
+    let methods: FxHashSet<&str> = offers.iter().map(|o| o.method).collect();
+    for model in registry.models() {
+        let Some(exposures) = entries.get(&model.id) else {
+            continue;
+        };
+        for (method, exposure) in exposures {
+            let Exposure::Exposed(exposed) = exposure else {
+                continue;
+            };
+            if !methods.contains(method) {
+                continue;
+            }
+            let targets = dispatch.targets(model.id, method);
+            let opted_in = |t: &MethodDispatchTarget| match t {
+                MethodDispatchTarget::Native(imp) => {
+                    offered.contains(&(imp.addon, imp.model, *method))
+                }
+                MethodDispatchTarget::Wasm(_) => false,
+            };
+            if !targets.iter().any(opted_in) {
+                continue;
+            }
+            let status = if targets.iter().any(MethodDispatchTarget::is_wasm) {
+                Err(NotOffered::WebAssembly)
+            } else if let Some(addon) = targets.iter().find_map(|t| match t {
+                MethodDispatchTarget::Native(imp) if !opted_in(t) => Some(imp.addon),
+                MethodDispatchTarget::Native(_) | MethodDispatchTarget::Wasm(_) => None,
+            }) {
+                Err(NotOffered::ChainOverrideWithoutOptIn { addon })
+            } else if exposed.effect == Effect::External {
+                Err(NotOffered::External)
+            } else if let Some((param, reason)) = open_param(exposed.params) {
+                Err(NotOffered::OpenParameter { param, reason })
+            } else {
+                Ok(Offered {
+                    model: model.name,
+                    method,
+                    effect: exposed.effect,
+                    receiver: exposed.receiver,
+                    params: exposed.params,
+                })
+            };
+            out.entry(model.id).or_default().insert(*method, status);
+        }
+    }
+    Ok(out)
+}
+
+/// The first parameter whose shape is not closed, with the reason.
+fn open_param(params: &[ParamSpec]) -> Option<(&'static str, &'static str)> {
+    params
+        .iter()
+        .find_map(|p| Some((p.name(), p.shape().open_reason()?)))
 }
 
 fn is_data_callable(imp: &RpcImpl) -> bool {
@@ -1020,6 +1292,11 @@ pub fn json_type(value: &Value) -> &'static str {
 pub trait FromRpc: Sized + Send + 'static {
     /// The accepted JSON shape, as named in binding errors.
     const EXPECTED: &'static str;
+    /// The accepted JSON shape as a type, for the assistant's tool schemas. No
+    /// default: a new binder type states its shape, [`ArgShape::Open`] with the reason when no
+    /// closed schema describes it. It never advertises a payload `from_rpc` refuses, except
+    /// [`ArgShape::Domain`], whose leaves the binder's domain parser checks further.
+    const SHAPE: ArgShape;
     /// Whether a call must pass the argument.
     const REQUIRED: bool = true;
 
@@ -1043,6 +1320,7 @@ pub(super) fn mismatch<T>(value: &Value) -> Result<T, ArgError> {
 
 impl<T: FromRpc> FromRpc for Option<T> {
     const EXPECTED: &'static str = T::EXPECTED;
+    const SHAPE: ArgShape = ArgShape::OrNull(&T::SHAPE);
     const REQUIRED: bool = false;
 
     fn from_rpc(value: Option<Value>) -> Result<Self, ArgError> {
@@ -1055,6 +1333,7 @@ impl<T: FromRpc> FromRpc for Option<T> {
 
 impl FromRpc for bool {
     const EXPECTED: &'static str = "a boolean";
+    const SHAPE: ArgShape = ArgShape::Boolean;
 
     fn from_rpc(value: Option<Value>) -> Result<Self, ArgError> {
         match present(value)? {
@@ -1068,6 +1347,7 @@ impl FromRpc for bool {
 
 impl FromRpc for i64 {
     const EXPECTED: &'static str = "an integer";
+    const SHAPE: ArgShape = ArgShape::Integer { min: None };
 
     fn from_rpc(value: Option<Value>) -> Result<Self, ArgError> {
         match present(value)? {
@@ -1079,6 +1359,7 @@ impl FromRpc for i64 {
 
 impl FromRpc for u64 {
     const EXPECTED: &'static str = "a non-negative integer";
+    const SHAPE: ArgShape = ArgShape::Integer { min: Some(0) };
 
     fn from_rpc(value: Option<Value>) -> Result<Self, ArgError> {
         match present(value)? {
@@ -1090,6 +1371,7 @@ impl FromRpc for u64 {
 
 impl FromRpc for f64 {
     const EXPECTED: &'static str = "a number";
+    const SHAPE: ArgShape = ArgShape::Number;
 
     fn from_rpc(value: Option<Value>) -> Result<Self, ArgError> {
         match present(value)? {
@@ -1103,6 +1385,7 @@ impl FromRpc for f64 {
 
 impl FromRpc for String {
     const EXPECTED: &'static str = "a string";
+    const SHAPE: ArgShape = ArgShape::String;
 
     fn from_rpc(value: Option<Value>) -> Result<Self, ArgError> {
         match present(value)? {
@@ -1114,6 +1397,7 @@ impl FromRpc for String {
 
 impl FromRpc for Value {
     const EXPECTED: &'static str = "any value";
+    const SHAPE: ArgShape = ArgShape::Open("any value");
 
     fn from_rpc(value: Option<Value>) -> Result<Self, ArgError> {
         present(value)
@@ -1122,6 +1406,7 @@ impl FromRpc for Value {
 
 impl FromRpc for ValueMap {
     const EXPECTED: &'static str = "an object";
+    const SHAPE: ArgShape = ArgShape::Open("an object with open keys");
 
     fn from_rpc(value: Option<Value>) -> Result<Self, ArgError> {
         match present(value)? {
@@ -1133,6 +1418,7 @@ impl FromRpc for ValueMap {
 
 impl<T: FromRpc> FromRpc for Vec<T> {
     const EXPECTED: &'static str = "an array";
+    const SHAPE: ArgShape = ArgShape::Array(&T::SHAPE);
 
     fn from_rpc(value: Option<Value>) -> Result<Self, ArgError> {
         match present(value)? {
@@ -1147,6 +1433,7 @@ impl<T: FromRpc> FromRpc for Vec<T> {
 
 impl FromRpc for erp_domain::Domain {
     const EXPECTED: &'static str = "a domain (array)";
+    const SHAPE: ArgShape = ArgShape::Domain;
 
     fn from_rpc(value: Option<Value>) -> Result<Self, ArgError> {
         let value = present(value)?;
@@ -1162,6 +1449,7 @@ impl FromRpc for erp_domain::Domain {
 
 impl FromRpc for crate::web::Spec {
     const EXPECTED: &'static str = "a specification (object)";
+    const SHAPE: ArgShape = ArgShape::Open("a read specification");
 
     fn from_rpc(value: Option<Value>) -> Result<Self, ArgError> {
         let value = present(value)?;
@@ -1172,13 +1460,13 @@ impl FromRpc for crate::web::Spec {
     }
 }
 
-/// Binary data over RPC: standard padded base64 (RFC 4648 §4) in, decoded strictly; base64 out
-/// .
+/// Binary data over RPC: standard padded base64 (RFC 4648 §4) in, decoded strictly; base64 out.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Binary(pub Vec<u8>);
 
 impl FromRpc for Binary {
     const EXPECTED: &'static str = "a base64 string";
+    const SHAPE: ArgShape = ArgShape::Open("binary data");
 
     fn from_rpc(value: Option<Value>) -> Result<Self, ArgError> {
         match present(value)? {

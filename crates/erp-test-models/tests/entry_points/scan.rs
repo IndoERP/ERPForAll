@@ -1,6 +1,6 @@
 //! What the enumeration test reads from the source: the files of a crate's module tree (from
 //! `src/lib.rs`, `#[cfg(test)]` modules skipped), the public functions among them that take the
-//! transaction, and the `sudo(true)` call sites.
+//! transaction, the `sudo(true)` call sites and the read-audit owner's call sites.
 //!
 //! Records live behind the transaction: its connection and its cache are the only way to read or
 //! write them, so every function that can touch a record takes `&mut Transaction` (or is a
@@ -306,27 +306,106 @@ fn takes_transaction(sig: &Signature, on_transaction: bool) -> bool {
 }
 
 /// `sudo(true)` call sites in `files`, outside `#[cfg(test)]` code: `<rel>::<enclosing fn>` →
-/// how many.
+/// how many. The engine's own superuser mode, `engine_sudo()` (`erp-orm`,: it keeps an
+/// elevation block's lifetime), counts as a `sudo(true)` site.
 pub fn sudo_sites(files: &[SourceFile], crate_name: &str) -> BTreeMap<String, usize> {
+    calls(
+        files,
+        crate_name,
+        &Matcher {
+            method: |call| {
+                let sudo_true = call.method == "sudo"
+                    && call.args.len() == 1
+                    && matches!(&call.args[0], syn::Expr::Lit(l)
+                    if matches!(&l.lit, syn::Lit::Bool(b) if b.value));
+                (sudo_true || (call.method == "engine_sudo" && call.args.is_empty())).then_some("")
+            },
+            path: |_| None,
+            tokens: &[("", "sudo(true)"), ("", "engine_sudo()")],
+        },
+    )
+}
+
+/// The read-audit owner's call sites in `files` (A2, P4), outside `#[cfg(test)]` code:
+/// `<rel>::<enclosing fn> <callee>` → how many, for `ReadAuditOwner::new`, `read_only_audited`
+/// (of `BeginOptions` or `CredentialOptions`) and `take_audit_attempt`, called or named as a path.
+pub fn read_audit_sites(files: &[SourceFile], crate_name: &str) -> BTreeMap<String, usize> {
+    const READ_AUDIT: [&str; 2] = ["read_only_audited", "take_audit_attempt"];
+    calls(
+        files,
+        crate_name,
+        &Matcher {
+            method: |call| READ_AUDIT.into_iter().find(|name| call.method == name),
+            path: |path| {
+                let names: Vec<String> = path
+                    .path
+                    .segments
+                    .iter()
+                    .map(|s| s.ident.to_string())
+                    .collect();
+                match names.as_slice() {
+                    [.., owner, new] if owner == "ReadAuditOwner" && new == "new" => {
+                        Some("ReadAuditOwner::new")
+                    }
+                    [.., last] => READ_AUDIT.into_iter().find(|name| *name == last.as_str()),
+                    [] => None,
+                }
+            },
+            tokens: &[
+                ("ReadAuditOwner::new", "ReadAuditOwner::new"),
+                ("read_only_audited", "read_only_audited("),
+                ("take_audit_attempt", "take_audit_attempt("),
+            ],
+        },
+    )
+}
+
+/// What [`calls`] counts: a method call or a path expression it names (the callee label, `""`
+/// for none), and `(label, text)` pairs found in macro tokens without whitespace.
+struct Matcher {
+    method: fn(&syn::ExprMethodCall) -> Option<&'static str>,
+    path: fn(&syn::ExprPath) -> Option<&'static str>,
+    tokens: &'static [(&'static str, &'static str)],
+}
+
+fn calls(files: &[SourceFile], crate_name: &str, matcher: &Matcher) -> BTreeMap<String, usize> {
     let mut out = BTreeMap::new();
     for file in files {
-        let mut visitor = Sudo {
+        let mut visitor = Calls {
             site: format!("{crate_name}/{}", file.rel),
             within: Vec::new(),
             out: &mut out,
+            matcher,
         };
         visitor.visit_file(&file.file);
     }
     out
 }
 
-struct Sudo<'a> {
+struct Calls<'a> {
     site: String,
     within: Vec<String>,
     out: &'a mut BTreeMap<String, usize>,
+    matcher: &'a Matcher,
 }
 
-impl<'ast> Visit<'ast> for Sudo<'_> {
+impl Calls<'_> {
+    fn count(&mut self, label: &str, n: usize) {
+        let within = self
+            .within
+            .last()
+            .cloned()
+            .unwrap_or_else(|| "(outside a function)".to_owned());
+        let key = if label.is_empty() {
+            format!("{}::{within}", self.site)
+        } else {
+            format!("{}::{within} {label}", self.site)
+        };
+        *self.out.entry(key).or_default() += n;
+    }
+}
+
+impl<'ast> Visit<'ast> for Calls<'_> {
     fn visit_item_mod(&mut self, m: &'ast syn::ItemMod) {
         // out-of-line modules are files of their own; inline test modules are skipped
         if m.content.is_some() && !is_cfg_test(&m.attrs) {
@@ -352,7 +431,7 @@ impl<'ast> Visit<'ast> for Sudo<'_> {
         self.within.pop();
     }
 
-    /// Macro arguments are raw tokens to `syn`: a `sudo(true)` in them (`assert!`, `vec!`,
+    /// Macro arguments are raw tokens to `syn`: a call in them (`assert!`, `vec!`,
     /// `tokio::join!`, a `macro_rules!` body) is found by reading the tokens without whitespace.
     fn visit_macro(&mut self, mac: &'ast syn::Macro) {
         let text: String = mac
@@ -361,37 +440,29 @@ impl<'ast> Visit<'ast> for Sudo<'_> {
             .chars()
             .filter(|c| !c.is_whitespace())
             .collect();
-        let n = text.matches("sudo(true)").count();
-        if n > 0 {
-            let within = self
-                .within
-                .last()
-                .cloned()
-                .unwrap_or_else(|| "(outside a function)".to_owned());
-            *self
-                .out
-                .entry(format!("{}::{within}", self.site))
-                .or_default() += n;
+        let mut by_label: BTreeMap<&str, usize> = BTreeMap::new();
+        for (label, needle) in self.matcher.tokens {
+            *by_label.entry(label).or_default() += text.matches(needle).count();
+        }
+        for (label, n) in by_label {
+            if n > 0 {
+                self.count(label, n);
+            }
         }
         syn::visit::visit_macro(self, mac);
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
-        if call.method == "sudo"
-            && call.args.len() == 1
-            && matches!(&call.args[0], syn::Expr::Lit(l)
-                if matches!(&l.lit, syn::Lit::Bool(b) if b.value))
-        {
-            let within = self
-                .within
-                .last()
-                .cloned()
-                .unwrap_or_else(|| "(outside a function)".to_owned());
-            *self
-                .out
-                .entry(format!("{}::{within}", self.site))
-                .or_default() += 1;
+        if let Some(label) = (self.matcher.method)(call) {
+            self.count(label, 1);
         }
         syn::visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
+        if let Some(label) = (self.matcher.path)(path) {
+            self.count(label, 1);
+        }
+        syn::visit::visit_expr_path(self, path);
     }
 }

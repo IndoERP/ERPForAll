@@ -600,10 +600,7 @@ async fn f5_many2one_lists_and_command_triples_are_strict() {
             Value::list([Value::Int(pid), Value::str("p"), Value::Int(3)]),
         ),
         ("partner_id", Value::list([Value::Int(pid), Value::Int(3)])),
-        (
-            "tag_ids",
-            Value::list([Value::list([Value::Int(4), Value::Int(tid)])]),
-        ),
+        // [4, id] is accepted since (see spec_rel_086 in rel_commands.rs)
         (
             "tag_ids",
             Value::list([Value::list([
@@ -764,6 +761,132 @@ async fn filtered_domain_refuses_non_positive_x2many_ids() {
             .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::Validation, "{json}: {err}");
     }
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+// ----- 14. owners of a deleted many2one_reference line are read per owner model -----------------
+
+/// A deletion of an attachment of `test_rel.attach_owner` id N marks the one2many of that owner
+/// only. `test_rel.attach_owner2` has a one2many over the same inverse (`res_model` + `res_id`) and
+/// a record with the same id N, whose cached dependent (`attachment_count`) must survive, while the
+/// first owner's is dropped. Before the model column filtered the owners, the record of the other
+/// model was marked too.
+#[tokio::test]
+async fn unlink_marks_only_the_owner_model_of_a_reference_line() {
+    let h = support::rel_orm().await;
+    let mut tx = h.begin().await.unwrap();
+    let first = create(
+        &mut tx,
+        "test_rel.attach_owner",
+        &[&[("name", Value::str("a"))]],
+    )
+    .await;
+    let second = create(
+        &mut tx,
+        "test_rel.attach_owner2",
+        &[&[("name", Value::str("b"))]],
+    )
+    .await;
+    let shared_id = first.ids()[0];
+    assert_eq!(
+        second.ids()[0],
+        shared_id,
+        "precondition: both owner models need a record with the same id"
+    );
+    let lines = create(
+        &mut tx,
+        "test_rel.attachment",
+        &[
+            &[
+                ("name", Value::str("of a")),
+                ("res_model", Value::str("test_rel.attach_owner")),
+                ("res_id", Value::Int(shared_id)),
+            ],
+            &[
+                ("name", Value::str("of b")),
+                ("res_model", Value::str("test_rel.attach_owner2")),
+                ("res_id", Value::Int(shared_id)),
+            ],
+        ],
+    )
+    .await;
+    tx.flush().await.unwrap();
+    tx.invalidate_all().await.unwrap();
+    // prime both caches
+    assert_eq!(
+        first.value(&mut tx, "attachment_count").await.unwrap(),
+        Value::Int(1)
+    );
+    assert_eq!(
+        second.value(&mut tx, "attachment_count").await.unwrap(),
+        Value::Int(1)
+    );
+    // the attachment of the first owner goes
+    lines
+        .browse_ids([lines.rec_ids()[0]])
+        .unlink(&mut tx)
+        .await
+        .unwrap();
+    // the dependent of the other model's one2many is still cached; the owner's own is marked
+    assert!(
+        tx.is_cached(&second, "attachment_count").unwrap(),
+        "the other model's owner is untouched"
+    );
+    assert!(
+        !tx.is_cached(&first, "attachment_count").unwrap(),
+        "the owner of the deleted line is marked"
+    );
+    assert_eq!(
+        second.value(&mut tx, "attachment_count").await.unwrap(),
+        Value::Int(1)
+    );
+    assert_eq!(
+        first.value(&mut tx, "attachment_count").await.unwrap(),
+        Value::Int(0)
+    );
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+/// Deleting an attachment of `test_rel.attach_owner` reads the owners once, although two owner
+/// models have a one2many with a dependent over the same inverse column: the owner read and the
+/// `DELETE` are the only statements it needs (two, the count this test printed in the focused
+/// run of slice, log `focus2.log.gz` in the slice's evidence
+/// directory), and a second owner read per model exceeds the
+/// ceiling.
+#[tokio::test]
+async fn unlink_reads_the_owners_of_a_shared_inverse_once() {
+    let h = support::rel_orm().await;
+    let mut tx = h.begin().await.unwrap();
+    let owner = create(
+        &mut tx,
+        "test_rel.attach_owner",
+        &[&[("name", Value::str("o"))]],
+    )
+    .await;
+    let lines = create(
+        &mut tx,
+        "test_rel.attachment",
+        &[&[
+            ("name", Value::str("line")),
+            ("res_model", Value::str("test_rel.attach_owner")),
+            ("res_id", Value::Int(owner.ids()[0])),
+        ]],
+    )
+    .await;
+    tx.flush().await.unwrap();
+    tx.invalidate_all().await.unwrap();
+    owner.value(&mut tx, "attachment_count").await.unwrap();
+    let before = tx.query_count();
+    assert_query_count!(tx, >= 2, <= 2, {
+        lines.unlink(&mut tx).await.unwrap();
+    });
+    // read with `--nocapture`: the count the ceiling is set from
+    eprintln!(
+        "shared inverse unlink statements: {}",
+        tx.query_count() - before
+    );
     drop(tx);
     h.cleanup().await.unwrap();
 }

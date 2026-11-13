@@ -8,6 +8,7 @@ import { absentPlaceholderInput } from "./field-options.js";
 import { createDateFieldControl } from "./field-dates.js";
 import type { EditorLocale } from "./datetime-values.js";
 import { renderCodeField } from "./code-field.js";
+import { renderHtmlField, renderListHtmlField } from "./html-field.js";
 import type { PopoverService } from "./popover.js";
 import { createAutocomplete, type AutocompleteOption } from "./autocomplete.js";
 import type { EditorEnvironment } from "./editor-types.js";
@@ -120,10 +121,16 @@ function relationAutocomplete(options: RelationAutocompleteOptions): ReturnType<
   // The bound is the server's integer option admission (0..=4096).
   const threshold = field.options?.search_threshold ?? 0, limit = SEARCH_LIMIT;
   if (!Number.isSafeInteger(threshold) || threshold < 0 || threshold > 4096) throw new ClientError("server", "Invalid relation search threshold.");
-  const complete = createAutocomplete({ input, owner: host, environment: editor, debounceMs: 150, autoSelect: true, focusFirst: false, representedValue,
+  // The picker button is appended by withRelationPicker inside the many2one buttons; the typed text travels in
+  // data-query, which its click handler reads once.
+  const searchMoreOption = (query: string): AutocompleteOption | undefined => {
+    const button = field.kind === "many2one" ? host.querySelector<HTMLButtonElement>(".relation-search-more") : null;
+    return button ? { kind: "option", label: "Search more…", select: () => { button.dataset["query"] = query; button.click(); delete button.dataset["query"]; } } : undefined;
+  };
+  const complete = createAutocomplete({ input, owner: host, alignTo: host, environment: editor, debounceMs: 150, autoSelect: true, focusFirst: false, representedValue,
     sources: [{ options: (query, signal) => new Promise<readonly AutocompleteOption[]>((resolve, reject) => {
       const typed = [...query].length;
-      if (typed < threshold) { resolve([{ kind: "status", label: `Start typing ${threshold - typed} more character${threshold - typed === 1 ? "" : "s"}…` }]); return; }
+      if (typed < threshold) { const more = searchMoreOption(query); resolve([{ kind: "status", label: `Start typing ${threshold - typed} more character${threshold - typed === 1 ? "" : "s"}…` }, ...(more ? [more] : [])]); return; }
       run(async () => {
         try {
           const skip = exclude();
@@ -135,6 +142,7 @@ function relationAutocomplete(options: RelationAutocompleteOptions): ReturnType<
             const record = object(row);
             return { id: integer(record["id"], "relation id"), display_name: text(record["display_name"], "relation name"), ...(field.options?.color_field ? { [field.options.color_field.name]: record[field.options.color_field.name] } : {}) };
           }).filter(item => !skip.has(item.id)).slice(0, limit).map(item => ({ kind: "option", label: item.display_name, select: () => pick(item) }));
+          if (items.length > 0) { const more = searchMoreOption(query); if (more) items.push(more); }
           if (query !== "" && !field.options?.no_create && !field.options?.no_quick_create && field.options?.create !== false) items.push({ kind: "option", label: `Create "${query}"`, select: () => {
             run(async () => {
               const created = array(await rpc.call(field.relation!, "name_create", { name: query, context: effective.context }, { write: true }), "created record");
@@ -261,7 +269,7 @@ function many2oneControl({ field, value, rpc, context, change: changed, run, ope
 }
 
 function many2manyControl({ field, value, rpc, context, change: changed, run, editor: owner, values: recordValues, openRecord, fields: authorizedFields, viewContext }: FieldControlOptions): FieldControl {
-  if (field.widget === "many2many_tags_avatar") throw new ClientError("unsupported", "Avatar tag data requires a later release.");
+  if (field.widget === "many2many_tags_avatar") throw new ClientError("unsupported", "Avatar tags are not supported.");
   const editor = owner && "messages" in owner ? owner : undefined;
   const values = value ? array(value, "relations") : [];
   const idOf = (item: unknown): number => typeof item === "number" ? integer(item, "relation id") : integer(object(item)["id"], "relation id");
@@ -377,3 +385,8 @@ registerFieldWidget("list.code", { kinds: ["text"], render: environment => {
   const node = el("span", typeof value === "string" ? value : "", "field-read-value list-code");
   node.setAttribute("aria-label", environment.field.label); return { node, dispose: () => {} };
 } });
+
+// Additive registration: html rich-text editing is available for html fields (W-29).
+registerFieldWidget("html", { kinds: ["html"], render: renderHtmlField });
+// List cells have no RecordForm draft lifecycle: they display safe read-only plain text.
+registerFieldWidget("list.html", { kinds: ["html"], render: renderListHtmlField });

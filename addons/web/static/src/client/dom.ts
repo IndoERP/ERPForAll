@@ -4,7 +4,7 @@ import { icon, type IconName } from "./icons.js";
 
 /** Built-in commands with a fixed icon. Only code opts in through `actionButton`: a label that comes from data
  *  (a menu, view, page or arch button that happens to read "Actions" or "Delete") never gets one. */
-const actionIcons = {New:"plus", Save:"save", Discard:"rotate-ccw", Reload:"refresh-cw", Delete:"trash", Search:"search", Previous:"chevron-left", Next:"chevron-right", Actions:"chevron-down"} as const satisfies Readonly<Record<string, IconName>>;
+const actionIcons = {New:"plus", Save:"save", Discard:"rotate-ccw", Reload:"refresh-cw", Archive:"archive", Unarchive:"archive-restore", Delete:"trash", Duplicate:"files", Search:"search", Previous:"chevron-left", Next:"chevron-right", Actions:"chevron-down"} as const satisfies Readonly<Record<string, IconName>>;
 export type ActionLabel = keyof typeof actionIcons;
 export function isActionLabel(label: string): label is ActionLabel { return Object.hasOwn(actionIcons, label); }
 
@@ -25,10 +25,16 @@ export function actionButton(label: ActionLabel, action: () => void, className?:
   else node.prepend(icon(actionIcons[label]));
   return node;
 }
+/** Swaps the label of an `actionButton` and its icon together (Archive becomes Unarchive); a bare textContent would drop the icon. */
+export function relabelActionButton(node: HTMLButtonElement, label: Exclude<ActionLabel, "Actions">): void {
+  node.replaceChildren(label); node.prepend(icon(actionIcons[label]));
+}
 export function labelled(label: string, control: HTMLElement): HTMLElement {
   const wrapper = el("label", undefined, "field-label"); wrapper.append(el("span", label), control); return wrapper;
 }
 export function errorMessage(error: unknown): string { return error instanceof Error ? error.message : "The operation failed. Please reload and try again."; }
+/** The caller names no intent for a choice, so a delete-like caption gets the destructive style. */
+const DESTRUCTIVE_CAPTION = /^(delete|remove|unlink|archive)\b/i;
 const choiceServices = new WeakMap<Document, DialogService>();
 /** Confirmation decision identity is independent of its visible captions. */
 export async function confirmChoice(options: {title:string;message:string;accept:string;cancel:string;signal?:AbortSignal;service?:DialogService}): Promise<boolean> {
@@ -36,8 +42,9 @@ export async function confirmChoice(options: {title:string;message:string;accept
   let dialogs=options.service??choiceServices.get(document);
   if(dialogs?.active() && !dialogs.active()!.isConnected){dialogs.dispose();dialogs=undefined;}
   if(!dialogs){dialogs=new DialogService(error=>{queueMicrotask(()=>{throw error;});});choiceServices.set(document,dialogs);}
-  const handle=dialogs.confirm({title:options.title,message:options.message,confirmLabel:options.accept,cancelLabel:options.cancel,...(options.signal?{signal:options.signal}:{})});
-  handle.dialog.querySelector<HTMLButtonElement>('.message-dialog-footer button.primary')?.focus();
+  const handle=dialogs.confirm({title:options.title,message:options.message,confirmLabel:options.accept,cancelLabel:options.cancel,
+    destructive:DESTRUCTIVE_CAPTION.test(options.accept),...(options.signal?{signal:options.signal}:{})});
+  handle.dialog.querySelector<HTMLButtonElement>('.message-dialog-footer [data-default-action]')?.focus();
   return await handle.result==='confirm';
 }
 /** Standalone choices share a document stack; app callers supply their owned service explicitly. */
@@ -56,13 +63,19 @@ export async function choose(title: string, message: string, choices: readonly s
       if (settled) return;
       settled = true; handle?.close(); resolve(value);
     };
-    for (const [index, choice] of choices.entries()) {
+    // The first choice is the primary one: it is listed last (right-aligned footer), focused first, and uses the danger
+    // style when its caption is destructive. Ctrl+Enter runs it.
+    const built = choices.map((choice, index) => {
       const action = (): void => finish(choice);
-      actions.append(isActionLabel(choice) ? actionButton(choice, action, index === 0 ? "primary" : "") : button(choice, action, index === 0 ? "primary" : ""));
-    }
+      const className = index !== 0 ? "" : DESTRUCTIVE_CAPTION.test(choice) ? "danger" : "primary";
+      const node = isActionLabel(choice) ? actionButton(choice, action, className) : button(choice, action, className);
+      if (index === 0) node.dataset["defaultAction"] = "";
+      return node;
+    });
+    actions.append(...built.reverse());
     handle = dialogs.open({ title, body: message, size: "sm", footer: actions,
       dismiss: () => { finish(null); }, onClose: () => finish(null), ...(signal ? { signal } : {}) });
     // Choices preserve their primary-action keyboard path; the generic shell defaults to its close control.
-    if (handle.dialog.isConnected) actions.querySelector<HTMLButtonElement>("button")?.focus();
+    if (handle.dialog.isConnected) actions.querySelector<HTMLButtonElement>("[data-default-action]")?.focus();
   });
 }

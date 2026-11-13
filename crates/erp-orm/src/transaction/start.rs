@@ -1,4 +1,4 @@
-//! The opening flight of a transaction (design note).
+//! The opening flight of a transaction.
 //!
 //! One message carries `BEGIN` and the `SET LOCAL` limits; the generation read of the signals and
 //! the principal resolver's statement follow it as unnamed statements with typed parameters. All
@@ -116,7 +116,7 @@ impl Transaction {
     /// The signal read is not counted in `query_count`; the resolver's statement is.
     pub(super) async fn start(&mut self, resolver: Option<&ResolverStatement>) -> Result<Vec<Row>> {
         if let Some(statement) = resolver {
-            self.require_writable_sql(statement.sql())?;
+            self.require_writable_sql("Orm::begin_with", statement.sql())?;
             // caller SQL like any other: a resolver should only read, but a `DELETE` it sends on
             // a followed table is forgotten here too (review C4-X1)
             self.follow_sql_deletes(statement.sql());
@@ -409,7 +409,7 @@ impl Transaction {
         if let Err(error) = self.check_not_cancelled() {
             return Err(CommitError::RolledBack(error));
         }
-        if let Err(error) = self.require_writable_sql(last.sql) {
+        if let Err(error) = self.require_writable_sql("Orm::one_flight", last.sql) {
             return Err(CommitError::RolledBack(error));
         }
         #[cfg(feature = "test-faults")]

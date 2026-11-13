@@ -18,13 +18,20 @@
 //! 9. **Retry** of the whole call on `40001`/`40P01` or a superseded ORM (at most 5 attempts);
 //!    a missing `COMMIT` answer is `erp.commit_unknown`, never retried.
 //!
+//! Server-side code may attach an [`AttemptHook`] to a keyed write call ([`RpcCall::attempt_hook`],
+//! ): it runs inside every attempt after a new idempotency claim, before and after the
+//! method body, can only refuse ([`HookRefusal`]) and sets the attempt's audit origin.
+//!
 //! Every failure is rendered by one error table ([`RpcFailure`]); `debug` stays empty unless the
 //! operator switch `rpc.error_debug` is on and the subject holds [`RPC_DEBUG_ERRORS`].
 
 mod audit_call;
 mod binding;
 mod config;
+mod read_audit_policy;
+pub use read_audit_policy::ReadAuditPolicy;
 mod error;
+mod hook;
 mod idempotency;
 mod output;
 mod password_change;
@@ -43,6 +50,10 @@ pub use binding::{
 };
 pub use config::{RpcConfig, RpcConfigBuilder, RpcLimits};
 pub use error::{IdempotencyRefusal, InfraError, ProtocolError, RpcFailure};
+pub use hook::{
+    AttemptHook, CONCEALED_ACCESS_MESSAGE, HookCall, HookError, HookOrigin, HookRefusal,
+    RefusalKind,
+};
 pub use idempotency::{CorrelationId, IDEMPOTENCY_DDL, IdempotencyKey, MAINTENANCE_BATCH};
 pub use pending::PendingMethods;
 pub use route::{MAX_NAME_LEN, Route, RouteKind};

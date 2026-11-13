@@ -29,10 +29,14 @@ fn base_declares_its_company_scoped_models() {
         company.field_by_id(company.parent_path.unwrap()).name,
         "parent_path"
     );
-    let users = registry.model("res.users").unwrap();
-    assert!(
-        matches!(users.company_access, CompanyAccessState::Declared(a) if matches!(a.restriction(), Restriction::Unrestricted { .. }))
-    );
+    // contacts and users are company-scoped with their user-type escape
+    for model in ["res.partner", "res.users"] {
+        let spec = registry.model(model).unwrap();
+        assert!(
+            matches!(spec.company_access, CompanyAccessState::Declared(a) if matches!(a.restriction(), Restriction::Direct(_))),
+            "{model}"
+        );
+    }
     let generated = generate(&registry).unwrap();
     let exact = "[('company_id', 'in', company_ids + [False])]";
     let ancestor = "['|', ('company_id', '=', False), ('company_id', 'parent_of', company_ids)]";
@@ -58,6 +62,33 @@ fn base_declares_its_company_scoped_models() {
         let restriction = generated.iter().find(|g| g.model_name() == model).unwrap();
         assert_eq!(restriction.text(), expected, "{model}");
     }
+}
+
+/// PostgreSQL is in base_partner_users_scope.rs)
+#[test]
+fn base_contacts_and_users_generate_the_user_type_escape() {
+    let registry = RegistryBuilder::new([&erp_addon_base::ADDON])
+        .build()
+        .unwrap();
+    assert_eq!(registry.company_access_gaps().count(), 0);
+    let generated = generate(&registry).unwrap();
+    let text = |model: &str| {
+        generated
+            .iter()
+            .find(|g| g.model_name() == model)
+            .unwrap_or_else(|| panic!("{model} generates no restriction"))
+            .text()
+            .to_owned()
+    };
+    assert_eq!(
+        text("res.partner"),
+        "['|', ('partner_share', '=', False), '|', ('company_id', '=', False), \
+         ('company_id', 'parent_of', company_ids)]"
+    );
+    assert_eq!(
+        text("res.users"),
+        "['|', ('share', '=', False), ('company_ids', 'in', company_ids)]"
+    );
 }
 
 #[test]

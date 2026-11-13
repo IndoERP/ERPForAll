@@ -1,0 +1,10 @@
+error[E0308]: mismatched types
+ --> tests/ui/ai_tools/instruction_from_string.rs:7:42
+  |
+7 |     let _instruction = Instruction::from(text);
+  |                        ----------------- ^^^^ expected `Instruction`, found `String`
+  |                        |
+  |                        arguments to this function are incorrect
+  |
+note: associated function defined here
+ --> $RUST/core/src/convert/mod.rs

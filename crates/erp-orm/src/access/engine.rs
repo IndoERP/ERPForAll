@@ -13,7 +13,7 @@ use erp_sql::param::{Param, Scalar, ScalarKind};
 use super::{AccessDomain, AccessPolicy, Operation};
 use crate::env::Env;
 use crate::field_chain::FieldContextValues;
-use crate::principal::{ActiveCompanySet, Elevation, Principal, PrincipalBinding};
+use crate::principal::{ActiveCompanySet, Principal, PrincipalBinding};
 use crate::transaction::Transaction;
 
 impl Transaction {
@@ -24,28 +24,22 @@ impl Transaction {
         &self.policy
     }
 
-    /// The binding of `env`'s principal for a decision in this transaction (DN §2.1): refuses a
-    /// scoped elevation whose block is not open here, refuses an unresolved principal under a
-    /// policy that decides on groups and companies, and interns the subject's group set in the
-    /// pinned snapshot.
+    /// The binding of `env`'s principal for a decision in this transaction (DN §2.1): refuses an
+    /// environment of an elevation block that is not open here (whatever its elevation now, ADR
+    /// 0164 D2) or that was widened, refuses an unresolved principal under a policy that decides
+    /// on groups and companies, and interns the subject's group set in the pinned snapshot.
     ///
     /// # Errors
     ///
-    /// `Programming` for a closed elevation block or an unresolved principal under a compiled
-    /// policy; the policy's interning error.
+    /// `Programming` for an environment outside its elevation block, a widened one or an
+    /// unresolved principal under a compiled policy; the policy's interning error.
     pub(crate) fn binding<'e>(&self, env: &'e Env) -> Result<PrincipalBinding<'e>> {
         self.check_not_cancelled()?;
+        // block liveness before any decision or memo
+        self.check_env_block(env)?;
         // an environment whose companies were refused decides nothing
         env.companies()?;
         let principal = env.principal();
-        if let Elevation::Scoped { block, .. } = principal.elevation() {
-            // blocks are opened by `Transaction::elevated`; none is open before
-            return Err(Error::programming(format!(
-                "elevated environment of block {}#{} used outside it",
-                block.tx().get(),
-                block.seq()
-            )));
-        }
         if self.refresh.stale() {
             return Err(Error::programming(
                 "the access policy of this transaction is stale: a policy or membership change is \
@@ -104,6 +98,9 @@ impl Transaction {
     ///
     /// `Access` when refused; the binding's errors.
     pub(crate) fn check_model(&self, env: &Env, model: ModelId, op: Operation) -> Result<()> {
+        // an environment outside its elevation block is refused, also in the engine's superuser
+        // mode
+        self.check_env_block(env)?;
         // refused companies stop every operation, also in superuser mode
         env.companies()?;
         let spec: &ModelSpec = self.shared.registry.model_by_id(model);
@@ -139,6 +136,7 @@ impl Transaction {
         model: ModelId,
         op: Operation,
     ) -> Result<AccessDomain> {
+        self.check_env_block(env)?;
         env.companies()?;
         if env.principal().elevation().is_full() {
             return Ok(AccessDomain::allow_all());
@@ -156,8 +154,8 @@ impl Transaction {
     ///
     /// # Errors
     ///
-    /// `Programming` for `company_id` without a current company, for link grant ids before
-    /// , for a parameter without a bound form, and (as
+    /// `Programming` for `company_id` without a current company, for link grant ids before,
+    /// for a parameter without a bound form, and (as
     /// [`Transaction::companies_now`]) for a subject not resolved in this transaction; `Access`
     /// for a company the subject is not in.
     pub(crate) fn bind_principal_params(&self, env: &Env, params: &mut [Param]) -> Result<()> {

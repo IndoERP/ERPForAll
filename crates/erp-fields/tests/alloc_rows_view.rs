@@ -1,4 +1,4 @@
-//! Allocation budget of reading a result batch (design note):
+//! Allocation budget of reading a result batch:
 //! `get`, `str` and `f64` over every row and key allocate nothing. One test in its own binary,
 //! run on the main thread by `erp_alloc_budget::harness` (`erp_alloc_budget`: one profiler, all
 //! threads counted).

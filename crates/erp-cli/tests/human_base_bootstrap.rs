@@ -29,6 +29,8 @@ fn partner_identity_is_in_the_native_base_registry() {
     assert!(partner.field("email").is_some());
     assert!(partner.field("active").is_some());
     assert!(partner.field("company_id").is_some());
+    assert!(partner.field("country_id").is_some());
+    assert!(partner.field("state_id").is_some());
     let user = registry.model("res.users").unwrap();
     let link = user
         .field("partner_id")
@@ -37,8 +39,27 @@ fn partner_identity_is_in_the_native_base_registry() {
     assert_eq!(link.ty.comodel(), Some("res.partner"));
 }
 
-#[tokio::test]
-async fn real_base_manifest_initializes_groups_company_and_explicit_acl_only() {
+#[test]
+fn real_base_manifest_initializes_groups_company_and_explicit_acl_only() {
+    // The unoptimized base initialization chain needs more than the 2 MiB test thread (same reason
+    // as `real_base_manifest_initializes_technical_menu_and_views`; the framework fix is
+    // ).
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(groups_company_and_explicit_acl_only());
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+async fn groups_company_and_explicit_acl_only() {
     let db = TestDb::create().await.unwrap();
     let mut index = AddonIndex::new(true);
     index.add_dev_path(
@@ -140,11 +161,18 @@ async fn real_base_manifest_initializes_groups_company_and_explicit_acl_only() {
             assert!(["r", "cud"].contains(&operation.as_str()), "{operation}");
             continue;
         }
+        if group == "group_user" && model == "ir.filters" {
+            // saved filters: read and create own or shared ones, write and delete own ones only
+            assert!(["cr", "ud"].contains(&operation.as_str()), "{operation}");
+            continue;
+        }
         if group == "group_user" {
             // the Settings service and a user's own record (My Preferences)
             let expected = match model.as_str() {
                 "ir.config.setting" | "res.users" => "ru",
-                "change.password.own" | "res.users.identitycheck" => "crud",
+                // a user's own settings row only (record domain on `user_id`; `user_id` itself is
+                // writable by the system group alone)
+                "change.password.own" | "res.users.identitycheck" | "res.users.settings" => "crud",
                 _ => "r",
             };
             assert_eq!(operation, expected);
@@ -572,7 +600,7 @@ struct Screen {
     admin: AdminRead,
 }
 
-const TECHNICAL_CATEGORIES: [&str; 7] = [
+const TECHNICAL_CATEGORIES: [&str; 8] = [
     "technical_db_menu",
     "technical_seq_menu",
     "technical_ui_menu",
@@ -580,9 +608,10 @@ const TECHNICAL_CATEGORIES: [&str; 7] = [
     "technical_params_menu",
     "technical_security_menu",
     "technical_modules_menu",
+    "technical_automation_menu",
 ];
 
-const TECHNICAL_SCREENS: [Screen; 18] = {
+const TECHNICAL_SCREENS: [Screen; 20] = {
     use AdminRead::{Granted, NoAcl, ReadOnly};
     const fn s(
         menu: &'static str,
@@ -744,6 +773,22 @@ const TECHNICAL_SCREENS: [Screen; 18] = {
             "technical_module_action",
             "ir.module.module",
             "technical_module",
+            Granted,
+        ),
+        s(
+            "technical_jobs_menu",
+            "technical_automation_menu",
+            "technical_job_action",
+            "ir.job",
+            "technical_job",
+            Granted,
+        ),
+        s(
+            "technical_job_runs_menu",
+            "technical_automation_menu",
+            "technical_job_run_action",
+            "ir.job.run",
+            "technical_job_run",
             Granted,
         ),
     ]
@@ -1614,8 +1659,8 @@ async fn technical_menu_and_views() {
         );
         action_probes += 1;
     }
-    // every one of the 18 own screens was probed (a short `loaded_screens` would end the zip early)
-    assert_eq!(action_probes, 18, "internal-user action probes");
+    // every one of the 20 own screens was probed (a short `loaded_screens` would end the zip early)
+    assert_eq!(action_probes, 20, "internal-user action probes");
     let mut read_probes = 0usize;
     for screen in &TECHNICAL_SCREENS {
         let groups: &[&str] = match screen.admin {
@@ -1912,7 +1957,7 @@ async fn test_base_1_1_migration_populates_missing_company_partner_id() {
     // Seed an existing unrelated contact belonging to branch_company (company_id is ownership, not representation)
     let unrelated_contact_id: i64 = client
         .query_one(
-            "INSERT INTO res_partner (name, company_id, active) VALUES ('Unrelated Branch Contact', $1, true) RETURNING id",
+            "INSERT INTO res_partner (name, company_id, active, partner_share) VALUES ('Unrelated Branch Contact', $1, true, false) RETURNING id",
             &[&branch_comp_id],
         )
         .await
@@ -1921,7 +1966,7 @@ async fn test_base_1_1_migration_populates_missing_company_partner_id() {
 
     let custom_partner_id: i64 = client
         .query_one(
-            "INSERT INTO res_partner (name, active) VALUES ('Custom Partner', true) RETURNING id",
+            "INSERT INTO res_partner (name, active, partner_share) VALUES ('Custom Partner', true, false) RETURNING id",
             &[],
         )
         .await
@@ -2368,7 +2413,9 @@ async fn combined_migration_concurrent_upgrade_is_refused_without_duplicate_part
             )
             .await
     });
-    let until = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    // The loop ends as soon as the upgrade waits on the barrier; the deadline only bounds a run that never
+    // gets there. 10 s was too short on a loaded host (failed there on unchanged code, 2026-11-13).
+    let until = tokio::time::Instant::now() + std::time::Duration::from_secs(120);
     let paused = loop {
         let waiting: bool = client.query_one("SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND NOT granted AND classid=1124991::oid AND objid=97::oid AND database=(SELECT oid FROM pg_database WHERE datname=current_database()))", &[]).await.unwrap().get(0);
         if waiting {

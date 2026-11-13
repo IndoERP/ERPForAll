@@ -19,7 +19,8 @@ export class ErrorDialog {
       this.dialog.querySelector<HTMLButtonElement>("[data-error-close]")?.focus(); return;
     }
     this.restore = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
-    const dialog = el("dialog", undefined, "choice-dialog client-error-dialog");
+    const dialog = el("dialog", undefined, "choice-dialog message-dialog client-error-dialog");
+    dialog.dataset["size"] = "md";
     this.dialog = dialog;
     const heading = el("h2", error instanceof ClientError && error.kind === "ambiguous" ? "Check whether your change was saved" : "Unable to complete the operation");
     heading.id = "client-error-heading";
@@ -53,7 +54,13 @@ export class ErrorDialog {
     const close = button("Close", () => this.dispose(), "primary"); close.setAttribute("data-error-close", "");
     const repeated = el("p"); repeated.setAttribute("data-error-repeated", ""); repeated.setAttribute("role", "status");
     const actions = el("div", undefined, "actions"); actions.append(close);
-    dialog.append(heading, message, ...(reference ? [reference] : []), details, repeated, actions);
+    // The shared dialog anatomy (dialog-service.ts): header with the title and a close button, body, footer.
+    const header = el("header", undefined, "message-dialog-header");
+    const headerClose = button("×", () => this.dispose(), "message-dialog-close"); headerClose.setAttribute("aria-label", "Close");
+    header.append(heading, headerClose);
+    const body = el("div", undefined, "message-dialog-body"); body.append(message, ...(reference ? [reference] : []), details, repeated);
+    const footer = el("footer", undefined, "message-dialog-footer"); footer.append(actions);
+    dialog.append(header, body, footer);
     dialog.addEventListener("cancel", event => { event.preventDefault(); this.dispose(); });
     dialog.addEventListener("close", () => this.dispose());
     if (this.dialogs) this.modal = this.dialogs.attach(dialog, { dismiss: () => { this.dispose(); }, onClose: () => this.dispose() });

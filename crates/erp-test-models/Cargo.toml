@@ -17,6 +17,8 @@ axum = { version = "=0.8.9", default-features = false, features = ["http1", "tok
 tower = { version = "=0.5.3", features = ["util"] }
 # Private impex served-floor capture reuses the existing PostgreSQL wire recorder.
 tempfile = { workspace = true }
+# delta_sql: date and timestamp grain values
+time = { workspace = true }
 erp-addon-base = { workspace = true }
 # the attachment store tests (base_attachment_*): the in-memory store and the zero GC grace
 erp-blob = { workspace = true, features = ["testing"] }

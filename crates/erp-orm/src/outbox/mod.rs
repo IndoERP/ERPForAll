@@ -4,6 +4,7 @@
 //! explicit implementation boundaries.
 
 use erp_fields::{Error, ErrorKind, Result};
+use erp_registry::MAX_EVENT_FIELD_NAMES;
 
 use crate::correlation::{CorrelationId, OperationId};
 
@@ -46,7 +47,6 @@ impl Kind {
 
 /// The `schema_version` column of every envelope this build writes.
 pub(crate) const SCHEMA_VERSION: i16 = 1;
-const MAX_CHANGED_NAMES: usize = 128;
 pub(crate) const MAX_CASCADE_MODELS: usize = 64;
 const MAX_COMPANIES: usize = 256;
 const MAX_NAME_BYTES: usize = 256;
@@ -129,8 +129,10 @@ impl Envelope {
         if record_ids.len() > MAX_ID_ENTRIES {
             return Err(limit("event exceeds 256 id entries"));
         }
-        if field_names.len() > MAX_CHANGED_NAMES {
-            return Err(limit("event exceeds 128 changed field names"));
+        if field_names.len() > MAX_EVENT_FIELD_NAMES {
+            return Err(limit(&format!(
+                "event exceeds {MAX_EVENT_FIELD_NAMES} changed field names"
+            )));
         }
         if cascade_models.len() > MAX_CASCADE_MODELS {
             return Err(limit("event exceeds 64 cascade models"));

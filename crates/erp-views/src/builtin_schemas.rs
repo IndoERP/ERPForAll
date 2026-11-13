@@ -1,4 +1,4 @@
-//! Builtin closed description schemas for the `list`, `form` and `search` view types.
+//! Builtin closed description schemas for the `list`, `form`, `search` and `pivot` view types.
 //!
 //! Each payload is the wire arena of `wire::View` minus its envelope: `{root, nodes}`, where every
 //! node is a tagged union on `kind` whose variants mirror the `wire::ViewNode` shapes of that view
@@ -83,6 +83,7 @@ static FIELD_OPTIONS: SchemaNode = SchemaNode::Object(&[
     SchemaProperty::optional("no_quick_create", &BOOL),
     SchemaProperty::optional("no_create_edit", &BOOL),
     SchemaProperty::optional("no_symbol", &BOOL),
+    SchemaProperty::optional("enable_formatting", &BOOL),
     SchemaProperty::optional("hide_trailing_zeros", &BOOL),
     SchemaProperty::optional("field_digits", &BOOL),
     SchemaProperty::optional("show_time", &BOOL),
@@ -315,6 +316,18 @@ static SEARCH_FILTER_NODE: SchemaNode = SchemaNode::Object(&[
     SchemaProperty::optional("domain", &DOMAIN_EXPR),
     SchemaProperty::optional("context", &CONTEXT_EXPR),
 ]);
+static PIVOT_NODE: SchemaNode = SchemaNode::Object(&[
+    SchemaProperty::required("children", &CHILDREN),
+    SchemaProperty::required("disable_linking", &BOOL),
+    SchemaProperty::required("display_quantity", &BOOL),
+    SchemaProperty::optional("default_order", &SHORT),
+]);
+static PIVOT_FIELD_NODE: SchemaNode = SchemaNode::Object(&[
+    SchemaProperty::required("field", &FIELD_REF),
+    SchemaProperty::required("label", &LABEL),
+    SchemaProperty::required("role", &SHORT),
+    SchemaProperty::optional("interval", &SHORT),
+]);
 static EMPTY_NODE: SchemaNode = SchemaNode::Object(&[]);
 static CHATTER_NODE: SchemaNode = SchemaNode::Object(&[
     SchemaProperty::required("reload_on_post", &BOOL),
@@ -376,6 +389,14 @@ static SEARCH_UNION: SchemaNode = SchemaNode::TaggedUnion {
     ],
 };
 
+static PIVOT_UNION: SchemaNode = SchemaNode::TaggedUnion {
+    discriminator: "kind",
+    variants: &[
+        SchemaVariant::new("pivot", &PIVOT_NODE),
+        SchemaVariant::new("pivot_field", &PIVOT_FIELD_NODE),
+    ],
+};
+
 static LIST_NODES: SchemaNode = SchemaNode::Array {
     item: &LIST_UNION,
     max_items: MAX_NODES,
@@ -388,6 +409,14 @@ static SEARCH_NODES: SchemaNode = SchemaNode::Array {
     item: &SEARCH_UNION,
     max_items: MAX_NODES,
 };
+static PIVOT_NODES: SchemaNode = SchemaNode::Array {
+    item: &PIVOT_UNION,
+    max_items: MAX_NODES,
+};
+static PIVOT_ROOT: SchemaNode = SchemaNode::Object(&[
+    SchemaProperty::required("root", &INT),
+    SchemaProperty::required("nodes", &PIVOT_NODES),
+]);
 static LIST_ROOT: SchemaNode = SchemaNode::Object(&[
     SchemaProperty::required("root", &INT),
     SchemaProperty::required("nodes", &LIST_NODES),
@@ -413,6 +442,10 @@ pub fn form_schema() -> ViewResult<ViewSchema> {
 pub fn search_schema() -> ViewResult<ViewSchema> {
     ViewSchema::new(REVISION, &SEARCH_ROOT)
 }
+/// The closed description schema of the builtin `pivot` view type.
+pub fn pivot_schema() -> ViewResult<ViewSchema> {
+    ViewSchema::new(REVISION, &PIVOT_ROOT)
+}
 
 /// Borrow a builtin's static root without constructing or validating a schema allocation.
 pub(crate) fn builtin_root(kind: crate::wire::ViewType) -> Option<&'static SchemaNode> {
@@ -420,6 +453,7 @@ pub(crate) fn builtin_root(kind: crate::wire::ViewType) -> Option<&'static Schem
         crate::wire::ViewType::List => Some(&LIST_ROOT),
         crate::wire::ViewType::Form => Some(&FORM_ROOT),
         crate::wire::ViewType::Search => Some(&SEARCH_ROOT),
+        crate::wire::ViewType::Pivot => Some(&PIVOT_ROOT),
         _ => None,
     }
 }

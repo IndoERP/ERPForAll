@@ -1,4 +1,4 @@
-//! The environment an operation runs in.
+//! The environment an operation runs.
 //!
 //! The base is the transaction's environment without `lang` (data files load in the source
 //! language). The `context` attributes of the operation's containers and of the

@@ -1,4 +1,4 @@
-//! Contextual actions of a model (`get_bindings`,,
+//! Contextual actions of a model (`get_bindings`,
 //! ).
 //!
 //! The shared part is the same for every user: the actions bound to the
@@ -152,7 +152,7 @@ pub async fn action_by_id(tx: &mut Transaction, id: ActionId) -> Result<Option<A
     Ok(Some(ActionRef { id, model }))
 }
 
-/// The contextual actions of `model` that the user of `env` may see.
+/// The contextual actions of `model` that the user of `env` may.
 ///
 /// ```no_run
 /// # #![recursion_limit = "256"]

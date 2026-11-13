@@ -1,4 +1,4 @@
-//! The served-path harness (PERF.SERVE-HARNESS,,/D12):
+//! The served-path harness (PERF.SERVE-HARNESS,/D12):
 //! allocations per request, heap per idle connection and future sizes of a server under test,
 //! counted for the whole process with [`erp_alloc_budget::measure`].
 //!

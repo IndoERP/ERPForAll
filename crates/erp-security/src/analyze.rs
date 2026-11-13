@@ -327,8 +327,7 @@ impl<'r> Walk<'r> {
         })
     }
 
-    /// `spec` of `model`, and for an inherited field its delegate and the parent's field
-    /// .
+    /// `spec` of `model`, and for an inherited field its delegate and the parent's field.
     fn read_field(&self, model: &ModelSpec, spec: &FieldSpec, out: &mut Analysis) -> Result<()> {
         out.read(model.id, spec.id);
         let mut owner = model;

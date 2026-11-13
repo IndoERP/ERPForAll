@@ -107,6 +107,10 @@ pub(crate) struct Inner {
     pub wake: tokio::sync::Notify,
     /// The wake-up of the `erp_jobs` channel through the signal listener, when the ORM has one.
     pub listener_wake: Option<Arc<tokio::sync::Notify>>,
+    /// Registered kinds this runner never claims: the names given to
+    /// [`JobRunnerBuilder::exclude_kinds`] and, with [`JobRunnerBuilder::exclude_elevated`], every
+    /// elevated declaration. The only filter of its kind.
+    pub excluded: Vec<&'static str>,
     #[cfg(feature = "test-faults")]
     pub hooks: Mutex<Option<Arc<dyn RunnerHooks>>>,
 }
@@ -134,6 +138,8 @@ pub struct JobRunnerBuilder {
     owner: Option<Uuid>,
     node: Option<NodeViewFn>,
     process_slots: Option<Arc<Semaphore>>,
+    excluded: Vec<&'static str>,
+    exclude_elevated: bool,
 }
 
 /// Claims and runs the jobs of one database.
@@ -162,6 +168,8 @@ impl JobRunner {
             owner: None,
             node: None,
             process_slots: None,
+            excluded: Vec::new(),
+            exclude_elevated: false,
         }
     }
 
@@ -214,11 +222,14 @@ impl JobRunner {
 
     /// The kinds this binary can run against this database: every registered kind, except step
     /// kinds whose model the registry does not have (an older or partial binary never claims a
-    /// kind it cannot run).
+    /// kind it cannot run), and the kinds excluded at build
+    /// ([`JobRunnerBuilder::exclude_kinds`]). This one list feeds every claim statement and the
+    /// next-due query, so an excluded kind is never claimed and so never run by this runner.
     pub(crate) fn claimable_kinds(&self) -> Vec<&'static JobKindDecl> {
         let registry = self.inner.orm.registry();
         super::linked_kinds()
             .into_iter()
+            .filter(|decl| !self.inner.excluded.contains(&decl.name))
             .filter(|decl| match decl.handler {
                 super::HandlerRef::Step { model, .. } => registry.model(model).is_some(),
                 super::HandlerRef::Native(_) => true,
@@ -569,12 +580,52 @@ impl JobRunnerBuilder {
         self
     }
 
+    /// Never claim the jobs of `kinds` (the ordinary runner works with the runtime
+    /// ORM and excludes the elevated attachment maintenance kinds, which only an isolated
+    /// maintenance runner may run). An excluded job stays `ready` with its attempts untouched.
+    /// Nothing is excluded by default: the composition that builds the runner opts in. Calling
+    /// it again adds to the list. See [`exclude_elevated`](Self::exclude_elevated) to exclude by
+    /// the declarations' flag instead of by name. The reaper is not affected (it returns expired leases of any
+    /// kind and runs nothing).
+    pub fn exclude_kinds(mut self, kinds: impl IntoIterator<Item = &'static str>) -> Self {
+        self.excluded.extend(kinds);
+        self
+    }
+
+    /// Never claim an elevated kind (`JobKindDecl::elevated`): at build, the name of
+    /// every registered kind whose declaration is elevated joins the excluded list. Like
+    /// [`exclude_kinds`](Self::exclude_kinds), the default is to exclude nothing; the composition
+    /// of an ordinary (non-maintenance) runner opts in.
+    pub fn exclude_elevated(mut self) -> Self {
+        self.exclude_elevated = true;
+        self
+    }
+
     /// Check the settings against the registered kinds and build the runner.
     ///
     /// # Errors
     ///
-    /// `Internal` when no entropy is available for the owner identity.
-    pub fn build(self) -> Result<JobRunner> {
+    /// `Programming` naming a kind given to [`exclude_kinds`](Self::exclude_kinds) that is not
+    /// registered in this binary; `Internal` when no entropy is available for the owner identity.
+    pub fn build(mut self) -> Result<JobRunner> {
+        let registered = super::enqueue::kind_map();
+        if let Some(unknown) = self
+            .excluded
+            .iter()
+            .find(|kind| !registered.contains_key(**kind))
+        {
+            return Err(Error::programming(format!(
+                "JobRunner::exclude_kinds names the job kind '{unknown}', which is not registered \
+                 in this binary"
+            )));
+        }
+        if self.exclude_elevated {
+            for decl in super::JOB_KINDS.iter().filter(|decl| decl.elevated) {
+                if !self.excluded.contains(&decl.name) {
+                    self.excluded.push(decl.name);
+                }
+            }
+        }
         let owner = match self.owner {
             Some(owner) => owner,
             None => {
@@ -606,6 +657,7 @@ impl JobRunnerBuilder {
             counters: Counters::default(),
             wake: tokio::sync::Notify::new(),
             listener_wake,
+            excluded: self.excluded,
             #[cfg(feature = "test-faults")]
             hooks: Mutex::new(None),
         });

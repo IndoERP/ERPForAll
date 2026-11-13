@@ -49,7 +49,9 @@ pub struct ResUsersApikeys {
     /// Naive UTC expiration, inclusive; NULL is persistent.
     #[field(datetime)]
     pub expiration_date: Option<DateTime>,
-    /// Last successful use, naive UTC like other model datetimes.
+    /// Last successful use, naive UTC like other model datetimes. Moves at most once an hour per
+    /// key across the cluster (a coarse "in use" signal, not an access log), written by the key
+    /// verification outside the request transaction without touching `write_date`.
     #[field(datetime)]
     pub last_used_at: Option<DateTime>,
     /// Imported legacy lookup prefix; no producer in this slice.

@@ -25,7 +25,7 @@ pub struct ModuleKey {
 }
 
 /// `Hasher` over SHA-256, so the cpu fingerprint is stable across Rust versions (a persistent copy of
-/// the cache,, uses the same key).
+/// the cache, uses the same key).
 struct ShaHasher(Sha256);
 
 impl std::hash::Hasher for ShaHasher {

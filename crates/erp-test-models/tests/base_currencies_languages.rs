@@ -1,5 +1,5 @@
 //! Parity tests for `res.currency` and `res.company.currency_id`.
-//! Specs:.
+//! Specs.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -347,7 +347,7 @@ async fn assert_company_currency_default_propagates_field_access_errors() {
         .await
         .unwrap();
     let mut setup = h.begin().await.unwrap();
-    setup.execute("INSERT INTO res_users (id, name, login, active) VALUES (42, 'Default reader', 'default-reader', true)", &[]).await.unwrap();
+    setup.execute("INSERT INTO res_users (id, name, login, active, share) VALUES (42, 'Default reader', 'default-reader', true, false)", &[]).await.unwrap();
     setup.commit().await.unwrap();
     let mut tx = h.begin_as(42).await.unwrap();
     let company = tx.env().records("res.company").unwrap();

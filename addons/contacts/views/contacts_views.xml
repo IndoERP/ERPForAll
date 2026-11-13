@@ -43,6 +43,11 @@
     <menuitem id="menu_contacts" name="Contacts" action="action_contacts" sequence="10"/>
     <menuitem id="menu_contacts_config" name="Configuration" groups="base.group_system" sequence="100">
       <menuitem id="menu_contact_tags" name="Contact Tags" action="action_contact_tags" sequence="10"/>
+      <menuitem id="menu_localisation" name="Localization" sequence="20">
+        <menuitem id="menu_country_partner" name="Countries" action="base.action_country" sequence="1"/>
+        <menuitem id="menu_country_state_partner" name="Fed. States" action="base.action_country_state" sequence="2"/>
+        <menuitem id="menu_country_group" name="Country Group" action="base.action_country_group" sequence="3"/>
+      </menuitem>
     </menuitem>
   </menuitem>
 </erp>

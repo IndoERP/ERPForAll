@@ -16,6 +16,7 @@ use erp_sql::param::{Param, Scalar};
 use tokio_postgres::Row;
 
 use super::apikey_store::KeyScope;
+pub use super::login::ApiKeyLastUse;
 use super::session::{Cached, Refusal, SessionCheck, SessionSecret};
 use super::settings::{AuthConfig, CACHE_NAME};
 use crate::resolver::Resolver;
@@ -82,11 +83,16 @@ pub struct ApiKeyBegin {
     pub tx: Transaction,
     /// The optional cookie failed validation; the HTTP boundary clears it.
     pub drop_cookie: bool,
+    /// `Some` when this key's `last_used_at` is due (never set, or older than one hour by the
+    /// database clock). Dropping the ticket launches the bookkeeping write; hold it until the
+    /// request transaction has ended. See [`ApiKeyLastUse`].
+    pub last_use: Option<ApiKeyLastUse>,
 }
 impl fmt::Debug for ApiKeyBegin {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ApiKeyBegin")
             .field("drop_cookie", &self.drop_cookie)
+            .field("last_use", &self.last_use)
             .finish_non_exhaustive()
     }
 }
@@ -144,8 +150,30 @@ impl fmt::Display for ApiKeyCooldown {
 }
 impl std::error::Error for ApiKeyCooldown {}
 
-pub(super) const LEGACY_REFUSAL: &str =
-    "Imported legacy API keys are not accepted until a later release";
+/// A key's `last_used_at` is written at most once in this many seconds, cluster-wide: the
+/// opening statement flags a key as due by it and the write repeats the same predicate.
+pub(super) const LAST_USED_INTERVAL_SECS: i64 = 3600;
+
+/// What an accepted key check hands to [`super::Auth::begin_api_key`].
+pub(super) struct KeyAccepted {
+    pub drop_cookie: bool,
+    pub key: ApiKeyId,
+    /// The key's `last_used_at` is NULL or older than [`LAST_USED_INTERVAL_SECS`].
+    pub last_use_due: bool,
+}
+
+/// The write of a key's last use: one row, only while it is still due and not locked by anyone
+/// else. Bookkeeping, like the session touch: `write_date` and `write_uid` stay as they are.
+/// `$1` is the key id (`int8`), `$2` the interval in seconds (`int8`). Returns the rows it
+/// changed, so an empty answer means "not due, locked or gone".
+pub(super) const LAST_USE_SQL: &str = "\
+UPDATE res_users_apikeys SET last_used_at = now() AT TIME ZONE 'utc'
+ WHERE id IN (SELECT id FROM res_users_apikeys
+               WHERE id = $1 AND (last_used_at IS NULL
+                     OR last_used_at < (now() AT TIME ZONE 'utc') - make_interval(secs => $2))
+                 FOR NO KEY UPDATE SKIP LOCKED)
+RETURNING id";
+
 pub(super) fn invalid_key() -> Error {
     Error::new(ErrorKind::AccessDenied, "Invalid apikey")
 }
@@ -165,13 +193,15 @@ pub(super) enum KeyRefused {
 
 /// The first sixteen columns exactly preserve SessionCheck's private wire contract, followed by
 /// the plan's added token fields (`plan.len()` text columns, NULL in the key and throttle rows).
-/// Key evidence occupies the remaining columns; the final tag distinguishes rows, so an absent
+/// Key evidence occupies the remaining columns (the key row ends with the last-use due flag, NULL
+/// in the other rows); the tag column at `first + 4` distinguishes rows, so an absent
 /// key still permits checking a presented cookie before refusing the key. At most two rows
 /// per digest are returned, allowing duplicate corruption to fail loudly without unbounded
 /// transfer. Stored JSON allowlists are tested in PostgreSQL and never transferred.
 pub(super) fn check_sql(resolver: &Resolver, plan: &super::token_plan::TokenPlan) -> String {
     let cookie = super::session::check_sql(resolver, plan).replace("$1", "$4");
     let pad = ", NULL::text".repeat(plan.len());
+    let secs = LAST_USED_INTERVAL_SECS;
     format!(
         r#"WITH cookie AS ({cookie} LIMIT 2),
 address_throttle AS MATERIALIZED (
@@ -187,21 +217,25 @@ SELECT {},
        CASE WHEN octet_length(k.name) BETWEEN 1 AND 128 AND length(btrim(k.name))>0 THEN k.name ELSE NULL END,
        CASE WHEN octet_length(k.kind)<=7 THEN k.kind ELSE NULL END,
        (k.models IS NULL AND k.methods IS NULL AND k.read_only IS FALSE AND k.capabilities='subject'),
-       0::int4, NULL::int4, NULL::float8
+       0::int4, NULL::int4, NULL::float8,
+       (k.last_used_at IS NULL
+        OR k.last_used_at < (now() AT TIME ZONE 'utc') - make_interval(secs => {secs}))
   FROM (SELECT * FROM res_users_apikeys
          WHERE EXISTS(SELECT FROM eligible)
-           AND digest=decode($1::text,'hex') AND digest_kid=$2::int8 AND scope=$3::text
-           AND legacy_hash IS NULL
+           AND scope=$3::text
+           AND CASE WHEN $8::int8 = 0
+                    THEN digest=decode($1::text,'hex') AND digest_kid=$2::int8 AND legacy_hash IS NULL
+                    ELSE id=$8::int8 AND legacy_hash=$9::text END
            AND (expiration_date IS NULL OR expiration_date>=now() AT TIME ZONE 'utc')
          LIMIT 2) k
   JOIN res_users u ON u.id=k.user_id
 UNION ALL
-SELECT cookie.*, NULL::int8, NULL::text, NULL::text, NULL::boolean, 1::int4, NULL::int4, NULL::float8 FROM cookie
+SELECT cookie.*, NULL::int8, NULL::text, NULL::text, NULL::boolean, 1::int4, NULL::int4, NULL::float8, NULL::boolean FROM cookie
 UNION ALL
 SELECT NULL::int8, NULL::boolean, NULL::int8, NULL::int8[], NULL::int8[],
        NULL::text, NULL::int8, NULL::text, NULL::bytea, NULL::int2,
        NULL::float8, NULL::float8, NULL::float8, NULL::float8, NULL::text, NULL::text{pad},
-       NULL::int8, NULL::text, NULL::text, NULL::boolean, 2::int4, failures, elapsed
+       NULL::int8, NULL::text, NULL::text, NULL::boolean, 2::int4, failures, elapsed, NULL::boolean
   FROM address_throttle"#,
         resolver.subject_columns()
     )
@@ -217,7 +251,8 @@ pub(super) struct KeyCheck<'a> {
     pub digest: String,
     pub kid: i16,
     pub malformed: bool,
-    pub legacy: bool,
+    /// An imported key already verified against its stored hash (id and that exact hash).
+    pub legacy: Option<super::apikey_legacy::LegacyMatch>,
     pub request: &'a ApiKeyRequest<'a>,
     pub cached: Arc<Cached>,
     pub config: &'a AuthConfig,
@@ -238,7 +273,7 @@ fn stored_authority() -> Error {
 }
 
 impl CredentialCheck for KeyCheck<'_> {
-    type Accepted = bool;
+    type Accepted = KeyAccepted;
     type Refused = KeyRefused;
     fn statement(&self) -> Result<ResolverStatement> {
         let audience = match self.request.scope {
@@ -268,6 +303,12 @@ impl CredentialCheck for KeyCheck<'_> {
                         .duration()
                         .as_secs_f64(),
                 )),
+                Param::Scalar(Scalar::Int8(self.legacy.as_ref().map_or(0, |m| m.id))),
+                Param::Scalar(Scalar::Text(
+                    self.legacy
+                        .as_ref()
+                        .map_or_else(|| "".into(), |m| Arc::clone(&m.hash)),
+                )),
             ],
         ))
     }
@@ -275,7 +316,7 @@ impl CredentialCheck for KeyCheck<'_> {
         &self,
         rows: &[Row],
         policy: &dyn AccessPolicy,
-    ) -> Result<CredentialVerdict<bool, KeyRefused>> {
+    ) -> Result<CredentialVerdict<KeyAccepted, KeyRefused>> {
         if self.orm.ormcache_generation(CACHE_NAME) != self.cached.generation {
             return Ok(CredentialVerdict::Refused(KeyRefused::Stale));
         }
@@ -356,9 +397,6 @@ impl CredentialCheck for KeyCheck<'_> {
             }
             Ok(CredentialVerdict::Refused(refused))
         };
-        if self.legacy {
-            return denied(Error::new(ErrorKind::AccessDenied, LEGACY_REFUSAL), true);
-        }
         if self.malformed {
             return denied(invalid_key(), true);
         }
@@ -399,6 +437,9 @@ impl CredentialCheck for KeyCheck<'_> {
             return Err(stored_authority());
         }
         let id = ApiKeyId::new(col(row, first)?).map_err(|_| stored_authority())?;
+        // a NULL flag on a key row is a broken statement, never "not due"
+        let last_use_due = col::<Option<bool>>(row, first + 7)?
+            .ok_or_else(|| Error::db("API key evidence lacks the last-use flag"))?;
         let name: Option<String> = col(row, first + 1)?;
         let name = name.ok_or_else(stored_authority)?;
         let scope = Scope::builder(id, name)
@@ -418,7 +459,14 @@ impl CredentialCheck for KeyCheck<'_> {
             .companies(principal.companies().allowed().to_vec())
             .scope(scope)
             .build()?;
-        Ok(CredentialVerdict::accepted(principal, drop_cookie))
+        Ok(CredentialVerdict::accepted(
+            principal,
+            KeyAccepted {
+                drop_cookie,
+                key: id,
+                last_use_due,
+            },
+        ))
     }
 }
 

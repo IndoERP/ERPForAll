@@ -236,8 +236,8 @@ async fn the_dispatch_table_orders_native_and_wasm_entries_like_the_addons() {
 async fn a_wasm_layer_over_a_native_method_without_wire_is_refused_at_build() {
     let h = harness(false).await;
     let log = Arc::new(Mutex::new(Vec::new()));
-    // `default_get` is core's and has no wire form (`create`, `write` and `unlink` have one since
-    // , see `wasm_override.rs`)
+    // `default_get` is core's and has no wire form (`create`, `write` and `unlink` have one since,
+    // see `wasm_override.rs`)
     let wasm = vec![WasmMethodImpl {
         model: MODEL.to_owned(),
         method: "default_get".to_owned(),

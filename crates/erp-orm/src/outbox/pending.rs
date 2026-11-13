@@ -288,7 +288,7 @@ impl crate::Transaction {
         records: &crate::Records,
         relevant: bool,
     ) -> Result<()> {
-        self.check_records(records)?;
+        self.admit_records(records).await?;
         if !relevant {
             return Ok(());
         }

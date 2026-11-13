@@ -16,6 +16,11 @@ pub const JOBS_LOCK_CLASS: i32 = 1703;
 /// node and install locks, `erp_orm::node::LOCK_CLASS`).
 pub const MAIL_SCHEDULED_THREAD_LOCK_CLASS: i32 = 1704;
 
+/// First key of the transaction-level advisory lock that serializes the composer uploads of one
+/// user (`erp_addon_mail::message_attachments::PENDING_LOCK_CLASS`; a test pins the two equal):
+/// the second key is `hashtext` of the user id.
+pub const MAIL_PENDING_UPLOAD_LOCK_CLASS: i32 = 1706;
+
 /// `pg_try_advisory_xact_lock` of the singleton key in `$1` (`text`).
 pub const JOBS_TRY_LOCK: &str = "pg_try_advisory_xact_lock(1703, hashtext($1::text))";
 

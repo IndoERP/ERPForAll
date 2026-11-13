@@ -2,7 +2,7 @@
 // The message: renderers, the safe body renderer, attachments, reactions, missing data and failures that stay visible.
 import { flushSync } from "@erpforall/elang";
 import { expect, test } from "vitest";
-import { BODY_MAX_DEPTH, BODY_MAX_LENGTH, BODY_MAX_NODES, ThreadViewError, bodyText, renderBody, safeHref } from "../src/index";
+import { BODY_MAX_DEPTH, BODY_MAX_LENGTH, BODY_MAX_NODES, ThreadViewError, bodyText, initialsAvatar, renderBody, safeHref } from "../src/index";
 import { Rig, article, failsWith, message } from "./support";
 
 const ann = { "res.partner": [{ id: 1, name: "Ann" }, { id: 2, name: "Bob" }] };
@@ -35,9 +35,10 @@ test("tracking, notification and comment messages are drawn by the renderer regi
   expect(article(thread, 2).dataset["layout"]).toBe("row");
   expect(lines.map((l) => l.getAttribute("data-field"))).toEqual(["stage_id", "expected_revenue"]);
   // Display strings captured at write time are shown; an empty old value reads "None"; the arrow is decorative.
-  expect(lines[0]?.textContent).toBe("Stage New →  changed to Won");
-  expect(lines[1]?.textContent).toBe("Expected revenue None →  changed to 1,200.50");
+  expect(lines[0]?.textContent).toBe("Stage New changed to Won");
+  expect(lines[1]?.textContent).toBe("Expected revenue None changed to 1,200.50");
   expect(lines[0]?.querySelector(".erp-mail-tracking-arrow")?.getAttribute("aria-hidden")).toBe("true");
+  expect(lines[0]?.querySelector(".erp-mail-tracking-arrow svg")).not.toBeNull();
   expect(rig.errors).toEqual([]);
 
   // A renderer with a lower sequence wins; removing it falls back to the default.
@@ -188,16 +189,16 @@ test("message attachments render download link, formatted size, and image thumbn
   expect(items).toHaveLength(2);
   const links = [...art.querySelectorAll<HTMLAnchorElement>(".erp-mail-attachment-link")];
   expect(links).toHaveLength(2);
-  expect(links[0]?.getAttribute("href")).toBe("/web/content/10?download=true");
+  expect(links[0]?.getAttribute("href")).toBe("/erp/content/10?download=true");
   expect(links[0]?.getAttribute("download")).toBe("photo.png");
   expect(items[0]?.textContent).toContain("photo.png");
   expect(items[0]?.textContent).toContain("(50 KB)");
   const thumb = items[0]?.querySelector<HTMLImageElement>(".erp-mail-attachment-thumbnail");
   expect(thumb).not.toBeNull();
-  expect(thumb?.getAttribute("src")).toBe("/web/content/10");
+  expect(thumb?.getAttribute("src")).toBe("/erp/content/10");
   expect(thumb?.getAttribute("alt")).toBe("photo.png");
 
-  expect(links[1]?.getAttribute("href")).toBe("/web/content/11?download=true");
+  expect(links[1]?.getAttribute("href")).toBe("/erp/content/11?download=true");
   expect(items[1]?.textContent).toContain("data.csv");
   expect(items[1]?.textContent).toContain("(2.0 KB)");
   expect(items[1]?.querySelector(".erp-mail-attachment-thumbnail")).toBeNull();
@@ -208,10 +209,40 @@ test("a message head shows author initials with a stable tone", () => {
   const rig = new Rig();
   rig.records(ann);
   rig.load([message(1, { body: "<p>One</p>", author_id: 1 }), message(2, { body: "<p>Two</p>", author_id: 1 })]);
-  const thread = rig.thread({ order: "asc" });
+  // Not squashed: a squashed message (same author, within minutes) has no avatar, only the gutter.
+  const thread = rig.thread({ order: "asc", squash: false });
   const first = article(thread, 1).querySelector<HTMLElement>(".erp-mail-avatar")!;
   const second = article(thread, 2).querySelector<HTMLElement>(".erp-mail-avatar")!;
   expect(first.textContent).toBe("AN");
   expect(first.getAttribute("aria-hidden")).toBe("true");
   expect(first.dataset["tone"]).toBe(second.dataset["tone"]);
+});
+
+/// (partial: the row is the avatar beside one column; a squashed message keeps the gutter and shows no avatar)
+test("a message row has the avatar beside the head and body, and a squashed one has no avatar", () => {
+  const rig = new Rig();
+  rig.records(ann);
+  rig.load([message(1, { date: "2026-11-08 09:00:00", body: "<p>One</p>", author_id: 1 }), message(2, { date: "2026-11-08 09:01:00", body: "<p>Two</p>", author_id: 1 })]);
+  const thread = rig.thread({ order: "asc", squash: true });
+  const first = article(thread, 1).querySelector<HTMLElement>(".erp-mail-message-row")!;
+  expect([...first.children].map((c) => c.className)).toEqual(["erp-mail-avatar", "erp-mail-message-main"]);
+  expect(first.querySelector(".erp-mail-message-head .erp-mail-avatar")).toBeNull();
+  expect(first.querySelector(".erp-mail-message-main > .erp-mail-message-head .erp-mail-author")?.textContent).toBe("Ann");
+  expect(first.querySelector(".erp-mail-message-main .erp-mail-message-content")?.textContent).toBe("One");
+  const second = article(thread, 2).querySelector<HTMLElement>(".erp-mail-message-row")!;
+  expect([...second.children].map((c) => c.className)).toEqual(["erp-mail-message-main"]);
+  // The day separator is a sibling of the row, so it spans the column.
+  expect(first.parentElement?.querySelector(":scope > .erp-mail-day")).not.toBeNull();
+});
+
+/// (partial: initials are whole graphemes: an emoji, a decomposed accent, Arabic letters)
+test("initials take whole graphemes, never half an emoji or a bare accent", () => {
+  const initials = (name: string) => initialsAvatar(document, name).textContent;
+  expect(initials("\u{1F600} Ann")).toBe("\u{1F600}A");
+  expect(initials("\u{1F468}\u200D\u{1F469}\u200D\u{1F467} Lee")).toBe("\u{1F468}\u200D\u{1F469}\u200D\u{1F467}L");
+  expect(initials("E\u0301lodie Martin")).toBe("E\u0301M");
+  expect(initials("e\u0301lodie")).toBe("E\u0301L");
+  expect(initials("\u0645\u062D\u0645\u062F \u0639\u0644\u064A")).toBe("\u0645\u0639");
+  expect(initials("\u0645\u062D\u0645\u062F")).toBe("\u0645\u062D");
+  expect(initials("Ann")).toBe("AN");
 });

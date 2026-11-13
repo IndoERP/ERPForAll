@@ -33,6 +33,8 @@ export function radioControl(options: FieldControlOptions): FieldControl {
   group.setAttribute("role", "radiogroup");
   group.setAttribute("aria-label", field.label);
   group.dataset["orientation"] = orientation;
+  // Only a view that says `horizontal: false` insists on a column; otherwise a form lays the choices in a row that wraps.
+  if (field.options?.horizontal === false) group.dataset["explicitVertical"] = "";
   if (field.required) group.setAttribute("aria-required", "true");
 
   let currentId: number | null = null;

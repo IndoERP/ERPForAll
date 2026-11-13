@@ -1,5 +1,4 @@
-//! RPC exposure and binding tests for `load`, `export_data`, and `get_import_templates`
-//! .
+//! RPC exposure and binding tests for `load`, `export_data`, and `get_import_templates`.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

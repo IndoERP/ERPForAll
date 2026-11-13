@@ -863,7 +863,7 @@ fn hand_written(partition: &str, from: DateTime, to: DateTime) -> String {
 fn has_rows_refusal(table: &str) -> String {
     format!(
         "table '{table}' has rows; changing its partitioning is not supported ({PARTITION_ADR}; \
-         business tables: M5 partitioning ADR)"
+         business tables: a later release)"
     )
 }
 
@@ -920,8 +920,7 @@ async fn spec_ormx_029_adopt_matching_tables_refuse_changes_on_tables_with_rows(
         &format!(
             "table 'scale_event' has rows and does not match the partitioning declared for \
              'scale.event': partition '{month}' does not match interval day; changing its \
-             partitioning is not supported ({PARTITION_ADR}; business tables: M5 partitioning \
-             ADR)"
+             partitioning is not supported ({PARTITION_ADR}; business tables: a later release)"
         ),
     );
 
@@ -1014,7 +1013,7 @@ async fn a_table_with_invisible_rows_is_not_recreated() {
     let refusal = format!(
         "table 'scale_event' has rows (none visible to this transaction: deleted rows not yet \
          vacuumed, or rows another transaction committed meanwhile); changing its partitioning \
-         is not supported ({PARTITION_ADR}; business tables: M5 partitioning ADR)"
+         is not supported ({PARTITION_ADR}; business tables: a later release)"
     );
     // a regular table where partitioning is declared
     exec(&h, "DROP TABLE scale_event").await;
@@ -2065,8 +2064,7 @@ async fn an_infinity_bound_is_a_mismatch_for_schema_sync() {
         &format!(
             "table 'scale_event' has rows and does not match the partitioning declared for \
              'scale.event': partition '{name}' does not match interval day; changing its \
-             partitioning is not supported ({PARTITION_ADR}; business tables: M5 partitioning \
-             ADR)"
+             partitioning is not supported ({PARTITION_ADR}; business tables: a later release)"
         ),
     );
     h.cleanup().await.unwrap();

@@ -12,14 +12,15 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use tokio::io::AsyncReadExt;
 
-use crate::BlobError;
 use crate::error::LimitKind;
 use crate::key::{ContentKey, StagingKey};
+use crate::owner::{contested_path, owner_path};
 use crate::stage::{Hasher, StageLimits, StagedBlob};
 use crate::store::{
     AttachmentStore, BlobMeta, BlobRead, BodyReader, BoxFuture, ByteRange, Capabilities,
     DeleteReport, StoreKind,
 };
+use crate::{BlobError, ContestState, Namespace, OwnerMarker, OwnerState, OwnerVersion};
 
 /// A store operation a fault can target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -37,6 +38,20 @@ pub enum Op {
     DeleteMany,
     /// `delete_staged`.
     DeleteStaged,
+    /// Read an owner marker.
+    ReadOwner,
+    /// Create or compare-and-swap an owner marker.
+    PutOwner,
+    /// Check the current owner version.
+    CheckOwner,
+    /// Read a contested marker.
+    ReadContested,
+    /// Create a contested marker.
+    CreateContested,
+    /// Remove only this capability probe's private markers.
+    ProbeCleanup,
+    /// Conditionally resolve a contest.
+    ResolveContested,
 }
 
 /// When a fault fires relative to the operation's effect.
@@ -111,6 +126,8 @@ fn injected(op: Op, when: When) -> BlobError {
 struct Inner {
     content: BTreeMap<String, Arc<Vec<u8>>>,
     staging: BTreeMap<String, Arc<Vec<u8>>>,
+    owners: BTreeMap<String, OwnerState>,
+    contested: BTreeMap<String, ContestState>,
 }
 
 /// An in-memory store.
@@ -128,6 +145,13 @@ impl Default for MemoryStore {
 }
 
 impl MemoryStore {
+    fn owner_fault(&self, op: Op, when: When) -> Result<(), BlobError> {
+        if self.faults.fire(op, when) {
+            Err(injected(op, when))
+        } else {
+            Ok(())
+        }
+    }
     /// An empty store.
     pub fn new() -> Self {
         Self {
@@ -182,12 +206,173 @@ impl AttachmentStore for MemoryStore {
             range_reads: true,
             presign: false,
             create_only: true,
-            if_match_put: false,
+            if_match_put: true,
         }
     }
 
     fn fingerprint(&self) -> Option<String> {
         Some(self.fingerprint.clone())
+    }
+
+    fn probe_owner(&self) -> BoxFuture<'_, Result<(), BlobError>> {
+        Box::pin(async move {
+            let ns = Namespace::random()?;
+            let probe = crate::owner::probe_contract(self, &ns).await;
+            let cleanup = (|| {
+                self.owner_fault(Op::ProbeCleanup, When::Before)?;
+                {
+                    let mut inner = self.lock();
+                    inner.owners.remove(&owner_path(&ns));
+                    inner.contested.remove(&contested_path(&ns));
+                }
+                self.owner_fault(Op::ProbeCleanup, When::After)
+            })();
+            crate::owner::finish_probe(probe, cleanup)
+        })
+    }
+
+    fn owner<'a>(
+        &'a self,
+        ns: &'a Namespace,
+    ) -> BoxFuture<'a, Result<Option<OwnerState>, BlobError>> {
+        Box::pin(async move {
+            self.owner_fault(Op::ReadOwner, When::Before)?;
+            let found = self.lock().owners.get(&owner_path(ns)).cloned();
+            self.owner_fault(Op::ReadOwner, When::After)?;
+            Ok(found)
+        })
+    }
+
+    fn put_owner<'a>(
+        &'a self,
+        ns: &'a Namespace,
+        marker: &'a OwnerMarker,
+        expected: Option<&'a OwnerVersion>,
+    ) -> BoxFuture<'a, Result<OwnerVersion, BlobError>> {
+        Box::pin(async move {
+            self.owner_fault(Op::PutOwner, When::Before)?;
+            let version = OwnerVersion::new(&crate::key::random_uuid_text()?, None)?;
+            {
+                let mut inner = self.lock();
+                let path = owner_path(ns);
+                match (inner.owners.get(&path), expected) {
+                    (None, None) => {}
+                    (Some(found), Some(expected)) if found.version() == expected => {}
+                    // Every other pairing is an explicit failed precondition.
+                    _ => return Err(BlobError::OwnerConflict),
+                }
+                inner
+                    .owners
+                    .insert(path, OwnerState::new(marker.clone(), version.clone()));
+            }
+            self.owner_fault(Op::PutOwner, When::After)?;
+            Ok(version)
+        })
+    }
+
+    fn check_owner<'a>(
+        &'a self,
+        ns: &'a Namespace,
+        expected: &'a OwnerVersion,
+    ) -> BoxFuture<'a, Result<(), BlobError>> {
+        Box::pin(async move {
+            self.owner_fault(Op::CheckOwner, When::Before)?;
+            if !self
+                .lock()
+                .owners
+                .get(&owner_path(ns))
+                .is_some_and(|state| state.version() == expected)
+            {
+                return Err(BlobError::OwnerConflict);
+            }
+            self.owner_fault(Op::CheckOwner, When::After)
+        })
+    }
+
+    fn contested<'a>(
+        &'a self,
+        ns: &'a Namespace,
+    ) -> BoxFuture<'a, Result<Option<OwnerMarker>, BlobError>> {
+        Box::pin(async move {
+            Ok(self
+                .contest_state(ns)
+                .await?
+                .filter(|s| !s.resolved())
+                .map(|s| s.marker().clone()))
+        })
+    }
+    fn contest_state<'a>(
+        &'a self,
+        ns: &'a Namespace,
+    ) -> BoxFuture<'a, Result<Option<ContestState>, BlobError>> {
+        Box::pin(async move {
+            self.owner_fault(Op::ReadContested, When::Before)?;
+            let found = self.lock().contested.get(&contested_path(ns)).cloned();
+            self.owner_fault(Op::ReadContested, When::After)?;
+            Ok(found)
+        })
+    }
+    fn create_contested<'a>(
+        &'a self,
+        ns: &'a Namespace,
+        loser: &'a OwnerMarker,
+    ) -> BoxFuture<'a, Result<(), BlobError>> {
+        Box::pin(async move {
+            self.owner_fault(Op::CreateContested, When::Before)?;
+            let mut inner = self.lock();
+            let path = contested_path(ns);
+            if inner
+                .contested
+                .get(&path)
+                .is_none_or(ContestState::resolved)
+            {
+                inner.contested.insert(
+                    path,
+                    ContestState::new(
+                        loser.clone(),
+                        OwnerVersion::new(&crate::key::random_uuid_text()?, None)?,
+                        false,
+                    ),
+                );
+            }
+            drop(inner);
+            self.owner_fault(Op::CreateContested, When::After)
+        })
+    }
+    fn resolve_contested<'a>(
+        &'a self,
+        ns: &'a Namespace,
+        owner: &'a OwnerState,
+        expected: Option<&'a ContestState>,
+    ) -> BoxFuture<'a, Result<ContestState, BlobError>> {
+        Box::pin(async move {
+            self.owner_fault(Op::ResolveContested, When::Before)?;
+            let receipt = {
+                let mut inner = self.lock();
+                if inner.owners.get(&owner_path(ns)) != Some(owner) {
+                    return Err(BlobError::OwnerConflict);
+                }
+                let path = contested_path(ns);
+                if let Some(found) = inner.contested.get(&path)
+                    && found.resolved()
+                    && found.marker() == owner.marker()
+                {
+                    return Ok(found.clone());
+                }
+                if inner.contested.get(&path) != expected {
+                    return Err(BlobError::OwnerConflict);
+                }
+                let receipt = ContestState::new(
+                    owner.marker().clone(),
+                    OwnerVersion::new(&crate::key::random_uuid_text()?, None)?,
+                    true,
+                );
+                inner.contested.insert(path, receipt.clone());
+                receipt
+            };
+            self.owner_fault(Op::ResolveContested, When::After)?;
+            Ok(receipt)
+        })
     }
 
     fn verify_fingerprint<'a>(&'a self, expected: &'a str) -> BoxFuture<'a, Result<(), BlobError>> {
@@ -272,9 +457,8 @@ impl AttachmentStore for MemoryStore {
                                 actual: format!("{len} bytes"),
                             });
                         }
-                        inner.staging.remove(&source);
                     }
-                    None => match inner.staging.remove(&source) {
+                    None => match inner.staging.get(&source).cloned() {
                         Some(bytes) => {
                             inner.content.insert(target, bytes);
                         }
@@ -394,6 +578,8 @@ impl AttachmentStore for MemoryStore {
                 .content
                 .keys()
                 .chain(inner.staging.keys())
+                .chain(inner.owners.keys())
+                .chain(inner.contested.keys())
                 .filter(|k| k.starts_with(prefix))
                 .filter(|k| after.is_none_or(|a| k.as_str() > a))
                 .cloned()

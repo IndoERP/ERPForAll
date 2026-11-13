@@ -200,6 +200,20 @@ pub fn targets_of(table: &str, column: &str) -> String {
     )
 }
 
+/// `SELECT DISTINCT "model_column", "column" FROM "t" WHERE "id" = ANY($1::int8[]) AND "column" IS
+/// NOT NULL`: the targets of a `many2one_reference` for the records `$1`, each with the model its
+/// model column names (NULL when the column is NULL). One read serves every owner model of the
+/// reference.
+pub fn targets_of_with_model(table: &str, model_column: &str, column: &str) -> String {
+    format!(
+        "SELECT DISTINCT {m}, {c} FROM {t} WHERE {id} = ANY($1::int8[]) AND {c} IS NOT NULL",
+        id = quote("id"),
+        t = quote(table),
+        m = quote(model_column),
+        c = quote(column)
+    )
+}
+
 /// `SELECT DISTINCT "column1" FROM "rel" WHERE "column2" = ANY($1::int8[])`: the records whose
 /// many2many lists one of `$1`.
 pub fn m2m_owners(rel: Relation<'_>) -> String {
@@ -495,6 +509,11 @@ mod tests {
             targets_of("t", "p_id"),
             "SELECT DISTINCT \"p_id\" FROM \"t\" WHERE \"id\" = ANY($1::int8[]) AND \"p_id\" IS \
              NOT NULL"
+        );
+        assert_eq!(
+            targets_of_with_model("t", "m_name", "p_id"),
+            "SELECT DISTINCT \"m_name\", \"p_id\" FROM \"t\" WHERE \"id\" = ANY($1::int8[]) \
+             AND \"p_id\" IS NOT NULL"
         );
         assert_eq!(
             m2m_owners(REL),

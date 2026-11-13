@@ -1,5 +1,5 @@
-//! Set-based capture of tracked-field changes (design note
-//! , decisions D1-D8; behavior).
+//! Set-based capture of tracked-field changes (
+//! decisions D1-D8; behavior).
 //!
 //! A field declared `tracking = true` (or a display sequence) is a *tracked field*.
 //!

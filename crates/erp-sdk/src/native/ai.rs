@@ -26,6 +26,16 @@
 use erp_orm::BoxFuture;
 use std::pin::Pin;
 
+/// Tool calling: typed content parts, tool specs and the tool-turn provider trait.
+#[path = "ai_tools.rs"]
+pub mod tools;
+
+pub use tools::{
+    ContentPart, DataSource, Instruction, LabelledData, ToolCall, ToolCallId, ToolModelProvider,
+    ToolName, ToolResult, ToolSpec, ToolTurnRequest, ToolTurnResponse, ToolTypeError, TurnMessage,
+    TurnRole, UserText,
+};
+
 /// Metered usage accounting for a model or embedding call.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct UsageRecord {
@@ -176,6 +186,8 @@ pub enum FinishReason {
     ContentFilter,
     /// Any other provider-specific finish reason.
     Other,
+    /// The model stopped to wait for tool results (tool turns, [`tools`]).
+    ToolUse,
 }
 
 /// Request parameters for text or chat completion.
@@ -395,6 +407,15 @@ pub enum ProviderError {
     /// Generic or unexpected provider backend error.
     #[error("provider '{provider}' backend error: {message}")]
     Backend {
+        /// Provider name.
+        provider: String,
+        /// Error details.
+        message: String,
+    },
+    /// The provider answered with something the interface cannot represent (an empty tool call
+    /// id, an oversized tool name, a part a response may not carry).
+    #[error("provider '{provider}' invalid response: {message}")]
+    InvalidResponse {
         /// Provider name.
         provider: String,
         /// Error details.

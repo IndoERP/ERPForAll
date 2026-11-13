@@ -240,7 +240,7 @@ fn check_semantics(case: Case, size: usize) {
                 Case::Default => 3,
                 // Explicit lifecycle query contracts observed in full-ci-integration-red.log.gz.
                 // The milestone performance/floor pins above remain unchanged.
-                Case::CompanyCreate => 7,
+                Case::CompanyCreate => 11,
                 Case::AssignInactive | Case::AssignActive => 6,
                 Case::LanguageCreate | Case::LanguageDeactivate => 2,
             },

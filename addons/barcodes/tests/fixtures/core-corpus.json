@@ -1,0 +1,217 @@
+[
+  {
+    "snapshot": {
+      "version": 1,
+      "conversion": "always",
+      "rules": [
+        {
+          "id": 1,
+          "sequence": 0,
+          "encoding": "ean13",
+          "kind": "product",
+          "pattern": ".*",
+          "alias": "0"
+        }
+      ]
+    },
+    "code": "036000291452",
+    "result": {
+      "version": 1,
+      "status": "matched",
+      "original_code": "036000291452",
+      "code": "0036000291452",
+      "items": [
+        {
+          "encoding": "ean13",
+          "type": "product",
+          "code": "0036000291452",
+          "base_code": "0036000291452",
+          "value": "0"
+        }
+      ]
+    }
+  },
+  {
+    "snapshot": {
+      "version": 1,
+      "conversion": "always",
+      "rules": [
+        {
+          "id": 1,
+          "sequence": 0,
+          "encoding": "ean13",
+          "kind": "product",
+          "pattern": ".*",
+          "alias": "0"
+        }
+      ]
+    },
+    "code": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "error": {
+      "kind": "limit",
+      "message": "Barcode exceeds 4096 bytes."
+    }
+  },
+  {
+    "snapshot": {
+      "version": 1,
+      "conversion": "none",
+      "rules": [
+        {
+          "id": 1,
+          "sequence": 0,
+          "encoding": "any",
+          "kind": "weight",
+          "pattern": "AB+{NDD}",
+          "alias": "0"
+        }
+      ]
+    },
+    "code": "ABBB125tail",
+    "result": {
+      "version": 1,
+      "status": "matched",
+      "original_code": "ABBB125tail",
+      "code": "ABBB125tail",
+      "items": [
+        {
+          "encoding": "any",
+          "type": "weight",
+          "code": "ABBB125tail",
+          "base_code": "ABBB000tail",
+          "value": "1.25"
+        }
+      ]
+    }
+  },
+  {
+    "snapshot": {
+      "version": 1,
+      "conversion": "none",
+      "rules": [
+        {
+          "id": 1,
+          "sequence": 0,
+          "encoding": "any",
+          "kind": "alias",
+          "pattern": "X",
+          "alias": "Y42"
+        }
+      ]
+    },
+    "code": "X99",
+    "result": {
+      "version": 1,
+      "status": "no_match",
+      "original_code": "X99",
+      "code": "Y42",
+      "items": []
+    }
+  },
+  {
+    "snapshot": {
+      "version": 1,
+      "conversion": "always",
+      "rules": [
+        {
+          "id": 1,
+          "sequence": 0,
+          "encoding": "ean13",
+          "kind": "product",
+          "pattern": ".*",
+          "alias": "0"
+        }
+      ]
+    },
+    "code": "BAD",
+    "result": {
+      "version": 1,
+      "status": "no_match",
+      "original_code": "BAD",
+      "code": "BAD",
+      "items": []
+    }
+  },
+  {
+    "snapshot": {
+      "version": 1,
+      "conversion": "none",
+      "rules": [
+        {
+          "id": 1,
+          "sequence": 0,
+          "encoding": "any",
+          "kind": "product",
+          "pattern": ".*",
+          "alias": "0"
+        }
+      ]
+    },
+    "code": "urn:epc:id:sgtin:9521141.012345.4711",
+    "result": {
+      "version": 1,
+      "status": "uri",
+      "original_code": "urn:epc:id:sgtin:9521141.012345.4711",
+      "code": "urn:epc:id:sgtin:9521141.012345.4711",
+      "items": [
+        {
+          "encoding": "",
+          "type": "product",
+          "code": "09521141123454",
+          "base_code": "urn:epc:id:sgtin:9521141.012345.4711",
+          "value": "09521141123454"
+        },
+        {
+          "encoding": "",
+          "type": "lot",
+          "code": "4711",
+          "base_code": "urn:epc:id:sgtin:9521141.012345.4711",
+          "value": "4711"
+        }
+      ]
+    }
+  },
+  {
+    "snapshot": {
+      "version": 1,
+      "conversion": "none",
+      "rules": [
+        {
+          "id": 1,
+          "sequence": 0,
+          "encoding": "any",
+          "kind": "product",
+          "pattern": ".*",
+          "alias": "0"
+        }
+      ]
+    },
+    "code": "urn:epc:id:unknown:1",
+    "error": {
+      "kind": "unsupported",
+      "message": "Unsupported EPC URI identifier."
+    }
+  },
+  {
+    "snapshot": {
+      "version": 1,
+      "conversion": "none",
+      "rules": [
+        {
+          "id": 1,
+          "sequence": 0,
+          "encoding": "any",
+          "kind": "product",
+          "pattern": ".*",
+          "alias": "0"
+        }
+      ],
+      "unexpected": true
+    },
+    "code": "A",
+    "compile_error": {
+      "kind": "configuration",
+      "message": "Invalid barcode snapshot JSON."
+    }
+  }
+]

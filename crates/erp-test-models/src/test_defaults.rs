@@ -45,4 +45,6 @@ pub struct DefaultsItem {
     pub note: Option<Arc<str>>,
     #[field(float, digits = "Product Price")]
     pub price: Decimal,
+    #[field(selection, selection = [("opt_a", "Option A"), ("opt_b", "Option B")])]
+    pub state: Option<Arc<str>>,
 }

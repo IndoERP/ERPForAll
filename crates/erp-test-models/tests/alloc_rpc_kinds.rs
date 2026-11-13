@@ -1,5 +1,5 @@
-//! Allocations per JSON-2 request of today's served path (PERF.AUDIT-SERVE,
-//! ; G6 item 5 and its checkpoint): `RpcService::call`
+//! Allocations per JSON-2 request of today's served path (PERF.AUDIT-SERVE;
+//! G6 item 5 and its checkpoint): `RpcService::call`
 //! for each BENCH-007 kind (form, list, name_search, save, create) and the rejection, on the
 //! bench models, with the request bodies of BENCH-007, whole process (dhat).
 //!

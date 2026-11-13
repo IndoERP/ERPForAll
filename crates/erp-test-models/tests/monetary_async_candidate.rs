@@ -982,7 +982,7 @@ async fn sudo_harness() -> Harness {
 async fn compute_sudo_decides_denied_inputs() {
     let h = sudo_harness().await;
     let mut tx = h.begin().await.unwrap();
-    tx.batch("INSERT INTO res_users(id,name,login,active) VALUES (42,'Candidate reader','candidate-reader',true)")
+    tx.batch("INSERT INTO res_users(id,name,login,active,share) VALUES (42,'Candidate reader','candidate-reader',true,false)")
         .await
         .unwrap();
     let cent = currency(&mut tx, "CU1", "0.01").await;
@@ -1052,7 +1052,7 @@ async fn compute_sudo_decides_denied_inputs() {
 async fn denied_amount_write_precedes_the_candidate() {
     let h = sudo_harness().await;
     let mut tx = h.begin().await.unwrap();
-    tx.batch("INSERT INTO res_users(id,name,login,active) VALUES (42,'Candidate writer','candidate-writer',true)")
+    tx.batch("INSERT INTO res_users(id,name,login,active,share) VALUES (42,'Candidate writer','candidate-writer',true,false)")
         .await
         .unwrap();
     let cent = currency(&mut tx, "CX1", "0.01").await;

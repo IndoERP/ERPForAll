@@ -32,7 +32,7 @@ const REQUIRED: [JobKindRequirement; 2] = [
 ];
 
 /// The core job kinds, for `OrmBuilder::require_job_kinds` at the build site of every binary that
-/// runs jobs:. Calling it also keeps the registrations in the binary (it references them).
+/// runs jobs. Calling it also keeps the registrations in the binary (it references them).
 pub fn core_job_kinds() -> &'static [JobKindRequirement] {
     // the references pull the registrations' object file into the binary
     std::hint::black_box(&HISTORY_RETENTION_KIND);

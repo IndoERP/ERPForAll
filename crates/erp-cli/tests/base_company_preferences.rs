@@ -1,4 +1,4 @@
-//! Company preferences (owner request 2026-11-05, spec): the
+//! Company preferences (owner request 2026-11-05): the
 //! company's contact fields mirror its partner, a company without a partner gets one, the
 //! Settings > Companies screens carry the fields, and only administrators change a company.
 #![allow(
@@ -314,6 +314,11 @@ async fn company_and_partner_edits_stay_in_sync_both_ways() {
     // Both survive a commit and a fresh transaction.
     tx.commit().await.unwrap();
     let mut read = harness.begin().await.unwrap();
+    assert_eq!(
+        cell(&mut read, "res.company", company, "website").await,
+        normalised,
+        "company website read in fresh transaction reflects partner normalisation (S-r3-1)"
+    );
     assert_eq!(
         cell(&mut read, "res.company", company, "city").await,
         text("Bandung")

@@ -1052,8 +1052,7 @@ impl Chars {
         None
     }
 
-    /// `^{prefix}{year}{prefix2:\D}{year_end}{prefix3:\D}{month}{prefix4:\D+?}{seq}{suffix}$`
-    /// .
+    /// `^{prefix}{year}{prefix2:\D}{year_end}{prefix3:\D}{month}{prefix4:\D+?}{seq}{suffix}$`.
     fn year_range_month(&self) -> Option<Match> {
         for p in self.prefix_ends() {
             let Some(y) = self.year(p) else { continue };
@@ -1106,8 +1105,8 @@ impl Chars {
         None
     }
 
-    /// `^(?:{prefix}{year}{prefix2:\D}{year_end}{prefix3:\D+?})?{seq}{suffix}$`
-    /// . Without the optional group the match has no years, which fails
+    /// `^(?:{prefix}{year}{prefix2:\D}{year_end}{prefix3:\D+?})?{seq}{suffix}$`.
+    /// Without the optional group the match has no years, which fails
     /// the family's requirements (`:220`), so only matches with the group are returned.
     fn year_range(&self) -> Option<Match> {
         for p in self.prefix_ends() {

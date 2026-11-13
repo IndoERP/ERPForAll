@@ -1,7 +1,7 @@
 //! Native API key text and keyed digests.
 //!
 //! These are cryptographic primitives, not authentication: persistence, owner/scope/expiry
-//! checks and principal construction belong to and.
+//! checks and principal construction belong to.
 //! The hasher is derived once from a tenant's current secret and rebuilt when that secret
 //! changes. No cache of accepted keys is kept here.
 //!

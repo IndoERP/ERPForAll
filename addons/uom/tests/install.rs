@@ -31,6 +31,7 @@ fn uom_manifest_and_access_rules_are_valid() {
     let file_names: Vec<&str> = data_files.iter().filter_map(|v| v.as_str()).collect();
     assert!(file_names.contains(&"security/ir.access.csv"));
     assert!(file_names.contains(&"data/uom_data.xml"));
+    assert!(file_names.contains(&"views/uom_views.xml"));
 
     let access_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("security/ir.access.csv");
     let access = fs::read_to_string(&access_path).expect("uom security/ir.access.csv");
@@ -102,4 +103,41 @@ fn uom_default_data_declares_precision_and_thirty_standard_units() {
         let needle = format!(r#"id="{unit_id}""#);
         assert!(content.contains(&needle), "missing expected unit {unit_id}");
     }
+}
+
+#[test]
+fn uom_views_xml_declares_list_form_search_action_and_menu() {
+    let views_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("views/uom_views.xml");
+    let content = fs::read_to_string(&views_path).expect("uom views/uom_views.xml");
+
+    // List view: uom_uom_view_list with handle, name, relative_factor, relative_uom_id
+    assert!(content.contains(r#"id="uom_uom_view_list""#));
+    assert!(content.contains(r#"<field name="model">uom.uom</field>"#));
+    assert!(content.contains(r#"<field name="sequence"/>"#));
+    assert!(content.contains(r#"<field name="relative_uom_id"/>"#));
+
+    // Form view: uom_uom_view_form with details group and reference unit placeholder
+    assert!(content.contains(r#"id="uom_uom_view_form""#));
+    assert!(content.contains(r#"placeholder="Reference Unit""#));
+
+    // Search view: uom_uom_view_search with name and archived filter
+    assert!(content.contains(r#"id="uom_uom_view_search""#));
+    assert!(content.contains(r#"domain="[('active', '=', False)]""#));
+
+    // Window action: uom_uom_action_list referencing list and search views
+    assert!(content.contains(r#"id="uom_uom_action_list""#));
+    assert!(content.contains(r#"<field name="res_model">uom.uom</field>"#));
+    assert!(content.contains(r#"<field name="view_mode">list,form</field>"#));
+    assert!(content.contains(r#"<field name="view_id" ref="uom_uom_view_list"/>"#));
+    assert!(content.contains(r#"<field name="search_view_id" ref="uom_uom_view_search"/>"#));
+
+    // Action view records
+    assert!(content.contains(r#"id="uom_uom_action_view_list""#));
+    assert!(content.contains(r#"id="uom_uom_action_view_form""#));
+
+    // Menuitem: settings menu parent
+    assert!(content.contains(r#"id="menu_uom_form_action""#));
+    assert!(content.contains(r#"parent="base.settings_menu""#));
+    assert!(content.contains(r#"action="uom_uom_action_list""#));
+    assert!(content.contains(r#"groups="base.group_system""#));
 }

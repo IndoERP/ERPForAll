@@ -597,7 +597,7 @@ pub enum AdoptScope {
 /// Anything else (another user's pending file, a file of another record, a field-bound file, an
 /// id that does not exist) refuses the whole call and names the ids, and nothing is moved; a
 /// missing and a foreign id read alike, so the answer tells nothing about other records.
-/// This function refuses both cases by name (standards §1) and,
+/// This function refuses both cases by name (standards §1),
 /// for a file already on the record, asks for write access to the record.
 ///
 /// The move runs as the system inside the private service scope, set-based (one statement for the
@@ -797,7 +797,6 @@ pub async fn open(tx: &mut Transaction, id: i64) -> Result<BlobHandle> {
         ));
     }
     let blob: Option<i64> = col!(row, 1);
-    let size: Option<i32> = col!(row, 2);
     let mimetype: Option<String> = col!(row, 3);
     let checksum: Option<String> = col!(row, 4);
     let mimetype = mimetype.unwrap_or_else(|| "application/octet-stream".to_owned());
@@ -811,6 +810,28 @@ pub async fn open(tx: &mut Transaction, id: i64) -> Result<BlobHandle> {
             HandleSource::Empty,
         ));
     };
+    handle_for_blob(tx, &env, id, blob, mimetype, checksum)
+        .await?
+        .ok_or_else(|| {
+            Error::internal(format!(
+                "AttachmentContentMissing: the content of attachment {id} has no blob row"
+            ))
+        })
+}
+
+/// The reader of blob row `blob` of attachment `id`, for a caller that **already checked** read
+/// access to the attachment ([`open`] and the content route of [`super::content`]). `None` when
+/// the blob row is gone or has neither inline bytes nor a store (the caller fails
+/// with `AttachmentContentMissing`, never empty content). Store errors resolving the store row
+/// (an unconfigured store, a fingerprint mismatch) are errors.
+pub(crate) async fn handle_for_blob(
+    tx: &mut Transaction,
+    env: &Env,
+    id: i64,
+    blob: i64,
+    mimetype: String,
+    checksum: String,
+) -> Result<Option<BlobHandle>> {
     let rows = tx
         .query(
             "SELECT b.sha256, b.store_id, b.size, i.data FROM ir_blob b \
@@ -818,12 +839,9 @@ pub async fn open(tx: &mut Transaction, id: i64) -> Result<BlobHandle> {
             &[&blob],
         )
         .await?;
-    let missing = || {
-        Error::internal(format!(
-            "AttachmentContentMissing: the content of attachment {id} has no blob row"
-        ))
+    let Some(row) = rows.first() else {
+        return Ok(None);
     };
-    let row = rows.first().ok_or_else(missing)?;
     let sha: Vec<u8> = col!(row, 0);
     let store_id: Option<i16> = col!(row, 1);
     let blob_size: i64 = col!(row, 2);
@@ -833,23 +851,18 @@ pub async fn open(tx: &mut Transaction, id: i64) -> Result<BlobHandle> {
     let source = match (inline, store_id) {
         (Some(bytes), _) => HandleSource::Inline(std::sync::Arc::new(bytes)),
         (None, Some(store_id)) => {
-            let rt = runtime(&env)?;
+            let rt = runtime(env)?;
             let store = store_by_id(tx, &rt, store_id).await?;
             HandleSource::Store {
                 key: ContentKey::new(store.namespace.clone(), sha256),
                 store: store.store.clone(),
             }
         }
-        (None, None) => return Err(missing()),
+        (None, None) => return Ok(None),
     };
-    let _ = size;
-    Ok(BlobHandle::new(
-        id,
-        u64::try_from(blob_size).unwrap_or(0),
-        mimetype,
-        checksum,
-        source,
-    ))
+    let size = u64::try_from(blob_size)
+        .map_err(|_| Error::db(format!("ir_blob {blob} has a negative size")))?;
+    Ok(Some(BlobHandle::new(id, size, mimetype, checksum, source)))
 }
 
 /// The caller already deleted the records, which they were allowed to; no further

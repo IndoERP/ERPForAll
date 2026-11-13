@@ -3,28 +3,41 @@
   <!--
 "My Preferences": the dialog the user menu opens on the current user.
        Only fields that res.users lets a user write on their own record appear here
-       (user_writeable). Signature, phone, avatar and the Security page are
-       deferred,
+       (user_writeable). The header block (name heading, e-mail, phone) is a title
+       region; the Preferences page has two columns, the right one is the group other_preferences
+       and the Calendar page has the group calendar_preferences: an addon adds its own preference
+       with a view that inherits this one and an xpath on those group names (mail adds the
+       notification choice). Signature, the avatar picture and the Security page
+       are deferred,
   -->
   <record id="users_preferences_form" model="ir.ui.view">
     <field name="name">res.users.preferences.form</field>
     <field name="model">res.users</field>
+    <field name="priority">18</field>
     <field name="arch" type="xml">
       <form string="My Preferences" record_mode="record">
         <sheet>
-          <group>
-            <field name="name"/>
-            <field name="email"/>
-          </group>
+          <div class="oe_title">
+            <h1><field name="name"/></h1>
+            <field name="email" widget="email"/>
+            <field name="phone" widget="phone"/>
+          </div>
           <notebook>
             <page name="preferences_page" string="Preferences">
               <group>
-                <field name="lang" widget="web.preference_choice" required="1"/>
+                <group>
+                  <field name="lang" widget="web.preference_choice" required="1"/>
+                </group>
+                <group name="other_preferences">
+                  <field name="color_scheme" widget="radio" string="Theme" options="{'horizontal': True}"/>
+                </group>
               </group>
             </page>
             <page name="calendar" string="Calendar">
               <group>
-                <field name="tz" widget="web.preference_choice"/>
+                <group name="calendar_preferences">
+                  <field name="tz" widget="web.preference_choice"/>
+                </group>
               </group>
             </page>
           </notebook>

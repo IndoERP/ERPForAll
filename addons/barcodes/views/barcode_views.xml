@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<odoo>
+ <record id="nomenclature_list" model="ir.ui.view"><field name="name">barcode.nomenclature.list</field><field name="model">barcode.nomenclature</field><field name="arch" type="xml"><list><field name="name"/><field name="upc_ean_conv"/></list></field></record>
+ <record id="nomenclature_form" model="ir.ui.view"><field name="name">barcode.nomenclature.form</field><field name="model">barcode.nomenclature</field><field name="arch" type="xml"><form record_mode="record"><sheet><group><field name="name"/><field name="upc_ean_conv"/></group><field name="rule_ids"/></sheet></form></field></record>
+ <record id="rule_list" model="ir.ui.view"><field name="name">barcode.rule.list</field><field name="model">barcode.rule</field><field name="arch" type="xml"><list><field name="sequence"/><field name="name"/><field name="barcode_nomenclature_id"/><field name="type"/><field name="pattern"/></list></field></record>
+ <record id="rule_form" model="ir.ui.view"><field name="name">barcode.rule.form</field><field name="model">barcode.rule</field><field name="arch" type="xml"><form record_mode="record"><sheet><group><field name="name"/><field name="barcode_nomenclature_id"/><field name="sequence"/><field name="type"/><field name="encoding" invisible="type == 'alias'"/><field name="pattern"/><field name="alias" invisible="type != 'alias'"/></group></sheet></form></field></record>
+ <record id="nomenclature_action" model="ir.actions.act_window"><field name="name">Barcode rules</field><field name="res_model">barcode.nomenclature</field><field name="view_mode">list,form</field></record>
+ <menuitem id="nomenclature_menu" name="Barcode rules" parent="base.settings_menu" action="nomenclature_action" groups="base.group_erp_manager" sequence="60"/>
+</odoo>

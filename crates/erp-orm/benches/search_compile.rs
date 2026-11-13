@@ -2,9 +2,8 @@
 //! (`Records::search_query`: access, active test, FULL optimization, planning, the search memo),
 //! with the memo on and off. Each iteration parses the JSON domain, as a JSON-2
 //! request must. No statement runs: the query is built, not executed. Needs `DATABASE_URL` (a
-//! connection is opened for the transaction; nothing is sent). Results:
-//! ; the relational cases (paths, `any`, many2one order):
-//! .
+//! connection is opened for the transaction; nothing is sent). Results;
+//! the relational cases (paths, `any`, many2one order).
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "benchmark setup")]
 
 use std::hint::black_box;

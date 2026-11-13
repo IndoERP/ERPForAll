@@ -507,6 +507,69 @@ pub struct ModelChildNocheck {
     pub parent_id: Option<RecId>,
 }
 
+// ----- company check toward a delegated company (A2) ----------------
+
+/// A template that holds the company, like `product.template`.
+#[model(
+    name = "test_rel.company_template",
+    company_access = unrestricted(reason = "delegated company-consistency fixture; access is not under test"),
+    description = "Company Template",
+    addon = "test_rel"
+)]
+pub struct CompanyTemplate {
+    #[field(char)]
+    pub name: Option<Arc<str>>,
+    #[field(many2one, comodel = "res.company")]
+    pub company_id: Option<RecId>,
+}
+
+/// A variant whose `company_id` is its template's through `_inherits`, like `product.product`.
+#[model(
+    name = "test_rel.company_variant",
+    company_access = unrestricted(reason = "delegated company-consistency fixture; access is not under test"),
+    description = "Company Variant",
+    inherits = [("test_rel.company_template", "template_id")],
+    addon = "test_rel"
+)]
+pub struct CompanyVariant {
+    #[field(
+        many2one,
+        comodel = "test_rel.company_template",
+        required,
+        ondelete = "cascade"
+    )]
+    pub template_id: Option<RecId>,
+}
+
+/// A lot linking a variant, like `stock.lot.product_id`: the declared link is checked against the
+/// variant's delegated company; the other link declares nothing and stays unchecked.
+#[model(
+    name = "test_rel.company_lot",
+    company_access = unrestricted(reason = "delegated company-consistency fixture; access is not under test"),
+    description = "Company Lot",
+    check_company_auto = true,
+    addon = "test_rel"
+)]
+pub struct CompanyLot {
+    #[field(char)]
+    pub name: Option<Arc<str>>,
+    #[field(many2one, comodel = "res.company")]
+    pub company_id: Option<RecId>,
+    #[field(
+        many2one,
+        comodel = "test_rel.company_variant",
+        string = "Variant",
+        check_company
+    )]
+    pub variant_id: Option<RecId>,
+    #[field(
+        many2one,
+        comodel = "test_rel.company_variant",
+        string = "Plain Variant"
+    )]
+    pub variant_plain_id: Option<RecId>,
+}
+
 // ----- _inherits ------------------------------------------------------------------------------
 
 /// `test.unit`.
@@ -893,7 +956,59 @@ pub struct AttachOwner {
     #[field(char)]
     pub name: Option<Arc<str>>,
     #[field(one2many, comodel = "test_rel.attachment", inverse_name = "res_id")]
-    pub attachment_ids: Vec<RecId>,
+    pub attachment_ids: X2many<Attachment>,
+    /// Gives `attachment_ids` a dependent, so that a deletion of an attachment reads its owners.
+    #[field(integer, compute = "_compute_attachment_count")]
+    pub attachment_count: i32,
+}
+
+#[methods(AttachOwner, addon = "test_rel")]
+impl AttachOwner {
+    #[compute(depends = ["attachment_ids"])]
+    fn _compute_attachment_count(batch: &mut Batch<'_, AttachOwner>) -> Result<()> {
+        for i in batch.indices() {
+            let lines = batch.get(i, AttachOwner::ATTACHMENT_IDS)?;
+            batch.set(
+                i,
+                AttachOwner::ATTACHMENT_COUNT,
+                i32::try_from(lines.len()).unwrap_or(i32::MAX),
+            )?;
+        }
+        Ok(())
+    }
+}
+
+/// A second owner model over the same `res_model` + `res_id` inverse of [`Attachment`], shaped
+/// like [`AttachOwner`]: one inverse column shared by two one2many fields of different models.
+#[model(
+    name = "test_rel.attach_owner2",
+    description = "Attachment Owner 2",
+    addon = "test_rel"
+)]
+pub struct AttachOwner2 {
+    #[field(char)]
+    pub name: Option<Arc<str>>,
+    #[field(one2many, comodel = "test_rel.attachment", inverse_name = "res_id")]
+    pub attachment_ids: X2many<Attachment>,
+    /// See [`AttachOwner::attachment_count`].
+    #[field(integer, compute = "_compute_attachment_count")]
+    pub attachment_count: i32,
+}
+
+#[methods(AttachOwner2, addon = "test_rel")]
+impl AttachOwner2 {
+    #[compute(depends = ["attachment_ids"])]
+    fn _compute_attachment_count(batch: &mut Batch<'_, AttachOwner2>) -> Result<()> {
+        for i in batch.indices() {
+            let lines = batch.get(i, AttachOwner2::ATTACHMENT_IDS)?;
+            batch.set(
+                i,
+                AttachOwner2::ATTACHMENT_COUNT,
+                i32::try_from(lines.len()).unwrap_or(i32::MAX),
+            )?;
+        }
+        Ok(())
+    }
 }
 
 /// Like `ir.attachment`: `res_model` + `res_id`.

@@ -1,4 +1,4 @@
-//! `#[model]`/`#[extend]` arguments: `exclusions = [exclude]`,
+//! `#[model]`/`#[extend]` arguments: `exclusions = [exclude(...)]`,
 //! `keys = [key(..., without_overlaps = "...")]`, `extensions = [...]`, and the `bounds` of range
 //! fields (design §5, §9).
 

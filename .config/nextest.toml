@@ -29,3 +29,13 @@ path = "junit.xml"
 [[profile.ci.overrides]]
 filter = 'binary(=auth_login) & (test(=a_deadlocked_failure_count_is_retried) | test(=a_deadlocked_login_success_is_retried))'
 threads-required = "num-test-threads"
+
+# 2026-11-12: while another team's database restore loaded the shared host (load 14 on 12 cores) the two served
+# allocation binaries below failed on their own 60 s client wait (`Custom { kind: Other, error: Timeout }`, support/
+# copy_serve.rs and impex_serve.rs recv_timeout) with their code untouched since the previous green run.
+# No other binary has a retry.
+[[profile.ci.overrides]]
+# The second binary (alloc_serve_impex) is not part of the public export, and nextest refuses a config whose
+# `binary(=…)` matches no binary: its tests are named by their prefix instead (they exist in that binary only).
+filter = 'binary(=alloc_copy_served) | test(/^served_impex_/)'
+retries = 1

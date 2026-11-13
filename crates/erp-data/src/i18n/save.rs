@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use erp_fields::Error;
+use erp_fields::{Error, FieldType};
 use erp_orm::Transaction;
 
 use super::importer::TranslationImporter;
@@ -63,7 +63,11 @@ impl TranslationImporter {
     /// Write the collected translations with `mode`, in the caller's transaction.
     ///
     /// Duplicates (same record, field and language) are merged first, the last collected entry
-    /// winning, so the result does not depend on how the entries split into statements. External ids
+    /// winning, so the result does not depend on how the entries split into statements. Values of an
+    /// Html field pass the field's HTML policy under the transaction's mode before they are stored
+    /// (a seeded `en_US` source too); the removal reports stay on the transaction
+    /// (`tx.html_reports()`). Every imported value is admitted, also one the overwrite mode then
+    /// keeps out of the column, so reports and strict refusals cover those values too. External ids
     /// naming one record are resolved first and kept in one statement, so the record counts once in
     /// [`SaveSummary::records_updated`]; among such aliases the key order, not collection order,
     /// decides which value wins.
@@ -74,6 +78,8 @@ impl TranslationImporter {
     ///   that names no record of the model; `Validation` for a field that is not translated, an
     ///   external id without a module, a result without an `en_US` text, or an empty `en_US` of a
     ///   required field; `User` (`Invalid language code`) for an inactive language.
+    /// - `Validation` for Html content the policy refuses (strict mode, NUL byte, size limit) and
+    ///   for a required Html source that is empty after sanitation.
     /// - `Conflict` when an update touches fewer records than it resolved.
     ///
     /// Model, field and language are checked before the first statement; external ids and `en_US`
@@ -135,6 +141,7 @@ impl TranslationImporter {
             }
             tx.validate_lang_code(lang).await?;
         }
+        let mut html_fields: Vec<(&str, &str)> = Vec::new();
         for (model, field) in grouped.keys() {
             let registry = tx.registry();
             let spec = registry.model(model).ok_or_else(|| {
@@ -147,6 +154,23 @@ impl TranslationImporter {
                 return Err(Error::validation(format!(
                     "field '{field}' of '{model}' is not translated"
                 )));
+            }
+            if matches!(field_spec.ty, FieldType::Html) {
+                html_fields.push((*model, *field));
+            }
+        }
+
+        // Every writer of an Html column admits its values; the SQL below bypasses
+        // the ORM write path, so the imported values are admitted here, before the first statement.
+        // A source text is admitted in `save_chunk`, once a record is known to need it as `en_US`.
+        for key in html_fields {
+            let Some(records) = grouped.get_mut(&key) else {
+                continue;
+            };
+            for record in records.values_mut() {
+                for (lang, value) in &mut record.values {
+                    *value = tx.admit_html_translation(key.0, key.1, lang, value)?;
+                }
             }
         }
 
@@ -269,6 +293,9 @@ async fn save_chunk(
         .model(model)
         .ok_or_else(|| Error::missing(format!("translation of an unknown model '{model}'")))?;
     let required = spec.field(field).is_some_and(|f| f.required);
+    let is_html = spec
+        .field(field)
+        .is_some_and(|f| matches!(f.ty, FieldType::Html));
     let table = identifier(&spec.table);
     let column = identifier(field);
     let imd = identifier("ir_model_data");
@@ -314,6 +341,21 @@ async fn save_chunk(
                  repair it before saving translations"
             )));
         }
+        if model == "ir.model.fields.selection" {
+            for (lang, val) in &record.values {
+                if val.trim().is_empty() {
+                    let parts: Vec<&str> = name.split("__").collect();
+                    let (fld, val_key) = if parts.len() >= 4 {
+                        (parts[2], parts[3])
+                    } else {
+                        ("unknown", "unknown")
+                    };
+                    return Err(Error::validation(format!(
+                        "translation of selection field '{fld}' value '{val_key}' for language '{lang}' has an empty label"
+                    )));
+                }
+            }
+        }
         match (record.values.get(BASE_LANG), &current_en) {
             (Some(en), _) if en.is_empty() && required => {
                 return Err(Error::validation(format!(
@@ -324,7 +366,18 @@ async fn save_chunk(
             (None, Some(_)) => {}
             (None, None) => match &record.src {
                 Some(src) if !(src.is_empty() && required) => {
-                    seeded.insert(xmlid, src.clone());
+                    let src = if is_html {
+                        tx.admit_html_translation(model, field, BASE_LANG, src)?
+                    } else {
+                        src.clone()
+                    };
+                    if is_html && src.is_empty() && required {
+                        return Err(Error::validation(format!(
+                            "'{xmlid}' of '{model}': the source text of required field '{field}' \
+                             is empty after HTML sanitation; {BASE_LANG} cannot be seeded from it"
+                        )));
+                    }
+                    seeded.insert(xmlid, src);
                 }
                 _ => {
                     return Err(Error::validation(format!(
@@ -350,6 +403,18 @@ async fn save_chunk(
             .find(|x| !found.contains(**x))
             .copied()
             .unwrap_or("?");
+        if model == "ir.model.fields.selection" {
+            let imd_name = missing.split_once('.').map(|(_, n)| n).unwrap_or(missing);
+            let parts: Vec<&str> = imd_name.split("__").collect();
+            let (fld, val_key) = if parts.len() >= 4 {
+                (parts[2], parts[3])
+            } else {
+                ("unknown", "unknown")
+            };
+            return Err(Error::missing(format!(
+                "translation target '{missing}' names unknown selection value '{val_key}' for field '{fld}' of '{model}'"
+            )));
+        }
         return Err(Error::missing(format!(
             "translation target '{missing}' names no record of '{model}'"
         )));

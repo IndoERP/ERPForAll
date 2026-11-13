@@ -560,7 +560,7 @@ async fn category_ancestor_hidden_by_record_rule_fails_with_access_error() {
         .await
         .unwrap();
     let mut tx = h.begin().await.unwrap();
-    tx.batch("INSERT INTO res_users (id, name, login, active) VALUES (2, 'demo', 'demo', true)")
+    tx.batch("INSERT INTO res_users (id, name, login, active, share) VALUES (2, 'demo', 'demo', true, false)")
         .await
         .unwrap();
     let hidden = tag(&mut tx, "Hidden", None).await;

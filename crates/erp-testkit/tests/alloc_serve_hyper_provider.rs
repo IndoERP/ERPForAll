@@ -1,4 +1,4 @@
-//! hyper 1.12 with the buffer-provider hook (ERPForAll patch,, perf-serve §4.1):
+//! hyper 1.12 with the buffer-provider hook (ERPForAll patch, perf-serve §4.1):
 //! the patch's behaviour tests and its measurements against the same services as the stock
 //! figures (perf-serve §12). Run under nextest (one process per test).
 //!

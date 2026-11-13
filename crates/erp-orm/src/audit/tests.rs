@@ -303,3 +303,46 @@ fn auth_event_json_has_only_ids_enums_and_counts() {
         assert!(!value.is_f64(), "integers only");
     }
 }
+
+/// as closed enum texts and counts: no free text, name or credential can be part of them.
+#[test]
+fn emergency_events_encode_closed_enums_and_counts() {
+    let header = AuthEvent::EmergencyRevocation(EmergencyRevocation::new(
+        EmergencyReason::Offboarding,
+        3,
+        2,
+    ));
+    assert_eq!(
+        header.to_json(),
+        serde_json::json!({
+            "type": "auth", "event": "emergency.revocation",
+            "reason": "offboarding", "keys": 3, "sessions": 2,
+        })
+    );
+    let reasons = [
+        EmergencyReason::Compromised,
+        EmergencyReason::Lost,
+        EmergencyReason::Offboarding,
+        EmergencyReason::Incident,
+    ]
+    .map(EmergencyReason::as_str);
+    assert_eq!(reasons, ["compromised", "lost", "offboarding", "incident"]);
+    let key = AuthEvent::ApiKeyRevoked(ApiKeyRevoked::new(
+        ApiKeyId::new(5).unwrap(),
+        UserId::new(7).unwrap(),
+        crate::KeyKind::User,
+        KeyRouteScope::Rpc,
+        RevokeCause::Emergency,
+    ));
+    assert_eq!(
+        key.to_json()["cause"],
+        serde_json::json!({"kind": "emergency"})
+    );
+    let sessions = AuthEvent::UserSessionsRevoked(UserSessionsRevoked::new(
+        UserId::new(7).unwrap(),
+        SessionCause::Emergency,
+        4,
+    ));
+    assert_eq!(sessions.to_json()["cause"], "emergency");
+    assert_eq!(sessions.to_json()["count"], 4);
+}

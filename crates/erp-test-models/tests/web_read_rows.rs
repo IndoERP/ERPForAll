@@ -1,4 +1,4 @@
-//! PERF.ROWS-READ (design note, §8): `web_read` builds
+//! PERF.ROWS-READ (§8): `web_read` builds
 //! its result as columnar batches straight from the cache, and returns what the map-based builder
 //! returned. The JSON-2 body of every shape BENCH-002 and the web client read (many2one with and
 //! without a sub-specification and with `display_name`, one2many with `order` and `limit`,

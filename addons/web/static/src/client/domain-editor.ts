@@ -284,7 +284,7 @@ export function createStructuredSourceEditor(
       if (field.kind === "properties") {
         throw new ClientError(
           "unsupported",
-          "Properties fields require the expression exclusion descriptor (a later release advanced controls).",
+          "Properties fields cannot be edited here; use the code editor.",
         );
       }
       admitted.set(name, field);

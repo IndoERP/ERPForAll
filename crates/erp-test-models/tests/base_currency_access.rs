@@ -30,7 +30,7 @@ async fn hidden_company_still_protects_its_currency_in_a_non_sudo_transaction() 
         .await
         .unwrap();
     setup.execute(
-        "INSERT INTO res_users (id, name, login, active) VALUES (42, 'Currency editor', 'currency-editor', true)",
+        "INSERT INTO res_users (id, name, login, active, share) VALUES (42, 'Currency editor', 'currency-editor', true, false)",
         &[],
     ).await.unwrap();
     setup.commit().await.unwrap();

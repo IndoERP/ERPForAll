@@ -2,9 +2,10 @@
 import { effect, signal, type Signal } from "@erpforall/elang";
 import { partnerName, readMessage, type MessageData } from "./contract";
 import { t } from "./context";
-import { formatBytes, h, normalize, SR_ONLY, uniqueId } from "./dom";
+import { formatBytes, glyphNode, h, normalize, SR_ONLY, uniqueId } from "./dom";
 import { ThreadViewError } from "./errors";
 import { performOperation } from "./operations";
+import { safeHref } from "./sanitize";
 import type { MessageAction, MessageActionContext, MessageLayout, MessageRenderer, ThreadViewContext } from "./registries";
 
 /** Options of a {@link Message}. */
@@ -47,10 +48,19 @@ const REPLY_PREFIX = /^\s*((re|fw|fwd)\s*:\s*)+/i;
 /** Number of stable avatar colours the stylesheet defines (`data-tone` 0..N-1). */
 const AVATAR_TONES = 6;
 
+const segmenter = typeof Intl !== "undefined" && "Segmenter" in Intl ? new Intl.Segmenter(undefined, { granularity: "grapheme" }) : null;
+
+/** The graphemes of a word (a letter with its accents, an emoji with its modifiers); a code point each where the engine has no segmenter. */
+function graphemes(word: string): string[] {
+  return segmenter === null ? [...word] : Array.from(segmenter.segment(word), (part) => part.segment);
+}
+const firstGrapheme = (word: string): string => graphemes(word)[0] ?? "";
+const firstTwoGraphemes = (word: string): string => graphemes(word).slice(0, 2).join("");
+
 /** A decorative initials badge; the colour is derived from the name, so one author always looks the same. */
-function avatar(doc: Document, name: string): HTMLElement {
+export function initialsAvatar(doc: Document, name: string): HTMLElement {
   const words = name.trim().split(/\s+/).filter((w) => w !== "");
-  const initials = (words.length > 1 ? words[0]!.charAt(0) + words[words.length - 1]!.charAt(0) : (words[0] ?? "?").slice(0, 2)).toUpperCase();
+  const initials = (words.length > 1 ? firstGrapheme(words[0]!) + firstGrapheme(words[words.length - 1]!) : firstTwoGraphemes(words[0] ?? "?")).toUpperCase();
   let hash = 0;
   for (const ch of name) hash = (hash * 31 + ch.codePointAt(0)!) >>> 0;
   return h(doc, "span", { class: "erp-mail-avatar", "data-tone": hash % AVATAR_TONES, "aria-hidden": "true" }, initials);
@@ -213,7 +223,6 @@ export class Message {
       this.element.dataset["layout"] = renderer.layout satisfies MessageLayout;
       const body = h(doc, "div", { class: "erp-mail-message-content", id: this.#bodyId }, this.#drawBody(renderer, message));
       const head = h(doc, "header", { class: squashed ? `erp-mail-message-head ${SR_ONLY}` : "erp-mail-message-head" },
-        avatar(doc, this.authorName(message)),
         h(doc, "span", { class: "erp-mail-author", id: this.#authorId }, this.authorName(message)),
         " ",
         h(doc, "time", {
@@ -227,12 +236,14 @@ export class Message {
       if (message.editedAt !== null) {
         head.append(" ", h(doc, "span", { class: "erp-mail-edited", title: formatter(view.services.locale, view.services.timeZone, "datetime").format(message.editedAt) }, t(view, "edited")));
       }
-      const parts: Node[] = dayLabel === null ? [head] : [h(doc, "div", { class: "erp-mail-day" }, dayLabel), head];
-      if (this.showSubject(message, this.#options.threadName?.())) parts.push(h(doc, "div", { class: "erp-mail-subject" }, message.subject ?? ""));
-      parts.push(body);
-      if (message.attachments.length > 0) parts.push(this.#drawAttachments(message));
-      parts.push(this.#drawControls(message));
-      this.#inner.replaceChildren(...parts);
+      // The row is the avatar beside one column (head, subject, body, attachments, controls); a squashed message keeps the gutter.
+      const main: Node[] = [head];
+      if (this.showSubject(message, this.#options.threadName?.())) main.push(h(doc, "div", { class: "erp-mail-subject" }, message.subject ?? ""));
+      main.push(body);
+      if (message.attachments.length > 0) main.push(this.#drawAttachments(message));
+      main.push(this.#drawControls(message));
+      const row = h(doc, "div", { class: "erp-mail-message-row" }, ...(squashed ? [] : [initialsAvatar(doc, this.authorName(message))]), h(doc, "div", { class: "erp-mail-message-main" }, ...main));
+      this.#inner.replaceChildren(...(dayLabel === null ? [row] : [h(doc, "div", { class: "erp-mail-day" }, dayLabel), row]));
       this.#applyTabindex();
     } catch (error) {
       this.#showFailure(error);
@@ -254,8 +265,9 @@ export class Message {
     for (const attachment of message.attachments) {
       const name = attachment.name ?? `Attachment #${attachment.id}`;
       const isImg = attachment.mimetype?.startsWith("image/");
-      const downloadUrl = attachment.url || `/web/content/${attachment.id}?download=true`;
-      const viewUrl = attachment.url || `/web/content/${attachment.id}`;
+      // A stored URL is a link-out only when it is a safe http(s)/mailto/tel URL; images load from our own route, never a remote URL.
+      const downloadUrl = (attachment.url ? safeHref(attachment.url) : null) ?? `/erp/content/${attachment.id}?download=true`;
+      const viewUrl = `/erp/content/${attachment.id}`;
 
       const item = h(doc, "li", { class: "erp-mail-attachment", "data-attachment-id": attachment.id });
 
@@ -327,7 +339,8 @@ export class Message {
           continue;
         }
         const label = action.label(ctx);
-        button.append(...(action.glyph !== undefined ? [h(doc, "span", { class: "erp-mail-glyph", "aria-hidden": "true" }, action.glyph)] : []), label);
+        button.title = label;
+        button.append(...(action.glyph !== undefined ? [glyphNode(doc, action.glyph)] : []), h(doc, "span", { class: "erp-mail-action-label" }, label));
         const pressed = action.pressed?.(ctx);
         if (pressed !== undefined) button.setAttribute("aria-pressed", pressed ? "true" : "false");
       } catch (error) {

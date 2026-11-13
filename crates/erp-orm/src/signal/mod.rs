@@ -132,8 +132,7 @@ pub enum SignalKey {
     Policy,
     /// Who belongs to what: group memberships, companies, `active` and `share` of users. Nothing
     /// is compiled from it, so applying a change is a no-op; the generation exists so a replica
-    /// that has not replayed a membership change is detected by the routing lag guard
-    /// .
+    /// that has not replayed a membership change is detected by the routing lag guard.
     Membership,
     /// A named ormcache (`ormcache` in [`Transaction`](crate::Transaction)).
     Cache(CacheName),

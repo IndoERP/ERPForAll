@@ -1,5 +1,5 @@
-//! The generator and verifier of company restrictions (A1-D2/A1-D3; design
-//! , §6.1, §11.2) over the fixture "company access". Pure: no
+//! The generator and verifier of company restrictions (A1-D2/A1-D3; design,
+//! §6.1, §11.2) over the fixture "company access". Pure: no
 //! database; the PostgreSQL half is `company_access_shapes.rs`.
 #![allow(clippy::unwrap_used, clippy::panic, reason = "tests")]
 

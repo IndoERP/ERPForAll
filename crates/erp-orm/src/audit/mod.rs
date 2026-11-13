@@ -1,4 +1,4 @@
-//! The append-only audit trail (to 9,).
+//! The append-only audit trail (to 9).
 //!
 //! Every mutating call, typed auth lifecycle change and audited elevation leaves **one** row in
 //! `erp_event.ir_audit_entry`, written by one typed INSERT in the commit preamble of the
@@ -49,18 +49,25 @@ mod buffer;
 mod elevation;
 mod event;
 mod persist;
+pub mod reader;
+mod reader_connection;
+mod reader_grants;
 mod schema;
+pub mod seal;
 mod store;
 
 pub use buffer::AttemptEvidence;
 pub(crate) use buffer::AuditBuffer;
 pub use elevation::{ElevationReason, SuperuserAction};
 pub use event::{
-    ApiKeyIssued, ApiKeyRevoked, ApiKeysCollected, AuthEvent, IdentityLink, KeyRouteScope,
-    LinkedBy, PasswordChanged, RevokeCause, SecretRotated, SessionCause, SessionRevoked,
-    UserSessionsRevoked,
+    ApiKeyIssued, ApiKeyRevoked, ApiKeysCollected, AttachmentProbeRecorded, AuthEvent,
+    EmergencyReason, EmergencyRevocation, IdentityLink, KeyRouteScope, LinkedBy, PasswordChanged,
+    ProbeOutcome, RevokeCause, SecretRotated, SessionCause, SessionRevoked, UserSessionsRevoked,
 };
 pub use persist::AuditAttempt;
+/// Isolated reader transport; authorization and projection remain separate from raw storage.
+pub use reader_connection::AuditReaderConnection;
+pub use reader_grants::AuditReaderRoles;
 pub(crate) use schema::AUDIT_TABLE;
 pub use store::AuditStoreState;
 pub(crate) use store::StoreCell;
@@ -72,7 +79,7 @@ use erp_fields::{Error, ErrorKind, Result};
 
 use crate::rpc::Effect;
 
-/// Days ahead of today the audit table keeps partitions for. Every runtime grant
+/// Days ahead of today the audit table keeps partitions. Every runtime grant
 /// publication and `erp audit maintain` refresh the window; the number is a safety margin until
 /// keeps it daily.
 pub const AUDIT_PREMAKE_DAYS: u32 = 31;
@@ -227,12 +234,16 @@ pub enum AuditOrigin {
     Cli,
     /// Anything else in the core.
     Internal,
+    /// A JSON-2 call confirmed through the AI assistant: set by the RPC layer from
+    /// the call's attempt hook, never by a request.
+    Assistant,
 }
 
 impl AuditOrigin {
     /// The `origin` column text.
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Assistant => "assistant",
             Self::Rpc => "rpc",
             Self::ServerAction => "server_action",
             Self::Job => "job",

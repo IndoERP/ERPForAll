@@ -19,7 +19,7 @@ async fn users(h: &erp_testkit::Harness) {
             .unwrap(),
         1
     );
-    c.batch_execute("INSERT INTO res_users(id, name, login, active) VALUES (20,'Ann','ann',true), (21,'Old','old',false); INSERT INTO res_groups(id,name) VALUES(10,'Settings'); INSERT INTO ir_model_data(module,name,model,res_id) VALUES('base','group_system','res.groups',10); INSERT INTO res_groups_users_rel(uid,gid) VALUES(1,10); INSERT INTO ir_config_parameter(key,value) VALUES('base.enable_programmatic_api_keys','True')").await.unwrap();
+    c.batch_execute("INSERT INTO res_users(id, name, login, active, share) VALUES (20,'Ann','ann',true, false), (21,'Old','old',false, false); INSERT INTO res_groups(id,name) VALUES(10,'Settings'); INSERT INTO ir_model_data(module,name,model,res_id) VALUES('base','group_system','res.groups',10); INSERT INTO res_groups_users_rel(uid,gid) VALUES(1,10); INSERT INTO ir_config_parameter(key,value) VALUES('base.enable_programmatic_api_keys','True')").await.unwrap();
 }
 fn request(expiry: Option<DateTime>) -> IssueRequest {
     IssueRequest::new(

@@ -471,7 +471,7 @@ async fn check_category_depth(tx: &mut Transaction, parents: &[i64], moved: &[i6
 /// `res.partner`: contacts, addresses and hierarchies.
 #[model(
     name = "res.partner",
-    company_access = unrestricted(reason = "base contact access currently has no company restriction; the reference ERP's partner rule has non-company escapes"),
+    company_access = direct(field = "company_id", branch = "ancestor", empty = "allow", escape = "partner_share"),
     description = "Contact",
     order = "complete_name, id desc",
     rec_names_search = ["complete_name", "email", "ref", "vat"],
@@ -506,7 +506,7 @@ pub struct ResPartner {
     )]
     pub child_ids: Vec<RecId>,
     /// Internal reference.
-    #[field(char, index = true)]
+    #[field(char, index = true, string = "Reference")]
     pub r#ref: Option<Arc<str>>,
     /// Language code.
     #[field(
@@ -525,7 +525,7 @@ pub struct ResPartner {
     #[field(char, compute = "_compute_tz_offset")]
     pub tz_offset: Option<Arc<str>>,
     /// Tax ID (VAT).
-    #[field(char, index = true)]
+    #[field(char, index = true, string = "Tax ID")]
     pub vat: Option<Arc<str>>,
     /// True when vat is set and valid.
     #[field(
@@ -566,14 +566,23 @@ pub struct ResPartner {
     #[field(char)]
     pub street: Option<Arc<str>>,
     /// Street line 2.
-    #[field(char)]
+    #[field(char, string = "Street 2")]
     pub street2: Option<Arc<str>>,
     /// Postal code.
-    #[field(char)]
+    #[field(char, string = "ZIP")]
     pub zip: Option<Arc<str>>,
     /// City name.
     #[field(char)]
     pub city: Option<Arc<str>>,
+    /// State of the address.
+    #[field(many2one, comodel = "res.country.state", ondelete = "restrict")]
+    pub state_id: Option<RecId>,
+    /// Country of the address.
+    #[field(many2one, comodel = "res.country", ondelete = "restrict")]
+    pub country_id: Option<RecId>,
+    /// Country code (ISO 2 chars).
+    #[field(char, related = "country_id.code", readonly = true)]
+    pub country_code: Option<Arc<str>>,
     /// Contact email.
     #[field(char)]
     pub email: Option<Arc<str>>,
@@ -600,14 +609,26 @@ pub struct ResPartner {
     /// Color index.
     #[field(integer, default = 0)]
     pub color: i32,
-    /// Linked active users.
+    /// Linked users (archived ones are hidden on read unless `active_test` is off).
     #[field(one2many, comodel = "res.users", inverse_name = "partner_id")]
     pub user_ids: Vec<RecId>,
     /// Main user for authentication/ownership.
     #[field(many2one, comodel = "res.users", compute = "_compute_main_user_id")]
     pub main_user_id: Option<RecId>,
-    /// True if no linked active internal user.
-    #[field(boolean, compute = "_compute_partner_share", store = true)]
+    /// True unless the contact is the superuser's partner or has an active internal user;
+    /// the escape of the company restriction. Required with
+    /// the static default `true`, so a row that was never computed takes the company test (fail
+    /// closed); the stored compute replaces the default after the insert, since a computed field
+    /// without inverse is not protected by a given value. The default is also the column's
+    /// database default (`db_default`) for rows written outside the ORM.
+    #[field(
+        boolean,
+        compute = "_compute_partner_share",
+        store = true,
+        required,
+        default = true,
+        db_default
+    )]
     pub partner_share: bool,
     /// Topmost ancestor in hierarchy.
     #[field(
@@ -676,7 +697,7 @@ fn context_flag(this: &RecordSet<ResPartner>, key: &str) -> bool {
         .is_some_and(|value| value.is_truthy())
 }
 
-fn source_type_labels(this: &RecordSet<ResPartner>) -> Result<BTreeMap<String, Arc<str>>> {
+fn static_type_labels(this: &RecordSet<ResPartner>) -> Result<BTreeMap<String, Arc<str>>> {
     let field = this
         .as_records()
         .spec()
@@ -694,6 +715,20 @@ fn source_type_labels(this: &RecordSet<ResPartner>) -> Result<BTreeMap<String, A
             "res.partner.type: expected static selection labels",
         )),
     }
+}
+
+async fn type_labels(
+    this: &RecordSet<ResPartner>,
+    tx: &mut Transaction,
+) -> Result<BTreeMap<String, Arc<str>>> {
+    let lang = this.env().lang().unwrap_or("en_US");
+    let pairs = tx
+        .selection_labels_for_lang("res.partner", "type", lang)
+        .await?;
+    Ok(pairs
+        .into_iter()
+        .map(|(key, label)| (key, Arc::from(label.as_str())))
+        .collect())
 }
 
 async fn displayed_type_keys(
@@ -923,13 +958,13 @@ impl ResPartner {
     }
 
     /// Compose one complete name per input record, in recordset order.
-    /// Uses source selection labels until adds translated labels.
+    /// Uses translated selection labels for context language.
     #[method]
     async fn _get_complete_name(
         this: &RecordSet<ResPartner>,
         tx: &mut Transaction,
     ) -> Result<Vec<Arc<str>>> {
-        let labels = source_type_labels(this)?;
+        let labels = type_labels(this, tx).await?;
         let displayed = displayed_type_keys(this, tx, &labels).await?;
         let names = this.mapped(tx, ResPartner::NAME).await?;
         let parents = this.mapped(tx, ResPartner::PARENT_ID).await?;
@@ -1024,7 +1059,7 @@ impl ResPartner {
         } else {
             BTreeMap::new()
         };
-        let type_labels = source_type_labels(this)?;
+        let type_labels = type_labels(this, tx).await?;
         for index in 0..this.len() {
             let mut label = Label::default();
             let email = emails[index].as_deref().filter(|email| !email.is_empty());
@@ -1204,7 +1239,7 @@ impl ResPartner {
                 "Couldn't create contact without email address!",
             ));
         }
-        let labels = source_type_labels(this)?;
+        let labels = static_type_labels(this)?;
         let mut context = this.env().context().clone();
         if let Some(value) = context.get("default_type")
             && value.is_truthy()
@@ -1251,11 +1286,74 @@ impl ResPartner {
         Ok(())
     }
 
-    #[compute(depends = [])]
-    fn _compute_partner_share(batch: &mut Batch<'_, ResPartner>) -> Result<()> {
-        for i in batch.indices() {
-            let is_superuser = batch.ids()[i].get() == erp_sdk::SUPERUSER_ID.get();
-            batch.set(i, ResPartner::PARTNER_SHARE, !is_superuser)?;
+    /// archived or not) and for a partner with an active user whose `share` is false; `true`
+    /// otherwise. The users are read with `active_test` off (the cache of `user_ids` holds the
+    /// archived ones too), then filtered here, so the caller's context cannot change the rule.
+    ///
+    /// The dependencies fire for a change of `share` or `active` of a linked user (the trigger
+    /// tree through `res.users.partner_id`) and for a change of `res.users.partner_id` itself,
+    /// which notifies the old and the new partner through the inverse one2many (REL §4.4.4).
+    /// The set-based path behind group changes applies the same rule
+    /// ([`crate::group_graph::recompute_user_share`]).
+    #[compute(depends = ["user_ids.share", "user_ids.active"])]
+    async fn _compute_partner_share(
+        this: &RecordSet<ResPartner>,
+        tx: &mut Transaction,
+        out: &mut Assign<'_, ResPartner>,
+    ) -> Result<()> {
+        let partners = this
+            .as_records()
+            .sudo(true)
+            .with_context([("active_test", Value::Bool(false))]);
+        let linked = partners.cells(tx, "user_ids").await?;
+        let mut per_partner: Vec<Vec<RecId>> = Vec::with_capacity(linked.len());
+        let mut users: Vec<RecId> = Vec::new();
+        let mut seen: BTreeSet<RecId> = BTreeSet::new();
+        for cell in &linked {
+            let ids: Vec<RecId> = match cell {
+                Cell::Ids(ids) => ids.to_vec(),
+                // a new partner without users
+                Cell::Null => Vec::new(),
+                other => {
+                    return Err(Error::programming(format!(
+                        "res.partner.user_ids holds {other:?}, expected a list of user ids"
+                    )));
+                }
+            };
+            users.extend(ids.iter().copied().filter(|id| seen.insert(*id)));
+            per_partner.push(ids);
+        }
+        let users = partners.env().records("res.users")?.browse_ids(users);
+        let actives = users.cells(tx, "active").await?;
+        let shares = users.cells(tx, "share").await?;
+        let mut internal: BTreeSet<RecId> = BTreeSet::new();
+        for ((id, active), share) in users.rec_ids().iter().zip(&actives).zip(&shares) {
+            let superuser = !id.is_new() && id.get() == erp_sdk::SUPERUSER_ID.get();
+            let active = match active {
+                Cell::Bool(active) => *active,
+                Cell::Null => false,
+                other => {
+                    return Err(Error::programming(format!(
+                        "res.users.active holds {other:?}, expected a boolean"
+                    )));
+                }
+            };
+            let share = match share {
+                Cell::Bool(share) => *share,
+                other => {
+                    return Err(Error::programming(format!(
+                        "res.users.share of user {id} holds {other:?}, expected a boolean (the \
+                         column is required)"
+                    )));
+                }
+            };
+            if superuser || (active && !share) {
+                internal.insert(*id);
+            }
+        }
+        for (i, ids) in per_partner.iter().enumerate() {
+            let share = !ids.iter().any(|id| internal.contains(id));
+            out.set(i, ResPartner::PARTNER_SHARE, share)?;
         }
         Ok(())
     }
@@ -1428,6 +1526,18 @@ impl ResPartner {
         mut vals: RawVals,
         sup: Super,
     ) -> Result<()> {
+        // the user-type flag is the escape of the company restriction: only the
+        // server's compute and the group recompute set it, never a caller
+        if vals.contains("partner_share") && !this.env().is_superuser() {
+            // a caller without write access to the field gets the access error first
+            this.as_records()
+                .check_access(tx, erp_sdk::Operation::Write)
+                .await?;
+            erp_sdk::__private::base_check_write_fields(tx, this.as_records(), &vals)?;
+            return Err(Error::programming(
+                "'res.partner.partner_share' is set by the server and cannot be written",
+            ));
+        }
         // Normalise website if updated
         if let Some(cell) = vals.get("website") {
             let normalised = normalise_website_cell(cell)?;
@@ -1456,10 +1566,36 @@ impl ResPartner {
         _this: &RecordSet<ResPartner>,
         _tx: &mut Transaction,
     ) -> Result<Vec<String>> {
-        Ok(["street", "street2", "zip", "city"]
-            .into_iter()
-            .map(str::to_owned)
-            .collect())
+        Ok(
+            ["street", "street2", "zip", "city", "state_id", "country_id"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+        )
+    }
+
+    /// Native addons append through ordinary
+    /// super dispatch; the base list is `vat` (`additional_identifiers` is a later
+    /// base task, commercial amendment).
+    #[method]
+    async fn _synced_commercial_fields(
+        _this: &RecordSet<ResPartner>,
+        _tx: &mut Transaction,
+    ) -> Result<Vec<String>> {
+        Ok(vec!["vat".to_owned()])
+    }
+
+    #[method]
+    async fn _commercial_fields(
+        this: &RecordSet<ResPartner>,
+        tx: &mut Transaction,
+    ) -> Result<Vec<String>> {
+        let mut fields: Vec<String> = this
+            .as_records()
+            .call(tx, "_synced_commercial_fields", ())
+            .await?;
+        fields.push("industry_id".to_owned());
+        Ok(fields)
     }
 
     /// Formatting has a separate extension chain from address synchronization.

@@ -96,8 +96,8 @@ impl fmt::Display for LimitKind {
     }
 }
 
-/// Why an XPath expression was rejected. The supported grammar is listed in
-/// ; everything else is rejected by name, never treated as a non-match.
+/// Why an XPath expression was rejected. The supported grammar is listed in;
+/// everything else is rejected by name, never treated as a non-match.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum XpathErrorKind {

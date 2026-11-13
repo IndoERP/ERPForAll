@@ -1,5 +1,5 @@
-//! Set-based capture of tracked-field changes (design
-//! ; behavior
+//! Set-based capture of tracked-field changes (design;
+//! behavior
 //! the display names), so every tag is `partial`.
 #![allow(
     clippy::unwrap_used,

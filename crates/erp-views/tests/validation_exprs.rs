@@ -1,4 +1,4 @@
-//! Install-time validation of expression attributes (GA-3 WP-C,; design
+//! Install-time validation of expression attributes (GA-3 WP-C; design
 //! ): the names an expression reads must exist, and a
 //! visible node may not read a field it does not guard.
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "tests")]

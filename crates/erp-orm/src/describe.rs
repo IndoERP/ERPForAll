@@ -15,6 +15,7 @@ fn describe(
     field: &FieldSpec,
     readonly: bool,
     include_digits: bool,
+    selection_overrides: Option<&std::collections::HashMap<(String, String), String>>,
 ) -> Result<BTreeMap<String, Value>> {
     let mut d: BTreeMap<String, Value> = BTreeMap::new();
     let mut put = |k: &str, v: Value| {
@@ -138,10 +139,13 @@ fn describe(
             let list = values.as_deref().unwrap_or_default();
             put(
                 "selection",
-                Value::list(
-                    list.iter()
-                        .map(|(k, l)| Value::list([Value::str(k), Value::str(l)])),
-                ),
+                Value::list(list.iter().map(|(k, l)| {
+                    let label = selection_overrides
+                        .and_then(|ovr| ovr.get(&(field.name.to_owned(), k.clone())))
+                        .map(String::as_str)
+                        .unwrap_or(l.as_str());
+                    Value::list([Value::str(k), Value::str(label)])
+                })),
             );
         }
         FieldType::Many2one { comodel, .. } | FieldType::Many2many { comodel, .. } => {
@@ -222,7 +226,7 @@ impl Records {
         allfields: Option<&[&str]>,
         attributes: Option<&[&str]>,
     ) -> Result<BTreeMap<String, BTreeMap<String, Value>>> {
-        tx.check_records(self)?;
+        tx.admit_records(self).await?;
         let spec = self.spec();
         // a refused company context is an error, never read-only fields (review F1/S5)
         self.env().companies()?;
@@ -276,6 +280,49 @@ impl Records {
             }
         }
         let include_selection = attributes.is_none_or(|attrs| attrs.contains(&"selection"));
+        let mut selection_overrides = std::collections::HashMap::new();
+        if include_selection && self.env().lang().is_some() {
+            let has_static_selection = fields.iter().any(|f| {
+                matches!(
+                    &f.ty,
+                    FieldType::Selection {
+                        values: Some(_),
+                        ..
+                    }
+                )
+            });
+            if has_static_selection && tx.registry().model("ir.model.fields.selection").is_some() {
+                let lang = self.env().lang().unwrap_or("en_US");
+                let rows = tx
+                    .query(
+                        r#"
+                        SELECT f.name, s.value, s.name->>$2
+                        FROM ir_model_fields_selection s
+                        JOIN ir_model_fields f ON f.id = s.field_id
+                        WHERE f.model = $1 AND s.name ? $2
+                        "#,
+                        &[&self.model_name(), &lang],
+                    )
+                    .await?;
+                // A failed lookup or a row that does not decode is an error, never "no translation":
+                // PostgreSQL has aborted the transaction by then and the cause would be lost.
+                let column = |error: tokio_postgres::Error| {
+                    Error::db("Invalid translated selection label row").with_source(error)
+                };
+                for row in rows {
+                    let field: String = row.try_get(0).map_err(column)?;
+                    let value: String = row.try_get(1).map_err(column)?;
+                    if let Some(label) = row.try_get::<_, Option<String>>(2).map_err(column)? {
+                        selection_overrides.insert((field, value), label);
+                    }
+                }
+            }
+        }
+        let sel_ovr = if selection_overrides.is_empty() {
+            None
+        } else {
+            Some(&selection_overrides)
+        };
         let has_providers = include_selection
             && fields.iter().any(|field| {
                 matches!(
@@ -290,7 +337,13 @@ impl Records {
             return fields
                 .into_iter()
                 .map(|f| {
-                    let mut d = describe(tx, f, readonly || !mask.writable(f.id), include_digits)?;
+                    let mut d = describe(
+                        tx,
+                        f,
+                        readonly || !mask.writable(f.id),
+                        include_digits,
+                        sel_ovr,
+                    )?;
                     if let Some(attrs) = attributes {
                         d.retain(|k, _| attrs.contains(&k.as_str()));
                     }
@@ -318,7 +371,13 @@ impl Records {
             let mut descriptions = BTreeMap::new();
             // Describe all static attributes before borrowing the transaction in the capability.
             for f in &fields {
-                let mut d = describe(tx, f, readonly || !mask.writable(f.id), include_digits)?;
+                let mut d = describe(
+                    tx,
+                    f,
+                    readonly || !mask.writable(f.id),
+                    include_digits,
+                    sel_ovr,
+                )?;
                 if let Some(attrs) = attributes {
                     d.retain(|k, _| attrs.contains(&k.as_str()));
                 }

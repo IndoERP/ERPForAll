@@ -1,5 +1,5 @@
 //! Business keys on large tables and conflict reporting during schema sync (
-//! ; design note, §11.1;
+//! §11.1;
 //! reviews D2 and D7).
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "tests")]
 
@@ -1397,7 +1397,7 @@ async fn a_hand_partitioned_table_with_rows_is_refused_before_any_key_is_planned
         (err.kind(), err.message()),
         (
             ErrorKind::Programming,
-            "table 'scale_lot' has rows; changing its partitioning is not supported (; business tables: M5 partitioning ADR)"
+            "table 'scale_lot' has rows; changing its partitioning is not supported (see the documentation; business tables: a later release)"
         )
     );
     tx.rollback().await.unwrap();

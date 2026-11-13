@@ -7,10 +7,21 @@ interface Entry<T> { readonly value: T; readonly bytes: number }
 export class HtmlEditorHistory<T> {
   private entries: Entry<T>[] = [];
   private index = -1;
+  /** Entries ever dropped from the front, so a position stays comparable after the history is shortened. */
+  private dropped = 0;
   private readonly limits: Readonly<HtmlEditorLimits>;
   constructor(initial: T, limits: HtmlEditorLimits, private readonly bytes: (value: T) => number) {
     this.limits = htmlEditorLimits(limits);
     this.reset(initial);
+  }
+  /** Stable position of the current entry. */
+  get absolute(): number { return this.dropped + this.index; }
+  /** Remove the entries between the one at `base` and the current one, keeping both ends: several edits become one undo step. */
+  collapseAfter(base: number): void {
+    const from = base - this.dropped;
+    if (from < 0 || from >= this.index - 1) return;
+    this.entries.splice(from + 1, this.index - from - 1);
+    this.index = from + 1;
   }
   get canUndo(): boolean { return this.index > 0; }
   get canRedo(): boolean { return this.index >= 0 && this.index < this.entries.length - 1; }
@@ -34,7 +45,7 @@ export class HtmlEditorHistory<T> {
       size -= retained[removed]!.bytes;
       removed++;
     }
-    this.entries = retained.slice(removed);
+    this.entries = retained.slice(removed); this.dropped += removed;
     this.index = this.entries.length - 1;
     return { shortened: removed > 0 };
   }
@@ -64,7 +75,7 @@ export class HtmlEditorHistory<T> {
   reset(value: T): void {
     const entry = this.admit(value);
     this.entries = [entry];
-    this.index = 0;
+    this.index = 0; this.dropped = 0;
   }
   clear(): void { this.entries = []; this.index = -1; }
 }

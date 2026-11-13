@@ -1,7 +1,7 @@
 //! the attachment service's `adopt` (a post claims the caller's
 //! composer files for a record) and the `pending_in` placeholder it claims, on the service
 //! layer without the mail addon. The mail-level cases are and in
-//! `mail_rpc.rs`;,
+//! `mail_rpc.rs`,
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

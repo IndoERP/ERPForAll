@@ -32,7 +32,7 @@ static STORE_FETCH_PRIMARY: erp_sdk::rpc::PrimaryRead = erp_sdk::rpc::PrimaryRea
 #[methods(MailStore, addon = "mail")]
 impl MailStore {
     /// Run a list of registered topics in this one read-only transaction and answer one store
-    /// payload with one as-of, plus one slot per topic..
+    /// payload with one as-of, plus one slot per topic.
     ///
     /// # Errors
     /// `Validation` for an unsupported wire major (message starts `client_outdated:`), a malformed,

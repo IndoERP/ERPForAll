@@ -46,7 +46,7 @@ const server = createServer(async (req, res) => {
     const body = JSON.parse(input); calls.push({ path: pathname, body }); let value;
     if (pathname.endsWith("erp_describe")) value = { wire_major: 1, registry_version: "r1", scope: body.scope, declarations: [{ key: "theme_office_blue.appearance", kind: "selection", label: "Appearance", choices: [["default", "Default"], ["office-blue", "Office Blue"]], writable: true }] };
     else if (pathname.endsWith("erp_read_values")) value = { wire_major: 1, scope: body.scope, revision: "1", values: [{ key: "theme_office_blue.appearance", value: "office-blue", source: "stored" }] };
-    else if (pathname.endsWith("erp_load_web_menus")) value = { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] };
+    else if (pathname.endsWith("erp_load_web_menus")) value = { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] };
     else if ((pathname.endsWith("erp_load_web_action") || pathname.endsWith("erp_load_web_action_views"))) value = { wire_major: 1, id: 20, name: "Notes", model: "test.note", target: "current", views: [{ id: 1, type: "list" }, { id: 2, type: "form" }], domain: null, context: null };
     else if (pathname.endsWith("get_views")) value = description;
     else if (pathname.endsWith("web_search_read")) value = { length: 1, records: [persisted] };

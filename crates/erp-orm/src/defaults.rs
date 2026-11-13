@@ -23,8 +23,7 @@ impl Records {
     /// through the model's `default_get` override chain. A name absent from the result has no
     /// default. Steps, numbered as in CRUD §4.5, first match wins:
     ///
-    /// 1. the context key `default_<name>`, returned even when `<name>` is not a field
-    ///    ;
+    /// 1. the context key `default_<name>`, returned even when `<name>` is not a field;
     /// 2. other names that are not fields are skipped (never an error);
     /// 3. the persisted `ir.default` user default, when that model is installed;
     /// 4. the field's `default` (static value or function of the environment);
@@ -68,7 +67,7 @@ async fn base_default_get(
     records: &Records,
     names: &[String],
 ) -> Result<ValueMap> {
-    tx.check_records(records)?;
+    tx.admit_records(records).await?;
     // `may_write_field` and the x2many checks below read the binding: bring it up to date first
     if !records.env().su() {
         tx.prepare_access(records.env()).await?;

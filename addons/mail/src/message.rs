@@ -2,8 +2,8 @@
 //!
 //! Storage and §4.1a; the post
 //! path (`client_uid`, `silent`) is (`crate::post`). Tracking and the search vector are
-//! later slices; the attachment link (`attachment_ids`) is
-//! . Read access to messages is
+//! later slices; the attachment link (`attachment_ids`) is.
+//! Read access to messages is
 //! : the `thread_access` rule operator declared below and the rows of
 //! `security/ir.access.csv`.
 

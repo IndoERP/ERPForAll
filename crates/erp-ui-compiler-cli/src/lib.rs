@@ -18,8 +18,8 @@
 //! Anything else (an unknown tag, a record out of order, such as a `directive` after a `limit`, a
 //! repeated directive or limit, too many directives, a non-canonical number) is a malformed
 //! request: decoding never drops or rewrites a record, so a
-//! decoded request encodes back to the same bytes. New inputs (the restricted source kind of
-//! , declared contexts) are new tags or `file` kinds, not a new magic.
+//! decoded request encodes back to the same bytes. New inputs (the restricted source kind of,
+//! declared contexts) are new tags or `file` kinds, not a new magic.
 //!
 //! The response is the canonical byte form of the result. The binary exits [`EXIT_CLEAN`] when the
 //! set has no error, [`EXIT_ERRORS`] when the result carries errors (a rejected template, a set

@@ -66,9 +66,20 @@ async fn node_param(auth: &erp_security::auth::Auth, key: &str, value: &str) {
     tx.commit().await.unwrap();
 }
 async fn sql(w: &World, text: &str) {
-    let mut tx = w.h.begin().await.unwrap();
-    tx.batch(text).await.unwrap();
-    tx.commit().await.unwrap();
+    // The detached last-use write of a key that was just verified may update the row this set-up
+    // statement touches. A serialization failure (40001) is retryable by contract, so it is
+    // retried here; any other error, and a sixth failure, still fails the test.
+    for attempt in 0..6 {
+        let mut tx = w.h.begin().await.unwrap();
+        match tx.batch(text).await {
+            Ok(()) => {
+                tx.commit().await.unwrap();
+                return;
+            }
+            Err(e) if e.kind() == ErrorKind::Concurrency && attempt < 5 => drop(tx),
+            Err(e) => panic!("set-up statement failed: {e:?}"),
+        }
+    }
 }
 async fn refuse(w: &World, req: ApiKeyRequest<'_>, kind: ErrorKind, message: &str) {
     let e = w
@@ -222,19 +233,347 @@ async fn cookie_never_supplies_key_authority_and_stale_cookie_is_not_mutated() {
     assert_eq!(count(&w.h, "erp_session").await, before);
 }
 
+const LEGACY_KEY: &str = "0123456789abcdef0123456789abcdef01234567";
+const LEGACY_HASH: &str = "$pbkdf2-sha512$6000$AQIDBAUGBwgJCgsMDQ4PEA$OZ8GgUdmDCbZpQ9KM2Qf/R0CUsAjhG/tqFSsh3ynCVmwTS/ggO81KR9hEpAPDPxG9v7BAKwEjPpaXEZ8Xn16lg";
+const OTHER_HASH: &str = "$pbkdf2-sha512$6000$FRYXGBkaGxwdHh8gISIjJA$XxXyWW9fMf65Qyk5t82OEPHWthxlLelsLE2LRcA37gBCjNeiEr.pU.LcIKBYayeOMg9kguppF0pqKA9xFK1C0g";
+
+async fn imported(w: &World, uid: i64, hash: &str) -> i64 {
+    let mut tx = w.h.begin().await.unwrap();
+    let id: i64 = tx
+        .query(
+            &format!(
+                "INSERT INTO res_users_apikeys(name,user_id,created_by,kind,scope,digest_kid,prefix,\
+                 read_only,capabilities,legacy_index,legacy_hash) \
+                 VALUES('imported',{uid},{uid},'user','rpc',1,'01234567',false,'subject','01234567','{hash}') \
+                 RETURNING id"
+            ),
+            &[],
+        )
+        .await
+        .unwrap()[0]
+        .get(0);
+    tx.commit().await.unwrap();
+    id
+}
+
 #[tokio::test]
-async fn legacy_refusal_and_request_debug_do_not_expose_submitted_text() {
+async fn imported_legacy_key_verifies_with_its_original_hash() {
     let w = world().await;
-    let legacy = "0123456789abcdef0123456789abcdef01234567";
-    let req = request(legacy);
-    assert!(!format!("{req:?}").contains(legacy));
+    let uid = user_with_password(&w.h, "legacy", "pw").await;
+    let id = imported(&w, uid, LEGACY_HASH).await;
+    let req = request(LEGACY_KEY).uid(UserId::new(uid).unwrap());
+    assert!(!format!("{req:?}").contains(LEGACY_KEY));
+    let mut tx = accepted(&w, req).await;
+    let p = tx.env().principal().clone();
+    assert_eq!(p.subject().get(), uid);
+    assert_eq!(p.scope().unwrap().key().get(), id);
+    assert!(matches!(p.actor(), Some(Actor::ApiKey { id: actor, .. }) if actor.get() == id));
+    tx.rollback().await.unwrap();
+    // the second request is served from the memo and still agrees
+    accepted(&w, request(LEGACY_KEY))
+        .await
+        .rollback()
+        .await
+        .unwrap();
+    // same index, other secret, wrong uid, wrong audience, empty: all the one redacted refusal
+    for req in [
+        request("0123456789abcdef0123456789abcdef01234568"),
+        request(LEGACY_KEY).uid(UserId::new(uid + 1).unwrap()),
+        ApiKeyRequest::new(LEGACY_KEY, KeyScope::Mcp, "192.0.2.21".parse().unwrap()),
+    ] {
+        refuse(&w, req, ErrorKind::AccessDenied, "Invalid apikey").await;
+    }
+}
+
+#[tokio::test]
+async fn memoised_legacy_key_never_outlives_its_committed_row_state() {
+    let w = world().await;
+    let uid = user_with_password(&w.h, "legacy2", "pw").await;
+    let id = imported(&w, uid, LEGACY_HASH).await;
+    accepted(&w, request(LEGACY_KEY))
+        .await
+        .rollback()
+        .await
+        .unwrap();
+    // expiry, inactivity, rotation of the stored hash and revocation are each seen by the very
+    // next request even though the memo still holds the earlier verification
+    sql(&w, &format!("UPDATE res_users_apikeys SET expiration_date=now() AT TIME ZONE 'utc' - interval '1 second' WHERE id={id}")).await;
     refuse(
         &w,
-        req,
+        request(LEGACY_KEY),
         ErrorKind::AccessDenied,
-        "Imported legacy API keys are not accepted until a later release",
+        "Invalid apikey",
     )
     .await;
+    sql(
+        &w,
+        &format!("UPDATE res_users_apikeys SET expiration_date=NULL WHERE id={id}"),
+    )
+    .await;
+    accepted(&w, request(LEGACY_KEY))
+        .await
+        .rollback()
+        .await
+        .unwrap();
+    sql(
+        &w,
+        &format!("UPDATE res_users SET active=false WHERE id={uid}"),
+    )
+    .await;
+    refuse(
+        &w,
+        request(LEGACY_KEY),
+        ErrorKind::AccessDenied,
+        "Invalid apikey",
+    )
+    .await;
+    sql(
+        &w,
+        &format!("UPDATE res_users SET active=true WHERE id={uid}"),
+    )
+    .await;
+    accepted(&w, request(LEGACY_KEY))
+        .await
+        .rollback()
+        .await
+        .unwrap();
+    sql(
+        &w,
+        &format!("UPDATE res_users_apikeys SET legacy_hash='{OTHER_HASH}' WHERE id={id}"),
+    )
+    .await;
+    refuse(
+        &w,
+        request(LEGACY_KEY),
+        ErrorKind::AccessDenied,
+        "Invalid apikey",
+    )
+    .await;
+    sql(
+        &w,
+        &format!("UPDATE res_users_apikeys SET legacy_hash='{LEGACY_HASH}' WHERE id={id}"),
+    )
+    .await;
+    accepted(&w, request(LEGACY_KEY))
+        .await
+        .rollback()
+        .await
+        .unwrap();
+    sql(&w, &format!("DELETE FROM res_users_apikeys WHERE id={id}")).await;
+    refuse(
+        &w,
+        request(LEGACY_KEY),
+        ErrorKind::AccessDenied,
+        "Invalid apikey",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn reimported_or_rehashed_legacy_key_is_accepted_and_corrupt_sibling_does_not_lock_it_out() {
+    let w = world().await;
+    let uid = user_with_password(&w.h, "legacy4", "pw").await;
+    let id = imported(&w, uid, LEGACY_HASH).await;
+    accepted(&w, request(LEGACY_KEY))
+        .await
+        .rollback()
+        .await
+        .unwrap();
+    // the same key re-imported under a new row id: the memoised id is gone, the key still works
+    sql(&w, &format!("DELETE FROM res_users_apikeys WHERE id={id}")).await;
+    let new_id = imported(&w, uid, LEGACY_HASH).await;
+    assert_ne!(id, new_id);
+    let mut tx = accepted(&w, request(LEGACY_KEY)).await;
+    assert_eq!(tx.env().principal().scope().unwrap().key().get(), new_id);
+    tx.rollback().await.unwrap();
+    // a corrupt row sharing the index (lower id) does not hide the valid one
+    sql(
+        &w,
+        &format!("DELETE FROM res_users_apikeys WHERE id={new_id}"),
+    )
+    .await;
+    imported(&w, uid, "not-a-passlib-hash").await;
+    let valid = imported(&w, uid, LEGACY_HASH).await;
+    let mut tx = accepted(&w, request(LEGACY_KEY)).await;
+    assert_eq!(tx.env().principal().scope().unwrap().key().get(), valid);
+    tx.rollback().await.unwrap();
+}
+
+#[tokio::test]
+async fn address_in_cooldown_gets_the_cooldown_without_any_legacy_hashing() {
+    let w = world().await;
+    let uid = user_with_password(&w.h, "legacy5", "pw").await;
+    imported(&w, uid, LEGACY_HASH).await;
+    node_param(&w.auth, "base.login_cooldown_after", "2").await;
+    // below the threshold the valid key still verifies (one pool job) and is accepted
+    let before = w.pool.stats().jobs;
+    accepted(&w, request(LEGACY_KEY))
+        .await
+        .rollback()
+        .await
+        .unwrap();
+    assert!(w.pool.stats().jobs > before);
+    for tail in ["68", "69"] {
+        let bad = format!("0123456789abcdef0123456789abcdef012345{tail}");
+        refuse(&w, request(&bad), ErrorKind::AccessDenied, "Invalid apikey").await;
+    }
+    // the address is now in cooldown: the valid key is refused with the cooldown, no hashing
+    let jobs = w.pool.stats().jobs;
+    let e = w
+        .auth
+        .begin_api_key(request(LEGACY_KEY), CredentialOptions::new())
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(
+        (e.kind(), e.message()),
+        (
+            ErrorKind::AccessDenied,
+            erp_security::auth::COOLDOWN_MESSAGE
+        )
+    );
+    assert!(
+        std::error::Error::source(&e)
+            .unwrap()
+            .downcast_ref::<erp_security::auth::ApiKeyCooldown>()
+            .is_some()
+    );
+    assert_eq!(w.pool.stats().jobs, jobs);
+}
+
+#[tokio::test]
+async fn failed_legacy_attempts_count_for_the_address_and_corrupt_hashes_fail_loudly() {
+    let w = world().await;
+    let uid = user_with_password(&w.h, "legacy3", "pw").await;
+    let id = imported(&w, uid, "not-a-passlib-hash").await;
+    let e = w
+        .auth
+        .begin_api_key(request(LEGACY_KEY), CredentialOptions::new())
+        .await
+        .err()
+        .unwrap();
+    assert_ne!(e.kind(), ErrorKind::AccessDenied);
+    assert!(!e.message().contains(LEGACY_KEY));
+    // the loud error is a failed attempt of the address, like a native miss (review S3)
+    assert_eq!(
+        count(
+            &w.h,
+            "erp_login_throttle WHERE kind='address' AND failures=1"
+        )
+        .await,
+        1
+    );
+    sql(
+        &w,
+        &format!("UPDATE res_users_apikeys SET legacy_hash='{LEGACY_HASH}' WHERE id={id}"),
+    )
+    .await;
+    let bad = "0123456789abcdef0123456789abcdef01234569";
+    refuse(&w, request(bad), ErrorKind::AccessDenied, "Invalid apikey").await;
+    assert_eq!(
+        count(
+            &w.h,
+            "erp_login_throttle WHERE kind='address' AND failures=2"
+        )
+        .await,
+        1
+    );
+}
+
+/// A corrupt row beside a valid one on the same index: each loud refusal counts for the address,
+/// so the cooldown ends the hashing work (review S3).
+#[tokio::test]
+async fn loud_legacy_refusals_reach_the_address_cooldown_and_stop_hashing() {
+    let w = world().await;
+    let uid = user_with_password(&w.h, "legacy8", "pw").await;
+    imported(&w, uid, "not-a-passlib-hash").await;
+    imported(&w, uid, LEGACY_HASH).await;
+    node_param(&w.auth, "base.login_cooldown_after", "2").await;
+    for (attempt, tail) in [(1, "68"), (2, "69")] {
+        let bad = format!("0123456789abcdef0123456789abcdef012345{tail}");
+        let e = w
+            .auth
+            .begin_api_key(request(&bad), CredentialOptions::new())
+            .await
+            .err()
+            .unwrap();
+        assert_ne!(e.kind(), ErrorKind::AccessDenied, "attempt {attempt}");
+        assert!(!e.message().contains(&bad));
+        assert_eq!(
+            count(
+                &w.h,
+                &format!("erp_login_throttle WHERE kind='address' AND failures={attempt}")
+            )
+            .await,
+            1,
+            "attempt {attempt}"
+        );
+    }
+    let jobs = w.pool.stats().jobs;
+    let e = w
+        .auth
+        .begin_api_key(
+            request("0123456789abcdef0123456789abcdef01234570"),
+            CredentialOptions::new(),
+        )
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(
+        (e.kind(), e.message()),
+        (
+            ErrorKind::AccessDenied,
+            erp_security::auth::COOLDOWN_MESSAGE
+        )
+    );
+    assert_eq!(w.pool.stats().jobs, jobs, "no hashing in cooldown");
+}
+
+#[tokio::test]
+async fn legacy_row_with_a_non_pbkdf2_hash_fails_loudly_instead_of_verifying() {
+    let w = world().await;
+    // the user's own password hash is our native scheme, made from the legacy key text
+    let uid = user_with_password(&w.h, "legacy6", LEGACY_KEY).await;
+    let native = stored_hash(&w.h, uid).await.unwrap();
+    assert!(native.starts_with("$argon2id$"), "{native}");
+    imported(&w, uid, &native).await;
+    let e = w
+        .auth
+        .begin_api_key(request(LEGACY_KEY), CredentialOptions::new())
+        .await
+        .err()
+        .unwrap();
+    assert_ne!(e.kind(), ErrorKind::AccessDenied);
+    assert!(!e.message().contains(LEGACY_KEY));
+}
+
+/// More than eight rows sharing one index fail loudly before any hashing work.
+#[tokio::test]
+async fn too_many_rows_sharing_one_legacy_index_fail_before_hashing() {
+    let w = world().await;
+    let uid = user_with_password(&w.h, "legacy7", "pw").await;
+    for _ in 0..9 {
+        imported(&w, uid, LEGACY_HASH).await;
+    }
+    let jobs = w.pool.stats().jobs;
+    let e = w
+        .auth
+        .begin_api_key(request(LEGACY_KEY), CredentialOptions::new())
+        .await
+        .err()
+        .unwrap();
+    assert_ne!(e.kind(), ErrorKind::AccessDenied);
+    assert!(!e.message().contains(LEGACY_KEY));
+    assert_eq!(w.pool.stats().jobs, jobs);
+    assert_eq!(
+        count(
+            &w.h,
+            "erp_login_throttle WHERE kind='address' AND failures=1"
+        )
+        .await,
+        1,
+        "the loud refusal counts for the address"
+    );
 }
 
 #[tokio::test]

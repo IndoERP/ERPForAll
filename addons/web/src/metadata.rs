@@ -583,6 +583,118 @@ struct MenuRecord {
     action: Option<i64>,
 }
 
+/// Resolve only retained menu IDs. SQL reduces aliases and reads sizes/identities; the trusted
+/// ORM read below is limited to those framework presentation rows, after caller authorization.
+/// No external IDs are created, and no provenance namespace supplies an access grant.
+async fn menu_modules(
+    env: &Env,
+    tx: &mut Transaction,
+    ids: &[i64],
+    menu_text_bytes: usize,
+    admission: &mut ResponseAdmission,
+) -> Result<Vec<(i64, Option<String>)>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let stats = preflight_stats(
+        tx,
+        "SELECT coalesce(sum(octet_length(d.module)), 0)::bigint, \
+                coalesce(max(octet_length(d.module)), 0)::bigint, count(*)::bigint \
+           FROM ir_model_data d JOIN ( \
+             SELECT min(id) AS id FROM ir_model_data \
+              WHERE model = 'ir.ui.menu' AND res_id = ANY($1) GROUP BY res_id \
+           ) oldest ON oldest.id = d.id",
+        ids,
+        3,
+        "menu module",
+        admission,
+    )
+    .await?;
+    ensure_below(stats[1], MAX_LABEL_BYTES, "Menu module", "byte")?;
+    let text_bytes = stat_size(stats[0])?;
+    let total_text = menu_text_bytes
+        .checked_add(text_bytes)
+        .ok_or_else(|| fail("Menu metadata text payload overflow."))?;
+    ensure_below(
+        i64::try_from(total_text).map_err(|_| fail("Menu metadata text payload exceeds i64."))?,
+        MAX_MENU_PAYLOAD_BYTES,
+        "Menu metadata text payload",
+        "byte",
+    )?;
+    let count = stat_size(stats[2])?;
+    if count > ids.len() {
+        return Err(Error::invariant(
+            "Menu module selection exceeds retained menus",
+        ));
+    }
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    admission.phase("menus:modules:reserve");
+    let mut selected_ids = admission.vector::<i64>(count)?;
+    for row in tx
+        .query(
+            "SELECT min(id) FROM ir_model_data \
+              WHERE model = 'ir.ui.menu' AND res_id = ANY($1) GROUP BY res_id",
+            &[&ids],
+        )
+        .await?
+    {
+        let id: i64 = row
+            .try_get(0)
+            .map_err(|error| Error::db(format!("unexpected menu module identity: {error}")))?;
+        if id <= 0 || selected_ids.len() >= count {
+            return Err(Error::invariant("Invalid menu module selection"));
+        }
+        selected_ids.push(id);
+    }
+    if selected_ids.len() != count {
+        return Err(Error::invariant(
+            "Menu module selection changed within snapshot",
+        ));
+    }
+    source_ids(admission, count)?;
+    let selected = env
+        .records("ir.model.data")?
+        .sudo(true)
+        .search_with(
+            tx,
+            &budget_ids_domain(admission, &selected_ids)?,
+            &checked_search_options(count)?,
+        )
+        .await?;
+    admission.source_rows(count, &["res_id", "module"], text_bytes, 1, 0, 0)?;
+    let mut modules = admission.vector::<(i64, Option<String>)>(count)?;
+    // Own both the ORM source strings and the eventual wire copies before reading either.
+    admission.charge(text_bytes)?;
+    admission.phase("menus:modules:read");
+    let rows = selected
+        .read_with(tx, &["res_id", "module"], Load::Raw)
+        .await?;
+    if rows.len() != count {
+        return Err(Error::invariant(
+            "Menu module presentation rows are missing",
+        ));
+    }
+    for row in &rows {
+        let id = optional_id(row, "res_id")?
+            .ok_or_else(|| Error::invariant("Menu module target is missing"))?;
+        if ids.binary_search(&id).is_err() {
+            return Err(Error::invariant("Menu module target was not retained"));
+        }
+        let module = match optional_text(row, "module")? {
+            Some(text) if !text.is_empty() => Some(text.to_owned()),
+            Some(_) | None => None,
+        };
+        modules.push((id, module));
+    }
+    modules.sort_unstable_by_key(|(id, _)| *id);
+    if modules.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err(Error::invariant("Duplicate menu module target"));
+    }
+    Ok(modules)
+}
+
 async fn load_menus(
     env: &Env,
     tx: &mut Transaction,
@@ -990,6 +1102,7 @@ async fn load_menus(
     });
     let mut ids = admission.vector::<i64>(visible.len())?;
     ids.extend(visible.iter().map(|entry| entry.id));
+    let mut modules = menu_modules(env, tx, &ids, stat_size(menu_stats[0])?, admission).await?;
     let mut edges = admission.vector::<(i64, i64, i64)>(visible.len())?;
     let mut roots = admission.vector::<(i64, i64)>(visible.len())?;
     for entry in &visible {
@@ -1017,22 +1130,29 @@ async fn load_menus(
         for (_, _, child) in &edges[start..end] {
             children.push(wire_id(*child)?);
         }
-        wire_nodes.push(wire::MenuNode::new(
-            wire_id(entry.id)?,
-            entry
-                .parent
-                .filter(|parent| ids.binary_search(parent).is_ok())
-                .map(wire_id)
-                .transpose()?,
-            children,
-            entry.label,
-            entry.icon,
-            entry
-                .action
-                .filter(|id| allowed_actions.binary_search(id).is_ok())
-                .map(wire_id)
-                .transpose()?,
-        ));
+        let module = match modules.binary_search_by_key(&entry.id, |(id, _)| *id) {
+            Ok(index) => modules[index].1.take(),
+            Err(_) => None,
+        };
+        wire_nodes.push(
+            wire::MenuNode::new(
+                wire_id(entry.id)?,
+                entry
+                    .parent
+                    .filter(|parent| ids.binary_search(parent).is_ok())
+                    .map(wire_id)
+                    .transpose()?,
+                children,
+                entry.label,
+                entry.icon,
+                entry
+                    .action
+                    .filter(|id| allowed_actions.binary_search(id).is_ok())
+                    .map(wire_id)
+                    .transpose()?,
+            )
+            .with_module(module),
+        );
     }
     let version = admission.format(format_args!("{}", env.registry().generation()))?;
     Ok(wire::MenuTree::new(version, wire_roots, wire_nodes))
@@ -1360,8 +1480,9 @@ type FieldWireMetadata<'a> = (
 
 pub(crate) fn field_kind<'a>(model: &str, field: &'a FieldSpec) -> Result<FieldWireMetadata<'a>> {
     let (kind, selection, relation, relation_field) = match &field.ty {
-        FieldType::Char { .. } => (wire::FieldKind::Char, None, None, None),
-        FieldType::Text => (wire::FieldKind::Text, None, None, None),
+        FieldType::Char { .. } | FieldType::Uuid => (wire::FieldKind::Char, None, None, None),
+        FieldType::Text | FieldType::Json => (wire::FieldKind::Text, None, None, None),
+        FieldType::Html => (wire::FieldKind::Html, None, None, None),
         FieldType::Boolean => (wire::FieldKind::Boolean, None, None, None),
         // The record identity renders as a plain integer; it stays readonly and never enters writes.
         FieldType::Id | FieldType::Integer => (wire::FieldKind::Integer, None, None, None),
@@ -2944,8 +3065,8 @@ async fn normalize_action_result(
 
 #[methods(Base, addon = "web")]
 impl WebBase {
-    /// Validate the value an object method returned into a typed, bounded action result
-    /// . Never re-executes the object method; current-list domain admission uses
+    /// Validate the value an object method returned into a typed, bounded action result.
+    /// Never re-executes the object method; current-list domain admission uses
     /// ordinary caller-bound search planning and its read/search-domain hooks.
     #[method]
     #[rpc(effect = read, model)]
@@ -3049,6 +3170,23 @@ mod tests {
             erp_sdk::serde_json::to_value(&preview).unwrap(),
             erp_sdk::serde_json::to_value(&owned).unwrap()
         );
+    }
+
+    #[test]
+    fn uuid_and_json_fields_map_to_human_wire_kinds() {
+        let registry = erp_sdk::RegistryBuilder::new([&erp_addon_base::ADDON, &crate::ADDON])
+            .build()
+            .unwrap();
+        // `ir.job` no longer has a uuid or json column (its admin view shows the uuid as text), so
+        // the two types are tried on copies of one of its fields.
+        let job = registry.model("ir.job").unwrap();
+        let mut field = job.field("job_uuid").unwrap().clone();
+        field.ty = FieldType::Uuid;
+        let (uuid_kind, _, _, _) = field_kind("ir.job", &field).unwrap();
+        assert_eq!(uuid_kind, wire::FieldKind::Char);
+        field.ty = FieldType::Json;
+        let (json_kind, _, _, _) = field_kind("ir.job", &field).unwrap();
+        assert_eq!(json_kind, wire::FieldKind::Text);
     }
 
     #[test]

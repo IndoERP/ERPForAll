@@ -191,11 +191,24 @@ pub async fn harness() -> RpcHarness {
 
 async fn seed_users(h: &Harness) {
     let mut tx = h.begin().await.unwrap();
-    tx.batch(
+    // Some binaries link full base (required stored share); others use the minimal kernel
+    // user declaration. Seed each declared schema explicitly, without an SQL default.
+    let has_share = h
+        .registry()
+        .model("res.users")
+        .expect("users fixture")
+        .field("share")
+        .is_some();
+    let insert = if has_share {
+        "INSERT INTO res_users (id, name, login, active, share) VALUES (2, 'alice', 'alice', true, false), \
+         (3, 'bob', 'bob', true, false), (4, 'admin', 'admin', true, false)"
+    } else {
         "INSERT INTO res_users (id, name, login, active) VALUES (2, 'alice', 'alice', true), \
-         (3, 'bob', 'bob', true), (4, 'admin', 'admin', true); \
-         SELECT setval(pg_get_serial_sequence('res_users', 'id'), 4)",
-    )
+         (3, 'bob', 'bob', true), (4, 'admin', 'admin', true)"
+    };
+    tx.batch(&format!(
+        "{insert}; SELECT setval(pg_get_serial_sequence('res_users', 'id'), 4)"
+    ))
     .await
     .unwrap();
     tx.commit().await.unwrap();

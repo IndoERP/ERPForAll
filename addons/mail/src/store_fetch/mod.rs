@@ -1,5 +1,5 @@
 //! `store_fetch(topics)`: one closed, batched, read-only fetch of store topics (
-//! , spec, design).
+//! design).
 //!
 //! The method [`MailStore::store_fetch`] runs a list of registered [`StoreTopic`]s in one
 //! read-only REPEATABLE READ transaction on the primary and answers one store payload with one

@@ -9,7 +9,7 @@ export interface ErrorDiagnostics {
   readonly timestamp?: number;
   readonly debug?: string;
   readonly reason?: string;
-  /** The id the server logs this call under: its `X-Request-Id`. */
+  /** The id the server logs this call: its `X-Request-Id`. */
   readonly requestId?: string;
 }
 const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -22,6 +22,12 @@ export class ClientError extends Error {
     super(message);
     this.name = "ClientError";
   }
+}
+/** The name in a `Content-Disposition` header: the exact `filename*` (RFC 8187) when present, else `filename`, else a neutral name. */
+export function fileNameOf(disposition: string | null): string {
+  const exact = /filename\*=UTF-8''([^;]+)/i.exec(disposition ?? "");
+  if (exact) { try { return decodeURIComponent(exact[1]!.trim()); } catch { /* fall back to the ASCII name */ } }
+  return /filename="([^"]*)"/i.exec(disposition ?? "")?.[1] ?? "download.xlsx";
 }
 export type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 export interface CallOptions {
@@ -47,7 +53,13 @@ export class RpcClient {
     return this.post(`/erp/json/2/${model}/${method}`, args, options);
   }
   async post(path: string, args: Record<string, unknown>, options: CallOptions = {}): Promise<unknown> {
-    if (!/^\/erp\/json\/2\/[a-z0-9_.]+\/[a-z0-9_]+$/.test(path) && path !== "/erp/module/install" && path !== "/erp/module/force-demo") {
+    if (
+      !/^\/erp\/json\/2\/[a-z0-9_.]+\/[a-z0-9_]+$/.test(path) &&
+      path !== "/erp/module/install" &&
+      path !== "/erp/module/upgrade" &&
+      path !== "/erp/module/uninstall" &&
+      path !== "/erp/module/force-demo"
+    ) {
       throw new ClientError("validation", "Unsupported request path.");
     }
     const finish = options.background ? undefined : this.activity?.();
@@ -65,6 +77,44 @@ export class RpcClient {
       finish?.();
       if (options.write) this.written?.(path.startsWith("/erp/module/") ? "ir.module.module" : path.split("/")[4]!);
     }
+  }
+  /** POST a JSON document to the pivot download route and take the spreadsheet it answers (the route answers a file, not JSON). */
+  async postFile(path: "/erp/pivot/export", document: unknown): Promise<{ blob: Blob; fileName: string }> {
+    const finish = this.activity?.();
+    const requestId = newRequestId();
+    const diagnostic = (status: number): ErrorDiagnostics => ({ endpoint: path, status, requestId });
+    try {
+      let response: Response;
+      try {
+        response = await this.fetcher(path, {
+          method: "POST", credentials: "same-origin", redirect: "error", cache: "no-store",
+          headers: { "Content-Type": "application/json", "Accept": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "X-Request-Id": requestId },
+          body: JSON.stringify(document)
+        });
+      } catch {
+        throw new ClientError("network", "Unable to connect. Check your connection and try again.", 0, diagnostic(0));
+      }
+      if (response.status === 401) { this.expired(); throw new ClientError("session", "Your session has expired. Sign in again.", 401, diagnostic(401)); }
+      if (!response.ok) {
+        // A refusal below 500 is the server's JSON error (`message`) or a plain-text sentence, shown as sent and bounded; anything else
+        // (an HTML error page, a 5xx) gets the fixed sentence, never the raw body.
+        const type = response.headers.get("Content-Type") ?? "";
+        let message = "";
+        if (response.status < 500 && (type.startsWith("text/plain") || type.includes("json"))) {
+          const raw = (await response.text().catch(() => "")).slice(0, 2000);
+          message = raw;
+          if (type.includes("json")) {
+            message = "";
+            try { const parsed: unknown = JSON.parse(raw); if (parsed !== null && typeof parsed === "object" && "message" in parsed && typeof parsed.message === "string") message = parsed.message; } catch { /* no message */ }
+          }
+        }
+        throw new ClientError(response.status === 403 ? "permission" : response.status < 500 ? "validation" : "server", message
+          || (response.status >= 500 ? "The server is temporarily unavailable. Please try again shortly." : "The download was refused. Please reload and try again."), response.status, diagnostic(response.status));
+      }
+      const blob = await response.blob();
+      if (blob.type !== "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") throw new ClientError("server", "The server returned an invalid response.", response.status, diagnostic(response.status));
+      return { blob, fileName: fileNameOf(response.headers.get("Content-Disposition")) };
+    } finally { finish?.(); }
   }
   private async send(path: string, args: Record<string, unknown>, options: CallOptions): Promise<unknown> {
     // The server answers with the id it logged; it keeps the one sent unless that one is malformed.
@@ -100,8 +150,8 @@ export class RpcClient {
     catch (error) {
       if (error instanceof AstDecodeError && error.detail === "number cannot round-trip through the record decimal contract") {
         throw new ClientError(options.write && response.ok ? "ambiguous" : "unsupported", options.write && response.ok
-          ? "The change may have been saved, but its numeric response cannot round-trip safely. Check the record before another write. Lossless monetary transport requires a later release."
-          : "This record contains a number that cannot round-trip safely. Lossless monetary transport requires a later release.", response.status, diagnostic(response.status));
+          ? "The change may have been saved, but its numeric response cannot round-trip safely. Check the record before another write. Lossless monetary transport is not available."
+          : "This record contains a number that cannot round-trip safely. Lossless monetary transport is not available.", response.status, diagnostic(response.status));
       }
       const details = { ...diagnostic(response.status), reason: "Response could not be decoded as supported JSON." };
       if (ambiguousWrite) throw new ClientError("ambiguous", ambiguousMessage, response.status, details);

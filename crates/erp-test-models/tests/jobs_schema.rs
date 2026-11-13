@@ -201,3 +201,104 @@ async fn a_dedup_key_is_unique_among_live_rows_of_a_kind_but_a_dead_row_frees_it
     .unwrap();
     tx.rollback().await.unwrap();
 }
+
+const OLD_RUN_TABLE: &str = "DROP TABLE erp_job_run CASCADE; \
+    CREATE TABLE erp_job_run (job_uuid uuid NOT NULL, kind text NOT NULL, kind_version int2 NOT NULL, \
+    outcome text NOT NULL, attempts int4 NOT NULL, enqueued_at timestamptz NOT NULL, started_at timestamptz, \
+    finished_at timestamptz NOT NULL DEFAULT clock_timestamp(), items_done int8 NOT NULL, \
+    items_failed int8 NOT NULL, run_as_kind text NOT NULL, run_as_user int8 NOT NULL, \
+    enqueued_by_user int8 NOT NULL, correlation_id uuid, last_error_code text, \
+    PRIMARY KEY (job_uuid, finished_at)); \
+    INSERT INTO erp_job_run (job_uuid, kind, kind_version, outcome, attempts, enqueued_at, items_done, \
+    items_failed, run_as_kind, run_as_user, enqueued_by_user) \
+    SELECT gen_random_uuid(), 'test.kind', 1, 'done', 1, now(), 1, 0, 'user', 7, 7 FROM generate_series(1, 2)";
+
+/// What the run table's keys and the two admin views look like, for a before/after comparison.
+async fn run_shape(tx: &mut erp_orm::Transaction) -> String {
+    support::one(
+        tx,
+        "SELECT concat_ws(' | ', \
+           (SELECT string_agg(pg_get_constraintdef(oid), ',' ORDER BY conname) FROM pg_constraint \
+             WHERE conrelid = 'erp_job_run'::regclass AND contype IN ('p', 'u')), \
+           (SELECT string_agg(indexdef, ',' ORDER BY indexname) FROM pg_indexes WHERE tablename = 'erp_job_run'), \
+           (SELECT count(*) FROM erp_job_run), (SELECT count(DISTINCT id) FROM erp_job_run), \
+           'ir_job_run'::regclass::oid, 'ir_job'::regclass::oid)",
+    )
+    .await
+    .unwrap()
+}
+
+/// same key as a fresh database, rows kept, and a second run changes nothing)
+#[tokio::test]
+async fn an_older_run_table_gets_the_same_key_as_a_fresh_one() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    let fresh_key = support::one(
+        &mut tx,
+        "SELECT pg_get_constraintdef(oid) FROM pg_constraint \
+          WHERE conrelid = 'erp_job_run'::regclass AND contype = 'p'",
+    )
+    .await;
+    assert_eq!(fresh_key.as_deref(), Some("PRIMARY KEY (id)"));
+    let fresh_indexes = support::one(
+        &mut tx,
+        "SELECT string_agg(indexname, ',' ORDER BY indexname) FROM pg_indexes WHERE tablename = 'erp_job_run'",
+    )
+    .await;
+
+    tx.batch(OLD_RUN_TABLE).await.unwrap();
+    erp_orm::core_ddl_run(&mut tx, CorePhase::BeforeModels)
+        .await
+        .unwrap();
+    let key = support::one(
+        &mut tx,
+        "SELECT pg_get_constraintdef(oid) FROM pg_constraint \
+          WHERE conrelid = 'erp_job_run'::regclass AND contype = 'p'",
+    )
+    .await;
+    assert_eq!(key, fresh_key);
+    let indexes = support::one(
+        &mut tx,
+        "SELECT string_agg(indexname, ',' ORDER BY indexname) FROM pg_indexes WHERE tablename = 'erp_job_run'",
+    )
+    .await;
+    assert_eq!(indexes, fresh_indexes);
+    let rows = support::one(
+        &mut tx,
+        "SELECT count(*) || '/' || count(DISTINCT id) FROM erp_job_run",
+    )
+    .await;
+    assert_eq!(rows.as_deref(), Some("2/2"));
+
+    let once = run_shape(&mut tx).await;
+    erp_orm::core_ddl_run(&mut tx, CorePhase::BeforeModels)
+        .await
+        .unwrap();
+    assert_eq!(run_shape(&mut tx).await, once);
+    tx.rollback().await.unwrap();
+}
+
+/// `security_invoker`, and are left alone by a second run)
+#[tokio::test]
+async fn a_stale_admin_view_is_recreated_and_a_current_one_is_left_alone() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    // a view of another shape under the old name: CREATE OR REPLACE VIEW would refuse this
+    tx.batch("DROP VIEW ir_job; CREATE VIEW ir_job AS SELECT 'x'::text AS id")
+        .await
+        .unwrap();
+    erp_orm::core_ddl_run(&mut tx, CorePhase::BeforeModels)
+        .await
+        .unwrap();
+    let shape = "SELECT concat_ws(' ', (SELECT count(*) FROM pg_attribute WHERE attrelid = 'ir_job'::regclass \
+                       AND attname = 'kind' AND NOT attisdropped), \
+                       (SELECT reloptions::text FROM pg_class WHERE oid = 'ir_job'::regclass), \
+                       'ir_job'::regclass::oid)";
+    let once = support::one(&mut tx, shape).await.unwrap();
+    assert!(once.starts_with("1 {security_invoker=true} "), "{once}");
+    erp_orm::core_ddl_run(&mut tx, CorePhase::BeforeModels)
+        .await
+        .unwrap();
+    assert_eq!(support::one(&mut tx, shape).await.unwrap(), once);
+    tx.rollback().await.unwrap();
+}

@@ -1,5 +1,5 @@
-//! Enforcement of the generated company restrictions (A1-D2/A1-D3,; design
-//! , §6.4, §6.5, §6.7, §11.3) over the fixture "company
+//! Enforcement of the generated company restrictions (A1-D2/A1-D3; design,
+//! §6.4, §6.5, §6.7, §11.3) over the fixture "company
 //! access": drift of the generated rows against the declarations, the empty validated
 //! active-company set, the origin of a generated rule in explanations, and the new state of a
 //! record a write moves. Generated rows are inserted into the policy rows with `generated = true`.
@@ -761,4 +761,230 @@ async fn a_related_company_chain_moves_with_its_anchor() {
         .await
         .unwrap();
     tx.rollback().await.unwrap();
+}
+
+fn cid(c: i64) -> CompanyId {
+    CompanyId::new(c).unwrap()
+}
+
+/// Seed one `m1` record in each of B, S and F; their ids in that order.
+async fn seed_m1(h: &Harness) -> (i64, i64, i64) {
+    let mut tx = h.begin().await.unwrap();
+    seed_companies(&mut tx).await;
+    let mut ids = Vec::new();
+    for company in [B, S, F] {
+        ids.push(
+            insert(
+                &mut tx,
+                "test_company_access_m1",
+                "company_id",
+                &company.to_string(),
+            )
+            .await,
+        );
+    }
+    tx.commit().await.unwrap();
+    (ids[0], ids[1], ids[2])
+}
+
+/// restriction admits under an explicit active set [B] and [B, F], for a principal whose own
+/// companies differ from the set; input order kept, duplicates and missing ids dropped)
+#[tokio::test]
+async fn visible_under_company_restriction_follows_the_given_companies() {
+    let (h, policy) = harness().await;
+    let (in_b, in_s, in_f) = seed_m1(&h).await;
+    let model = format!("{P}m1");
+    // the principal names [B, F]; the set passed in decides, never the principal's own list
+    let p = user(&*policy, &[B, F]);
+    let mut tx = h.begin().await.unwrap();
+    let all = [in_f, in_s, in_b, in_f, i64::from(i32::MAX)];
+    let only_b = tx
+        .visible_under_company_restriction(&model, &all, &*policy, &p, &[cid(B)])
+        .await
+        .unwrap();
+    assert_eq!(only_b, vec![in_b], "a record of F is hidden under [B]");
+    let both = tx
+        .visible_under_company_restriction(&model, &all, &*policy, &p, &[cid(B), cid(F)])
+        .await
+        .unwrap();
+    assert_eq!(both, vec![in_f, in_b], "input order, each id once");
+    tx.rollback().await.unwrap();
+}
+
+/// The visible set equals the write path's verdict on the same rows: a write that keeps each
+/// record in its own company passes exactly for the records the call answers.
+#[tokio::test]
+async fn visible_under_company_restriction_matches_the_write_verdict() {
+    let (h, policy) = harness().await;
+    let (in_b, in_s, in_f) = seed_m1(&h).await;
+    let model = format!("{P}m1");
+    for active in [vec![B], vec![B, F], vec![S]] {
+        let set: Vec<CompanyId> = active.iter().copied().map(cid).collect();
+        let mut tx = h.begin().await.unwrap();
+        let p = user(&*policy, &[R, B, S, F]);
+        let visible = tx
+            .visible_under_company_restriction(&model, &[in_b, in_s, in_f], &*policy, &p, &set)
+            .await
+            .unwrap();
+        tx.rollback().await.unwrap();
+        let mut written = Vec::new();
+        for (id, company) in [(in_b, B), (in_s, S), (in_f, F)] {
+            let mut tx = h
+                .orm()
+                .begin_opts(BeginOptions::for_principal(user(&*policy, &active)))
+                .await
+                .unwrap();
+            let outcome = tx
+                .env()
+                .records(&model)
+                .unwrap()
+                .browse([id])
+                .unwrap()
+                .write(&mut tx, id_vals("company_id", company))
+                .await;
+            if outcome.is_ok() {
+                written.push(id);
+            }
+            tx.rollback().await.unwrap();
+        }
+        assert_eq!(visible, written, "active {active:?}");
+    }
+}
+
+#[tokio::test]
+async fn visible_under_company_restriction_with_no_company_shows_nothing() {
+    let (h, policy) = harness().await;
+    let (in_b, in_s, in_f) = seed_m1(&h).await;
+    let p = user(&*policy, &[B]);
+    let mut tx = h.begin().await.unwrap();
+    let visible = tx
+        .visible_under_company_restriction(
+            &format!("{P}m1"),
+            &[in_b, in_s, in_f],
+            &*policy,
+            &p,
+            &[],
+        )
+        .await
+        .unwrap();
+    assert!(visible.is_empty(), "{visible:?}");
+}
+
+/// A company outside the principal's own is refused as an unauthorized company set.
+#[tokio::test]
+async fn visible_under_company_restriction_refuses_a_foreign_company() {
+    let (h, policy) = harness().await;
+    let (in_b, _, _) = seed_m1(&h).await;
+    let p = principal(&*policy, &[B], &[R, B]);
+    let want: erp_fields::Error = p.with_companies(vec![cid(F)]).unwrap_err().into();
+    let mut tx = h.begin().await.unwrap();
+    let err = tx
+        .visible_under_company_restriction(&format!("{P}m1"), &[in_b], &*policy, &p, &[cid(F)])
+        .await
+        .unwrap_err();
+    assert_eq!((err.kind(), err.message()), (want.kind(), want.message()));
+    assert_eq!(err.kind(), ErrorKind::Access);
+}
+
+/// Programming errors: an elevated or `System` principal, an unknown model, a model without a
+/// generated restriction, a non-positive id, and a policy that answers no restriction for a
+/// model that declares one.
+#[tokio::test]
+async fn visible_under_company_restriction_refuses_what_it_cannot_decide() {
+    let (h, policy) = harness().await;
+    let (in_b, _, _) = seed_m1(&h).await;
+    let m1 = format!("{P}m1");
+    let p = user(&*policy, &[B]);
+    let b = [cid(B)];
+    let mut tx = h.begin().await.unwrap();
+    let system = tx.env().principal().clone();
+    let err = tx
+        .visible_under_company_restriction(&m1, &[in_b], &*policy, &system, &b)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (err.kind(), err.message()),
+        (
+            ErrorKind::Programming,
+            "visible_under_company_restriction decides for a human principal: the system \
+             principal of user 1 is elevated or the system"
+        )
+    );
+    let err = tx
+        .visible_under_company_restriction("test_company_access.nope", &[in_b], &*policy, &p, &b)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (err.kind(), err.message()),
+        (
+            ErrorKind::Programming,
+            "visible_under_company_restriction: unknown model 'test_company_access.nope'"
+        )
+    );
+    let err = tx
+        .visible_under_company_restriction(&format!("{P}u"), &[in_b], &*policy, &p, &b)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (err.kind(), err.message()),
+        (
+            ErrorKind::Programming,
+            "visible_under_company_restriction: model 'test_company_access.u' declares no \
+             generated company restriction"
+        )
+    );
+    let err = tx
+        .visible_under_company_restriction(&m1, &[in_b, 0], &*policy, &p, &b)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (err.kind(), err.message()),
+        (
+            ErrorKind::Programming,
+            "visible_under_company_restriction: invalid record id 0"
+        )
+    );
+    tx.rollback().await.unwrap();
+
+    // an elevated environment of the same user
+    let mut tx = h
+        .orm()
+        .begin_opts(BeginOptions::for_principal(user(&*policy, &[B])))
+        .await
+        .unwrap();
+    let elevated = tx.env().sudo(true).principal().clone();
+    let err = tx
+        .visible_under_company_restriction(&m1, &[in_b], &*policy, &elevated, &b)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (err.kind(), err.message()),
+        (
+            ErrorKind::Programming,
+            "visible_under_company_restriction decides for a human principal: the user \
+             principal of user 2 is elevated or the system"
+        )
+    );
+    tx.rollback().await.unwrap();
+
+    // a policy without generated restrictions (the static test policy) answers `None`
+    let st = Harness::builder([&test_company_access::ADDON])
+        .policy(erp_orm::StaticPolicy::AllowAll)
+        .build()
+        .await
+        .expect("harness");
+    let mut tx = st.begin().await.unwrap();
+    let static_policy = Arc::clone(tx.policy());
+    let err = tx
+        .visible_under_company_restriction(&m1, &[1], &*static_policy, &p, &b)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (err.kind(), err.message()),
+        (
+            ErrorKind::Programming,
+            "the access policy answers no generated company restriction for \
+             'test_company_access.m1', which declares one"
+        )
+    );
 }

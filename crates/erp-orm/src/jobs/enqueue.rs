@@ -298,7 +298,8 @@ impl Transaction {
     ///
     /// # Errors
     ///
-    /// `Programming` for an unregistered kind, or `run_as` on a kind that runs as the system;
+    /// `Programming` for an environment outside its elevation block or widened,
+    /// an unregistered kind, or `run_as` on a kind that runs as the system;
     /// `Validation` for an oversized payload or a batch over the limit; `Access` for `run_as` by a
     /// principal that may not (naming) and for a public or link principal; the
     /// database's errors.
@@ -307,6 +308,23 @@ impl Transaction {
         env: &Env,
         requests: Vec<EnqueueRequest>,
     ) -> Result<Vec<EnqueueOutcome>> {
+        self.enqueue_many_by(env, requests, None).await
+    }
+
+    /// [`Transaction::enqueue_many`] whose rows record `enqueued_by` (a caller the core checked
+    /// itself, [`Transaction::job_upsert_recurring_own`]) instead of `env`'s principal as the
+    /// enqueuer; `env` is the one admitted and decides everything else.
+    pub(crate) async fn enqueue_many_by(
+        &mut self,
+        env: &Env,
+        requests: Vec<EnqueueRequest>,
+        enqueued_by: Option<&StoredPrincipal>,
+    ) -> Result<Vec<EnqueueOutcome>> {
+        // an environment outside its elevation block, or widened, or with a refused with_user
+        // switch, enqueues nothing (A4)
+        self.prepare_switch(env).await?;
+        self.check_env_block(env)?;
+        env.companies()?;
         if requests.is_empty() {
             return Ok(Vec::new());
         }
@@ -330,8 +348,9 @@ impl Transaction {
         };
         let companies: Vec<i64> = caller.companies.iter().map(|c| c.get()).collect();
         let current: Option<i64> = caller.current_company.map(|c| c.get());
-        let enqueued_by_kind = caller.kind_text();
-        let enqueued_by_user = caller.subject.get();
+        let enqueuer = enqueued_by.unwrap_or(&caller);
+        let enqueued_by_kind = enqueuer.kind_text();
+        let enqueued_by_user = enqueuer.subject.get();
 
         let uuids: Vec<Uuid> = rows.iter().map(|r| r.uuid).collect();
         let kinds: Vec<&str> = rows.iter().map(|r| r.decl.name).collect();
@@ -420,7 +439,7 @@ impl Transaction {
     }
 
     /// A job due within `jobs.wake_slack` was inserted: poke this process's runners after the
-    /// commit and, within the NOTIFY budget, tell the other nodes (2).
+    /// commit, within the NOTIFY budget, tell the other nodes (2).
     pub(crate) async fn wake_for_due_jobs(&mut self, settings: &super::JobSettings) -> Result<()> {
         let orm_id = self.orm_id();
         self.after_commit(move || super::wake::wake_local(orm_id));

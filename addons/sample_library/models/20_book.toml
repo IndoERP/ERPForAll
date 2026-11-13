@@ -30,6 +30,23 @@ type = "integer"
 string = "Publication Year"
 
 [[model.field]]
+name = "pages"
+type = "integer"
+string = "Pages"
+
+# The date the book was published: the pivot view groups by it (year, quarter, month) to show a timeline.
+[[model.field]]
+name = "published_on"
+type = "date"
+string = "Published On"
+
+# The price in the library's currency: a second measure for the pivot view.
+[[model.field]]
+name = "price"
+type = "float"
+string = "Price"
+
+[[model.field]]
 name = "available"
 type = "boolean"
 string = "Available"
@@ -93,3 +110,8 @@ name = "favorite"
 type = "boolean"
 string = "Favorite"
 default = false
+
+[[model.field]]
+name = "description"
+type = "html"
+string = "Description"

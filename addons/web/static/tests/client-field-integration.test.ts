@@ -126,3 +126,62 @@ test("a relational field's constant context is sent with its read; a record-depe
   const dependent = { schema: 1, nodes: [{ kind: "literal" as const, value: { kind: "str" as const, value: "default_name" } }, { kind: "name" as const, name: "name" }, { kind: "dict" as const, items: [[0, 1]] as [number, number][] }] };
   expect(specification([{ ...tags, options: { context: dependent } }])).toEqual({ product_template_attribute_value_ids: { fields: { display_name: {} } } });
 });
+
+/// (partial: record form canEdit defaults to true when omitted, even if context has edit 0)
+test("record form canEdit defaults to true when omitted even if context has edit: 0", async () => {
+  const fields = [base("name", "char")];
+  const rpc = new RpcClient(async () => new Response('[{"id":7,"name":"Test"}]', { headers: { "Content-Type": "application/json" } }), () => {});
+  const state = new RecordState(rpc, "fixture.record", fields, {});
+  await state.load(7);
+  const form = document.createElement("form");
+  document.body.append(form);
+  const surface = new RecordForm({
+    form, state, view: view(fields), rpc, context: { edit: 0 },
+    run: job => { void job(); }, report: err => { throw err; },
+    openRecord: async () => {}, change: () => {}, button: () => {}
+  });
+  surface.render();
+  const input = form.querySelector<HTMLInputElement>('input[name="name"]');
+  expect(input).not.toBeNull();
+  expect(form.querySelector(".field-readonly")).toBeNull();
+  surface.dispose();
+});
+
+/// (partial: a form view that declares edit="0" is read-only for an existing record without an owner canEdit)
+test("record form falls back to the view's own edit=0", async () => {
+  const fields = [base("name", "char")];
+  const rpc = new RpcClient(async () => new Response('[{"id":7,"name":"Test"}]', { headers: { "Content-Type": "application/json" } }), () => {});
+  const state = new RecordState(rpc, "fixture.record", fields, {});
+  await state.load(7);
+  const form = document.createElement("form");
+  document.body.append(form);
+  const surface = new RecordForm({
+    form, state, view: { ...view(fields), canEdit: false }, rpc, context: { edit: 0 },
+    run: job => { void job(); }, report: err => { throw err; },
+    openRecord: async () => {}, change: () => {}, button: () => {}
+  });
+  surface.render();
+  expect(form.querySelector<HTMLInputElement>('input[name="name"]')).toBeNull();
+  expect(form.querySelector(".field-readonly")).not.toBeNull();
+  surface.dispose();
+});
+
+test("record form canEdit when explicitly false renders existing record as read-only", async () => {
+  const fields = [base("name", "char")];
+  const rpc = new RpcClient(async () => new Response('[{"id":7,"name":"Test"}]', { headers: { "Content-Type": "application/json" } }), () => {});
+  const state = new RecordState(rpc, "fixture.record", fields, {});
+  await state.load(7);
+  const form = document.createElement("form");
+  document.body.append(form);
+  const surface = new RecordForm({
+    form, state, view: view(fields), rpc, context: {},
+    canEdit: false,
+    run: job => { void job(); }, report: err => { throw err; },
+    openRecord: async () => {}, change: () => {}, button: () => {}
+  });
+  surface.render();
+  expect(form.querySelector<HTMLInputElement>('input[name="name"]')).toBeNull();
+  expect(form.querySelector(".field-readonly")).not.toBeNull();
+  surface.dispose();
+});
+

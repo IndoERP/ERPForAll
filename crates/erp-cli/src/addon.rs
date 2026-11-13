@@ -4,7 +4,7 @@
 //! places it at `wasm/<name>.wasm` of the addon directory and instantiates it with the WASM host
 //! under its limits: `describe()` must list the addon and every WASM addon it depends on.
 //! `package` writes the `.erpaddon` with the package writer and reads it back with the reader.
-//! Design:; author entry:.
+//! Design; author entry.
 
 use crate::args::{AddonBuildArgs, AddonPackageArgs, BuildTarget};
 use crate::error::{CliError, Result};
@@ -392,8 +392,7 @@ fn run_cargo(
     if let Some(dir) = target_dir {
         cmd.arg("--target-dir").arg(dir);
     }
-    // Without fat LTO the linker drops the registrations of dependency addons from describe()
-    // .
+    // Without fat LTO the linker drops the registrations of dependency addons from describe().
     cmd.env("CARGO_PROFILE_RELEASE_LTO", "fat")
         .current_dir(&addon.dir)
         .stdin(Stdio::null())

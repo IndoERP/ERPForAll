@@ -1,5 +1,4 @@
-//! Fixture addon `test_wasm_ovr_c`: the native top layer of the chain C -> WebAssembly (W) -> A
-//! .
+//! Fixture addon `test_wasm_ovr_c`: the native top layer of the chain C -> WebAssembly (W) -> A.
 
 use erp_addon_test_wasm_ovr_a::{Ovr, note};
 use erp_sdk::prelude::*;

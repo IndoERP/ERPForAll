@@ -1,7 +1,7 @@
 //! `res.company`: company model.
 
 use erp_sdk::prelude::*;
-use erp_sdk::{Operation, ValueMap};
+use erp_sdk::{Command, Operation, ValueMap};
 
 /// `res.company`.
 #[model(
@@ -47,6 +47,7 @@ pub struct ResCompany {
     /// Street line 2 of the company contact.
     #[field(
         char,
+        string = "Street 2",
         related = "partner_id.street2",
         readonly = false,
         compute_sudo = true
@@ -55,6 +56,7 @@ pub struct ResCompany {
     /// Postal code of the company contact.
     #[field(
         char,
+        string = "ZIP",
         related = "partner_id.zip",
         readonly = false,
         compute_sudo = true
@@ -104,16 +106,59 @@ pub struct ResCompany {
 }
 
 // Without it a related field is company-bound
-// and refuses a company partner whose `company_id` lies outside the reader's active companies
-// .
+// and refuses a company partner whose `company_id` lies outside the reader's active companies.
 
 const PARTNER_MIRRORED: [&str; 8] = [
     "street", "street2", "zip", "city", "email", "phone", "website", "vat",
 ];
 
+/// Add `created` to `company_ids` of the environment's user and of the superuser.
+/// Elevated, through the ORM, with the ids of `created` only; see `ResCompany::create`.
+async fn link_to_creators(tx: &mut Transaction, created: &Records) -> Result<()> {
+    if created.is_empty() {
+        return Ok(());
+    }
+    let links: Vec<Command> = created
+        .rec_ids()
+        .iter()
+        .map(|id| Command::link(*id))
+        .collect();
+    let mut users = vec![created.env().uid()];
+    let superuser = erp_sdk::SUPERUSER_ID.get();
+    if !users.contains(&superuser) {
+        users.push(superuser);
+    }
+    created
+        .env()
+        .sudo(true)
+        .records("res.users")?
+        .browse(users)?
+        .write(tx, RawVals::new().set_commands("company_ids", links))
+        .await
+}
+
 #[methods(ResCompany, addon = "base")]
 impl ResCompany {
     /// The partner is created in the caller's environment with no default parent.
+    ///
+    /// The link is one `res.users` write with elevated rights: `company_ids` is
+    /// administrator-only for ordinary writes, and the caller has already passed the create
+    /// access check on `res.company`. Only the environment's own user id, the superuser and the
+    /// ids this create returned reach that write; no caller-supplied id does. It runs inside the
+    /// lifecycle guard and fence.
+    ///
+    /// The link can fail the create. The user checks of `res.users` run on that write, so an
+    /// active creator with no default company, or whose default company is not among its
+    /// allowed companies, is refused with that check's message and nothing is created. The
+    /// check locks the creator's user row for share (and the membership row of its default
+    /// company), so a concurrent update of that user becomes a retryable concurrency error. A
+    /// branch created through the `child_ids` command of a saved company goes through this
+    /// method too, so it is linked the same way.
+    ///
+    /// # Errors
+    ///
+    /// The create's own errors, and the errors of the `res.users` link write (the user checks
+    /// above, or a creating user that has no `res.users` row).
     #[method(override)]
     async fn create(
         this: &RecordSet<ResCompany>,
@@ -201,6 +246,7 @@ impl ResCompany {
         }
         let created: Records = sup.call(tx, this.as_records(), (vals_list,)).await?;
         guard.admit(&created.ids())?;
+        link_to_creators(tx, &created).await?;
         Ok(created)
     }
 

@@ -20,8 +20,8 @@ use std::time::{Duration, Instant};
 pub use users_support::*;
 
 use erp_orm::model_hooks::call_init;
-use erp_orm::{Orm, Signal, StaticPolicy};
-use erp_sdk::{Transaction, Value};
+use erp_orm::{BeginOptions, Isolation, Orm, SUPERUSER_ID, Signal, StaticPolicy};
+use erp_sdk::{Error, Transaction, Value};
 use erp_security::auth::password::limits;
 use erp_security::auth::{
     Auth, AuthConfig, ClientAddr, CredentialOptions, HashPool, HashPoolConfig, Login, LoginError,
@@ -400,4 +400,389 @@ pub mod warn_capture {
             _guard: guard,
         }
     }
+}
+
+/// The initial pool `deadlock_timeout` used by the login side, ms (round 6
+/// C5-1): the pool of [`deadlock_world`] starts each connection with it. Below the ORM's default
+/// `lock_timeout` (10 s), so the login's deadlock check runs before its lock limit can fire.
+pub const DEADLOCK_TIMEOUT_MS: f64 = 5000.0;
+
+/// The world of a forced deadlock (round 6 C5-1): an `Auth` and the other side's ORM on one pool
+/// whose every connection starts with `deadlock_timeout` = [`DEADLOCK_TIMEOUT_MS`], so the login's
+/// backend and the other side's run with the same raised timeout (the test role may set it, as a
+/// superuser; checked on erpforall-pg 2026-10-23, round 6).
+/// The helper locally overrides its detector afterward; login connections keep this setting.
+pub async fn deadlock_world() -> (Harness, Arc<Auth>, Orm) {
+    let w = world().await;
+    let pool = pool_with_options(&w.h, 4, "-c deadlock_timeout=5s");
+    let orm = orm_on(&w.h, pool).await;
+    let auth = Auth::new(
+        orm.clone(),
+        AuthConfig::DEFAULT,
+        own_pool(HashPoolConfig::DEFAULT),
+    )
+    .await
+    .unwrap();
+    (w.h, Arc::new(auth), orm)
+}
+
+/// The helper's detector runs after the login's 5 s detector. Equal detectors can choose
+/// the helper as the victim even though both sessions reached the arranged cycle; a failed
+/// helper alone does not measure a client scheduling stall. Its lock timeout leaves room for
+/// its detector, without changing the login's production retry or timeout behavior.
+pub const OTHER_DEADLOCK_TIMEOUT_MS: f64 = 30_000.0;
+
+/// A READ COMMITTED transaction on `orm`, as the system: the other side of a forced deadlock.
+pub async fn other_side(orm: &Orm) -> erp_sdk::Transaction {
+    let mut tx = orm
+        .begin_opts(BeginOptions::new(SUPERUSER_ID).isolation(Isolation::ReadCommitted))
+        .await
+        .unwrap();
+    let initial: f64 = tx
+        .query(
+            "SELECT setting::float8 FROM pg_settings WHERE name = 'deadlock_timeout'",
+            &[],
+        )
+        .await
+        .unwrap()[0]
+        .get(0);
+    assert_eq!(
+        initial, DEADLOCK_TIMEOUT_MS,
+        "the login pool's detector timeout"
+    );
+    tx.execute("SET LOCAL deadlock_timeout = '30s'", &[])
+        .await
+        .unwrap();
+    tx.execute("SET LOCAL lock_timeout = '45s'", &[])
+        .await
+        .unwrap();
+    let lock_timeout: f64 = tx
+        .query(
+            "SELECT setting::float8 FROM pg_settings WHERE name = 'lock_timeout'",
+            &[],
+        )
+        .await
+        .unwrap()[0]
+        .get(0);
+    assert_eq!(
+        lock_timeout, 45_000.0,
+        "helper lock timeout follows its detector"
+    );
+    tx
+}
+
+/// The result of the other side's blocking request (round 6 C5-2): its error means the other
+/// side, not the login, was refused by the deadlock check, so the panic says so instead of
+/// unwrapping a bare 40P01.
+pub fn the_other_side_won<T>(result: Result<T, Error>) -> T {
+    result.unwrap_or_else(|e| {
+        panic!(
+            "the other side was the deadlock victim (sqlstate {:?}): the arranged login-victim \
+             ordering was not reached: {e}",
+            e.sqlstate()
+        )
+    })
+}
+
+/// How long the backend that waits for a lock this transaction holds has waited, ms
+/// (`pg_locks` `waitstart`, server clock), and this transaction's own `deadlock_timeout`, ms;
+/// `None` while none waits or its wait start is not set yet. `pg_locks` and `pg_blocking_pids`
+/// are read live at each statement (`pg_stat_activity` is not: a transaction keeps its first
+/// snapshot of it).
+pub const LOCK_WAIT_SQL: &str = "\
+SELECT (extract(epoch FROM clock_timestamp() - min(l.waitstart)) * 1000)::float8,
+       (SELECT setting::float8 FROM pg_settings WHERE name = 'deadlock_timeout')
+  FROM pg_locks l
+ WHERE NOT l.granted AND l.waitstart IS NOT NULL
+   AND pg_backend_pid() = ANY (pg_blocking_pids(l.pid))";
+
+/// Round 4 C4-3, round 6 C5-1 and C5-3: the gate of a forced deadlock, run by the other side
+/// right before its blocking request. It waits until the login waits for a lock the other side
+/// holds (`pg_locks`, its wait start set), then checks that the login has waited less than half
+/// of the login backend's `deadlock_timeout`.
+///
+/// `pg_settings` here is the helper's session: assert its 30 s detector override. The
+/// login remains on the pool's 5 s setting, checked before the helper's local override.
+/// The wait admission below still uses half of the login's 5 s detector window.
+///
+/// Why half: the login's deadlock check runs once, its own `deadlock_timeout` (dL) after it
+/// started waiting, and on a cycle the backend that runs the check is the one refused. The login
+/// is the victim when the other side's request reaches its lock wait before that check. A request
+/// that arrives later makes the other side the victim whatever the other side's own timeout is
+/// (its check then finds the cycle first), so the admission window remains dL alone.
+/// The helper's later detector removes the equal-timer victim race. The residual timing
+/// assumption: the other side's next statement reaches its lock wait within dL - waited (at least
+/// dL/2 = 2.5 s, one round trip on the same connection). A wrong victim still fails loudly;
+/// that outcome alone does not measure the size or cause of a scheduling delay.
+pub async fn until_the_login_waits(other: &mut erp_sdk::Transaction) {
+    let started = std::time::Instant::now();
+    loop {
+        let rows = other.query(LOCK_WAIT_SQL, &[]).await.unwrap();
+        let waited: Option<f64> = rows[0].get(0);
+        let timeout: f64 = rows[0].get(1);
+        assert_eq!(
+            timeout, OTHER_DEADLOCK_TIMEOUT_MS,
+            "the helper detector must run after the login detector"
+        );
+        if let Some(waited) = waited {
+            assert!(
+                waited < DEADLOCK_TIMEOUT_MS / 2.0,
+                "the login waited {waited} ms before the other side's request: \
+                 beyond half of its 5000 ms deadlock_timeout"
+            );
+            return;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "the login never waited for a lock"
+        );
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+}
+
+// ---- race gates: every gate polls with a deadline that panics ----
+
+/// The advisory-lock key of the success pause ([`install_success_pause`]).
+pub const PAUSE_KEY: i64 = 0x4c52_0001;
+
+/// Wait until some backend of `h`'s database waits for a relation lock of `mode` (a
+/// `pg_locks.mode` name such as `ShareRowExclusiveLock`) on `relation`; `n` waiters at least.
+pub async fn until_relation_waiter(h: &Harness, relation: &str, mode: &str, n: i64) {
+    let client = h.db().client().await.unwrap();
+    let started = Instant::now();
+    loop {
+        let row = client
+            .query_one(
+                "SELECT count(*) FROM pg_locks WHERE NOT granted AND locktype = 'relation' \
+                    AND relation = $1::text::regclass AND mode = $2",
+                &[&relation, &mode],
+            )
+            .await
+            .unwrap();
+        if row.get::<_, i64>(0) >= n {
+            return;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "{n} backend(s) never waited for {mode} on {relation}"
+        );
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+}
+
+/// A transaction that holds the advisory lock `key` until it is committed or rolled back.
+pub async fn advisory_gate(h: &Harness, key: i64) -> Transaction {
+    let mut tx = h.begin().await.unwrap();
+    tx.query("SELECT pg_advisory_xact_lock($1)", &[&key])
+        .await
+        .unwrap();
+    tx
+}
+
+/// Wait until some backend waits for the advisory lock `key`.
+pub async fn until_advisory_waiter(h: &Harness, key: i64) {
+    let client = h.db().client().await.unwrap();
+    let started = Instant::now();
+    loop {
+        let row = client
+            .query_one(
+                "SELECT count(*) FROM pg_locks WHERE NOT granted AND locktype = 'advisory' \
+                    AND ((classid::bigint << 32) | objid::bigint) = $1",
+                &[&key],
+            )
+            .await
+            .unwrap();
+        if row.get::<_, i64>(0) > 0 {
+            return;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "no backend waited for the advisory lock {key}"
+        );
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+}
+
+/// Commit a trigger that makes every insert into `erp_session` wait for the advisory lock
+/// [`PAUSE_KEY`]: with an [`advisory_gate`] held, a login's success statement pauses inside its
+/// transaction (after the selection guard, before the session row).
+pub async fn install_success_pause(h: &Harness) {
+    let mut tx = h.begin().await.unwrap();
+    tx.batch(&format!(
+        "CREATE FUNCTION pause_session_insert() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN \
+         PERFORM pg_advisory_xact_lock({PAUSE_KEY}); RETURN NEW; END $$; \
+         CREATE TRIGGER pause_session_insert BEFORE INSERT ON erp_session \
+         FOR EACH ROW EXECUTE FUNCTION pause_session_insert()"
+    ))
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+}
+
+/// Wait until no other backend of `h`'s database is in a transaction or running a statement, and
+/// no lock request is pending: nothing a cancelled login left behind.
+pub async fn until_database_quiet(h: &Harness) {
+    let client = h.db().client().await.unwrap();
+    let started = Instant::now();
+    loop {
+        let busy: i64 = client
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() \
+                    AND pid <> pg_backend_pid() AND state IN ('active', 'idle in transaction', \
+                    'idle in transaction (aborted)')",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        let waiting: i64 = client
+            .query_one("SELECT count(*) FROM pg_locks WHERE NOT granted", &[])
+            .await
+            .unwrap()
+            .get(0);
+        if busy == 0 && waiting == 0 {
+            return;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "the database never went quiet: {busy} busy backend(s), {waiting} lock waiter(s)"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// Wait until `from` (a `FROM ... WHERE ...` tail as [`count`] takes) counts `expected` rows.
+pub async fn until_count(h: &Harness, from: &str, expected: i64) {
+    let started = Instant::now();
+    loop {
+        let found = count(h, from).await;
+        if found == expected {
+            return;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "{from} counted {found}, expected {expected}"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// What an installed `base` has and these databases lack, for the company-scoped password reset
+/// (Amendment 1): the generated company restriction row of `res.users` (the
+/// session's compiled policy reports a missing row as drift and refuses the model) and one active
+/// company, which every user the system creates afterwards gets as its default and only company.
+/// Call it before creating the users of the test. Returns the company.
+pub async fn company_scope(h: &Harness) -> i64 {
+    let mut tx = h.begin().await.unwrap();
+    erp_orm::reflection::reflect_models(&mut tx).await.unwrap();
+    let all = erp_security::company_access::generate(h.registry()).unwrap();
+    let users = all
+        .iter()
+        .find(|g| g.model_name() == "res.users")
+        .expect("res.users declares a generated company restriction");
+    let present: i64 = tx
+        .query(
+            "SELECT count(*) FROM ir_access a JOIN ir_model m ON m.id = a.model_id \
+              WHERE m.model = 'res.users' AND a.generated IS TRUE",
+            &[],
+        )
+        .await
+        .unwrap()[0]
+        .get(0);
+    if present == 0 {
+        tx.execute(
+            "INSERT INTO ir_access (name, model_id, active, operation, domain, generated) \
+             SELECT $1, id, true, 'crud', $2, true FROM ir_model WHERE model = 'res.users'",
+            &[&users.name(), &users.text()],
+        )
+        .await
+        .unwrap();
+    }
+    tx.commit().await.unwrap();
+    add_company(h, "Main company").await
+}
+
+/// A new active company `name` (with a currency of its own).
+pub async fn add_company(h: &Harness, name: &str) -> i64 {
+    let mut tx = h.begin().await.unwrap();
+    let currency: i64 = tx
+        .query(
+            "INSERT INTO res_currency (name, symbol, rounding, active) \
+             VALUES (left(md5($1), 3), 'T', 0.01, true) RETURNING id",
+            &[&name],
+        )
+        .await
+        .unwrap()[0]
+        .get(0);
+    let id = tx
+        .env()
+        .records("res.company")
+        .unwrap()
+        .create_values(
+            &mut tx,
+            &[map(&[("name", s(name)), ("currency_id", int(currency))])],
+        )
+        .await
+        .unwrap()
+        .ids()[0];
+    tx.commit().await.unwrap();
+    id
+}
+
+/// Put `user` in `companies` alone, the first as its default company (setup by SQL in one
+/// transaction that also updates the `res_users` row, as a form save that moves a user does).
+pub async fn set_companies(h: &Harness, user: i64, companies: &[i64]) {
+    let mut tx = h.begin().await.unwrap();
+    tx.execute(
+        "UPDATE res_users SET company_id = $2 WHERE id = $1",
+        &[&user, &companies[0]],
+    )
+    .await
+    .unwrap();
+    tx.execute(
+        "DELETE FROM res_company_users_rel WHERE user_id = $1",
+        &[&user],
+    )
+    .await
+    .unwrap();
+    tx.execute(
+        "INSERT INTO res_company_users_rel (cid, user_id) SELECT unnest($2::int8[]), $1",
+        &[&user, &companies],
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+}
+
+/// The id of the group bound to `base.<name>`.
+pub async fn base_group(h: &Harness, name: &str) -> i64 {
+    let mut tx = h.begin().await.unwrap();
+    let id: i64 = tx
+        .query(
+            "SELECT res_id FROM ir_model_data WHERE module = 'base' AND name = $1",
+            &[&name],
+        )
+        .await
+        .unwrap()[0]
+        .get(0);
+    tx.rollback().await.unwrap();
+    id
+}
+
+/// A user `login` with `password` and the direct groups `groups` (created by the system).
+pub async fn user_in_groups(h: &Harness, login: &str, password: &str, groups: &[i64]) -> i64 {
+    let mut tx = h.begin().await.unwrap();
+    let id = create(
+        &mut tx,
+        "res.users",
+        &[
+            ("name", s(login)),
+            ("login", s(login)),
+            ("password", s(password)),
+            ("group_ids", set_cmd(groups)),
+        ],
+    )
+    .await;
+    tx.commit().await.unwrap();
+    id
 }

@@ -1,4 +1,4 @@
-//! on more than one node (SCALE.TEST style,, 3, 5): two
+//! on more than one node (SCALE.TEST style, 3, 5): two
 //! ORM instances over one database and one shared store stand for two application nodes. Dedup by
 //! content hash has no race, garbage collection is a leased job any node may run and never removes
 //! content another node is linking, and a node-local store is refused for a second live node.
@@ -53,7 +53,11 @@ async fn upload_and_link(orm: &Orm, name: &str, bytes: &[u8]) -> i64 {
     let env = env_of(orm).await;
     let mut body = bytes;
     let up = Uploader::new(orm)
-        .stage(&env, &mut body, StageRequest::named(name))
+        .stage(
+            &env,
+            &mut body,
+            StageRequest::named(name).with_declared_length(bytes.len() as u64),
+        )
         .await
         .unwrap();
     let ids = orm
@@ -80,7 +84,7 @@ async fn gc_pass(orm: &Orm) {
     tx.commit().await.unwrap();
     drop(tx);
     let mut tx = orm.begin_opts(rc()).await.unwrap();
-    let ids = sweep_mark(&mut tx, 0, 100).await.unwrap();
+    let ids = sweep_mark(&mut tx, 0, 100).await.unwrap().ids;
     tx.commit().await.unwrap();
     drop(tx);
     if ids.is_empty() {
@@ -116,6 +120,7 @@ async fn waits_for_hold_lock(observer: &erp_testkit::tokio_postgres::Client) -> 
 #[tokio::test]
 async fn a_hold_on_one_node_waits_for_a_sweep_running_on_another() {
     let f = fixture(external_limits()).await;
+    admit_cleanup(f.h.orm()).await;
     let node_b = second_node(&f, Arc::clone(&f.store) as Arc<dyn AttachmentStore>);
     let node_a = f.h.orm().clone();
     let rc = || BeginOptions::new(PrincipalHint::system()).isolation(Isolation::ReadCommitted);
@@ -132,7 +137,7 @@ async fn a_hold_on_one_node_waits_for_a_sweep_running_on_another() {
     tx.commit().await.unwrap();
     drop(tx);
     let mut tx = node_a.begin_opts(rc()).await.unwrap();
-    let ids = sweep_mark(&mut tx, 0, 100).await.unwrap();
+    let ids = sweep_mark(&mut tx, 0, 100).await.unwrap().ids;
     tx.commit().await.unwrap();
     drop(tx);
     assert_eq!(ids.len(), 1);
@@ -180,7 +185,7 @@ async fn a_hold_on_one_node_waits_for_a_sweep_running_on_another() {
     drop(tx);
     let mut tx = node_a.begin_opts(rc()).await.unwrap();
     assert!(
-        sweep_mark(&mut tx, 0, 100).await.unwrap().is_empty(),
+        sweep_mark(&mut tx, 0, 100).await.unwrap().ids.is_empty(),
         "held"
     );
     tx.commit().await.unwrap();
@@ -190,6 +195,7 @@ async fn a_hold_on_one_node_waits_for_a_sweep_running_on_another() {
 #[tokio::test]
 async fn two_nodes_link_identical_content_into_one_blob() {
     let f = fixture(external_limits()).await;
+    admit_cleanup(f.h.orm()).await;
     let store: Arc<dyn AttachmentStore> = Arc::clone(&f.store) as _;
     let node_b = second_node(&f, store);
     let node_a = f.h.orm().clone();
@@ -240,6 +246,7 @@ async fn two_nodes_link_identical_content_into_one_blob() {
 #[tokio::test]
 async fn linkers_unlinkers_and_collectors_on_two_nodes_never_lose_referenced_content() {
     let f = fixture(external_limits()).await;
+    admit_cleanup(f.h.orm()).await;
     let store: Arc<dyn AttachmentStore> = Arc::clone(&f.store) as _;
     let node_b = second_node(&f, store);
     let node_a = f.h.orm().clone();
@@ -351,6 +358,7 @@ async fn linkers_unlinkers_and_collectors_on_two_nodes_never_lose_referenced_con
 #[tokio::test]
 async fn the_collection_job_runs_on_any_node_under_a_lease() {
     let f = fixture(external_limits()).await;
+    admit_cleanup(f.h.orm()).await;
     let store: Arc<dyn AttachmentStore> = Arc::clone(&f.store) as _;
     let node_b = second_node(&f, store);
     let keep = upload_and_link(f.h.orm(), "keep.txt", b"referenced stays").await;
@@ -390,20 +398,50 @@ async fn the_collection_job_runs_on_any_node_under_a_lease() {
             .build()
             .unwrap()
     };
-    for _ in 0..6 {
+    // Three kinds share the two runners since the owner heartbeat is scheduled too: which one a tick takes is
+    // not fixed, so the bound is generous; the loop ends as soon as the blob is collected. The heartbeat keeps
+    // its own five-minute cadence after its first run: made due on every pass it would run beside the
+    // collection on the other runner each time and hold the store `recovering` while the collection checks
+    // it, so the collection would skip the store on every pass.
+    for _ in 0..24 {
         let (a, b) = tokio::join!(runner_a.tick(), runner_b.tick());
         a.unwrap();
         b.unwrap();
         let mut tx = f.h.begin().await.unwrap();
-        tx.batch("UPDATE erp_job SET run_after = now() WHERE kind LIKE 'base.attachment_%' AND state = 'ready'")
-            .await
-            .unwrap();
+        tx.batch(
+            "UPDATE erp_job SET run_after = now() WHERE kind LIKE 'base.attachment_%' \
+                  AND kind <> 'base.attachment_owner_heartbeat' AND state = 'ready'",
+        )
+        .await
+        .unwrap();
         tx.commit().await.unwrap();
         if scalar(&f.h, "SELECT count(*) FROM ir_blob").await == 1 {
             break;
         }
     }
-    assert_eq!(scalar(&f.h, "SELECT count(*) FROM ir_blob").await, 1);
+    let mut tx = f.h.begin().await.unwrap();
+    let diagnosis: String = tx
+        .query(
+            "SELECT coalesce((SELECT string_agg(kind || ' ' || state || ' attempts=' || attempts || ' ' \
+             || coalesce(last_error_code, '-') || ' ' || coalesce(last_error, '-') || ' progress=' \
+             || coalesce(progress::text, '-'), E'\\n' ORDER BY kind) FROM erp_job \
+             WHERE kind LIKE 'base.attachment_%'), '') || E'\\nowner: ' || coalesce((SELECT string_agg( \
+             mode || ' fresh=' || (last_success_at > clock_timestamp() - make_interval(secs => $1::float8))::text \
+             || ' ready=' || coalesce((observation_not_before <= clock_timestamp())::text, 'none'), ', ') \
+             FROM ir_blob_owner_state), '') || E'\\nblobs: ' || coalesce((SELECT string_agg(id || ':' \
+             || state || ':' || coalesce(sweep_attempted_at::text, '-'), ', ') FROM ir_blob), '')",
+            &[&(erp_addon_base::attachments::ownership::FRESH_SECS as f64)],
+        )
+        .await
+        .unwrap()[0]
+        .get(0);
+    tx.rollback().await.unwrap();
+    drop(tx);
+    assert_eq!(
+        scalar(&f.h, "SELECT count(*) FROM ir_blob").await,
+        1,
+        "{diagnosis}"
+    );
     assert_eq!(f.store.content_keys().len(), 1);
     let mut tx = f.h.begin().await.unwrap();
     let handle = attachments::open(&mut tx, keep).await.unwrap();

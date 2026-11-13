@@ -1,5 +1,5 @@
-//! Business keys and row versions in the registry (and D3; design note
-//! , §4.1, §9).
+//! Business keys and row versions in the registry (and D3,
+//! §4.1, §9).
 //!
 //! - `row_version = true` on a declaration adds the server-maintained `row_version` field
 //!   ([`ROW_VERSION_FIELD`]) to the model; once a declaration in the method resolution order turns

@@ -588,8 +588,8 @@ async fn another_user_for_a_cron_needs_the_elevation_that_m3_audit_provides() {
     let a = action(&h).await;
     exec(
         &h,
-        "INSERT INTO res_users (id, name, login, active) OVERRIDING SYSTEM VALUE VALUES \
-         (7, 'u7', 'u7', true), (9, 'u9', 'u9', true)",
+        "INSERT INTO res_users (id, name, login, active, share) OVERRIDING SYSTEM VALUE VALUES \
+         (7, 'u7', 'u7', true, false), (9, 'u9', 'u9', true, false)",
     )
     .await;
     let mut tx = h.orm().begin(UserId::new(7).unwrap()).await.unwrap();
@@ -630,8 +630,8 @@ async fn a_user_id_in_any_cell_form_other_than_the_callers_is_refused_on_create_
     let a = action(&h).await;
     exec(
         &h,
-        "INSERT INTO res_users (id, name, login, active) OVERRIDING SYSTEM VALUE VALUES \
-         (7, 'u7', 'u7', true), (9, 'u9', 'u9', true)",
+        "INSERT INTO res_users (id, name, login, active, share) OVERRIDING SYSTEM VALUE VALUES \
+         (7, 'u7', 'u7', true, false), (9, 'u9', 'u9', true, false)",
     )
     .await;
     let own = cron(&h, a, 7, &[]).await.unwrap();
@@ -682,8 +682,8 @@ async fn changing_a_cron_that_belongs_to_another_user_is_refused_for_a_non_syste
     let a = action(&h).await;
     exec(
         &h,
-        "INSERT INTO res_users (id, name, login, active) OVERRIDING SYSTEM VALUE VALUES \
-         (7, 'u7', 'u7', true), (9, 'u9', 'u9', true)",
+        "INSERT INTO res_users (id, name, login, active, share) OVERRIDING SYSTEM VALUE VALUES \
+         (7, 'u7', 'u7', true, false), (9, 'u9', 'u9', true, false)",
     )
     .await;
     let theirs = cron(&h, a, 9, &[]).await.unwrap();
@@ -720,5 +720,130 @@ async fn changing_a_cron_that_belongs_to_another_user_is_refused_for_a_non_syste
         .await
         .unwrap();
     tx.commit().await.unwrap();
+    assert_eq!(job(&h, theirs, "run_as_user").await, "9");
+}
+
+/// A4 and.2: a user keeps the job row of its own cron without switching to
+/// the superuser, on create and on write, attributed to the user; the core entry a user keeps its
+/// schedule with never replaces the row of another principal, nor names another user or a
+/// system-run kind.
+#[tokio::test]
+async fn a_user_keeps_its_own_cron_row_and_never_replaces_another_principals_row() {
+    use erp_orm::jobs::{JobKey, RecurringSpec};
+    let _serial = SERIAL.lock().await;
+    let h = harness().await;
+    let a = action(&h).await;
+    exec(
+        &h,
+        "INSERT INTO res_users (id, name, login, active, share) OVERRIDING SYSTEM VALUE VALUES \
+         (7, 'u7', 'u7', true, false), (9, 'u9', 'u9', true, false)",
+    )
+    .await;
+    // create by the user: the job row runs as the user
+    let own = cron(&h, a, 7, &[]).await.unwrap();
+    assert_eq!(job(&h, own, "run_as_user").await, "7");
+    assert_eq!(job(&h, own, "run_as_kind").await, "user");
+    // the row was written by the core but is attributed to the user who kept it
+    assert_eq!(job(&h, own, "enqueued_by_kind").await, "user");
+    assert_eq!(job(&h, own, "enqueued_by_user").await, "7");
+    // write by the user keeps the row in step
+    let mut tx = h.orm().begin(UserId::new(7).unwrap()).await.unwrap();
+    let records = tx.env().records("ir.cron").unwrap().browse([own]).unwrap();
+    records
+        .write(
+            &mut tx,
+            RawVals::new().set_cell("active", Cell::Bool(false)),
+        )
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(job(&h, own, "state").await, "held");
+    assert_eq!(job(&h, own, "run_as_user").await, "7");
+
+    // the own entry, directly: another principal's row (the cron of user 9) is not replaced; the
+    // ORM knows the impersonation capability, so a switch made by user 7 passes the gate under
+    // `AllowAll` and reaches the entry's own check
+    let theirs = cron(&h, a, 9, &[]).await.unwrap();
+    let key = JobKey::new(&format!("base.cron:{theirs}")).unwrap();
+    // the system-run core kinds are linked from erp-security
+    assert!(!erp_security::jobs::core_job_kinds().is_empty());
+    let orm = h
+        .orm()
+        .rebuild(h.registry().clone())
+        .impersonate_capability(&erp_security::principal::PRINCIPAL_IMPERSONATE)
+        .build()
+        .unwrap();
+    let mut tx = orm.begin(UserId::new(7).unwrap()).await.unwrap();
+    let env = tx.env();
+    let error = tx
+        .job_upsert_recurring_own(
+            &env,
+            RecurringSpec::new("base.cron", key.clone()).run_as(UserId::new(7).unwrap()),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Access);
+    assert_eq!(
+        error.message(),
+        format!(
+            "the recurring job base.cron:{theirs} of kind 'base.cron' runs as user 9: only the \
+             system principal replaces it"
+        )
+    );
+    // nor runs as another user
+    let error = tx
+        .job_upsert_recurring_own(
+            &env,
+            RecurringSpec::new("base.cron", key.clone()).run_as(UserId::new(9).unwrap()),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Access);
+    assert_eq!(
+        error.message(),
+        "job_upsert_recurring_own keeps a schedule that runs as its caller (user 7), not as user 9"
+    );
+    // nor keeps a kind that runs as the system
+    let error = tx
+        .job_upsert_recurring_own(
+            &env,
+            RecurringSpec::new(
+                "core.jobs_history_retention",
+                JobKey::new("core.jobs_history_retention").unwrap(),
+            )
+            .run_as(UserId::new(7).unwrap()),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Access);
+    assert_eq!(
+        error.message(),
+        "job kind 'core.jobs_history_retention' runs as the system principal: only the system \
+         keeps its schedule (job_upsert_recurring)"
+    );
+    // nor acts from an admitted switch to another user, and a switch to the superuser is refused
+    // by the gate before the entry
+    let own_only = "job_upsert_recurring_own keeps the schedule of a user acting for itself: call \
+                    it with the user's own environment, outside an elevation block and without \
+                    with_user";
+    for (switched, message) in [
+        (env.with_user(9), own_only.to_owned()),
+        (
+            env.sudo(true).with_user(erp_orm::SUPERUSER_ID),
+            "only the system principal may act as the superuser (user 7 called with_user(1))"
+                .to_owned(),
+        ),
+    ] {
+        let error = tx
+            .job_upsert_recurring_own(
+                &switched,
+                RecurringSpec::new("base.cron", key.clone()).run_as(UserId::new(7).unwrap()),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Access, "{error}");
+        assert_eq!(error.message(), message);
+    }
+    tx.rollback().await.unwrap();
     assert_eq!(job(&h, theirs, "run_as_user").await, "9");
 }

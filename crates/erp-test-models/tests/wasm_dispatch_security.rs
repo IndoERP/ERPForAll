@@ -41,6 +41,22 @@ const EMPTY_COMPONENT: [u8; 8] = [0x00, 0x61, 0x73, 0x6d, 0x0d, 0x00, 0x01, 0x00
 struct Rules;
 
 impl erp_testkit::TestRules for Rules {
+    /// The transaction's user (4) invokes the guest through records switched to users 2 and 3:
+    /// it holds `principal.impersonate` here (A4); no other capability is mapped.
+    fn has_capability(
+        &self,
+        b: &erp_orm::PrincipalBinding<'_>,
+        cap: &erp_orm::Capability,
+    ) -> Result<bool> {
+        if cap.name() == "principal.impersonate" {
+            return Ok(b.principal().subject().get() == 4);
+        }
+        Err(Error::programming(format!(
+            "the dispatch fixture maps no capability '{}'",
+            cap.name()
+        )))
+    }
+
     fn check_model(
         &self,
         b: &erp_orm::PrincipalBinding<'_>,
@@ -128,6 +144,8 @@ async fn world(callable: impl FnOnce(&Orm) -> CallableMethods) -> World {
     // a guest may only continue its chain (security review r1 H1)
     let h = Harness::builder([&base_users::ADDON, &ADDON_A, &ADDON_B])
         .rules(Rules)
+        // user 4 switches to the users the guest runs as (A4)
+        .impersonate_capability(&erp_security::principal::PRINCIPAL_IMPERSONATE)
         .as_user(4)
         .build()
         .await

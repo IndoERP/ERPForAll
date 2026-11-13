@@ -104,7 +104,7 @@ async fn access_in_memory(
                 let readable = user
                     .filtered_access(tx, crate::access::Operation::Read)
                     .await?;
-                let targets = records.sudo(true).related(tx, field.name).await?;
+                let targets = records.engine_sudo().related(tx, field.name).await?;
                 let allowed = targets
                     .with_env(user.env().clone())
                     .filtered_access(tx, op)
@@ -146,7 +146,7 @@ async fn filter_records_inner(
     if records.is_empty() || domain.is_true() {
         return Ok(records.clone());
     }
-    tx.check_records(records)?;
+    tx.admit_records(records).await?;
     if domain.has_params() {
         // access predicates are decided in SQL only (R-S6); the property tests bind
         // the parameters to values before they evaluate a predicate in memory
@@ -217,7 +217,7 @@ async fn filter_records_inner(
     }
     let ids = records.rec_ids();
     let mut columns: Vec<Vec<Cell>> = Vec::with_capacity(builder.fields.len());
-    let sudo = records.sudo(true);
+    let sudo = records.engine_sudo();
     for (fid, as_superuser) in &builder.fields {
         let field = spec.field_by_id(*fid);
         columns.push(if matches!(field.ty, FieldType::Id) {
@@ -292,7 +292,7 @@ async fn resolve_any(
         }
         let env = records.env();
         let (env, targets, nested_reset) = match (*bypass, reset) {
-            (true, _) if !env.su() => (env.sudo(true), targets, Some(env.clone())),
+            (true, _) if !env.su() => (env.engine_sudo(), targets, Some(env.clone())),
             (true, reset) => (env.clone(), targets, reset.cloned()),
             (false, Some(user)) => {
                 let visible = tx.readable_ids(user, *comodel, &targets).await?;

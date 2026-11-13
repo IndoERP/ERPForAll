@@ -1,0 +1,11 @@
+error[E0599]: no associated function or constant named `default` found for struct `erp_sdk::ai::Instruction` in the current scope
+ --> tests/ui/ai_tools/instruction_default.rs:6:37
+  |
+6 |     let _instruction = Instruction::default();
+  |                                     ^^^^^^^ associated function or constant not found in `erp_sdk::ai::Instruction`
+  |
+note: if you're trying to build a new `erp_sdk::ai::Instruction`, consider using `erp_sdk::ai::Instruction::from_static` which returns `erp_sdk::ai::Instruction`
+ --> src/native/ai_tools.rs
+  |
+  |     pub fn from_static(text: &'static str) -> Self {
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

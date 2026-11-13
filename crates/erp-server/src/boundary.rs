@@ -25,6 +25,23 @@ pub enum BoundaryError {
     SameOrigin,
 }
 
+impl BoundaryError {
+    /// The variant's fixed text (the same as its `Display`), for a log field. It never carries
+    /// the refused value, so a URL, cookie or credential cannot reach the log through it.
+    pub(crate) const fn reason(&self) -> &'static str {
+        match self {
+            Self::Authorization => "Invalid apikey",
+            Self::Redirect => "redirect must be an allowed local shell URL",
+            Self::Cookie => "ambiguous or malformed authentication cookie",
+            Self::DatabaseMismatch => {
+                "Session cookie and X-ERP-Database header refer to different databases."
+            }
+            Self::Database => "Database not found.",
+            Self::SameOrigin => "Missing \"Authorization\" or Sec-headers for interactive usage.",
+        }
+    }
+}
+
 /// Parse exactly one bounded Bearer header, retaining no submitted text in errors.
 /// Token grammar and cryptographic verification belong to `erp-security`; malformed tokens
 /// still reach its address throttle. A missing header permits the browser session path.
@@ -119,4 +136,24 @@ pub fn same_origin_fetch(
         return Err(BoundaryError::SameOrigin);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The log reason of every variant is its displayed text, so the two never drift apart.
+    #[test]
+    fn each_reason_is_the_displayed_text() {
+        for error in [
+            BoundaryError::Authorization,
+            BoundaryError::Redirect,
+            BoundaryError::Cookie,
+            BoundaryError::DatabaseMismatch,
+            BoundaryError::Database,
+            BoundaryError::SameOrigin,
+        ] {
+            assert_eq!(error.reason(), error.to_string(), "{error:?}");
+        }
+    }
 }

@@ -1,4 +1,4 @@
-//! `erp cluster` (SCALE.NODES,; design, §7.5): the
+//! `erp cluster` (SCALE.NODES; design, §7.5): the
 //! nodes registered in a database and its rollout window.
 //!
 //! - `erp cluster nodes -d <db>`: every `erp_node` row, oldest registration first.

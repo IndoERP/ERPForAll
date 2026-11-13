@@ -77,6 +77,7 @@ pub struct HarnessBuilder {
     wasm_methods: Vec<WasmMethodImpl>,
     policy: erp_fields::Result<Arc<dyn PolicyProvider>>,
     resolver: Option<Arc<dyn PrincipalResolver>>,
+    impersonate: Option<&'static erp_orm::Capability>,
     policy_sources: Vec<&'static PolicySourceWrite>,
     config: OrmConfig,
     init: bool,
@@ -121,6 +122,7 @@ impl Harness {
             wasm_methods: Vec::new(),
             policy: StaticPolicy::AllowAll.into_policy_provider(),
             resolver: None,
+            impersonate: None,
             policy_sources: Vec::new(),
             config: OrmConfig::default(),
             init: true,
@@ -372,6 +374,16 @@ impl HarnessBuilder {
         self
     }
 
+    /// The capability behind `with_user` to another user by a principal that is not `System`
+    /// ([`erp_orm::OrmBuilder::impersonate_capability`]; `erp-security` declares it as
+    /// `erp_security::principal::PRINCIPAL_IMPERSONATE`). Without it such a switch is refused
+    /// with a `Programming` error; under [`StaticPolicy::AllowAll`] (and a test policy that grants
+    /// every capability) it is admitted once the capability is named.
+    pub fn impersonate_capability(mut self, capability: &'static erp_orm::Capability) -> Self {
+        self.impersonate = Some(capability);
+        self
+    }
+
     /// Register policy-source and membership models built at runtime (design note §3.4).
     pub fn policy_sources(
         mut self,
@@ -532,6 +544,9 @@ impl HarnessBuilder {
                 identify_untagged: self.config.identify_untagged || self.identify_untagged,
                 ..self.config
             });
+        if let Some(capability) = self.impersonate {
+            builder = builder.impersonate_capability(capability);
+        }
         if let Some(resolver) = self.resolver {
             builder = builder.resolver(ArcResolver(resolver));
         } else {
@@ -605,6 +620,9 @@ impl HarnessBuilder {
                 identify_untagged: self.config.identify_untagged || self.identify_untagged,
                 ..self.config
             });
+        if let Some(capability) = self.impersonate {
+            builder = builder.impersonate_capability(capability);
+        }
         if let Some(resolver) = self.resolver {
             builder = builder.resolver(ArcResolver(resolver));
         } else {
@@ -639,7 +657,8 @@ impl HarnessBuilder {
             // keys, `erp-security`'s sessions and login throttle)
             erp_orm::core_ddl_run(&mut tx, erp_orm::CorePhase::BeforeModels).await?;
             tx.init_models(&[]).await?;
-            erp_orm::core_ddl_run(&mut tx, erp_orm::CorePhase::AfterModels).await?;
+            let deferred = erp_orm::core_ddl_run(&mut tx, erp_orm::CorePhase::AfterModels).await?;
+            erp_orm::core_ddl_refuse_deferred(&deferred)?;
             if let Some(users) = registry.model("res.users").filter(|m| m.has_table()) {
                 let table = &users.table;
                 let mut columns = vec!["\"id\"".to_owned()];
@@ -650,6 +669,8 @@ impl HarnessBuilder {
                         values.push("'__system__'".to_owned());
                     }
                 }
+                // every other column takes its database default (base's fail-closed `share` has
+                // one) or NULL; a required column without one fails this insert loudly
                 tx.batch(&format!(
                     "INSERT INTO \"{table}\" ({}) VALUES ({}) ON CONFLICT DO NOTHING; \
                      SELECT setval(pg_get_serial_sequence('\"{table}\"', 'id'), \

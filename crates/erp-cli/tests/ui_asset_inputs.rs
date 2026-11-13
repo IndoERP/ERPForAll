@@ -343,6 +343,11 @@ async fn fixture_registry_baseline(h: &erp_testkit::Harness) -> erp_orm::Generat
     erp_orm::Signal::read(&client).await.unwrap()
 }
 
+/// The stand-in base of the test kit (manifest plus the records base's code needs to register).
+fn base_fixture(root: &Path) {
+    erp_testkit::stand_in_base::write_stand_in_base(root).unwrap();
+}
+
 #[tokio::test]
 async fn startup_reassembles_changed_inputs_and_keeps_previous_generation_after_failure() {
     use erp_addon_web::assets::store;
@@ -497,11 +502,7 @@ async fn real_asset_lifecycle_rejects_every_negative_install_and_upgrade_atomica
     use erp_cli::ui_assets::AssetLifecycle;
     use erp_modules::{AddonIndex, InitOptions, ModuleName, ModuleSystem};
     let root = tempfile::tempdir().unwrap();
-    file(
-        root.path(),
-        "base/manifest.toml",
-        b"name='Base'\nauto_install=true\n",
-    );
+    base_fixture(root.path());
     file(
         root.path(),
         "web/manifest.toml",
@@ -658,11 +659,7 @@ async fn older_lifecycle_hook_refuses_newer_generation_before_source_collection(
     use erp_cli::ui_assets::{AssetLifecycle, assemble_entries};
     use erp_modules::{AddonIndex, InitOptions, ModuleName, ModuleSystem};
     let root = tempfile::tempdir().unwrap();
-    file(
-        root.path(),
-        "base/manifest.toml",
-        b"name='Base'\nauto_install=true\n",
-    );
+    base_fixture(root.path());
     file(
         root.path(),
         "web/manifest.toml",
@@ -742,11 +739,7 @@ async fn host_collection_uses_immutable_inputs_retained_by_operation_and_load() 
     use erp_cli::ui_assets::AssetLifecycle;
     use erp_modules::{AddonIndex, InitOptions, ModuleSystem};
     let root = tempfile::tempdir().unwrap();
-    file(
-        root.path(),
-        "base/manifest.toml",
-        b"name='Base'\nauto_install=true\n",
-    );
+    base_fixture(root.path());
     file(
         root.path(),
         "web/manifest.toml",
@@ -801,11 +794,7 @@ async fn stale_startup_interleaving(uninstall: bool) {
     use erp_modules::{AddonIndex, InitOptions, ModuleName, ModuleSystem};
     use erp_orm::{Generations, Signal, SignalKey};
     let root = tempfile::tempdir().unwrap();
-    file(
-        root.path(),
-        "base/manifest.toml",
-        b"name='Base'\nauto_install=true\n",
-    );
+    base_fixture(root.path());
     file(
         root.path(),
         "web/manifest.toml",

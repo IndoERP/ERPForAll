@@ -19,7 +19,7 @@ indexmap = { workspace = true }
 erp-data = { workspace = true }
 erp-expr = { workspace = true }
 erp-orm = { workspace = true }
-# The runtime of WebAssembly addons; L7 below L8,.
+# The runtime of WebAssembly addons; L7 below L8.
 erp-wasm-host = { workspace = true }
 erp-sql = { workspace = true }
 erp-security = { workspace = true }

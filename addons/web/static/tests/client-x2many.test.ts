@@ -126,7 +126,7 @@ test("editing a stored line records which fields changed; a read-only one2many o
   const view = document.querySelector<HTMLDialogElement>("dialog.x2many-dialog")!;
   expect(view.querySelector('input[name="title"]')).toBeNull();
   expect(view.textContent).toContain("Foundation");
-  expect([...view.querySelectorAll("button")].map(b => b.textContent)).toEqual(["Close"]);
+  expect([...view.querySelectorAll("button")].map(b => b.textContent)).toEqual(["×", "Close"]);
 });
 
 test("a stored line saved through the form is written as one2many commands", async () => {
@@ -417,6 +417,21 @@ test("existing line dialogs are titled Open: <field label> even when the line ha
   expect(dialog.querySelector("h2")!.textContent).not.toContain("sample_library.loan");
 });
 
+test("a line dialog shares the dialog anatomy: header with a close button, large size, primary action last", async () => {
+  const handle = render([{ id: 18, display_name: "sample_library.loan,18", title: "Dune" }]);
+  handle.node.querySelector<HTMLElement>(".x2many-row-open")!.click();
+  await Promise.all(jobs);
+  const dialog = document.querySelector<HTMLDialogElement>("dialog.x2many-dialog")!;
+  expect(dialog.dataset["size"]).toBe("lg");
+  const close = dialog.querySelector<HTMLButtonElement>(".message-dialog-header .message-dialog-close")!;
+  expect(close.getAttribute("aria-label")).toBe("Close");
+  expect(dialog.querySelector(".message-dialog-body form")).not.toBeNull();
+  const labels = [...dialog.querySelectorAll(".message-dialog-footer button")].map(item => item.textContent?.trim());
+  expect(labels.at(-1)).toBe("Save & Close");
+  close.click();
+  expect(document.querySelector("dialog.x2many-dialog")).toBeNull();
+});
+
 test("embedded list cells use the comodel's list widgets: a colour swatch instead of the hex code", async () => {
   const cover = field("cover_color", "char", { label: "Cover Color", widget: "color" });
   const available = field("available", "boolean", { label: "Available" });
@@ -489,4 +504,45 @@ test("openLine evaluates field context against parent record values and passes t
   });
   const dialog = document.querySelector<HTMLDialogElement>("dialog.x2many-dialog")!;
   expect(dialog.querySelector("h2")!.textContent).toBe("Create Books");
+});
+
+/// Opening an existing line asks for no defaults, so neither the field's domain nor its context is evaluated.
+test("a line opens even when the field domain names a value the line cannot supply", async () => {
+  const domainDoc = {
+    schema: 1,
+    nodes: [
+      { kind: "literal", value: { kind: "str", value: "owner_id" } },
+      { kind: "literal", value: { kind: "str", value: "=" } },
+      { kind: "name", name: "value_nobody_provides" },
+      { kind: "tuple", items: [0, 1, 2] },
+      { kind: "list", items: [3] }
+    ]
+  };
+  const unusedDomain = { ...books(), options: { domain: domainDoc as unknown as import("../src/client/field-options.js").FieldPresentationOptions["domain"] } };
+  const { node } = render([{ id: 4, title: "Foundation", publication_year: 1951 }], vi.fn(), rpcWith(() => ({})), unusedDomain);
+  node.querySelector<HTMLElement>("tbody tr")!.click();
+  await Promise.all(jobs);
+  expect(reports).toEqual([]);
+  expect(document.querySelector("dialog.x2many-dialog")).not.toBeNull();
+});
+
+/// (partial: widgets of an existing line get the one2many field's context too)
+test("an existing line's widgets receive the field context, like a new line's", async () => {
+  const seen: Record<string, unknown>[] = [];
+  fieldWidgets.add("x1_context_probe", { kinds: ["char"], render: environment => { seen.push(environment.context); return { node: document.createElement("span"), dispose: () => {} }; } });
+  const probeTitle = { ...title, readonly: false };
+  const probeForm: View = { type: "form", mode: "record", fields: [probeTitle], nodes: [{ kind: "root", children: [{ kind: "sheet", children: [{ kind: "field", field: probeTitle, label: "Title", widget: "x1_context_probe" }] }] }] };
+  const probeSubview: Subview = { ...subview, form: probeForm };
+  const contextDoc = { schema: 1, nodes: [
+    { kind: "literal", value: { kind: "str", value: "default_parent_id" } },
+    { kind: "name", name: "id" },
+    { kind: "dict", items: [[0, 1]] }
+  ] };
+  const target = { ...books(), subview: probeSubview, options: { context: contextDoc as unknown as import("../src/client/field-options.js").FieldPresentationOptions["context"] } };
+  const handle = fieldWidgets.get("one2many").render({ field: target, value: [{ id: 4, title: "Foundation" }], values: { id: 42 }, change: vi.fn(), rpc: rpcWith(() => ({})), context: { ambient_key: "ambient_val" }, run, report: error => { reports.push(error); } });
+  document.body.append(handle.node);
+  handle.node.querySelector<HTMLElement>("tbody tr")!.click();
+  await Promise.all(jobs);
+  expect(reports).toEqual([]);
+  expect(seen.at(-1)).toMatchObject({ ambient_key: "ambient_val", default_parent_id: 42 });
 });

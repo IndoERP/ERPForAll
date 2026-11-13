@@ -2,7 +2,7 @@
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// One selected user's replacement password (blank means skip),.
+/// One selected user's replacement password (blank means skip).
 /// Secret text is private, zeroized on drop and omitted from Debug.
 ///
 /// ```
@@ -42,6 +42,17 @@ impl PasswordReset {
             submitted_bytes: password.len(),
         })
     }
+
+    /// The user whose password this line replaces.
+    #[must_use]
+    pub fn user(&self) -> UserId {
+        self.user
+    }
+    /// Whether the line is blank (or whitespace only) and so changes nothing.
+    #[must_use]
+    pub fn is_blank(&self) -> bool {
+        self.password.is_empty()
+    }
 }
 fn too_long() -> Error {
     Error::validation("The new password exceeds the configured credential byte limit.")
@@ -58,10 +69,17 @@ impl Auth {
     /// Blank lines are skipped. All hashes/session-end hooks commit together. If selected,
     /// the actor retains only the presented session; ordinary password writes still revoke all.
     /// No general res.users write permission is granted by this narrow operation.
+    /// Every target but the inactive superuser row must be visible to the actor under `res.users`'
+    /// company restriction with all of the actor's companies, and a target holding
+    /// `base.group_system` needs an actor holding it (Amendment 1); both are checked in
+    /// the preflight and again after the final locks.
     /// # Errors
     /// UserError without HTTP authority; Access for a non-manager; Validation for duplicate,
-    /// oversized batches/passwords or excess stored sessions; Missing for a missing target;
-    /// session, hash, hook, concurrency and database failures propagate without partial commit.
+    /// oversized batches/passwords or excess stored sessions; Missing for a missing target and,
+    /// with the same message, for a target outside the actor's company restriction; Access
+    /// "Only a Settings administrator can reset the password of a Settings administrator." for a
+    /// Settings administrator target reset by an actor who is not one; session, hash, hook,
+    /// concurrency and database failures propagate without partial commit.
     pub async fn reset_passwords(
         &self,
         secret: Option<&SessionSecret>,
@@ -87,6 +105,8 @@ impl Auth {
             ));
         }
         let mut selected = BTreeSet::new();
+        // the targets alone: the actor joins `selected` for the final locks only
+        let targets: Vec<UserId> = changes.iter().map(|change| change.user).collect();
         for change in changes {
             if !selected.insert(change.user.get()) {
                 return Err(Error::validation(
@@ -121,11 +141,11 @@ impl Auth {
                     )
                     .await?;
                 if rows.len() != ids.len() {
-                    return Err(Error::new(
-                        ErrorKind::Missing,
-                        "A selected password reset user no longer exists.",
-                    ));
+                    return Err(missing_reset_target());
                 }
+                authority
+                    .check_reset_targets(&mut preflight, &targets)
+                    .await?;
             }
             Ok(())
         }
@@ -159,7 +179,7 @@ impl Auth {
         let mut tx = self.orm.begin_opts(read_committed()).await?;
         let outcome = async {
             let users = tx.query("SELECT id FROM res_users WHERE id = ANY($1::int8[]) ORDER BY id FOR UPDATE", &[&selected]).await?;
-            if users.len() != selected.len() { return Err(Error::new(ErrorKind::Missing, "A selected password reset user no longer exists.")); }
+            if users.len() != selected.len() { return Err(missing_reset_target()); }
             let (session, _, actor_extra) = self.lock_identity(&mut tx, secret, &actor).await?;
             let authority = self.check_session_in(&mut tx, secret).await?;
             if !authority.has_groups("base.group_erp_manager,base.group_system")? { return Err(manager_required()); }
@@ -181,6 +201,9 @@ impl Auth {
             authorize(final_authority.principal())?;
             if !final_authority.has_groups("base.group_erp_manager,base.group_system")? { return Err(manager_required()); }
             if recent(&mut tx, session.id()).await? == IdentityCheck::Required { return Ok(IdentityCheck::Required); }
+            // after the final locks and authority rechecks: company scope, then the Settings
+            // administrator rule, then the write (a refusal writes nothing)
+            final_authority.check_reset_targets(&mut tx, &targets).await?;
             if let Some(pos) = ids.iter().position(|uid| *uid == actor.uid.get()) {
                 let current = settings::load(&mut tx).await?;
                 let (kid, key) = current.keys.issuing();

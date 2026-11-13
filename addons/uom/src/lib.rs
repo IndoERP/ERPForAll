@@ -14,3 +14,5 @@ mod protection;
 
 mod guard_state;
 pub mod references;
+
+pub mod stock;

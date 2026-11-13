@@ -21,6 +21,8 @@ erp-orm = { workspace = true, features = ["trusted-test-principals", "test-ident
 erp-rpc = { workspace = true }
 erp-sdk = { workspace = true }
 futures-core = { workspace = true }
+# tool-call arguments of the scripted AI provider (`ai::ScriptedReply`)
+serde_json = { workspace = true }
 rustc-hash = { workspace = true }
 erp-alloc-budget = { workspace = true }
 
@@ -28,7 +30,6 @@ erp-alloc-budget = { workspace = true }
 # Allocation envelope of the real sanitiser (tests/alloc_html_sanitize_envelope.rs).
 erp-html = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "time"] }
-serde_json = { workspace = true }
 # stock hyper measured by the served-path harness (tests/alloc_serve_hyper.rs)
 hyper = { workspace = true, features = ["server", "http1"] }
 hyper-util = { workspace = true, features = ["tokio"] }

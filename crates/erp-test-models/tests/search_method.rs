@@ -1202,8 +1202,8 @@ async fn actual_rpc_search_and_physical_empty_vat_use_the_provider() {
         absent,
         "nonstored compute must not create a physical column"
     );
-    let empty: i64 = client.query_one("INSERT INTO res_partner (name, vat, active) VALUES ('raw empty', '', true) RETURNING id", &[]).await.unwrap().get(0);
-    let valid: i64 = client.query_one("INSERT INTO res_partner (name, vat, active) VALUES ('raw valid', 'VAT123', true) RETURNING id", &[]).await.unwrap().get(0);
+    let empty: i64 = client.query_one("INSERT INTO res_partner (name, vat, active, partner_share) VALUES ('raw empty', '', true, false) RETURNING id", &[]).await.unwrap().get(0);
+    let valid: i64 = client.query_one("INSERT INTO res_partner (name, vat, active, partner_share) VALUES ('raw valid', 'VAT123', true, false) RETURNING id", &[]).await.unwrap().get(0);
     let stored: String = client
         .query_one("SELECT vat FROM res_partner WHERE id = $1", &[&empty])
         .await
@@ -1758,7 +1758,7 @@ mod delegates {
         description = "Search delegates",
         addon = "test_search_delegates",
         inherits = [("res.partner", "partner_id")],
-        company_access = unrestricted(reason = "Delegated res.partner is unrestricted; this fixture adds no company restriction")
+        company_access = unrestricted(reason = "this fixture adds no company restriction of its own; the delegated res.partner keeps its own")
     )]
     pub struct Delegates {
         #[field(

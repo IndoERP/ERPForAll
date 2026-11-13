@@ -4,8 +4,7 @@
 //! reading a clone of the handle, next to `std::time::Instant::now` (the clock that does not
 //! count suspend) under the same two loads, and `NodeAdmission::readiness`. The handle is
 //! detached (no database, no heartbeat task): the hot path is exactly the one a request task
-//! runs. Needs the `bench-seams` feature for the detached constructors. Results:
-//! .
+//! runs. Needs the `bench-seams` feature for the detached constructors. Results.
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "benchmark setup")]
 
 use std::hint::black_box;

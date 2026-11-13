@@ -15,7 +15,7 @@ use erp_orm::{
     GroupSet, GroupSetInterner, InternedGroups, Operation, PolicyGeneration, PrincipalBinding,
     SnapshotId, SnapshotOrigin, SnapshotRef,
 };
-use erp_registry::ModelSpec;
+use erp_registry::{ModelSpec, Registry};
 use erp_testkit::Harness;
 use erp_testkit::tokio_postgres::{Client, NoTls};
 
@@ -178,4 +178,64 @@ pub fn snapshot(implied: BTreeMap<GroupId, Vec<GroupId>>) -> Arc<TestSnapshot> {
     Arc::new(
         TestSnapshot::new(SnapshotOrigin::Shared, PolicyGeneration::default(), implied).unwrap(),
     )
+}
+
+/// Insert the generated company restriction of each of `models` into the policy tables of the
+/// database behind `client`, as the installation emission does (`erp_modules`): the `ir_access`
+/// row (`crud`, no group, active, generated) and the `ir_model.company_restriction` ledger text.
+/// Module installation writes these rows; a test that compiles the policy from rows it inserted
+/// itself has none, and a restricted model without its generated row is denied to every principal
+/// that is not in superuser mode (drift). The `ir_model` row of a model is used when it exists and
+/// created otherwise, so call this after the test inserted its own `ir_model` rows. A second call
+/// for the same model changes nothing.
+///
+/// # Panics
+///
+/// When a model has no generated restriction in `registry` (it is not in the registry, is
+/// unrestricted or has no declaration), and on any database error: nothing is skipped silently.
+pub async fn insert_generated(client: &Client, registry: &Registry, models: &[&str]) {
+    let all = erp_security::company_access::generate(registry)
+        .expect("generate the company restrictions of the registry");
+    for model in models {
+        let g = all
+            .iter()
+            .find(|g| g.model_name() == *model)
+            .ok_or_else(|| format!("no generated company restriction for model {model}"))
+            .expect("every requested model is restricted in the registry");
+        let found = client
+            .query_opt(
+                "SELECT id::int8 FROM ir_model WHERE model = $1 ORDER BY id LIMIT 1",
+                &[&g.model_name()],
+            )
+            .await
+            .unwrap();
+        let model_id: i64 = match found {
+            Some(row) => row.get(0),
+            None => client
+                .query_one(
+                    "INSERT INTO ir_model (name, model, state, transient) \
+                     VALUES ($1, $1, 'base', false) RETURNING id::int8",
+                    &[&g.model_name()],
+                )
+                .await
+                .unwrap()
+                .get(0),
+        };
+        client
+            .execute(
+                "INSERT INTO ir_access (name, active, model_id, operation, domain, generated) \
+                 SELECT $1::text, true, $2::int8, 'crud', $3::text, true \
+                  WHERE NOT EXISTS (SELECT 1 FROM ir_access WHERE model_id = $2::int8 AND generated)",
+                &[&g.name(), &model_id, &g.text()],
+            )
+            .await
+            .unwrap();
+        client
+            .execute(
+                "UPDATE ir_model SET company_restriction = $2::text WHERE id = $1::int8",
+                &[&model_id, &g.text()],
+            )
+            .await
+            .unwrap();
+    }
 }

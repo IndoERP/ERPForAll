@@ -1,4 +1,4 @@
-//! Round trips counted at the wire (design note).
+//! Round trips counted at the wire.
 //!
 //! The ORM counts its own statements (`Transaction::query_count`); that says nothing about how
 //! many times the client waited for the server. [`WireCounter`] sits between the test pool and

@@ -79,7 +79,7 @@ try{
  await show('plain');await select(0,11);await paste({'text/html':'<b>rich</b>','text/plain':'<literal>\nline'});assert.equal(await value(),'<p>&lt;literal&gt;<br>line</p>');result.checks.push('Plain destination keeps literal text and line breaks');
  await show('empty');await select(0);await paste({'application/vnd.erpforall.html-editor+json':JSON.stringify({version:1,html:'<b>Own</b>'})});assert.equal(await value(),'<strong>Own</strong>');
  await paste({'application/vnd.erpforall.html-editor+json':JSON.stringify({version:2,html:'bad'})});assert.equal((await state()).errors.at(-1).message,'Invalid ERPForAll HTML clipboard payload.');result.checks.push('Editor-origin MIME receives strict version/admission checks');
- await show('empty');await select(0);await paste({'text/html':'<p onmouseover="alert(1)">safe<a href="https://attacker.invalid/">link</a><img src="https://attacker.invalid/pixel"><script>alert(1)</script><svg onload="alert(1)"></svg></p>'});assert.equal(await value(),'<p>safelink</p>');assert.equal(await page.locator('#scene img,#scene script,#scene svg,#scene a').count(),0);assert.equal(await page.locator('.html-editor-status').textContent(),'Pasted formatting was simplified.');result.checks.push('Hostile paste renders only reconstructed admitted structure');
+ await show('empty');await select(0);await paste({'text/html':'<p onmouseover="alert(1)">safe<a href="https://attacker.invalid/">link</a><img src="https://attacker.invalid/pixel"><script>alert(1)</script><svg onload="alert(1)"></svg></p>'});assert.equal(await value(),'<p>safelink</p>');assert.equal(await page.locator('#scene .html-editor-content img,#scene .html-editor-content script,#scene .html-editor-content svg,#scene .html-editor-content a').count(),0);assert.equal(await page.locator('.html-editor-status').textContent(),'Pasted formatting was simplified.');result.checks.push('Hostile paste renders only reconstructed admitted structure');
  await show('protected');await select(0,5);assert.equal(await paste({'text/plain':'changed'}),true);assert.equal((await state()).canUndo,false);assert.equal(await value(),'<p>Hello world</p>');assert.deepEqual((await state()).changes,[]);result.checks.push('Protected selection cannot authorize paste');
  await show('default');await select(0,5);await page.getByRole('button',{name:'Bold',exact:true}).focus();await page.keyboard.press('Enter');assert.equal(await value(),'<p><strong>Hello</strong> world</p>');await page.evaluate(()=>window.fixture.set('<p>Parent replacement</p>'));assert.equal((await state()).canUndo,false);assert.equal((await state()).dirty,false);result.checks.push('Keyboard toolbar and silent owner baseline replacement');
  await show('pending');await select(11);await page.keyboard.type('!');assert.equal((await state()).pending,true);await page.evaluate(()=>window.fixture.set('<p>New owner</p>'));await page.evaluate(()=>window.fixture.fail());assert.equal(await value(),'<p>New owner</p>');assert.deepEqual((await state()).errors,[]);result.checks.push('Replacement invalidates pending callback completion');
@@ -93,9 +93,43 @@ try{
   await page.keyboard.press('Control+z');await page.keyboard.press('Control+y');
   assert.equal((await state()).errors.length,mergeState.errors.length,'Undo and redo after a block merge report no new error');
   result.checks.push('Backspace block merge into a heading stays editable');
-  // Unrouted native format commands (italic, underline) are blocked rather than written by the engine.
-  await show('default');await select(0,5);await page.keyboard.press('Control+i');await page.keyboard.press('Control+u');await page.keyboard.press('Meta+i');await page.keyboard.press('Meta+u');
-  assert.equal(await value(),'<p>Hello world</p>');assert.deepEqual((await state()).errors,[]);result.checks.push('Native italic and underline commands are blocked');
+  // Italic and underline are routed commands now (admitted tags em and u); the engine never lets the browser write its own markup.
+  await show('default');await select(0,5);await page.keyboard.press('Control+i');await page.keyboard.press('Control+u');
+  assert.equal(await value(),'<p><em><u>Hello</u></em> world</p>');await page.keyboard.press('Control+i');assert.equal(await value(),'<p><u>Hello</u> world</p>');assert.deepEqual((await state()).errors,[]);result.checks.push('Italic and underline shortcuts write only admitted tags');
+  // Floating toolbar: no permanent strip, appears over a selection inside the viewport, formats, hides on collapse and Escape.
+  await show('default');const toolbar=page.locator('#scene .html-editor-toolbar'),field=page.locator('#scene .html-editor');
+  assert.equal(await toolbar.evaluate(n=>n.hidden),true,'No toolbar before a selection');
+  assert.equal(await field.evaluate(n=>getComputedStyle(n).borderTopWidth),'0px','The field has no box border');
+  await select(0,5);assert.equal(await toolbar.evaluate(n=>n.hidden),false);
+  const box=await toolbar.boundingBox(),view=page.viewportSize();assert.ok(box.x>=0&&box.y>=0&&box.x+box.width<=view.width&&box.y+box.height<=view.height,'Toolbar stays inside the viewport');
+  await page.screenshot({path:path.join(output,'float-toolbar.png'),caret:'initial'});
+  await page.getByRole('button',{name:'Italic',exact:true}).click();assert.equal(await value(),'<p><em>Hello</em> world</p>');
+  assert.equal(await page.getByRole('button',{name:'Italic',exact:true}).getAttribute('aria-pressed'),'true');
+  await select(2);assert.equal(await toolbar.evaluate(n=>n.hidden),true,'Collapsing the selection hides the toolbar');
+  await select(0,3);assert.equal(await toolbar.evaluate(n=>n.hidden),false);await page.keyboard.press('Escape');assert.equal(await toolbar.evaluate(n=>n.hidden),true,'Escape hides the toolbar');
+  await select(0,3);await page.keyboard.press('Alt+f');assert.equal(await page.evaluate(()=>document.activeElement?.dataset.htmlCommand),'bold');await page.keyboard.press('ArrowRight');assert.equal(await page.evaluate(()=>document.activeElement?.dataset.htmlCommand),'italic');
+  await page.keyboard.press('Escape');assert.equal(await page.evaluate(()=>document.activeElement===window.fixture.editable()),true,'Escape from the toolbar returns to the text');
+  result.checks.push('Floating toolbar: hidden by default, placed in the viewport, formats, hides on collapse and Escape, reachable by keyboard');
+  // Slash commands: real typing opens the list, filters, moves, applies, and Escape closes it.
+  await show('empty');await page.evaluate(()=>window.fixture.editable().focus());await page.keyboard.type('/');
+  const menu=page.locator('#scene .html-slash-menu');assert.equal(await menu.evaluate(n=>n.hidden),false);assert.ok(await menu.locator('[role=option]').count()>=6);
+  await page.screenshot({path:path.join(output,'slash-menu.png'),caret:'initial'});
+  await page.keyboard.type('head');assert.equal(await menu.locator('[role=option]').count(),3);await page.keyboard.press('ArrowDown');await page.keyboard.press('Enter');
+  assert.equal(await value(),'<h2><br></h2>');assert.equal(await menu.evaluate(n=>n.hidden),true);await page.keyboard.type('Title');assert.equal(await value(),'<h2>Title</h2>');
+  await show('empty');await page.evaluate(()=>window.fixture.editable().focus());await page.keyboard.type('/zzz');assert.equal(await menu.evaluate(n=>n.hidden),true,'No match closes the list');
+  await show('empty');await page.evaluate(()=>window.fixture.editable().focus());await page.keyboard.type('/li');assert.equal(await menu.evaluate(n=>n.hidden),false);await page.keyboard.press('Escape');assert.equal(await menu.evaluate(n=>n.hidden),true);assert.equal(await value(),'/li');
+  // Focus leaving the field hides both surfaces even though the browser may keep the document selection.
+  await show('default');await select(0,5);assert.equal(await toolbar.evaluate(n=>n.hidden),false);await page.getByRole('button',{name:'Next field',exact:true}).focus();assert.equal(await toolbar.evaluate(n=>n.hidden),true,'Focus moving to another control hides the toolbar');
+  await show('empty');await page.evaluate(()=>window.fixture.editable().focus());await page.keyboard.type('/');assert.equal(await menu.evaluate(n=>n.hidden),false);await page.getByRole('button',{name:'Next field',exact:true}).focus();assert.equal(await menu.evaluate(n=>n.hidden),true,'Focus moving to another control hides the slash list');
+  // The toolbar returns when the selection scrolls out of the viewport and back.
+  await show('default');await page.evaluate(()=>{document.body.style.minHeight='4000px';});await select(0,5);assert.equal(await toolbar.evaluate(n=>n.hidden),false);
+  await page.evaluate(()=>window.scrollTo(0,2500));await page.waitForFunction(()=>document.querySelector('#scene .html-editor-toolbar').hidden);
+  await page.evaluate(()=>window.scrollTo(0,0));await page.waitForFunction(()=>!document.querySelector('#scene .html-editor-toolbar').hidden);await page.evaluate(()=>{document.body.style.minHeight='';});
+  // Every toolbar button is one 28px square.
+  await select(0,5);const sizes=await toolbar.locator('button').evaluateAll(list=>list.map(n=>{const r=n.getBoundingClientRect();return [Math.round(r.width),Math.round(r.height)];}));assert.deepEqual(new Set(sizes.map(String)),new Set(['28,28']));
+  await page.screenshot({path:path.join(output,'float-toolbar-icons.png'),caret:'initial'});
+  result.checks.push('Focus leaving the field hides the toolbar and the slash list; the toolbar returns after scrolling out and back; equal 28px buttons');
+  result.checks.push('Slash list: opens on "/", filters, applies a block with the keyboard, closes on no match and on Escape');
  }
  const allScenes=['default','hover','focus','active','readonly','disabled','invalid','required','empty','dirty','pending','error'];
  for(const theme of ['light','dark'])for(const viewport of [{name:'desktop',width:1280,height:900},{name:'intermediate',width:820,height:900},{name:'phone',width:390,height:844}]){
@@ -109,7 +143,7 @@ try{
    if(['dirty','pending','error'].includes(scene)){await select(11);if(suite==='visual')await page.evaluate(()=>window.fixture.type('!'));else await page.keyboard.type('!');if(scene==='error')await page.waitForFunction(()=>window.fixture.state().errors.length===1);}
    // Publish the current layout before reading geometry.
    await page.screenshot({caret:'initial'});
-   const geometry=await page.evaluate(()=>({width:innerWidth,scrollWidth:document.documentElement.scrollWidth,buttons:[...document.querySelectorAll('#scene button')].filter(n=>!n.hidden&&getComputedStyle(n).display!=='none').map(n=>{const r=n.getBoundingClientRect();return {label:n.textContent,width:r.width,height:r.height};})}));
+   const geometry=await page.evaluate(()=>({width:innerWidth,scrollWidth:document.documentElement.scrollWidth,buttons:[...document.querySelectorAll('#scene button')].filter(n=>n.getClientRects().length>0).map(n=>{const r=n.getBoundingClientRect();return {label:n.textContent,width:r.width,height:r.height};})}));
    assert.ok(geometry.scrollWidth<=viewport.width+1,'No horizontal overflow');for(const button of geometry.buttons)assert.ok(button.width>=24&&button.height>=24,'Every visible command has a 24px target');
    if(scene==='readonly'||scene==='disabled'){assert.equal(await page.getByRole('textbox',{name:'Rich notes',exact:true}).getAttribute('contenteditable'),'false');assert.equal(await page.locator('#scene button:not(:disabled)').count(),0);}
    if(scene==='invalid')assert.equal(await page.getByRole('textbox',{name:'Rich notes',exact:true}).getAttribute('aria-invalid'),'true');

@@ -91,7 +91,7 @@ async fn seed(client: &Client) -> Seeded {
         .unwrap();
     let admin = one(
         client,
-        "INSERT INTO res_users (name, login, active) VALUES ('Root', 'root', true) \
+        "INSERT INTO res_users (name, login, active, share) VALUES ('Root', 'root', true, false) \
          RETURNING id::int8",
         &[],
     )
@@ -146,8 +146,8 @@ async fn seed(client: &Client) -> Seeded {
     .await;
     let user = one(
         client,
-        "INSERT INTO res_users (name, login, active, company_id) \
-         VALUES ('Ann', 'ann', true, $1) RETURNING id::int8",
+        "INSERT INTO res_users (name, login, active, share, company_id) \
+         VALUES ('Ann', 'ann', true, false, $1) RETURNING id::int8",
         &[&company_a],
     )
     .await;
@@ -557,8 +557,8 @@ async fn a_forged_resolution_grants_nothing() {
     let internal = group_user(&client).await;
     let bob = one(
         &client,
-        "INSERT INTO res_users (name, login, active, company_id) \
-         VALUES ('Bob', 'bob', true, $1) RETURNING id::int8",
+        "INSERT INTO res_users (name, login, active, share, company_id) \
+         VALUES ('Bob', 'bob', true, false, $1) RETURNING id::int8",
         &[&s.company_a],
     )
     .await;

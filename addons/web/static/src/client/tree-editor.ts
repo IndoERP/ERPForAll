@@ -594,7 +594,7 @@ export function createTreeEditor(options: TreeEditorOptions): TreeEditorHandle {
             ) {
               throw new ClientError(
                 "unsupported",
-                "Condition value or operator requires a compatible tree editor provider (a later release advanced controls).",
+                "Condition value or operator requires a compatible tree editor provider.",
               );
             }
             const picker = createModelFieldSelector({
@@ -618,7 +618,7 @@ export function createTreeEditor(options: TreeEditorOptions): TreeEditorHandle {
                   if (!first) {
                     throw new ClientError(
                       "unsupported",
-                      "The selected field has no compatible condition operators (a later release advanced controls).",
+                      "The selected field has no compatible condition operators.",
                     );
                   }
                   const operator = first.value,

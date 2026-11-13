@@ -1,6 +1,6 @@
 //! Native addon skeletons and manifest integration tests for the M7 inventory family.
 //!
-//! The graph is the trimmed one documented: addons that
+//! The graph is the trimmed one: addons that
 //! are not on `main` yet (`account`, `sale`, ...) are absent, so the tests accept only the 12 M7
 //! addons plus `base`, `web`, `uom` and `product` as dependency targets and fail on anything else.
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "tests")]

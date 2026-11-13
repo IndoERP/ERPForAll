@@ -1,4 +1,4 @@
-//! Company consistency failures (design note).
+//! Company consistency failures.
 
 use std::fmt;
 
@@ -48,8 +48,10 @@ pub enum CompanyError {
         /// Its id.
         id: i64,
     },
-    /// `UserError`: a company-dependent field was written, with a value, without a current
-    /// company (open question 1).
+    /// Legacy `UserError` retained for source compatibility with existing callers.
+    /// Property reads and mutations now refuse earlier with `Validation` when a current
+    /// company is required; the ORM no longer emits this variant.
+    /// Constructing it explicitly retains its historical kind and message.
     NoCurrentCompany {
         /// The model.
         model: &'static str,

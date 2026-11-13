@@ -627,6 +627,7 @@ async fn spec_sec_030_full_name_search() {
     h.cleanup().await.unwrap();
 }
 
+/// base_partner_users_scope.rs)
 #[tokio::test]
 async fn spec_sec_065_share_follows_the_internal_groups() {
     let h = harness().await;

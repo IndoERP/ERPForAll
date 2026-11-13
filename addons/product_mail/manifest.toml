@@ -1,0 +1,12 @@
+name = "Product Mail Bridge"
+summary = "Messages, followers and chatter for product template and product variant"
+category = "Sales/Sales"
+author = "Arkana"
+license = "MIT OR Apache-2.0"
+version = "1.0.0"
+depends = ["base", "product", "mail"]
+auto_install = true
+data = [
+    "views/product_template_views.xml",
+    "views/product_product_views.xml",
+]

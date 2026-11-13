@@ -1,5 +1,5 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import type { Node } from "../src/client/metadata.js";
 import { renderFormLayout } from "../src/client/form-layout.js";
 
@@ -149,4 +149,42 @@ test("a title with no authorized visible fields creates no empty heading", () =>
   const nodes=[{kind:"root",children:[{kind:"title",children:[{kind:"heading",level:1,children:[]}]}]}] as Node[];
   renderFormLayout(form,nodes,renderField,new Map(),undefined,undefined,{titleHost});
   expect(titleHost.children).toHaveLength(0);
+});
+
+/// (partial: the aside rail keeps its expanded state across re-renders)
+test("an expanded aside rail stays expanded when the form is rebuilt", () => {
+  const labelled = (node: Extract<Node, { kind: "field" }>, parent: HTMLElement): void => {
+    const label = document.createElement("label"); label.className = "field-label";
+    const input = document.createElement("input"); input.name = node.field.name; label.append(input); parent.append(label);
+  };
+  const nodes = [{ kind: "root", children: [{ kind: "aside", children: ["a", "b", "c", "d"].map(field) }] }] as unknown as Node[];
+  const kept = new Map<Node, number>();
+  const draw = (): HTMLElement => {
+    const asideHost = document.createElement("div"), chatterHost = document.createElement("div");
+    renderFormLayout(document.createElement("form"), nodes, labelled, kept, undefined, undefined, { asideHost, chatterHost });
+    return asideHost.querySelector<HTMLElement>(".form-aside")!;
+  };
+  let aside = draw();
+  expect(aside.classList.contains("is-collapsed")).toBe(true);
+  aside.querySelector<HTMLButtonElement>(".form-aside-toggle")!.click();
+  aside = draw();
+  expect(aside.classList.contains("is-collapsed")).toBe(false);
+  expect(aside.querySelector(".form-aside-toggle")!.getAttribute("aria-expanded")).toBe("true");
+  aside.querySelector<HTMLButtonElement>(".form-aside-toggle")!.click();
+  expect(draw().classList.contains("is-collapsed")).toBe(true);
+});
+
+test.each([[390, 4, 4, false], [390, 5, 3, true], [800, 4, 4, false], [1440, 6, 6, false]])("at %ipx a box of %i statistics shows %i directly (More: %s)", (width, count, direct, more) => {
+  vi.spyOn(window, "innerWidth", "get").mockReturnValue(width);
+  const actions = Array.from({ length: count }, (_unused, index) => ({ kind: "stat_button", name: `open_${index}`, label: `Open ${index}`, variant: "secondary", confirm: null, invisible: null, children: [] }));
+  const nodes = [{ kind: "root", children: [{ kind: "sheet", children: [{ kind: "button_box", children: actions }] }] }] as unknown as Node[];
+  const host = document.createElement("form");
+  const layout = renderFormLayout(host, nodes, renderField, new Map(), (node, parent) => {
+    const control = document.createElement("button"); control.type = "button"; control.textContent = node.label; parent.append(control); return control;
+  });
+  const box = host.querySelector(".form-button-box")!;
+  expect(box.querySelectorAll(":scope > .form-stat-button")).toHaveLength(direct);
+  expect(box.querySelector(":scope > .form-overflow-toggle") !== null).toBe(more);
+  expect(host.querySelectorAll(".form-stat-button")).toHaveLength(count);
+  layout.dispose(); vi.restoreAllMocks();
 });

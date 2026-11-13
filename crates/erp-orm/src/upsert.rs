@@ -1,4 +1,4 @@
-//! `upsert` on a declared business key (–D2; design note
+//! `upsert` on a declared business key (–D2;
 //! ).
 //!
 //! `records.upsert(tx, Upsert::on(Model::KEY).rows(rows).update([..]).accumulate(..))` inserts the
@@ -443,7 +443,7 @@ impl Records {
     /// physical inserts/changes under the writer, including deferred compute provenance.
     /// Relation/bulk capture and nested event-relevant side effects remain unsupported.
     pub async fn upsert(&self, tx: &mut Transaction, call: UpsertCall) -> Result<UpsertResult> {
-        tx.check_records(self)?;
+        tx.admit_records(self).await?;
         tx.check_capture_create(self, &call.rows)?;
         let before = tx.mutations();
         let guard = tx.guard();
@@ -481,7 +481,7 @@ impl Records {
         update: &[&str],
         accumulate: &[(&str, Option<Value>)],
     ) -> Result<UpsertResult> {
-        tx.check_records(self)?;
+        tx.admit_records(self).await?;
         let spec = self.spec();
         crate::database_generated::check_write_names(
             tx,
@@ -1248,10 +1248,13 @@ fn shape(tx: &Transaction, spec: &ModelSpec, plan: &Plan<'_>, batch: &Batch) -> 
     };
     changed_fields.sort_by_key(|field| spec.field_by_id(*field).name);
     changed_fields.dedup();
-    if changed_fields.len() > 128 {
+    if changed_fields.len() > erp_registry::MAX_EVENT_FIELD_NAMES {
         return Err(Error::new(
             ErrorKind::ResourceExhausted,
-            "outbox CaptureLimit: event exceeds 128 changed field names",
+            format!(
+                "outbox CaptureLimit: event exceeds {} changed field names",
+                erp_registry::MAX_EVENT_FIELD_NAMES
+            ),
         ));
     }
     let changed_names: Vec<&str> = changed_fields
@@ -2162,7 +2165,7 @@ pub(crate) async fn upsert_records(
     records: &Records,
     call: UpsertCall,
 ) -> Result<UpsertResult> {
-    tx.check_records(records)?;
+    tx.admit_records(records).await?;
     tx.check_capture_create(records, &call.rows)?;
     let before = tx.mutations();
     let guard = tx.guard();
@@ -2185,6 +2188,11 @@ async fn upsert_records_inner(
     let model = records.model_id();
     let registry = Arc::clone(env.registry());
     let spec = registry.model_by_id(model);
+    if let Some(field) = spec.fields.iter().find(|field| field.company_dependent) {
+        return Err(crate::company_dependent_runtime::unsupported(
+            spec.name, field.name, "upsert",
+        ));
+    }
     if spec
         .fields
         .iter()

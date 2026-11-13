@@ -8,9 +8,11 @@ use erp_sdk::blob::{AttachmentRuntime, AttachmentStore, BlobError, Namespace};
 use erp_sdk::prelude::*;
 use erp_sdk::{Env, ErrorKind};
 
-/// What a caller sees when no composition root attached the store configuration.
-pub(crate) const NOT_CONFIGURED: &str = "Attachments are not configured: the composition root must \
-attach an erp_sdk::blob::AttachmentRuntime to the ORM generation (attachments.write_store; see the attachment store page for operators)";
+/// What a caller sees when no composition root attached the store configuration. A user error
+/// (HTTP 422), not a programming error: the user reads which setting the operator must set.
+pub(crate) const NOT_CONFIGURED: &str = "Attachments are not configured: this server has no attachment \
+store, so files cannot be stored. An administrator must set attachments.write_store and a store in \
+the [attachments] table of the server configuration";
 
 /// A retryable whole-call failure: a reference raced a removal or a
 /// concurrent link. The ORM's retry loop repeats the call.
@@ -47,14 +49,35 @@ pub(crate) fn map_link_fk(error: Error) -> Error {
 /// The configured stores of this ORM generation.
 pub(crate) fn runtime(env: &Env) -> Result<Arc<AttachmentRuntime>> {
     env.generation_attachment::<AttachmentRuntime>()
-        .map_err(|_| Error::programming(NOT_CONFIGURED))
+        .map_err(|_| Error::user(NOT_CONFIGURED))
+}
+
+// A failed cleanup diagnostic must not reclassify the original receive failure.
+fn receive_kind(error: &BlobError) -> ErrorKind {
+    match error {
+        BlobError::StagingAbort { receive, .. } => receive_kind(receive),
+        BlobError::LimitExceeded { .. }
+        | BlobError::InvalidRange { .. }
+        | BlobError::UploadExpired => ErrorKind::Validation,
+        BlobError::QuotaExceeded { .. } => ErrorKind::ResourceExhausted,
+        BlobError::Configuration { .. } => ErrorKind::Programming,
+        BlobError::Busy { .. } => ErrorKind::Lock,
+        // All remaining storage/integrity/ownership failures already map to Internal below.
+        _ => ErrorKind::Internal,
+    }
 }
 
 /// Map a store error to the ORM error a caller sees.
 pub(crate) fn blob_error(error: BlobError) -> Error {
     match &error {
-        BlobError::LimitExceeded { .. } | BlobError::InvalidRange { .. } => {
-            Error::validation(error.to_string()).with_source(error)
+        BlobError::StagingAbort { receive, .. } => {
+            Error::new(receive_kind(receive), error.to_string()).with_source(error)
+        }
+        BlobError::LimitExceeded { .. }
+        | BlobError::InvalidRange { .. }
+        | BlobError::UploadExpired => Error::validation(error.to_string()).with_source(error),
+        BlobError::QuotaExceeded { .. } => {
+            Error::new(ErrorKind::ResourceExhausted, error.to_string()).with_source(error)
         }
         BlobError::Configuration { .. } => Error::programming(error.to_string()).with_source(error),
         // a full node answers busy at once (409, retry); it never queues
@@ -189,4 +212,40 @@ pub(crate) async fn store_by_id(
 /// A failed column read of a service statement.
 pub(crate) fn col_error(what: &str, error: impl std::fmt::Display) -> Error {
     Error::db(format!("{what}: a column could not be read: {error}"))
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "tests"
+)]
+mod cleanup_errors {
+    use super::*;
+    use std::error::Error as _;
+
+    #[test]
+    fn multipart_abort_diagnostic_keeps_the_original_limit_classification() {
+        let error = blob_error(BlobError::StagingAbort {
+            receive: Box::new(BlobError::LimitExceeded {
+                kind: erp_sdk::blob::LimitKind::ObjectBytes,
+                limit: 7,
+            }),
+            abort: Box::new(BlobError::Unavailable {
+                retryable: true,
+                message: "abort fault".into(),
+                source: None,
+            }),
+        });
+        assert_eq!(error.kind(), ErrorKind::Validation);
+        assert_eq!(
+            error.message(),
+            "object size in bytes exceeds the limit of 7; aborting the incomplete staging upload also failed: the attachment store is unavailable (retryable): abort fault"
+        );
+        assert!(matches!(
+            error.source().unwrap().downcast_ref::<BlobError>().unwrap(),
+            BlobError::StagingAbort { .. }
+        ));
+    }
 }

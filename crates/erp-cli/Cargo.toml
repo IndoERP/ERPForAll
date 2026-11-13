@@ -11,16 +11,18 @@ publish.workspace = true
 erp-modules = { workspace = true }
 # `erp access`: the policy of a database through erp-security, as the System principal
 erp-addon-base = { workspace = true }
+erp-addon-barcodes = { workspace = true }
 erp-addon-uom = { workspace = true }
 erp-addon-mail = { workspace = true }
 erp-addon-product = { workspace = true }
+erp-addon-product-mail = { workspace = true }
 erp-addon-web.workspace = true
 erp-addon-acceptance-notes.workspace = true
 erp-addon-theme-office-blue.workspace = true
 erp-server.workspace = true
 erp-views.workspace = true
 erp-sdk.workspace = true
-# `erp addon build/package`: reads the built component's describe under the host's limits
+# `erp addon build/package`: reads the built component's describe() under the host's limits
 erp-wasm-host.workspace = true
 erp-sql.workspace = true
 serde_json.workspace = true
@@ -51,12 +53,16 @@ rustix = { workspace = true, features = ["fs"] }
 erp-addon-web = { workspace = true, features = ["test-support"] }
 erp-addon-uom = { workspace = true }
 erp-addon-stock = { workspace = true }
+erp-addon-account = { workspace = true }
+erp-addon-analytic = { workspace = true }
 erp-addon-barcodes = { workspace = true }
 erp-addon-barcodes_gs1_nomenclature = { workspace = true }
 erp-addon-sample_library_wasm = { path = "../../examples/wasm/sample_library_wasm", default-features = false }
 erp-testkit = { workspace = true }
 # a minimal component for the package tests
 wat.workspace = true
+# opens the .xlsx the pivot download answers (human_pivot_export)
+zip = { workspace = true }
 erp-test-models = { path = "../erp-test-models" }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "test-util"] }
 

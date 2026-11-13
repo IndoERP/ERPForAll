@@ -1,6 +1,5 @@
 //! One node of a database: the module system with the runtime of WebAssembly package addons, as
-//! the server and the operator commands (`erp addon install | upgrade | uninstall`) compose it
-//! .
+//! the server and the operator commands (`erp addon install | upgrade | uninstall`) compose it.
 //!
 //! A node holds the compiled addons linked into this binary, the addon directories, the module
 //! system and the lifecycle of package addons. [`Node::load`] is what a starting server and a
@@ -103,9 +102,11 @@ impl Node {
                 .native_artifact_identities(crate::identity::native_artifact_identities()?)
                 .code([
                     &erp_addon_base::ADDON,
+                    &erp_addon_barcodes::ADDON,
                     &erp_addon_uom::ADDON,
                     &erp_addon_mail::ADDON,
                     &erp_addon_product::ADDON,
+                    &erp_addon_product_mail::ADDON,
                     &erp_addon_web::ADDON,
                     &erp_addon_acceptance_notes::ADDON,
                     &erp_addon_theme_office_blue::ADDON,
@@ -114,6 +115,9 @@ impl Node {
                 .lifecycle_hook(Arc::new(crate::ui_assets::AssetLifecycle::new(
                     crate::ui_assets::host_options()?,
                 )))
+                .lifecycle_hook(Arc::new(
+                    crate::attachment_schedules::AttachmentScheduleLifecycle,
+                ))
         } else {
             builder.linked_hooks(false).linked_migrations(false)
         };

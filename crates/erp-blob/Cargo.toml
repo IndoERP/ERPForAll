@@ -28,6 +28,9 @@ getrandom = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+rustix = { workspace = true, features = ["fs"] }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["fs", "io-util", "rt", "macros", "time"] }
 tempfile = { workspace = true }

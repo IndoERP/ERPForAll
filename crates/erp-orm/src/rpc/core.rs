@@ -10,8 +10,8 @@ use erp_domain::{Domain, Operator};
 use erp_fields::{Error, Value, ValueMap};
 
 use super::{
-    ArgError, BindError, Effect, FromRpc, IntoRpc, ParamSpec, Receiver, RpcArgs, RpcDecl, RpcImpl,
-    json_type, mismatch, null, present,
+    ArgError, ArgShape, BindError, Effect, FromRpc, IntoRpc, ParamSpec, Receiver, RpcArgs, RpcDecl,
+    RpcImpl, json_type, mismatch, null, present,
 };
 use crate::dispatch::{BoxFuture, call_method};
 use crate::read::Load;
@@ -88,6 +88,7 @@ mod args {
 
     impl FromRpc for LoadArg {
         const EXPECTED: &'static str = "a string or null";
+        const SHAPE: ArgShape = ArgShape::Open("a load mode");
         const REQUIRED: bool = false;
 
         fn from_rpc(value: Option<Value>) -> Result<Self, ArgError> {
@@ -111,6 +112,7 @@ mod args {
 
     impl FromRpc for ValsArg {
         const EXPECTED: &'static str = "an object or an array of objects";
+        const SHAPE: ArgShape = ArgShape::Open("field values");
 
         fn from_rpc(value: Option<Value>) -> Result<Self, ArgError> {
             match value {
@@ -126,11 +128,26 @@ mod args {
         }
     }
 
+    /// The operator names `OperatorArg` accepts, in `Operator::ALL` order.
+    pub(super) const OPERATOR_NAMES: [&str; Operator::ALL.len()] = {
+        let mut out = [""; Operator::ALL.len()];
+        let mut i = 0;
+        while i < out.len() {
+            out[i] = Operator::ALL[i].as_str();
+            i += 1;
+        }
+        out
+    };
+
+    /// The operation names `OperationArg` accepts (a unit test pins them to its parser).
+    pub(super) const OPERATION_NAMES: [&str; 4] = ["read", "write", "create", "unlink"];
+
     /// `name_search(operator=…)`: an operator name.
     pub(super) struct OperatorArg(pub(super) Operator);
 
     impl FromRpc for OperatorArg {
         const EXPECTED: &'static str = "a domain operator";
+        const SHAPE: ArgShape = ArgShape::Enum(&OPERATOR_NAMES);
 
         fn from_rpc(value: Option<Value>) -> Result<Self, ArgError> {
             match value {
@@ -150,6 +167,7 @@ mod args {
 
     impl FromRpc for OperationArg {
         const EXPECTED: &'static str = "'read', 'write', 'create' or 'unlink'";
+        const SHAPE: ArgShape = ArgShape::Enum(&OPERATION_NAMES);
 
         fn from_rpc(value: Option<Value>) -> Result<Self, ArgError> {
             match value {
@@ -217,6 +235,7 @@ mod args {
 
     impl<T: OrNull> FromRpc for Nullable<T> {
         const EXPECTED: &'static str = T::EXPECTED_OR_NULL;
+        const SHAPE: ArgShape = ArgShape::OrNull(&T::SHAPE);
         const REQUIRED: bool = false;
 
         fn from_rpc(value: Option<Value>) -> Result<Self, ArgError> {
@@ -242,6 +261,7 @@ mod args {
 
     impl<T: FromRpc> FromRpc for Defaulted<T> {
         const EXPECTED: &'static str = T::EXPECTED;
+        const SHAPE: ArgShape = T::SHAPE;
         const REQUIRED: bool = false;
 
         fn from_rpc(value: Option<Value>) -> Result<Self, ArgError> {
@@ -262,6 +282,7 @@ mod args {
 
     impl FromRpc for SearchPanelLimitArg {
         const EXPECTED: &'static str = "a non-negative integer, false or null";
+        const SHAPE: ArgShape = ArgShape::OrNull(&ArgShape::Integer { min: Some(0) });
         const REQUIRED: bool = false;
 
         fn from_rpc(value: Option<Value>) -> Result<Self, ArgError> {
@@ -279,6 +300,7 @@ mod args {
 
     impl FromRpc for GroupbySpecArg {
         const EXPECTED: &'static str = "a specification mapping (object) or null";
+        const SHAPE: ArgShape = ArgShape::Open("a read specification mapping");
         const REQUIRED: bool = false;
 
         fn from_rpc(value: Option<Value>) -> Result<Self, ArgError> {
@@ -311,6 +333,7 @@ mod args {
 
     impl FromRpc for OpeningInfoArg {
         const EXPECTED: &'static str = "an array of objects";
+        const SHAPE: ArgShape = ArgShape::Open("group opening state");
         const REQUIRED: bool = false;
 
         fn from_rpc(value: Option<Value>) -> Result<Self, ArgError> {
@@ -342,6 +365,7 @@ mod args {
 
     impl FromRpc for ProgressBarArg {
         const EXPECTED: &'static str = "an object";
+        const SHAPE: ArgShape = ArgShape::Open("a progress bar specification");
         const REQUIRED: bool = true;
 
         fn from_rpc(value: Option<Value>) -> Result<Self, ArgError> {
@@ -722,7 +746,7 @@ async fn has_access(tx: &mut Transaction, records: &Records, op: Operation) -> R
     };
     // the rules are enforced under the fixed predicate context; agree with the enforcement
     let visible = crate::search::predicate_records(records)
-        .sudo(true)
+        .engine_sudo()
         .search_query(tx, &(condition & rules), &opts)
         .await?
         .count(tx)
@@ -1895,5 +1919,64 @@ mod tests {
         let valid_items = Value::list([val_map([])]);
         let parsed = OpeningInfoArg::from_rpc(Some(valid_items)).unwrap().0;
         assert_eq!(parsed.unwrap().len(), 1);
+    }
+
+    /// Each binder type's shape follows R2, and the enum shapes
+    /// list exactly the names the binders accept.
+    #[test]
+    fn binder_shapes_follow_the_table() {
+        use super::args::{OPERATION_NAMES, OPERATOR_NAMES};
+        assert_eq!(bool::SHAPE, ArgShape::Boolean);
+        assert_eq!(i64::SHAPE, ArgShape::Integer { min: None });
+        assert_eq!(u64::SHAPE, ArgShape::Integer { min: Some(0) });
+        assert_eq!(f64::SHAPE, ArgShape::Number);
+        assert_eq!(String::SHAPE, ArgShape::String);
+        assert_eq!(Domain::SHAPE, ArgShape::Domain);
+        assert_eq!(
+            <Option<Vec<u64>>>::SHAPE,
+            ArgShape::OrNull(&ArgShape::Array(&ArgShape::Integer { min: Some(0) }))
+        );
+        assert!(<Option<Vec<u64>>>::SHAPE.is_closed());
+        assert_eq!(
+            Nullable::<String>::SHAPE,
+            ArgShape::OrNull(&ArgShape::String)
+        );
+        assert_eq!(Defaulted::<u64>::SHAPE, u64::SHAPE);
+        assert_eq!(
+            SearchPanelLimitArg::SHAPE,
+            ArgShape::OrNull(&ArgShape::Integer { min: Some(0) })
+        );
+        assert_eq!(OperatorArg::SHAPE, ArgShape::Enum(&OPERATOR_NAMES));
+        assert_eq!(OperationArg::SHAPE, ArgShape::Enum(&OPERATION_NAMES));
+        for name in OPERATOR_NAMES {
+            assert!(
+                OperatorArg::from_rpc(Some(Value::str(name))).is_ok(),
+                "{name}"
+            );
+        }
+        assert_eq!(OPERATOR_NAMES.len(), Operator::ALL.len());
+        for name in OPERATION_NAMES {
+            assert!(
+                OperationArg::from_rpc(Some(Value::str(name))).is_ok(),
+                "{name}"
+            );
+        }
+        assert_eq!(OPERATION_NAMES.len(), Operation::ALL.len());
+        for (shape, reason) in [
+            (Value::SHAPE, "any value"),
+            (ValueMap::SHAPE, "an object with open keys"),
+            (Spec::SHAPE, "a read specification"),
+            (super::super::Binary::SHAPE, "binary data"),
+            (LoadArg::SHAPE, "a load mode"),
+            (ValsArg::SHAPE, "field values"),
+            (GroupbySpecArg::SHAPE, "a read specification mapping"),
+            (OpeningInfoArg::SHAPE, "group opening state"),
+            (ProgressBarArg::SHAPE, "a progress bar specification"),
+            (<Vec<Value>>::SHAPE, "any value"),
+            (<Option<ValueMap>>::SHAPE, "an object with open keys"),
+        ] {
+            assert_eq!(shape.open_reason(), Some(reason), "{shape:?}");
+            assert!(!shape.is_closed());
+        }
     }
 }

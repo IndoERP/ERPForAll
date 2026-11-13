@@ -1,5 +1,5 @@
-//! `ir.access`: model and record access in one table (SPEC-SEC §4.1,
-//! ;). A row with a group is a
+//! `ir.access`: model and record access in one table (SPEC-SEC §4.1;
+//! ). A row with a group is a
 //! **permission** of that group, a row without one a **restriction** for everyone; the access
 //! domain of a model and operation is `OR(permissions of the user's groups) AND
 //! AND(restrictions)`. `erp-security` compiles the active rows into the policy snapshot.

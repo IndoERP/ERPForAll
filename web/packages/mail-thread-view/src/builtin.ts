@@ -3,7 +3,7 @@
 // provider. Addons add theirs next to these.
 import { untrack } from "@erpforall/elang";
 import { PARTNER_MODEL, readMessage } from "./contract";
-import { h, humanize, normalize } from "./dom";
+import { glyphNode, h, humanize, normalize } from "./dom";
 import { OWNING_TASK, ThreadViewError, unavailable } from "./errors";
 import { performOperation } from "./operations";
 import type { ComposerAction, MessageAction, MessageRenderer, PartnerSuggestion, Suggestion, SuggestionProvider, ThreadViewRegistries } from "./registries";
@@ -117,7 +117,7 @@ const emojiAction: ComposerAction = {
 
 const attachAction: ComposerAction = {
   label: (ctx) => t(ctx.view, "Attach files"),
-  glyph: "📎",
+  glyph: "paperclip",
   unavailable: (ctx) => (ctx.view.services.uploadAttachment === undefined ? `Attaching files needs ${OWNING_TASK.upload} (ir.attachment)` : null),
   run: (ctx) => {
     if (ctx.view.services.uploadAttachment === undefined) {
@@ -151,7 +151,7 @@ const trackingRenderer: MessageRenderer = {
           h(doc, "span", { class: "erp-mail-tracking-field" }, label),
           " ",
           h(doc, "span", { class: "erp-mail-tracking-old" }, shown(change.oldDisplay, change.old)),
-          h(doc, "span", { class: "erp-mail-tracking-arrow", "aria-hidden": "true" }, " → "),
+          h(doc, "span", { class: "erp-mail-tracking-arrow", "aria-hidden": "true" }, glyphNode(doc, "arrow-right", 12)),
           h(doc, "span", { class: "erp-mail-sr-only" }, ` ${t(view, "changed to")} `),
           h(doc, "span", { class: "erp-mail-tracking-new" }, shown(change.newDisplay, change.new))),
       );

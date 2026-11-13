@@ -1,0 +1,5 @@
+error: #[rpc(hide)] takes no other parameter
+ --> tests/ui/rpc_assistant/hide_offer.rs:4:5
+  |
+4 |     #[rpc(hide, assistant = offer)]
+  |     ^

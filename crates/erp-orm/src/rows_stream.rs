@@ -1,4 +1,4 @@
-//! Windowed reads (PERF.STREAM-WINDOW; design notes–§3.7, §4.1
+//! Windowed reads (PERF.STREAM-WINDOW;–§3.7, §4.1
 //! and).
 //!
 //! [`Records::stream`] reads the records of a domain window by window through a SQL cursor, and
@@ -612,7 +612,7 @@ impl RowsStream {
     /// the flush's errors; the `FETCH`'s or the chunk's read errors (a server error aborts the
     /// transaction); the read errors of [`Records::read_rows`] for the window's records.
     pub async fn next(&mut self, tx: &mut Transaction) -> Result<Option<&Rows>> {
-        tx.check_records(&self.records)?;
+        tx.admit_records(&self.records).await?;
         if self.phase == Phase::Done {
             return Ok(None);
         }

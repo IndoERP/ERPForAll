@@ -3977,6 +3977,10 @@ async fn nested_bad_values_are_validation() {
             "Unknown command 9 for test_web.multi_line.sub_ids: [9, 0, 0]",
         ),
         (
+            json!([[0, 0, {"sub_ids": [[3, 1, 7]]}]]),
+            "Wrong value for test_web.multi_line.sub_ids: [3, 1, 7]",
+        ),
+        (
             json!([[0, 0, {"sub_ids": [[0, 0, {"nope": 1}]]}]]),
             "Invalid field 'nope' on model 'test_web.multi_sub'",
         ),

@@ -1,0 +1,207 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Country, Federal State, and Country Group views and window actions. -->
+<erp>
+  <!-- res.country views -->
+  <record id="view_country_tree" model="ir.ui.view">
+    <field name="name">res.country.list</field>
+    <field name="model">res.country</field>
+    <field name="arch" type="xml">
+      <list string="Country">
+        <field name="name"/>
+        <field name="code"/>
+      </list>
+    </field>
+  </record>
+
+  <record id="view_country_form" model="ir.ui.view">
+    <field name="name">res.country.form</field>
+    <field name="model">res.country</field>
+    <field name="arch" type="xml">
+      <form>
+        <sheet>
+          <div class="oe_title">
+            <label for="name"/>
+            <h1><field name="name"/></h1>
+          </div>
+          <group name="main_group">
+            <group name="country_details">
+              <field name="currency_id"/>
+              <field name="code"/>
+              <field name="phone_code"/>
+            </group>
+            <group name="phone_vat_settings">
+              <field name="vat_label"/>
+              <field name="zip_applicability"/>
+              <field name="state_required"/>
+            </group>
+          </group>
+          <group name="advanced_address_formatting" string="Advanced Address Formatting">
+            <field name="address_view_id"/>
+            <field name="address_format" placeholder="Address format..."/>
+            <field name="name_position"/>
+          </group>
+          <notebook>
+            <page name="states" string="States">
+              <field name="state_ids">
+                <list editable="bottom">
+                  <field name="name"/>
+                  <field name="code"/>
+                </list>
+              </field>
+            </page>
+          </notebook>
+        </sheet>
+      </form>
+    </field>
+  </record>
+
+  <record id="view_country_search" model="ir.ui.view">
+    <field name="name">res.country.search</field>
+    <field name="model">res.country</field>
+    <field name="arch" type="xml">
+      <search string="Countries">
+        <field name="name" filter_domain="['|', ('name', 'ilike', self), ('code', 'ilike', self)]"/>
+        <field name="phone_code"/>
+      </search>
+    </field>
+  </record>
+
+  <record id="action_country" model="ir.actions.act_window">
+    <field name="name">Countries</field>
+    <field name="res_model">res.country</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="view_country_tree"/>
+    <field name="search_view_id" ref="view_country_search"/>
+  </record>
+
+  <record id="action_country_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="action_country"/>
+    <field name="view_id" ref="view_country_tree"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+
+  <record id="action_country_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="action_country"/>
+    <field name="view_id" ref="view_country_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+
+  <!-- res.country.state views -->
+  <record id="view_country_state_tree" model="ir.ui.view">
+    <field name="name">res.country.state.list</field>
+    <field name="model">res.country.state</field>
+    <field name="arch" type="xml">
+      <list string="State" editable="bottom">
+        <field name="name"/>
+        <field name="code"/>
+        <field name="country_id"/>
+      </list>
+    </field>
+  </record>
+
+  <record id="view_country_state_form" model="ir.ui.view">
+    <field name="name">res.country.state.form</field>
+    <field name="model">res.country.state</field>
+    <field name="arch" type="xml">
+      <form string="State">
+        <sheet>
+          <group>
+            <field name="name"/>
+            <field name="code"/>
+            <field name="country_id"/>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+
+  <record id="view_country_state_search" model="ir.ui.view">
+    <field name="name">res.country.state.search</field>
+    <field name="model">res.country.state</field>
+    <field name="arch" type="xml">
+      <search string="Country">
+        <field name="name"/>
+        <field name="country_id"/>
+        <group>
+          <filter name="groupby_country" string="Country" context="{'group_by': 'country_id'}"/>
+        </group>
+      </search>
+    </field>
+  </record>
+
+  <record id="action_country_state" model="ir.actions.act_window">
+    <field name="name">Fed. States</field>
+    <field name="res_model">res.country.state</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="view_country_state_tree"/>
+    <field name="search_view_id" ref="view_country_state_search"/>
+  </record>
+
+  <record id="action_country_state_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="action_country_state"/>
+    <field name="view_id" ref="view_country_state_tree"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+
+  <record id="action_country_state_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="action_country_state"/>
+    <field name="view_id" ref="view_country_state_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+
+  <!-- res.country.group views -->
+  <record id="view_country_group_tree" model="ir.ui.view">
+    <field name="name">res.country.group.list</field>
+    <field name="model">res.country.group</field>
+    <field name="arch" type="xml">
+      <list string="Country Group">
+        <field name="name"/>
+        <field name="code"/>
+      </list>
+    </field>
+  </record>
+
+  <record id="view_country_group_form" model="ir.ui.view">
+    <field name="name">res.country.group.form</field>
+    <field name="model">res.country.group</field>
+    <field name="arch" type="xml">
+      <form string="Country Group">
+        <sheet>
+          <div class="oe_title">
+            <label for="name" string="Group Name"/>
+            <h1><field name="name" placeholder="e.g. Europe"/></h1>
+          </div>
+          <group name="country_group">
+            <field name="code"/>
+            <field name="country_ids" widget="many2many_tags"/>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+
+  <record id="action_country_group" model="ir.actions.act_window">
+    <field name="name">Country Group</field>
+    <field name="res_model">res.country.group</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="view_country_group_tree"/>
+  </record>
+
+  <record id="action_country_group_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="action_country_group"/>
+    <field name="view_id" ref="view_country_group_tree"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+
+  <record id="action_country_group_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="action_country_group"/>
+    <field name="view_id" ref="view_country_group_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+</erp>

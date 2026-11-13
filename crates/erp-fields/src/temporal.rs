@@ -103,8 +103,7 @@ impl Date {
     }
 
     /// Like [`context_today`](Self::context_today) for the instant `timestamp` (a naive UTC
-    /// datetime) instead of the clock: `Date.context_today(record, timestamp)`
-    /// .
+    /// datetime) instead of the clock: `Date.context_today(record, timestamp)`.
     ///
     /// # Errors
     ///

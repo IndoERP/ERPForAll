@@ -32,7 +32,7 @@ const description={wire_major:1,registry_version:'r1',description_version:'d1',m
 let savedName='Original', saves=[], actionCount=0, pendingResolve;
 const action={wire_major:1,id:20,name:'Notes',model:'test.note',target:'current',views:[{id:1,type:'form'}],domain:null,context:null};
 window.fetch=async(path,init={})=>{const body=JSON.parse(String(init.body??'{}'));let value;
-if(path.endsWith('erp_load_web_menus'))value={wire_major:1,registry_version:'r1',roots:[10],nodes:[{id:10,parent_id:null,label:'Notes',action_id:20,children:[],icon:null}]};
+if(path.endsWith('erp_load_web_menus'))value={wire_major:1,registry_version:'r1',roots:[10],nodes:[{ module: null,id:10,parent_id:null,label:'Notes',action_id:20,children:[],icon:null}]};
 else if(path.endsWith('erp_load_web_action_views'))value={action,views:description};
 else if(path.endsWith('erp_load_web_action'))value=action;
 else if(path.endsWith('get_views'))value=description;

@@ -1,10 +1,12 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { registerFieldWidget, configureClientTemplates } from "../src/client/registry.js";
+import { registerFieldWidget, registerDebugItemProvider, configureClientTemplates, registerCommandCategory, commandCategories, registerCommandProvider, commandProviders } from "../src/client/registry.js";
 import { RecordForm } from "../src/client/record-form.js";
 import { HumanApp } from "../src/client/app.js";
 import { describeViews } from "../src/client/metadata.js";
+import { ClientError } from "../src/client/transport.js";
 import * as panelRecovery from "../src/client/panel-recovery.js";
+import { getActiveCommandPalette } from "../src/client/command-palette.js";
 
 /** Match the bundled navigation RPC while keeping standalone discovery fixtures. */
 function actionMetadata(path: string, action: unknown, views: unknown): unknown {
@@ -121,7 +123,7 @@ test("ordinary authorized action renders actual values as text and saves edited 
   vi.stubGlobal("fetch", vi.fn(async (path: string, init: RequestInit) => {
     const body = JSON.parse(String(init.body)) as Record<string, unknown>;
     calls.push({ path, body });
-    const value = path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] }
+    const value = path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] }
       : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, { wire_major: 1, id: 20, name: "Notes", model: "test.note", target: "current", views: [{ id: 1, type: "form" }], domain: null, context: null }, description)
       : path.endsWith("get_views") ? description
       : path.endsWith("onchange") ? { value: { name: objectName(body["values"]) } }
@@ -130,8 +132,13 @@ test("ordinary authorized action renders actual values as text and saves edited 
     return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
   }));
   const root = host();
+  const focus = vi.spyOn(HTMLElement.prototype, "focus");
   app = new HumanApp(root, bootstrap);
   await app.start();
+  // the opened page takes focus without being scrolled to its own top edge: the menu bar above it stays in view
+  const content = root.querySelector<HTMLElement>("[data-client-content]")!;
+  expect(focus.mock.calls[focus.mock.contexts.lastIndexOf(content)]).toEqual([{ preventScroll: true }]);
+  focus.mockRestore();
   expect([...root.querySelectorAll("img")].filter(img => !["/erp/brand/logo.svg", "/erp/brand/logo-dark.svg"].includes(img.getAttribute("src") ?? ""))).toEqual([]);
   const input = root.querySelector<HTMLInputElement>('input[name="name"]')!;
   expect(input.value).toBe("<img src=x onerror=alert(1)>");
@@ -152,13 +159,65 @@ test("a session denial removes protected shell state before the error is display
   await expect(app.start()).rejects.toMatchObject({ kind: "session" });
   expect(root.textContent).not.toContain("Operator");
   expect(root.querySelector("input[name=csrf_token]")).toBeNull();
-  expect(root.querySelector("a")?.getAttribute("href")).toBe("/erp/login");
+  expect(root.querySelector("a")?.getAttribute("href")).toBe("/erp/login?redirect=%2Ferp");
+  expect(root.textContent).not.toContain("Unsaved changes");
+});
+
+test("a session expiry with unsaved edits keeps the return path and says the edits were lost", async () => {
+  history.replaceState(null, "", "/erp/action-20?id=5&view_type=form");
+  let expired = false;
+  vi.stubGlobal("fetch", vi.fn(async (path: string, init: RequestInit) => {
+    if (expired) return new Response('{"message":"Expired"}', { status: 401 });
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    const value = path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] }
+      : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, { wire_major: 1, id: 20, name: "Notes", model: "test.note", target: "current", views: [{ id: 1, type: "form" }], domain: null, context: null }, description)
+      : path.endsWith("get_views") ? description
+      : path.endsWith("onchange") ? { value: { name: objectName(body["values"]) } }
+      : [{ id: 5, name: "Original" }];
+    return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
+  }));
+  const root = host();
+  app = new HumanApp(root, bootstrap);
+  await app.start();
+  const input = root.querySelector<HTMLInputElement>('input[name="name"]')!;
+  input.value = "Changed";
+  input.dispatchEvent(new Event("change"));
+  await vi.waitFor(() => expect(root.querySelector<HTMLInputElement>('input[name="name"]')?.disabled).toBe(false));
+  expired = true;
+  [...root.querySelectorAll("button")].find(button => button.textContent === "Save")!.click();
+  await vi.waitFor(() => expect(root.querySelector("main h1")?.textContent).toBe("Session expired"));
+  expect(root.textContent).not.toContain("Changed");
+  expect(root.querySelector('[role="alert"]')?.textContent).toBe("Unsaved changes on this page were lost. Sign in, then enter them again.");
+  const link = root.querySelector("a")!;
+  expect(new URL(link.href).pathname).toBe("/erp/login");
+  expect(new URL(link.href).searchParams.get("redirect")).toBe("/erp/action-20?id=5&view_type=form");
+  // A second 401 from another in-flight request must not erase the warning or move the return path.
+  history.replaceState(null, "", "/erp/action-99");
+  (app as unknown as { expire(): void }).expire();
+  expect(root.querySelectorAll("main")).toHaveLength(1);
+  expect(root.querySelector('[role="alert"]')?.textContent).toBe("Unsaved changes on this page were lost. Sign in, then enter them again.");
+  expect(root.querySelector("a")?.getAttribute("href")).toBe(link.getAttribute("href"));
+});
+
+test("a failing dirty check on session expiry is reported, the teardown still runs and the warning is shown", async () => {
+  history.replaceState(null, "", "/erp");
+  const reported = vi.fn();
+  vi.stubGlobal("reportError", reported);
+  const root = host();
+  app = new HumanApp(root, bootstrap);
+  const failure = new Error("dirty state unreadable");
+  Object.defineProperty(app, "isDirty", { value: () => { throw failure; } });
+  (app as unknown as { expire(): void }).expire();
+  expect(reported).toHaveBeenCalledWith(failure);
+  expect(root.querySelector("main h1")?.textContent).toBe("Session expired");
+  expect(root.querySelector('[role="alert"]')?.textContent).toBe("Unsaved changes on this page were lost. Sign in, then enter them again.");
+  expect(root.querySelector("a")?.getAttribute("href")).toBe("/erp/login?redirect=%2Ferp");
 });
 
 test("Back and Forward restore existing application history entries", async () => {
   history.replaceState(null, "", "/erp");
   vi.stubGlobal("fetch", vi.fn(async (path: string) => {
-    const value = path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] }
+    const value = path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] }
       : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, { wire_major: 1, id: 20, name: "Notes", model: "test.note", target: "current", views: [{ id: 1, type: "form" }], domain: null, context: null }, description)
       : path.endsWith("get_views") ? description : path.endsWith("default_get") ? { name: "New note" } : { value: { name: "New note" } };
     return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
@@ -189,7 +248,7 @@ test("rapid Back traversals share one dirty decision and restore the latest capt
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function (this: HTMLDialogElement) { this.open = true; } });
   Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function (this: HTMLDialogElement) { this.open = false; } });
   vi.stubGlobal("fetch", vi.fn(async (path: string) => {
-    const value = path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] }
+    const value = path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] }
       : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, { wire_major: 1, id: 20, name: "Notes", model: "test.note", target: "current", views: [{ id: 1, type: "form" }], domain: null, context: null }, description)
       : path.endsWith("get_views") ? description : path.endsWith("default_get") ? { name: "New note" } : { value: { name: "Changed" } };
     return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
@@ -234,8 +293,8 @@ test("app switcher keeps labelled launcher buttons with decorative Lucide SVG ic
       registry_version: "r1",
       roots: [10, 11],
       nodes: [
-        { id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: "lucide:notebook-pen" },
-        { id: 11, parent_id: null, label: "Settings", action_id: 21, children: [], icon: "lucide:settings" }
+        { module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: "lucide:notebook-pen" },
+        { module: null, id: 11, parent_id: null, label: "Settings", action_id: 21, children: [], icon: "lucide:settings" }
       ]
     } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
       wire_major: 1,
@@ -311,10 +370,10 @@ test("second-level menus appear under their root app rather than in a flat globa
       registry_version: "r1",
       roots: [10, 11],
       nodes: [
-        { id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null },
-        { id: 11, parent_id: null, label: "Settings", action_id: 21, children: [101, 102], icon: null },
-        { id: 101, parent_id: 11, label: "Users", action_id: 201, children: [], icon: null },
-        { id: 102, parent_id: 11, label: "Companies", action_id: 202, children: [], icon: null }
+        { module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null },
+        { module: null, id: 11, parent_id: null, label: "Settings", action_id: 21, children: [101, 102], icon: null },
+        { module: null, id: 101, parent_id: 11, label: "Users", action_id: 201, children: [], icon: null },
+        { module: null, id: 102, parent_id: 11, label: "Companies", action_id: 202, children: [], icon: null }
       ]
     } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
       wire_major: 1,
@@ -356,7 +415,7 @@ test("breadcrumbs display action and record hierarchy with clickable back naviga
       wire_major: 1,
       registry_version: "r1",
       roots: [10],
-      nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
+      nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
     } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
       wire_major: 1,
       id: 20,
@@ -401,7 +460,7 @@ test("search input creates removable facet chips and clears filter on remove", a
       wire_major: 1,
       registry_version: "r1",
       roots: [10],
-      nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
+      nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
     } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
       wire_major: 1,
       id: 20,
@@ -449,7 +508,7 @@ test("search keeps the prior history URL and shows validation when Unicode facet
     if (path.endsWith("web_search_read")) searchQueries.push(body["domain"]);
     const value = path.endsWith("erp_load_web_menus") ? {
       wire_major: 1, registry_version: "r1", roots: [10],
-      nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
+      nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
     } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
       wire_major: 1, id: 20, name: "Notes", model: "test.note", target: "current",
       views: [{ id: 2, type: "list" }], domain: null, context: null
@@ -497,7 +556,7 @@ test("search autocomplete allows selection and triggers filtered search", async 
       wire_major: 1,
       registry_version: "r1",
       roots: [10],
-      nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
+      nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
     } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
       wire_major: 1,
       id: 20,
@@ -543,7 +602,7 @@ test("search menu panel toggles and adds custom filter to query domain", async (
       wire_major: 1,
       registry_version: "r1",
       roots: [10],
-      nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
+      nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
     } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
       wire_major: 1,
       id: 20,
@@ -589,7 +648,7 @@ test("systray user menu displays company and CSRF-protected logout", async () =>
       wire_major: 1,
       registry_version: "r1",
       roots: [10],
-      nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
+      nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
     } : [];
     return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
   }));
@@ -614,7 +673,11 @@ test("systray user menu displays company and CSRF-protected logout", async () =>
   userBtn.click();
   expect(dropdown.classList.contains("open")).toBe(true);
   expect(dropdown.textContent).toContain("Operator");
-  expect(dropdown.querySelector("select")?.value).toBe("1");
+  expect(header.querySelector<HTMLSelectElement>(".company-menu select")?.value).toBe("1");
+  expect(header.querySelector(".company-menu-name")?.textContent).not.toBe("");
+  const rowLabels = [...dropdown.querySelectorAll(".user-menu-row")].map(row => row.textContent ?? "");
+  expect(rowLabels[0]).toContain("Shortcuts");
+  expect(rowLabels.slice(1)).toEqual(["My preferences", "Sign out"]);
 
   const logoutForm = dropdown.querySelector<HTMLFormElement>("form")!;
   expect(logoutForm.action).toContain("/erp/session/logout");
@@ -636,7 +699,7 @@ test("list view header and row selection with count and delete action", async ()
       wire_major: 1,
       registry_version: "r1",
       roots: [10],
-      nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
+      nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
     } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
       wire_major: 1,
       id: 20,
@@ -693,7 +756,7 @@ test("list view header and row selection with count and delete action", async ()
     configurable: true,
     value: function (this: HTMLDialogElement) {
       this.open = true;
-      const primaryBtn = this.querySelector<HTMLButtonElement>("button.primary");
+      const primaryBtn = this.querySelector<HTMLButtonElement>("button[data-default-action]");
       setTimeout(() => primaryBtn?.click(), 10);
     }
   });
@@ -719,7 +782,7 @@ test("list columns settle synchronously on initial load and reload (no auto-layo
       wire_major: 1,
       registry_version: "r1",
       roots: [10],
-      nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
+      nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
     } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
       wire_major: 1,
       id: 20,
@@ -746,9 +809,10 @@ test("list columns settle synchronously on initial load and reload (no auto-layo
   expect(table.classList.contains("list-auto-layout")).toBe(false);
   expect(table.style.tableLayout).toBe("fixed");
   expect(table.querySelectorAll("col").length).toBeGreaterThan(1);
-  for (const col of Array.from(table.querySelectorAll("col"))) {
-    expect(col.style.width).toMatch(/^[0-9]+px$/);
-  }
+  // every column but the last has its pixel width; the last takes the spare room, so it has none.
+  const cols = Array.from(table.querySelectorAll("col"));
+  for (const col of cols.slice(0, -1)) expect(col.style.width).toMatch(/^[0-9]+px$/);
+  expect(cols.at(-1)!.style.width).toBe("");
 });
 
 /// (partial: Office Blue list hierarchy and real pagination controller)
@@ -762,8 +826,8 @@ test("Office Blue list has a title, metadata ancestry and bounded real page navi
     const body = init.body ? JSON.parse(String(init.body)) : {};
     const value = path.endsWith("erp_load_web_menus") ? {
       wire_major: 1, registry_version: "r1", roots: [9], nodes: [
-        { id: 9, parent_id: null, children: [10], label: "Workspace", action_id: null, icon: null },
-        { id: 10, parent_id: 9, children: [], label: "Notes", action_id: 20, icon: null }
+        { module: null, id: 9, parent_id: null, children: [10], label: "Workspace", action_id: null, icon: null },
+        { module: null, id: 10, parent_id: 9, children: [], label: "Notes", action_id: 20, icon: null }
       ]
     } : path.endsWith("erp_load_web_action_views") ? actionMetadata(path, {
       wire_major: 1, id: 20, name: "Notes", model: "test.note", target: "current",
@@ -779,11 +843,28 @@ test("Office Blue list has a title, metadata ancestry and bounded real page navi
   try {
     const root = host(); app = new HumanApp(root, bootstrap); await app.start();
     expect(root.querySelector(".control-panel-list h1")?.textContent).toBe("Notes");
-    expect(root.querySelector(".list-menu-path")?.textContent).toBe("Workspace › Notes");
-    const footer = root.querySelector(".list-footer")!;
+    expect(root.querySelector<HTMLHeadingElement>(".control-panel-list h1")?.title).toBe("Workspace › Notes");
+    const footer = root.querySelector(".control-panel-list .pager")!;
+    expect(root.querySelector(".list-footer")).toBeNull();
     expect(footer).not.toBeNull();
     expect(footer.querySelector(".pager-count")?.textContent).toBe("1–40 / 240");
     expect(footer.querySelector('[aria-current="page"]')?.textContent).toBe("1");
+    const options = footer.querySelector<HTMLButtonElement>(".pager-options")!;
+    options.dispatchEvent(new KeyboardEvent("keydown", {key:"ArrowDown",bubbles:true}));
+    footer.querySelector('.pager-menu')!.dispatchEvent(new KeyboardEvent("keydown", {key:"End",bubbles:true}));
+    const sizeTrigger = footer.querySelector<HTMLButtonElement>('.list-page-size .choice-dropdown-trigger')!;
+    expect(document.activeElement).toBe(sizeTrigger);
+    expect(sizeTrigger.getAttribute("role")).toBe("menuitem"); // review N5: an item of role=menu, not a plain button
+    sizeTrigger.dispatchEvent(new KeyboardEvent("keydown", {key:"ArrowDown",bubbles:true}));
+    expect(document.activeElement).toBe(footer.querySelector('.list-page-size [data-value="20"]'));
+    document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", {key:"ArrowDown",bubbles:true}));
+    expect(document.activeElement).toBe(footer.querySelector('.list-page-size [data-value="40"]'));
+    document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", {key:"Escape",bubbles:true}));
+    expect(document.activeElement).toBe(sizeTrigger);
+    expect(options.getAttribute("aria-expanded")).toBe("true");
+    sizeTrigger.dispatchEvent(new KeyboardEvent("keydown", {key:"Escape",bubbles:true}));
+    expect(options.getAttribute("aria-expanded")).toBe("false");
+
     (footer.querySelector('[aria-label="Page 6"]') as HTMLButtonElement).click();
     await vi.waitFor(() => expect(reads.at(-1)).toEqual({ offset: 200, limit: 40 }));
     await vi.waitFor(() => expect(footer.querySelector(".pager-count")?.textContent).toBe("201–240 / 240"));
@@ -793,18 +874,17 @@ test("Office Blue list has a title, metadata ancestry and bounded real page navi
     (footer.querySelector(".pager-prev") as HTMLButtonElement).click();
     await vi.waitFor(() => expect(reads.at(-1)).toEqual({ offset: 160, limit: 40 }));
     expect(root.querySelectorAll(".list-row-select")).toHaveLength(40);
-    const size = footer.querySelector<HTMLSelectElement>(".list-page-size")!;
-    size.value = "50"; size.dispatchEvent(new Event("change"));
+    footer.querySelector<HTMLButtonElement>('.list-page-size [data-value="50"]')!.click();
     await vi.waitFor(() => expect(reads.at(-1)).toEqual({ offset: 0, limit: 50 }));
     await vi.waitFor(() => expect(footer.querySelector(".pager-count")?.textContent).toBe("1–50 / 240"));
     expect(root.querySelectorAll(".list-row-select")).toHaveLength(50);
-    const active = root.querySelector<HTMLSelectElement>(".list-active-filter")!;
+    const active = root.querySelector<HTMLElement>(".list-active-filter")!;
     expect(active).not.toBeNull();
-    active.value = "archived"; active.dispatchEvent(new Event("change"));
+    active.querySelector<HTMLButtonElement>('[data-value="archived"]')!.click();
     await vi.waitFor(() => expect(root.querySelector(".erp-facet-filter")?.textContent).toContain("Archived"));
     await vi.waitFor(() => expect(footer.querySelector(".pager-count")?.textContent).toBe("0 records"));
     expect(domains.at(-1)).toEqual([["active", "=", false]]);
-    active.value = "all"; active.dispatchEvent(new Event("change"));
+    active.querySelector<HTMLButtonElement>('[data-value="all"]')!.click();
     await vi.waitFor(() => expect(footer.querySelector(".pager-count")?.textContent).toBe("1–50 / 240"));
     expect(domains.at(-1)).toEqual([]);
     const search = root.querySelector<HTMLInputElement>(".search-input")!;
@@ -829,7 +909,7 @@ test("declared list tabs count the base search, filter actual rows and ignore a 
   vi.stubGlobal("fetch", vi.fn(async (path: string, init: RequestInit) => {
     const body = init.body ? JSON.parse(String(init.body)) : {};
     let value: unknown;
-    if (path.endsWith("erp_load_web_menus")) value = { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ id: 10, parent_id: null, children: [], label: "Notes", action_id: 20, icon: null }] };
+    if (path.endsWith("erp_load_web_menus")) value = { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, children: [], label: "Notes", action_id: 20, icon: null }] };
     else if (path.endsWith("erp_load_web_action_views")) value = actionMetadata(path, { wire_major: 1, id: 20, name: "Notes", model: "test.note", target: "current", views: [{ id: 2, type: "list" }, { id: 1, type: "form" }], domain: null, context: null }, tabDescription);
     else if (path.endsWith("web_search_read")) { rowDomains.push(body.domain); limits.push(body.limit); const rows = matching(body.domain); value = { length: rows.length, records: rows.slice(body.offset, body.offset + body.limit) }; }
     else if (path.endsWith("formatted_read_group")) {
@@ -846,8 +926,8 @@ test("declared list tabs count the base search, filter actual rows and ignore a 
   try {
     const root = host(); app = new HumanApp(root, bootstrap); await app.start();
     expect(limits[0]).toBe(250);
-    expect(root.querySelector<HTMLSelectElement>(".list-page-size")?.value).toBe("250");
-    expect(root.querySelector('.list-page-size option[value="250"]')).not.toBeNull();
+    expect(root.querySelector<HTMLButtonElement>(".list-page-size .choice-dropdown-trigger")?.value).toBe("250");
+    expect(root.querySelector('.list-page-size [data-value="250"]')).not.toBeNull();
     const tabs = root.querySelector(".list-state-tabs")!;
     expect(tabs.querySelector('[data-tab-token="all"]')?.textContent).toBe("All3");
     const high = tabs.querySelector<HTMLButtonElement>('[data-tab-token="value:high"]')!;
@@ -862,7 +942,7 @@ test("declared list tabs count the base search, filter actual rows and ignore a 
     await vi.waitFor(() => expect(tabs.querySelector('[data-tab-token="all"]')?.textContent).toBe("All2"));
     expect(countDomains.at(-1)).toEqual([["name", "ilike", "match"]]);
     expect(rowDomains.at(-1)).toEqual([["name", "ilike", "match"], ["priority", "=", "high"]]);
-    const size = root.querySelector<HTMLSelectElement>(".list-page-size")!; size.value = "50"; size.dispatchEvent(new Event("change"));
+    root.querySelector<HTMLButtonElement>('.list-page-size [data-value="50"]')!.click();
     await vi.waitFor(() => expect(limits.at(-1)).toBe(50));
     expect(rowDomains.at(-1)).toEqual([["name", "ilike", "match"], ["priority", "=", "high"]]);
     tabs.querySelector<HTMLButtonElement>('[data-tab-token="value:normal"]')!.click();
@@ -912,7 +992,7 @@ test("list view column sort with direction indicator and row click opens form", 
       wire_major: 1,
       registry_version: "r1",
       roots: [10],
-      nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
+      nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
     } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
       wire_major: 1,
       id: 20,
@@ -939,14 +1019,15 @@ test("list view column sort with direction indicator and row click opens form", 
   // Click sort to toggle to name asc
   sortBtn.click();
   await vi.waitFor(() => expect(searchCalls.some(c => c.order === "name asc")).toBe(true));
-  await vi.waitFor(() => expect(root.querySelector(".sort-button")?.textContent).toContain("↑"));
+  await vi.waitFor(() => expect(root.querySelector(".sort-button .sort-indicator")).not.toBeNull());
   expect(root.querySelector("th.sortable-column")?.getAttribute("aria-sort")).toBe("ascending");
 
   // Click again to toggle to name desc
   root.querySelector<HTMLButtonElement>(".sort-button")!.click();
   await vi.waitFor(() => expect(searchCalls.some(c => c.order === "name desc")).toBe(true));
-  await vi.waitFor(() => expect(root.querySelector(".sort-button")?.textContent).toContain("↓"));
-  expect(root.querySelector("th.sortable-column")?.getAttribute("aria-sort")).toBe("descending");
+  await vi.waitFor(() => expect(root.querySelector("th.sortable-column")?.getAttribute("aria-sort")).toBe("descending"));
+  expect(root.querySelector(".sort-button .sort-indicator")).not.toBeNull();
+  expect(root.querySelector(".sort-button")?.textContent).toBe("Name");
 
   // Click row to navigate to form
   const row = root.querySelector<HTMLElement>("tbody tr")!;
@@ -964,11 +1045,11 @@ test.each([false, true])("form state and Save/Discard retain validation with Off
     if (path.endsWith("web_save")) {
       saveCalls.push(body);
     }
-    const value = path.endsWith("erp_load_web_menus") ? {
+    const value = path.endsWith("get_res_users_settings") ? { homemenu_config: null } : path.endsWith("erp_load_web_menus") ? {
       wire_major: 1,
       registry_version: "r1",
       roots: [10],
-      nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
+      nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
     } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
       wire_major: 1,
       id: 20,
@@ -994,12 +1075,12 @@ test.each([false, true])("form state and Save/Discard retain validation with Off
   expect(root.querySelector(".record-form-viewport > .content-sheet > .record-form")).not.toBeNull();
   expect(root.querySelector(".record-form-viewport [data-control-panel]")).toBeNull();
   const breadcrumbs = root.querySelector("[data-control-breadcrumbs]")!;
-  const statusHost = office ? root.querySelector(".form-record-commands")! : breadcrumbs;
+  const statusHost = breadcrumbs;
   expect(statusHost).not.toBeNull();
   const statusIndicator = statusHost.querySelector(".form-status-indicator")!;
   expect(statusIndicator).not.toBeNull();
   expect(root.querySelectorAll(".form-status-indicator")).toHaveLength(1);
-  if (office) expect(breadcrumbs.querySelector(".form-status-indicator")).toBeNull();
+  expect(breadcrumbs.querySelector(".form-status-indicator")).not.toBeNull();
 
   const statusBadge = statusIndicator.querySelector(".status-badge")!;
   expect(statusBadge.textContent).toBe("Saved");
@@ -1035,7 +1116,7 @@ test.each([false, true])("form state and Save/Discard retain validation with Off
     saveBtn.click();
     await vi.waitFor(() => expect(document.activeElement).toBe(externalTitle));
     expect(saveCalls).toHaveLength(0);
-    expect(root.querySelector('.client-notification[data-level="danger"] .client-notification-message')?.textContent).toBe("Complete the required fields before saving.");
+    expect(root.querySelector('.client-notification[data-level="warning"] .client-notification-message')?.textContent).toBe("1 field needs a value");
     expect(externalTitle.getAttribute("aria-invalid")).toBe("true");
     externalTitle.value = "Updated note";
   }
@@ -1047,6 +1128,64 @@ test.each([false, true])("form state and Save/Discard retain validation with Off
   expect(root.querySelector<HTMLElement>(".status-actions")?.style.display).toBe("none");
 });
 
+// It lives in the Actions menu (one click), asks first,
+// saves a dirty record before it acts, and an archived record says so quietly in the control panel.
+test("form Archive and Unarchive live in the Actions menu and the archived state is visible", async () => {
+  history.replaceState(null, "", "/erp/action-20?id=5&view_type=form");
+  const calls: { method: string; ids: number[] }[] = [];
+  let active = true;
+  const note = description.fields["test.note"];
+  const archivable = {
+    ...description, fields: { "test.note": { ...note, active: { type: "boolean", label: "Active", required: false, readonly: false, relation: null, relation_field: null, selection: null } } },
+    views: description.views.map(view => view.type !== "form" ? view : {
+      ...view, nodes: [{ kind: "form", record_mode: "record", children: [1, 2] }, view.nodes[1],
+        { kind: "field", force_save: false, field: { model: "test.note", name: "active" }, widget: "boolean_toggle", options: {}, modifiers: { readonly: null, required: null, invisible: null }, label: "Active" }]
+    })
+  };
+  vi.stubGlobal("fetch", vi.fn(async (path: string, init: RequestInit) => {
+    const body = init.body ? JSON.parse(String(init.body)) : {};
+    const method = path.split("/").pop()!;
+    if (method === "action_archive" || method === "action_unarchive") { calls.push({ method, ids: body.ids }); active = method === "action_unarchive"; }
+    const value = path.endsWith("get_res_users_settings") ? { homemenu_config: null } : path.endsWith("erp_load_web_menus") ? {
+      wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
+    } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
+      wire_major: 1, id: 20, name: "Notes", model: "test.note", target: "current", views: [{ id: 1, type: "form" }, { id: 2, type: "list" }], domain: null, context: null
+    }, archivable) : path.endsWith("get_views") ? archivable
+      : path.endsWith("web_read") ? [{ id: 5, name: "Existing note", active }]
+      : [];
+    return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
+  }));
+  const root = host();
+  app = new HumanApp(root, bootstrap);
+  await app.start();
+  await vi.waitFor(() => expect(root.querySelector(".form-actions-dropdown")).not.toBeNull());
+  const menuItems = (): string[] => [...root.querySelectorAll<HTMLButtonElement>(".form-action-menu button")].filter(item => !item.hidden).map(item => item.textContent!);
+  expect(menuItems()).toEqual(["Duplicate", "Archive", "Delete", "Reload"]);
+  expect(root.querySelector<HTMLElement>(".status-badge.archived")!.hidden).toBe(true);
+
+  const confirm = async (label: string): Promise<void> => {
+    await vi.waitFor(() => expect(document.querySelector("dialog")).not.toBeNull());
+    [...document.querySelectorAll<HTMLButtonElement>("dialog button")].find(item => item.textContent === label)!.click();
+  };
+  root.querySelector<HTMLButtonElement>(".form-archive-btn")!.click();
+  await confirm("Cancel");
+  await Promise.resolve();
+  expect(calls).toEqual([]);
+
+  root.querySelector<HTMLButtonElement>(".form-archive-btn")!.click();
+  await confirm("Archive");
+  await vi.waitFor(() => expect(calls).toEqual([{ method: "action_archive", ids: [5] }]));
+  await vi.waitFor(() => expect(root.querySelector<HTMLElement>(".status-badge.archived")!.hidden).toBe(false));
+  expect(root.querySelector(".status-badge.archived")!.textContent).toBe("Archived");
+  expect(menuItems()).toEqual(["Duplicate", "Unarchive", "Delete", "Reload"]);
+
+  // Unarchiving is harmless, so it does not ask.
+  root.querySelector<HTMLButtonElement>(".form-archive-btn")!.click();
+  await vi.waitFor(() => expect(calls.map(call => call.method)).toEqual(["action_archive", "action_unarchive"]));
+  await vi.waitFor(() => expect(root.querySelector<HTMLElement>(".status-badge.archived")!.hidden).toBe(true));
+  expect(menuItems()).toEqual(["Duplicate", "Archive", "Delete", "Reload"]);
+});
+
 test("form view record pager cycles between records", async () => {
   history.replaceState(null, "", "/erp/action-20");
   vi.stubGlobal("fetch", vi.fn(async (path: string, init: RequestInit) => {
@@ -1055,7 +1194,7 @@ test("form view record pager cycles between records", async () => {
       wire_major: 1,
       registry_version: "r1",
       roots: [10],
-      nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
+      nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
     } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
       wire_major: 1,
       id: 20,
@@ -1107,7 +1246,7 @@ function pagerSaveFetch(log: { saved: unknown[]; reads: number[] }, fail: boolea
     }
     const value = path.endsWith("erp_load_web_menus") ? {
       wire_major: 1, registry_version: "r1", roots: [10],
-      nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
+      nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
     } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
       wire_major: 1, id: 20, name: "Notes", model: "test.note", target: "current",
       views: [{ id: 2, type: "list" }, { id: 1, type: "form" }], domain: null, context: null
@@ -1163,7 +1302,7 @@ function pagedFetch(total: number, log: { unlink: number[][]; offsets: number[] 
     const body = init.body ? JSON.parse(String(init.body)) : {};
     const value = path.endsWith("erp_load_web_menus") ? {
       wire_major: 1, registry_version: "r1", roots: [10],
-      nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
+      nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
     } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
       wire_major: 1, id: 20, name: "Notes", model: "test.note", target: "current",
       views: [{ id: 2, type: "list" }, { id: 1, type: "form" }], domain: null, context: null
@@ -1263,7 +1402,7 @@ test("list selection is cleared on page change so Delete cannot reach hidden rec
     configurable: true,
     value: function (this: HTMLDialogElement) {
       this.open = true;
-      setTimeout(() => this.querySelector<HTMLButtonElement>("button.primary")?.click(), 10);
+      setTimeout(() => this.querySelector<HTMLButtonElement>("button[data-default-action]")?.click(), 10);
     }
   });
   Object.defineProperty(HTMLDialogElement.prototype, "close", {
@@ -1292,7 +1431,7 @@ test("related-record opening uses an advertised form action and preserves model 
   const calls:string[]=[];
   vi.stubGlobal("fetch",vi.fn(async(path:string,init:RequestInit)=>{
     calls.push(path);const body=JSON.parse(String(init.body));let value:unknown;
-    if(path.endsWith("erp_load_web_menus"))value={wire_major:1,registry_version:"r1",roots:[10,12,11],nodes:[{id:10,parent_id:null,label:"Notes",action_id:20,children:[],icon:null},{id:12,parent_id:null,label:"Unrelated",action_id:22,children:[],icon:null},{id:11,parent_id:null,label:"Companies",action_id:21,children:[],icon:null}]};
+    if(path.endsWith("erp_load_web_menus"))value={wire_major:1,registry_version:"r1",roots:[10,12,11],nodes:[{ module: null,id:10,parent_id:null,label:"Notes",action_id:20,children:[],icon:null},{ module: null,id:12,parent_id:null,label:"Unrelated",action_id:22,children:[],icon:null},{ module: null,id:11,parent_id:null,label:"Companies",action_id:21,children:[],icon:null}]};
     else if(path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")){
       const id=body.ids[0];
       // Discovery must not describe this unrelated model's inaccessible views.
@@ -1369,7 +1508,7 @@ test("applied search field stays synchronized across column sort and pager reloa
       wire_major: 1,
       registry_version: "r1",
       roots: [10],
-      nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
+      nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
     } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
       wire_major: 1,
       id: 20,
@@ -1426,9 +1565,9 @@ test("secondary navbar dropdown closes on outside click and focusout", async () 
       registry_version: "r1",
       roots: [10],
       nodes: [
-        { id: 10, parent_id: null, label: "Notes", action_id: null, children: [11], icon: null },
-        { id: 11, parent_id: 10, label: "Folders", action_id: null, children: [12], icon: null },
-        { id: 12, parent_id: 11, label: "Archive", action_id: 20, children: [], icon: null }
+        { module: null, id: 10, parent_id: null, label: "Notes", action_id: null, children: [11], icon: null },
+        { module: null, id: 11, parent_id: 10, label: "Folders", action_id: null, children: [12], icon: null },
+        { module: null, id: 12, parent_id: 11, label: "Archive", action_id: 20, children: [], icon: null }
       ]
     } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
       wire_major: 1,
@@ -1511,9 +1650,9 @@ test("Escape key closes home menu overlay, mobile drawer, user dropdown, and nav
       registry_version: "r1",
       roots: [10],
       nodes: [
-        { id: 10, parent_id: null, label: "Notes", action_id: null, children: [11], icon: null },
-        { id: 11, parent_id: 10, label: "Folders", action_id: null, children: [12], icon: null },
-        { id: 12, parent_id: 11, label: "Archive", action_id: 20, children: [], icon: null }
+        { module: null, id: 10, parent_id: null, label: "Notes", action_id: null, children: [11], icon: null },
+        { module: null, id: 11, parent_id: 10, label: "Folders", action_id: null, children: [12], icon: null },
+        { module: null, id: 12, parent_id: 11, label: "Archive", action_id: 20, children: [], icon: null }
       ]
     } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
       wire_major: 1,
@@ -1587,8 +1726,8 @@ test("root /erp navigation reuses buildHomeContent with app search input and til
       registry_version: "r1",
       roots: [10, 11],
       nodes: [
-        { id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null },
-        { id: 11, parent_id: null, label: "Settings", action_id: 21, children: [], icon: null }
+        { module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null },
+        { module: null, id: 11, parent_id: null, label: "Settings", action_id: 21, children: [], icon: null }
       ]
     } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
       wire_major: 1,
@@ -1670,7 +1809,7 @@ test("search field select defaults to name or display_name when available", asyn
       wire_major: 1,
       registry_version: "r1",
       roots: [10],
-      nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
+      nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
     } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
       wire_major: 1,
       id: 20,
@@ -1714,7 +1853,7 @@ test("cancelled company switch resets company select to currentCompanyId", async
       wire_major: 1,
       registry_version: "r1",
       roots: [10],
-      nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
+      nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
     } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
       wire_major: 1,
       id: 20,
@@ -1784,7 +1923,7 @@ test.each([
 test("form List switcher clears record id and leaves a reloadable search URL", async()=>{
  history.replaceState(null,"","/erp/action-20?id=5&view_type=form&search=Meeting");
  vi.stubGlobal("fetch",vi.fn(async(path:string)=>{
-  const value=path.endsWith("erp_load_web_menus")?{wire_major:1,registry_version:"r1",roots:[10],nodes:[{id:10,parent_id:null,label:"Notes",action_id:20,children:[],icon:null}]}:
+  const value=path.endsWith("erp_load_web_menus")?{wire_major:1,registry_version:"r1",roots:[10],nodes:[{ module: null,id:10,parent_id:null,label:"Notes",action_id:20,children:[],icon:null}]}:
    (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views"))?actionMetadata(path, {wire_major:1,id:20,name:"Notes",model:"test.note",target:"current",views:[{id:1,type:"form"},{id:2,type:"list"}],domain:null,context:null}, description):
    path.endsWith("get_views")?description:path.endsWith("web_search_read")?{length:1,records:[{id:5,name:"Meeting"}]}:[{id:5,name:"Meeting"}];
   return new Response(JSON.stringify(value),{headers:{"Content-Type":"application/json"}});
@@ -1805,12 +1944,12 @@ test("nested menu categories render dropdown headers and submenus correctly", as
     registry_version: "r1",
     roots: [1],
     nodes: [
-      { id: 1, parent_id: null, label: "Settings", action_id: null, children: [2], icon: null },
-      { id: 2, parent_id: 1, label: "Technical", action_id: null, children: [3, 4], icon: null },
-      { id: 3, parent_id: 2, label: "Database Structure", action_id: null, children: [10], icon: null },
-      { id: 4, parent_id: 2, label: "User Interface", action_id: null, children: [11], icon: null },
-      { id: 10, parent_id: 3, label: "Models", action_id: 100, children: [], icon: null },
-      { id: 11, parent_id: 4, label: "Views", action_id: 101, children: [], icon: null }
+      { module: null, id: 1, parent_id: null, label: "Settings", action_id: null, children: [2], icon: null },
+      { module: null, id: 2, parent_id: 1, label: "Technical", action_id: null, children: [3, 4], icon: null },
+      { module: null, id: 3, parent_id: 2, label: "Database Structure", action_id: null, children: [10], icon: null },
+      { module: null, id: 4, parent_id: 2, label: "User Interface", action_id: null, children: [11], icon: null },
+      { module: null, id: 10, parent_id: 3, label: "Models", action_id: 100, children: [], icon: null },
+      { module: null, id: 11, parent_id: 4, label: "Views", action_id: 101, children: [], icon: null }
     ]
   };
 
@@ -1888,15 +2027,15 @@ function stubMenus(nodes: unknown[], roots: number[]): void {
 test("categories without a reachable action are omitted instead of rendering empty dropdowns", async () => {
   history.replaceState(null, "", "/erp/action-100?menu=10");
   stubMenus([
-    { id: 1, parent_id: null, label: "Settings", action_id: null, children: [2, 5], icon: null },
-    { id: 2, parent_id: 1, label: "Technical", action_id: null, children: [3, 4, 6], icon: null },
-    { id: 3, parent_id: 2, label: "Database Structure", action_id: null, children: [10], icon: null },
-    { id: 4, parent_id: 2, label: "Empty Category", action_id: null, children: [], icon: null },
-    { id: 6, parent_id: 2, label: "Nested Empty", action_id: null, children: [7], icon: null },
-    { id: 7, parent_id: 6, label: "Inner Empty", action_id: null, children: [], icon: null },
-    { id: 5, parent_id: 1, label: "Ghost", action_id: null, children: [8], icon: null },
-    { id: 8, parent_id: 5, label: "Ghost Category", action_id: null, children: [], icon: null },
-    { id: 10, parent_id: 3, label: "Models", action_id: 100, children: [], icon: null }
+    { module: null, id: 1, parent_id: null, label: "Settings", action_id: null, children: [2, 5], icon: null },
+    { module: null, id: 2, parent_id: 1, label: "Technical", action_id: null, children: [3, 4, 6], icon: null },
+    { module: null, id: 3, parent_id: 2, label: "Database Structure", action_id: null, children: [10], icon: null },
+    { module: null, id: 4, parent_id: 2, label: "Empty Category", action_id: null, children: [], icon: null },
+    { module: null, id: 6, parent_id: 2, label: "Nested Empty", action_id: null, children: [7], icon: null },
+    { module: null, id: 7, parent_id: 6, label: "Inner Empty", action_id: null, children: [], icon: null },
+    { module: null, id: 5, parent_id: 1, label: "Ghost", action_id: null, children: [8], icon: null },
+    { module: null, id: 8, parent_id: 5, label: "Ghost Category", action_id: null, children: [], icon: null },
+    { module: null, id: 10, parent_id: 3, label: "Models", action_id: 100, children: [], icon: null }
   ], [1]);
   const root = host();
   app = new HumanApp(root, bootstrap);
@@ -1904,7 +2043,7 @@ test("categories without a reachable action are omitted instead of rendering emp
 
   const nav = root.querySelector("[data-client-navigation]")!;
   const toggles = [...nav.querySelectorAll<HTMLButtonElement>(".nav-dropdown-toggle")].map(toggle => toggle.textContent);
-  expect(toggles).toEqual(["Technical ▾"]);
+  expect(toggles).toEqual(["Technical"]);
   const headers = [...nav.querySelectorAll(".nav-dropdown-menu .dropdown-header")].map(header => header.textContent);
   expect(headers).toEqual(["Database Structure"]);
   const subtitles = [...root.querySelectorAll(".mobile-drawer .drawer-section-subtitle")].map(subtitle => subtitle.textContent);
@@ -1915,11 +2054,11 @@ test("categories without a reachable action are omitted instead of rendering emp
 test("opening one navigation dropdown closes the other, and an outside click closes it", async () => {
   history.replaceState(null, "", "/erp/action-100?menu=10");
   stubMenus([
-    { id: 1, parent_id: null, label: "Settings", action_id: null, children: [2, 3], icon: null },
-    { id: 2, parent_id: 1, label: "Technical", action_id: null, children: [10], icon: null },
-    { id: 3, parent_id: 1, label: "Users", action_id: null, children: [11], icon: null },
-    { id: 10, parent_id: 2, label: "Models", action_id: 100, children: [], icon: null },
-    { id: 11, parent_id: 3, label: "Groups", action_id: 101, children: [], icon: null }
+    { module: null, id: 1, parent_id: null, label: "Settings", action_id: null, children: [2, 3], icon: null },
+    { module: null, id: 2, parent_id: 1, label: "Technical", action_id: null, children: [10], icon: null },
+    { module: null, id: 3, parent_id: 1, label: "Users", action_id: null, children: [11], icon: null },
+    { module: null, id: 10, parent_id: 2, label: "Models", action_id: 100, children: [], icon: null },
+    { module: null, id: 11, parent_id: 3, label: "Groups", action_id: 101, children: [], icon: null }
   ], [1]);
   const root = host();
   app = new HumanApp(root, bootstrap);
@@ -1950,9 +2089,9 @@ test("opening one navigation dropdown closes the other, and an outside click clo
 test("a cyclic menu tree is refused before any navigation renders", async () => {
   history.replaceState(null, "", "/erp/action-100?menu=10");
   stubMenus([
-    { id: 1, parent_id: null, label: "Settings", action_id: null, children: [2], icon: null },
-    { id: 2, parent_id: 1, label: "Technical", action_id: null, children: [3], icon: null },
-    { id: 3, parent_id: 2, label: "Loop", action_id: null, children: [2], icon: null }
+    { module: null, id: 1, parent_id: null, label: "Settings", action_id: null, children: [2], icon: null },
+    { module: null, id: 2, parent_id: 1, label: "Technical", action_id: null, children: [3], icon: null },
+    { module: null, id: 3, parent_id: 2, label: "Loop", action_id: null, children: [2], icon: null }
   ], [1]);
   const root = host();
   app = new HumanApp(root, bootstrap);
@@ -1973,7 +2112,7 @@ test("failed initial form render disposes partial widgets and action listeners b
  broken.views[0]!.nodes.push({kind:"field", force_save: false,field:{model:"test.note",name:"name"},widget:"test.form_failure_cleanup",options:{},modifiers:{readonly:null,required:null,invisible:null},label:"Name"});
  broken.views[0]!.nodes[0]!.children=[1,2];
  vi.stubGlobal("fetch",vi.fn(async(path:string)=>{
-  const value=path.endsWith("erp_load_web_menus")?{wire_major:1,registry_version:"r1",roots:[10],nodes:[{id:10,parent_id:null,label:"Notes",action_id:20,children:[],icon:null}]}
+  const value=path.endsWith("erp_load_web_menus")?{wire_major:1,registry_version:"r1",roots:[10],nodes:[{ module: null,id:10,parent_id:null,label:"Notes",action_id:20,children:[],icon:null}]}
    :(path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views"))?actionMetadata(path, {wire_major:1,id:20,name:"Notes",model:"test.note",target:"current",views:[{id:1,type:"form"}],domain:null,context:null}, broken)
    :path.endsWith("get_views")?broken:[{id:5,name:"Draft"}];
   return new Response(JSON.stringify(value),{headers:{"Content-Type":"application/json"}});
@@ -1996,8 +2135,8 @@ test("invalid Lucide menu identity cannot fall through to external image renderi
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
     wire_major: 1, registry_version: "r1", roots: [10, 11], nodes: [
-      {id:10,parent_id:null,label:"Notes",action_id:20,children:[],icon:"lucide:https://evil.example/icon.svg"},
-      {id:11,parent_id:null,label:"Library",action_id:21,children:[],icon:"lucide:library"}
+      { module: null,id:10,parent_id:null,label:"Notes",action_id:20,children:[],icon:"lucide:https://evil.example/icon.svg"},
+      { module: null,id:11,parent_id:null,label:"Library",action_id:21,children:[],icon:"lucide:library"}
     ]
   }), {headers:{"Content-Type":"application/json"}})));
   const root = host(); app = new HumanApp(root, bootstrap);
@@ -2015,9 +2154,9 @@ async function mobileNavigationFixture(): Promise<HTMLElement> {
   vi.stubGlobal("fetch", vi.fn(async (path: string) => {
     const value = path.endsWith("erp_load_web_menus") ? {
       wire_major: 1, registry_version: "r1", roots: [10, 30], nodes: [
-        { id: 10, parent_id: null, label: "Notes", action_id: null, children: [11], icon: null },
-        { id: 11, parent_id: 10, label: "Archive", action_id: 20, children: [], icon: null },
-        { id: 30, parent_id: null, label: "Other", action_id: 40, children: [], icon: null }
+        { module: null, id: 10, parent_id: null, label: "Notes", action_id: null, children: [11], icon: null },
+        { module: null, id: 11, parent_id: 10, label: "Archive", action_id: 20, children: [], icon: null },
+        { module: null, id: 30, parent_id: null, label: "Other", action_id: 40, children: [], icon: null }
       ]
     } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
       wire_major: 1, id: 20, name: "Notes", model: "test.note", target: "current",
@@ -2234,9 +2373,9 @@ function metadataServer(model = "test.note", bundle?: () => Promise<void>) {
     const value = path.endsWith("erp_load_web_menus") ? {
       wire_major: 1, registry_version: "r1", roots: [10],
       nodes: [
-        { id: 10, parent_id: null, label: "Notes", action_id: null, children: [11, 12], icon: null },
-        { id: 11, parent_id: 10, label: "All notes", action_id: 20, children: [], icon: null },
-        { id: 12, parent_id: 10, label: "Archive", action_id: 21, children: [], icon: null }
+        { module: null, id: 10, parent_id: null, label: "Notes", action_id: null, children: [11, 12], icon: null },
+        { module: null, id: 11, parent_id: 10, label: "All notes", action_id: 20, children: [], icon: null },
+        { module: null, id: 12, parent_id: 10, label: "Archive", action_id: 21, children: [], icon: null }
       ]
     } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
       wire_major: 1, id: 20, name: "Notes", model, target: "current",
@@ -2338,8 +2477,8 @@ test("menu prefetches run one at a time and skip entries the pointer already lef
         const value = path.endsWith("erp_load_web_menus") ? {
           wire_major: 1, registry_version: "r1", roots: [10],
           nodes: [
-            { id: 10, parent_id: null, label: "Notes", action_id: null, children: [11, 12, 13, 14, 15], icon: null },
-            ...[11, 12, 13, 14, 15].map(id => ({ id, parent_id: 10, label: `Menu ${id}`, action_id: id + 9, children: [], icon: null }))
+            { module: null, id: 10, parent_id: null, label: "Notes", action_id: null, children: [11, 12, 13, 14, 15], icon: null },
+            ...[11, 12, 13, 14, 15].map(id => ({ module: null, id, parent_id: 10, label: `Menu ${id}`, action_id: id + 9, children: [], icon: null }))
           ]
         } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
           wire_major: 1, id: body.ids![0], name: "Notes", model: "test.note", target: "current",
@@ -2380,7 +2519,7 @@ test("menu icon selection and reset retain mounted-form focus, save/readback and
   vi.stubGlobal("fetch", vi.fn(async (path: string, init: RequestInit) => {
     const body = JSON.parse(String(init.body)) as Record<string, unknown>;
     let value: unknown;
-    if (path.endsWith("erp_load_web_menus")) value = { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] };
+    if (path.endsWith("erp_load_web_menus")) value = { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] };
     else if (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) value = actionMetadata(path, { wire_major: 1, id: 20, name: "Notes", model: "test.note", target: "current", views: [{ id: 1, type: "form" }], domain: null, context: null }, view);
     else if (path.endsWith("get_views")) value = view;
     else if (path.endsWith("onchange")) value = { value: {} };
@@ -2590,11 +2729,11 @@ test("office sidebar keeps same-root route ancestry open through navigation and 
   history.replaceState(null, "", "/erp/action-100?menu=10");
   const longLabel = "Administration — permissions, models and interface settings";
   const menus = { wire_major: 1, registry_version: "r1", roots: [1], nodes: [
-    { id: 1, parent_id: null, label: longLabel, action_id: null, children: [2, 3], icon: null },
-    { id: 2, parent_id: 1, label: "Structure", action_id: null, children: [10], icon: null },
-    { id: 3, parent_id: 1, label: "Interface", action_id: null, children: [11], icon: null },
-    { id: 10, parent_id: 2, label: "Models", action_id: 100, children: [], icon: null },
-    { id: 11, parent_id: 3, label: "Views", action_id: 101, children: [], icon: null }
+    { module: null, id: 1, parent_id: null, label: longLabel, action_id: null, children: [2, 3], icon: null },
+    { module: null, id: 2, parent_id: 1, label: "Structure", action_id: null, children: [10], icon: null },
+    { module: null, id: 3, parent_id: 1, label: "Interface", action_id: null, children: [11], icon: null },
+    { module: null, id: 10, parent_id: 2, label: "Models", action_id: 100, children: [], icon: null },
+    { module: null, id: 11, parent_id: 3, label: "Views", action_id: 101, children: [], icon: null }
   ] };
   vi.stubGlobal("fetch", vi.fn(async (path: string, init: RequestInit) => {
     const args = JSON.parse(String(init.body));
@@ -2633,8 +2772,8 @@ test("Office header searches actual menus and retains the dirty-form navigation 
     const body = init.body ? JSON.parse(String(init.body)) : {};
     const actionId = body.ids?.[0];
     const value = path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10, 11], nodes: [
-      { id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null },
-      { id: 11, parent_id: null, label: "Actions", action_id: 21, children: [], icon: null }
+      { module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null },
+      { module: null, id: 11, parent_id: null, label: "Actions", action_id: 21, children: [], icon: null }
     ] } : path.endsWith("erp_load_web_action_views") ? actionMetadata(path, { wire_major: 1, id: actionId, name: actionId === 20 ? "Notes" : "Actions", model: "test.note", target: "current", views: [{ id: actionId === 20 ? 1 : 2, type: actionId === 20 ? "form" : "list" }], domain: null, context: null }, description)
       : path.endsWith("web_read") ? [{ id: 5, name: "Existing title" }]
       : path.endsWith("onchange") ? { value: {} }
@@ -2673,7 +2812,7 @@ test("Office header searches actual menus and retains the dirty-form navigation 
 
 test('navigation cannot dispose the source while a child modal owns an operation',async()=>{
   history.replaceState(null,'','/erp/action-20?id=5&view_type=form');
-  vi.stubGlobal('fetch',vi.fn(async(path:string)=>new Response(JSON.stringify(path.endsWith('erp_load_web_menus')?{wire_major:1,registry_version:'r1',roots:[10],nodes:[{id:10,parent_id:null,label:'Notes',action_id:20,children:[],icon:null}]}:(path.endsWith('erp_load_web_action')||path.endsWith('erp_load_web_action_views'))?actionMetadata(path,{wire_major:1,id:20,name:'Notes',model:'test.note',target:'current',views:[{id:1,type:'form'}],domain:null,context:null},description):path.endsWith('get_views')?description:[{id:5,name:'Source'}]),{headers:{'Content-Type':'application/json'}})));
+  vi.stubGlobal('fetch',vi.fn(async(path:string)=>new Response(JSON.stringify(path.endsWith('erp_load_web_menus')?{wire_major:1,registry_version:'r1',roots:[10],nodes:[{ module: null,id:10,parent_id:null,label:'Notes',action_id:20,children:[],icon:null}]}:(path.endsWith('erp_load_web_action')||path.endsWith('erp_load_web_action_views'))?actionMetadata(path,{wire_major:1,id:20,name:'Notes',model:'test.note',target:'current',views:[{id:1,type:'form'}],domain:null,context:null},description):path.endsWith('get_views')?description:[{id:5,name:'Source'}]),{headers:{'Content-Type':'application/json'}})));
   const root=host();app=new HumanApp(root,bootstrap);await app.start();
   const modal=app.messages.dialogs.open({title:'Related operation',body:'Keep the source until this modal is closed.',dismiss:()=>false});
   const before=location.href;root.querySelector<HTMLButtonElement>(".brand")!.click();await new Promise<void>(resolve=>setTimeout(resolve,0));expect(location.href).toBe(before);expect(root.querySelector('.record-form')).not.toBeNull();expect(modal.dialog.isConnected).toBe(true);
@@ -2685,13 +2824,15 @@ test('loaded-empty help is distinct from pending reads and load failures',async(
  let readStarted=false, fail=false, complete:((value:Response)=>void)|undefined;
  vi.stubGlobal('fetch',vi.fn(async(path:string)=>{
   if(path.endsWith('web_search_read')){readStarted=true;if(fail)return new Response('{"message":"List failed"}',{status:500,headers:{'Content-Type':'application/json'}});return new Promise<Response>(resolve=>{complete=resolve;});}
-  const value=path.endsWith('erp_load_web_menus')?{wire_major:1,registry_version:'r1',roots:[10],nodes:[{id:10,parent_id:null,label:'Notes',action_id:20,children:[],icon:null}]}:(path.endsWith('erp_load_web_action')||path.endsWith('erp_load_web_action_views'))?actionMetadata(path,{wire_major:1,id:20,name:'Notes',model:'test.note',target:'current',views:[{id:2,type:'list'}],domain:null,context:null},description):path.endsWith('get_views')?description:[];
+  const value=path.endsWith('erp_load_web_menus')?{wire_major:1,registry_version:'r1',roots:[10],nodes:[{ module: null,id:10,parent_id:null,label:'Notes',action_id:20,children:[],icon:null}]}:(path.endsWith('erp_load_web_action')||path.endsWith('erp_load_web_action_views'))?actionMetadata(path,{wire_major:1,id:20,name:'Notes',model:'test.note',target:'current',views:[{id:2,type:'list'}],domain:null,context:null},description):path.endsWith('get_views')?description:[];
   return new Response(JSON.stringify(value),{headers:{'Content-Type':'application/json'}});
  }));
  const root=host();app=new HumanApp(root,bootstrap);const started=app.start();
  await vi.waitFor(()=>expect(readStarted).toBe(true));expect(root.querySelector('.message-no-content')).toBeNull();
  complete!(new Response('{"length":0,"records":[]}',{headers:{'Content-Type':'application/json'}}));await started;
  expect(root.querySelector('.message-no-content')?.getAttribute('role')).toBe('alert');expect(root.querySelector('.message-no-content h2')?.textContent).toBe('No Notes records yet');
+ expect(root.querySelector('table[aria-label="Records"]')).not.toBeNull();
+ expect(root.querySelectorAll('table[aria-label="Records"] tbody tr').length).toBe(0);
  app.dispose();root.remove();fail=true;history.replaceState(null,'','/erp/action-20?view_type=list');const errorRoot=host();app=new HumanApp(errorRoot,bootstrap);
  await expect(app.start()).rejects.toMatchObject({kind:'server',message:'List failed'});expect(errorRoot.querySelector('.message-no-content')).toBeNull();
 });
@@ -2713,7 +2854,7 @@ test('mounted app presents offline and safe-read recovery states without replayi
   if(path.endsWith('web_save'))writes++;
   if(path.endsWith('onchange')){if(offline)throw new TypeError('Connection lost');return json({value:{}});}
   if(path.endsWith('web_read')&&refreshing)return new Promise<Response>(resolve=>{finish=resolve;});
-  return json(path.endsWith('erp_load_web_menus')?{wire_major:1,registry_version:'r1',roots:[10],nodes:[{id:10,parent_id:null,label:'Notes',action_id:20,children:[],icon:null}]}:(path.endsWith('erp_load_web_action')||path.endsWith('erp_load_web_action_views'))?actionMetadata(path,{wire_major:1,id:20,name:'Notes',model:'test.note',target:'current',views:[{id:1,type:'form'}],domain:null,context:null},description):path.endsWith('get_views')?description:[{id:5,name:'Source'}]);
+  return json(path.endsWith('erp_load_web_menus')?{wire_major:1,registry_version:'r1',roots:[10],nodes:[{ module: null,id:10,parent_id:null,label:'Notes',action_id:20,children:[],icon:null}]}:(path.endsWith('erp_load_web_action')||path.endsWith('erp_load_web_action_views'))?actionMetadata(path,{wire_major:1,id:20,name:'Notes',model:'test.note',target:'current',views:[{id:1,type:'form'}],domain:null,context:null},description):path.endsWith('get_views')?description:[{id:5,name:'Source'}]);
  }));
  const root=host();app=new HumanApp(root,bootstrap);await app.start();offline=true;
  const input=root.querySelector<HTMLInputElement>('input[name="name"]')!;input.value='Entered';input.dispatchEvent(new Event('change'));
@@ -2751,7 +2892,7 @@ test.each([{ date_format: "%j" }, { time_format: "%f" }])("unsupported editor fo
   const calls: { path: string; body: Record<string, unknown> }[] = [];
   vi.stubGlobal("fetch", vi.fn(async (path: string, init: RequestInit) => {
     const body = JSON.parse(String(init.body)) as Record<string, unknown>; calls.push({ path, body });
-    const value = path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] }
+    const value = path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] }
       : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, { wire_major: 1, id: 20, name: "Notes", model: "test.note", target: "current", views: [{ id: 1, type: "form" }], domain: null, context: null }, description)
       : path.endsWith("get_views") ? description
       : path.endsWith("onchange") ? { value: { name: objectName(body["values"]) } }
@@ -2789,7 +2930,7 @@ test.each([
   vi.stubGlobal("fetch", vi.fn(async (path: string, init: RequestInit) => {
     const body = JSON.parse(String(init.body)) as Record<string, unknown>; calls.push({ path, body });
     const value = path.endsWith("client-error") ? {}
-      : path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] }
+      : path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] }
       : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, { wire_major: 1, id: 20, name: "Notes", model: "test.note", target: "current", views: [{ id: 1, type: "form" }], domain: null, context: null }, mixedDescription)
       : path.endsWith("get_views") ? mixedDescription
       : path.endsWith("onchange") ? { value: { name: objectName(body["values"]) } }
@@ -2972,7 +3113,7 @@ test("window action domain filters list view records via initial domain", async 
     }
     const value = path.endsWith("erp_load_web_menus") ? {
       wire_major: 1, registry_version: "r1", roots: [10],
-      nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 25, children: [], icon: null }]
+      nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 25, children: [], icon: null }]
     } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
       wire_major: 1, id: 25, name: "Companies", model: "test.note", target: "current",
       views: [{ id: 2, type: "list" }], domain: actionDomainDoc, context: null
@@ -2990,7 +3131,7 @@ test("list view hides New button when view has create=false or context create is
   const listDesc = JSON.parse(JSON.stringify(description));
   listDesc.views[1].nodes[0].create = false;
   vi.stubGlobal("fetch", vi.fn(async (path: string) => {
-    const value = path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] }
+    const value = path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] }
       : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, { wire_major: 1, id: 20, name: "Notes", model: "test.note", target: "current", views: [{ id: 2, type: "list" }, { id: 1, type: "form" }], domain: null, context: null }, listDesc)
       : path.endsWith("get_views") ? listDesc
       : { length: 0, records: [] };
@@ -3009,7 +3150,7 @@ test("form view hides New button when view has create=false or context create is
   const formDesc = JSON.parse(JSON.stringify(description));
   formDesc.views[0].nodes[0].create = false;
   vi.stubGlobal("fetch", vi.fn(async (path: string) => {
-    const value = path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] }
+    const value = path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] }
       : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, { wire_major: 1, id: 20, name: "Notes", model: "test.note", target: "current", views: [{ id: 1, type: "form" }], domain: null, context: null }, formDesc)
       : path.endsWith("get_views") ? formDesc
       : [{ id: 5, name: "Existing note" }];
@@ -3020,4 +3161,332 @@ test("form view hides New button when view has create=false or context create is
   await app.start();
   const buttons = Array.from(root.querySelectorAll<HTMLButtonElement>("button"));
   expect(buttons.some(btn => btn.textContent?.trim() === "New")).toBe(false);
+});
+
+/// Second review pass: the window action domain sees the same names as a button domain.
+test("a window action domain may name uid", async () => {
+  history.replaceState(null, "", "/erp/action-25");
+  const domains: unknown[] = [];
+  const doc = {
+    schema: 1,
+    nodes: [
+      { kind: "literal", value: { kind: "str", value: "owner_id" } },
+      { kind: "literal", value: { kind: "str", value: "=" } },
+      { kind: "name", name: "uid" },
+      { kind: "tuple", items: [0, 1, 2] },
+      { kind: "list", items: [3] }
+    ]
+  };
+  vi.stubGlobal("fetch", vi.fn(async (path: string, init: RequestInit) => {
+    const body = init?.body ? JSON.parse(String(init.body)) : {};
+    if (path.endsWith("web_search_read")) {
+      domains.push(body.domain);
+      return new Response(JSON.stringify({ length: 0, records: [] }), { headers: { "Content-Type": "application/json" } });
+    }
+    const value = path.endsWith("erp_load_web_menus") ? {
+      wire_major: 1, registry_version: "r1", roots: [10],
+      nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 25, children: [], icon: null }]
+    } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
+      wire_major: 1, id: 25, name: "Mine", model: "test.note", target: "current",
+      views: [{ id: 2, type: "list" }], domain: doc, context: null
+    }, description) : path.endsWith("get_views") ? description : [];
+    return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
+  }));
+  const root = host(); app = new HumanApp(root, bootstrap); await app.start();
+  await vi.waitFor(() => expect(domains.length).toBeGreaterThan(0));
+  expect(domains[0]).toEqual([["owner_id", "=", 2]]);
+});
+
+/// Second review pass: the developer menu appears with ?debug=1 and re-opening it disposes the earlier render.
+test("the debug menu button shows with debug=1 and a reopen disposes the previous render", async () => {
+  history.replaceState(null, "", "/erp?debug=1");
+  const disposed = vi.fn();
+  registerDebugItemProvider("secondPass", () => [{ id: "probe", type: "component", render: () => ({ node: document.createElement("span"), dispose: disposed }) }]);
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(path.endsWith("erp_load_web_menus")
+    ? { wire_major: 1, registry_version: "r1", roots: [], nodes: [] } : []), { headers: { "Content-Type": "application/json" } })));
+  const root = host(); app = new HumanApp(root, bootstrap); await app.start();
+  const toggle = root.querySelector<HTMLButtonElement>(".debug-menu-button");
+  expect(toggle).not.toBeNull();
+  toggle!.click();
+  await vi.waitFor(() => expect(root.querySelector(".debug-menu-dropdown")?.children.length).toBeGreaterThan(0));
+  toggle!.click();
+  toggle!.click();
+  await vi.waitFor(() => expect(disposed).toHaveBeenCalledTimes(1));
+});
+
+/// Second review pass: an edit="0" view renders read-only after the first save of a new record and ignores keyboard save.
+/// (partial: edit=0 form renders read-only once a new record is saved and ignores keyboard save)
+test("an edit=0 form renders read-only after its first save and ignores keyboard save", async () => {
+  history.replaceState(null, "", "/erp/action-20?view_type=form");
+  const noEdit = JSON.parse(JSON.stringify(description));
+  noEdit.views[0].nodes[0].edit = false;
+  const saved: unknown[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (path: string, init: RequestInit) => {
+    const body = init.body ? JSON.parse(String(init.body)) : {};
+    if (path.endsWith("web_save")) saved.push(body.vals);
+    const value = path.endsWith("erp_load_web_menus") ? {
+      wire_major: 1, registry_version: "r1", roots: [10],
+      nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
+    } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
+      wire_major: 1, id: 20, name: "Notes", model: "test.note", target: "current",
+      views: [{ id: 2, type: "list" }, { id: 1, type: "form" }], domain: null, context: null
+    }, noEdit) : path.endsWith("get_views") ? noEdit
+      : path.endsWith("default_get") ? { name: "" }
+      : path.endsWith("onchange") ? { value: {} }
+      : path.endsWith("web_save") ? [{ id: 7, name: "Fresh" }]
+      : path.endsWith("web_read") ? [{ id: 7, name: "Fresh" }]
+      : [];
+    return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
+  }));
+  const root = host(); app = new HumanApp(root, bootstrap); await app.start();
+  // While new (!state.id), fields are editable
+  const input = root.querySelector<HTMLInputElement>('input[name="name"]')!;
+  expect(input).not.toBeNull();
+  input.focus();
+  input.value = "Fresh";
+  input.dispatchEvent(new Event("input"));
+  // First save works via keyboard shortcut Alt+S
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "s", code: "KeyS", altKey: true, bubbles: true, cancelable: true }));
+  await vi.waitFor(() => expect(saved).toHaveLength(1));
+
+  // Once saved (record now has id 7), the form must render read-only
+  await vi.waitFor(() => expect(root.querySelector<HTMLInputElement>('input[name="name"]')).toBeNull());
+  const readonlyField = root.querySelector(".field-readonly");
+  expect(readonlyField).not.toBeNull();
+  const readValue = root.querySelector(".field-read-value");
+  expect(readValue?.textContent).toBe("Fresh");
+
+  // Status actions (Save/Discard) are hidden for the read-only record
+  const statusActions = root.querySelector<HTMLElement>(".status-actions");
+  expect(statusActions?.style.display).toBe("none");
+
+  // Keyboard save (Alt+S) of such a record must be ignored and not trigger another save
+  root.dispatchEvent(new KeyboardEvent("keydown", { key: "s", code: "KeyS", altKey: true, bubbles: true, cancelable: true }));
+  await Promise.resolve();
+  expect(saved).toHaveLength(1);
+
+  // Directly attempting a change on RecordState throws validation error because the field is readonly
+  const internals = app as unknown as { record: { dirty: boolean; busy: boolean; change(n: string, v: unknown): void }; canLeave(o: { autosave: boolean }): Promise<boolean> };
+  expect(() => internals.record.change("name", "Sneaky")).toThrowError(new ClientError("validation", "This field cannot be edited."));
+  expect(internals.record.dirty).toBe(false);
+
+  // If a locked record has staged changes, canLeave({ autosave: true }) must discard rather than saving
+  ((internals.record as any).changes as Set<string>).add("name");
+  expect(internals.record.dirty).toBe(true);
+  expect(await internals.canLeave({ autosave: true })).toBe(true);
+  expect(internals.record.dirty).toBe(false);
+  expect(root.textContent).toContain("This record is read-only; the change was not saved.");
+  await Promise.resolve();
+  expect(saved).toHaveLength(1);
+});
+
+test("the debug menu supports keyboard roving focus, Escape dismissal, and global Escape overlay handling", async () => {
+  history.replaceState(null, "", "/erp?debug=1");
+  registerDebugItemProvider("debugA11yTest", () => [
+    { id: "item1", description: "First Debug Tool", callback: () => {} },
+    { id: "item2", description: "Second Debug Tool", callback: () => {} }
+  ]);
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(path.endsWith("erp_load_web_menus")
+    ? { wire_major: 1, registry_version: "r1", roots: [], nodes: [] } : []), { headers: { "Content-Type": "application/json" } })));
+  const root = host(); app = new HumanApp(root, bootstrap); await app.start();
+
+  const toggle = root.querySelector<HTMLButtonElement>(".debug-menu-button")!;
+  const dropdown = root.querySelector<HTMLElement>(".debug-menu-dropdown")!;
+  expect(toggle).not.toBeNull();
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  expect(dropdown.style.display).toBe("none");
+
+  toggle.focus();
+  toggle.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+
+  await vi.waitFor(() => expect(dropdown.style.display).toBe("block"));
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+
+  await vi.waitFor(() => {
+    const items = dropdown.querySelectorAll<HTMLButtonElement>(".debug-menu-item");
+    expect(items.length).toBeGreaterThan(0);
+    expect(document.activeElement).toBe(items[0]);
+  });
+  const items = dropdown.querySelectorAll<HTMLButtonElement>(".debug-menu-item");
+
+  dropdown.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+  expect(document.activeElement).toBe(items[1]);
+
+  dropdown.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  expect(dropdown.style.display).toBe("none");
+  expect(document.activeElement).toBe(toggle);
+
+  toggle.click();
+  await vi.waitFor(() => expect(dropdown.style.display).toBe("block"));
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+
+  root.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  expect(dropdown.style.display).toBe("none");
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  expect(document.activeElement).toBe(toggle);
+});
+
+/// (partial: app command palette categories forwarding)
+test("HumanApp.openCommandPalette forwards registered command categories into command palette", async () => {
+  history.replaceState(null, "", "/erp");
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ wire_major: 1, registry_version: "r1", roots: [], nodes: [] }), { headers: { "Content-Type": "application/json" } })));
+  const root = host();
+  app = new HumanApp(root, bootstrap);
+  await app.start();
+
+  registerCommandCategory("app_addon_cat", { name: "Addon Actions", sequence: 10 });
+  registerCommandProvider("app_addon_provider", {
+    provide: () => [{ id: "cmd_addon", name: "Addon Action Item", category: "app_addon_cat" }]
+  });
+
+  try {
+    app.openCommandPalette();
+    const palette = getActiveCommandPalette();
+    expect(palette).not.toBeNull();
+
+    await vi.waitFor(() => {
+      const items = palette!.node.querySelectorAll<HTMLElement>(".command-palette-item");
+      expect(items.length).toBeGreaterThan(0);
+      const target = Array.from(items).find(it => it.querySelector(".command-name")?.textContent === "Addon Action Item");
+      expect(target).toBeDefined();
+      expect(target?.querySelector(".command-category")?.textContent).toBe("Addon Actions");
+    });
+
+    palette?.close();
+  } finally {
+    commandCategories.remove("app_addon_cat");
+    commandProviders.remove("app_addon_provider");
+  }
+});
+
+/// (partial: the authorized menus are a built-in palette provider; hint instead of an empty message)
+test("the command palette lists authorized menus, finds Notes from 'No', and hints before anything is typed", async () => {
+  history.replaceState(null, "", "/erp");
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(path.endsWith("erp_load_web_menus")
+    ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] } : []), { headers: { "Content-Type": "application/json" } })));
+  const root = host(); app = new HumanApp(root, bootstrap); await app.start();
+  app.openCommandPalette();
+  const palette = getActiveCommandPalette()!;
+  const input = palette.node.querySelector<HTMLInputElement>(".command-palette-input")!;
+  expect(input.placeholder).toBe("Search commands…");
+  await vi.waitFor(() => expect(palette.node.querySelector(".command-name")?.textContent).toBe("Notes"));
+  expect(palette.node.querySelector(".command-category")?.textContent).toBe("Menus");
+  input.value = "no"; input.dispatchEvent(new Event("input"));
+  await vi.waitFor(() => expect(palette.node.querySelectorAll(".command-name")).toHaveLength(1));
+  input.value = "zzz"; input.dispatchEvent(new Event("input"));
+  await vi.waitFor(() => expect(palette.node.querySelector<HTMLElement>(".command-palette-empty")?.textContent).toBe("No commands found"));
+  palette.close();
+});
+
+
+
+/** An existing, archivable record in the default theme; `writes` collects every write-method call. */
+async function startArchivableForm(): Promise<{ root: HTMLElement; writes: string[] }> {
+  history.replaceState(null, "", "/erp/action-20?id=5&view_type=form");
+  const writes: string[] = [];
+  const note = description.fields["test.note"];
+  const archivable = {
+    ...description, fields: { "test.note": { ...note, active: { type: "boolean", label: "Active", required: false, readonly: false, relation: null, relation_field: null, selection: null } } },
+    views: description.views.map(view => view.type !== "form" ? view : {
+      ...view, nodes: [{ kind: "form", record_mode: "record", children: [1, 2] }, view.nodes[1],
+        { kind: "field", force_save: false, field: { model: "test.note", name: "active" }, widget: "boolean_toggle", options: {}, modifiers: { readonly: null, required: null, invisible: null }, label: "Active" }]
+    })
+  };
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+    const method = path.split("/").pop()!;
+    if (["copy", "unlink", "action_archive", "action_unarchive"].includes(method)) writes.push(method);
+    const value = path.endsWith("get_res_users_settings") ? { homemenu_config: null } : path.endsWith("erp_load_web_menus") ? {
+      wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }]
+    } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
+      wire_major: 1, id: 20, name: "Notes", model: "test.note", target: "current", views: [{ id: 1, type: "form" }, { id: 2, type: "list" }], domain: null, context: null
+    }, archivable) : path.endsWith("get_views") ? archivable
+      : path.endsWith("web_read") ? [{ id: 5, name: "Existing note", active: true }]
+      : [];
+    return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
+  }));
+  const root = host();
+  app = new HumanApp(root, bootstrap);
+  await app.start();
+  await vi.waitFor(() => expect(root.querySelector(".form-actions-dropdown")).not.toBeNull());
+  return { root, writes };
+}
+
+/// CYCLE3 MUST 1: after an unknown action outcome the record menu cannot send a write, in the default theme too.
+test("an unknown action outcome disables the record menu writes and their jobs refuse", async () => {
+  const { root, writes } = await startArchivableForm();
+  (app as unknown as { uncertainMethod: boolean }).uncertainMethod = true;
+  root.querySelector<HTMLButtonElement>(".form-reload-btn")!.click();
+  const entries = (): HTMLButtonElement[] => ["duplicate", "archive", "delete"].map(name => root.querySelector<HTMLButtonElement>(`.form-${name}-btn`)!);
+  await vi.waitFor(() => expect(entries().map(entry => entry.disabled)).toEqual([true, true, true]));
+  expect(root.querySelector<HTMLButtonElement>(".form-reload-btn")!.disabled).toBe(false);
+  // A stale enabled button must still not write.
+  for (const entry of entries()) { entry.disabled = false; entry.click(); }
+  await new Promise(done => setTimeout(done, 20));
+  expect(writes).toEqual([]);
+});
+
+/// CYCLE3 SHOULD 5: the record menu is the shared dropdown (roles, aria-expanded, roving focus, Escape).
+test("the record menu opens with the keyboard, roves focus and closes on Escape returning to the trigger", async () => {
+  const { root } = await startArchivableForm();
+  const toggle = root.querySelector<HTMLButtonElement>(".record-menu-btn")!;
+  const menu = root.querySelector<HTMLElement>(".form-action-menu")!;
+  expect(menu.getAttribute("role")).toBe("menu");
+  expect([...menu.querySelectorAll("button")].map(item => item.getAttribute("role"))).toEqual(expect.arrayContaining(["menuitem"]));
+  expect([...menu.querySelectorAll("button")].every(item => item.getAttribute("role") === "menuitem")).toBe(true);
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  toggle.focus();
+  toggle.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }));
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  expect(menu.classList.contains("open")).toBe(true);
+  expect(root.querySelector<HTMLElement>(".form-duplicate-btn")!.hidden).toBe(false);
+  await vi.waitFor(() => expect(document.activeElement).toBe(root.querySelector(".form-duplicate-btn")));
+  menu.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }));
+  expect(document.activeElement).toBe(root.querySelector(".form-archive-btn"));
+  menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  expect(menu.classList.contains("open")).toBe(false);
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  expect(document.activeElement).toBe(toggle);
+});
+
+/// CYCLE3 SHOULD 7: dispose releases the top-bar dropdown listeners; no document pointerdown listener outlives the app.
+test("dispose releases the top-bar dropdown document listeners", async () => {
+  history.replaceState(null, "", "/erp/action-20");
+  const live = new Set<EventListenerOrEventListenerObject>();
+  const add = document.addEventListener.bind(document), remove = document.removeEventListener.bind(document);
+  vi.spyOn(document, "addEventListener").mockImplementation((type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions) => { if (type === "pointerdown") live.add(listener); add(type, listener, options); });
+  vi.spyOn(document, "removeEventListener").mockImplementation((type: string, listener: EventListenerOrEventListenerObject, options?: boolean | EventListenerOptions) => { if (type === "pointerdown") live.delete(listener); remove(type, listener, options); });
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+    const value = path.endsWith("erp_load_web_menus") ? {
+      wire_major: 1, registry_version: "r1", roots: [10],
+      nodes: [
+        { module: null, id: 10, parent_id: null, label: "Notes", action_id: null, children: [11], icon: null },
+        { module: null, id: 11, parent_id: 10, label: "Folders", action_id: null, children: [12], icon: null },
+        { module: null, id: 12, parent_id: 11, label: "Archive", action_id: 20, children: [], icon: null }
+      ]
+    } : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, {
+      wire_major: 1, id: 20, name: "Notes", model: "test.note", target: "current", views: [{ id: 2, type: "list" }], domain: null, context: null
+    }, description) : path.endsWith("get_views") ? description
+      : path.endsWith("web_search_read") ? { length: 0, records: [] }
+      : [];
+    return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
+  }));
+  const root = host();
+  app = new HumanApp(root, bootstrap);
+  await app.start();
+  expect(root.querySelector(".nav-dropdown-toggle")).not.toBeNull();
+  expect(live.size).toBeGreaterThan(0);
+  app.dispose(); app = undefined;
+  expect(live.size).toBe(0);
+});
+
+/// CYCLE3 NIT 14: the addon context line survives a render that drops the title block it had moved under.
+test("the context line returns to the sheet when a render leaves no title block", async () => {
+  const { root } = await startArchivableForm();
+  const line = root.querySelector<HTMLElement>(".content-sheet > .form-record-context")!;
+  expect(line).not.toBeNull();
+  const form = root.querySelector<HTMLElement>(".record-form")!;
+  form.append(line);
+  form.replaceChildren();
+  await vi.waitFor(() => expect(root.querySelector(".content-sheet > .form-record-context")).toBe(line));
 });

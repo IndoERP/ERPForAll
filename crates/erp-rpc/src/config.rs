@@ -87,6 +87,7 @@ impl Bound {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RpcConfig {
     error_debug: bool,
+    read_audit_policy: crate::ReadAuditPolicy,
     result_bytes: u64,
     body_bytes: u64,
     json_depth: usize,
@@ -100,6 +101,7 @@ impl Default for RpcConfig {
     fn default() -> Self {
         Self {
             error_debug: false,
+            read_audit_policy: crate::ReadAuditPolicy::default(),
             result_bytes: RESULT_BYTES.default,
             body_bytes: BODY_BYTES.default,
             json_depth: 64,
@@ -115,6 +117,11 @@ impl RpcConfig {
     /// Start from the defaults.
     pub fn builder() -> RpcConfigBuilder {
         RpcConfigBuilder(Self::default())
+    }
+
+    /// Operator widening of successful-read auditing.
+    pub fn read_audit_policy(&self) -> &crate::ReadAuditPolicy {
+        &self.read_audit_policy
     }
 
     /// `rpc.error_debug`: whether `debug` may be shown to holders of `rpc.debug_errors`
@@ -184,6 +191,7 @@ impl erp_orm::node::SharedSettings for RpcConfig {
     ) -> std::result::Result<(), erp_orm::node::NodeError> {
         let Self {
             error_debug,
+            read_audit_policy,
             // section `limits` (`RpcLimits`)
             result_bytes: _,
             body_bytes: _,
@@ -193,6 +201,7 @@ impl erp_orm::node::SharedSettings for RpcConfig {
             idempotency_replay_secs,
             idempotency_response_bytes,
         } = self;
+        read_audit_policy.describe(out)?;
         out.shared_bool("rpc.error_debug", *error_debug)?;
         out.shared_u64(TTL_SECS.name, *idempotency_ttl_secs)?;
         out.shared_u64(REPLAY_SECS.name, *idempotency_replay_secs)?;
@@ -257,6 +266,12 @@ impl erp_orm::node::SharedSettings for RpcLimits {
 pub struct RpcConfigBuilder(RpcConfig);
 
 impl RpcConfigBuilder {
+    /// Operator widening; this policy never disables model, principal or elevation auditing.
+    pub fn read_audit_policy(mut self, policy: crate::ReadAuditPolicy) -> Self {
+        self.0.read_audit_policy = policy;
+        self
+    }
+
     /// `rpc.error_debug`.
     pub fn error_debug(mut self, on: bool) -> Self {
         self.0.error_debug = on;
@@ -351,6 +366,8 @@ mod tests {
         assert_eq!(
             names,
             [
+                "rpc.audit_read_policy.groups_digest",
+                "rpc.audit_read_policy.mode",
                 "rpc.error_debug",
                 "rpc.idempotency_replay_secs",
                 "rpc.idempotency_response_bytes",

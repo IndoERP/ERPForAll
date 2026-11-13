@@ -78,20 +78,27 @@ pub fn execute_with(
 /// Publisher/startup enforce read-only UI assets, execute-only node features and
 /// insert-only event storage and monotone UoM references, and the insert-only audit
 /// trail. Keep in sync with scripts/human-release.py.
+/// Version 7 narrows attachment content writes and publishes append-only usage accounting.
 /// This is a local capability declaration, not a claim about a database's current grants.
 /// Version 5 adds the job queue's column-level grants; version 6 adds the
-/// insert-only audit trail. The number is pinned here, in
+/// insert-only audit trail; version 7 adds attachment accounting and version 8 adds the isolated SELECT-only
+/// reader. The number is pinned here, in
 /// `scripts/human-release.py`, and the tests that pin it.
+/// Version 9 adds SELECT-only attachment ownership state.
+/// Version 10 adds snapshot-safe pending attachment guard writes.
+/// Version 11 adds SELECT-only peer evidence.
+/// Version 12 adds owner-only attachment recovery.
+/// Version 13 relabels attachment recovery: owner writes, the runtime role reads progress; grants unchanged.
 fn runtime_grant_contract() -> String {
     format!(
-        r#"{{"version":{RUNTIME_GRANT_CONTRACT_VERSION},"ui_assets":"read-only","node_features":"execute-only","event_outbox":"insert-only","uom_references":"guarded-monotone","job_queue":"column-grants","audit_trail":"insert-only"}}"#
+        r#"{{"version":{RUNTIME_GRANT_CONTRACT_VERSION},"ui_assets":"read-only","node_features":"execute-only","event_outbox":"insert-only","uom_references":"guarded-monotone","job_queue":"column-grants","audit_trail":"insert-only","attachment_usage":"append-only","audit_reader":"select-only","attachment_owner":"read-only","attachment_pending":"guarded-create","attachment_peer":"read-only","attachment_recovery":"owner-write, progress-read"}}"#
     )
 }
 
 /// The contract version this build publishes.: v5 went to (job queue) and v6
 /// to (audit trail, includes v5's guarantees); change it here and in
 /// `scripts/human-release.py` (`RUNTIME_GRANT_CONTRACTS`) together.
-const RUNTIME_GRANT_CONTRACT_VERSION: u32 = 6;
+const RUNTIME_GRANT_CONTRACT_VERSION: u32 = 13;
 
 async fn build_object(
     args: &BuildObjectArgs,

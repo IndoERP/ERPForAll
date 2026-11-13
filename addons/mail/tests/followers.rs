@@ -58,7 +58,7 @@ async fn user_with_partner(tx: &mut Transaction) -> i64 {
     let partner = partner(tx, "Portal Pat").await;
     tx.flush().await.unwrap();
     tx.execute(
-        "INSERT INTO res_users (id, name, login, active, partner_id) VALUES (42, 'Pat', 'pat', true, $1)",
+        "INSERT INTO res_users (id, name, login, active, partner_id, share) VALUES (42, 'Pat', 'pat', true, $1, false)",
         &[&partner],
     )
     .await
@@ -534,7 +534,7 @@ async fn a_refused_thread_deletion_deletes_nothing() {
     .unwrap();
     let mut tx = h.begin().await.unwrap();
     tx.execute(
-        "INSERT INTO res_users (id, name, login, active) VALUES (42, 'U', 'u', true)",
+        "INSERT INTO res_users (id, name, login, active, share) VALUES (42, 'U', 'u', true, false)",
         &[],
     )
     .await
@@ -603,10 +603,19 @@ async fn follower_upsert_refuses_subtype_links() {
     h.cleanup().await.unwrap();
 }
 
-/// The ceiling may only
-/// go down (design note "Statement budgets"). Run as the superuser only.
+/// Statement ceiling of `unfollow`, a RATCHET and DEFERRED_PERFORMANCE, not the §15.2
+/// budget (three), which is lowered at milestone end. The ceiling is five, the count this test
+/// printed in the focused run of slice (log `focus2.log.gz` in the
+/// slice's evidence directory; the ceiling was six with two mixin
+/// models and eight with four before), and it no longer grows with the
+/// number of models that inherit the mixin: the deletion of the follower row reads the owners of
+/// every `message_follower_ids` once, through the shared `res_id` column, not once per model (see
+/// `follower_statements_do_not_grow_with_thread_models`). The statements by the code: the
+/// subscription read, base's `ir.default` check and cleanup on unlink (2), one owner read and the
+/// `DELETE`. The ceiling may only go down (design note "Statement budgets"). Run as the superuser
+/// only.
 #[tokio::test]
-async fn unfollow_statement_ceiling_is_six() {
+async fn unfollow_statement_ceiling_is_five() {
     let h = harness().await;
     let mut tx = h.begin().await.unwrap();
     let t = ticket(&mut tx, "T").await;
@@ -616,7 +625,7 @@ async fn unfollow_statement_ceiling_is_six() {
     tx.invalidate_all().await.unwrap();
     let record = ticket_of(&tx.env(), t);
     let before = tx.query_count();
-    assert_query_count!(tx, >= 1, <= 6, {
+    assert_query_count!(tx, >= 1, <= 5, {
         record
             .call::<_, ()>(&mut tx, "unfollow", (vec![p],))
             .await
@@ -629,8 +638,8 @@ async fn unfollow_statement_ceiling_is_six() {
     h.cleanup().await.unwrap();
 }
 
-/// Statement ceiling of `set_subtypes` (flush included), a RATCHET and DEFERRED_PERFORMANCE
-/// , not the §15.2 budget (three), which is lowered at milestone end.
+/// Statement ceiling of `set_subtypes` (flush included), a RATCHET and DEFERRED_PERFORMANCE,
+/// not the §15.2 budget (three), which is lowered at milestone end.
 /// The ceiling may only go down. Run as the superuser only.
 #[tokio::test]
 async fn set_subtypes_statement_ceiling_is_six() {
@@ -1021,6 +1030,7 @@ async fn follow_others_needs_write_access_and_self_needs_read_access() {
     let public_partner = partner(&mut tx, "Public").await;
     tx.flush().await.unwrap();
     tx.execute(
+        // a public user: `share` takes its fail-closed database default
         "INSERT INTO res_users (id, name, login, active, partner_id) VALUES (43, 'Pub', 'pub', true, $1)",
         &[&public_partner],
     )
@@ -1379,6 +1389,151 @@ async fn follow_statement_ceiling() {
 const FOLLOW_DEFAULTS_CEILING: u64 = 8;
 /// Ceiling of `follow` with explicit subtypes replacing an existing follower's.
 const FOLLOW_EXPLICIT_CEILING: u64 = 9;
+
+/// A harness over the plain registry plus the second test addon (`support::more`): two more models
+/// that inherit the thread mixin.
+async fn more_models_harness() -> Harness {
+    Harness::builder([
+        &erp_addon_base::ADDON,
+        &erp_addon_mail::ADDON,
+        &support::ADDON,
+        &support::more::ADDON,
+    ])
+    .build()
+    .await
+    .unwrap()
+}
+
+/// Fails loudly when the extra thread models are not in the registry of `h`.
+async fn assert_extra_thread_models(h: &Harness) {
+    let tx = h.begin().await.unwrap();
+    for model in ["test_mail_more.note", "test_mail_more.task"] {
+        let env = tx.env();
+        assert!(
+            env.records(model).is_ok(),
+            "precondition: {model} must be in the registry"
+        );
+    }
+    drop(tx);
+}
+
+/// Statements of `unfollow` of one follower of a ticket, flush included, on `h`.
+async fn unfollow_statements(h: &Harness) -> u64 {
+    let mut tx = h.begin().await.unwrap();
+    let t = ticket(&mut tx, "T").await;
+    let p = partner(&mut tx, "P").await;
+    follower(&mut tx, TICKET, t, p, &[]).await;
+    tx.flush().await.unwrap();
+    tx.invalidate_all().await.unwrap();
+    let record = ticket_of(&tx.env(), t);
+    let before = tx.query_count();
+    record
+        .call::<_, ()>(&mut tx, "unfollow", (vec![p],))
+        .await
+        .unwrap();
+    tx.flush().await.unwrap();
+    let used = tx.query_count() - before;
+    tx.rollback().await.unwrap();
+    used
+}
+
+/// Statements of `follow` with default subtypes for a new partner, flush included, on `h`.
+async fn follow_defaults_statements(h: &Harness) -> u64 {
+    let mut tx = h.begin().await.unwrap();
+    let t = ticket(&mut tx, "T").await;
+    let p = partner(&mut tx, "P").await;
+    tx.flush().await.unwrap();
+    tx.invalidate_all().await.unwrap();
+    let record = ticket_of(&tx.env(), t);
+    let before = tx.query_count();
+    record
+        .call::<_, ()>(&mut tx, "follow", (vec![p], None::<Vec<i64>>))
+        .await
+        .unwrap();
+    tx.flush().await.unwrap();
+    let used = tx.query_count() - before;
+    tx.rollback().await.unwrap();
+    used
+}
+
+/// Statements of `follow` with explicit subtypes replacing an existing follower's, flush
+/// included, on `h`.
+async fn follow_explicit_statements(h: &Harness) -> u64 {
+    let mut tx = h.begin().await.unwrap();
+    let t = ticket(&mut tx, "T").await;
+    let q = partner(&mut tx, "Q").await;
+    let s1 = subtype(&mut tx, "S1", RawVals::new()).await;
+    let s2 = subtype(&mut tx, "S2", RawVals::new()).await;
+    follower(&mut tx, TICKET, t, q, &[s1]).await;
+    tx.flush().await.unwrap();
+    tx.invalidate_all().await.unwrap();
+    let record = ticket_of(&tx.env(), t);
+    let before = tx.query_count();
+    record
+        .call::<_, ()>(&mut tx, "follow", (vec![q], Some(vec![s2])))
+        .await
+        .unwrap();
+    tx.flush().await.unwrap();
+    let used = tx.query_count() - before;
+    tx.rollback().await.unwrap();
+    used
+}
+
+/// Statements of `set_subtypes` of an existing follower, flush included, on `h`.
+async fn set_subtypes_statements(h: &Harness) -> u64 {
+    let mut tx = h.begin().await.unwrap();
+    let t = ticket(&mut tx, "T").await;
+    let p = partner(&mut tx, "P").await;
+    let s1 = subtype(&mut tx, "S1", RawVals::new()).await;
+    let s2 = subtype(&mut tx, "S2", RawVals::new()).await;
+    follower(&mut tx, TICKET, t, p, &[s1]).await;
+    tx.flush().await.unwrap();
+    tx.invalidate_all().await.unwrap();
+    let record = ticket_of(&tx.env(), t);
+    let before = tx.query_count();
+    record
+        .call::<_, ()>(&mut tx, "set_subtypes", (p, vec![s2]))
+        .await
+        .unwrap();
+    tx.flush().await.unwrap();
+    let used = tx.query_count() - before;
+    tx.rollback().await.unwrap();
+    used
+}
+
+/// The statements of `unfollow`, `follow` (default subtypes for a new partner; explicit subtypes
+/// replacing an existing follower's) and `set_subtypes` are the same in a registry with two more
+/// models that inherit `mail.thread` as in the plain one: none of them reads or marks anything
+/// once per thread model. The counts come from the code under test in both registries; no
+/// absolute number is asserted here.
+#[tokio::test]
+async fn follower_statements_do_not_grow_with_thread_models() {
+    let plain = harness().await;
+    let more = more_models_harness().await;
+    assert_extra_thread_models(&more).await;
+    assert_eq!(
+        unfollow_statements(&plain).await,
+        unfollow_statements(&more).await,
+        "unfollow"
+    );
+    assert_eq!(
+        follow_defaults_statements(&plain).await,
+        follow_defaults_statements(&more).await,
+        "follow with default subtypes"
+    );
+    assert_eq!(
+        follow_explicit_statements(&plain).await,
+        follow_explicit_statements(&more).await,
+        "follow with explicit subtypes"
+    );
+    assert_eq!(
+        set_subtypes_statements(&plain).await,
+        set_subtypes_statements(&more).await,
+        "set_subtypes"
+    );
+    plain.cleanup().await.unwrap();
+    more.cleanup().await.unwrap();
+}
 
 #[tokio::test]
 async fn message_follower_ids_is_internal_only() {

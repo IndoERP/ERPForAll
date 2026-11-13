@@ -1,6 +1,6 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 // @vitest-environment jsdom
-// Tests for store, depth rules, ColumnarRecordStore, and createSelector.
+// Tests for store(), depth rules, ColumnarRecordStore, and createSelector.
 
 import { describe, expect, test } from "vitest";
 import {

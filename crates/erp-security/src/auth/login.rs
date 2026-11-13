@@ -34,11 +34,11 @@ use std::time::Duration;
 use erp_fields::{Condition, Error, ErrorKind, Result};
 use erp_orm::node::{FeatureBinding, FeatureKey, FeatureSnapshot, FeatureVersion, NodeAdmission};
 use erp_orm::{
-    BeginOptions, CommitError, CredentialBegin, CredentialOptions, FinalStatement, Isolation, Orm,
-    SUPERUSER_ID, Timeouts, Transaction, UserId,
+    ApiKeyId, BeginOptions, CommitError, CredentialBegin, CredentialOptions, FinalStatement,
+    Isolation, Orm, SUPERUSER_ID, Timeouts, Transaction, UserId,
 };
 use subtle::ConstantTimeEq;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError, oneshot};
 use tokio_postgres::Row;
 use tokio_postgres::types::{ToSql, Type};
 use zeroize::Zeroizing;
@@ -50,7 +50,7 @@ use super::dummy;
 use super::hooks::EndReason;
 use super::password::{self, HashParams};
 use super::pool::{self, HashPool, HashPoolError};
-use super::retry::{DEADLOCK, DeadlockRetries, RetryCounters, retry};
+use super::retry::{DEADLOCK, DeadlockRetries, RetryCounters, absorb, is_retried, retry};
 use super::schema;
 use super::session::{
     self, Cached, CheckedSession, Refusal, SessionCheck, SessionId, SessionSecret, TokenFields,
@@ -323,7 +323,159 @@ impl SessionAuthorization {
         )?;
         self.policy.has_groups(&binding, groups)
     }
+
+    /// The users among `users` this session's human may see under `res.users`' generated
+    /// company restriction, with all of the human's companies active (
+    /// Amendment 1): the resolution's default companies, whatever the company switcher shows.
+    /// Missing and hidden users are both absent; input order, each once.
+    /// # Errors
+    /// As [`erp_orm::Transaction::visible_under_company_restriction`]: `Access` for a drifted
+    /// generated restriction of `res.users`; `Programming` when `res.users` lost its declaration;
+    /// statement errors.
+    pub async fn visible_users(
+        &self,
+        tx: &mut Transaction,
+        users: &[UserId],
+    ) -> Result<Vec<UserId>> {
+        let ids: Vec<i64> = users.iter().map(|u| u.get()).collect();
+        let companies = self.principal.resolution().default_companies().to_vec();
+        tx.visible_under_company_restriction(
+            "res.users",
+            &ids,
+            self.policy.as_ref(),
+            &self.principal,
+            &companies,
+        )
+        .await?
+        .into_iter()
+        .map(|id| UserId::new(id).map_err(Error::from))
+        .collect()
+    }
+
+    /// The users among `users` whose groups, closed with the implied groups of the policy read
+    /// with this session, hold `base.group_system` (inactive users included); input order.
+    /// # Errors
+    /// `Programming` when the policy does not know `base.group_system`; a group row the policy
+    /// does not know; statement errors.
+    pub async fn settings_administrators(
+        &self,
+        tx: &mut Transaction,
+        users: &[UserId],
+    ) -> Result<Vec<UserId>> {
+        let xmlid = erp_orm::QualifiedXmlId::parse("base.group_system")?;
+        let system = match self.policy.resolve_group_ref(&xmlid)? {
+            erp_orm::GroupRefResolution::Known { id, .. } => id,
+            _ => {
+                return Err(Error::programming(
+                    "the access policy read with this session does not know base.group_system: \
+                     a Settings administrator target cannot be decided",
+                ));
+            }
+        };
+        let ids: Vec<i64> = users.iter().map(|u| u.get()).collect();
+        let rows = tx
+            .query(
+                "SELECT uid::int8, array_agg(gid::int8 ORDER BY gid) FROM res_groups_users_rel \
+                  WHERE uid = ANY($1::int8[]) GROUP BY uid",
+                &[&ids],
+            )
+            .await?;
+        let mut administrators = std::collections::BTreeSet::new();
+        for row in &rows {
+            let uid: i64 = col(row, 0)?;
+            let gids: Vec<i64> = col(row, 1)?;
+            let direct = gids
+                .into_iter()
+                .map(|g| erp_orm::GroupId::new(g).map_err(Error::from))
+                .collect::<Result<Vec<_>>>()?;
+            if self.policy.groups(&direct)?.contains(system) {
+                administrators.insert(uid);
+            }
+        }
+        Ok(users
+            .iter()
+            .copied()
+            .filter(|u| administrators.contains(&u.get()))
+            .collect())
+    }
+
+    /// The company scope and Settings administrator rule of an administrator password reset (ADR
+    /// 0138 Amendment 1). Each refusal of a target is the unknown-user answer
+    /// ([`missing_reset_target`], Missing "A selected password reset user no longer exists.", so
+    /// existence is not revealed):
+    /// - the superuser row (`SUPERUSER_ID`) is never a target, for any actor;
+    /// - every target must be visible to this session's human
+    ///   ([`SessionAuthorization::visible_users`]; the `share` escape scopes portal users only);
+    /// - when the actor does not hold `base.group_system`, every target, internal users included,
+    ///   must share a company (`res_company_users_rel` or `res_users.company_id`) with the
+    ///   resolution's default companies.
+    ///
+    /// Then a target holding `base.group_system` needs an actor holding it, else Access "Only a
+    /// Settings administrator can reset the password of a Settings administrator.". The callers
+    /// check existence and the manager authority themselves.
+    /// # Errors
+    /// The refusals above; the errors of the lookups.
+    pub async fn check_reset_targets(
+        &self,
+        tx: &mut Transaction,
+        targets: &[UserId],
+    ) -> Result<()> {
+        if targets.is_empty() {
+            return Ok(());
+        }
+        if targets.contains(&SUPERUSER_ID) {
+            return Err(missing_reset_target());
+        }
+        let visible = self.visible_users(tx, targets).await?;
+        if targets.iter().any(|u| !visible.contains(u)) {
+            return Err(missing_reset_target());
+        }
+        let settings_actor = self.has_groups("base.group_system")?;
+        if !settings_actor {
+            let ids: Vec<i64> = targets.iter().map(|u| u.get()).collect();
+            let companies: Vec<i64> = self
+                .principal
+                .resolution()
+                .default_companies()
+                .iter()
+                .map(|c| c.get())
+                .collect();
+            let rows = tx
+                .query(
+                    "SELECT count(*)::int8 FROM res_users u WHERE u.id = ANY($1::int8[]) \
+                       AND (u.company_id = ANY($2::int8[]) OR EXISTS (SELECT FROM \
+                            res_company_users_rel r WHERE r.user_id = u.id \
+                              AND r.cid = ANY($2::int8[])))",
+                    &[&ids, &companies],
+                )
+                .await?;
+            let row = rows
+                .first()
+                .ok_or_else(|| Error::db("the reset company check returned no row"))?;
+            let shared: i64 = col(row, 0)?;
+            if usize::try_from(shared).ok() != Some(ids.len()) {
+                return Err(missing_reset_target());
+            }
+        }
+        if !settings_actor && !self.settings_administrators(tx, targets).await?.is_empty() {
+            return Err(Error::access(
+                "Only a Settings administrator can reset the password of a Settings administrator.",
+            ));
+        }
+        Ok(())
+    }
 }
+
+/// What the imported rows of one index say about a 40-hex key: the verified row, none, or a loud
+/// refusal of the stored rows that still counts as a failed attempt.
+type LegacyOutcome = std::result::Result<
+    Option<super::apikey_legacy::LegacyMatch>,
+    super::apikey_legacy::LoudRefusal,
+>;
+
+/// The answer for an unknown or refused password reset target, defined in `erp-orm` so the reset
+/// line model of `base` gives the same one (Amendment 1).
+pub use erp_orm::missing_reset_target;
 impl fmt::Debug for SessionAuthorization {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SessionAuthorization")
@@ -390,10 +542,25 @@ pub struct AuthStats {
     /// Deadlocks the short transactions absorbed by running again, by step (each logged at
     /// `warn`; rust review round 3 RD-5).
     pub deadlock_retries: DeadlockRetries,
+    /// API key `last_used_at` writes that changed the row.
+    pub last_use_writes: u64,
+    /// Due last-use tickets dropped while another write of this ORM lineage held the one-permit
+    /// gate; nothing was written, the key's next use is due again.
+    pub last_use_skipped: u64,
+    /// Last-use writes that changed no row: the key was no longer due (another node wrote it
+    /// first), locked by another transaction (skipped without waiting) or already deleted.
+    pub last_use_noops: u64,
+    /// Last-use writes that failed (logged at `warn` with the key id only; the request that held
+    /// the ticket was never affected).
+    pub last_use_errors: u64,
 }
 
 #[derive(Debug, Default)]
 struct Counters {
+    last_use_writes: AtomicU64,
+    last_use_skipped: AtomicU64,
+    last_use_noops: AtomicU64,
+    last_use_errors: AtomicU64,
     settings_loads: AtomicU64,
     refusal_delete_failures: AtomicU64,
     failure_write_errors: AtomicU64,
@@ -421,6 +588,7 @@ pub struct Auth {
     prefilter: Prefilter,
     check_sql: String,
     api_key_sql: String,
+    legacy_memo: super::apikey_legacy::LegacyMemo,
     #[cfg(feature = "test-support")]
     api_key_verdict_gate: Mutex<Option<super::apikey_verify::ApiKeyVerdictGate>>,
     /// The statements that depend on the token plan.
@@ -1778,6 +1946,7 @@ impl Auth {
         Ok(Self {
             check_sql: session::check_sql(&resolver, &token_plan),
             api_key_sql: super::apikey_verify::check_sql(&resolver, &token_plan),
+            legacy_memo: super::apikey_legacy::LegacyMemo::default(),
             #[cfg(feature = "test-support")]
             api_key_verdict_gate: Mutex::new(None),
             sql: Arc::new(PlanSql::new(&token_plan, has_languages)?),
@@ -1870,6 +2039,10 @@ impl Auth {
             settings_wait_expired: c.settings_expiries.wait_expired.load(Ordering::Relaxed),
             settings_load_expired: c.settings_expiries.load_expired.load(Ordering::Relaxed),
             deadlock_retries: c.retries.read(),
+            last_use_writes: c.last_use_writes.load(Ordering::Relaxed),
+            last_use_skipped: c.last_use_skipped.load(Ordering::Relaxed),
+            last_use_noops: c.last_use_noops.load(Ordering::Relaxed),
+            last_use_errors: c.last_use_errors.load(Ordering::Relaxed),
         }
     }
 
@@ -2416,7 +2589,7 @@ impl Auth {
         Ok(rows.len() as u64)
     }
 
-    /// End the session `id` (logout): the row and, through the session-end hooks,
+    /// End the session `id` (logout): the row, through the session-end hooks,
     /// the subscribers' rows go in one READ COMMITTED transaction (hooks use raw statements only,
     /// as on every path; a deadlock is retried up to three tries, database review round 2 N9).
     /// `false` when no such row exists.
@@ -2844,6 +3017,10 @@ impl Verdict {
     /// The success: the rehash (on the pool), phase A ended, phase B, then the sessions the
     /// login ends (the cap; every other session after a rehash, lead decision 6). `None`: the
     /// credential changed since phase A, nothing was written.
+    ///
+    /// Under custom selection or a bound rollout the finalization is one guarded transaction
+    /// ([`Self::finalize_once`]) that is run again after a deadlock, counted in
+    /// [`AuthStats::deadlock_retries`] `.success`.
     async fn succeed(
         &mut self,
         auth: AuthInfo,
@@ -2872,100 +3049,52 @@ impl Verdict {
             Ok(rehash) => rehash,
             Err(e) => return Err(self.abandon_phase_a(phase_a, e).await),
         };
-        let mut selection_tx = if let Some(feature) = &self.feature {
-            let mut tx = self
-                .orm
-                .begin_opts(read_committed())
-                .await
-                .map_err(LoginError::Failed)?;
-            if let Err(error) = feature
-                .member
-                .binding
-                .protect_in(&mut tx, &feature.snapshot)
+        if user.witness.is_some() && self.plan.is_none() {
+            return Err(self
+                .abandon_phase_a(
+                    phase_a,
+                    LoginError::Failed(Error::programming(
+                        "missing selection plan for witness verification",
+                    )),
+                )
+                .await);
+        }
+        let rehash_hash = rehash.as_deref().map(String::as_str);
+        let mut phase_a = Some(phase_a);
+        // A guarded finalization (a rollout feature or a selection witness) runs in one
+        // transaction that a deadlock (40P01) aborts as a whole: the guard, the re-selection and
+        // the success statement run again from the start, at most `DEADLOCK_TRIES` times in all.
+        // The unguarded base path keeps the retry of its one-statement flight.
+        let guarded = self.feature.is_some() || user.witness.is_some();
+        let mut tries = 1;
+        let mut absorbed: Option<Error> = None;
+        let outcome = loop {
+            let mut phase_a_failed = false;
+            let error = match self
+                .finalize_once(&user, rehash_hash, &mut phase_a, &mut phase_a_failed)
                 .await
             {
-                return Err(LoginError::Failed(
-                    abandon(&mut tx, rollout_error(error)).await,
-                ));
+                Ok(outcome) => break outcome,
+                Err(error) => error,
+            };
+            if guarded && !phase_a_failed && is_retried(DEADLOCK, &error, tries) {
+                absorb(
+                    &self.counters.retries.success,
+                    "the guarded success of a login",
+                    tries,
+                    &error,
+                )
+                .await;
+                tries += 1;
+                absorbed = Some(error);
+                continue;
             }
-            Some(tx)
-        } else {
-            None
+            // the absorbed deadlock stays the cause when the rerun fails (lead review r1 S-1)
+            return Err(LoginError::Failed(match absorbed {
+                Some(cause) => error.and_also(&cause),
+                None => error,
+            }));
         };
-        if let Some(witness) = &user.witness {
-            let Some(plan) = &self.plan else {
-                return Err(self
-                    .abandon_phase_a(
-                        phase_a,
-                        LoginError::Failed(Error::programming(
-                            "missing selection plan for witness verification",
-                        )),
-                    )
-                    .await);
-            };
-            let mut tx = match selection_tx.take() {
-                Some(tx) => tx,
-                None => self
-                    .orm
-                    .begin_opts(read_committed())
-                    .await
-                    .map_err(LoginError::Failed)?,
-            };
-            if let Err(error) = tx
-                .execute("LOCK TABLE res_users IN SHARE ROW EXCLUSIVE MODE", &[])
-                .await
-            {
-                return Err(LoginError::Failed(abandon(&mut tx, error).await));
-            }
-            let fresh =
-                match dispatch_selection(&mut tx, self.login(), &self.limits, self.orm.registry())
-                    .await
-                {
-                    Ok(plan) => plan,
-                    Err(error) => return Err(LoginError::Failed(abandon(&mut tx, error).await)),
-                };
-            let candidate = match select_candidate(&mut tx, &fresh, &self.limits).await {
-                Ok(candidate) => candidate,
-                Err(error) => return Err(LoginError::Failed(abandon(&mut tx, error).await)),
-            };
-            let matches = fresh.domain.domain() == plan.domain.domain()
-                && fresh.order == plan.order
-                && candidate.is_some_and(|(uid, _, _, _, _, new_witness)| {
-                    uid == user.uid && new_witness == *witness
-                });
-            if !matches {
-                tx.rollback().await.map_err(LoginError::Failed)?;
-                end_phase_a(phase_a, false)
-                    .await
-                    .map_err(LoginError::Failed)?;
-                return Ok(None);
-            }
-            // This transaction owns the table guard through session/rehash persistence.
-            selection_tx = Some(tx);
-        }
-        end_phase_a(phase_a, true)
-            .await
-            .map_err(LoginError::Failed)?;
-        let written = self
-            .write_success(
-                &user,
-                rehash.as_deref().map(String::as_str),
-                selection_tx.as_mut(),
-            )
-            .await;
-        let outcome = match written {
-            Ok(outcome) => outcome,
-            Err(LoginError::Failed(error)) => {
-                return Err(LoginError::Failed(match selection_tx.as_mut() {
-                    Some(tx) => abandon(tx, error).await,
-                    None => error,
-                }));
-            }
-            Err(error) => return Err(error),
-        };
-        if let Some(tx) = selection_tx.as_mut() {
-            tx.commit().await.map_err(LoginError::Failed)?;
-        }
         let Some((session, context, sessions)) = outcome else {
             return Ok(None);
         };
@@ -2984,6 +3113,105 @@ impl Verdict {
             auth,
             context,
         }))
+    }
+
+    /// One try of the guarded finalization: a READ COMMITTED transaction takes the protection of
+    /// the rollout feature (when bound) and the table guard, selects the candidate again and
+    /// compares it with the witness, ends phase A, writes the session and commits. `None`: the
+    /// selection or the credential changed since phase A, nothing was written (phase A ended
+    /// without commit when it was still open).
+    ///
+    /// A deadlock aborts the whole transaction and its error keeps the SQLSTATE, so a caller may
+    /// run this again; phase A is taken out of `phase_a` once, by the first try that gets that
+    /// far, and later tries find it ended (`None` is an ended phase A, not a default). When
+    /// ending phase A with its commit fails, `phase_a_failed` is set: its writes may be lost, so
+    /// no rerun may log in without them (the order of the bound path before LOGIN-RACES, where
+    /// phase A ended outside the retry). Without a guard (the base path) the success statement
+    /// is its own flight and retries itself ([`Self::success_flight`]).
+    async fn finalize_once(
+        &self,
+        user: &LoginUser,
+        rehash: Option<&str>,
+        phase_a: &mut Option<PhaseA>,
+        phase_a_failed: &mut bool,
+    ) -> Result<Option<(NewSession, UserContext, i64)>> {
+        let mut selection_tx = if let Some(feature) = &self.feature {
+            let mut tx = self.orm.begin_opts(read_committed()).await?;
+            if let Err(error) = feature
+                .member
+                .binding
+                .protect_in(&mut tx, &feature.snapshot)
+                .await
+            {
+                return Err(abandon(&mut tx, rollout_error(error)).await);
+            }
+            Some(tx)
+        } else {
+            None
+        };
+        if let Some(witness) = &user.witness {
+            let Some(plan) = &self.plan else {
+                return Err(Error::programming(
+                    "missing selection plan for witness verification",
+                ));
+            };
+            let mut tx = match selection_tx.take() {
+                Some(tx) => tx,
+                None => self.orm.begin_opts(read_committed()).await?,
+            };
+            if let Err(error) = tx
+                .execute("LOCK TABLE res_users IN SHARE ROW EXCLUSIVE MODE", &[])
+                .await
+            {
+                return Err(abandon(&mut tx, error).await);
+            }
+            let fresh =
+                match dispatch_selection(&mut tx, self.login(), &self.limits, self.orm.registry())
+                    .await
+                {
+                    Ok(plan) => plan,
+                    Err(error) => return Err(abandon(&mut tx, error).await),
+                };
+            let candidate = match select_candidate(&mut tx, &fresh, &self.limits).await {
+                Ok(candidate) => candidate,
+                Err(error) => return Err(abandon(&mut tx, error).await),
+            };
+            let matches = fresh.domain.domain() == plan.domain.domain()
+                && fresh.order == plan.order
+                && candidate.is_some_and(|(uid, _, _, _, _, new_witness)| {
+                    uid == user.uid && new_witness == *witness
+                });
+            if !matches {
+                tx.rollback().await?;
+                end_phase_a(phase_a.take().unwrap_or(PhaseA::Flight), false).await?;
+                return Ok(None);
+            }
+            // This transaction owns the table guard through session/rehash persistence.
+            selection_tx = Some(tx);
+        }
+        if let Err(error) = end_phase_a(phase_a.take().unwrap_or(PhaseA::Flight), true).await {
+            *phase_a_failed = true;
+            return Err(match selection_tx.as_mut() {
+                Some(tx) => abandon(tx, error).await,
+                None => error,
+            });
+        }
+        let written = self
+            .write_success(user, rehash, selection_tx.as_mut())
+            .await;
+        let outcome = match written {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                return Err(match selection_tx.as_mut() {
+                    Some(tx) => abandon(tx, error).await,
+                    None => error,
+                });
+            }
+        };
+        if let Some(tx) = selection_tx.as_mut() {
+            tx.commit().await?;
+        }
+        Ok(outcome)
     }
 
     /// The new hash of the presented password when `_check_credentials` asked for a rehash.
@@ -3066,16 +3294,15 @@ impl Verdict {
         user: &LoginUser,
         rehash: Option<&str>,
         selection_tx: Option<&mut Transaction>,
-    ) -> Result<Option<(NewSession, UserContext, i64)>, LoginError> {
-        let prepared = self.new_session(user, rehash).map_err(LoginError::Failed)?;
+    ) -> Result<Option<(NewSession, UserContext, i64)>> {
+        let prepared = self.new_session(user, rehash)?;
         let rows = self
             .success_flight(user, rehash, &prepared, selection_tx)
-            .await
-            .map_err(LoginError::Failed)?;
+            .await?;
         let Some(row) = rows.first() else {
             return Ok(None);
         };
-        let before: i64 = col(row, 0).map_err(LoginError::Failed)?;
+        let before: i64 = col(row, 0)?;
         let Prepared {
             secret, id, lang, ..
         } = prepared;
@@ -3088,8 +3315,11 @@ impl Verdict {
         Ok(Some((session, context, before + 1)))
     }
 
-    /// The success statement's flight (parameters as `success_tail!` names them), run again
-    /// after a deadlock ([`super::retry`]).
+    /// The success statement's flight (parameters as `success_tail!` names them). Without a guard
+    /// transaction it runs again after a deadlock ([`super::retry`]) here. With `selection_tx` a
+    /// deadlock (40P01) aborts that whole transaction, the table guard included, so it is not
+    /// retried here: the error keeps its SQLSTATE and `succeed` runs the entire guarded
+    /// finalization again ([`Self::finalize_once`]).
     async fn success_flight(
         &self,
         user: &LoginUser,
@@ -3940,7 +4170,7 @@ impl Auth {
     /// cancellation occurs during rollback. A lineage admission lease bounds that detached work.
     ///
     /// # Errors
-    /// `AccessDenied` for invalid native keys, explicitly unsupported legacy imports or kinds,
+    /// `AccessDenied` for invalid native or imported legacy keys, unsupported kinds,
     /// and address cooldown (typed [`super::ApiKeyCooldown`] source); `Access` for a live cookie
     /// of another subject. Database, settings and decoding errors propagate. Expected refusals
     /// carry [`super::ApiKeyRefusal`] cookie-clearing evidence. Admission expiry is
@@ -3963,12 +4193,36 @@ impl Auth {
             .map_err(Error::from)?,
         ));
         let address = throttle::address_key(request.address);
+        // Reused by a retry under the same settings generation, so it does not repeat the hashing
+        // work; a new generation may change the cooldown screen, so it resolves again. The
+        // opening statement re-reads the row on every attempt.
+        let mut resolved: Option<(u64, LegacyOutcome)> = None;
         for _ in 0..2 {
             let cached = self.settings_current().await?;
             let address_hash = cached.throttle.key_hash(ThrottleKey::Address(&address));
             let parsed = super::apikey::NativeApiKey::parse(request.raw);
-            let legacy =
-                request.raw.len() == 40 && request.raw.bytes().all(|c| c.is_ascii_hexdigit());
+            let outcome =
+                if request.raw.len() == 40 && request.raw.bytes().all(|c| c.is_ascii_hexdigit()) {
+                    match &resolved {
+                        Some((generation, outcome)) if *generation == cached.generation => {
+                            outcome.clone()
+                        }
+                        _ => {
+                            let outcome = self
+                                .resolve_legacy_key(&request, &cached, &address_hash)
+                                .await?;
+                            resolved = Some((cached.generation, outcome.clone()));
+                            outcome
+                        }
+                    }
+                } else {
+                    Ok(None)
+                };
+            // a loud refusal of the stored rows is counted as a miss first (review S3)
+            let (legacy, loud) = match outcome {
+                Ok(found) => (found, None),
+                Err(loud) => (None, Some(loud)),
+            };
             let (digest, kid, malformed) = match parsed {
                 Ok(token) => {
                     let digest = cached.apikey.digest(&token);
@@ -3978,7 +4232,8 @@ impl Auth {
                     if error.kind() == ErrorKind::AccessDenied
                         && error.message() == "Invalid apikey" =>
                 {
-                    (String::new(), 1, true)
+                    // an imported key verified above is not a malformed native key
+                    (String::new(), 1, legacy.is_none())
                 }
                 Err(error) => return Err(error),
             };
@@ -4009,9 +4264,16 @@ impl Auth {
             settlement.release()?;
             match begun? {
                 CredentialBegin::Open { tx, value } => {
+                    // A failure here drops `tx` (rolled back) before any ticket exists.
+                    let last_use = if value.last_use_due {
+                        Some(self.api_key_last_use(value.key)?)
+                    } else {
+                        None
+                    };
                     return Ok(super::ApiKeyBegin {
                         tx,
-                        drop_cookie: value,
+                        drop_cookie: value.drop_cookie,
+                        last_use,
                     });
                 }
                 CredentialBegin::Refused(KeyRefused::Stale) => self.cache_drop(),
@@ -4027,6 +4289,9 @@ impl Auth {
                     if let Some(failure) = failure {
                         failure.settle().await?;
                     }
+                    if let Some(loud) = loud {
+                        return Err(loud.error());
+                    }
                     return Err(ApiKeyRefusal::attach(error, drop_cookie));
                 }
             }
@@ -4035,6 +4300,71 @@ impl Auth {
             ErrorKind::Concurrency,
             "the authentication keys changed twice during one API key check; retry the request",
         ))
+    }
+
+    /// The imported row whose stored PBKDF2 hash accepts this 40-hex key, if any. The answer
+    /// is evidence only: the opening statement re-reads the row, user, audience and expiry.
+    async fn resolve_legacy_key(
+        &self,
+        request: &super::ApiKeyRequest<'_>,
+        cached: &session::Cached,
+        address_hash: &[u8; 32],
+    ) -> Result<LegacyOutcome> {
+        use super::apikey_legacy::{CANDIDATES_SQL, verify_candidates};
+        let generation = cached.generation;
+        let index = request.raw[..8].to_owned();
+        let audience = match request.scope {
+            super::apikey_store::KeyScope::Rpc => "rpc",
+            super::apikey_store::KeyScope::Mcp => "mcp",
+        }
+        .to_owned();
+        let address_hex = session::hex(address_hash);
+        let cooldown = cached.settings.address_cooldown();
+        let after = i64::from(cooldown.after());
+        let window = cooldown.duration().as_secs_f64();
+        let params: [(&(dyn ToSql + Sync), Type); 5] = [
+            (&index, Type::TEXT),
+            (&audience, Type::TEXT),
+            (&address_hex, Type::TEXT),
+            (&after, Type::INT8),
+            (&window, Type::FLOAT8),
+        ];
+        let rows = one_flight(&self.orm, read_committed(), CANDIDATES_SQL, &params).await?;
+        let mut candidates = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let id: i64 = row.try_get(0).map_err(|e| {
+                Error::db(format!("could not decode legacy API key id: {e}")).with_source(e)
+            })?;
+            let hash: String = row.try_get(1).map_err(|e| {
+                Error::db(format!("could not decode legacy API key hash: {e}")).with_source(e)
+            })?;
+            candidates.push((id, Arc::<str>::from(hash)));
+        }
+        if let Some(found) = self.legacy_memo.get(request.raw, generation, &candidates)? {
+            return Ok(Ok(Some(found)));
+        }
+        let outcome = verify_candidates(&self.registration, request.raw, candidates).await?;
+        if let Ok(Some(found)) = &outcome {
+            self.legacy_memo
+                .put(request.raw, generation, found.clone())?;
+        }
+        Ok(outcome)
+    }
+
+    fn api_key_last_use(&self, key: ApiKeyId) -> Result<ApiKeyLastUse> {
+        let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
+            Error::programming("API key verification requires an active Tokio runtime")
+                .with_source(error)
+        })?;
+        Ok(ApiKeyLastUse {
+            key,
+            work: Some(LastUseWork {
+                orm: self.orm.clone(),
+                counters: Arc::clone(&self.counters),
+                registration: self.registration.clone(),
+                runtime,
+            }),
+        })
     }
 
     pub(super) fn api_key_failure_ticket(
@@ -4090,6 +4420,109 @@ impl Auth {
         }
         *gate = Some(super::apikey_verify::ApiKeyVerdictGate { reached, release });
         Ok(())
+    }
+}
+
+/// The right to record one use of an API key, handed out by [`Auth::begin_api_key`] only when
+/// the key's `last_used_at` is due (never set, or older than one hour by the database clock).
+///
+/// **Dropping the ticket launches the write**; there is nothing to await and no other way to fire
+/// it. Hold it until the request transaction has ended, then drop it. The write is bookkeeping:
+/// one READ COMMITTED statement on the primary, outside the request transaction, repeating the
+/// due test and skipping a locked row, so the key is written at most about once an hour across
+/// the whole cluster. It runs on the runtime that verified the key, so dropping the ticket in a
+/// cancelled request still records the use; a ticket dropped while that runtime is shutting
+/// down may record nothing, and that loss is neither counted nor logged. Only one such write
+/// runs at a time per process and ORM lineage: a ticket dropped while another write is running
+/// is skipped and counted ([`AuthStats::last_use_skipped`]), and the key's next use is due
+/// again. A failed write is logged at `warn` (key id only) and counted
+/// ([`AuthStats::last_use_errors`]); the request is never affected.
+///
+/// Dropping the ticket before the request transaction has ended is safe, with one exception: the
+/// request transaction is REPEATABLE READ, so any such transaction that takes its snapshot before
+/// a last-use write of this key commits, and then updates, deletes or locks (`FOR UPDATE`) that
+/// key row, gets a serialization failure (`40001`). That is the same request when it dropped the
+/// ticket early (a key revoking itself), and also another request that revokes or changes this
+/// key while a write from a different request commits in between. Holding the ticket until after
+/// commit protects only the request that owns it; the RPC layer retries a `40001` as a whole
+/// attempt (`crates/erp-rpc/src/service.rs`, `classify`), so the cost is one more attempt.
+pub struct ApiKeyLastUse {
+    key: ApiKeyId,
+    work: Option<LastUseWork>,
+}
+
+impl fmt::Debug for ApiKeyLastUse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ApiKeyLastUse")
+            .field("key", &self.key)
+            .finish_non_exhaustive()
+    }
+}
+
+struct LastUseWork {
+    orm: Orm,
+    counters: Arc<Counters>,
+    registration: pool::PoolBinding,
+    runtime: tokio::runtime::Handle,
+}
+
+impl ApiKeyLastUse {
+    /// Throw this ticket away without writing: nothing is launched and no counter moves.
+    ///
+    /// For a caller that already holds a ticket for the same key in the same request (for
+    /// example a preflight check followed by the request's own opening statement): keep the first
+    /// ticket and discard the others, so the write runs once, when the kept ticket is dropped.
+    pub fn discard(mut self) {
+        self.work = None;
+    }
+}
+
+impl Drop for ApiKeyLastUse {
+    fn drop(&mut self) {
+        let Some(work) = self.work.take() else {
+            return;
+        };
+        let key = self.key;
+        // No queueing: a busy gate means another write is on its way, and this key is due again
+        // on its next use.
+        let permit = match work.registration.last_use_gate().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(TryAcquireError::NoPermits) => {
+                bump(&work.counters.last_use_skipped);
+                return;
+            }
+            Err(TryAcquireError::Closed) => {
+                tracing::warn!(target: "erp::auth", "could not record the last use of API key {}: the last-use gate is closed", key.get());
+                bump(&work.counters.last_use_errors);
+                return;
+            }
+        };
+        // A dropped JoinHandle detaches rather than cancels; the captured runtime lets a
+        // cancelled request drop this ticket outside any runtime context.
+        drop(work.runtime.clone().spawn(async move {
+            let id = key.get();
+            let secs = super::apikey_verify::LAST_USED_INTERVAL_SECS;
+            let params: [(&(dyn ToSql + Sync), Type); 2] =
+                [(&id, Type::INT8), (&secs, Type::INT8)];
+            match one_flight(
+                &work.orm,
+                read_committed(),
+                super::apikey_verify::LAST_USE_SQL,
+                &params,
+            )
+            .await
+            {
+                Ok(rows) if rows.is_empty() => bump(&work.counters.last_use_noops),
+                Ok(_) => bump(&work.counters.last_use_writes),
+                Err(error) => {
+                    tracing::warn!(target: "erp::auth", "could not record the last use of API key {id}: {error}");
+                    bump(&work.counters.last_use_errors);
+                }
+            }
+            // keep the lineage binding alive until the write has ended
+            drop(permit);
+            drop(work.registration);
+        }));
     }
 }
 

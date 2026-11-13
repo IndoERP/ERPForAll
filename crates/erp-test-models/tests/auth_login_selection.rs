@@ -28,8 +28,11 @@ async fn selection_world() -> World {
 }
 
 async fn selection_fixture(h: Harness) -> World {
+    selection_fixture_on(h, own_pool(HashPoolConfig::DEFAULT)).await
+}
+
+async fn selection_fixture_on(h: Harness, pool: &'static erp_security::auth::HashPool) -> World {
     let admin = prepare(&h).await;
-    let pool = own_pool(HashPoolConfig::DEFAULT);
     let auth = erp_security::auth::test_support::login_selection_auth(
         h.orm().clone(),
         AuthConfig::DEFAULT,
@@ -812,5 +815,444 @@ async fn unbound_serving_constructor_refuses_selection_overrides() {
                 "serving constructor enabled custom login selection without rollout admission"
             ),
         }
+    }
+}
+
+// ---- LOGIN-RACES: remaining login races and cancellation ----
+
+fn selection_harness() -> erp_testkit::HarnessBuilder {
+    Harness::builder([
+        &erp_addon_base::ADDON,
+        &erp_data::model_data::ADDON,
+        &erp_test_models::test_login_selection::ADDON,
+    ])
+    .with_decls([erp_data::ir_model_data_decl()])
+    .require_core_tables(erp_security::auth::core_tables())
+}
+
+/// A selection world whose hashing pool has `permits` permits and a 30 s queue wait.
+async fn selection_world_permits(permits: u32) -> World {
+    let h = selection_harness().build().await.expect("harness");
+    selection_fixture_on(h, waiting_pool(permits)).await
+}
+
+/// A raw statement in its own committed transaction.
+async fn run_sql(
+    h: &Harness,
+    sql: &str,
+    params: &[&(dyn erp_testkit::tokio_postgres::types::ToSql + Sync)],
+) {
+    let mut tx = h.begin().await.unwrap();
+    tx.execute(sql, params).await.unwrap();
+    tx.commit().await.unwrap();
+}
+
+fn limits_min() -> u32 {
+    erp_security::auth::password::limits::ARGON2_MEMORY_KIB_MIN
+}
+
+/// Wait (yielding to the runtime) for a signal of a blocking job, 30 s at most.
+async fn wait_for_signal(rx: &std::sync::mpsc::Receiver<()>) {
+    let started = std::time::Instant::now();
+    loop {
+        match rx.try_recv() {
+            Ok(()) => return,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => panic!("the job ended unsignalled"),
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(30),
+            "the job never signalled"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    }
+}
+
+#[tokio::test]
+async fn races_writer_after_final_selection_waits_behind_the_guard() {
+    let w = selection_world_permits(2).await;
+    let uid = user_with_alias_and_priority(&w.h, "late_writer", "pw", "late_alias", 1).await;
+    install_success_pause(&w.h).await;
+    let mut gate = advisory_gate(&w.h, PAUSE_KEY).await;
+    let auth = std::sync::Arc::new(w.auth);
+    let task_auth = std::sync::Arc::clone(&auth);
+    let pending = tokio::spawn(async move { login(&task_auth, "late_writer", "pw").await });
+    // the login holds the table guard and waits inside its success statement
+    until_advisory_waiter(&w.h, PAUSE_KEY).await;
+    let mut writer = w.h.begin().await.unwrap();
+    let rename = tokio::spawn(async move {
+        writer
+            .execute(
+                "UPDATE res_users SET login = 'late_writer_renamed' WHERE id = $1",
+                &[&uid],
+            )
+            .await
+            .unwrap();
+        writer.commit().await.unwrap();
+    });
+    until_relation_waiter(&w.h, "res_users", "RowExclusiveLock", 1).await;
+    assert!(
+        !rename.is_finished(),
+        "the writer must wait behind the guard"
+    );
+    gate.commit().await.unwrap();
+    let logged = pending.await.unwrap().unwrap();
+    assert_eq!(logged.auth().uid().get(), uid);
+    rename.await.unwrap();
+    let error = check_user(&auth, logged.session().secret())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (error.kind(), error.message()),
+        (ErrorKind::SessionExpired, "user is not connected")
+    );
+}
+
+#[tokio::test]
+async fn races_writer_commits_while_login_waits_for_the_guard() {
+    let w = selection_world_permits(2).await;
+    let old_uid = user_with_alias_and_priority(&w.h, "guard_old", "pw", "guard_race", 10).await;
+    let new_uid = user_with_alias_and_priority(&w.h, "guard_new", "pw", "guard_race", 5).await;
+    let mut writer = w.h.begin().await.unwrap();
+    writer
+        .execute(
+            "UPDATE res_users SET priority = 20 WHERE id = $1",
+            &[&new_uid],
+        )
+        .await
+        .unwrap();
+    let auth = std::sync::Arc::new(w.auth);
+    let task_auth = std::sync::Arc::clone(&auth);
+    let pending = tokio::spawn(async move { login(&task_auth, "alias:guard_race", "pw").await });
+    until_relation_waiter(&w.h, "res_users", "ShareRowExclusiveLock", 1).await;
+    writer.commit().await.unwrap();
+    let logged = pending.await.unwrap().unwrap();
+    assert_eq!(logged.auth().uid().get(), new_uid);
+    assert_eq!(auth.stats().login_restarts, 1);
+    assert_eq!(
+        count(&w.h, &format!("erp_session WHERE user_id = {old_uid}")).await,
+        0
+    );
+    assert_eq!(count(&w.h, "erp_session").await, 1);
+}
+
+#[tokio::test]
+async fn races_second_mismatch_is_denied_after_one_restart() {
+    let w = selection_world_permits(1).await;
+    let old_uid = user_with_alias_and_priority(&w.h, "second_old", "pw", "second_race", 10).await;
+    let new_uid = user_with_alias_and_priority(&w.h, "second_new", "pw", "second_race", 5).await;
+    let release_first = hold_permits(w.pool, 1).await;
+    let auth = std::sync::Arc::new(w.auth);
+    let task_auth = std::sync::Arc::clone(&auth);
+    let pending = tokio::spawn(async move { login(&task_auth, "alias:second_race", "pw").await });
+    until_waiting(w.pool, 1).await;
+    // a second holder queued behind the login: it takes the only permit when the first verify ends
+    let (second_started, second_started_rx) = std::sync::mpsc::channel();
+    let (release_second, release_second_rx) = std::sync::mpsc::channel::<()>();
+    let pool = w.pool;
+    let second = tokio::spawn(pool.run(limits_min(), move || {
+        second_started.send(()).unwrap();
+        release_second_rx.recv().ok();
+    }));
+    until_waiting(w.pool, 2).await;
+    // writer A: the first verified winner is no longer the winner
+    run_sql(
+        &w.h,
+        "UPDATE res_users SET priority = 20 WHERE id = $1",
+        &[&new_uid],
+    )
+    .await;
+    drop(release_first);
+    // the first verify ended and the second holder owns the permit; the restarted verify queues
+    wait_for_signal(&second_started_rx).await;
+    until_waiting(w.pool, 1).await;
+    // writer B: the restarted verify's winner is no longer the winner either
+    run_sql(
+        &w.h,
+        "UPDATE res_users SET priority = 1 WHERE id = $1",
+        &[&new_uid],
+    )
+    .await;
+    release_second.send(()).unwrap();
+    second.await.unwrap().unwrap();
+    let outcome = pending.await.unwrap();
+    assert!(matches!(outcome, Err(LoginError::Denied)), "{outcome:?}");
+    assert_eq!(auth.stats().login_restarts, 1);
+    assert_eq!(count(&w.h, "erp_session").await, 0);
+    assert_eq!(
+        count(&w.h, &format!("erp_session WHERE user_id = {old_uid}")).await,
+        0
+    );
+    // observed today (not a decision): the second-mismatch Denied writes no failure accounting
+    assert_eq!(
+        count(
+            &w.h,
+            "erp_login_throttle WHERE kind IN ('address', 'login', 'principal')"
+        )
+        .await,
+        0
+    );
+}
+
+/// The state a cancelled login must leave behind: nothing running or waiting in the database and
+/// every hashing permit free again.
+async fn assert_no_leftovers(h: &Harness, pool: &'static erp_security::auth::HashPool) {
+    until_database_quiet(h).await;
+    assert_eq!(pool.stats().waiting, 0, "{:?}", pool.stats());
+    // every permit can be taken again
+    let release = hold_permits(pool, pool.config().permits()).await;
+    drop(release);
+}
+
+#[tokio::test]
+async fn races_cancel_at_phase_a_leaves_nothing_behind() {
+    let w = selection_world_permits(2).await;
+    let uid = user_with_alias_and_priority(&w.h, "cancel_a", "pw", "cancel_a_alias", 1).await;
+    let mut blocker = w.h.begin().await.unwrap();
+    blocker
+        .execute("LOCK TABLE res_users IN ACCESS EXCLUSIVE MODE", &[])
+        .await
+        .unwrap();
+    let auth = std::sync::Arc::new(w.auth);
+    let task_auth = std::sync::Arc::clone(&auth);
+    let pending = tokio::spawn(async move { login(&task_auth, "cancel_a", "pw").await });
+    until_relation_waiter(&w.h, "res_users", "AccessShareLock", 1).await;
+    pending.abort();
+    assert!(pending.await.unwrap_err().is_cancelled());
+    blocker.rollback().await.unwrap();
+    assert_no_leftovers(&w.h, w.pool).await;
+    assert_eq!(count(&w.h, "erp_session").await, 0);
+    assert_eq!(auth.stats().verdict_failures, 0);
+    let logged = login(&auth, "cancel_a", "pw").await.unwrap();
+    assert_eq!(logged.auth().uid().get(), uid);
+}
+
+#[tokio::test]
+async fn races_cancel_at_hash_wait_lets_the_verdict_finish() {
+    let w = selection_world_permits(1).await;
+    let uid = user_with_alias_and_priority(&w.h, "cancel_b", "pw", "cancel_b_alias", 1).await;
+    let release = hold_permits(w.pool, 1).await;
+    let auth = std::sync::Arc::new(w.auth);
+    let task_auth = std::sync::Arc::clone(&auth);
+    let pending = tokio::spawn(async move { login(&task_auth, "cancel_b", "pw").await });
+    until_waiting(w.pool, 1).await;
+    pending.abort();
+    assert!(pending.await.unwrap_err().is_cancelled());
+    assert_eq!(
+        w.pool.stats().waiting,
+        1,
+        "the detached verdict still waits for its permit"
+    );
+    drop(release);
+    until_count(&w.h, &format!("erp_session WHERE user_id = {uid}"), 1).await;
+    assert_no_leftovers(&w.h, w.pool).await;
+    assert_eq!(auth.stats().verdict_failures, 0);
+}
+
+#[tokio::test]
+async fn races_cancel_at_guard_wait_lets_the_verdict_finish() {
+    let w = selection_world_permits(2).await;
+    let uid = user_with_alias_and_priority(&w.h, "cancel_c", "pw", "cancel_c_alias", 1).await;
+    let mut writer = w.h.begin().await.unwrap();
+    writer
+        .execute("UPDATE res_users SET tz = 'UTC' WHERE id = $1", &[&uid])
+        .await
+        .unwrap();
+    let auth = std::sync::Arc::new(w.auth);
+    let task_auth = std::sync::Arc::clone(&auth);
+    let pending = tokio::spawn(async move { login(&task_auth, "cancel_c", "pw").await });
+    until_relation_waiter(&w.h, "res_users", "ShareRowExclusiveLock", 1).await;
+    pending.abort();
+    assert!(pending.await.unwrap_err().is_cancelled());
+    writer.commit().await.unwrap();
+    until_count(&w.h, &format!("erp_session WHERE user_id = {uid}"), 1).await;
+    assert_no_leftovers(&w.h, w.pool).await;
+    assert_eq!(auth.stats().verdict_failures, 0);
+}
+
+#[tokio::test]
+async fn races_cancel_at_success_insert_lets_the_verdict_finish() {
+    let w = selection_world_permits(2).await;
+    let uid = user_with_alias_and_priority(&w.h, "cancel_d", "pw", "cancel_d_alias", 1).await;
+    install_success_pause(&w.h).await;
+    let mut gate = advisory_gate(&w.h, PAUSE_KEY).await;
+    let auth = std::sync::Arc::new(w.auth);
+    let task_auth = std::sync::Arc::clone(&auth);
+    let pending = tokio::spawn(async move { login(&task_auth, "cancel_d", "pw").await });
+    until_advisory_waiter(&w.h, PAUSE_KEY).await;
+    pending.abort();
+    assert!(pending.await.unwrap_err().is_cancelled());
+    gate.commit().await.unwrap();
+    until_count(&w.h, &format!("erp_session WHERE user_id = {uid}"), 1).await;
+    assert_no_leftovers(&w.h, w.pool).await;
+    // the guard is released: a writer is not blocked
+    run_sql(
+        &w.h,
+        "UPDATE res_users SET tz = 'UTC' WHERE id = $1",
+        &[&uid],
+    )
+    .await;
+    assert_eq!(auth.stats().verdict_failures, 0);
+}
+
+/// A selection world whose connections start with `deadlock_timeout = 5s`, as `deadlock_world`.
+async fn selection_deadlock_world() -> (Harness, std::sync::Arc<Auth>, erp_orm::Orm) {
+    let h = selection_harness().build().await.expect("harness");
+    prepare(&h).await;
+    let pool = pool_with_options(&h, 4, "-c deadlock_timeout=5s");
+    let orm = orm_on(&h, pool).await;
+    let auth = erp_security::auth::test_support::login_selection_auth(
+        orm.clone(),
+        AuthConfig::DEFAULT,
+        own_pool(HashPoolConfig::DEFAULT),
+    )
+    .await
+    .unwrap();
+    (h, std::sync::Arc::new(auth), orm)
+}
+
+/// The selection mirror of `a_deadlocked_login_success_is_retried` (auth_login.rs): the other
+/// side removes bob's oldest trusted pair first; the login (holding the table guard) waits for
+/// that pair in its success statement; the other side then asks for the user table (the guard's
+/// conflicting lock) and the login, who waited first, is refused (40P01).
+#[tokio::test]
+async fn races_deadlocked_selection_success_is_retried() {
+    let (h, auth, orm) = selection_deadlock_world().await;
+    let bob = user_with_password(&h, "bob", "pw").await;
+    let mut keys = Vec::new();
+    for n in 80..=96 {
+        let addr =
+            erp_security::auth::throttle::address_key(format!("192.0.2.{n}").parse().unwrap());
+        keys.push(
+            auth.throttle_key(ThrottleKey::Trusted(&addr, "bob"))
+                .await
+                .unwrap()
+                .to_vec(),
+        );
+    }
+    let mut tx = h.begin().await.unwrap();
+    for (n, key) in keys.iter().enumerate() {
+        let age = match n {
+            0 => "1 hour",
+            1 => "40 days",
+            _ => "1 day",
+        };
+        tx.execute(
+            &format!(
+                "INSERT INTO erp_login_throttle (kind, key_hash, failures, last_failure_at) \
+                 VALUES ('trusted', $1, 1, now() - interval '{age}')"
+            ),
+            &[key],
+        )
+        .await
+        .unwrap();
+    }
+    tx.commit().await.unwrap();
+    let mut other = other_side(&orm).await;
+    let removed = other
+        .execute(
+            "DELETE FROM erp_login_throttle WHERE kind = 'trusted' AND key_hash = $1",
+            &[&keys[1]],
+        )
+        .await
+        .unwrap();
+    assert_eq!(removed, 1);
+    let node = std::sync::Arc::clone(&auth);
+    let attempt = tokio::spawn(async move { login_from(&node, "bob", "pw", "192.0.2.80").await });
+    until_the_login_waits(&mut other).await;
+    the_other_side_won(
+        other
+            .query("SELECT 1 FROM res_users WHERE id = $1 FOR UPDATE", &[&bob])
+            .await,
+    );
+    other.commit().await.unwrap();
+    let outcome = attempt.await.unwrap();
+    let ok = outcome.unwrap_or_else(|e| panic!("the selection login was not retried: {e:?}"));
+    assert_eq!(ok.uid().get(), bob);
+    let stats = auth.stats();
+    assert_eq!(stats.deadlock_retries.success, 1, "{stats:?}");
+    assert_eq!(stats.verdict_failures, 0);
+    assert_eq!(count(&h, "erp_session").await, 1);
+    assert_eq!(
+        count(&h, "erp_login_throttle WHERE kind = 'trusted'").await,
+        16,
+        "the login's pair and 15 others"
+    );
+}
+
+static R4_COMPANY: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(-1);
+
+fn r4_boom() -> erp_fields::Result<()> {
+    panic!("r4 callback panic")
+}
+
+fn r4_callbacks() -> [erp_orm::SelectionCallback; 2] {
+    use std::sync::atomic::Ordering;
+    [
+        erp_orm::SelectionCallback::new("r4_pend", |tx, _model, _ids| {
+            Box::pin(async move {
+                R4_COMPANY.store(tx.env().company_id()?.unwrap_or(0), Ordering::SeqCst);
+                std::future::pending::<()>().await;
+                Ok(())
+            })
+        }),
+        erp_orm::SelectionCallback::new("r4_panic", |tx, _model, _ids| {
+            Box::pin(async move {
+                R4_COMPANY.store(tx.env().company_id()?.unwrap_or(0), Ordering::SeqCst);
+                r4_boom()
+            })
+        }),
+    ]
+}
+
+async fn r4_world() -> World {
+    let mut builder = selection_harness();
+    for cb in r4_callbacks() {
+        builder = builder.selection_callback(cb);
+    }
+    selection_fixture(builder.build().await.expect("harness")).await
+}
+
+#[tokio::test]
+async fn races_selection_callback_unwind_restores_the_environment() {
+    use std::future::Future;
+    use std::sync::atomic::Ordering;
+    use std::task::{Context, Poll, Waker};
+    let w = r4_world().await;
+    let ids = [erp_fields::RecId::new_unique(1).unwrap()];
+    for callback in ["r4_pend", "r4_panic"] {
+        R4_COMPANY.store(-1, Ordering::SeqCst);
+        let mut tx = w.h.begin().await.unwrap();
+        let before = tx.env();
+        {
+            let mut call = Box::pin(tx.call_selection_callback_in_company(
+                callback,
+                "res.users",
+                &ids,
+                Some(1),
+            ));
+            let mut cx = Context::from_waker(Waker::noop());
+            let polled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                call.as_mut().poll(&mut cx)
+            }));
+            match (callback, polled) {
+                ("r4_pend", Ok(Poll::Pending)) => {}
+                ("r4_panic", Err(_)) => {}
+                (name, other) => panic!(
+                    "{name}: unexpected poll outcome {:?}",
+                    other.map(|p| p.is_pending())
+                ),
+            }
+        }
+        assert_eq!(
+            R4_COMPANY.load(Ordering::SeqCst),
+            1,
+            "{callback}: the callback must have run in company 1"
+        );
+        assert!(
+            tx.env() == before,
+            "{callback}: the company environment leaked out of the dropped call"
+        );
+        tx.rollback().await.unwrap();
     }
 }

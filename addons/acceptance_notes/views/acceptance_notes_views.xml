@@ -9,6 +9,7 @@
                 <field name="priority" widget="priority"/>
                 <field name="owner_id"/>
                 <field name="company_id"/>
+                <field name="rich_body" widget="html"/>
                 <field name="active" widget="boolean_toggle"/>
             </list>
         </field>
@@ -47,6 +48,9 @@
                     <notebook>
                         <page name="description" string="Description">
                             <field name="body" string="Description" widget="CopyClipboardText"/>
+                        </page>
+                        <page name="rich_body" string="Rich Notes">
+                            <field name="rich_body" widget="html"/>
                         </page>
                         <page name="internal" string="Internal Memo" groups="base.group_system">
                             <field name="internal_memo"/>

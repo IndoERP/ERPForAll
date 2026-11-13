@@ -1,4 +1,4 @@
-//! Allocation budget of building a result batch (design note): a
+//! Allocation budget of building a result batch: a
 //! 5-key batch (id, text, 3 floats) gathered from prepared values the way the read path gathers
 //! cache columns. One test in its own binary, run on the main thread by `erp_alloc_budget::harness`
 //! (`erp_alloc_budget`: one profiler, all threads counted).

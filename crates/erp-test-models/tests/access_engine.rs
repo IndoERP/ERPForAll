@@ -1627,7 +1627,13 @@ async fn cached_reads_recheck_record_rules_after_switching_user() {
             .write_values(&mut tx, &row(&[("name", Value::str("pending private"))]))
             .await
             .unwrap();
-        let restricted = allowed.with_user(OTHER);
+        // made by System: demo has no `principal.impersonate` (A4); the cache is the
+        // transaction's either way
+        let restricted = allowed.with_env(
+            h.orm()
+                .env(erp_orm::SUPERUSER_ID, erp_orm::Context::new())
+                .with_user(OTHER),
+        );
         let err = cached_read(&mut tx, &restricted, path)
             .await
             .expect_err(path);

@@ -1148,8 +1148,10 @@ const CREATE_STATEMENTS: usize = 3;
 const WRITE_KEY_STATEMENTS: usize = 2;
 /// Measured at review round 1.
 const WRITE_OTHER_STATEMENTS: usize = 1;
-/// Measured at review round 1: two of the `ir.default` clean-up and the `DELETE`.
-const UNLINK_STATEMENTS: usize = 3;
+/// It was 3 until: the second `ir.default` statement became the
+/// fallback check of `refuse_company_dependent_unlink`, which runs only for a model that a
+/// company-dependent many2one targets (`ir.actions.act_url` has none).
+const UNLINK_STATEMENTS: usize = 2;
 
 /// The ids among `ids` that have a row in `ir_actions`.
 async fn key_rows(tx: &mut erp_sdk::Transaction, ids: &[i64]) -> Vec<i64> {
@@ -1662,31 +1664,31 @@ async fn upsert_on_actions_is_refused() {
     h.cleanup().await.unwrap();
 }
 
-static FILTERS_ADDON: erp_registry::AddonDescriptor = erp_registry::AddonDescriptor {
-    name: "x_filters",
+static TODO_ADDON: erp_registry::AddonDescriptor = erp_registry::AddonDescriptor {
+    name: "x_todo",
     depends: &["base"],
     exact_only: false,
 };
 
-const FILTER_FIELDS: &[erp_registry::FieldDecl] = &[erp_registry::FieldDecl::char("name")];
+const TODO_FIELDS: &[erp_registry::FieldDecl] = &[erp_registry::FieldDecl::char("name")];
 
 #[tokio::test]
 async fn a_missing_unlink_cleanup_is_refused() {
     let h = Harness::builder([
         &erp_addon_base::ADDON,
         &erp_data::model_data::ADDON,
-        &FILTERS_ADDON,
+        &TODO_ADDON,
     ])
     .with_decls([
         erp_data::ir_model_data_decl(),
-        erp_registry::ModelDecl::new("x_filters", "ir.filters")
-            .description("Filters")
-            .fields(FILTER_FIELDS),
+        erp_registry::ModelDecl::new("x_todo", "ir.actions.todo")
+            .description("Action Todo")
+            .fields(TODO_FIELDS),
     ])
     .build()
     .await
     .expect("harness");
-    let message = "the registry has model 'ir.filters', but deleting actions does not clean it \
+    let message = "the registry has model 'ir.actions.todo', but deleting actions does not clean it \
                    up yet: a later release must add that clean-up to the unlink of \
                    ir.actions.base";
     let mut tx = h.begin().await.unwrap();

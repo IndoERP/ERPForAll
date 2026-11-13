@@ -45,8 +45,7 @@ pub(crate) const WEB_NAME_SEARCH_OPERATOR: Operator = Operator::ILike;
 pub(crate) const WEB_RESEQUENCE_FIELD: &str = "sequence";
 /// `web_resequence(offset: int = 0)`.
 pub(crate) const WEB_RESEQUENCE_OFFSET: i64 = 0;
-/// `web_read_group(unfold_read_default_limit: int | None = 80)`
-/// .
+/// `web_read_group(unfold_read_default_limit: int | None = 80)`.
 pub(crate) const UNFOLD_READ_DEFAULT_LIMIT: u64 = 80;
 use crate::Transaction;
 use crate::dispatch::{BoxFuture, ImplKind, MethodFn, MethodImpl, Super, call_method};
@@ -489,8 +488,8 @@ impl Records {
             }
             "web_resequence" => {
                 let mut k = Kwargs::new("web_resequence", kwargs)?;
-                // the same argument rules as the JSON-2 binder: `field_name: null` gives `[]`
-                // , `offset: null` is refused; every argument is checked first
+                // the same argument rules as the JSON-2 binder: `field_name: null` gives `[]`,
+                // `offset: null` is refused; every argument is checked first
                 let specification = k.spec("specification")?;
                 let field_name = k.str_nullable_or("field_name", WEB_RESEQUENCE_FIELD)?;
                 let offset = k.i64_present_or("offset", WEB_RESEQUENCE_OFFSET)?;

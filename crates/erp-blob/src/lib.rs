@@ -35,6 +35,8 @@ mod key;
 mod local;
 mod memory;
 mod object;
+mod owner;
+pub mod peer;
 mod stage;
 mod store;
 
@@ -50,6 +52,9 @@ pub use key::{ContentKey, Namespace, StagingKey, from_hex, to_hex};
 pub use local::LocalStore;
 pub use memory::{Faults, MemoryStore, Op, When};
 pub use object::{ObjectBackend, PART_SIZE, S3Settings};
+pub use owner::{
+    ContestState, OWNER_MARKER_MAX_BYTES, OwnerIdentity, OwnerMarker, OwnerState, OwnerVersion,
+};
 pub use stage::{DETECT_BYTES, DIGEST_READ_BYTES, StageLimits, StagedBlob, digest_stream, digests};
 pub use store::{
     AttachmentStore, BlobMeta, BlobRead, BlobReader, BodyReader, BoxFuture, ByteRange,

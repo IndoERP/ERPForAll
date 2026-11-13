@@ -10,8 +10,7 @@
 //! connection is detached from the pool (closing it rolls back on the server) and the transaction
 //! becomes `Released`: unusable. A connection inside a transaction never returns to the pool.
 //!
-//! [`Orm::run`] is the unit-of-work entry point: it retries serialization failures and deadlocks
-//! .
+//! [`Orm::run`] is the unit-of-work entry point: it retries serialization failures and deadlocks.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -183,6 +182,9 @@ pub(crate) struct Shared {
     pub(crate) job_settings: Arc<crate::jobs::JobSettings>,
     /// The capability that authorizes job administration (`jobs.admin`).
     pub(crate) job_admin: Option<&'static crate::Capability>,
+    /// The capability that lets a principal that is not `System` act as another user
+    /// (`principal.impersonate`, A4).
+    pub(crate) impersonate: Option<&'static crate::Capability>,
     /// Implementations given to the builder at runtime, carried over by [`Orm::rebuild`].
     extras: Extras,
 }
@@ -428,6 +430,7 @@ pub struct OrmBuilder {
     required_job_kinds: Vec<&'static crate::jobs::JobKindRequirement>,
     job_settings: Option<Arc<crate::jobs::JobSettings>>,
     job_admin: Option<&'static crate::Capability>,
+    impersonate: Option<&'static crate::Capability>,
     read_pool: Option<Pool>,
     read_pool_failure: Option<crate::route::ReadPoolFailure>,
     read_pool_max_lag: Option<Duration>,
@@ -626,6 +629,19 @@ impl OrmBuilder {
         self
     }
 
+    /// The capability that lets a principal that is not `System` act as another user with
+    /// `with_user` (`principal.impersonate`, A4). `erp-orm` cannot declare
+    /// a capability itself, so the binary names the one `erp-security` declares
+    /// (`erp_security::principal::PRINCIPAL_IMPERSONATE`). Without it every switch to another
+    /// user by a principal that is not `System` is refused with a `Programming` error naming this
+    /// call; switches by `System` and to the switcher's own subject need no capability. Also
+    /// allowed on a builder made by [`Orm::rebuild`].
+    #[must_use]
+    pub fn impersonate_capability(mut self, capability: &'static crate::Capability) -> Self {
+        self.impersonate = Some(capability);
+        self
+    }
+
     /// Enable cross-process change signals: every transaction reads the generations
     /// with its `BEGIN` and applies what changed before its first statement.
     #[must_use]
@@ -786,8 +802,8 @@ impl OrmBuilder {
     /// `Programming` when a read pool is configured without a signal
     /// ([`OrmBuilder::read_pool`]), when `read_pool_failure` or `read_pool_max_lag` is set
     /// without a read pool or the lag is zero, when the policy needs resolved principals and no resolver is
-    /// installed, when a linked `capability!` has a malformed name or a name declared twice
-    /// , when a policy-source registration watches a field its model does
+    /// installed, when a linked `capability!` has a malformed name or a name declared twice,
+    /// when a policy-source registration watches a field its model does
     /// not have, when, with a read pool configured, a model registered as a
     /// [`crate::SourceKind::Membership`] source declares no membership signal trigger, when an
     /// addon's `#[access_domain]` overrides one model twice or overrides a model
@@ -916,6 +932,39 @@ impl OrmBuilder {
             .chain(self.constraints.iter().copied())
             .collect();
         let graph = ComputeGraph::build(&self.registry, &dispatch, &computes, &constraints)?;
+        for model in self.registry.models() {
+            for field in &model.fields {
+                if let Some(compute) = graph.compute((model.id, field.id)) {
+                    let reads_property = compute
+                        .readable
+                        .iter()
+                        .any(|f| model.field_by_id(*f).company_dependent)
+                        || compute.input_paths().any(|path| {
+                            path.iter().any(|(m, f)| {
+                                self.registry
+                                    .model_by_id(*m)
+                                    .field_by_id(*f)
+                                    .company_dependent
+                            })
+                        })
+                        || graph.upstream((model.id, field.id)).iter().any(|(m, f)| {
+                            self.registry
+                                .model_by_id(*m)
+                                .field_by_id(*f)
+                                .company_dependent
+                        });
+                    if reads_property
+                        && (compute.stored || !compute.depends_context.contains(&"company"))
+                    {
+                        return Err(crate::company_dependent_runtime::unsupported(
+                            model.name,
+                            field.name,
+                            "compute dependencies without nonstored company context",
+                        ));
+                    }
+                }
+            }
+        }
         let relations = crate::relational::Relations::build(&self.registry)?;
         let onchange = crate::onchange::OnchangeMethods::build(&self.registry, &dispatch)?;
         let write_hooks = crate::version::WriteHooks::build(&self.registry, &self.write_hooks)?;
@@ -1010,6 +1059,7 @@ impl OrmBuilder {
                 },
                 job_settings,
                 job_admin: self.job_admin,
+                impersonate: self.impersonate,
             }),
             pool: self.pool,
         })
@@ -1083,6 +1133,7 @@ impl Orm {
             required_job_kinds: Vec::new(),
             job_settings: None,
             job_admin: None,
+            impersonate: None,
             read_pool: None,
             read_pool_failure: None,
             read_pool_max_lag: None,
@@ -1131,6 +1182,7 @@ impl Orm {
             required_job_kinds: self.shared.extras.required_job_kinds.clone(),
             job_settings: Some(Arc::clone(&self.shared.job_settings)),
             job_admin: self.shared.job_admin,
+            impersonate: self.shared.impersonate,
             // the read routing of the ORM it came from: a stage registry of a module operation
             // keeps routing reads to the replica (the verification cache starts empty)
             read_pool: self.shared.read.as_ref().map(|read| read.pool.clone()),
@@ -1215,6 +1267,18 @@ impl Orm {
         .with_generation_attachments(Arc::clone(&self.shared.generation_attachments))
     }
 
+    /// [`Orm::env`] for a caller (A4): an environment of the `User`
+    /// principal of `subject`, never `System`. The entry addon code uses to build an environment
+    /// for a user it acts for; the hint-taking [`Orm::env`] also builds the `System` one.
+    ///
+    /// # Errors
+    ///
+    /// `Access` ("the superuser cannot be opened as a caller: core code opens the system
+    /// principal itself") for [`crate::SUPERUSER_ID`].
+    pub fn env_caller(&self, subject: crate::UserId, context: Context) -> Result<Env> {
+        Ok(self.env(PrincipalHint::caller(subject)?, context))
+    }
+
     /// Whether this ORM's lineage is `lineage` (by identity).
     pub(crate) fn has_lineage(&self, lineage: &Lineage) -> bool {
         Arc::ptr_eq(&self.shared.database.lineage, lineage)
@@ -1232,6 +1296,28 @@ impl Orm {
     /// groups and no companies, as under today's static policies.
     pub async fn begin(&self, principal: impl Into<PrincipalHint>) -> Result<Transaction> {
         self.begin_with(principal, Context::new()).await
+    }
+
+    /// Open a transaction for a caller (A4): the `User` principal of
+    /// `subject`, resolved as [`Orm::begin`] resolves it, never `System`. The entry addon code
+    /// uses to open a transaction for a user it acts for; the hint-taking entries
+    /// ([`Orm::begin`], [`Orm::begin_with`], [`Orm::run`], [`BeginOptions::new`]) also open the
+    /// `System` one.
+    ///
+    /// ```no_run
+    /// # async fn demo(orm: &erp_orm::Orm, user: erp_orm::UserId) -> erp_fields::Result<()> {
+    /// let tx = orm.begin_caller(user).await?;
+    /// assert_eq!(tx.env().principal().kind(), erp_orm::PrincipalKind::User);
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// `Access` ("the superuser cannot be opened as a caller: core code opens the system
+    /// principal itself") for [`crate::SUPERUSER_ID`], before any statement; then as
+    /// [`Orm::begin_opts`].
+    pub async fn begin_caller(&self, subject: crate::UserId) -> Result<Transaction> {
+        self.begin_opts(BeginOptions::caller(subject)?).await
     }
 
     /// Open a transaction with a context.
@@ -1346,6 +1432,7 @@ impl Orm {
             hint,
             context,
             intent,
+            read_audit_owner,
             isolation,
             timeouts,
             on_primary,
@@ -1361,6 +1448,7 @@ impl Orm {
             signal_read_sql,
         } = options;
         // checked before a connection is taken: nothing has been sent
+        refuse_switched_principal(&principal)?;
         #[cfg(feature = "test-faults")]
         if isolation == Isolation::ReadCommitted && import_snapshot.is_some() {
             return Err(Error::programming(
@@ -1377,6 +1465,9 @@ impl Orm {
             None => None,
         };
         let unit = crate::route::current_unit();
+        // an owned read-only transaction keeps its elevation evidence across a rollback inside a
+        // method body (the owner's attempt row needs it after the body returns)
+        let retain_elevations = read_audit_owner.is_some();
         let crate::route_orm::Checkout {
             conn,
             route,
@@ -1403,9 +1494,11 @@ impl Orm {
             refresh: crate::access::RefreshState::default(),
             private_texts: Mutex::new(FxHashMap::default()),
             intent,
+            read_audit_owner,
             isolation,
             raw_statements_only: false,
             pure_methods: None,
+            hook_scope: None,
             pure_scratch: FxHashMap::default(),
             timeouts: timeouts.unwrap_or(self.shared.config.timeouts),
             watch: crate::timeouts::LimitWatch::default(),
@@ -1449,7 +1542,12 @@ impl Orm {
             schema_changed: false,
             signal_state: crate::signal::TxSignal::default(),
             outbox: crate::outbox::Buffer::new(crate::outbox::BufferLimits::default())?,
-            audit: crate::audit::AuditBuffer::new(),
+            audit: if retain_elevations {
+                crate::audit::AuditBuffer::retaining_elevations()
+            } else {
+                crate::audit::AuditBuffer::new()
+            },
+            blocks: Arc::default(),
             pending_capture: crate::outbox::Pending::default(),
             signal_read: true,
             versions: crate::version::Expectations::default(),
@@ -1551,7 +1649,7 @@ enum State {
     Released,
 }
 
-/// What a transaction is opened for: fixed at `BEGIN`, never changed.
+/// What a transaction is opened: fixed at `BEGIN`, never changed.
 ///
 /// A [`TxIntent::Read`] transaction starts with `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY`
 /// and refuses every write path before sending anything: flush of pending values, `create`,
@@ -1600,7 +1698,7 @@ impl TxIntent {
 /// fail on concurrent updates of the rows they touch or skip: the batched garbage collection of
 /// the session and throttle tables, and the authentication service's short transactions (the
 /// login's two phases, session rotation and touch through [`Orm::one_flight`], and the session
-/// ends with their hooks;, round 1 decisions 9 and 12, rust review
+/// ends with their hooks, round 1 decisions 9 and 12, rust review
 /// round 2 N-5). Each statement then reads a new snapshot, so such a transaction refuses the
 /// record API (record reads and writes, searches, method calls, access checks) with a
 /// `Programming` error; only raw `query`, `execute` and `batch` run in it.
@@ -1646,6 +1744,103 @@ impl WriteOp {
     }
 }
 
+/// Refuse to open a transaction for a principal whose impersonation chain starts at a principal
+/// that is not `System` (A4): its switch is decided by the engine's admission check of the
+/// environment, which a transaction of its own would skip. A principal only records the root of its
+/// chain, so a chain that starts at `System` (`System` → A → T) opens one even when A's switch to T
+/// would be refused in the environment; closing that needs the immediate switcher on the principal
+/// and is left to the addon lint P6, which lists [`BeginOptions::for_principal`] beside
+/// the hint-taking entries (any holder of an [`Orm`] can already open a transaction for any user).
+fn refuse_switched_principal(principal: &Principal) -> Result<()> {
+    match principal.actor() {
+        Some(crate::Actor::Impersonator(switcher))
+            if switcher.kind() != crate::PrincipalKind::System =>
+        {
+            Err(Error::access(format!(
+                "a transaction cannot be opened for user {} as switched to by user {}: an \
+                 environment made by with_user is admitted by the engine only; open the \
+                 transaction for the caller (Orm::begin_caller)",
+                principal.subject(),
+                switcher.subject()
+            )))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// The future of [`Transaction::admit_records`] and [`Transaction::prepare_switch`]: ready at once
+/// for an environment without a pending `with_user` switch, otherwise the boxed resolution (and,
+/// for the admission, the check).
+#[must_use = "futures do nothing unless awaited"]
+pub(crate) enum Admit<'a> {
+    /// Decided when made (taken by the first poll).
+    Ready(Option<Result<()>>),
+    /// The switchers are resolved first.
+    Pending(crate::BoxFuture<'a, Result<()>>),
+}
+
+impl std::future::Future for Admit<'_> {
+    type Output = Result<()>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<()>> {
+        match self.get_mut() {
+            Self::Ready(outcome) => std::task::Poll::Ready(outcome.take().unwrap_or_else(|| {
+                Err(Error::internal(
+                    "the admission of an environment was polled after it completed",
+                ))
+            })),
+            Self::Pending(future) => future.as_mut().poll(cx),
+        }
+    }
+}
+
+/// The declaration that the code opening a read-only transaction writes its attempt evidence
+/// (amendment A2).
+///
+/// A read-only transaction cannot write its own audit row, so a scoped elevation block (or an
+/// audited unscoped `sudo`) inside it leaves its evidence only in the transaction's attempt
+/// ([`Transaction::take_audit_attempt`]). The owner is the opener that takes this contract on:
+/// **before it releases any result, it writes that attempt evidence as one `read_ok` attempt row,
+/// and it withholds the result when the row cannot be written.** A transaction without an owner
+/// refuses every elevation, because nobody would write the evidence.
+///
+/// The name is a `&'static str` chosen in Rust by the opening code, never derived from request
+/// input. It is declared with [`BeginOptions::read_only_audited`] or
+/// [`CredentialOptions::read_only_audited`]. Only the server's request path and other core code
+/// may declare one; addon crates must not (the P6 lint bans the constructors there).
+///
+/// ```
+/// use erp_orm::ReadAuditOwner;
+/// assert!(ReadAuditOwner::new("erp-rpc").is_ok());
+/// assert!(ReadAuditOwner::new("").is_err());
+/// ```
+#[derive(Debug, Clone)]
+pub struct ReadAuditOwner {
+    name: &'static str,
+}
+
+impl ReadAuditOwner {
+    /// The owner called `name` (for example `"erp-rpc"`).
+    ///
+    /// # Errors
+    ///
+    /// `Programming` for an empty name.
+    pub fn new(name: &'static str) -> Result<Self> {
+        if name.is_empty() {
+            return Err(Error::programming("a read-audit owner needs a name"));
+        }
+        Ok(Self { name })
+    }
+
+    /// The owner's name.
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+}
+
 /// How [`Orm::begin_opts`] opens a transaction.
 ///
 /// ```
@@ -1664,6 +1859,9 @@ pub struct BeginOptions {
     hint: Option<PrincipalHint>,
     context: Context,
     intent: TxIntent,
+    /// Declared with [`BeginOptions::read_only_audited`]; only ever set together with a read
+    /// intent.
+    read_audit_owner: Option<ReadAuditOwner>,
     isolation: Isolation,
     timeouts: Option<crate::timeouts::Timeouts>,
     on_primary: bool,
@@ -1691,8 +1889,22 @@ impl BeginOptions {
         }
     }
 
+    /// [`BeginOptions::new`] for a caller (A4): the `User` principal of
+    /// `subject`, never `System` ([`PrincipalHint::caller`]).
+    ///
+    /// # Errors
+    ///
+    /// [`crate::PrincipalError::SuperuserAsCaller`] (kind `Access`) for [`crate::SUPERUSER_ID`].
+    pub fn caller(subject: crate::UserId) -> std::result::Result<Self, crate::PrincipalError> {
+        Ok(Self::new(PrincipalHint::caller(subject)?))
+    }
+
     /// A read/write transaction for a resolved principal (its companies, scope and debug flag
-    /// apply), with an empty context.
+    /// apply), with an empty context. [`Orm::begin_opts`] refuses (`Access`, before any
+    /// statement) a principal whose impersonation chain starts at a principal other than `System`
+    /// (A4): that switch is decided only by the engine's admission of the environment. A
+    /// chain rooted at `System` is not refused here (the principal records the root only);
+    /// P6's lint lists this entry.
     pub fn for_principal(principal: Principal) -> Self {
         Self {
             operation_identity: None,
@@ -1700,6 +1912,7 @@ impl BeginOptions {
             hint: None,
             context: Context::new(),
             intent: TxIntent::Write,
+            read_audit_owner: None,
             isolation: Isolation::RepeatableRead,
             timeouts: None,
             on_primary: false,
@@ -1796,17 +2009,36 @@ impl BeginOptions {
         self
     }
 
-    /// Open it read-only for the entry method `entry` (`<model>.<method>`).
+    /// Open it read-only for the entry method `entry` (`<model>.<method>`), with no read-audit
+    /// owner (clears one declared before): a scoped elevation block or an audited unscoped `sudo`
+    /// in it is refused.
     pub fn read_only(mut self, entry: impl Into<Arc<str>>) -> Self {
         self.intent = TxIntent::Read {
             entry: entry.into(),
         };
+        self.read_audit_owner = None;
         self
+    }
+
+    /// Open it read-only for the entry method `entry` (`<model>.<method>`) and declare `owner`,
+    /// which promises to write the transaction's attempt evidence as one `read_ok` attempt row
+    /// before releasing any result (see [`ReadAuditOwner`]). With an owner a scoped elevation
+    /// block ([`Transaction::elevated`]) and [`Transaction::audited_unscoped_sudo`] are admitted;
+    /// the transaction stays `READ ONLY`. The owner is not part of [`TxIntent`].
+    pub fn read_only_audited(self, entry: impl Into<Arc<str>>, owner: ReadAuditOwner) -> Self {
+        let mut options = self.read_only(entry);
+        options.read_audit_owner = Some(owner);
+        options
     }
 
     /// The intent it opens with.
     pub fn intent(&self) -> &TxIntent {
         &self.intent
+    }
+
+    /// The read-audit owner it opens with, if one was declared.
+    pub fn read_audit_owner(&self) -> Option<&ReadAuditOwner> {
+        self.read_audit_owner.as_ref()
     }
 
     /// Open it at `isolation` instead of [`Isolation::RepeatableRead`] (see [`Isolation`] for
@@ -1838,6 +2070,11 @@ impl BeginOptions {
 pub struct CredentialOptions(BeginOptions);
 
 impl CredentialOptions {
+    /// The read-audit owner it opens with, if one was declared.
+    pub fn read_audit_owner(&self) -> Option<&ReadAuditOwner> {
+        self.0.read_audit_owner()
+    }
+
     /// On the primary, read/write, the ORM's limits.
     pub fn new() -> Self {
         Self(BeginOptions::credential())
@@ -1858,9 +2095,16 @@ impl CredentialOptions {
         Self(self.0.timeouts(timeouts))
     }
 
-    /// Open it read-only for the entry method `entry` (`<model>.<method>`).
+    /// Open it read-only for the entry method `entry` (`<model>.<method>`), with no read-audit
+    /// owner.
     pub fn read_only(self, entry: impl Into<Arc<str>>) -> Self {
         Self(self.0.read_only(entry))
+    }
+
+    /// Open it read-only for the entry method `entry` and declare `owner`
+    /// ([`BeginOptions::read_only_audited`]).
+    pub fn read_only_audited(self, entry: impl Into<Arc<str>>, owner: ReadAuditOwner) -> Self {
+        Self(self.0.read_only_audited(entry, owner))
     }
 }
 
@@ -1902,7 +2146,8 @@ impl std::fmt::Debug for FinalStatement<'_> {
 #[non_exhaustive]
 pub enum CommitError {
     /// Nothing was committed, for certain; the error says why (it keeps its kind and SQLSTATE,
-    /// so `40001`/`40P01` can be retried).
+    /// so `40001`/`40P01` can be retried). It also carries a refusal made before anything was
+    /// sent (a managed transaction, a [`HookScope`]), when nothing was rolled back either.
     RolledBack(Error),
     /// `COMMIT` was sent but no answer arrived: the change may or may not have been applied.
     /// Never retry blindly. After-commit hooks do not run, because the outcome is not known.
@@ -2167,11 +2412,17 @@ pub struct Transaction {
         Mutex<FxHashMap<(erp_sql::filter::ShapeKey, usize), crate::search::MemoText>>,
     /// Read-only or read/write, fixed at `BEGIN`.
     intent: TxIntent,
+    /// The read-audit owner declared at open ([`BeginOptions::read_only_audited`]). It lives in
+    /// the transaction value, so a replica-to-primary reroute (same value, new connection) keeps
+    /// it.
+    read_audit_owner: Option<ReadAuditOwner>,
     /// The isolation level of `BEGIN` ([`BeginOptions::isolation`]).
     isolation: Isolation,
     /// Scoped refusal of record operations, independent of database isolation.
     raw_statements_only: bool,
     pure_methods: Option<Arc<PureMethodState>>,
+    /// The live [`HookScope`]'s hook and first refusal.
+    hook_scope: Option<HookScopeState>,
     pure_scratch: FxHashMap<std::any::TypeId, Box<dyn std::any::Any + Send + Sync>>,
     /// The limits set with `BEGIN`; the errors of statements that hit them name them.
     timeouts: crate::timeouts::Timeouts,
@@ -2255,6 +2506,9 @@ pub struct Transaction {
     pub(crate) outbox: crate::outbox::Buffer,
     /// The audit content of this attempt, written with one INSERT at commit.
     pub(crate) audit: crate::audit::AuditBuffer,
+    /// The open scoped elevation blocks of this database transaction and their identity counters,
+    /// shared with the guards that close them.
+    pub(crate) blocks: Arc<Mutex<crate::principal::block::OpenBlocks>>,
     pub(crate) pending_capture: crate::outbox::Pending,
     /// Read the generations with `BEGIN` (off only for `sync_schema`, which creates the table).
     pub(crate) signal_read: bool,
@@ -2462,6 +2716,188 @@ impl Drop for RawStatements<'_> {
     }
 }
 
+/// Source of [`HookScopeState`] tokens (process-wide, so a state never matches another scope's).
+static NEXT_HOOK_SCOPE_TOKEN: AtomicU64 = AtomicU64::new(1);
+
+/// The state of a live [`HookScope`]: the hook it runs and the first refusal inside it.
+#[derive(Debug)]
+struct HookScopeState {
+    hook: &'static str,
+    /// Matches the owning [`HookScope`]'s token while the scope lends this transaction.
+    token: u64,
+    /// The message of the first refusal, kept even when the hook caught the error.
+    refused: Option<String>,
+}
+
+/// Transaction-control first keywords refused inside a [`HookScope`].
+/// `PREPARE` is in the list only when `TRANSACTION` follows it ([`hook_control_keyword`]).
+const HOOK_CONTROL_KEYWORDS: [&str; 9] = [
+    "COMMIT",
+    "END",
+    "ROLLBACK",
+    "ABORT",
+    "BEGIN",
+    "START",
+    "SAVEPOINT",
+    "RELEASE",
+    "PREPARE",
+];
+
+/// The transaction-control keyword `sql` starts with (in upper case), if any: its first word
+/// outside whitespace and comments, unquoted, in any case. `PREPARE` counts only when the next
+/// word is an unquoted `TRANSACTION` (`PREPARE name AS …` is an ordinary prepared statement). A
+/// quoted first word is an identifier, never a keyword.
+///
+/// The scanner's uncertain flag is not consulted. It marks text the scanner cannot read with
+/// certainty (a `U&` string, a stray backslash or `$`), which matters to the read-only classifiers
+/// that look at every word; this check looks only at the first word, and what the scanner skips
+/// before it (whitespace, comments, literals, punctuation) cannot be a keyword. A statement sent
+/// by `query` or `execute` is a single statement (the extended protocol refuses more, `42601`), so
+/// a control keyword later in the text cannot run.
+fn hook_control_keyword(sql: &str) -> Option<&'static str> {
+    let mut words = sql_words::SqlWords::new(sql);
+    let first = words.next()?;
+    if first.quoted {
+        return None;
+    }
+    let keyword = HOOK_CONTROL_KEYWORDS
+        .iter()
+        .copied()
+        .find(|k| first.text.eq_ignore_ascii_case(k))?;
+    if keyword == "PREPARE" {
+        let next = words.next()?;
+        if next.quoted || !next.text.eq_ignore_ascii_case("TRANSACTION") {
+            return None;
+        }
+    }
+    Some(keyword)
+}
+
+/// A borrowing scope for a hook chain that runs inside a transaction the framework ends, made by
+/// [`Transaction::hook_scope`] (and amendment A3).
+///
+/// While it lives, [`Transaction::commit`], [`Transaction::rollback`],
+/// [`Transaction::commit_pipelined`], [`Transaction::switch_orm`] and [`Transaction::batch`] are
+/// refused, and so is a raw statement whose first keyword is transaction control (`COMMIT`,
+/// `END`, `ROLLBACK`, `ABORT`, `BEGIN`, `START`, `SAVEPOINT`, `RELEASE`, `PREPARE TRANSACTION`),
+/// all with `Programming` before anything is sent; the transaction stays as it was. The savepoint
+/// API ([`Transaction::savepoint`], [`Transaction::savepoint_outcome`]), record work and raw
+/// reads and writes stay available.
+///
+/// A refusal is sticky: [`HookScope::finish`] fails with the first refusal's message even when
+/// the hook caught the error. A nested scope names its own hook; when it is dropped its refusal
+/// is carried into the enclosing scope. Dropping the scope restores the caller's state, also
+/// during error propagation, unwind or cancellation. This is a consistency guard for trusted
+/// native code, not a sandbox.
+///
+/// Each scope's state carries a token. When the transaction behind the scope was replaced
+/// (`std::mem::swap` through `DerefMut`) or a nested scope was forgotten (`std::mem::forget`),
+/// the token no longer matches: `finish` fails, and dropping the scope leaves the state in place
+/// and poisons the transaction it then lends, so neither transaction commits silently. A
+/// top-level scope dropped with a refusal but without `finish` logs it at `error` and poisons the
+/// transaction, so a later commit refuses; call `finish`
+/// before passing the hook's result up (`let r = run(&mut scope).await; scope.finish()?; r?`).
+/// After a token mismatch the stale state keeps refusing `rollback` too: such a transaction can
+/// only be dropped, which closes its connection and so rolls it back on the server.
+///
+/// The holder of a module operation's [`OperationControl`] is outside the guard
+/// (`operation_commit` and its siblings); a login transaction is never managed, and
+/// [`Transaction::manage_operation`] is refused inside a scope.
+#[must_use = "keep the scope alive while running the hook chain, then call finish"]
+#[non_exhaustive]
+pub struct HookScope<'a> {
+    transaction: &'a mut Transaction,
+    previous: Option<HookScopeState>,
+    hook: &'static str,
+    token: u64,
+    finished: bool,
+}
+
+impl std::ops::Deref for HookScope<'_> {
+    type Target = Transaction;
+
+    fn deref(&self) -> &Self::Target {
+        self.transaction
+    }
+}
+
+impl std::ops::DerefMut for HookScope<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.transaction
+    }
+}
+
+impl HookScope<'_> {
+    /// Finish the hook chain.
+    ///
+    /// # Errors
+    /// `Programming` with the first refusal's message when anything was refused inside this
+    /// scope or a scope nested in it, even when the hook caught the error and returned `Ok`.
+    /// `Programming` too when the transaction behind the scope was replaced or a nested scope was
+    /// forgotten (its state is not this scope's).
+    pub fn finish(mut self) -> Result<()> {
+        self.finished = true;
+        match self.transaction.hook_scope.as_ref() {
+            Some(state) if state.token == self.token => match state.refused.as_deref() {
+                Some(message) => Err(Error::programming(message)),
+                None => Ok(()),
+            },
+            _ => Err(Error::programming(format!(
+                "HookScope::finish: the transaction of the {} hook scope was replaced (swapped) or \
+                 a nested scope was forgotten while the scope lived (nothing was committed)",
+                self.hook
+            ))),
+        }
+    }
+}
+
+impl Drop for HookScope<'_> {
+    fn drop(&mut self) {
+        let matches = self
+            .transaction
+            .hook_scope
+            .as_ref()
+            .is_some_and(|state| state.token == self.token);
+        if !matches {
+            // another transaction is behind the scope, or a nested scope was forgotten: leave
+            // the state as it is and keep this transaction from committing
+            self.transaction.poison_with(&Error::programming(format!(
+                "HookScope: the transaction of the {} hook scope was replaced (swapped) or a \
+                 nested scope was forgotten while the scope lived; this transaction must not \
+                 commit",
+                self.hook
+            )));
+            return;
+        }
+        let top_level = self.previous.is_none();
+        let inner = std::mem::replace(&mut self.transaction.hook_scope, self.previous.take());
+        let Some(HookScopeState {
+            refused: Some(message),
+            ..
+        }) = inner
+        else {
+            return;
+        };
+        if let Some(outer) = self.transaction.hook_scope.as_mut() {
+            outer.refused.get_or_insert(message);
+        } else if top_level && !self.finished && !std::thread::panicking() {
+            // a later commit of this transaction fails loudly: the hook ran past a refused commit
+            self.transaction.poison_with(&Error::programming(format!(
+                "HookScope: the {} hook scope was dropped without finish after a refusal ({message}); \
+                 this transaction must not commit",
+                self.hook
+            )));
+            tracing::error!(
+                target: "erp::orm",
+                hook = self.hook,
+                refusal = %message,
+                "a hook scope with a refusal was dropped without finish; the refusal may not \
+                 have reached its caller (call finish before passing the hook's result up)"
+            );
+        }
+    }
+}
+
 impl Transaction {
     /// Admit only the named metadata method chains in this transaction's exact
     /// original environment. Nested scopes keep the outer restrictions.
@@ -2502,6 +2938,24 @@ impl Transaction {
         Ok(())
     }
 
+    /// [`Transaction::check_method_records`] for an async method call: inside a pure-methods
+    /// scope the scope's own check, otherwise [`Transaction::admit_records`] (the switchers of
+    /// the records' environment are resolved first, A4).
+    ///
+    /// # Errors
+    ///
+    /// As [`Transaction::check_method_records`] and [`Transaction::admit_records`].
+    pub(crate) fn admit_method_records<'a>(
+        &'a mut self,
+        records: &'a Records,
+        method: &str,
+    ) -> Admit<'a> {
+        if self.pure_methods.is_some() {
+            return Admit::Ready(Some(self.check_method_records(records, method)));
+        }
+        self.admit_records(records)
+    }
+
     pub(crate) fn check_method_records(&self, records: &Records, method: &str) -> Result<()> {
         if let Some(state) = &self.pure_methods {
             self.check_not_cancelled()?;
@@ -2539,6 +2993,75 @@ impl Transaction {
             transaction: self,
             previous,
         }
+    }
+
+    /// Run a hook chain inside this transaction, which the framework ends after the hook, for the
+    /// lifetime of the returned borrowing scope. Calls that end the
+    /// transaction and raw transaction-control SQL are refused inside it ([`HookScope`]); call
+    /// [`HookScope::finish`] after the chain, so a refusal the hook caught still fails it.
+    ///
+    /// `hook` names the hook in the refusal messages. A nested scope names its own hook.
+    ///
+    /// ```no_run
+    /// # async fn example(tx: &mut erp_orm::Transaction) -> erp_fields::Result<()> {
+    /// let mut scope = tx.hook_scope("res.users._post_login");
+    /// // `scope.commit()` or `scope.query("COMMIT", &[])` would be refused here.
+    /// let ran = scope.query("SELECT 1", &[]).await;
+    /// // finish first, so a refusal the hook caught is not lost, then pass the result up
+    /// scope.finish()?;
+    /// ran?;
+    /// // The caller ends the transaction.
+    /// tx.commit().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn hook_scope(&mut self, hook: &'static str) -> HookScope<'_> {
+        let token = NEXT_HOOK_SCOPE_TOKEN.fetch_add(1, Ordering::Relaxed);
+        let previous = self.hook_scope.replace(HookScopeState {
+            hook,
+            token,
+            refused: None,
+        });
+        HookScope {
+            transaction: self,
+            previous,
+            hook,
+            token,
+            finished: false,
+        }
+    }
+
+    /// Refuse `call`, an entry point that ends the transaction, inside a [`HookScope`], and
+    /// record the refusal so [`HookScope::finish`] fails.
+    fn refuse_in_hook_scope(&mut self, call: &'static str) -> Result<()> {
+        let Some(state) = self.hook_scope.as_mut() else {
+            return Ok(());
+        };
+        let message = format!(
+            "{call}: refused inside the {} hook; the framework ends this transaction after the \
+             hook (nothing was committed or rolled back)",
+            state.hook
+        );
+        state.refused.get_or_insert_with(|| message.clone());
+        Err(Error::programming(message))
+    }
+
+    /// Refuse raw transaction-control SQL sent through `call` inside a [`HookScope`], and record
+    /// the refusal so [`HookScope::finish`] fails.
+    fn refuse_hook_control_sql(&mut self, call: &'static str, sql: &str) -> Result<()> {
+        let Some(state) = self.hook_scope.as_mut() else {
+            return Ok(());
+        };
+        let Some(keyword) = hook_control_keyword(sql) else {
+            return Ok(());
+        };
+        let message = format!(
+            "{call}: transaction control ({keyword}) is refused inside the {} hook; the framework \
+             ends this transaction after the hook (nothing was sent)",
+            state.hook
+        );
+        state.refused.get_or_insert_with(|| message.clone());
+        Err(Error::programming(message))
     }
 
     /// Refuse scoped record work, including entry points without a recordset (flush).
@@ -2763,6 +3286,14 @@ impl Transaction {
         self.state == State::Idle
     }
 
+    /// A new environment on this transaction's registry and lineage for `principal` with
+    /// `context` (the companies it names are validated as `Env` does); not the transaction's own.
+    pub(crate) fn env_for(&self, principal: Principal, context: Context) -> Env {
+        Env::new(Arc::clone(&self.shared.registry), principal, context)
+            .with_lineage(Arc::clone(&self.shared.database.lineage))
+            .with_generation_attachments(Arc::clone(&self.shared.generation_attachments))
+    }
+
     /// The transaction's environment with `principal` (the resolver's at the start).
     pub(crate) fn replace_principal(&mut self, principal: Principal) {
         let identity = self.env.operation_identity().cloned().map(Arc::new);
@@ -2789,8 +3320,8 @@ impl Transaction {
     }
 
     /// The pool this transaction runs on. A read transaction opened with a read pool configured
-    /// is [`Route::ReadPool`] until the lag guard or the unit of work sends it to the primary
-    /// ; a write is always [`Route::Primary`].
+    /// is [`Route::ReadPool`] until the lag guard or the unit of work sends it to the primary;
+    /// a write is always [`Route::Primary`].
     pub fn route(&self) -> crate::route::Route {
         self.route
     }
@@ -2828,7 +3359,17 @@ impl Transaction {
         self.state = State::Released;
         self.signal_state.reset();
         self.outbox.clear();
-        self.audit.clear();
+        // the audit buffer is kept: a reroute happens only while a database transaction opens
+        // (`start`), before any statement of it completed, so what was recorded since (an
+        // elevation entered before the first statement) still describes this transaction, which
+        // goes on, on the primary; evidence of an earlier database transaction that the caller
+        // ended itself is already in the stash and stays there
+        // the database transaction ended: none of its blocks is open any more, and the next
+        // block takes a new serial (closing is the safe direction on a poisoned set)
+        self.blocks
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .reset();
         self.pending_capture.clear();
         self.scoped_ids.clear();
         self.tracking.clear();
@@ -2936,6 +3477,13 @@ impl Transaction {
         &self.intent
     }
 
+    /// The read-audit owner declared when the transaction was opened
+    /// ([`BeginOptions::read_only_audited`]); `None` for a write transaction and for a read-only
+    /// one opened without an owner.
+    pub fn read_audit_owner(&self) -> Option<&ReadAuditOwner> {
+        self.read_audit_owner.as_ref()
+    }
+
     /// Refuse `op` on `model` in a read-only transaction (design note §5.3).
     ///
     /// # Errors
@@ -2988,9 +3536,15 @@ impl Transaction {
     /// One pass of the word scanner on the way in (`needs_isolation`, which holds for anything
     /// uncertain), a second for the session-state functions; whether the scanner was certain is
     /// asked only to word the error.
-    fn require_writable_sql(&mut self, sql: &str) -> Result<()> {
+    ///
+    /// Inside a [`HookScope`] a statement whose first keyword is transaction control is refused
+    /// first, whatever the intent; `call` is the public entry point named in that refusal.
+    fn require_writable_sql(&mut self, call: &'static str, sql: &str) -> Result<()> {
         self.refuse_pure_effect()?;
         self.note_string_reading();
+        if self.hook_scope.is_some() {
+            self.refuse_hook_control_sql(call, sql)?;
+        }
         let TxIntent::Read { entry } = &self.intent else {
             return Ok(());
         };
@@ -3196,10 +3750,38 @@ impl Transaction {
         &self.shared.config
     }
 
+    /// [`Transaction::check_records`] after resolving the switching principals of the pending
+    /// `with_user` switches of the records' environment ([`Transaction::prepare_switch`]), so the
+    /// admission check refuses a switcher without `principal.impersonate` with its `Access` error
+    /// instead of an unresolved-principal one (A4). Every async entry that takes a
+    /// recordset admits it this way; a synchronous one relies on the entry that called it.
+    ///
+    /// The future is a named type, not an `async fn` body: without a switch it is ready at once,
+    /// and with one the resolution (which may refresh the policy, flush and read records again
+    /// through this function) runs as an erased future, so neither the cycle nor an extra level
+    /// of nesting enters the callers' future types.
+    ///
+    /// # Errors
+    ///
+    /// As [`Transaction::prepare_switch`] and [`Transaction::check_records`].
+    pub(crate) fn admit_records<'a>(&'a mut self, records: &'a Records) -> Admit<'a> {
+        if records.env().switches().is_empty() {
+            return Admit::Ready(Some(self.check_records(records)));
+        }
+        let env = records.env();
+        Admit::Pending(Box::pin(async move {
+            self.prepare_switch(env).await?;
+            self.check_records(records)
+        }))
+    }
+
     /// Records must come from this transaction's registry: a recordset built on another registry
     /// would resolve its model and field ids against the wrong metadata.
     pub(crate) fn check_records(&self, records: &Records) -> Result<()> {
         self.check_not_cancelled()?;
+        // an environment of an elevation block is admitted only while its block is open here,
+        // before anything reads the cache
+        self.check_env_block(records.env())?;
         self.require_record_api(records)?;
         if Arc::ptr_eq(records.env().registry(), &self.shared.registry) {
             crate::event_namespace::refuse_event_namespace(records.spec(), "every record operation")
@@ -3357,16 +3939,17 @@ impl Transaction {
 
     /// Inspect native lifecycle source lookup on this held connection before its lazy BEGIN.
     /// This performs metadata reads only, issues no explicit table locks, and grants no lifecycle
-    /// authority. Configured signals are refused before lazy BEGIN: idle catalog observations
-    /// cannot stabilize source schema or aggregate resolution across the automatic opening read.
-    /// No signal read is suppressed, and the idle connection remains usable after a refusal.
-    /// The caller still performs its in-transaction schema, authority
+    /// authority. Configured signals are validated before lazy BEGIN to ensure exact native storage
+    /// types, absence of rewrite rules/triggers, and native built-in aggregate resolution before
+    /// automatic generation reads. No signal read is suppressed, and the idle connection remains
+    /// usable after a refusal. The caller still performs its in-transaction schema, authority
     /// and effect admission.
     ///
     /// # Errors
     /// Access without the fully elevated System principal; Programming unless still idle;
-    /// Validation for catalog precedence, missing/temporary/nonordinary signal storage, or
-    /// a configured Signal until safe opening admission is implemented;
+    /// Validation for catalog precedence, missing/temporary/nonordinary signal storage (including
+    /// row-level security, partitions and inheritance, which run or reach user code on read), or
+    /// non-native storage types/overloaded aggregates;
     /// Database when the metadata query fails. No second pool connection is acquired.
     #[doc(hidden)]
     pub async fn preflight_native_catalog_sources(&mut self) -> Result<()> {
@@ -3378,7 +3961,7 @@ impl Transaction {
             ));
         }
         let row = self.conn()?.query_one(
-            "SELECT pg_catalog.current_schemas(true), EXISTS(SELECT 1 FROM pg_catalog.pg_class c WHERE c.oid OPERATOR(pg_catalog.=) pg_catalog.to_regclass('erp_signal_generation') AND c.relpersistence::pg_catalog.text OPERATOR(pg_catalog.=) 'p' AND c.relkind::pg_catalog.text OPERATOR(pg_catalog.=) 'r')",
+            "SELECT pg_catalog.current_schemas(true), EXISTS(SELECT 1 FROM pg_catalog.pg_class c WHERE c.oid OPERATOR(pg_catalog.=) pg_catalog.to_regclass('erp_signal_generation') AND c.relpersistence::pg_catalog.text OPERATOR(pg_catalog.=) 'p' AND c.relkind::pg_catalog.text OPERATOR(pg_catalog.=) 'r' AND NOT c.relispartition AND NOT c.relrowsecurity AND NOT c.relforcerowsecurity AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_inherits i WHERE i.inhrelid OPERATOR(pg_catalog.=) c.oid OR i.inhparent OPERATOR(pg_catalog.=) c.oid))",
             &[],
         ).await.map_err(|error| Error::db("Cannot inspect native lifecycle sources").with_source(error))?;
         let schemas: Vec<String> = row.try_get(0).map_err(|error| {
@@ -3395,15 +3978,28 @@ impl Transaction {
         }
         if self.shared.signal.is_some() && !persistent {
             return Err(Error::validation(
-                "Native lifecycle opening requires a persistent signal store",
+                "Native lifecycle opening requires a persistent ordinary signal store table without row-level security, partitioning or inheritance",
             ));
         }
         if self.shared.signal.is_some() {
-            // A metadata-only idle probe has a check/use window before lazy BEGIN. Do not read
-            // generations through that window or disable the freshness read to avoid it.
-            return Err(Error::validation(
-                "Native lifecycle opening with configured Signal is unsupported until a later release",
-            ));
+            let valid_row = self.conn()?.query_one(
+                "SELECT \
+                 EXISTS(SELECT 1 FROM pg_catalog.pg_attribute a WHERE a.attrelid OPERATOR(pg_catalog.=) pg_catalog.to_regclass('erp_signal_generation') AND a.attname OPERATOR(pg_catalog.=) 'weight' AND a.atttypid OPERATOR(pg_catalog.=) 20 AND a.attnum > 0 AND NOT a.attisdropped AND a.attgenerated OPERATOR(pg_catalog.=) '') \
+                 AND EXISTS(SELECT 1 FROM pg_catalog.pg_attribute a WHERE a.attrelid OPERATOR(pg_catalog.=) pg_catalog.to_regclass('erp_signal_generation') AND a.attname OPERATOR(pg_catalog.=) 'key' AND a.atttypid OPERATOR(pg_catalog.=) 25 AND a.attnum > 0 AND NOT a.attisdropped AND a.attgenerated OPERATOR(pg_catalog.=) '') \
+                 AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_trigger t WHERE t.tgrelid OPERATOR(pg_catalog.=) pg_catalog.to_regclass('erp_signal_generation') AND NOT t.tgisinternal AND t.tgenabled OPERATOR(pg_catalog.<>) 'D') \
+                 AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_rewrite r WHERE r.ev_class OPERATOR(pg_catalog.=) pg_catalog.to_regclass('erp_signal_generation') AND r.rulename OPERATOR(pg_catalog.<>) '_RETURN') \
+                 AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid OPERATOR(pg_catalog.=) p.pronamespace WHERE p.proname OPERATOR(pg_catalog.=) 'sum' AND n.nspname OPERATOR(pg_catalog.=) ANY($1) AND n.nspname OPERATOR(pg_catalog.<>) 'pg_catalog')",
+                &[&schemas],
+            ).await.map_err(|error| Error::db("Cannot inspect signal storage and aggregate provenance").with_source(error))?;
+            let valid: bool = valid_row.try_get(0).map_err(|error| {
+                Error::programming("Invalid native signal validation query result")
+                    .with_source(error)
+            })?;
+            if !valid {
+                return Err(Error::validation(
+                    "Native lifecycle opening requires native signal storage types and built-in aggregate resolution",
+                ));
+            }
         }
         Ok(())
     }
@@ -3682,7 +4278,7 @@ impl Transaction {
         sql: &str,
         params: &[&(dyn ToSql + Sync)],
     ) -> impl std::future::Future<Output = Result<Vec<Row>>> {
-        self.query_allowed(sql, params, true)
+        self.query_allowed("Transaction::query", sql, params, true)
     }
 
     /// Generated ORM DELETE RETURNING whose caller applies followed-delete invalidation.
@@ -3691,18 +4287,19 @@ impl Transaction {
         sql: &str,
         params: &[&(dyn ToSql + Sync)],
     ) -> impl std::future::Future<Output = Result<Vec<Row>>> {
-        self.query_allowed(sql, params, false)
+        self.query_allowed("ORM statement", sql, params, false)
     }
 
     // Return this future directly: an extra async wrapper deepens every caller's generator.
     // Admission and invalidation stay inside it, so an unpolled query has no side effects.
     async fn query_allowed(
         &mut self,
+        call: &'static str,
         sql: &str,
         params: &[&(dyn ToSql + Sync)],
         scan_deletes: bool,
     ) -> Result<Vec<Row>> {
-        self.require_writable_sql(sql)?;
+        self.require_writable_sql(call, sql)?;
         if scan_deletes {
             self.follow_sql_deletes(sql);
         }
@@ -3732,7 +4329,7 @@ impl Transaction {
         sql: &str,
         params: &[(&(dyn ToSql + Sync), tokio_postgres::types::Type)],
     ) -> Result<Vec<Row>> {
-        self.require_writable_sql(sql)?;
+        self.require_writable_sql("Transaction::query_typed", sql)?;
         self.follow_sql_deletes(sql);
         self.ensure_open().await?;
         self.open_isolation(Some(sql)).await?;
@@ -3748,7 +4345,7 @@ impl Transaction {
 
     /// Run a statement and return the number of rows affected.
     pub async fn execute(&mut self, sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<u64> {
-        self.require_writable_sql(sql)?;
+        self.require_writable_sql("Transaction::execute", sql)?;
         self.follow_sql_deletes(sql);
         self.execute_allowed(sql, params).await
     }
@@ -3761,7 +4358,7 @@ impl Transaction {
         sql: &str,
         params: &[&(dyn ToSql + Sync)],
     ) -> Result<u64> {
-        self.require_writable_sql(sql)?;
+        self.require_writable_sql("ORM statement", sql)?;
         self.execute_allowed(sql, params).await
     }
 
@@ -3788,8 +4385,24 @@ impl Transaction {
     /// Run several statements without parameters in one round trip (DDL). Counts as one statement
     /// in [`Transaction::query_count`]. Prepared statements of every pooled connection are dropped
     /// before their next use, since DDL can change result shapes.
+    ///
+    /// # Errors
+    /// `Programming` inside a [`HookScope`] (nothing is sent: the simple protocol could carry a
+    /// transaction-control statement, amendment A3); the statement's error otherwise.
     pub async fn batch(&mut self, sql: &str) -> Result<()> {
-        self.require_writable_sql(sql)?;
+        // the simple protocol could carry several statements, a transaction-control one among
+        // them (amendment A3)
+        if let Some(state) = self.hook_scope.as_mut() {
+            let message = format!(
+                "Transaction::batch: refused inside the {} hook (the simple protocol can carry \
+                 several statements, a transaction-control one among them); the framework ends \
+                 this transaction after the hook (nothing was sent)",
+                state.hook
+            );
+            state.refused.get_or_insert_with(|| message.clone());
+            return Err(Error::programming(message));
+        }
+        self.require_writable_sql("Transaction::batch", sql)?;
         self.follow_sql_deletes(sql);
         self.ensure_open().await?;
         self.open_isolation(None).await?;
@@ -3862,15 +4475,17 @@ impl Transaction {
         }
     }
 
-    /// Flush pending writes, then `COMMIT`; the cache is cleared and after-commit hooks run
-    /// . A transaction aborted by an earlier error is rolled back and the commit
+    /// Flush pending writes, then `COMMIT`; the cache is cleared and after-commit hooks run.
+    /// A transaction aborted by an earlier error is rolled back and the commit
     /// fails (`Concurrency` for serialization failures and deadlocks, else `Database`); so does a
     /// failed flush. A failed `COMMIT` releases the connection.
     ///
     /// # Errors
     /// Also `Programming` on a transaction managed by a module operation
-    /// ([`Transaction::manage_operation`]): the operation commits it itself.
+    /// ([`Transaction::manage_operation`]): the operation commits it itself; and inside a
+    /// [`HookScope`] (nothing is sent; the framework ends the transaction after the hook).
     pub async fn commit(&mut self) -> Result<()> {
+        self.refuse_in_hook_scope("Transaction::commit")?;
         self.refuse_when_managed("Transaction::commit")?;
         self.commit_inner().await
     }
@@ -4059,11 +4674,15 @@ impl Transaction {
     ///
     /// On a transaction managed by a module operation ([`Transaction::manage_operation`]) it
     /// returns [`CommitError::RolledBack`] with a `Programming` error without touching the
-    /// transaction (which is not rolled back: the operation ends it).
+    /// transaction (which is not rolled back: the operation ends it). Inside a [`HookScope`] it
+    /// does the same (the framework ends the transaction after the hook).
     pub async fn commit_pipelined(
         &mut self,
         last: Option<FinalStatement<'_>>,
     ) -> std::result::Result<(), CommitError> {
+        if let Err(error) = self.refuse_in_hook_scope("Transaction::commit_pipelined") {
+            return Err(CommitError::RolledBack(error));
+        }
         if let Err(error) = self.refuse_when_managed("Transaction::commit_pipelined") {
             return Err(CommitError::RolledBack(error));
         }
@@ -4255,13 +4874,15 @@ impl Transaction {
     /// `Access` (nothing is switched) unless the transaction acts as the `System` principal with
     /// full elevation (S1: a user transaction cannot move onto another registry).
     /// `Programming` (nothing is switched) when `orm` belongs to another database identity (see
-    /// [`Orm::rebuild`]) or uses the transaction's current registry, inside a savepoint or an
-    /// isolated (onchange) scope, when the transaction
+    /// [`Orm::rebuild`]) or uses the transaction's current registry, inside a savepoint, an
+    /// elevation block ([`Transaction::elevated`]) or an isolated (onchange) scope, when the
+    /// transaction
     /// is poisoned, aborted, cancelled or released; the flush's error when the flush fails; also
     /// `Programming` on a transaction managed by a module operation
     /// ([`Transaction::manage_operation`]), which switches through
-    /// [`Transaction::operation_switch_orm`].
+    /// [`Transaction::operation_switch_orm`], and inside a [`HookScope`].
     pub async fn switch_orm(&mut self, orm: &Orm) -> Result<()> {
+        self.refuse_in_hook_scope("Transaction::switch_orm")?;
         self.refuse_when_managed("Transaction::switch_orm")?;
         self.switch_orm_inner(orm).await
     }
@@ -4289,6 +4910,14 @@ impl Transaction {
             return Err(Error::programming(
                 "cannot switch the transaction's ORM inside a savepoint",
             ));
+        }
+        // a block's scope was validated against the current registry
+        if let Some(block) = crate::principal::block::lock(&self.blocks)?.innermost() {
+            return Err(Error::programming(format!(
+                "cannot switch the transaction's ORM inside elevation block {}#{}",
+                block.tx().get(),
+                block.seq()
+            )));
         }
         if !self.isolated.is_empty() {
             return Err(Error::programming(
@@ -4333,16 +4962,17 @@ impl Transaction {
         Ok(())
     }
 
-    /// `ROLLBACK`; pending writes and after-commit hooks are discarded and the cache cleared
-    /// .
+    /// `ROLLBACK`; pending writes and after-commit hooks are discarded and the cache cleared.
     ///
     /// # Errors
     /// `Database` when `ROLLBACK` failed (or the connection was already gone): the connection is
     /// then released instead, and closing it rolls the transaction back on the server, so nothing
     /// of the transaction persists either way. The error says why the rollback statement failed.
     /// Also `Programming` on a transaction managed by a module operation
-    /// ([`Transaction::manage_operation`]).
+    /// ([`Transaction::manage_operation`]), and inside a [`HookScope`] (nothing is sent; the
+    /// framework ends the transaction after the hook).
     pub async fn rollback(&mut self) -> Result<()> {
+        self.refuse_in_hook_scope("Transaction::rollback")?;
         self.refuse_when_managed("Transaction::rollback")?;
         self.rollback_inner().await
     }
@@ -4388,8 +5018,10 @@ impl Transaction {
     /// process); the trust boundary is described there.
     ///
     /// # Errors
-    /// `Programming` when the transaction is managed already (the control exists elsewhere).
+    /// `Programming` when the transaction is managed already (the control exists elsewhere), and
+    /// inside a [`HookScope`].
     pub fn manage_operation(&mut self, _key: &OperationKey) -> Result<OperationControl> {
+        self.refuse_in_hook_scope("Transaction::manage_operation")?;
         self.refuse_pure_effect()?;
         if self.operation.is_some() {
             return Err(Error::programming(
@@ -4620,6 +5252,12 @@ impl Transaction {
         self.signal_state.reset();
         self.outbox.clear();
         self.audit.clear();
+        // the database transaction ended: none of its blocks is open any more, and the next
+        // block takes a new serial (closing is the safe direction on a poisoned set)
+        self.blocks
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .reset();
         self.pending_capture.clear();
         self.scoped_ids.clear();
         self.versions.clear();
@@ -4703,7 +5341,7 @@ impl Transaction {
         }
     }
 
-    fn poison_error(&self) -> Option<Error> {
+    pub(crate) fn poison_error(&self) -> Option<Error> {
         self.poison
             .as_ref()
             .map(|(kind, message)| Error::new(*kind, message.clone()))
@@ -4802,7 +5440,7 @@ impl Transaction {
         records: &Records,
         fields: Option<&[&str]>,
     ) -> Result<()> {
-        self.check_records(records)?;
+        self.admit_records(records).await?;
         let ids = field_ids(records.spec(), fields)?;
         match &ids {
             Some(fids) => self.flush_fields(records.model_id(), fids).await?,
@@ -5286,6 +5924,12 @@ impl Transaction {
     }
 
     /// Call a registered selection ondelete callback.
+    ///
+    /// # Cancellation
+    ///
+    /// Dropping the future (or a panic unwinding it) ends the call where it stands; the
+    /// transaction's environment is restored by a drop guard either way. Work the callback already
+    /// did in the transaction stays; the caller decides whether to roll back.
     pub async fn call_selection_callback(
         &mut self,
         name: &str,
@@ -5299,6 +5943,12 @@ impl Transaction {
     }
 
     /// Call a registered selection ondelete callback with an active company context.
+    ///
+    /// # Cancellation
+    ///
+    /// As [`Transaction::call_selection_callback`]: the company switch is undone by a drop guard
+    /// when the future completes, is dropped while pending, or unwinds, so a cancelled call never
+    /// leaves the transaction in `company`.
     pub async fn call_selection_callback_in_company(
         &mut self,
         name: &str,
@@ -5310,6 +5960,75 @@ impl Transaction {
         self.require_system_full("Transaction::call_selection_callback_in_company")?;
         self.dispatch_selection_callback(name, model, ids, company)
             .await
+    }
+
+    /// Resolve static selection labels for a field in the given language or context language.
+    pub async fn selection_labels(
+        &mut self,
+        model: &str,
+        field: &str,
+    ) -> Result<Vec<(String, String)>> {
+        let lang = self.env().lang().unwrap_or("en_US").to_string();
+        self.selection_labels_for_lang(model, field, &lang).await
+    }
+
+    /// Resolve static selection labels for a field in an explicit language.
+    pub async fn selection_labels_for_lang(
+        &mut self,
+        model: &str,
+        field: &str,
+        lang: &str,
+    ) -> Result<Vec<(String, String)>> {
+        let registry = Arc::clone(self.env().registry());
+        let spec = registry
+            .model(model)
+            .ok_or_else(|| Error::missing(format!("model '{model}' not found in registry")))?;
+        let fld = spec
+            .field(field)
+            .ok_or_else(|| Error::missing(format!("model '{model}' has no field '{field}'")))?;
+        let values = match &fld.ty {
+            erp_fields::FieldType::Selection {
+                values: Some(values),
+                ..
+            } => values.clone(),
+            _ => {
+                return Err(Error::programming(format!(
+                    "field '{model}.{field}' is not a static selection"
+                )));
+            }
+        };
+        if lang == "en_US" || registry.model("ir.model.fields.selection").is_none() {
+            return Ok(values);
+        }
+        let rows = self
+            .query(
+                r#"
+                SELECT s.value, s.name->>$3
+                FROM ir_model_fields_selection s
+                JOIN ir_model_fields f ON f.id = s.field_id
+                WHERE f.model = $1 AND f.name = $2 AND s.name ? $3
+                "#,
+                &[&model, &field, &lang],
+            )
+            .await?;
+        // A failed lookup or a row that does not decode is an error, never "no translation".
+        let column = |error: tokio_postgres::Error| {
+            Error::db("Invalid translated selection label row").with_source(error)
+        };
+        let mut translations = std::collections::HashMap::new();
+        for row in rows {
+            let value: String = row.try_get(0).map_err(column)?;
+            if let Some(label) = row.try_get::<_, Option<String>>(1).map_err(column)? {
+                translations.insert(value, label);
+            }
+        }
+        Ok(values
+            .into_iter()
+            .map(|(k, l)| {
+                let label = translations.remove(&k).unwrap_or(l);
+                (k, label)
+            })
+            .collect())
     }
 
     async fn dispatch_selection_callback(
@@ -5331,13 +6050,54 @@ impl Transaction {
             )));
         };
 
-        let prev_env = self.env.clone();
+        // The scope restores the environment in `Drop`, so a dropped (cancelled) or unwound
+        // callback future cannot leave the company switched on this transaction (LOGIN-R4).
+        let mut scope = CompanyEnvScope::enter(self, company)?;
+        cb.call(&mut scope, model, ids).await
+    }
+}
+
+/// Restores the transaction's environment when dropped: the company switch of a selection
+/// callback ends with the call, however the call ends (completed, error, dropped while pending, or
+/// unwound by a panic).
+struct CompanyEnvScope<'a> {
+    tx: &'a mut Transaction,
+    previous: Option<Env>,
+}
+
+impl<'a> CompanyEnvScope<'a> {
+    /// Switch `tx` to `company` (when given); the previous environment returns on drop.
+    fn enter(tx: &'a mut Transaction, company: Option<i64>) -> Result<Self> {
+        let previous = tx.env.clone();
         if let Some(cid) = company {
-            self.env = self.env.with_company(cid)?;
+            tx.env = previous.with_company(cid)?;
         }
-        let res = cb.call(self, model, ids).await;
-        self.env = prev_env;
-        res
+        Ok(Self {
+            tx,
+            previous: Some(previous),
+        })
+    }
+}
+
+impl std::ops::Deref for CompanyEnvScope<'_> {
+    type Target = Transaction;
+
+    fn deref(&self) -> &Self::Target {
+        self.tx
+    }
+}
+
+impl std::ops::DerefMut for CompanyEnvScope<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.tx
+    }
+}
+
+impl Drop for CompanyEnvScope<'_> {
+    fn drop(&mut self) {
+        if let Some(previous) = self.previous.take() {
+            self.tx.env = previous;
+        }
     }
 }
 

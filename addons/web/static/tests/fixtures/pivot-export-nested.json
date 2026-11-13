@@ -1,0 +1,195 @@
+{
+  "model": "t.note",
+  "title": "Notes",
+  "headers": [
+    [
+      {
+        "label": "Priority",
+        "rowspan": 3
+      },
+      {
+        "label": "Total",
+        "colspan": 4,
+        "bold": true
+      },
+      {
+        "label": "Total",
+        "colspan": 2,
+        "rowspan": 2,
+        "bold": true
+      }
+    ],
+    [
+      {
+        "label": "Draft",
+        "colspan": 2
+      },
+      {
+        "label": "Done",
+        "colspan": 2
+      }
+    ],
+    [
+      {
+        "label": "Size"
+      },
+      {
+        "label": "Weight"
+      },
+      {
+        "label": "Size"
+      },
+      {
+        "label": "Weight"
+      },
+      {
+        "label": "Size",
+        "bold": true
+      },
+      {
+        "label": "Weight",
+        "bold": true
+      }
+    ]
+  ],
+  "rows": [
+    {
+      "label": "Total",
+      "bold": true,
+      "cells": [
+        {
+          "kind": "integer",
+          "value": 20,
+          "bold": true
+        },
+        {
+          "kind": "float",
+          "value": 1237.5,
+          "digits": 2,
+          "bold": true
+        },
+        {
+          "kind": "integer",
+          "value": 1505,
+          "bold": true
+        },
+        {
+          "kind": "float",
+          "value": 0.25,
+          "digits": 2,
+          "bold": true
+        },
+        {
+          "kind": "integer",
+          "value": 1525,
+          "bold": true
+        },
+        {
+          "kind": "float",
+          "value": 1237.75,
+          "digits": 2,
+          "bold": true
+        }
+      ]
+    },
+    {
+      "label": "Normal",
+      "indent": 1,
+      "cells": [
+        {
+          "kind": "integer",
+          "value": 10
+        },
+        {
+          "kind": "float",
+          "value": 1234.5,
+          "digits": 2
+        },
+        {
+          "kind": "integer",
+          "value": 5
+        },
+        {
+          "kind": "float",
+          "value": 0.25,
+          "digits": 2
+        },
+        {
+          "kind": "integer",
+          "value": 15,
+          "bold": true
+        },
+        {
+          "kind": "float",
+          "value": 1234.75,
+          "digits": 2,
+          "bold": true
+        }
+      ]
+    },
+    {
+      "label": "High",
+      "indent": 1,
+      "cells": [
+        {
+          "kind": "integer",
+          "value": 10
+        },
+        {
+          "kind": "float",
+          "value": 3,
+          "digits": 2
+        },
+        {
+          "kind": "empty"
+        },
+        {
+          "kind": "empty"
+        },
+        {
+          "kind": "integer",
+          "value": 10,
+          "bold": true
+        },
+        {
+          "kind": "float",
+          "value": 3,
+          "digits": 2,
+          "bold": true
+        }
+      ]
+    },
+    {
+      "label": "None",
+      "indent": 1,
+      "cells": [
+        {
+          "kind": "empty"
+        },
+        {
+          "kind": "empty"
+        },
+        {
+          "kind": "integer",
+          "value": 1500
+        },
+        {
+          "kind": "float",
+          "value": 0,
+          "digits": 2
+        },
+        {
+          "kind": "integer",
+          "value": 1500,
+          "bold": true
+        },
+        {
+          "kind": "float",
+          "value": 0,
+          "digits": 2,
+          "bold": true
+        }
+      ]
+    }
+  ]
+}

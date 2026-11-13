@@ -54,6 +54,8 @@ Contact views (partner part).
                 <field name="street2"/>
                 <field name="zip"/>
                 <field name="city"/>
+                <field name="state_id"/>
+                <field name="country_id"/>
               </group>
             </page>
             <page name="details" string="Details">
@@ -89,6 +91,10 @@ Contact views (partner part).
         <filter name="individuals" string="Individuals" domain="[('is_company', '=', False)]"/>
         <separator/>
         <filter name="archived" string="Archived" domain="[('active', '=', False)]"/>
+        <group string="Group By">
+          <filter name="group_city" string="City" context="{'group_by': 'city'}"/>
+          <filter name="group_type" string="Address Type" context="{'group_by': 'type'}"/>
+        </group>
       </search>
     </field>
   </record>

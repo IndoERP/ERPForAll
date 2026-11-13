@@ -161,7 +161,7 @@ impl Transaction {
         if real.is_empty() {
             return Ok(Vec::new());
         }
-        let env = records.env().sudo(true);
+        let env = records.env().engine_sudo();
         let current = self.peek_cells(&env, spec.id, parent, &real).await?;
         let target = crate::relational::id_of(new_parent);
         let moved: Vec<RecId> = real
@@ -240,7 +240,7 @@ impl Transaction {
         let guard = self.guard();
         let result = async {
             self.flush_fields(spec.id, &[parent]).await?;
-            let env = records.env().sudo(true);
+            let env = records.env().engine_sudo();
             let paths = self.peek_cells(&env, spec.id, path, moved).await?;
             let empty: Vec<RecId> = moved
                 .iter()

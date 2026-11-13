@@ -1,5 +1,4 @@
-//! Window actions: the `views` they open, the `view_mode` rules and the model checks
-//! .
+//! Window actions: the `views` they open, the `view_mode` rules and the model checks.
 //!
 //! `views` lists the view of every `view_ids` row first (its view or `false`, its type), then
 //! each type of `view_mode` that no row gives: the action's `view_id` first when its type is

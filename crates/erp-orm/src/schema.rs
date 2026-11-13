@@ -7,6 +7,8 @@
 //! Lock-friendly forms on existing tables:
 //! - a new column with a constant default uses PostgreSQL's fast default
 //!   (`ADD COLUMN … DEFAULT <lit> [NOT NULL]`, then `DROP DEFAULT`): no table rewrite, no UPDATE;
+//!   a `db_default` field keeps that default, and schema sync sets it on an existing
+//!   column that lacks it and drops it again when the field loses the flag;
 //! - foreign keys on tables that already existed are added `NOT VALID`, then validated.
 //!
 //! Large tables: with
@@ -48,7 +50,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use erp_fields::{ColumnType, Error, FieldType, IndexKind, M2mRelation, OnDelete, RecId, Result};
+use erp_fields::{
+    Cell, ColumnType, Error, FieldType, IndexKind, M2mRelation, OnDelete, RecId, Result,
+};
 use erp_registry::ident::index_name;
 use erp_registry::{FieldDefault, FieldSpec, ModelId, ModelSpec, StaticValue, TableObjectKind};
 use erp_sql::ddl::{self, ColumnDef};
@@ -159,6 +163,23 @@ impl ReverseTranslationCheck {
     }
 }
 
+/// Existing JSONB must be a valid property map before schema changes.
+struct CompanyJsonbCheck {
+    model: &'static str,
+    field: &'static str,
+    table: String,
+    ty: FieldType,
+}
+
+impl CompanyJsonbCheck {
+    fn problem(&self) -> Error {
+        Error::validation(format!(
+            "{}.{}: invalid company-dependent JSONB storage; an explicit migration is required",
+            self.model, self.field,
+        ))
+    }
+}
+
 /// Validation of pre-existing jsonb column when declared translated.
 struct JsonbValidationCheck {
     model: &'static str,
@@ -194,6 +215,8 @@ type ConstraintInfo = (String, Option<String>, String);
 #[derive(Debug, Default)]
 struct Catalog {
     tables: FxHashSet<String>,
+    /// tables that are views (`relkind = 'v'`)
+    views: FxHashSet<String>,
     /// tables that are partitioned (`relkind = 'p'`)
     partitioned: FxHashSet<String>,
     /// table → fill factor storage parameter, when set
@@ -214,8 +237,9 @@ struct Catalog {
     invalid_indexes: FxHashSet<String>,
     /// valid index name → `pg_get_indexdef`
     index_defs: FxHashMap<String, String>,
-    /// `(table, column)` with a database default (identity and generated columns excluded)
-    defaults: FxHashSet<(String, String)>,
+    /// `(table, column)` with a database default (identity and generated columns excluded) →
+    /// its expression as the catalog prints it (`pg_get_expr`)
+    defaults: FxHashMap<(String, String), String>,
     /// `(table, column)` marked with a pending compute backfill
     /// ([`ddl::PENDING_BACKFILL_COMMENT_PREFIX`])
     pending_backfills: FxHashSet<(String, String)>,
@@ -300,6 +324,9 @@ fn static_json(value: &StaticValue) -> erp_fields::serde_json::Value {
 
 /// A static default as an SQL literal of the column's type, or `None` when it does not apply.
 fn sql_default(field: &FieldSpec, ty: ColumnType) -> Option<String> {
+    if field.company_dependent {
+        return None;
+    }
     // existing rows start at version 1 (fast default, dropped again)
     if matches!(field.ty, FieldType::RowVersion) {
         return Some("1::int8".to_owned());
@@ -325,6 +352,25 @@ fn sql_default(field: &FieldSpec, ty: ColumnType) -> Option<String> {
         ) => Some(cast(literal(s))),
         // JSON (and, later, translated text) columns take a JSON document.
         (value, ColumnType::Jsonb) => Some(cast(literal(&static_json(value).to_string()))),
+        _ => None,
+    }
+}
+
+/// The database default a `db_default` field keeps: `(literal to set, the expression
+/// the catalog prints for it)`. `None` for every other field. The registry admits the flag only on
+/// stored required booleans with a static boolean default, so both forms are exact.
+fn persistent_default(field: &FieldSpec) -> Option<(&'static str, &'static str)> {
+    if !field.db_default {
+        return None;
+    }
+    static_bool_default(field)
+}
+
+/// A static boolean default as `(literal, catalog expression)`.
+fn static_bool_default(field: &FieldSpec) -> Option<(&'static str, &'static str)> {
+    match &field.default {
+        Some(FieldDefault::Value(StaticValue::Bool(true))) => Some(("TRUE", "true")),
+        Some(FieldDefault::Value(StaticValue::Bool(false))) => Some(("FALSE", "false")),
         _ => None,
     }
 }
@@ -467,7 +513,7 @@ impl Catalog {
         self.columns.remove(table);
         self.constraints.remove(table);
         self.indexes.remove(table);
-        self.defaults.retain(|(t, _)| t != table);
+        self.defaults.retain(|(t, _), _| t != table);
         self.generated_columns.remove(table);
         self.provenance.remove(table);
     }
@@ -688,7 +734,7 @@ impl Transaction {
 
     /// Probe PostgreSQL to canonicalise a WHERE clause on `table` by creating a probe index
     /// on a temporary table matching `table`, reading its `pg_get_expr(indpred)` and dropping the
-    /// probe again (SEC-D2-1,, D7.FOLLOW).
+    /// probe again (SEC-D2-1, D7.FOLLOW).
     ///
     /// The probe creates `_erp_probe` with `(LIKE table) ON COMMIT DROP` and index `_erp_probe_i`
     /// on `((1))`, queries `pg_get_expr`, then runs an explicit `DROP TABLE` so a second probe in
@@ -790,6 +836,9 @@ impl Transaction {
                     if text(row, 4)?.as_deref() == Some("p") {
                         cat.partitioned.insert(table.clone());
                     }
+                    if text(row, 4)?.as_deref() == Some("v") {
+                        cat.views.insert(table.clone());
+                    }
                     cat.tables.insert(table);
                 }
                 "column" => {
@@ -850,7 +899,15 @@ impl Transaction {
                     }
                 }
                 "default" => {
-                    cat.defaults.insert((table, name));
+                    let expression = text(row, 3)?.ok_or_else(|| {
+                        Error::new(
+                            erp_fields::ErrorKind::Database,
+                            format!(
+                                "the catalog has no default expression of column {table}.{name}"
+                            ),
+                        )
+                    })?;
+                    cat.defaults.insert((table, name), expression);
                 }
                 "pending" => {
                     cat.pending_backfills.insert((table, name));
@@ -1234,6 +1291,72 @@ impl Transaction {
         )))
     }
 
+    /// Validate all rows in bounded windows, before applying schema DDL. There is deliberately
+    /// no persistent marker: a marker for translations cannot establish company-map validity.
+    pub(crate) async fn check_company_storage(
+        &mut self,
+        spec: &ModelSpec,
+        field: &FieldSpec,
+    ) -> Result<()> {
+        self.check_company_jsonb(&[CompanyJsonbCheck {
+            model: spec.name,
+            field: field.name,
+            table: spec.table.clone(),
+            ty: field.ty.clone(),
+        }])
+        .await
+    }
+
+    async fn check_company_jsonb(&mut self, checks: &[CompanyJsonbCheck]) -> Result<()> {
+        // Every admitted byte can expand to at most six JSON text bytes (a Unicode escape).
+        // The codec's 64-byte per-entry charge covers punctuation and scalar-number text.
+        // Mask larger values in SQL before driver ownership, and cap each result's total bytes.
+        const WIRE_LIMIT: usize = crate::company_dependent::MAX_MAP_BYTES * 6;
+        let decode_error = |error: tokio_postgres::Error| {
+            Error::new(
+                erp_fields::ErrorKind::Database,
+                "could not read company-map schema validation",
+            )
+            .with_source(error)
+        };
+        for check in checks {
+            let table = erp_sql::quote(&check.table);
+            let column = erp_sql::quote(check.field);
+            let sql = format!(
+                "WITH candidates AS MATERIALIZED (\
+                 SELECT id, octet_length({column}::text)::int8 AS bytes FROM {table} \
+                 WHERE {column} IS NOT NULL AND ($1::int8 IS NULL OR id > $1) ORDER BY id LIMIT 64), \
+                 sized AS (SELECT id, bytes, \
+                 sum(LEAST(bytes, {WIRE_LIMIT}) + 32) OVER (ORDER BY id) AS total FROM candidates) \
+                 SELECT t.id, CASE WHEN s.bytes <= {WIRE_LIMIT} THEN t.{column} ELSE NULL END, \
+                 s.bytes > {WIRE_LIMIT} FROM sized s JOIN {table} t ON t.id=s.id \
+                 WHERE s.total <= {WIRE_LIMIT} + 32 OR s.id=(SELECT min(id) FROM candidates) \
+                 ORDER BY s.id"
+            );
+            let mut after: Option<i64> = None;
+            loop {
+                let rows = self.query(&sql, &[&after]).await?;
+                if rows.is_empty() {
+                    break;
+                }
+                for row in &rows {
+                    let oversized: bool = row.try_get(2).map_err(decode_error)?;
+                    if oversized {
+                        return Err(check.problem());
+                    }
+                    let value: serde_json::Value = row.try_get(1).map_err(|_| check.problem())?;
+                    crate::company_dependent::validate_storage(
+                        &check.ty,
+                        &Cell::Json(Arc::new(value)),
+                    )
+                    .map_err(|_| check.problem())?;
+                    after = Some(row.try_get(0).map_err(decode_error)?);
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Validate pre-existing jsonb columns declared translated before DDL. Columns already marked
     /// ([`JSONB_VERIFIED_TABLE`]) are not scanned; the ones that pass are marked.
     async fn check_jsonb_validations(&mut self, checks: &[JsonbValidationCheck]) -> Result<()> {
@@ -1581,7 +1704,7 @@ impl Transaction {
     /// process built ([`SelfApplied::Yes`](crate::SelfApplied)), so other processes rebuild and
     /// drop their statement caches; nothing without signals. One bump per transaction however
     /// often it is called ([`Transaction::signal_bump`]).
-    async fn signal_schema_change(&mut self) -> Result<()> {
+    pub(crate) async fn signal_schema_change(&mut self) -> Result<()> {
         if self.shared.signal.is_none() {
             return Ok(());
         }
@@ -2086,6 +2209,116 @@ impl Transaction {
         Ok(())
     }
 
+    /// True when some of `fields` reaches eventful storage, so a backfill of them needs capture
+    /// admission. Non-eventful backfills pay no probe query.
+    fn backfill_capture_relevant(&self, spec: &ModelSpec, fields: &[&str]) -> Result<bool> {
+        let mut relevant = false;
+        for name in fields {
+            let field = spec.field(name).ok_or_else(|| {
+                Error::programming(format!("backfill of unknown field '{}.{name}'", spec.name))
+            })?;
+            relevant |= self.capture_relevant(spec.id, field.id);
+        }
+        Ok(relevant)
+    }
+
+    /// [`Self::check_backfill_capture`] for a table that exists: the refusal applies only when the
+    /// table holds at least one row, because an empty table has no record to report and nothing
+    /// to credit. The probe runs only when some
+    /// field is capture-relevant. It is a planning-time answer under this transaction's snapshot:
+    /// a row committed after the snapshot is not seen here, which is why the inline backfill
+    /// checks again under a SHARE lock ([`Self::check_backfill_relation_empty`]).
+    pub(crate) async fn check_backfill_admission(
+        &mut self,
+        spec: &ModelSpec,
+        table: &str,
+        fields: &[&str],
+    ) -> Result<()> {
+        if !self.backfill_capture_relevant(spec, fields)? {
+            return Ok(());
+        }
+        let sql = format!("SELECT EXISTS (SELECT FROM {})", erp_sql::quote(table));
+        let rows = self.query(&sql, &[]).await?;
+        let read = |e| {
+            Error::new(
+                erp_fields::ErrorKind::Database,
+                format!("could not read the row probe of table '{table}'"),
+            )
+            .with_source(e)
+        };
+        let has_rows: bool = rows
+            .first()
+            .ok_or_else(|| {
+                Error::new(
+                    erp_fields::ErrorKind::Database,
+                    format!("the row probe of table '{table}' returned no row"),
+                )
+            })?
+            .try_get(0)
+            .map_err(read)?;
+        if has_rows {
+            self.check_backfill_capture(spec, fields)?;
+        }
+        Ok(())
+    }
+
+    /// The inline backfill's second admission, run before the NULL scan under a SHARE lock on the
+    /// table (the `ALTER`'s stronger lock when there was one), so no row can arrive after it. It
+    /// does not depend on the snapshot: the sync transaction is REPEATABLE READ and its snapshot
+    /// predates the planning probe, so a row another node committed in between is invisible to the
+    /// probe and to the NULL scan alike. `pg_relation_size` reads the relation itself and answers
+    /// more than zero whenever a page exists; the sizes of the members of `pg_partition_tree` are
+    /// added, because a partitioned parent has no pages of its own (for a plain table that function
+    /// returns no row). It is conservative: a table whose rows were all deleted but not yet
+    /// vacuumed is refused too, loudly, with the same message as a populated table. Only
+    /// capture-relevant backfills pay the lock and the query.
+    async fn check_backfill_relation_empty(
+        &mut self,
+        spec: &ModelSpec,
+        table: &str,
+        fields: &[&str],
+    ) -> Result<()> {
+        if !self.backfill_capture_relevant(spec, fields)? {
+            return Ok(());
+        }
+        let quoted = erp_sql::quote(table);
+        // A pending-marked field on an existing table is backfilled with no `ALTER` on it, so no
+        // lock would keep a writer out between this check and the NULL scan. SHARE blocks inserts
+        // and updates until commit; when the `ALTER` already holds ACCESS EXCLUSIVE it changes
+        // nothing. The sync's `lock_timeout` bounds the wait.
+        self.execute_orm(&format!("LOCK TABLE {quoted} IN SHARE MODE"), &[])
+            .await?;
+        let rows = self
+            .query(
+                "SELECT (pg_relation_size(r) + coalesce((SELECT sum(pg_relation_size(t.relid)) \
+                 FROM pg_partition_tree(r) t WHERE t.relid <> r), 0))::int8 \
+                 FROM (SELECT $1::text::regclass AS r) q",
+                &[&quoted],
+            )
+            .await?;
+        let read = |e| {
+            Error::new(
+                erp_fields::ErrorKind::Database,
+                format!("could not read the size of table '{table}'"),
+            )
+            .with_source(e)
+        };
+        let size: i64 = rows
+            .first()
+            .ok_or_else(|| {
+                Error::new(
+                    erp_fields::ErrorKind::Database,
+                    format!("the size probe of table '{table}' returned no row"),
+                )
+            })?
+            .try_get(0)
+            .map_err(read)?;
+        if size > 0 {
+            self.check_backfill_capture(spec, fields)?;
+        }
+        Ok(())
+    }
+
     /// Fill the new stored computed columns of small tables in this transaction: every record
     /// with a NULL in one of them is marked to compute, in batches flushed one after the other.
     async fn backfill_inline(
@@ -2095,10 +2328,12 @@ impl Transaction {
         batch: usize,
     ) -> Result<()> {
         for (table, model, fields) in backfills {
-            let ids = select_null_ids(self, table, fields, None).await?;
             let spec = registry.model(model).ok_or_else(|| {
                 Error::programming(format!("backfill of unknown model '{model}'"))
             })?;
+            self.check_backfill_relation_empty(spec, table, fields)
+                .await?;
+            let ids = select_null_ids(self, table, fields, None).await?;
             for chunk in ids.chunks(batch.max(1)) {
                 mark_to_compute(self, spec, fields, chunk)?;
                 self.flush().await?;
@@ -2131,6 +2366,7 @@ impl Transaction {
             tables.push(crate::signal::SIGNAL_TABLE.to_owned());
         }
         tables.push(crate::schema_generated::TABLE_NAME.to_owned());
+        tables.push(crate::schema_sqlobj::OBJECT_TABLE.to_owned());
         let mut cat = self.catalog(&tables).await?;
         self.load_provenance(&mut cat, &tables).await?;
         check_generated_columns(specs, &cat)?;
@@ -2147,25 +2383,38 @@ impl Transaction {
 
         // ORM columns have no database default: `create` pads the columns a row does not give
         // with NULL, which equals omitting them only then. A default set outside
-        // the ORM is refused, naming the columns.
-        let mut defaulted: Vec<String> = specs
-            .iter()
-            .flat_map(|spec| {
-                spec.column_fields()
-                    .filter(|f| {
-                        f.column().is_some()
-                            && !matches!(f.ty, FieldType::RowVersion)
-                            && !f.is_generated()
-                            // a shared id sequence's default is checked below
-                            && !(spec.id_sequence.is_some() && matches!(f.ty, FieldType::Id))
-                            && cat
-                                .defaults
-                                .contains(&(spec.table.clone(), f.name.to_owned()))
-                    })
-                    .map(|f| format!("\"{}\".\"{}\"", spec.table, f.name))
-                    .collect::<Vec<_>>()
-            })
-            .collect();
+        // the ORM is refused, naming the columns. Exempt: `db_default` columns, whose default
+        // schema sync owns (the ORM gives them in every row of a create), and an
+        // unflagged required column whose default is the field's own static boolean default,
+        // which is what a field that lost `db_default` leaves behind: that one is dropped below.
+        let mut lost_defaults: Vec<Work> = Vec::new();
+        let mut defaulted: Vec<String> = Vec::new();
+        for spec in specs {
+            for f in spec.column_fields() {
+                if f.column().is_none()
+                    || matches!(f.ty, FieldType::RowVersion)
+                    || f.is_generated()
+                    // a shared id sequence's default is checked below
+                    || (spec.id_sequence.is_some() && matches!(f.ty, FieldType::Id))
+                    || f.db_default
+                {
+                    continue;
+                }
+                let Some(expression) = cat.defaults.get(&(spec.table.clone(), f.name.to_owned()))
+                else {
+                    continue;
+                };
+                // only a field that could have carried the flag (the registry's conditions)
+                if f.required
+                    && !f.company_dependent
+                    && static_bool_default(f).is_some_and(|(_, catalog)| catalog == expression)
+                {
+                    lost_defaults.push(Work::Sql(ddl::drop_column_default(&spec.table, f.name)));
+                } else {
+                    defaulted.push(format!("\"{}\".\"{}\"", spec.table, f.name));
+                }
+            }
+        }
         if !defaulted.is_empty() {
             defaulted.sort();
             return Err(Error::programming(format!(
@@ -2255,12 +2504,14 @@ impl Transaction {
         // tables whose partitioning changes are dropped first and created again below
         let mut phase1: Vec<Work> = partitions.drops().into_iter().map(Work::Sql).collect();
         phase1.extend(create_sequences);
+        phase1.extend(lost_defaults);
         let mut post: Vec<Work> = Vec::new();
         // parent stores whose `parent_path` column is new on an existing table (CRUD §4.11)
         let mut fill_paths: Vec<(String, String)> = Vec::new();
         let mut not_null_checks: Vec<NotNullCheck> = Vec::new();
         let mut reverse_translation_checks: Vec<ReverseTranslationCheck> = Vec::new();
         let mut jsonb_validations: Vec<JsonbValidationCheck> = Vec::new();
+        let mut company_jsonb_checks = Vec::new();
         // translated jsonb columns this sync creates or converts: marked verified after phase 1
         let mut fresh_translated: Vec<(String, String)> = Vec::new();
         // existing tables with stored computed columns to fill
@@ -2284,7 +2535,8 @@ impl Transaction {
                                 name: f.name.to_owned(),
                                 ty,
                                 // the partition key is in the primary key
-                                not_null: f.required || crate::partition::is_key(spec, f.id),
+                                not_null: (f.required && !f.company_dependent)
+                                    || crate::partition::is_key(spec, f.id),
                                 comment: f.string.clone(),
                                 generated: f.generated().map(|g| {
                                     erp_fields::ColumnGenerated::new(
@@ -2326,6 +2578,12 @@ impl Transaction {
                     .into_iter()
                     .map(Work::Sql),
                 );
+                // the default stays on the column (catalog-only, same round trip)
+                phase1.extend(columns.iter().filter_map(|(field, col)| {
+                    persistent_default(field).map(|(lit, _)| {
+                        Work::Sql(ddl::set_column_default(&spec.table, &col.name, lit))
+                    })
+                }));
                 for (field, col) in &columns {
                     if let Some(gen_spec) = field.generated() {
                         let sig = crate::schema_generated::compute_signature(
@@ -2339,6 +2597,22 @@ impl Transaction {
                             signature: sig,
                         });
                     }
+                }
+                continue;
+            }
+            if cat.views.contains(&spec.table) {
+                let missing = missing_view_columns(
+                    columns.iter().map(|(_, c)| c.name.as_str()),
+                    cat.columns.get(&spec.table),
+                );
+                if !missing.is_empty() {
+                    return Err(Error::programming(format!(
+                        "the view '{}' backing model '{}' lacks the column(s) {}: add them to the view \
+                         or remove the fields",
+                        spec.table,
+                        spec.name,
+                        missing.join(", ")
+                    )));
                 }
                 continue;
             }
@@ -2369,11 +2643,14 @@ impl Transaction {
                             Some(FieldDefault::Value(StaticValue::Bool(false)))
                         ) && !field.required;
                         let default = sql_default(field, col.ty).filter(|_| !skip);
-                        phase1.extend(
-                            ddl::add_column(&spec.table, col, default.as_deref())
-                                .into_iter()
-                                .map(Work::Sql),
-                        );
+                        let add = match persistent_default(field) {
+                            // the fast default stays as the column's default
+                            Some((lit, _)) => {
+                                ddl::add_column_keeping_default(&spec.table, col, lit)
+                            }
+                            None => ddl::add_column(&spec.table, col, default.as_deref()),
+                        };
+                        phase1.extend(add.into_iter().map(Work::Sql));
                         if spec.parent_path == Some(field.id)
                             && let Some(parent) = spec.parent_name
                         {
@@ -2408,6 +2685,14 @@ impl Transaction {
                         }
                     }
                     Some((udt, len, not_null)) => {
+                        if udt == "jsonb" && field.company_dependent {
+                            company_jsonb_checks.push(CompanyJsonbCheck {
+                                model: spec.name,
+                                field: field.name,
+                                table: spec.table.clone(),
+                                ty: field.ty.clone(),
+                            });
+                        }
                         if udt == "jsonb" && field.translate && !field.company_dependent {
                             jsonb_validations.push(JsonbValidationCheck {
                                 model: spec.name,
@@ -2468,7 +2753,68 @@ impl Transaction {
                             (ColumnType::Varchar(Some(want)), Some(have)) => want > *have,
                             _ => false,
                         };
-                        if udt != col.ty.udt_name() || wider {
+                        let converted = udt != col.ty.udt_name() || wider;
+                        if converted {
+                            if field.company_dependent {
+                                self.batch(&format!(
+                                    "LOCK TABLE {} IN ACCESS EXCLUSIVE MODE",
+                                    erp_sql::quote(&spec.table)
+                                ))
+                                .await?;
+                                let populated = self
+                                    .query(
+                                        &format!(
+                                            "SELECT EXISTS(SELECT FROM {} WHERE {} IS NOT NULL)",
+                                            erp_sql::quote(&spec.table),
+                                            erp_sql::quote(field.name)
+                                        ),
+                                        &[],
+                                    )
+                                    .await?;
+                                let has_values: bool = populated[0].try_get(0).map_err(|e| {
+                                    Error::new(
+                                        erp_fields::ErrorKind::Database,
+                                        "could not read company migration admission",
+                                    )
+                                    .with_source(e)
+                                })?;
+                                if has_values {
+                                    return Err(Error::programming(format!(
+                                        "{}.{}: populated scalar conversion requires an explicit company migration policy",
+                                        spec.name, field.name
+                                    )));
+                                }
+                                let expected = field.ty.column_type().ok_or_else(|| {
+                                    Error::programming(
+                                        "company migration target has no scalar column",
+                                    )
+                                })?;
+                                if udt != expected.udt_name() {
+                                    return Err(Error::programming(format!(
+                                        "{}.{}: incompatible company migration predecessor type",
+                                        spec.name, field.name
+                                    )));
+                                }
+                                let attr=self.query("SELECT attnum::int4 FROM pg_attribute WHERE attrelid=to_regclass($1) AND attname=$2 AND NOT attisdropped",&[&erp_sql::quote(&spec.table),&field.name]).await?;
+                                let row = attr.first().ok_or_else(|| {
+                                    Error::programming(
+                                        "company migration predecessor column is missing",
+                                    )
+                                })?;
+                                let number: i32 = row.try_get(0).map_err(|e| {
+                                    Error::new(
+                                        erp_fields::ErrorKind::Database,
+                                        "could not read company migration column",
+                                    )
+                                    .with_source(e)
+                                })?;
+                                phase1.extend(
+                                    self.company_migration_dependencies(spec, field, number)
+                                        .await?
+                                        .into_iter()
+                                        .map(Work::Sql),
+                                );
+                            }
                             // These scalars carry identity, an unsigned transaction id or an
                             // absolute instant. PostgreSQL casts may accept legacy text or
                             // reinterpret a naive timestamp in the session timezone. Neither
@@ -2489,7 +2835,16 @@ impl Transaction {
                                     col.ty.udt_name()
                                 )));
                             }
-                            if field.translate && col.ty == ColumnType::Jsonb && udt != "jsonb" {
+                            if field.company_dependent {
+                                phase1.push(Work::Sql(format!(
+                                    "ALTER TABLE {} ALTER COLUMN {} TYPE jsonb USING NULL::jsonb",
+                                    erp_sql::quote(&spec.table),
+                                    erp_sql::quote(field.name)
+                                )));
+                            } else if field.translate
+                                && col.ty == ColumnType::Jsonb
+                                && udt != "jsonb"
+                            {
                                 if !field.company_dependent {
                                     fresh_translated
                                         .push((spec.table.clone(), field.name.to_owned()));
@@ -2546,6 +2901,22 @@ impl Transaction {
                             });
                         } else if !col.not_null && *not_null != NotNull::No {
                             phase1.push(Work::Sql(ddl::drop_not_null(&spec.table, &col.name)));
+                        }
+                        // a missing or different default is set (catalog-only); a type
+                        // conversion above drops it, so it is set again after one
+                        if let Some((lit, catalog)) = persistent_default(field)
+                            && (converted
+                                || cat
+                                    .defaults
+                                    .get(&(spec.table.clone(), col.name.clone()))
+                                    .map(String::as_str)
+                                    != Some(catalog))
+                        {
+                            phase1.push(Work::Sql(ddl::set_column_default(
+                                &spec.table,
+                                &col.name,
+                                lit,
+                            )));
                         }
                     }
                 }
@@ -2611,7 +2982,11 @@ impl Transaction {
             }
             if !computed.is_empty() {
                 let fields: Vec<_> = computed.iter().map(|field| field.name).collect();
-                self.check_backfill_capture(spec, &fields)?;
+                // a table that is not there yet is created empty
+                if existing.is_some() {
+                    self.check_backfill_admission(spec, &spec.table, &fields)
+                        .await?;
+                }
                 backfills.push(PlannedBackfill {
                     table: spec.table.clone(),
                     model: spec.name,
@@ -2678,6 +3053,9 @@ impl Transaction {
         // Phase 2: table objects (CRUD §4.9).
         let mut phase2: Vec<Work> = Vec::new();
         for spec in specs {
+            if cat.views.contains(&spec.table) {
+                continue;
+            }
             let existed = cat.tables.contains(&spec.table);
             let constraints = cat.constraints.get(&spec.table);
             let indexes = cat.indexes.get(&spec.table);
@@ -2869,6 +3247,9 @@ impl Transaction {
         // (the extensions they need were checked before phase 1)
         let mut phase3: Vec<Work> = Vec::new();
         for spec in specs {
+            if cat.views.contains(&spec.table) {
+                continue;
+            }
             let existed = cat.tables.contains(&spec.table);
             let indexes = cat.indexes.get(&spec.table);
             let shapes = cat.index_shapes.get(&spec.table);
@@ -2997,6 +3378,9 @@ impl Transaction {
         let mut phase4: Vec<Work> = Vec::new();
         let mut keys: Vec<(String, &str, String, OnDelete)> = Vec::new();
         for spec in specs {
+            if cat.views.contains(&spec.table) {
+                continue;
+            }
             for field in spec.column_fields() {
                 if field.company_dependent {
                     continue;
@@ -3169,11 +3553,19 @@ impl Transaction {
         if replan.is_some() {
             return Ok(steps);
         }
+        // S0 of the addon-owned SQL objects: every refusal before any DDL
+        let has_provenance = cat.tables.contains(crate::schema_sqlobj::OBJECT_TABLE);
+        let mut sql_objects = self
+            .plan_sql_objects(registry, has_provenance, specs, options.is_lifecycle())
+            .await?;
 
         self.check_not_null(&not_null_checks).await?;
         self.check_reverse_translations(&reverse_translation_checks)
             .await?;
+        self.check_company_jsonb(&company_jsonb_checks).await?;
         self.check_jsonb_validations(&jsonb_validations).await?;
+        // S1: independent functions before the tables
+        self.install_sql_objects_early(&mut sql_objects).await?;
         self.run_phase(phase1, None).await?;
         self.record_generated_provenance(&pending_provenance)
             .await?;
@@ -3233,12 +3625,18 @@ impl Transaction {
         self.run_phase(phase3, diagnose(conflicts3)).await?;
         self.run_phase(phase4, diagnose(conflicts4)).await?;
         self.run_signal_upgrade(signal_upgrade).await?;
+        // S2: catalog-derived bodies from the final columns (no later phase changes a column)
+        self.install_sql_objects_derived(&mut sql_objects).await?;
         self.run_phase(phase5, None).await?;
+        // S3: triggers, after the functions they execute
+        self.install_sql_objects_triggers(&mut sql_objects).await?;
         // a batch larger than the address space is one batch
         let batch = usize::try_from(options.backfill_records().get()).unwrap_or(usize::MAX);
         self.backfill_inline(registry, &inline_backfills, batch)
             .await?;
         self.run_phase(cleared_marks, None).await?;
+        // S4: provenance of what changed, in the same transaction
+        self.record_sql_objects(&sql_objects).await?;
         // a change whose whole work went to steps (an index, a column made required with a
         // default) ran no DDL above: signal it all the same, so other processes take the new
         // registry before its steps run
@@ -3247,6 +3645,16 @@ impl Transaction {
         }
         Ok(steps)
     }
+}
+
+/// The stored columns of a view-backed model that the view does not expose.
+fn missing_view_columns<'a>(
+    wanted: impl Iterator<Item = &'a str>,
+    existing: Option<&FxHashMap<String, ColumnInfo>>,
+) -> Vec<&'a str> {
+    wanted
+        .filter(|name| existing.is_none_or(|e| !e.contains_key(*name)))
+        .collect()
 }
 
 /// True when the model declares a trigger that writes the signal table (a signal trigger, or a
@@ -3498,6 +3906,10 @@ pub(crate) fn mark_to_compute(
     fields: &[&str],
     ids: &[RecId],
 ) -> Result<()> {
+    // nothing to mark: an empty table (or a step whose rows are gone) has no record to report
+    if ids.is_empty() {
+        return Ok(());
+    }
     tx.check_backfill_capture(spec, fields)?;
     for name in fields {
         let field = spec.field(name).ok_or_else(|| {
@@ -4134,7 +4546,7 @@ fn row_version_ddl(specs: &[&ModelSpec], cat: &Catalog) -> Vec<String> {
         // the column out work, and a column added with the fast default keeps it
         if !cat
             .defaults
-            .contains(&(spec.table.clone(), erp_registry::ROW_VERSION.to_owned()))
+            .contains_key(&(spec.table.clone(), erp_registry::ROW_VERSION.to_owned()))
         {
             out.push(erp_sql::version::set_default(&spec.table));
         }
@@ -4152,6 +4564,15 @@ fn row_version_ddl(specs: &[&ModelSpec], cat: &Catalog) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_view_missing_a_model_column_is_reported_by_name() {
+        let mut view: FxHashMap<String, ColumnInfo> = FxHashMap::default();
+        view.insert("id".to_owned(), ("int8".to_owned(), None, NotNull::Yes));
+        let missing = missing_view_columns(["id", "name", "kind"].into_iter(), Some(&view));
+        assert_eq!(missing, ["name", "kind"]);
+        assert!(missing_view_columns(["id"].into_iter(), Some(&view)).is_empty());
+    }
 
     /// Review C4-R1: with no follow-delete (and no signal) declaration left in the registry, the
     /// orphaned follow-delete trigger and its `_truncate` companion are still removed, without a

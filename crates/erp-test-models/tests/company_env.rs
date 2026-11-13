@@ -1,5 +1,5 @@
-//! One validated company context in `Env` (design note
-//! ): `env.companies`, `env.company`, `with_company`, the
+//! One validated company context in `Env` (
+//! ): `env.companies()`, `env.company()`, `with_company`, the
 //! resolver's default order, record rules and company-dependent cache keys that follow the
 //! validated companies, and the refusals (also under `sudo()`).
 //!
@@ -85,8 +85,8 @@ async fn policy_harness() -> Harness {
         .expect("harness");
     let mut tx = h.begin().await.unwrap();
     tx.batch(
-        "INSERT INTO res_users (id, name, login, active) VALUES (2, 'demo', 'demo', true), \
-         (3, 'other', 'other', true); \
+        "INSERT INTO res_users (id, name, login, active, share) VALUES (2, 'demo', 'demo', true, false), \
+         (3, 'other', 'other', true, false); \
          SELECT setval(pg_get_serial_sequence('res_users', 'id'), 3)",
     )
     .await
@@ -488,6 +488,9 @@ async fn resolver_harness() -> Harness {
     Harness::builder(addons())
         .with_decls([company_columns()])
         .policy(policy)
+        // the cases switch from one user to another (ann to dora): the ORM names the
+        // impersonation capability and this policy grants every capability (A4)
+        .impersonate_capability(&erp_security::principal::PRINCIPAL_IMPERSONATE)
         .resolver(resolver)
         .build()
         .await
@@ -533,8 +536,8 @@ async fn seed(h: &Harness) -> Seeded {
     let mut user = async |login: &str, main_company: i64, member_of: &[i64]| -> i64 {
         let uid: i64 = tx
             .query(
-                "INSERT INTO res_users (name, login, active, company_id) \
-                 VALUES ($1, $1, true, $2) RETURNING id::int8",
+                "INSERT INTO res_users (name, login, active, company_id, share) \
+                 VALUES ($1, $1, true, $2, false) RETURNING id::int8",
                 &[&login, &main_company],
             )
             .await
@@ -948,15 +951,18 @@ async fn a_membership_change_is_seen_under_sudo() {
     h.cleanup().await.unwrap();
 }
 
-/// Review S2: `with_user(SUPERUSER_ID)` from a user gives a `System` principal that keeps the
-/// user's companies as its bound; only the `System` principal the core created takes any list.
-/// Fails on the old code (the foreign company was accepted).
+/// Review S2: `with_user(SUPERUSER_ID)` from a user keeps the user's companies as its bound; only
+/// the `System` principal the core created takes any list. Fails on the old code (the foreign
+/// company was accepted). Since A4 the switch itself is refused: the
+/// environment keeps the user's own principal, so its companies are the user's.
 #[tokio::test]
 async fn with_user_superuser_keeps_the_actors_companies() {
     let h = policy_harness().await;
     let tx = begin(&h, principal(DEMO, &[A, C], &[A, C]), Context::new()).await;
     let su = tx.env().with_user(erp_orm::SUPERUSER_ID.get());
-    assert!(su.su());
+    // refused, never superuser mode (A4)
+    assert!(!su.su());
+    assert_eq!(su.uid(), DEMO);
     let foreign = su.with_context([("allowed_company_ids", ids(&[B]))]);
     assert_unauthorized(&foreign.companies().unwrap_err());
     assert_unauthorized(&su.with_company(B).unwrap().company().unwrap_err());

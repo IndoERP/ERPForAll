@@ -236,7 +236,7 @@ impl Transaction {
     where
         F: FnMut(&mut Cache, &RawRow<'_>) -> Result<()>,
     {
-        self.require_writable_sql(sql)?;
+        self.require_writable_sql("Transaction::query_each", sql)?;
         // a `DELETE … RETURNING` streamed here forgets what the follow-delete triggers changed
         // (review C3-X2)
         self.follow_sql_deletes(sql);

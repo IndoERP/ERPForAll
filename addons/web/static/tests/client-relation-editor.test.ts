@@ -42,7 +42,7 @@ test("invalid required field does not save, cancel returns no selection", async 
   const rpc = new RpcClient(async url => { const method = String(url).split("/").at(-1); if (method === "web_save") writes(); return json(method === "get_views" ? description() : method === "default_get" ? { name: "" } : { value: {} }); }, () => {});
   const result = editRelation({ dialogs, rpc, model, context: {}, report: error => errors.push(error) });
   await vi.waitFor(() => expect(document.querySelector("dialog input[name='name']")).not.toBeNull());
-  control("Save").click(); expect(writes).not.toHaveBeenCalled(); expect(document.querySelector("[role='alert']")?.textContent).toContain("required");
+  control("Save").click(); expect(writes).not.toHaveBeenCalled(); expect(document.querySelector("[role='alert']")?.textContent).toContain("needs a value");
   control("Cancel").click(); await expect(result).resolves.toBeUndefined();
 });
 

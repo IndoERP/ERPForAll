@@ -1,6 +1,6 @@
 //! Grouped reads and `web_read_group` (slice S5): wall time and statements per call on 100,000
 //! lines and 1,000 partners, built inside one transaction that is rolled back at the end (the
-//! tables never outlive the run). Needs `DATABASE_URL`. Results:.
+//! tables never outlive the run). Needs `DATABASE_URL`. Results.
 //!
 //! - `read_group_m2o_sum`: `_read_group([], ['partner_id'], ['value:sum', '__count'])`.
 //! - `read_group_month_partner_ordered`: `['date:month', 'partner_id']` ordered by the partners'

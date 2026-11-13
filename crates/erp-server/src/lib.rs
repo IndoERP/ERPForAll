@@ -9,6 +9,7 @@ pub mod conn;
 pub mod prefs;
 pub mod proxy;
 pub mod redirect;
+pub mod routes;
 pub mod startup_limits;
 
 pub mod web;

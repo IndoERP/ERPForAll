@@ -54,6 +54,21 @@ pub trait TestRules: Send + Sync + 'static {
         model: &ModelSpec,
         op: Operation,
     ) -> Result<Domain>;
+
+    /// Whether `b` holds `cap`. By default test rules map no capability: asking is a
+    /// `Programming` error, never `false`. A test whose principal switches to another user
+    /// (`principal.impersonate`, A4) answers it here.
+    ///
+    /// # Errors
+    ///
+    /// By default always (`Programming`).
+    fn has_capability(&self, b: &PrincipalBinding<'_>, cap: &Capability) -> Result<bool> {
+        let _ = b;
+        Err(Error::programming(format!(
+            "the test rules policy maps no capability ('{}')",
+            cap.name()
+        )))
+    }
 }
 
 /// A policy snapshot over [`TestRules`].
@@ -136,12 +151,9 @@ impl<R: TestRules> AccessPolicy for RulesPolicy<R> {
         Ok(Vec::new())
     }
 
-    /// Test rules know no capability.
-    fn has_capability(&self, _b: &PrincipalBinding<'_>, cap: &Capability) -> Result<bool> {
-        Err(Error::programming(format!(
-            "the test rules policy maps no capability ('{}')",
-            cap.name()
-        )))
+    /// The rules' answer ([`TestRules::has_capability`]; by default none is mapped).
+    fn has_capability(&self, b: &PrincipalBinding<'_>, cap: &Capability) -> Result<bool> {
+        self.rules.has_capability(b, cap)
     }
 
     fn explain(&self, req: &ExplainRequest<'_>) -> Result<Explanation> {

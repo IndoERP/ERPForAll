@@ -8,8 +8,8 @@
 //! # Storage rules
 //!
 //! - Periods of one key in one scope (one company, or the shared scope) never overlap: two typed
-//!   exclusion constraints enforce it in the database, so concurrent writers cannot both commit
-//!   . Both ends are inclusive (`bounds = "[]"`); an empty `date_to` is unbounded.
+//!   exclusion constraints enforce it in the database, so concurrent writers cannot both commit.
+//!   Both ends are inclusive (`bounds = "[]"`); an empty `date_to` is unbounded.
 //! - A key is `lower_case_words` joined by dots, at most 128 bytes (`CHECK` and
 //!   [`validate_key`]); a text value is at most 1024 bytes.
 //! - The value is stored as text next to its kind and parsed strictly on write and on read:

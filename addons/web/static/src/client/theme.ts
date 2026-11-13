@@ -64,3 +64,20 @@ export async function loadDatabaseTheme(rpc: RpcClient, registry: string, contex
     document.documentElement.dataset["officeTheme"] = text(value, "appearance");
   }
 }
+
+/**
+ *  attribute); `light` and `dark` set the explicit `data-theme` that client.css already honours.
+ *  `false` is a row that holds no value (also `system`). Any other value is a server fault and fails loudly. 
+ */
+export function applyColorScheme(value: unknown): void {
+  if (value === "system" || value === false) delete document.documentElement.dataset["theme"];
+  else if (value === "light" || value === "dark") document.documentElement.dataset["theme"] = value;
+  else throw new ClientError("server", "Invalid colour scheme.");
+}
+
+/** Read the signed-in user's own `res.users.color_scheme` and apply it. */
+export async function loadUserColorScheme(rpc: RpcClient, uid: number, context: Record<string, unknown>): Promise<void> {
+  const rows = array(await rpc.call("res.users", "read", { ids: [uid], fields: ["color_scheme"], context }), "user rows");
+  if (rows.length !== 1) throw new ClientError("server", "Invalid colour scheme response.");
+  applyColorScheme(object(rows[0], "user row")["color_scheme"]);
+}

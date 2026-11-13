@@ -88,7 +88,7 @@ async fn names(tx: &mut Transaction, rs: &Records) -> Vec<String> {
 
 // ----- exists ------------------------------------------------------------------------------------
 
-/// <= 0,; the record `d` is deleted with raw SQL until `unlink` arrives in S3, which
+/// <= 0; the record `d` is deleted with raw SQL until `unlink` arrives in S3, which
 /// `exists()` observes the same way)
 #[tokio::test]
 async fn spec_rset_023_exists() {
@@ -1867,7 +1867,7 @@ async fn empty_write_on_every_model() {
 
 // ----- per-model overrides -----------------------------------------------------------------------
 
-/// text id, has no counterpart: ids are integers,, divergent)
+/// text id, has no counterpart: ids are integers, divergent)
 #[tokio::test]
 async fn spec_rset_062_per_model_overrides_of_exists_and_filtered_domain() {
     let h = harness().await;

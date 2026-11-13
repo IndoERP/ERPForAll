@@ -3,8 +3,8 @@
 //!
 //! Both are defined on `base` as no-ops, so every model has them and an addon overrides them like
 //! any method (`#[method(override)]`, calling `super()`). The module system calls
-//! [`call_init`] on every model whose tables an install or upgrade step created or altered
-//! , and [`call_register_hook`] once per model on the final registry of a load or an
+//! [`call_init`] on every model whose tables an install or upgrade step created or altered,
+//! and [`call_register_hook`] once per model on the final registry of a load or an
 //! operation. Neither is called by the ORM itself.
 
 use std::any::Any;

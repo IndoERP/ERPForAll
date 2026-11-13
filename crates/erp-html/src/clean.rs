@@ -396,6 +396,9 @@ pub(crate) fn clean<'d>(
                 let verdict = match judge(local) {
                     // An HTML element carrying an `encoding` attribute is unwrapped (the
                     // reference deletes its start tag; spec 4.2 step 2).
+                    // Note: scanning attrs for `encoding` charges `attrs.len()` work here;
+                    // `report_unwrapped_attrs` below also charges `attrs.len()` when reporting
+                    // discarded attributes. This double charge is intentional and fail-closed.
                     Verdict::Keep if name.ns == ns!(html) && has_encoding_attr(attrs) => {
                         budget.charge_work(attrs.len())?;
                         Verdict::Unwrap

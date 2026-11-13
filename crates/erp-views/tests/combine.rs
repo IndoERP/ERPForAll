@@ -1,5 +1,5 @@
-//! Combination through the public API: order, errors in view context
-//! , attributes (/054), text, catalogue scoping and
+//! Combination through the public API: order, errors in view context,
+//! attributes (/054), text, catalogue scoping and
 //! limits.
 
 #![allow(

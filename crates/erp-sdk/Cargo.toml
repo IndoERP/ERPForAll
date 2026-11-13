@@ -34,6 +34,8 @@ erp-security = { workspace = true }
 futures-core = { workspace = true }
 linkme = { workspace = true }
 serde = { workspace = true }
+# tool-calling arguments, schemas and labelled data (`ai::tools`)
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 
 # Guest backend (`wasm32-wasip2`): the component bindings and the collector the guard proved on
@@ -42,6 +44,10 @@ thiserror = { workspace = true }
 erp-guest = { workspace = true }
 inventory = { workspace = true }
 serde = { workspace = true }
+
+[dev-dependencies]
+# compile-fail tests of the AI tool-calling types (tests/compile_fail.rs)
+trybuild = { workspace = true }
 
 [lints]
 workspace = true

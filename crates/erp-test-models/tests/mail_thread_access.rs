@@ -16,9 +16,13 @@
     reason = "tests"
 )]
 
+mod company_rows_support;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use company_rows_support::UserKind::{External, Internal};
+use company_rows_support::fixture_user_with_partner;
 use erp_addon_mail::MailThread;
 use erp_orm::{Orm, PolicyProvider, UserId};
 use erp_sdk::prelude::*;
@@ -148,32 +152,6 @@ async fn rule(
     .await;
 }
 
-/// A user with its own partner, in `groups`; returns (user, partner).
-async fn user(client: &Client, login: &str, groups: &[i64], share: bool) -> (i64, i64) {
-    let partner = one(
-        client,
-        "INSERT INTO res_partner (name, active) VALUES ($1, true) RETURNING id::int8",
-        &[&login],
-    )
-    .await;
-    let uid = one(
-        client,
-        "INSERT INTO res_users (name, login, active, share, partner_id) \
-         VALUES ($1, $1, true, $2, $3) RETURNING id::int8",
-        &[&login, &share, &partner],
-    )
-    .await;
-    for g in groups {
-        exec(
-            client,
-            "INSERT INTO res_groups_users_rel (uid, gid) VALUES ($1, $2)",
-            &[&uid, g],
-        )
-        .await;
-    }
-    (uid, partner)
-}
-
 struct World {
     h: Harness,
     orm: Orm,
@@ -296,6 +274,13 @@ async fn world() -> World {
     )
     .await;
     rule(&client, "internal read b", doc_b, g_user, "r", None).await;
+    // installation emits the generated company restrictions; this database has no installation
+    company_rows_support::insert_generated(
+        &client,
+        h.registry(),
+        &company_rows_support::PARTNER_AND_USERS,
+    )
+    .await;
     rule(
         &client,
         "portal read a",
@@ -314,10 +299,15 @@ async fn world() -> World {
         Some("[('name', '=', 'shared')]"),
     )
     .await;
-    let (public, _) = user(&client, "pub", &[g_public], true).await;
-    let (internal, internal_partner) = user(&client, "ivy", &[g_user], false).await;
-    let (_, other_partner) = user(&client, "otto", &[g_user], false).await;
-    let (portal, portal_partner) = user(&client, "pat", &[g_portal], true).await;
+    let company = company_rows_support::fixture_company(&client).await;
+    let (public, _) =
+        fixture_user_with_partner(&client, "pub", &[g_public], External, company).await;
+    let (internal, internal_partner) =
+        fixture_user_with_partner(&client, "ivy", &[g_user], Internal, company).await;
+    let (_, other_partner) =
+        fixture_user_with_partner(&client, "otto", &[g_user], Internal, company).await;
+    let (portal, portal_partner) =
+        fixture_user_with_partner(&client, "pat", &[g_portal], External, company).await;
 
     let source = PolicySource::build(Arc::clone(h.registry()), pool(&h, 2))
         .await

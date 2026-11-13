@@ -10,10 +10,14 @@
     reason = "tests"
 )]
 
+mod company_rows_support;
 mod users_support;
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use company_rows_support::UserKind::Internal;
+use company_rows_support::fixture_user;
 use erp_orm::{Orm, PolicyProvider, UserId};
 use erp_sdk::serde_json::json;
 use erp_sdk::{Domain, ErrorKind, SearchOptions, Transaction, Value};
@@ -86,25 +90,6 @@ async fn access(
     .await;
 }
 
-async fn new_user(client: &Client, login: &str, groups: &[i64]) -> i64 {
-    let uid = one(
-        client,
-        "INSERT INTO res_users (name, login, active, share) VALUES ($1, $1, true, false) \
-         RETURNING id::int8",
-        &[&login],
-    )
-    .await;
-    for g in groups {
-        exec(
-            client,
-            "INSERT INTO res_groups_users_rel (uid, gid) VALUES ($1, $2)",
-            &[&uid, g],
-        )
-        .await;
-    }
-    uid
-}
-
 fn pool(h: &Harness, size: usize) -> erp_testkit::deadpool_postgres::Pool {
     erp_orm::pool::create_pool(h.db().config(), size).unwrap()
 }
@@ -153,6 +138,13 @@ async fn fixture() -> Fixture {
     let users_model = model(&client, "res.users", "User").await;
     let lang_model = model(&client, "res.lang", "Language").await;
     let partner_model = model(&client, "res.partner", "Contact").await;
+    // installation emits the generated company restrictions; these databases have no installation
+    company_rows_support::insert_generated(
+        &client,
+        h.registry(),
+        &company_rows_support::PARTNER_AND_USERS,
+    )
+    .await;
     // the same rows as addons/base/security/ir.access.csv (and no others)
     access(
         &client,
@@ -191,10 +183,25 @@ async fn fixture() -> Fixture {
         None,
     )
     .await;
-    let me = new_user(&client, "me", &[internal]).await;
-    let other = new_user(&client, "other", &[internal]).await;
-    let manager = new_user(&client, "manager", &[internal, manager_group]).await;
-    let admin = new_user(&client, "admin", &[internal, system_group]).await;
+    let company = company_rows_support::fixture_company(&client).await;
+    let me = fixture_user(&client, "me", &[internal], Internal, company).await;
+    let other = fixture_user(&client, "other", &[internal], Internal, company).await;
+    let manager = fixture_user(
+        &client,
+        "manager",
+        &[internal, manager_group],
+        Internal,
+        company,
+    )
+    .await;
+    let admin = fixture_user(
+        &client,
+        "admin",
+        &[internal, system_group],
+        Internal,
+        company,
+    )
+    .await;
     let orm = production_orm(&h).await;
     let active_languages = vec![
         ("Indonesian", "id_ID"),
@@ -661,5 +668,277 @@ async fn spec_prefs_004_an_access_rights_manager_without_settings_writes_only_th
         .unwrap()
         .get(0);
     assert_eq!(login, "me2");
+    f.finish().await;
+}
+
+#[tokio::test]
+async fn spec_prefs_013_phone_is_read_and_written_on_the_own_record_only() {
+    let f = fixture().await;
+    let mut tx = begin(&f.orm, f.me).await;
+    let own = tx
+        .env()
+        .records("res.users")
+        .unwrap()
+        .browse([f.me])
+        .unwrap();
+    own.write_values(&mut tx, &map(&[("phone", s("+62 21 555 0100"))]))
+        .await
+        .unwrap();
+    assert_eq!(
+        own.value(&mut tx, "phone").await.unwrap(),
+        s("+62 21 555 0100")
+    );
+    // the other user's record is out of reach
+    let foreign = tx
+        .env()
+        .records("res.users")
+        .unwrap()
+        .browse([f.other])
+        .unwrap();
+    let err = foreign
+        .write_values(&mut tx, &map(&[("phone", s("000"))]))
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Access, "{err}");
+    // clearing is accepted and leaves no value
+    own.write_values(&mut tx, &map(&[("phone", Value::False)]))
+        .await
+        .unwrap();
+    assert_eq!(own.value(&mut tx, "phone").await.unwrap(), Value::False);
+    tx.commit().await.unwrap();
+    drop(tx);
+    let other_phone: Option<String> = f
+        .client
+        .query_one("SELECT phone FROM res_users WHERE id = $1", &[&f.other])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(other_phone, None);
+    f.finish().await;
+}
+
+/// The stored colour scheme and name of a user, read by SQL.
+async fn stored_scheme_and_name(client: &Client, uid: i64) -> (Option<String>, String) {
+    let row = client
+        .query_one(
+            "SELECT color_scheme, name FROM res_users WHERE id = $1",
+            &[&uid],
+        )
+        .await
+        .unwrap();
+    (row.get(0), row.get(1))
+}
+
+#[tokio::test]
+async fn spec_prefs_014_the_colour_scheme_takes_three_values_and_cannot_be_emptied() {
+    let f = fixture().await;
+    let mut tx = begin(&f.orm, f.me).await;
+    let users = tx.env().records("res.users").unwrap();
+    // the declared choices and the default come from the model's own metadata
+    let described = users
+        .fields_get(&mut tx, Some(&["color_scheme"]), Some(&["selection"]))
+        .await
+        .unwrap();
+    let keys: Vec<String> = pairs(&described["color_scheme"]["selection"])
+        .into_iter()
+        .map(|(key, _)| key)
+        .collect();
+    assert_eq!(keys, ["system", "light", "dark"]);
+    let defaults = users.default_get(&mut tx, &["color_scheme"]).await.unwrap();
+    assert_eq!(defaults.get("color_scheme"), Some(&s(&keys[0])));
+    // a row inserted by raw SQL holds no value
+    let own = users.browse([f.me]).unwrap();
+    assert_eq!(
+        own.value(&mut tx, "color_scheme").await.unwrap(),
+        Value::False
+    );
+    // the accepted writes, committed first
+    for key in &keys {
+        own.write_values(&mut tx, &map(&[("color_scheme", s(key))]))
+            .await
+            .unwrap();
+        assert_eq!(own.value(&mut tx, "color_scheme").await.unwrap(), s(key));
+    }
+    own.write_values(&mut tx, &map(&[("color_scheme", s("light"))]))
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    drop(tx);
+    assert_eq!(
+        stored_scheme_and_name(&f.client, f.me).await,
+        (Some("light".to_owned()), "me".to_owned())
+    );
+
+    // the empty text is not a key of the list, so the selection conversion refuses it
+    // (`crates/erp-fields/src/convert.rs:535-549` passes it on, `:335-349` refuses it); only
+    // `false` (stored as NULL) reaches the constraint of this addon
+    let wrong_sepia = format!(
+        "Wrong value for res.users.color_scheme: {}",
+        Value::str("sepia")
+    );
+    let wrong_empty = format!("Wrong value for res.users.color_scheme: {}", Value::str(""));
+    let cannot_be_empty = "The color scheme cannot be empty.";
+    let with_sepia = map(&[("name", s("After")), ("color_scheme", s("sepia"))]);
+    let with_false = map(&[("name", s("After")), ("color_scheme", Value::False)]);
+    let with_empty = map(&[("name", s("After")), ("color_scheme", s(""))]);
+    let clear = map(&[("color_scheme", Value::False)]);
+    assert_refused_write(&f, &with_sepia, &wrong_sepia).await;
+    assert_refused_write(&f, &with_false, cannot_be_empty).await;
+    assert_refused_write(&f, &clear, cannot_be_empty).await;
+    assert_refused_write(&f, &with_empty, &wrong_empty).await;
+    f.finish().await;
+}
+
+/// A write of the own record that the model refuses with `Validation` and `message`, in a
+/// transaction of its own (a `Validation` error poisons the transaction,
+/// `crates/erp-orm/src/transaction.rs:4735-4741`); the stored state is read by SQL and is the
+/// one the accepted writes left.
+async fn assert_refused_write(f: &Fixture, vals: &BTreeMap<String, Value>, message: &str) {
+    let mut tx = begin(&f.orm, f.me).await;
+    let own = tx
+        .env()
+        .records("res.users")
+        .unwrap()
+        .browse([f.me])
+        .unwrap();
+    let err = own.write_values(&mut tx, vals).await.unwrap_err();
+    assert_error(&err, ErrorKind::Validation, message);
+    drop(tx);
+    assert_eq!(
+        stored_scheme_and_name(&f.client, f.me).await,
+        (Some("light".to_owned()), "me".to_owned()),
+        "{message}"
+    );
+}
+
+/// The fields a user outside `base.group_system` may write on their own `res.users` record,
+/// sorted. `mail` adds `notification_type`; this database has `base` only.
+const SELF_WRITEABLE: [&str; 7] = [
+    "color_scheme",
+    "company_id",
+    "email",
+    "lang",
+    "name",
+    "phone",
+    "tz",
+];
+
+/// The refusal of a field-level write on `res.users` (text of the access engine).
+fn denied(field: &str) -> String {
+    format!(
+        "You do not have enough rights to access the field \"{field}\" on User (res.users). \
+         Please contact your system administrator.\n\nOperation: write"
+    )
+}
+
+/// a compute, or computed with an inverse such as `password`; stored computed fields such as
+/// `share` and `role` are skipped; `notification_type` with `mail` is `user_preferences_mail.rs`)
+#[tokio::test]
+async fn spec_prefs_017_the_self_write_set_is_exactly_the_user_writeable_fields() {
+    let f = fixture().await;
+    let spec = f.h.registry().model("res.users").unwrap();
+    let mut flagged: Vec<&str> = spec
+        .fields
+        .iter()
+        .filter(|field| field.user_writeable)
+        .map(|field| field.name)
+        .collect();
+    flagged.sort_unstable();
+    assert_eq!(flagged, SELF_WRITEABLE);
+    // the positive half: every flagged field takes a valid value on the own record, in one
+    // transaction that is committed and read back
+    let mut tx = begin(&f.orm, f.me).await;
+    let own = tx
+        .env()
+        .records("res.users")
+        .unwrap()
+        .browse([f.me])
+        .unwrap();
+    // the user's own company is a valid value for `company_id`
+    let company: i64 = f
+        .client
+        .query_one(
+            "SELECT company_id::int8 FROM res_users WHERE id = $1",
+            &[&f.me],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let mut vals = BTreeMap::new();
+    for field in flagged {
+        let value = match field {
+            "name" => s("Me Myself"),
+            "email" => s("me@example.com"),
+            "phone" => s("+62 21 555 0100"),
+            "lang" => s("id_ID"),
+            "tz" => s("Asia/Jakarta"),
+            "color_scheme" => s("dark"),
+            "company_id" => Value::Int(company),
+            other => panic!("no sample value for the user_writeable field {other}"),
+        };
+        vals.insert(field.to_owned(), value);
+    }
+    own.write_values(&mut tx, &vals).await.unwrap();
+    tx.commit().await.unwrap();
+    drop(tx);
+    let row = f
+        .client
+        .query_one(
+            "SELECT name, email, phone, lang, tz, color_scheme, company_id::int8 \
+               FROM res_users WHERE id = $1",
+            &[&f.me],
+        )
+        .await
+        .unwrap();
+    let text = |i: usize| row.get::<_, Option<String>>(i);
+    assert_eq!(text(0).as_deref(), Some("Me Myself"));
+    assert_eq!(text(1).as_deref(), Some("me@example.com"));
+    assert_eq!(text(2).as_deref(), Some("+62 21 555 0100"));
+    assert_eq!(text(3).as_deref(), Some("id_ID"));
+    assert_eq!(text(4).as_deref(), Some("Asia/Jakarta"));
+    assert_eq!(text(5).as_deref(), Some("dark"));
+    assert_eq!(row.get::<_, i64>(6), company);
+
+    // every other writable, non-magic field (stored without a compute, or computed with an
+    // inverse such as `password`) is refused on the own record
+    let mut tx = begin(&f.orm, f.me).await;
+    let own = tx
+        .env()
+        .records("res.users")
+        .unwrap()
+        .browse([f.me])
+        .unwrap();
+    let mut refused: Vec<&str> = Vec::new();
+    for field in spec.fields.iter().filter(|field| {
+        !field.readonly
+            && !field.magic
+            && !field.user_writeable
+            && ((field.store && field.compute.is_none()) || field.inverse.is_some())
+    }) {
+        // `active` keeps its value: switching the own user off is refused by another rule
+        // ("You cannot deactivate the user you're currently logged in as.") before the field
+        // check is reached
+        let value = if field.name == "active" {
+            Value::Bool(true)
+        } else {
+            Value::False
+        };
+        let err = own
+            .write_values(&mut tx, &map(&[(field.name, value)]))
+            .await
+            .unwrap_err();
+        assert_error(&err, ErrorKind::Access, &denied(field.name));
+        refused.push(field.name);
+    }
+    for must in [
+        "login",
+        "password",
+        "partner_id",
+        "group_ids",
+        "company_ids",
+    ] {
+        assert!(refused.contains(&must), "{must} is not among {refused:?}");
+    }
+    drop(tx);
     f.finish().await;
 }

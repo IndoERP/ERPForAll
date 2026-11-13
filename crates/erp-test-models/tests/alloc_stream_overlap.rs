@@ -1,4 +1,4 @@
-//! Presence before decode (design note, perf-audit W9): a fetch
+//! Presence before decode (perf-audit W9): a fetch
 //! whose statement also returns cells already cached must not decode them. Text cells cost one
 //! `Arc<str>` each when decoded, so a fetch of `code` and `product_name` for 20,000 lines where
 //! `code` is already cached for half of them allocates one block less per skipped cell than the

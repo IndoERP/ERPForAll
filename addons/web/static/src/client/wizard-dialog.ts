@@ -12,6 +12,8 @@ import type { RecordState } from "./record.js";
 import { ClientError, type RpcClient } from "./transport.js";
 import { viewButton, ButtonDebouncer, ButtonHotkeys } from "./view-button.js";
 
+type FormElement = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement;
+
 /** One disposable action scope, independent of the caller's route and record. */
 export class WizardDialog {
   readonly dialog = el("dialog", undefined, "wizard-dialog");
@@ -23,16 +25,20 @@ export class WizardDialog {
   private readonly abort = new AbortController();
   private modal: DialogHandle | undefined;
   private pending = false;
+  private commitPending: Promise<void> | undefined;
+  private queuedCommits: (() => Promise<void>)[] = [];
+  private queuedActivation: (() => Promise<void>) | undefined;
   private uncertain = false;
   private saveUncertain = false;
   private nextFocus: string | undefined;
   private dead = false;
   private readonly debounce=new ButtonDebouncer();
   private readonly hotkeys:ButtonHotkeys;
-  private disabled = new Map<HTMLInputElement, boolean>();
+  private disabled = new Map<FormElement, boolean>();
   private readonly prior = document.activeElement;
   constructor(private readonly env: {
-    messages?: MessageServices; editorLocale?: EditorLocale; numericLocale?: import("./numeric-values.js").NumericLocale;debug?:boolean;uid?:number;action?(id:number,context:Record<string,unknown>):Promise<void>;url?(href:string):Promise<void>; name: string; state: RecordState; view: View; rpc: RpcClient; context: Record<string, unknown>;
+    /** The My Preferences presentation of the title block (avatar initial, row icons). */
+    profileTitle?: boolean; messages?: MessageServices; editorLocale?: EditorLocale; numericLocale?: import("./numeric-values.js").NumericLocale;debug?:boolean;uid?:number;action?(id:number,context:Record<string,unknown>):Promise<void>;url?(href:string):Promise<void>; name: string; state: RecordState; view: View; rpc: RpcClient; context: Record<string, unknown>;
     report(error: unknown): void; notice(message: string): void;
     openRecord(model: string, id: number): Promise<void>;
     result(value: unknown, context?:Record<string,unknown>, button?:string, resubmit?:Resubmission): Promise<void>; closed(): Promise<void>;
@@ -55,9 +61,9 @@ export class WizardDialog {
     this.notification.hidden = true;
     this.notification.setAttribute("data-wizard-notice", "");
     this.dialog.append(head, this.statusRow, this.notification, sheet, footer);
-    this.surface = new RecordForm({ ...(env.messages ? { messages: env.messages } : {}), editorLocale: env.editorLocale, numericLocale: env.numericLocale, notify: message => env.messages ? env.messages.notifications.add(message, { level: "danger" }) : env.notice(message), signal: this.abort.signal, form: this.form, state: env.state, view: env.view, rpc: env.rpc, context: env.context,
+    this.surface = new RecordForm({ ...(env.profileTitle ? { profileTitle: true } : {}), ...(env.messages ? { messages: env.messages } : {}), editorLocale: env.editorLocale, numericLocale: env.numericLocale, notify: message => env.messages ? env.messages.notifications.add(message, { level: "danger" }) : env.notice(message), signal: this.abort.signal, form: this.form, state: env.state, view: env.view, rpc: env.rpc, context: env.context,
       run: job => {
-        if (this.dead || this.pending || this.uncertain || this.saveUncertain) return;
+        if (this.dead || this.pending || this.commitPending !== undefined || this.uncertain || this.saveUncertain) return;
         void job().catch(error => env.report(error));
       }, report: error => env.report(error),
       openRecord: async (model, id) => {
@@ -65,7 +71,7 @@ export class WizardDialog {
         await this.close();
         await env.openRecord(model, id);
       },
-      changeValues: (changes, focus) => this.run(async () => {
+      changeValues: (changes, focus) => this.runCommit(async () => {
         if (this.surface.needsCommit()) await this.surface.commit();
         env.state.changeMany(changes); await env.state.onchange(Object.keys(changes));
         if (!this.dead) { this.surface.render(focus); if (env.messages) env.messages.warning(env.state.warningDetails); else if (env.state.warning) env.notice(env.state.warning); }
@@ -83,14 +89,14 @@ export class WizardDialog {
         // A password form has no server onchange (item 7). Its field commit stages the value at once:
         // a pending job would disable the buttons, and the click whose blur committed the field would be lost.
         if (passwordModels.has(env.state.model)) {
-          if (this.dead || this.pending || this.uncertain || this.saveUncertain) throw new ClientError("validation", "The wizard cannot be edited during this operation.");
+          if (this.dead || this.pending || this.commitPending !== undefined || this.uncertain || this.saveUncertain) throw new ClientError("validation", "The wizard cannot be edited during this operation.");
           env.state.change(name, value);
           // A typed secret is not re-rendered: that would replace the button the click is about to land on. The reset
           // wizard's selected-user lines (an array, changed from their own line dialog) are rendered as before.
           if (Array.isArray(value) && !this.dead) this.surface.render(focus);
           return;
         }
-        this.run(async () => {
+        this.runCommit(async () => {
           if (this.surface.needsCommit()) await this.surface.commit();
           env.state.change(name, value);
           await env.state.onchange(name);
@@ -101,7 +107,7 @@ export class WizardDialog {
       footerHost: footer,
       footer: (node, parent) => this.renderButton(node, parent)
     });
-    this.hotkeys=new ButtonHotkeys(()=>[...this.dialog.querySelectorAll<HTMLButtonElement>("button")],{blocked:()=>this.pending||this.uncertain||this.saveUncertain||this.env.messages?.block.blocked===true,report:error=>this.env.report(error)});
+    this.hotkeys=new ButtonHotkeys(()=>[...this.dialog.querySelectorAll<HTMLButtonElement>("button")],{blocked:()=>this.pending||this.commitPending!==undefined||this.uncertain||this.saveUncertain||this.env.messages?.block.blocked===true,report:error=>this.env.report(error)});
     this.form.addEventListener("submit", event => {
       event.preventDefault();
       // Enter in a password form presses its submission button: a password form is never saved.
@@ -120,7 +126,8 @@ export class WizardDialog {
     });
     else { document.body.append(this.dialog); this.dialog.showModal(); }
     if (this.env.messages) this.env.messages.warning(this.env.state.warningDetails);
-    this.form.querySelector<HTMLElement>("input,select,textarea,button")?.focus();
+    // A profile header opens on its notebook tab: the name, e-mail and phone fields come before it in tab order, so the name shows no focus rule at first sight.
+    ((this.env.profileTitle ? this.form.querySelector<HTMLElement>("[role=tab][aria-selected=true]") : null) ?? this.form.querySelector<HTMLElement>("input,select,textarea,button"))?.focus();
   }
   /** Text-only announcement in the active native modal, never its inert background. */
   notify(result: Extract<ActionResult, {kind: "notification"}>): void {
@@ -131,9 +138,14 @@ export class WizardDialog {
     this.notification.hidden = false;
   }
   get dirty(): boolean { return this.uncertain || this.saveUncertain || this.env.state.dirty || this.env.state.id === undefined; }
-  get busy(): boolean { return this.pending || this.env.state.busy; }
+  get busy(): boolean { return this.pending || this.commitPending !== undefined || this.queuedCommits.length > 0 || this.env.state.busy; }
   private run(job: () => Promise<void>): void {
-    if (this.pending || this.uncertain || this.saveUncertain || this.dead) return;
+    if (this.dead || this.uncertain || this.saveUncertain) return;
+    if (this.pending) return;
+    if (this.commitPending !== undefined) {
+      this.queuedActivation = job;
+      return;
+    }
     const focus = formFocus(this.dialog);
     this.pending = true; this.disable();
     void job().catch(error => { this.env.report(error); }).finally(() => {
@@ -148,14 +160,78 @@ export class WizardDialog {
       }
     }).catch(error => { this.env.report(error); });
   }
+  private runCommit(job: () => Promise<void>): void {
+    if (this.dead || this.pending || this.uncertain || this.saveUncertain) return;
+    if (this.commitPending !== undefined) {
+      this.queuedCommits.push(job);
+      return;
+    }
+    const focus = formFocus(this.dialog);
+    let commitOk = false;
+    let commitError: unknown;
+    const work = (async () => {
+      try {
+        await job();
+        commitOk = true;
+      } catch (error) {
+        commitError = error;
+      }
+    })();
+    this.commitPending = work;
+    this.disable();
+    void work.finally(() => {
+      if (this.commitPending === work) this.commitPending = undefined;
+      this.disable();
+      if (!this.dead) {
+        if (!commitOk) {
+          for (const [input, disabled] of this.disabled) input.disabled = disabled;
+          this.disabled.clear();
+          const target = this.nextFocus ?? focus; this.nextFocus = undefined;
+          this.surface.render(target);
+          this.disable();
+          if (target) for (const control of this.dialog.querySelectorAll<HTMLElement>("[data-focus-key]")) if (control.dataset["focusKey"] === target) control.focus();
+          if (commitError !== undefined) this.env.report(commitError);
+        }
+        if (commitOk && this.queuedCommits.length > 0) {
+          const nextCommit = this.queuedCommits.shift()!;
+          this.runCommit(nextCommit);
+        } else {
+          this.queuedCommits.length = 0;
+          if (commitOk && this.queuedActivation) {
+            const next = this.queuedActivation;
+            this.queuedActivation = undefined;
+            this.run(next);
+          } else {
+            this.queuedActivation = undefined;
+          }
+        }
+      }
+    });
+  }
   private disable(): void {
-    this.surface.setDisabled(this.pending || this.uncertain || this.saveUncertain);
-    for (const input of this.dialog.querySelectorAll<HTMLInputElement>("input,select,textarea,button")) {
+    const isAction = this.pending || this.uncertain || this.saveUncertain;
+    const isCommit = this.commitPending !== undefined;
+    this.surface.setDisabled(isAction || isCommit);
+    for (const input of this.dialog.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement>("input,select,textarea,button")) {
       if (input.closest(".code-field")) continue; // Its engine/history are owned by RecordForm.
-      if (this.pending || this.uncertain || this.saveUncertain) {
-        if (!this.disabled.has(input)) this.disabled.set(input, input.disabled);
-        input.disabled = true;
-      } else if (this.disabled.has(input)) input.disabled = this.disabled.get(input)!;
+      const isBtn = input instanceof HTMLButtonElement || input.type === "button" || input.type === "submit";
+      if (isBtn) {
+        if (isAction) {
+          if (!this.disabled.has(input)) this.disabled.set(input, input.disabled);
+          input.disabled = true;
+        } else if (this.disabled.has(input)) {
+          input.disabled = this.disabled.get(input)!;
+          this.disabled.delete(input);
+        }
+      } else {
+        if (isAction || isCommit) {
+          if (!this.disabled.has(input)) this.disabled.set(input, input.disabled);
+          input.disabled = true;
+        } else if (this.disabled.has(input)) {
+          input.disabled = this.disabled.get(input)!;
+          this.disabled.delete(input);
+        }
+      }
     }
     const reload = this.dialog.querySelector<HTMLButtonElement>(".wizard-reload");
     if (reload) reload.disabled = this.pending;
@@ -163,7 +239,7 @@ export class WizardDialog {
     this.status.textContent = this.uncertain
       ? "The action may have completed. This dialog is read-only; reloading cannot authorize another attempt."
       : this.saveUncertain ? "The save outcome is unknown. Reload the record to check it before continuing." : "";
-    this.dialog.setAttribute("aria-busy", String(this.pending));
+    this.dialog.setAttribute("aria-busy", String(isAction || isCommit));
   }
   /** The enabled button of this dialog that submits its password operation, if any. */
   private submissionButton(): HTMLButtonElement | undefined {
@@ -233,7 +309,7 @@ export class WizardDialog {
   /** Read-only recovery, offered only while an outcome is uncertain; it clears save uncertainty only and
    * a method operation can never be replayed. */
   private reload(): void {
-    if (this.dead || this.pending) return;
+    if (this.dead || this.pending || this.commitPending !== undefined) return;
     this.pending = true; this.disable();
     void (async () => {
       if (this.dead) return;
@@ -248,7 +324,7 @@ export class WizardDialog {
     }).catch(error => { this.env.report(error); });
   }
   async canLeave(insideOperation = false): Promise<boolean> {
-    return !(this.dead || this.pending && !insideOperation || this.uncertain || this.saveUncertain || this.env.state.busy);
+    return !(this.dead || (this.pending || this.commitPending !== undefined) && !insideOperation || this.uncertain || this.saveUncertain || this.env.state.busy);
   }
   async close(): Promise<void> {
     if (this.dead || this.uncertain || this.saveUncertain) return;
@@ -257,7 +333,8 @@ export class WizardDialog {
   }
   dispose(): void {
     if (this.dead) return;
-    this.dead = true;this.hotkeys.dispose();this.debounce.dispose(); this.abort.abort(); this.surface.dispose();
+    this.dead = true; this.queuedCommits.length = 0; this.queuedActivation = undefined;
+    this.hotkeys.dispose(); this.debounce.dispose(); this.abort.abort(); this.surface.dispose();
     if (this.modal) { this.modal.dispose(); this.modal = undefined; } else { this.dialog.close(); this.dialog.remove(); }
     if (this.prior instanceof HTMLElement && this.prior.isConnected) this.prior.focus();
   }

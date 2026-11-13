@@ -4,13 +4,13 @@
 //! actor that staged it. A business transaction links it later ([`super::link`]).
 //!
 //! Every staging object has a committed row, so the cleaner never lists the store. A failed or
-//! abandoned upload leaves a row that expires; [`super::gc`] removes its object.
+//! abandoned upload retains its reservation; fenced [`super::gc`] maintenance removes its object.
 
 use erp_sdk::blob::{
     AttachmentRuntime, DETECT_BYTES, Namespace, StageLimits, StagingKey, resolve, to_hex,
 };
 use erp_sdk::prelude::*;
-use erp_sdk::{Actor, BeginOptions, Env, ErrorKind, Orm};
+use erp_sdk::{Actor, BeginOptions, Env, Isolation, Orm};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 use super::runtime::{blob_error, col_error, runtime, store_by_key};
@@ -24,6 +24,8 @@ pub struct StageRequest {
     pub name: Option<String>,
     /// The media type the client declares, checked against the detected one.
     pub declared_mimetype: Option<String>,
+    declared_length: Option<u64>,
+    file_limit: Option<u64>,
 }
 
 impl StageRequest {
@@ -32,7 +34,36 @@ impl StageRequest {
         Self {
             name: Some(name.into()),
             declared_mimetype: None,
+            declared_length: None,
+            file_limit: None,
         }
+    }
+
+    /// Reserve a known body length. Actual bytes may be shorter, but never exceed it.
+    #[must_use]
+    pub fn with_declared_length(mut self, bytes: u64) -> Self {
+        self.declared_length = Some(bytes);
+        self
+    }
+
+    /// Apply a transport file limit, capped again by the configured attachment limit.
+    #[must_use]
+    pub fn with_file_limit(mut self, bytes: u64) -> Self {
+        self.file_limit = Some(bytes);
+        self
+    }
+
+    // absent length reserves the file limit; absent transport limit uses
+    // the configured store limit. These are specified absence defaults, not error fallbacks.
+    fn byte_limits(&self, configured: u64) -> Result<(u64, u64)> {
+        let limit = self.file_limit.unwrap_or(configured).min(configured);
+        let reserved = self.declared_length.unwrap_or(limit);
+        if reserved > limit {
+            return Err(Error::validation(format!(
+                "object size in bytes exceeds the limit of {limit}"
+            )));
+        }
+        Ok((limit, reserved))
     }
 
     /// Declare the media type.
@@ -104,8 +135,12 @@ impl Uploader {
     ///
     /// `Validation` for a bad name, a declared type that does not match, content above
     /// `attachments.max_file_bytes`; `ResourceExhausted` when the subject already holds the
-    /// maximum of pending uploads; `Programming` when no attachment runtime is attached; store
-    /// errors as `Internal`.
+    /// maximum pending count/bytes or storage quota; typed quota errors remain sources.
+    /// Failed receives retain their intent/reservation until fenced maintenance succeeds.
+    /// `Programming` for invalid runtime configuration; store
+    /// errors as `Internal`. `Access` when `env` was switched by `with_user` from a principal that
+    /// is not `System` (also an admitted impersonation): its transaction is refused when it opens
+    /// (A4); stage for the caller's own environment instead.
     pub async fn stage(
         &self,
         env: &Env,
@@ -116,164 +151,79 @@ impl Uploader {
         if let Some(name) = &request.name {
             check_name(name)?;
         }
-        // the per-node admission of streaming operations: a full node answers busy before any
-        // row exists; the permit is released when the bytes have passed (or on any early return)
-        let permit = rt.try_stream_permit().map_err(blob_error)?;
-        let declared = match &request.declared_mimetype {
-            Some(declared) => Some(
-                erp_sdk::blob::normalize_declared(declared)
-                    .map_err(|e| Error::validation(e.to_string()))?,
-            ),
-            None => None,
-        };
-        let uid = env.principal().subject().get();
-        let actor = actor_text(env);
+        let (file_limit, reserved) = request.byte_limits(rt.limits().max_file_bytes)?;
+        let _permit = rt.try_stream_permit().map_err(blob_error)?;
+        let declared = request
+            .declared_mimetype
+            .as_deref()
+            .map(erp_sdk::blob::normalize_declared)
+            .transpose()
+            .map_err(|e| Error::validation(e.to_string()))?;
+        // Start before BEGIN: PostgreSQL now() for expires_at is no earlier than this point.
+        // A stalled receive must stop before an expired intent becomes eligible for cleanup.
+        let deadline = tokio::time::Instant::now()
+            .checked_add(std::time::Duration::from_secs(rt.limits().upload_ttl_secs))
+            .ok_or_else(|| {
+                Error::programming("attachments.upload_ttl_secs exceeds the monotonic clock range.")
+            })?;
         let options = || BeginOptions::for_principal(env.principal().clone()).on_primary();
-
-        // 1. intent first, in its own short transaction; the first upload of a database races to
-        // register the store row, so a serialization failure repeats this short transaction
-        let mut attempt = 0u32;
-        let (store, upload_id) = loop {
-            attempt += 1;
-            match self
-                .open_intent(&rt, &options, uid, &actor, &request, declared.as_deref())
-                .await
-            {
-                Err(error) if error.sqlstate() == Some("40001") && attempt < 5 => {
-                    tokio::time::sleep(std::time::Duration::from_millis(15 * u64::from(attempt)))
-                        .await;
-                }
-                other => break other?,
-            }
-        };
-
-        // 2. stream, hash, detect (a failure discards the row; expiry covers a failed discard)
-        match self
-            .receive(
-                &rt,
-                &store.namespace,
-                &upload_id,
-                body,
-                &request,
-                declared.as_deref(),
-            )
-            .await
-        {
-            Ok(staged) => {
-                drop(permit);
-                // 3. ready
-                let mut tx = self.orm.begin_opts(options()).await?;
-                let updated = tx
-                    .execute(
-                        "UPDATE ir_blob_upload SET state = 1, sha256 = $2, sha1 = $3, size = $4, \
-                         detected_mimetype = $5, inline_data = $6 \
-                         WHERE id = $1::text::uuid AND state = 0",
-                        &[
-                            &upload_id,
-                            &staged.sha256.to_vec(),
-                            &staged.sha1.to_vec(),
-                            &i64::try_from(staged.size).unwrap_or(i64::MAX),
-                            &staged.mimetype,
-                            &staged.inline,
-                        ],
-                    )
-                    .await?;
-                if updated != 1 {
-                    let rolled_back = tx.rollback().await;
-                    // the row is the write-ahead marker of the staged object: without it the
-                    // cleaner never finds the object, so remove it here
-                    let mut message = "the upload row left the receiving state while its bytes \
-                                       were staged"
-                        .to_owned();
-                    if staged.inline.is_none()
-                        && let Err(error) =
-                            self.remove_staged(&rt, &store.namespace, &upload_id).await
-                    {
-                        message.push_str(&format!(
-                            "; its staged object could not be removed and is orphaned: {error}"
-                        ));
-                    }
-                    rolled_back?;
-                    return Err(Error::internal(message));
-                }
-                tx.commit().await?;
-                Ok(StagedUpload {
-                    id: UploadId::from_db(upload_id),
-                    size: staged.size,
-                    checksum: to_hex(&staged.sha1),
-                    mimetype: staged.mimetype,
-                })
-            }
-            Err(error) => {
-                drop(permit);
-                self.discard(env, &rt, &store.namespace, &upload_id).await;
-                Err(error)
-            }
-        }
-    }
-
-    /// The committed intent row of one upload: store row registered, topology checked, pending
-    /// cap enforced. Returns the store and the new upload id.
-    async fn open_intent(
-        &self,
-        rt: &AttachmentRuntime,
-        options: &dyn Fn() -> BeginOptions,
-        uid: i64,
-        actor: &str,
-        request: &StageRequest,
-        declared: Option<&str>,
-    ) -> Result<(super::runtime::StoreRef, String)> {
-        let limits = rt.limits().clone();
-        let mut tx = self.orm.begin_opts(options()).await?;
-        super::topology::verify(&mut tx, rt).await?;
-        let store = store_by_key(&mut tx, rt, rt.write_store_key()).await?;
-        let pending = tx
-            .query(
-                "SELECT count(*) FROM ir_blob_upload \
-                 WHERE subject_user = $1 AND state IN (0, 1) AND expires_at > now()",
-                &[&uid],
-            )
+        // The primary READ COMMITTED transaction takes database then subject locks. It commits
+        // the intent and reservation before any read; none of these locks spans the stream.
+        let mut tx = self
+            .orm
+            .begin_opts(options().isolation(Isolation::ReadCommitted))
             .await?;
-        let pending: i64 = pending
-            .first()
-            .ok_or_else(|| Error::db("the pending upload count is missing"))?
-            .try_get(0)
-            .map_err(|e| col_error("upload count", e))?;
-        if pending >= i64::from(limits.pending_uploads_per_subject) {
-            tx.rollback().await?;
-            return Err(Error::new(
-                ErrorKind::ResourceExhausted,
-                format!(
-                    "You already have {} pending uploads, the most allowed. Link or discard them \
-                     first.",
-                    limits.pending_uploads_per_subject
-                ),
-            ));
-        }
-        let ttl = i64::try_from(limits.upload_ttl_secs).unwrap_or(86_400);
-        let created = tx
-            .query(
-                "INSERT INTO ir_blob_upload (store_id, subject_user, actor, expires_at, \
-                 declared_name, declared_mimetype) \
-                 VALUES ($1, $2, $3, now() + make_interval(secs => $4::float8), $5, $6) \
-                 RETURNING id::text",
-                &[
-                    &store.id,
-                    &uid,
-                    &actor,
-                    &(ttl as f64),
-                    &request.name,
-                    &declared,
-                ],
-            )
-            .await?;
+        super::topology::verify(&mut tx, &rt).await?;
+        let store = store_by_key(&mut tx, &rt, rt.write_store_key()).await?;
+        let uid = env.principal().subject().get();
+        super::quota::admit(&mut tx, rt.limits(), uid, reserved, file_limit).await?;
+        let actor = actor_text(env);
+        let ttl = rt.limits().upload_ttl_secs as f64;
+        let reservation = super::quota::sql_bytes(reserved)?;
+        let created = tx.query(
+            "INSERT INTO ir_blob_upload(store_id,subject_user,actor,expires_at,declared_name,declared_mimetype,reserved_bytes) VALUES ($1,$2,$3,now()+make_interval(secs=>$4::float8),$5,$6,$7) RETURNING id::text",
+            &[&store.id,&uid,&actor,&ttl,&request.name,&declared,&reservation],
+        ).await?;
         let upload_id: String = created
             .first()
-            .ok_or_else(|| Error::db("the upload row was not created"))?
+            .ok_or_else(|| Error::db("The upload intent was not created."))?
             .try_get(0)
             .map_err(|e| col_error("upload id", e))?;
         tx.commit().await?;
-        Ok((store, upload_id))
+        drop(tx);
+        let result = async {
+            let staged = tokio::select! {
+                biased;
+                _ = tokio::time::sleep_until(deadline) => Err(blob_error(erp_sdk::blob::BlobError::UploadExpired)),
+                received = self.receive(&rt, &store.namespace, &upload_id, body, &request, declared.as_deref()) => received,
+            }?;
+            let mut tx = self.orm.begin_opts(options()).await?;
+            let size = super::quota::sql_bytes(staged.size)?;
+            let updated = tx.execute(
+                "UPDATE ir_blob_upload SET state=1,sha256=$2,sha1=$3,size=$4,detected_mimetype=$5,inline_data=$6,reserved_bytes=$4 WHERE id=$1::text::uuid AND state=0",
+                &[&upload_id,&staged.sha256.to_vec(),&staged.sha1.to_vec(),&size,&staged.mimetype,&staged.inline],
+            ).await?;
+            if updated != 1 { return Err(Error::internal("The upload intent left receiving state before completion; cleanup is required.")); }
+            tx.commit().await?;
+            Ok(StagedUpload { id: UploadId::from_db(upload_id.clone()), size: staged.size, checksum: to_hex(&staged.sha1), mimetype: staged.mimetype })
+        }.await;
+        match result {
+            Ok(staged) => Ok(staged),
+            Err(original) => {
+                // Requests never delete storage or tracking rows: maintenance owns physical
+                // cleanup, with the owner fence. A dropped future leaves its receiving marker.
+                let cleanup = async {
+                    let mut tx = self.orm.begin_opts(options()).await?;
+                    let n = tx.execute("UPDATE ir_blob_upload SET state=3,cleanup_error='Receive failed; fenced cleanup pending.' WHERE id=$1::text::uuid AND state IN (0,1)", &[&upload_id]).await?;
+                    if n != 1 { return Err(Error::internal("The failed upload cleanup marker is missing or already consumed.")); }
+                    tx.commit().await
+                }.await;
+                match cleanup {
+                    Ok(()) => Err(original.and_also(&Error::internal("fenced cleanup pending; the committed reservation is retained"))),
+                    Err(cause) => Err(original.and_also(&Error::internal("cleanup state could not be recorded; verify the committed upload intent")).and_also(&cause)),
+                }
+            }
+        }
     }
 
     async fn receive(
@@ -286,14 +236,21 @@ impl Uploader {
         declared: Option<&str>,
     ) -> Result<Received> {
         let limits = rt.limits();
+        let (_, byte_limit) = request.byte_limits(limits.max_file_bytes)?;
         // read one byte past the inline threshold to learn which path this content takes
-        let probe = limits.inline_max_bytes.saturating_add(1);
+        let probe =
+            (limits.inline_max_bytes.saturating_add(1) as u64).min(byte_limit.saturating_add(1));
         let mut prefix = Vec::new();
-        let mut limited = (&mut *body).take(probe as u64);
+        let mut limited = (&mut *body).take(probe);
         limited
             .read_to_end(&mut prefix)
             .await
             .map_err(|e| Error::validation(format!("The upload body could not be read: {e}")))?;
+        if prefix.len() as u64 > byte_limit {
+            return Err(Error::validation(format!(
+                "object size in bytes exceeds the limit of {byte_limit}"
+            )));
+        }
         let detect_name = request.name.as_deref();
         if prefix.len() <= limits.inline_max_bytes {
             // the whole body is in `prefix`
@@ -313,7 +270,7 @@ impl Uploader {
         let key = StagingKey::new(namespace.clone(), upload_id).map_err(blob_error)?;
         let mut chained = std::io::Cursor::new(prefix).chain(body);
         let staged = store
-            .stage(&key, &mut chained, StageLimits::new(limits.max_file_bytes))
+            .stage(&key, &mut chained, StageLimits::new(byte_limit))
             .await
             .map_err(blob_error)?;
         match resolve(declared, staged.head(), detect_name) {
@@ -324,44 +281,7 @@ impl Uploader {
                 mimetype: detected.mimetype,
                 inline: None,
             }),
-            Err(error) => {
-                let _ = store.delete_staged(&key).await;
-                Err(Error::validation(error.to_string()))
-            }
-        }
-    }
-
-    /// Remove the staged object of an upload whose row is gone.
-    async fn remove_staged(
-        &self,
-        rt: &AttachmentRuntime,
-        ns: &Namespace,
-        upload_id: &str,
-    ) -> Result<()> {
-        let store = rt.write_store().map_err(blob_error)?;
-        let key = StagingKey::new(ns.clone(), upload_id).map_err(blob_error)?;
-        store.delete_staged(&key).await.map_err(blob_error)
-    }
-
-    /// Remove the row and the object of an upload that failed; a failure here is covered by the
-    /// row's expiry, so it is not an error of the upload.
-    async fn discard(&self, env: &Env, rt: &AttachmentRuntime, ns: &Namespace, upload_id: &str) {
-        if let Ok(store) = rt.write_store()
-            && let Ok(key) = StagingKey::new(ns.clone(), upload_id)
-        {
-            let _ = store.delete_staged(&key).await;
-        }
-        let options = BeginOptions::for_principal(env.principal().clone()).on_primary();
-        if let Ok(mut tx) = self.orm.begin_opts(options).await {
-            let removed = tx
-                .execute(
-                    "DELETE FROM ir_blob_upload WHERE id = $1::text::uuid AND state = 0",
-                    &[&upload_id],
-                )
-                .await;
-            if removed.is_ok() {
-                let _ = tx.commit().await;
-            }
+            Err(error) => Err(Error::validation(error.to_string())),
         }
     }
 }

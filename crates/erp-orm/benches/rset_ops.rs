@@ -2,7 +2,7 @@
 //! `sorted` (one and two terms), `mapped`, `filtered` on a field, and `grouped`, over 1,000, 10,000
 //! and 100,000 records. The records are new (in-memory) records, so every value is in the cache
 //! and no statement runs; the setup asserts it. Needs `DATABASE_URL` (the transaction holds a pooled
-//! connection; nothing is sent). Results:.
+//! connection; nothing is sent). Results.
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "benchmark setup")]
 
 use std::hint::black_box;

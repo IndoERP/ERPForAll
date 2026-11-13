@@ -177,15 +177,23 @@ async fn fixture(tx: &mut Transaction) -> Fixture {
 /// `sudo()` and `with_user(admin)`.
 fn variants(
     tx: &Transaction,
-    fx: &Fixture,
+    as_admin: &erp_orm::Env,
     model: &str,
     id: i64,
 ) -> Vec<(&'static str, erp_sdk::Records)> {
     let base = tx.env().records(model).unwrap().browse([id]).unwrap();
     vec![
-        ("with_user(admin)", base.with_user(fx.admin)),
+        ("with_user(admin)", base.with_env(as_admin.clone())),
         ("sudo", base.sudo(true)),
     ]
+}
+
+/// The admin environment, made by System: the transaction's user has no `principal.impersonate`
+/// (A4); x2many commands still run as the transaction's original user.
+fn admin_env(h: &Harness, fx: &Fixture) -> erp_orm::Env {
+    h.orm()
+        .env(erp_orm::SUPERUSER_ID, erp_orm::Context::new())
+        .with_user(fx.admin)
 }
 
 /// `res.partner.user_ids`, which waits for, and its field-access message)
@@ -198,13 +206,14 @@ async fn spec_rel_060_one2many_commands_run_as_the_original_user() {
 
     let mut tx = h.begin_as(DEMO).await.unwrap();
     let line = "test_sudo.line";
-    for (label, owner) in variants(&tx, &fx, "test_sudo.owner", fx.owner) {
+    let as_admin = admin_env(&h, &fx);
+    for (label, owner) in variants(&tx, &as_admin, "test_sudo.owner", fx.owner) {
         // CREATE through an owner created with the elevated environment
         let create_owner = tx.env().records("test_sudo.owner").unwrap();
         let create_owner = if label == "sudo" {
             create_owner.sudo(true)
         } else {
-            create_owner.with_user(fx.admin)
+            create_owner.with_env(as_admin.clone())
         };
         let result = create_owner
             .create_values(
@@ -261,13 +270,11 @@ async fn spec_rel_060_many2many_commands_run_as_the_original_user() {
 
     let mut tx = h.begin_as(DEMO).await.unwrap();
     let group = "test_sudo.group";
+    let as_admin = admin_env(&h, &fx);
     for (label, users) in [
         (
             "with_user(admin)",
-            tx.env()
-                .records("test_sudo.user")
-                .unwrap()
-                .with_user(fx.admin),
+            as_admin.records("test_sudo.user").unwrap(),
         ),
         (
             "sudo",

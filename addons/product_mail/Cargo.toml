@@ -1,0 +1,15 @@
+[package]
+name = "erp-addon-product-mail"
+description = "ERPForAll bridge addon product_mail: chatter on product.template and product.product"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+erp-sdk = { workspace = true }
+erp-addon-product = { workspace = true }
+erp-addon-mail = { workspace = true }
+
+[lints]
+workspace = true

@@ -4,7 +4,7 @@
 //! The composer works on `&'static` [`ModelDecl`]s (the shape `#[model]` emits). An owned
 //! [`ModelDef`] becomes one through [`ModelDef::to_decl`], which interns it: every *distinct*
 //! definition is leaked once for the life of the process and reused afterwards, so rebuilding a
-//! registry from the same definitions allocates nothing new (design note).
+//! registry from the same definitions allocates nothing new.
 //! Interned bytes are bounded twice: each database's declarations are charged to its
 //! [`InternAccount`] (at most [`DATABASE_INTERN_QUOTA_BYTES`] by default), so one database churning
 //! custom fields exhausts only its own quota (isolation); the whole process is capped
@@ -888,8 +888,7 @@ pub struct ModelDef {
     pub order: Option<String>,
     /// `_rec_name`.
     pub rec_name: Option<String>,
-    /// `_check_company_auto`: `Some(false)` opts the model out of the default company check
-    /// .
+    /// `_check_company_auto`: `Some(false)` opts the model out of the default company check.
     pub check_company_auto: Option<bool>,
     /// `company_match`.
     pub company_match: Option<CompanyMatch>,
@@ -917,8 +916,11 @@ pub struct ModelDef {
     /// threshold. Only transient models may state it; the registry build refuses it elsewhere and
     /// above [`crate::MAX_TRANSIENT_MAX_COUNT`].
     pub transient_max_count: Option<u64>,
-    /// Opt into transactional event capture; defaults false and composes by OR.
+    /// Opt into transactional event capture; defaults false and composes by.
     pub eventful: bool,
+    /// Select successful RPC reads for independent auditing.
+    /// Default false; OR-composed through extensions and classical/abstract inheritance.
+    pub audit_reads: bool,
 }
 
 impl ModelDef {
@@ -953,6 +955,7 @@ impl ModelDef {
             transient_max_age_seconds: None,
             transient_max_count: None,
             eventful: false,
+            audit_reads: false,
         }
     }
 
@@ -973,6 +976,13 @@ impl ModelDef {
     #[must_use]
     pub fn eventful(mut self, on: bool) -> Self {
         self.eventful = on;
+        self
+    }
+
+    /// Select successful RPC reads for auditing; false cannot undo another MRO opt-in.
+    /// Abstract declarations contribute to descendants; transient models may opt in.
+    pub fn audit_reads(mut self, on: bool) -> Self {
+        self.audit_reads = on;
         self
     }
 
@@ -1247,6 +1257,7 @@ impl ModelDef {
         decl.transient_max_age_seconds = self.transient_max_age_seconds;
         decl.transient_max_count = self.transient_max_count;
         decl.eventful = self.eventful;
+        decl.audit_reads = self.audit_reads;
         decl.company_access = match &self.company_access {
             Some(access) => Some(access.intern(&mut |s| interner.str(s))?),
             None => None,

@@ -1,6 +1,6 @@
 //! Fixture addon `test_wasm_life`: defines its own model and one method, and is compiled to a
-//! component that `erp-modules` installs into a running database from a `.erpaddon` package
-//! . Only the field kinds and attributes the runtime install
+//! component that `erp-modules` installs into a running database from a `.erpaddon` package.
+//! Only the field kinds and attributes the runtime install
 //! reads from `describe()` are used.
 
 use erp_sdk::prelude::*;

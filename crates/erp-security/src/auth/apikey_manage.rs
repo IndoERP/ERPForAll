@@ -11,7 +11,9 @@ use erp_orm::audit::{
 use erp_orm::{Actor, ApiKeyId, KeyKind as ActorKeyKind, Principal, PrincipalKind, Transaction};
 use zeroize::Zeroizing;
 
-const INVALID: &str = "The provided API key is invalid or does not belong to the current user.";
+const GENERATE_INVALID: &str =
+    "The provided API key is invalid or does not belong to the current user.";
+const REVOKE_INVALID: &str = "The provided API key is invalid.";
 
 fn column<T: tokio_postgres::types::FromSqlOwned>(
     row: &tokio_postgres::Row,
@@ -101,13 +103,18 @@ fn key_actor(principal: &Principal) -> Result<Option<(ApiKeyId, ActorKeyKind)>> 
     }
 }
 
+/// The id of the active native user key `key` of the current user and `scope`, locked.
+/// Every refused lookup (malformed, unknown, foreign, expired, wrong scope) answers
+/// AccessDenied with the one `refusal` text of the calling operation, so the answer
+/// never tells whether the key exists.
 async fn key_id(
     tx: &mut Transaction,
     hasher: &ApiKeyHasher,
     key: &str,
     scope: &str,
+    refusal: &'static str,
 ) -> Result<i64> {
-    let invalid = || Error::new(ErrorKind::AccessDenied, INVALID);
+    let invalid = || Error::new(ErrorKind::AccessDenied, refusal);
     let token = NativeApiKey::parse(key).map_err(|_| invalid())?;
     let digest = hasher.digest(&token);
     let uid = tx.env().user_id().get();
@@ -129,11 +136,6 @@ async fn key_id(
 /// and route scope. The issuance is audited by [`issue`] (one `api_key.issued` event; the
 /// transaction needs an `OperationIdentity`). Does not revoke the old key. Publish the returned secret
 /// only after commit. Agent/service/legacy keys remain gated.
-///
-/// # Errors
-/// User when programmatic management is disabled or the active-key cap is hit;
-/// AccessDenied for invalid/expired/foreign/wrong-scope credentials; Validation
-/// for invalid metadata/configuration/lifetime; database errors propagate.
 pub async fn generate(
     tx: &mut Transaction,
     key: &str,
@@ -143,7 +145,7 @@ pub async fn generate(
 ) -> Result<IssuedApiKey> {
     gate(tx).await?;
     let hasher = hasher(tx).await?;
-    key_id(tx, &hasher, key, scope).await?;
+    key_id(tx, &hasher, key, scope, GENERATE_INVALID).await?;
     let request = IssueRequest::new(
         tx.env().user_id(),
         name,
@@ -157,14 +159,10 @@ pub async fn generate(
 
 /// Delete an active native key owned by the current user. Self-revocation is
 /// allowed; the next transaction on every replica observes the deletion.
-///
-/// # Errors
-/// Same programmatic/principal gates as [`generate`]; invalid, foreign or
-/// expired credentials return AccessDenied without revealing ownership.
 pub async fn revoke(tx: &mut Transaction, key: &str) -> Result<bool> {
     gate(tx).await?;
     let hasher = hasher(tx).await?;
-    let id = key_id(tx, &hasher, key, "rpc").await?;
+    let id = key_id(tx, &hasher, key, "rpc", REVOKE_INVALID).await?;
     let deleted = tx
         .execute("DELETE FROM res_users_apikeys WHERE id=$1", &[&id])
         .await?;

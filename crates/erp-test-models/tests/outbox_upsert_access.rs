@@ -186,11 +186,14 @@ async fn generated_assignment_and_event_insert_denial_preserve_business_state() 
         .await
         .unwrap();
     let err = tx.commit().await.unwrap_err();
-    assert_eq!(err.kind(), ErrorKind::Validation);
-    assert_eq!(err.sqlstate(), Some("23514"));
+    // the typed error naming the upkeep, the database error as its source
+    assert_eq!(err.kind(), ErrorKind::Concurrency);
+    assert_eq!(err.sqlstate(), None);
     assert_eq!(
         err.message(),
-        "The operation cannot be completed: no partition of relation \"ir_event_outbox\" found for row"
+        "outbox: no partition of erp_event.ir_event_outbox covers the transaction's day; the \
+         event partition upkeep has not run (it runs at server start and hourly; `erp audit \
+         maintain` refreshes both event tables)"
     );
     tx.rollback().await.unwrap();
     assert!(state(&h).await.is_empty());
@@ -398,12 +401,20 @@ async fn serialization_retry_keeps_only_successful_upsert_capture() {
     h.cleanup().await.unwrap();
 }
 
+/// Declared integer fields of the wide upsert model: with `code` and the four log-access columns the
+/// model has exactly 128 columns, the ceiling of one event (`erp_registry::MAX_EVENT_FIELD_NAMES`).
+const WIDE_DECLARED: i32 = 123;
+
+/// eventful models are refused when the registry is built, see erp-registry `tests/eventful.rs`)
 #[tokio::test]
-async fn changed_name_limit_accepts_boundary_and_refuses_overflow_before_sql() {
+async fn changed_name_limit_accepts_the_boundary_model() {
     use erp_registry::{FieldDecl, KeyDecl, ModelDecl, TableObjectDecl, TableObjectKind};
     use erp_test_models::base_users;
     let fields = std::iter::once(FieldDecl::char("code"))
-        .chain((0..129).map(|i| FieldDecl::integer(Box::leak(format!("f{i:03}").into_boxed_str()))))
+        .chain(
+            (0..WIDE_DECLARED)
+                .map(|i| FieldDecl::integer(Box::leak(format!("f{i:03}").into_boxed_str()))),
+        )
         .collect::<Vec<_>>();
     let fields = Box::leak(fields.into_boxed_slice());
     let objects = Box::leak(
@@ -421,6 +432,15 @@ async fn changed_name_limit_accepts_boundary_and_refuses_overflow_before_sql() {
         .build()
         .await
         .unwrap();
+    let countable = h
+        .registry()
+        .model("test.upsert.wide")
+        .unwrap()
+        .fields
+        .iter()
+        .filter(|f| f.has_column() && f.inherited.is_none() && f.name != "id")
+        .count();
+    assert_eq!(countable, erp_registry::MAX_EVENT_FIELD_NAMES);
     let mut setup = h.begin().await.unwrap();
     setup.install_event_schema().await.unwrap();
     setup
@@ -433,7 +453,7 @@ async fn changed_name_limit_accepts_boundary_and_refuses_overflow_before_sql() {
     let model = tx.env().records("test.upsert.wide").unwrap();
     let mut vals = RawVals::new().set_cell("code", Cell::Str("x".into()));
     let mut names = Vec::new();
-    for i in 0..128 {
+    for i in 0..WIDE_DECLARED {
         let name = format!("f{i:03}");
         vals = vals.set_cell(name.clone(), Cell::Int(i));
         names.push(name);
@@ -449,69 +469,24 @@ async fn changed_name_limit_accepts_boundary_and_refuses_overflow_before_sql() {
         .unwrap();
     tx.commit().await.unwrap();
     drop(tx);
-    let mut tx = begin(&h).await;
-    tx.capture_statements(true);
-    names.push("f128".into());
-    vals = vals.set_cell("f128", Cell::Int(128));
-    let err = model
-        .with_env(tx.env())
-        .upsert(
-            &mut tx,
-            UpsertCall::new("_business")
-                .with_rows([vals])
-                .with_update(names.clone()),
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(err.kind(), ErrorKind::ResourceExhausted);
-    assert_eq!(
-        err.message(),
-        "outbox CaptureLimit: event exceeds 128 changed field names"
-    );
-    assert!(
-        !tx.captured()
-            .iter()
-            .any(|s| s.contains("INSERT INTO \"test_upsert_wide\""))
-    );
-    tx.rollback().await.unwrap();
-    drop(tx);
-    // A new row with 128 supplied columns fits the SQL projection but its create envelope
-    // exceeds the name cap once key/audit columns join it. Prove direct base dispatch poisons
-    // after the INSERT, even when the caller catches capture admission failure.
+    // A new row with every column supplied: its create event names at most the 128 columns.
     let mut vals = RawVals::new().set_cell("code", Cell::Str("new".into()));
-    for i in 0..128 {
+    for i in 0..WIDE_DECLARED {
         vals = vals.set_cell(format!("f{i:03}"), Cell::Int(i));
     }
     let mut tx = begin(&h).await;
-    tx.capture_statements(true);
     let records = tx.env().records("test.upsert.wide").unwrap();
-    let err = erp_orm::call_method::<(UpsertCall,), erp_orm::UpsertResult>(
+    erp_orm::call_method::<(UpsertCall,), erp_orm::UpsertResult>(
         &mut tx,
         &records,
         "upsert",
         (UpsertCall::new("_business")
             .with_rows([vals])
-            .with_update(names[..128].iter().cloned()),),
+            .with_update(names.iter().cloned()),),
     )
     .await
-    .unwrap_err();
-    assert_eq!(err.kind(), ErrorKind::ResourceExhausted);
-    assert_eq!(
-        err.message(),
-        "outbox CaptureLimit: event exceeds 128 changed field names"
-    );
-    assert!(
-        tx.captured()
-            .iter()
-            .any(|sql| sql.contains("INSERT INTO \"test_upsert_wide\""))
-    );
-    let err = tx.commit().await.unwrap_err();
-    assert_eq!(err.kind(), ErrorKind::ResourceExhausted);
-    assert_eq!(
-        err.message(),
-        "outbox CaptureLimit: event exceeds 128 changed field names"
-    );
-    tx.rollback().await.unwrap();
+    .unwrap();
+    tx.commit().await.unwrap();
     drop(tx);
     let mut check = h.begin().await.unwrap();
     assert_eq!(
@@ -520,8 +495,59 @@ async fn changed_name_limit_accepts_boundary_and_refuses_overflow_before_sql() {
             .await
             .unwrap()[0]
             .get::<_, i64>(0),
-        1
+        2
     );
+    check.rollback().await.unwrap();
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn envelope_cap_failure_after_upsert_insert_cannot_commit_business_rows() {
+    let h = harness(true).await;
+    let mut tx = begin(&h).await;
+    let records = tx.env().records(MODEL).unwrap();
+    let upsert_one = |n: i32| (call(vec![row(Some(&format!("k{n:04}")), n, None)]),);
+    for n in 0..4096 {
+        erp_orm::call_method::<(UpsertCall,), erp_orm::UpsertResult>(
+            &mut tx,
+            &records,
+            "upsert",
+            upsert_one(n),
+        )
+        .await
+        .unwrap();
+    }
+    let error = erp_orm::call_method::<(UpsertCall,), erp_orm::UpsertResult>(
+        &mut tx,
+        &records,
+        "upsert",
+        upsert_one(4096),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::ResourceExhausted);
+    assert_eq!(
+        error.message(),
+        "outbox CaptureLimit: transaction exceeds 4096 envelopes"
+    );
+    let rows: i64 = tx
+        .query(&format!("SELECT count(*) FROM {TABLE}"), &[])
+        .await
+        .unwrap()[0]
+        .get(0);
+    assert_eq!(rows, 4097, "admission error must follow INSERT");
+    let commit = tx.commit().await.unwrap_err();
+    assert_eq!(commit.kind(), ErrorKind::ResourceExhausted);
+    assert_eq!(commit.message(), error.message());
+    tx.rollback().await.unwrap();
+    assert!(state(&h).await.is_empty());
+    let mut check = h.begin().await.unwrap();
+    let events: i64 = check
+        .query("SELECT count(*) FROM erp_event.ir_event_outbox", &[])
+        .await
+        .unwrap()[0]
+        .get(0);
+    assert_eq!(events, 0);
     check.rollback().await.unwrap();
     h.cleanup().await.unwrap();
 }

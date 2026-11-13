@@ -228,7 +228,7 @@ async fn children_use_model_order_and_hide_archived_or_denied_records() {
         .await
         .unwrap();
     let mut tx = h.begin().await.unwrap();
-    tx.batch("INSERT INTO res_users (id, name, login, active) VALUES (2, 'Address reader', 'address-reader', true)").await.unwrap();
+    tx.batch("INSERT INTO res_users (id, name, login, active, share) VALUES (2, 'Address reader', 'address-reader', true, false)").await.unwrap();
     let root = create(&mut tx, "Root", "contact", None).await;
     let older = create(&mut tx, "Same", "delivery", Some(root)).await;
     let newer = create(&mut tx, "Same", "delivery", Some(root)).await;
@@ -330,7 +330,7 @@ async fn traversal_refuses_depth_overflow_without_unbounded_recursion() {
     // Integrity-corruption fixture bypasses the existing create-time hierarchy limit
     // so this test reaches address selection's independent admission boundary.
     tx.execute(
-        "WITH source AS MATERIALIZED (SELECT nextval(pg_get_serial_sequence('res_partner', 'id')) AS id, n FROM generate_series(1,257) AS n), links AS (SELECT id, COALESCE(lag(id) OVER (ORDER BY n), $1) AS parent_id, n FROM source) INSERT INTO res_partner (id, name, type, active, parent_id, is_company) SELECT id, 'deep-' || n::text, 'other', true, parent_id, false FROM links",
+        "WITH source AS MATERIALIZED (SELECT nextval(pg_get_serial_sequence('res_partner', 'id')) AS id, n FROM generate_series(1,257) AS n), links AS (SELECT id, COALESCE(lag(id) OVER (ORDER BY n), $1) AS parent_id, n FROM source) INSERT INTO res_partner (id, name, type, active, parent_id, is_company, partner_share) SELECT id, 'deep-' || n::text, 'other', true, parent_id, false, false FROM links",
         &[&root],
     ).await.unwrap();
     tx.invalidate_all().await.unwrap();
@@ -360,7 +360,7 @@ async fn traversal_refuses_visited_identity_overflow_before_unbounded_expansion(
     tx.flush().await.unwrap();
     // A broad hierarchy is legal to store but exceeds the bounded selection call.
     tx.execute(
-        "INSERT INTO res_partner (name, type, active, parent_id, is_company) SELECT 'wide-' || n::text, 'other', true, $1, false FROM generate_series(1,4096) AS n",
+        "INSERT INTO res_partner (name, type, active, parent_id, is_company, partner_share) SELECT 'wide-' || n::text, 'other', true, $1, false, false FROM generate_series(1,4096) AS n",
         &[&root],
     ).await.unwrap();
     tx.invalidate_all().await.unwrap();
@@ -419,7 +419,7 @@ async fn traversal_accepts_exact_depth_limit() {
     tx.flush().await.unwrap();
     // Root is depth zero. This independently injects exactly 256 child edges.
     tx.execute(
-        "WITH source AS MATERIALIZED (SELECT nextval(pg_get_serial_sequence('res_partner', 'id')) AS id, n FROM generate_series(1,256) AS n), links AS (SELECT id, COALESCE(lag(id) OVER (ORDER BY n), $1) AS parent_id, n FROM source) INSERT INTO res_partner (id, name, type, active, parent_id, is_company) SELECT id, 'exact-deep-' || n::text, 'other', true, parent_id, false FROM links",
+        "WITH source AS MATERIALIZED (SELECT nextval(pg_get_serial_sequence('res_partner', 'id')) AS id, n FROM generate_series(1,256) AS n), links AS (SELECT id, COALESCE(lag(id) OVER (ORDER BY n), $1) AS parent_id, n FROM source) INSERT INTO res_partner (id, name, type, active, parent_id, is_company, partner_share) SELECT id, 'exact-deep-' || n::text, 'other', true, parent_id, false, false FROM links",
         &[&root],
     ).await.unwrap();
     tx.invalidate_all().await.unwrap();
@@ -440,7 +440,7 @@ async fn traversal_accepts_exact_visited_identity_limit() {
     tx.flush().await.unwrap();
     // 4095 children plus the root are exactly 4096 distinct partner identities.
     tx.execute(
-        "INSERT INTO res_partner (name, type, active, parent_id, is_company) SELECT 'exact-wide-' || n::text, 'other', true, $1, false FROM generate_series(1,4095) AS n",
+        "INSERT INTO res_partner (name, type, active, parent_id, is_company, partner_share) SELECT 'exact-wide-' || n::text, 'other', true, $1, false, false FROM generate_series(1,4095) AS n",
         &[&root],
     ).await.unwrap();
     tx.invalidate_all().await.unwrap();
@@ -525,7 +525,7 @@ async fn directly_denied_input_and_ancestor_return_access_instead_of_fallback() 
         .unwrap();
     for through_child in [false, true] {
         let mut tx = h.begin().await.unwrap();
-        tx.batch("INSERT INTO res_users (id, name, login, active) VALUES (2, 'Address reader', 'address-reader', true)").await.unwrap();
+        tx.batch("INSERT INTO res_users (id, name, login, active, share) VALUES (2, 'Address reader', 'address-reader', true, false)").await.unwrap();
         let hidden = create(&mut tx, "Hidden ancestor", "other", None).await;
         partners(&tx)
             .browse([hidden])

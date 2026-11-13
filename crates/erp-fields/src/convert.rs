@@ -585,7 +585,7 @@ fn coerce(field: FieldRef<'_>, ty: &FieldType, value: &Value) -> Result<Cell> {
         FieldType::Many2one { .. } => match value {
             Value::False => Ok(Cell::Null),
             Value::Int(i) if *i > 0 => Ok(Cell::Id(*i)),
-            // an `(id, display_name)` pair as `read` returns it
+            // an `(id, display_name)` pair as `read()` returns it
             // the read format `[id, display_name]` (the name may be False), nothing else (
             // F5)
             Value::List(items) => match &items[..] {

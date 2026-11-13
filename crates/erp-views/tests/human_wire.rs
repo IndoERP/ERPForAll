@@ -14,6 +14,34 @@ fn roundtrip<T: DeserializeOwned + Serialize>(value: &Value) {
 }
 
 #[test]
+fn menu_module_is_required_nullable_and_closed() {
+    let node = json!({"id":1,"parent_id":null,"children":[],"label":"Workspace",
+        "icon":null,"action_id":2,"module":"workspace"});
+    roundtrip::<MenuNode>(&node);
+    let mut absent_provenance = node.clone();
+    absent_provenance["module"] = Value::Null;
+    roundtrip::<MenuNode>(&absent_provenance);
+    let mut missing = node.clone();
+    missing.as_object_mut().unwrap().remove("module");
+    let error = serde_json::from_value::<MenuNode>(missing).unwrap_err();
+    assert!(error.is_data());
+    assert_eq!(error.to_string(), "missing field `module`");
+    for (bad, expected) in [
+        (
+            json!(true),
+            "invalid type: boolean `true`, expected a string",
+        ),
+        (json!(1), "invalid type: integer `1`, expected a string"),
+    ] {
+        let mut invalid = node.clone();
+        invalid["module"] = bad;
+        let error = serde_json::from_value::<MenuNode>(invalid).unwrap_err();
+        assert!(error.is_data());
+        assert_eq!(error.to_string(), expected);
+    }
+}
+
+#[test]
 fn action_view_bundle_roundtrips_existing_descriptions_and_rejects_unknown_fields() {
     let fixture: Value =
         serde_json::from_str(include_str!("../../../testdata/contracts/human-ui-v1.json")).unwrap();
@@ -490,5 +518,166 @@ fn code_field_options_are_closed_and_roundtrip() {
             error.to_string(),
             "data did not match any variant of untagged enum FieldOptions"
         );
+    }
+}
+
+#[test]
+fn setting_description_carries_app_block_sequence_and_roundtrips() {
+    let desc = SettingDescription::new(
+        "sale_stock.returns".into(),
+        "Allow Returns".into(),
+        SettingKind::Boolean,
+        SettingValue::Boolean(false),
+        None,
+        true,
+        "stock".into(),
+        "Operations".into(),
+        20,
+    );
+    let encoded = serde_json::to_value(&desc).unwrap();
+    assert_eq!(encoded["key"], "sale_stock.returns");
+    assert_eq!(encoded["app"], "stock");
+    assert_eq!(encoded["block"], "Operations");
+    assert_eq!(encoded["sequence"], 20);
+    roundtrip::<SettingDescription>(&encoded);
+
+    let settings_desc = SettingsDescription::new("r1".into(), SettingsScope::Global {}, vec![desc]);
+    let desc_encoded = serde_json::to_value(&settings_desc).unwrap();
+    roundtrip::<SettingsDescription>(&desc_encoded);
+}
+
+/// A company without `parent_id` is refused, not read as a top-level company.
+#[test]
+fn company_without_parent_id_is_refused() {
+    let missing = serde_json::json!({"id": 1, "name": "Company"});
+    assert!(serde_json::from_value::<erp_views::wire::Company>(missing).is_err());
+    let root = serde_json::json!({"id": 1, "name": "Company", "parent_id": null});
+    assert!(serde_json::from_value::<erp_views::wire::Company>(root).is_ok());
+}
+
+#[test]
+fn settings_items_roundtrip_as_tagged_rows_and_stay_additive() {
+    let fixture: Value =
+        serde_json::from_str(include_str!("../../../testdata/contracts/human-ui-v1.json")).unwrap();
+    let response = &fixture["settings_describe"]["response"];
+    let decoded: SettingsDescription = serde_json::from_value(response.clone()).unwrap();
+    // The fixture carries every row shape: info with and without detail, action link with and without a
+    // record, menu link.
+    assert_eq!(decoded.items.len(), 5);
+    for item in &decoded.items {
+        roundtrip::<SettingsItem>(&serde_json::to_value(item).unwrap());
+    }
+
+    // Built by our constructors, the rows encode with the tagged shape.
+    let info = SettingsItem::Info {
+        key: "base.languages".into(),
+        label: "Language".into(),
+        app: "base".into(),
+        block: "Languages".into(),
+        sequence: 30,
+        value: SettingValue::Integer(1),
+        detail: None,
+    };
+    let record_link = SettingsItem::Link {
+        key: "base.company_update".into(),
+        label: "Update Info".into(),
+        app: "base".into(),
+        block: "Companies".into(),
+        sequence: 60,
+        target: SettingsLinkTarget::Action {
+            id: WireId::try_from(5).unwrap(),
+            res_id: Some(WireId::try_from(1).unwrap()),
+        },
+    };
+    let menu_link = SettingsItem::Link {
+        key: "base.users_menu".into(),
+        label: "Users".into(),
+        app: "base".into(),
+        block: "Users".into(),
+        sequence: 40,
+        target: SettingsLinkTarget::Menu {
+            id: WireId::try_from(9).unwrap(),
+        },
+    };
+    let description = SettingsDescription::new("r1".into(), SettingsScope::Global {}, vec![])
+        .with_items(vec![info, record_link, menu_link]);
+    let encoded = serde_json::to_value(&description).unwrap();
+    assert_eq!(encoded["items"][0]["kind"], "info");
+    assert_eq!(encoded["items"][0]["value"], 1);
+    assert!(encoded["items"][0]["detail"].is_null());
+    assert_eq!(encoded["items"][1]["kind"], "link");
+    assert_eq!(encoded["items"][1]["target"]["kind"], "action");
+    assert_eq!(encoded["items"][1]["target"]["id"], 5);
+    assert_eq!(encoded["items"][1]["target"]["res_id"], 1);
+    assert_eq!(encoded["items"][2]["target"]["kind"], "menu");
+    assert_eq!(encoded["items"][2]["target"]["id"], 9);
+    roundtrip::<SettingsDescription>(&encoded);
+
+    // A menu target carrying `res_id` is refused, as is an action target without it and an info row without
+    // its nullable detail.
+    let mut menu_with_record = encoded["items"][2].clone();
+    menu_with_record["target"]["res_id"] = json!(1);
+    let error = serde_json::from_value::<SettingsItem>(menu_with_record).unwrap_err();
+    assert!(error.is_data());
+    assert_eq!(error.to_string(), "unknown field `res_id`, expected `id`");
+    // An unknown member of an item itself is refused too. The rest of serde's message lists the expected
+    // members in serde's own wording, so only the part that names the member is compared.
+    for index in [0, 1] {
+        let mut unknown_member = encoded["items"][index].clone();
+        unknown_member["colour"] = json!("red");
+        let error = serde_json::from_value::<SettingsItem>(unknown_member).unwrap_err();
+        assert!(error.is_data());
+        assert!(
+            error.to_string().starts_with("unknown field `colour`"),
+            "{error}"
+        );
+    }
+    let mut action_without_record = encoded["items"][1].clone();
+    action_without_record["target"]
+        .as_object_mut()
+        .unwrap()
+        .remove("res_id");
+    let error = serde_json::from_value::<SettingsItem>(action_without_record).unwrap_err();
+    assert!(error.is_data());
+    assert_eq!(error.to_string(), "missing field `res_id`");
+    let mut info_without_detail = encoded["items"][0].clone();
+    info_without_detail
+        .as_object_mut()
+        .unwrap()
+        .remove("detail");
+    let error = serde_json::from_value::<SettingsItem>(info_without_detail).unwrap_err();
+    assert!(error.is_data());
+    assert_eq!(error.to_string(), "missing field `detail`");
+
+    // A payload of a server without items decodes with an empty list (additive within wire major 1).
+    let mut older = response.clone();
+    older.as_object_mut().unwrap().remove("items");
+    let decoded: SettingsDescription = serde_json::from_value(older).unwrap();
+    assert!(decoded.items.is_empty());
+    assert_eq!(decoded.declarations.len(), 1);
+}
+
+#[test]
+fn field_presentation_options_roundtrip_enable_formatting_flag() {
+    let mut options = FieldPresentationOptions::empty();
+    options.enable_formatting = Some(false);
+    let json = serde_json::to_value(&options).unwrap();
+    assert_eq!(json.get("enable_formatting"), Some(&json!(false)));
+    let decoded: FieldPresentationOptions = serde_json::from_value(json).unwrap();
+    assert_eq!(decoded.enable_formatting, Some(false));
+}
+
+#[test]
+fn enable_formatting_is_admitted_for_integer_and_float_only() {
+    use erp_views::wire::{FieldOptionKind, field_option_kind};
+    for widget in ["integer", "float"] {
+        assert!(matches!(
+            field_option_kind(widget, "enable_formatting"),
+            Some(FieldOptionKind::Bool)
+        ));
+        assert!(field_option_kind(widget, "format").is_none());
+    }
+    for widget in ["percentage", "monetary", "char", "many2one"] {
+        assert!(field_option_kind(widget, "enable_formatting").is_none());
     }
 }

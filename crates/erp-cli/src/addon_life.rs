@@ -13,8 +13,8 @@
 //! (and load the package) without a restart. Afterwards the tables the package created are
 //! granted to the server's runtime role, as the browser installation does.
 //!
-//! Prints one JSON line on success. Design:; operator guide:
-//! , "Install a WebAssembly addon".
+//! Prints one JSON line on success. Design; operator guide,
+//! "Install a WebAssembly addon".
 
 use std::path::Path;
 
@@ -157,6 +157,7 @@ async fn publish_grants(
         let mut tx = outcome.orm.begin(SUPERUSER_ID).await?;
         crate::human::grant_runtime(&mut tx, config).await?;
         tx.commit().await?;
+        crate::audit_reader::verify_configured(config).await?;
         Ok::<(), CliError>(())
     }
     .await;

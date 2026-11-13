@@ -200,7 +200,7 @@ impl<'t> ReadTx<'t> {
         if !outside.is_empty() {
             let ids: Vec<RecId> = outside.iter().map(|k| records.rec_ids()[*k]).collect();
             let rest = records.browse_ids(ids);
-            self.tx.check_records(&rest)?;
+            self.tx.admit_records(&rest).await?;
             let cells = rest.cells(self.tx, name).await?;
             if cells.len() != outside.len() {
                 return Err(Error::programming(

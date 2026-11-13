@@ -88,12 +88,8 @@ async fn owned(tx: &mut Transaction, model: &str, id: i64, actor: i64) -> Result
     }
     Ok(())
 }
-async fn manager(auth: &Auth, tx: &mut Transaction, secret: &SessionSecret) -> Result<()> {
-    if !auth
-        .check_session_in(tx, secret)
-        .await?
-        .has_groups("base.group_erp_manager,base.group_system")?
-    {
+fn manager(authority: &erp_security::auth::SessionAuthorization) -> Result<()> {
+    if !authority.has_groups("base.group_erp_manager,base.group_system")? {
         return Err(
             Error::access("Password resets require access administration authority.").into(),
         );
@@ -155,6 +151,21 @@ enum ResetInput {
     },
 }
 
+/// It
+/// is logged at `warn` because the default `RUST_LOG` is `warn` and an audit trail the default
+/// configuration drops would not be a trail.
+fn audit(operation: Op, actor: i64, target: i64, client: std::net::IpAddr) {
+    tracing::warn!(
+        target: "erp::audit",
+        event = "password_changed",
+        operation = ?operation,
+        actor,
+        target_user = target,
+        client = %client,
+        "password changed"
+    );
+}
+
 pub(super) async fn execute(
     credential: &BrowserCredential,
     orm: &Orm,
@@ -189,7 +200,7 @@ pub(super) async fn execute(
                 .into());
             }
             if !own {
-                manager(auth, &mut tx, secret).await?;
+                manager(&authority)?;
             }
             if !recent(&mut tx, &session_id).await? {
                 tx.rollback().await?;
@@ -214,14 +225,21 @@ pub(super) async fn execute(
             if unique.len() != call.ids().len() {
                 return Err(invalid("A password reset may name each user only once."));
             }
+            // company scope and Settings administrator rule before anything about the targets is
+            // read (Amendment 1); an id that cannot name a user gets the unknown-user
+            // answer, as the existence probe below gives it
+            let mut targets = Vec::with_capacity(call.ids().len());
+            for id in call.ids() {
+                targets.push(
+                    erp_orm::UserId::new(*id)
+                        .map_err(|_| erp_security::auth::missing_reset_target())?,
+                );
+            }
+            authority.check_reset_targets(&mut tx, &targets).await?;
             let selected = call.ids().to_vec();
             let users=tx.query("SELECT id::bigint, login FROM res_users WHERE id = ANY($1::int8[]) ORDER BY id", &[&selected]).await?;
             if users.len() != selected.len() {
-                return Err(Error::new(
-                    erp_fields::ErrorKind::Missing,
-                    "A selected password reset user no longer exists.",
-                )
-                .into());
+                return Err(erp_security::auth::missing_reset_target().into());
             }
             let wizard = tx
                 .env()
@@ -245,7 +263,10 @@ pub(super) async fn execute(
                         .set_cell("user_login", erp_fields::Cell::Str(login.into())),
                 );
             }
+            // lines are created by the server only (Amendment 1 item 6): superuser mode
+            // passes the line model's guard; `create_uid` stays the actor, which `owned` reads
             tx.env()
+                .sudo(true)
                 .records("change.password.user")?
                 .create(&mut tx, vals)
                 .await?;
@@ -308,6 +329,9 @@ pub(super) async fn execute(
                 .change_password_authorized(Some(secret), password.trim(), &|p| call.authorize(p))
                 .await
                 .map_err(domain)?;
+            if checked == IdentityCheck::Verified {
+                audit(call.operation(), actor, actor, credential.client);
+            }
             Ok(match checked {
                 IdentityCheck::Required => Reply::required(),
                 IdentityCheck::Verified if legacy => Reply::changed(),
@@ -315,7 +339,7 @@ pub(super) async fn execute(
             })
         }
         Op::ResetWizard | Op::ResetLine => {
-            manager(auth, &mut tx, secret).await?;
+            manager(&authority)?;
             let id = one(call.ids())?;
             let (wizard, input) = if call.operation() == Op::ResetLine {
                 owned(&mut tx, "change.password.user", id, actor).await?;
@@ -374,6 +398,16 @@ pub(super) async fn execute(
                 .reset_passwords_authorized(Some(secret), &changes, &|p| call.authorize(p))
                 .await
                 .map_err(domain)?;
+            if check == IdentityCheck::Verified {
+                for change in changes.iter().filter(|c| !c.is_blank()) {
+                    audit(
+                        call.operation(),
+                        actor,
+                        change.user().get(),
+                        credential.client,
+                    );
+                }
+            }
             Ok(match check {
                 IdentityCheck::Required => Reply::required(),
                 IdentityCheck::Verified => Reply::closed(),

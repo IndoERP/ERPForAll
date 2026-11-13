@@ -44,6 +44,39 @@ impl Transaction {
         self.has_groups(env, xmlid).await
     }
 
+    /// `env` itself must be admitted (its block
+    /// open, its own switches allowed).
+    ///
+    /// It has no authorization of its own: the caller decides who may ask (`res.users.has_group`
+    /// lets a user ask about itself, superuser mode and internal users about anyone). A missing
+    /// or archived `user` is answered as the principal resolver resolves it.
+    ///
+    /// ```
+    /// # async fn demo(tx: &mut erp_orm::Transaction, user: erp_orm::UserId) -> erp_fields::Result<()> {
+    /// let env = tx.env();
+    /// if tx.user_has_group(&env, user, "base.group_system").await? {
+    ///     // the other user administers the database
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// The admission refusals of `env`; as [`Transaction::has_group`] for `user`.
+    pub async fn user_has_group(
+        &mut self,
+        env: &Env,
+        user: crate::principal::UserId,
+        xmlid: &str,
+    ) -> Result<bool> {
+        QualifiedXmlId::parse(xmlid)?;
+        self.prepare_switch(env).await?;
+        self.check_env_block(env)?;
+        let subject = env.switched(user);
+        self.has_groups(&subject, xmlid).await
+    }
+
     /// An empty list is never satisfied;
     /// `base.group_no_one` counts only in debug mode ([`Env::with_debug`]); superuser mode does
     /// not change the answer. To check many records, take a [`GroupMembership`] once
@@ -105,6 +138,35 @@ impl std::fmt::Debug for GroupMembership<'_> {
 }
 
 impl GroupMembership<'_> {
+    /// Effective positive group membership for additive audit selection.
+    /// Unlike authorization/UI group checks, request debug mode cannot suppress this result.
+    /// Every reference is resolved in this membership's pinned policy before returning a match.
+    /// This does not grant access and must not replace authorization checks.
+    ///
+    /// # Errors
+    /// `Programming` for more than 256 references, an unknown group or an unsupported resolver;
+    /// errors returned by the policy's reference and subject-group providers.
+    pub fn has_any_effective_xmlid(&self, groups: &[QualifiedXmlId]) -> Result<bool> {
+        if groups.len() > 256 {
+            return Err(erp_fields::Error::programming(
+                "audit read policy has more than 256 group references",
+            ));
+        }
+        let held = self.policy.subject_groups(&self.binding)?;
+        let mut matched = false;
+        for group in groups {
+            match self.policy.resolve_group_ref(group)? {
+                crate::GroupRefResolution::Known { id, .. } => matched |= held.contains(id),
+                crate::GroupRefResolution::Unknown => {
+                    return Err(erp_fields::Error::programming(format!(
+                        "audit read policy names unresolved group '{group}'"
+                    )));
+                }
+            }
+        }
+        Ok(matched)
+    }
+
     /// Whether the user is in at least one of `groups` (as [`Transaction::has_any_group`]): no
     /// statement, no allocation.
     ///

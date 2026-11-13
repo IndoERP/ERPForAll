@@ -49,7 +49,12 @@ async fn named_create_and_write_refuse_excess_without_rounding() {
     let h = harness().await;
     let mut tx = h.begin().await.unwrap();
     precision(&mut tx, 2).await;
-    let items = tx.env().records("test_defaults.item").unwrap();
+    let items = tx
+        .env()
+        .with_company(1)
+        .unwrap()
+        .records("test_defaults.item")
+        .unwrap();
     let error = items
         .create(&mut tx, vec![raw("1.23"), raw("1.234")])
         .await
@@ -85,7 +90,12 @@ async fn named_dynamic_write_ignores_metadata_override_and_tracks_local_precisio
     let h = harness().await;
     let mut tx = h.begin().await.unwrap();
     let setting = precision(&mut tx, 2).await;
-    let items = tx.env().records("test_defaults.item").unwrap();
+    let items = tx
+        .env()
+        .with_company(1)
+        .unwrap()
+        .records("test_defaults.item")
+        .unwrap();
     tx.set_precision("Product Price", 28);
     let error = items
         .create_values(&mut tx, &[support::map(&[("price", Value::str("1.234"))])])
@@ -111,7 +121,12 @@ async fn named_scale_zero_and_twenty_eight_are_exact() {
     let h = harness().await;
     let mut tx = h.begin().await.unwrap();
     let setting = precision(&mut tx, 0).await;
-    let items = tx.env().records("test_defaults.item").unwrap();
+    let items = tx
+        .env()
+        .with_company(1)
+        .unwrap()
+        .records("test_defaults.item")
+        .unwrap();
     items.create(&mut tx, vec![raw("-2.000")]).await.unwrap();
     check(
         &items.create(&mut tx, vec![raw("-2.1")]).await.unwrap_err(),
@@ -338,7 +353,12 @@ async fn pending_named_values_are_revalidated_after_precision_changes() {
     let h = harness().await;
     let mut tx = h.begin().await.unwrap();
     let setting = precision(&mut tx, 4).await;
-    let items = tx.env().records("test_defaults.item").unwrap();
+    let items = tx
+        .env()
+        .with_company(1)
+        .unwrap()
+        .records("test_defaults.item")
+        .unwrap();
     let record = items.create(&mut tx, vec![raw("1.23")]).await.unwrap();
     tx.flush().await.unwrap();
     let error = tx

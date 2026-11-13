@@ -84,6 +84,8 @@ pub struct Cli {
 pub enum Commands {
     /// Serve the linked native application using explicit protected configuration.
     Server(ServerArgs),
+    /// Inspect ownership, recover a contested store, or verify an operator-run peer.
+    Attachments(AttachmentCommand),
     /// Scaffold a new addon skeleton
     Scaffold(ScaffoldArgs),
 
@@ -104,6 +106,9 @@ pub enum Commands {
 
     /// The audit trail (`erp audit maintain`)
     Audit(AuditCommand),
+
+    /// Operator credential actions on the owner connection (`erp auth emergency-revoke`)
+    Auth(AuthCommand),
 
     /// The nodes serving a database and its rollout window (`erp cluster nodes`,
     /// `erp cluster rollout open|close|status`)
@@ -455,6 +460,92 @@ pub enum AuditAction {
     Maintain(ServerArgs),
 }
 
+/// `erp auth` subcommand container.
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AuthCommand {
+    /// Auth action to perform
+    #[command(subcommand)]
+    pub action: AuthAction,
+}
+
+/// Operator auth actions.
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AuthAction {
+    /// End API keys or sessions on the owner connection, with its own audit row in the same
+    /// transaction. Refuses when the connection does not own the credential tables or when the
+    /// audit store cannot take the row; there is no unaudited revocation.
+    EmergencyRevoke(EmergencyRevokeArgs),
+}
+
+/// Why the operator revokes (`--reason`): the closed list the audit row can hold.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EmergencyReasonArg {
+    /// A credential is known or suspected to be in the wrong hands.
+    Compromised,
+    /// A device or a stored credential was lost.
+    Lost,
+    /// The person or service left; their access ends.
+    Offboarding,
+    /// Any other incident response.
+    Incident,
+}
+
+impl EmergencyReasonArg {
+    /// The audit reason this argument stands for.
+    pub fn reason(self) -> erp_orm::audit::EmergencyReason {
+        match self {
+            Self::Compromised => erp_orm::audit::EmergencyReason::Compromised,
+            Self::Lost => erp_orm::audit::EmergencyReason::Lost,
+            Self::Offboarding => erp_orm::audit::EmergencyReason::Offboarding,
+            Self::Incident => erp_orm::audit::EmergencyReason::Incident,
+        }
+    }
+}
+
+/// Arguments for `erp auth emergency-revoke`: exactly one target group (`--key`, `--session` or
+/// `--user`); `--user` needs `--keys`, `--sessions` or both. The command never takes a key secret,
+/// prefix or name.
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+#[command(
+    group(
+        clap::ArgGroup::new("target")
+            .required(true)
+            .multiple(false)
+            .args(["key", "session", "user"])
+    ),
+    group(clap::ArgGroup::new("user_scope").multiple(true).args(["keys", "sessions"]))
+)]
+#[non_exhaustive]
+pub struct EmergencyRevokeArgs {
+    /// Deployment configuration file (its owner connection is used).
+    #[arg(long)]
+    pub config: PathBuf,
+    /// Why the credentials are revoked.
+    #[arg(long, value_enum)]
+    pub reason: EmergencyReasonArg,
+    /// API key ids to revoke (at most 500).
+    #[arg(long = "key", num_args = 1.., value_name = "ID")]
+    pub key: Vec<i64>,
+    /// Session ids (UUIDs) to revoke (at most 500).
+    #[arg(long = "session", num_args = 1.., value_name = "UUID")]
+    pub session: Vec<String>,
+    /// Revoke the credentials of this user id (needs `--keys`, `--sessions` or both).
+    #[arg(long = "user", value_name = "UID", requires = "user_scope")]
+    pub user: Option<i64>,
+    /// With `--user`: revoke all the user's API keys (500 per transaction and audit row).
+    // `requires = "user"` alone is not enough: clap counts a missing required argument as
+    // satisfied when it conflicts with an argument that is present (here `--key`), so the
+    // conflict with the other target groups is stated on the flag itself.
+    #[arg(long, requires = "user", conflicts_with_all = ["key", "session"])]
+    pub keys: bool,
+    /// With `--user`: revoke all the user's sessions.
+    #[arg(long, requires = "user", conflicts_with_all = ["key", "session"])]
+    pub sessions: bool,
+}
+
 /// `erp db` subcommand container.
 #[derive(Args, Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -478,8 +569,8 @@ pub enum DbAction {
     /// threshold, where the install refuses it. Holds ACCESS EXCLUSIVE on the table for the
     /// build: run it in a maintenance window.
     BuildObject(BuildObjectArgs),
-    /// Run one bounded cleanup of old rows of transient (wizard) models for one database
-    /// . Nothing runs it automatically: an operator or the operator's scheduler calls
+    /// Run one bounded cleanup of old rows of transient (wizard) models for one database.
+    /// Nothing runs it automatically: an operator or the operator's scheduler calls
     /// this command.
     VacuumTransient(VacuumTransientArgs),
     /// Give a maintenance role its privileges on the vacuum state table (and no others), as the
@@ -931,4 +1022,113 @@ impl Default for DevArgs {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Audited attachment ownership operations on the owner connection.
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct AttachmentCommand {
+    /// Inspect, claim, or read recovery status.
+    #[command(subcommand)]
+    pub action: AttachmentAction,
+}
+/// Attachment operator command; no arbitrary paths or namespaces are accepted.
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum AttachmentAction {
+    /// Probe the actual shared local filesystem from two hosts.
+    ProbeStore(PeerArgs),
+    /// Print the selected database/namespace confirmation token without changing ownership.
+    Inspect(AttachmentTargetArgs),
+    /// Establish chosen ownership and conditionally resolve a contest.
+    Claim(AttachmentClaimArgs),
+    /// Read a durable recovery operation's phase.
+    Status(AttachmentStatusArgs),
+}
+/// Protected configuration and an explicit configured store key.
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct AttachmentTargetArgs {
+    /// Protected server configuration.
+    #[arg(long)]
+    pub config: PathBuf,
+    /// Configured attachment store key.
+    #[arg(long)]
+    pub store: String,
+}
+/// Closed operator decision reasons.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttachmentReasonArg {
+    /// Restore the original selected database.
+    RestorePrimary,
+    /// Retire an isolated competing clone.
+    RetireClone,
+}
+/// Explicit force decision, or resumption of a previously audited decision.
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct AttachmentClaimArgs {
+    /// Configured target.
+    #[command(flatten)]
+    pub target: AttachmentTargetArgs,
+    /// Confirm that competing databases have been isolated and ownership is chosen explicitly.
+    #[arg(long, required = true)]
+    pub force: bool,
+    /// Resume this durable operation UUID; never mint a replacement on ambiguous failure.
+    #[arg(long,conflicts_with_all=["reason","confirm"])]
+    pub resume: Option<String>,
+    /// Audited operator reason for a new claim.
+    #[arg(long, value_enum, required_unless_present = "resume")]
+    pub reason: Option<AttachmentReasonArg>,
+    /// Exact confirmation token printed by inspect.
+    #[arg(long, required_unless_present = "resume")]
+    pub confirm: Option<String>,
+}
+/// Read-only recovery phase lookup.
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct AttachmentStatusArgs {
+    /// Configured target.
+    #[command(flatten)]
+    pub target: AttachmentTargetArgs,
+    /// Durable operation UUID.
+    #[arg(long)]
+    pub operation: String,
+}
+
+/// Configuration and mode for the two-node peer probe.
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct PeerArgs {
+    /// Require explicit peer mode; local capability flags cannot admit shared deletion.
+    #[arg(long, required = true)]
+    pub peer: bool,
+    /// Protected native server configuration.
+    #[arg(long)]
+    pub config: PathBuf,
+    /// Configured shared local store key.
+    #[arg(long)]
+    pub store: String,
+    /// Start, join or inspect an attempt.
+    #[command(subcommand)]
+    pub action: PeerAction,
+}
+/// Probe lifecycle action.
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PeerAction {
+    /// Invalidate previous evidence and print a fresh session for the other host to join.
+    Start {
+        /// Finite orchestration deadline, 30–300 seconds.
+        #[arg(long,default_value_t=120,value_parser=clap::value_parser!(u32).range(30..=300))]
+        timeout: u32,
+    },
+    /// Join a session printed by the other host.
+    Join {
+        /// Canonical session UUID.
+        #[arg(value_parser=parse_peer_session)]
+        session: String,
+    },
+    /// Inspect current durable state; this does not authorize cleanup.
+    Status,
+}
+fn parse_peer_session(value: &str) -> std::result::Result<String, String> {
+    erp_sdk::blob::Namespace::parse(value)
+        .map(|n| n.to_string())
+        .map_err(|_| "peer session must be a canonical UUID".into())
 }

@@ -3,7 +3,7 @@
     clippy::result_large_err,
     reason = "HTTP helpers propagate an already-rendered response with headers and body; boxing would add an allocation to every refusal"
 )]
-use crate::{boundary, config::ServerConfig, redirect::RedirectPolicy};
+use crate::{boundary, config::ServerConfig, redirect::RedirectPolicy, routes};
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -11,8 +11,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use erp_security::auth::{
-    ApiKeyCooldown, ApiKeyRefusal, ApiKeyRequest, Auth, ClientAddr, CredentialOptions, LoginError,
-    LoginRequest, SessionSecret,
+    ApiKeyCooldown, ApiKeyLastUse, ApiKeyRefusal, ApiKeyRequest, Auth, ClientAddr,
+    CredentialOptions, LoginError, LoginRequest, SessionSecret,
     apikey_store::KeyScope,
     browser::{PrefsError, PrefsSigner, SignedPrefs},
 };
@@ -256,7 +256,14 @@ pub trait WebLifecycle: Send + Sync {
     ) -> erp_orm::BoxFuture<'a, Result<Publication, LifecycleFailure>>;
 }
 
+mod content;
 mod password_change;
+mod pivot_export;
+pub use content::{
+    ContentLookup, ContentOpenFailure, ContentOpener, ContentRange, ContentReader, FoundContent,
+    WebAttachmentContent,
+};
+pub use pivot_export::{PivotWorkbook, WebPivotExport};
 
 #[derive(Debug)]
 struct BrowserCredential {
@@ -295,6 +302,12 @@ struct BearerCredential {
     session: Option<SessionSecret>,
     client: IpAddr,
     drop_cookie: AtomicBool,
+    /// The key's first due last-use ticket, kept until this request-local credential is dropped,
+    /// after the RPC call returned and the response was built: the write then starts after every
+    /// request transaction has ended, so it cannot make the request fail to serialize against
+    /// its own key row. `open` runs once as the preflight and again in each RPC attempt; later
+    /// tickets for the same key are discarded unfired.
+    last_use: std::sync::Mutex<Option<ApiKeyLastUse>>,
 }
 impl std::fmt::Debug for BearerCredential {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -311,6 +324,19 @@ impl BearerCredential {
             Ok(begun) => {
                 self.drop_cookie
                     .fetch_or(begun.drop_cookie, Ordering::Relaxed);
+                if let Some(ticket) = begun.last_use {
+                    let mut slot = self.last_use.lock().map_err(|_| {
+                        erp_fields::Error::programming(
+                            "the API key last-use ticket of this request was poisoned",
+                        )
+                    })?;
+                    // Keep the first ticket; dropping an earlier one would launch the write
+                    // while this attempt's transaction is open.
+                    match slot.as_ref() {
+                        None => *slot = Some(ticket),
+                        Some(_) => ticket.discard(),
+                    }
+                }
                 Ok(begun.tx)
             }
             Err(error) => {
@@ -351,6 +377,8 @@ pub struct WebApp {
     config: Arc<ServerConfig>,
     services: RwLock<Services>,
     lifecycle: Option<Arc<dyn WebLifecycle>>,
+    attachment_content: Option<Arc<dyn WebAttachmentContent>>,
+    pivot_export: Option<Arc<dyn WebPivotExport>>,
     refreshing: Mutex<()>,
     requests: Arc<Semaphore>,
     queue: Arc<Semaphore>,
@@ -400,6 +428,8 @@ impl WebApp {
                 assets: None,
             }),
             lifecycle: None,
+            attachment_content: None,
+            pivot_export: None,
             refreshing: Mutex::new(()),
             requests: Arc::new(Semaphore::new(crate::startup_limits::RPC_CONCURRENCY)),
             queue: Arc::new(Semaphore::new(256)),
@@ -618,7 +648,22 @@ impl WebApp {
     }
     /// Give the request an id, serve it, return the id in `X-Request-Id` and write the refusals
     /// the RPC layer did not already log.
-    async fn handle(self: Arc<Self>, peer: IpAddr, mut request: Request<Body>) -> Response {
+    async fn handle(self: Arc<Self>, peer: IpAddr, request: Request<Body>) -> Response {
+        // Every answer on the content route, the substitutes (busy, deadline, refresh) included,
+        // leaves with the attachment class (threat model §13).
+        let content_route =
+            canonical_path(request.uri().path()).starts_with(content::CONTENT_PREFIX);
+        let mut response = Box::pin(self.handle_identified(peer, request)).await;
+        if content_route {
+            content::apply_attachment_class(&mut response);
+        }
+        response
+    }
+    async fn handle_identified(
+        self: Arc<Self>,
+        peer: IpAddr,
+        mut request: Request<Body>,
+    ) -> Response {
         let id = match request_id(request.headers()) {
             Ok(id) => id,
             Err(response) => return finish_response(response, false),
@@ -641,12 +686,12 @@ impl WebApp {
             Err(_) => return finish_response(internal(), false), // a UUID is always a valid header value
         }
         if response.extensions().get::<RpcLogged>().is_none() {
-            log_web_refusal(&method, &path, response.status(), id.as_str());
+            log_web_refusal(&method, &path, &response, id.as_str());
         }
         response
     }
     async fn handle_request(self: Arc<Self>, peer: IpAddr, request: Request<Body>) -> Response {
-        if request.method() == Method::GET && request.uri().path() == "/erp/health/ready" {
+        if request.method() == Method::GET && request.uri().path() == routes::HEALTH_READY {
             return if self.ready().await {
                 response(StatusCode::OK, "ready")
             } else {
@@ -662,27 +707,18 @@ impl WebApp {
             return finish_response(busy(), false);
         }
         let classified_path = canonical_path(request.uri().path());
-        if classified_path == "/erp/login"
+        if classified_path == routes::LOGIN
             && matches!(*request.method(), Method::GET | Method::POST)
             && !self.login_available.load(Ordering::Acquire)
         {
             return finish_response(busy(), true);
         }
-        let navigation = !classified_path.starts_with("/erp/json/2/")
+        let navigation = !classified_path.starts_with(routes::JSON2_PREFIX)
             && LifecycleOperation::from_path(&classified_path).is_none()
-            && !classified_path.starts_with("/erp/assets/")
-            && (request.method() == Method::GET
-                || request
-                    .headers()
-                    .get_all(header::ACCEPT)
-                    .iter()
-                    .any(|value| {
-                        value.to_str().is_ok_and(|value| {
-                            value
-                                .split(',')
-                                .any(|item| item.trim().starts_with("text/html"))
-                        })
-                    }));
+            && !classified_path.starts_with(routes::ASSETS_PREFIX)
+            // attachment errors keep their class and stay plain text, never the HTML page
+            && !classified_path.starts_with(content::CONTENT_PREFIX)
+            && (request.method() == Method::GET || accepts_html(request.headers()));
         // The queue admission and execution permit precede body buffering.
         let queued = match Arc::clone(&self.queue).try_acquire_owned() {
             Ok(permit) => permit,
@@ -758,7 +794,7 @@ impl WebApp {
                     Ok(response) | Err(response) => response,
                 };
             } else if response.status().is_server_error() {
-                response = busy();
+                response = superseded_failure(&response);
             }
         }
         response
@@ -858,8 +894,9 @@ impl WebApp {
         // dispatched directly once below, retaining all origin/body/auth/CSRF gates.
         if parts.method == Method::GET
             && path != incoming_path
-            && path != "/erp"
-            && !path.starts_with("/erp/action-")
+            && path != routes::ERP
+            && !path.starts_with(routes::ACTION_PREFIX)
+            && !path.starts_with(content::CONTENT_PREFIX)
         {
             let destination = match parts.uri.query() {
                 Some(query) => format!("{path}?{query}"),
@@ -868,7 +905,7 @@ impl WebApp {
             return redirect(&self.redirect(Some(&destination))?);
         }
         if parts.method == Method::GET
-            && let Some(name) = path.strip_prefix("/erp/assets/")
+            && let Some(name) = path.strip_prefix(routes::ASSETS_PREFIX)
         {
             if let Some(admission) = &self.current_asset_admission().await? {
                 match admission {
@@ -910,13 +947,15 @@ impl WebApp {
                 .map_err(|error| bad(error.to_string()))?
                 .ok_or_else(|| response(StatusCode::NOT_FOUND, "Not found"));
         }
-        if parts.method == Method::GET && path.contains("/static/") {
+        if parts.method == Method::GET && path.contains(routes::STATIC_SEGMENT) {
             match &self.current_asset_admission().await? {
                 Some(AssetAdmission::Published(assets)) => {
                     let url = assets
                         .fixed_path(path)
                         .ok_or_else(|| response(StatusCode::NOT_FOUND, "Not found"))?;
-                    let name = url.strip_prefix("/erp/assets/").ok_or_else(internal)?;
+                    let name = url
+                        .strip_prefix(routes::ASSETS_PREFIX)
+                        .ok_or_else(internal)?;
                     let mut result = assets
                         .response(
                             name,
@@ -941,12 +980,18 @@ impl WebApp {
                 None => return Err(response(StatusCode::NOT_FOUND, "Not found")),
             }
         }
-        if path == "/erp/client-error" {
+        if let Some(rest) = path.strip_prefix(content::CONTENT_PREFIX) {
+            return self.attachment_content(&parts, rest, &auth).await;
+        }
+        if path == routes::PIVOT_EXPORT {
+            return self.pivot_export(&parts, body, &auth).await;
+        }
+        if path == routes::CLIENT_ERROR {
             return self
                 .client_error(&parts.method, headers, parts.extensions.get(), body, &auth)
                 .await;
         }
-        if path.starts_with("/erp/json/2/") || LifecycleOperation::from_path(path).is_some() {
+        if path.starts_with(routes::JSON2_PREFIX) || LifecycleOperation::from_path(path).is_some() {
             if parts.method != Method::POST {
                 return Err(response(StatusCode::METHOD_NOT_ALLOWED, "POST required"));
             }
@@ -971,7 +1016,7 @@ impl WebApp {
                     "Lifecycle writes require only a primary browser session",
                 ));
             }
-            let json2 = path.starts_with("/erp/json/2/");
+            let json2 = path.starts_with(routes::JSON2_PREFIX);
             // An ambiguous/non-ASCII header remains a failed key attempt; its text is never
             // retained, and it still receives cookie precedence and address throttling.
             let bearer = if json2 && headers.contains_key(header::AUTHORIZATION) {
@@ -1004,6 +1049,7 @@ impl WebApp {
                     session: self.session(headers)?,
                     client,
                     drop_cookie: AtomicBool::new(false),
+                    last_use: std::sync::Mutex::new(None),
                 }))
             } else {
                 None
@@ -1227,8 +1273,8 @@ impl WebApp {
             return Ok(response);
         }
         match (&parts.method, path) {
-            (&Method::GET, "/") => redirect("/erp"),
-            (&Method::GET, "/erp/login") => {
+            (&Method::GET, routes::ROOT) => redirect("/erp"),
+            (&Method::GET, routes::LOGIN) => {
                 let fields = form(parts.uri.query().unwrap_or(""), &["redirect", "db"])?;
                 if fields
                     .get("db")
@@ -1239,7 +1285,7 @@ impl WebApp {
                 let redirect = self.redirect(fields.get("redirect").map(String::as_str))?;
                 self.login_page(headers, redirect, None).await
             }
-            (&Method::POST, "/erp/login") => {
+            (&Method::POST, routes::LOGIN) => {
                 self.form_origin(headers)?;
                 let fields = read_form(
                     headers,
@@ -1310,27 +1356,28 @@ impl WebApp {
                     Err(_) => Err(internal()),
                 }
             }
-            (&Method::POST, "/erp/session/logout") => {
+            (&Method::POST, routes::LOGOUT) => {
                 self.form_origin(headers)?;
                 let fields = read_form(headers, body, &["csrf_token"]).await?;
                 self.verify_csrf(headers, required(&fields, "csrf_token")?)
                     .await?;
-                if let Some(secret) = self.session(headers)? {
-                    match auth.begin_session(&secret, CredentialOptions::new()).await {
-                        Ok(mut begun) => {
-                            let id = begun.session.id();
-                            begun.tx.rollback().await.map_err(auth_error)?;
-                            auth.logout(id).await.map_err(auth_error)?;
-                        }
-                        Err(error) if error.kind() == erp_fields::ErrorKind::SessionExpired => {} // idempotent logout of an expired session
-                        Err(error) => return Err(auth_error(error)),
+                // Only after the origin and token checks passed: a refused request clears nothing.
+                // From here every outcome carries the cleanup, a failed revocation included; that
+                // one keeps its auth failure status and never claims a sign-out.
+                let cleanup = LogoutCleanup::new(self.cookie_header("session_id", "", 0)?);
+                match self.revoke_session(headers, &auth).await {
+                    Ok(()) => {
+                        let mut result = redirect("/erp/login")?;
+                        cleanup.apply(&mut result);
+                        Ok(result)
+                    }
+                    Err(mut refused) => {
+                        cleanup.apply(&mut refused);
+                        Err(refused)
                     }
                 }
-                let mut result = redirect("/erp/login")?;
-                self.set_cookie(&mut result, "session_id", "", 0)?;
-                Ok(result)
             }
-            (&Method::GET, "/erp/login_successful") => {
+            (&Method::GET, routes::LOGIN_SUCCESS) => {
                 let secret = self
                     .session(headers)?
                     .ok_or_else(|| response(StatusCode::UNAUTHORIZED, "user is not connected"))?;
@@ -1339,18 +1386,26 @@ impl WebApp {
                     .await
                     .map_err(auth_error)?;
                 begun.tx.rollback().await.map_err(auth_error)?;
-                Ok(response(StatusCode::OK, "Login successful."))
+                self.login_success_page().await
             }
-            (&Method::GET, path) if path == "/erp" || path.starts_with("/erp/action-") => {
+            (&Method::GET, path)
+                if path == routes::ERP || path.starts_with(routes::ACTION_PREFIX) =>
+            {
                 let requested = parts
                     .uri
                     .path_and_query()
                     .map_or(path, |value| value.as_str());
-                let policy = RedirectPolicy::new(self.config.origin(), &["list", "form"])
-                    .map_err(|_| internal())?;
-                let canonical = policy
-                    .shell(requested)
-                    .map_err(|_| bad("invalid shell URL state"))?;
+                let policy =
+                    RedirectPolicy::new(self.config.origin(), crate::redirect::SHELL_VIEW_TYPES)
+                        .map_err(|_| internal())?;
+                let canonical = policy.shell(requested).map_err(|error| {
+                    let mut refused = bad("invalid shell URL state");
+                    // The variant's fixed text for the log line, never the refused URL.
+                    refused
+                        .extensions_mut()
+                        .insert(RefusalReason(error.reason()));
+                    refused
+                })?;
                 if canonical != requested {
                     return redirect(&canonical);
                 }
@@ -1378,10 +1433,13 @@ impl WebApp {
                     }
                 }
                 let signer = auth.browser_tokens().await.map_err(auth_error)?;
-                let prefs = match cookie.map(|value| signer.verify(value)) {
-                    Some(Ok(prefs)) => prefs,
-                    None | Some(Err(PrefsError::Cookie)) => return self.session_login(&canonical),
-                    Some(Err(_)) => return Err(internal()),
+                let verified = cookie.map(|value| (value, signer.verify(value)));
+                let (prefs, prefs_cookie) = match verified {
+                    Some((value, Ok(prefs))) => (prefs, value),
+                    None | Some((_, Err(PrefsError::Cookie))) => {
+                        return self.session_login(&canonical);
+                    }
+                    Some((_, Err(_))) => return Err(internal()),
                 };
                 let mut begun = match auth
                     .begin_session(
@@ -1398,9 +1456,31 @@ impl WebApp {
                     }
                     Err(error) => return Err(auth_error(error)),
                 };
+                // The shell access guard runs before any bootstrap work, from the
+                // principal just checked against the primary; an error resolving it fails closed.
+                let env = begun.tx.env();
+                let internal_user = begun
+                    .tx
+                    .has_group(&env, "base.group_user")
+                    .await
+                    .map_err(auth_error)?;
+                if !internal_user {
+                    begun.tx.rollback().await.map_err(auth_error)?;
+                    if !accepts_html(headers) {
+                        return Err(response(
+                            StatusCode::FORBIDDEN,
+                            "The web client requires an internal user",
+                        ));
+                    }
+                    // Rendered in place, never a redirect loop through the login page.
+                    return self.login_success_page().await;
+                }
                 let document = self.bootstrap(&mut begun.tx, &signer, &prefs).await?;
                 begun.tx.rollback().await.map_err(auth_error)?;
-                self.document("erp-bootstrap", &document).await
+                let mut result = self.document("erp-bootstrap", &document).await?;
+                // Sliding expiry: the verified value is sent again, never re-minted.
+                self.set_cookie(&mut result, "prefs", prefs_cookie, PREFS_LIFETIME_SECS)?;
+                Ok(result)
             }
             _ => Err(response(StatusCode::NOT_FOUND, "Not found")),
         }
@@ -1467,6 +1547,27 @@ impl WebApp {
         report.log(uid, request_id.map_or("-", erp_rpc::CorrelationId::as_str));
         Ok(response(StatusCode::NO_CONTENT, ""))
     }
+    /// Revoke the browser's session for a logout whose origin and token were verified. No session
+    /// cookie, or one the server no longer knows, is an idempotent success. A malformed or
+    /// duplicated cookie is refused without any revocation: an ambiguous envelope may hide a live
+    /// session, so the answer must not suggest a sign-out that did not happen.
+    async fn revoke_session(&self, headers: &HeaderMap, auth: &Arc<Auth>) -> HttpResult<()> {
+        let Some(secret) = self.session(headers)? else {
+            return Ok(());
+        };
+        match auth.begin_session(&secret, CredentialOptions::new()).await {
+            Ok(mut begun) => {
+                let id = begun.session.id();
+                begun.tx.rollback().await.map_err(auth_error)?;
+                // `false` (the row was already gone) is the same idempotent success.
+                auth.logout(id).await.map_err(auth_error)?;
+                Ok(())
+            }
+            // idempotent logout of an expired session
+            Err(error) if error.kind() == erp_fields::ErrorKind::SessionExpired => Ok(()),
+            Err(error) => Err(auth_error(error)),
+        }
+    }
     fn session_login(&self, destination: &str) -> HttpResult<Response> {
         let query = url::form_urlencoded::Serializer::new(String::new())
             .append_pair("redirect", destination)
@@ -1478,7 +1579,7 @@ impl WebApp {
         Ok(result)
     }
     fn redirect(&self, input: Option<&str>) -> HttpResult<String> {
-        let local = RedirectPolicy::new(self.config.origin(), &["list", "form"])
+        let local = RedirectPolicy::new(self.config.origin(), crate::redirect::SHELL_VIEW_TYPES)
             .map_err(|_| internal())?
             .normalize(input.unwrap_or("/erp"))
             .map_err(|_| bad("unsafe redirect"))?;
@@ -1624,7 +1725,19 @@ impl WebApp {
             header::CONTENT_TYPE,
             HeaderValue::from_static("text/html; charset=utf-8"),
         );
-        self.apply_asset_document(result).await
+        self.apply_asset_document(result, PageClass::Shell).await
+    }
+
+    /// The fixed login-success document (`login` class): the sealed `/erp/login_successful`
+    /// page, and what a signed-in non-internal user opening the shell as HTML receives.
+    /// No bootstrap, menus or back-office data.
+    async fn login_success_page(&self) -> HttpResult<Response> {
+        let mut result = response(StatusCode::OK, LOGIN_SUCCESS_PAGE);
+        result.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/html; charset=utf-8"),
+        );
+        self.apply_asset_document(result, PageClass::Login).await
     }
 
     async fn current_asset_admission(&self) -> HttpResult<Option<AssetAdmission>> {
@@ -1651,10 +1764,19 @@ impl WebApp {
         Ok(admission)
     }
 
-    async fn apply_asset_document(&self, mut result: Response) -> HttpResult<Response> {
+    async fn apply_asset_document(
+        &self,
+        mut result: Response,
+        class: PageClass,
+    ) -> HttpResult<Response> {
         let admission = self.current_asset_admission().await?;
         let Some(admission) = &admission else {
-            return Ok(result);
+            // No published generation (a transport fixture, a host without tenant assets): the
+            // page carries no import map, so it gets the class policy without a nonce. Never a
+            // page without a policy (threat model §13, T-AST.9).
+            let csp = crate::assets::static_shell_csp(self.config.origin())
+                .map_err(|error| response(StatusCode::SERVICE_UNAVAILABLE, error.to_string()))?;
+            return class_headers(result, &csp, class);
         };
         let assets = match admission {
             AssetAdmission::Published(assets) => assets,
@@ -1684,21 +1806,7 @@ impl WebApp {
             .map_err(|_| internal())?
             .replacen("</head>", &format!("{}</head>", shell.import_map_html()), 1);
         *result.body_mut() = Body::from(html);
-        result.headers_mut().insert(
-            header::CONTENT_SECURITY_POLICY,
-            HeaderValue::from_str(shell.csp()).map_err(|_| internal())?,
-        );
-        result
-            .headers_mut()
-            .insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
-        result.headers_mut().insert(
-            header::REFERRER_POLICY,
-            HeaderValue::from_static("same-origin"),
-        );
-        result
-            .headers_mut()
-            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-        Ok(result)
+        class_headers(result, shell.csp(), class)
     }
 
     async fn bootstrap(
@@ -1707,17 +1815,8 @@ impl WebApp {
         signer: &PrefsSigner,
         prefs: &SignedPrefs,
     ) -> HttpResult<erp_views::wire::Bootstrap> {
+        // The caller checked the shell access guard (internal user) before this.
         let env = tx.env();
-        if !tx
-            .has_group(&env, "base.group_user")
-            .await
-            .map_err(auth_error)?
-        {
-            return Err(response(
-                StatusCode::FORBIDDEN,
-                "The web client requires an internal user",
-            ));
-        }
         let ids: Vec<i64> = env
             .principal()
             .resolution()
@@ -1750,6 +1849,8 @@ impl WebApp {
             let id: i64 = row.try_get(0).map_err(|_| internal())?;
             let name: String = row.try_get(1).map_err(|_| internal())?;
             let parent_id: Option<i64> = row.try_get(2).map_err(|_| internal())?;
+            // a parent the user may not use is not named: its id would leak
+            let parent_id = parent_id.filter(|parent| ids.contains(parent));
             companies.push(serde_json::json!({"id":id,"name":name,"parent_id":parent_id}));
         }
         let context = erp_security::auth::user_context(tx, env.user_id())
@@ -1810,12 +1911,10 @@ impl WebApp {
         let services = self.services.read().await.clone();
         let auth = services.auth;
         let signer = auth.browser_tokens().await.map_err(auth_error)?;
-        let prefs = signer
-            .verify(cookie)
-            .map_err(|_| bad("Session expired (invalid CSRF token)"))?;
+        let prefs = signer.verify(cookie).map_err(csrf_refusal)?;
         signer
             .verify_csrf(&prefs, token, now()?)
-            .map_err(|_| bad("Session expired (invalid CSRF token)"))
+            .map_err(csrf_refusal)
     }
     async fn login_page(
         &self,
@@ -1862,9 +1961,9 @@ impl WebApp {
             HeaderValue::from_static("text/html; charset=utf-8"),
         );
         if let Some(cookie) = cookie {
-            self.set_cookie(&mut result, "prefs", &cookie, 48 * 60 * 60)?;
+            self.set_cookie(&mut result, "prefs", &cookie, PREFS_LIFETIME_SECS)?;
         }
-        self.apply_asset_document(result).await
+        self.apply_asset_document(result, PageClass::Login).await
     }
     fn session(&self, headers: &HeaderMap) -> HttpResult<Option<SessionSecret>> {
         let cookies = values(headers, "cookie")?;
@@ -1900,6 +1999,11 @@ impl WebApp {
         value: &str,
         lifetime: u64,
     ) -> HttpResult<()> {
+        let cookie = self.cookie_header(name, value, lifetime)?;
+        response.headers_mut().append(header::SET_COOKIE, cookie);
+        Ok(())
+    }
+    fn cookie_header(&self, name: &str, value: &str, lifetime: u64) -> HttpResult<HeaderValue> {
         let secure = if self.config.origin().starts_with("https:") {
             "; Secure"
         } else {
@@ -1907,11 +2011,7 @@ impl WebApp {
         };
         let cookie =
             format!("{name}={value}; Path=/; HttpOnly; SameSite=Lax; Max-Age={lifetime}{secure}");
-        response.headers_mut().append(
-            header::SET_COOKIE,
-            HeaderValue::from_str(&cookie).map_err(|_| internal())?,
-        );
-        Ok(())
+        HeaderValue::from_str(&cookie).map_err(|_| internal())
     }
 }
 
@@ -1919,6 +2019,40 @@ impl WebApp {
 /// Marks a response whose failure the RPC layer already logged.
 #[derive(Clone)]
 struct RpcLogged;
+
+/// The browser cleanup of a verified logout (T-SHELL.5): the expired `session_id` cookie and
+/// `Clear-Site-Data`. It rides on the response as an extension so a later replacement of a 5xx
+/// (`superseded_failure`) can carry exactly these headers over, and nothing else.
+#[derive(Clone)]
+struct LogoutCleanup {
+    expired_session: HeaderValue,
+}
+
+impl LogoutCleanup {
+    fn new(expired_session: HeaderValue) -> Self {
+        Self { expired_session }
+    }
+    fn apply(&self, response: &mut Response) {
+        let headers = response.headers_mut();
+        headers.append(header::SET_COOKIE, self.expired_session.clone());
+        headers.insert(
+            "clear-site-data",
+            HeaderValue::from_static(LOGOUT_CLEAR_SITE_DATA),
+        );
+        response.extensions_mut().insert(self.clone());
+    }
+}
+
+/// The answer that replaces a 5xx served by a superseded generation: `busy()`, plus the cleanup
+/// of a verified logout when the replaced response carried one. Other headers of the replaced
+/// response (any other `set-cookie` among them) are dropped.
+fn superseded_failure(replaced: &Response) -> Response {
+    let mut result = busy();
+    if let Some(cleanup) = replaced.extensions().get::<LogoutCleanup>() {
+        cleanup.apply(&mut result);
+    }
+    result
+}
 
 /// The request's id. An incoming `X-Request-Id` is kept only when it is exactly one header holding
 /// a UUID (RFC 9562 text form, any version); anything else (several values, other text, other
@@ -1935,8 +2069,13 @@ fn request_id(headers: &HeaderMap) -> HttpResult<erp_rpc::CorrelationId> {
     {
         return Ok(id);
     }
+    fresh_correlation_id().map_err(|_| internal())
+}
+
+/// A fresh random v4 UUID (RFC 9562) from OS randomness.
+fn fresh_correlation_id() -> Result<erp_rpc::CorrelationId, getrandom::Error> {
     let mut bytes = [0_u8; 16];
-    getrandom::fill(&mut bytes).map_err(|_| internal())?;
+    getrandom::fill(&mut bytes)?;
     bytes[6] = bytes[6] & 0x0f | 0x40;
     bytes[8] = bytes[8] & 0x3f | 0x80;
     Ok(erp_rpc::CorrelationId::from_u128(u128::from_be_bytes(
@@ -1944,54 +2083,128 @@ fn request_id(headers: &HeaderMap) -> HttpResult<erp_rpc::CorrelationId> {
     )))
 }
 
+/// The server-generated reference shown on a rendered error page ("Reference: …"), logged as
+/// `error_id`. It is never the client's `X-Request-Id`, so a page cannot be made to show a
+/// value the requester chose (T-SHELL.7).
+#[derive(Clone)]
+struct ErrorReference(erp_rpc::CorrelationId);
+
+/// The fixed text of the refusal's typed cause (a `BoundaryError` variant), logged as
+/// `reason`. Never request input: no URL, query, header or cookie value.
+#[derive(Clone, Copy)]
+struct RefusalReason(&'static str);
+
 /// One log line for a refusal that did not come through the RPC layer (a CSRF, media type, proxy
 /// or session refusal; a server error). Method and path only: no query, header, cookie or body.
+/// `reason` is the fixed text of a typed refusal ([`RefusalReason`]) and `error_id` the reference
+/// the rendered error page shows ([`ErrorReference`]); each is written only when present.
 /// Unknown paths and methods (scanners) are `info`, which the default `warn` filter drops.
-fn log_web_refusal(method: &Method, path: &str, status: StatusCode, request_id: &str) {
-    let code = status.as_u16();
+fn log_web_refusal(method: &Method, path: &str, response: &Response, request_id: &str) {
+    let code = response.status().as_u16();
     let path: String = path.chars().take(200).collect();
+    let reason = response
+        .extensions()
+        .get::<RefusalReason>()
+        .map(|reason| reason.0);
+    let error_id = response
+        .extensions()
+        .get::<ErrorReference>()
+        .map(|reference| reference.0.as_str());
     if code >= 500 {
-        tracing::error!(target: "erp::http", %method, path, status = code, request_id, "http request failed");
+        tracing::error!(target: "erp::http", %method, path, status = code, request_id, reason, error_id, "http request failed");
     } else if code == 404 || code == 405 {
-        tracing::info!(target: "erp::http", %method, path, status = code, request_id, "http request not found");
+        tracing::info!(target: "erp::http", %method, path, status = code, request_id, reason, error_id, "http request not found");
     } else if code >= 400 {
-        tracing::warn!(target: "erp::http", %method, path, status = code, request_id, "http request refused");
+        tracing::warn!(target: "erp::http", %method, path, status = code, request_id, reason, error_id, "http request refused");
     }
 }
 
 fn canonical_path(path: &str) -> Cow<'_, str> {
-    for (legacy, native) in [
-        ("/odoo", "/erp"),
-        ("/web", "/erp"),
-        ("/web/login", "/erp/login"),
-        ("/web/login_successful", "/erp/login_successful"),
-        ("/web/session/logout", "/erp/session/logout"),
-        ("/web/module/install", "/erp/module/install"),
-    ] {
-        if path == legacy {
-            return Cow::Borrowed(native);
+    for (legacy, native) in routes::LEGACY_EXACT {
+        if path == *legacy {
+            return Cow::Borrowed(*native);
         }
     }
-    for (legacy, native) in [
-        ("/odoo/action-", "/erp/action-"),
-        ("/web/assets/", "/erp/assets/"),
-        ("/json/2/", "/erp/json/2/"),
-        ("/web/dataset/call_kw", "/erp/dataset/call_kw"),
-    ] {
-        if let Some(suffix) = path.strip_prefix(legacy) {
+    for (legacy, native) in routes::LEGACY_PREFIX {
+        if let Some(suffix) = path.strip_prefix(*legacy) {
             return Cow::Owned(format!("{native}{suffix}"));
         }
     }
     Cow::Borrowed(path)
 }
 
-// Fixed template owned by this transport; no request or diagnostic text is interpolated.
+/// Lifetime of the anonymous preferences cookie, renewed by every verified shell load.
+const PREFS_LIFETIME_SECS: u64 = 48 * 60 * 60;
+
+/// What a valid sign-out clears in the browser for this origin (T-SHELL.5).
+const LOGOUT_CLEAR_SITE_DATA: &str = "\"cache\", \"storage\"";
+
+// Fixed document for a signed-in user without web client access; nothing is interpolated.
+const LOGIN_SUCCESS_PAGE: &str = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Login successful · ERPForAll</title><link rel=\"icon\" type=\"image/svg+xml\" href=\"/erp/brand/icon.svg\"></head><body><main><h1>Login successful.</h1></main></body></html>";
+
+/// Header class of a served HTML document (threat model §13). Both classes send
+/// `same-origin`: a page that hosts a form must not send `no-referrer`, because a browser then
+/// puts `Origin: null` on that form's POST and the same-origin check of the login refuses it
+/// (release cf9b245a6, 2026-11-12: nobody could sign in). Local redirects keep `no-referrer`.
+#[derive(Debug, Clone, Copy)]
+enum PageClass {
+    Shell,
+    Login,
+}
+
+impl PageClass {
+    fn referrer_policy(self) -> HeaderValue {
+        match self {
+            Self::Shell => HeaderValue::from_static("same-origin"),
+            Self::Login => HeaderValue::from_static("same-origin"),
+        }
+    }
+}
+
+/// The `shell`/`login` class headers of a served document (threat model §13) with policy `csp`.
+fn class_headers(mut result: Response, csp: &str, class: PageClass) -> HttpResult<Response> {
+    let headers = result.headers_mut();
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_str(csp).map_err(|_| internal())?,
+    );
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers.insert(header::REFERRER_POLICY, class.referrer_policy());
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(result)
+}
+
+// The error page's only styling, an inline `<style>` element allowed by the hash of these exact
+// bytes (`ERROR_CSP`), never `'unsafe-inline'`. The page has no `style=` attributes. A separate
+// stylesheet is not used: `busy()` answers before the brand route while a node drains.
+const ERROR_STYLE: &str = r#":root{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#28343c;background:#f5f6f8;color-scheme:light}*{box-sizing:border-box}body{margin:0}header{padding:12px 24px;background:#fff;border-bottom:1px solid #dce0e4}header img{display:block;height:28px;width:auto}main{min-height:calc(100dvh - 60px);display:grid;place-items:center;padding:24px}.card{width:100%;max-width:520px;background:white;border:1px solid #dce1e5;border-radius:12px;padding:40px;box-shadow:0 3px 14px #23303b0a}.code{color:#714b67;font-size:14px;font-weight:650;letter-spacing:.08em;margin:0 0 16px}h1{font-size:28px;line-height:1.25;margin:0 0 14px}p{line-height:1.6;color:#596570;margin:0 0 28px}nav{display:flex;gap:12px;flex-wrap:wrap}a{display:inline-flex;align-items:center;justify-content:center;min-height:44px;border:1px solid #cbd2d8;border-radius:6px;padding:10px 18px;color:#34424b;font-weight:600;text-decoration:none}.primary{background:#007e84;border-color:#007e84;color:white}a:hover{filter:brightness(.94)}a:focus-visible{outline:3px solid #218c99;outline-offset:3px}@media(max-width:480px){main{padding:16px}.card{padding:28px 24px}h1{font-size:25px}nav a{flex:1}}.ref{margin:24px 0 0;font-size:13px;line-height:1.5}.ref code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;user-select:all}"#;
+
+// Fixed template owned by this transport; no request or diagnostic text is interpolated. The
+// reference is a fresh server-generated UUID (`ErrorReference`), never request input.
 const ERROR_PAGE: &str = r#"<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{TITLE}} · ERPForAll</title>
-<style>
-:root{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#28343c;background:#f5f6f8;color-scheme:light}*{box-sizing:border-box}body{margin:0}header{padding:12px 24px;background:#fff;border-bottom:1px solid #dce0e4}header img{display:block;height:28px;width:auto}main{min-height:calc(100dvh - 60px);display:grid;place-items:center;padding:24px}.card{width:100%;max-width:520px;background:white;border:1px solid #dce1e5;border-radius:12px;padding:40px;box-shadow:0 3px 14px #23303b0a}.code{color:#714b67;font-size:14px;font-weight:650;letter-spacing:.08em;margin:0 0 16px}h1{font-size:28px;line-height:1.25;margin:0 0 14px}p{line-height:1.6;color:#596570;margin:0 0 28px}nav{display:flex;gap:12px;flex-wrap:wrap}a{display:inline-flex;align-items:center;justify-content:center;min-height:44px;border:1px solid #cbd2d8;border-radius:6px;padding:10px 18px;color:#34424b;font-weight:600;text-decoration:none}.primary{background:#007e84;border-color:#007e84;color:white}a:hover{filter:brightness(.94)}a:focus-visible{outline:3px solid #218c99;outline-offset:3px}@media(max-width:480px){main{padding:16px}.card{padding:28px 24px}h1{font-size:25px}nav a{flex:1}}
-</style></head><body><header><img src="/erp/brand/logo.svg" alt="ERPForAll" width="105" height="28"></header><main><section class="card" aria-labelledby="error-title"><p class="code">ERROR {{STATUS}}</p><h1 id="error-title">{{TITLE}}</h1><p>{{MESSAGE}}</p><nav aria-label="Recovery options"><a class="primary" href="/erp/login">Sign in again</a><a href="/erp">Go to home</a></nav></section></main></body></html>
+<style>{{STYLE}}</style></head><body><header><img src="/erp/brand/logo.svg" alt="ERPForAll" width="105" height="28"></header><main><section class="card" aria-labelledby="error-title"><p class="code">ERROR {{STATUS}}</p><h1 id="error-title">{{TITLE}}</h1><p>{{MESSAGE}}</p><nav aria-label="Recovery options"><a class="primary" href="/erp/login">Sign in again</a><a href="/erp">Go to home</a></nav><p class="ref">Reference: <code>{{REFERENCE}}</code></p></section></main></body></html>
 "#;
+
+/// The error page policy (threat model §13 `error` class, moved toward it): the style is allowed
+/// by its sha256, the logo by `img-src 'self'`. If the header cannot be built, the page goes out
+/// unstyled under a stricter policy and the failure is logged; it never falls back to
+/// `'unsafe-inline'`.
+static ERROR_CSP: std::sync::LazyLock<HeaderValue> = std::sync::LazyLock::new(|| {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+    let hash = base64::engine::general_purpose::STANDARD
+        .encode(sha2::Sha256::digest(ERROR_STYLE.as_bytes()));
+    let policy = format!(
+        "default-src 'none'; style-src 'sha256-{hash}'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+    );
+    HeaderValue::from_str(&policy).unwrap_or_else(|_| {
+        tracing::error!(target: "erp::http", "error page policy could not be built; serving it unstyled");
+        HeaderValue::from_static(
+            "default-src 'none'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+        )
+    })
+});
 
 // Render only navigation failures. JSON/asset protocol bodies and every HTTP status remain intact.
 fn finish_response(mut result: Response, navigation: bool) -> Response {
@@ -2030,17 +2243,36 @@ fn finish_response(mut result: Response, navigation: bool) -> Response {
                 "The application could not complete this request. Try again or contact your administrator.",
             ),
         };
+        // A fresh id, never the client's X-Request-Id. Without OS randomness the page shows no
+        // reference and the failure is logged; no other value stands in for it.
+        let reference = match fresh_correlation_id() {
+            Ok(reference) => Some(reference),
+            Err(_) => {
+                tracing::error!(target: "erp::http", "OS randomness unavailable; error page rendered without a reference");
+                None
+            }
+        };
+        let shown = reference
+            .as_ref()
+            .map_or("unavailable", erp_rpc::CorrelationId::as_str);
         let html = ERROR_PAGE
+            .replace("{{STYLE}}", ERROR_STYLE)
             .replace("{{TITLE}}", title)
             .replace("{{STATUS}}", status.as_str())
-            .replace("{{MESSAGE}}", message);
+            .replace("{{MESSAGE}}", message)
+            .replace("{{REFERENCE}}", shown);
         *result.body_mut() = Body::from(html);
         result.headers_mut().remove(header::CONTENT_LENGTH);
         result.headers_mut().insert(
             header::CONTENT_TYPE,
             HeaderValue::from_static("text/html; charset=utf-8"),
         );
-        result.headers_mut().insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"));
+        result
+            .headers_mut()
+            .insert(header::CONTENT_SECURITY_POLICY, ERROR_CSP.clone());
+        if let Some(reference) = reference {
+            result.extensions_mut().insert(ErrorReference(reference));
+        }
     }
     if !result.headers().contains_key(header::CACHE_CONTROL) {
         result
@@ -2051,10 +2283,19 @@ fn finish_response(mut result: Response, navigation: bool) -> Response {
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
     );
-    result.headers_mut().insert(
-        header::REFERRER_POLICY,
-        HeaderValue::from_static("same-origin"),
-    );
+    // A page or redirect that chose the stricter class (login, redirect) keeps it; any other
+    // value a handler set is replaced, so no response leaves with a weaker policy.
+    let mut chosen = result.headers().get_all(header::REFERRER_POLICY).iter();
+    let strict = chosen
+        .next()
+        .is_some_and(|value| value.as_bytes() == b"no-referrer")
+        && chosen.next().is_none();
+    if !strict {
+        result.headers_mut().insert(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("same-origin"),
+        );
+    }
     result
 }
 
@@ -2069,9 +2310,9 @@ fn brand_route(method: &Method, path: &str) -> Option<Response> {
         return None;
     }
     match path {
-        "/favicon.ico" | "/erp/brand/icon.svg" => Some(brand_response(BRAND_ICON)),
-        "/erp/brand/logo.svg" => Some(brand_response(BRAND_LOGO)),
-        "/erp/brand/logo-dark.svg" => Some(brand_response(BRAND_LOGO_DARK)),
+        routes::FAVICON | routes::BRAND_ICON_PATH => Some(brand_response(BRAND_ICON)),
+        routes::BRAND_LOGO_PATH => Some(brand_response(BRAND_LOGO)),
+        routes::BRAND_LOGO_DARK_PATH => Some(brand_response(BRAND_LOGO_DARK)),
         _ => None,
     }
 }
@@ -2093,6 +2334,18 @@ fn brand_response(svg: &'static [u8]) -> Response {
         HeaderValue::from_static("default-src 'none'; style-src 'unsafe-inline'"),
     );
     response
+}
+
+/// Whether the request asks for HTML (an `Accept` item starting with `text/html`), as a browser
+/// navigation does. A header value that is not visible ASCII counts as not asking for HTML.
+fn accepts_html(headers: &HeaderMap) -> bool {
+    headers.get_all(header::ACCEPT).iter().any(|value| {
+        value.to_str().is_ok_and(|value| {
+            value
+                .split(',')
+                .any(|item| item.trim().starts_with("text/html"))
+        })
+    })
 }
 
 fn values<'a>(headers: &'a HeaderMap, name: &str) -> HttpResult<Vec<&'a str>> {
@@ -2206,10 +2459,7 @@ fn bearer_failure(error: erp_fields::Error) -> erp_rpc::RpcFailure {
         };
         return erp_rpc::InfraError::RateLimited { retry_after }.into();
     }
-    if error.kind() == erp_fields::ErrorKind::AccessDenied
-        && (error.message() == "Invalid apikey"
-            || error.message() == "Imported legacy API keys are not accepted until a later release")
-    {
+    if error.kind() == erp_fields::ErrorKind::AccessDenied && error.message() == "Invalid apikey" {
         return erp_rpc::ProtocolError::Unauthorized(error.message().to_owned()).into();
     }
     error.into()
@@ -2248,6 +2498,23 @@ fn auth_error(error: erp_fields::Error) -> Response {
     );
     internal()
 }
+/// The answer to a failed form-token check. A bad cookie or token is the client's 400; a key or
+/// entropy failure is the server's: a plain 500 whose body names neither the token nor the key,
+/// with the cause in the log (its text names no secret).
+fn csrf_refusal(error: PrefsError) -> Response {
+    match error {
+        PrefsError::Cookie | PrefsError::Csrf => bad("Session expired (invalid CSRF token)"),
+        _ => {
+            tracing::error!(
+                target: "erp::http",
+                reason = %error,
+                request_id = erp_orm::trace::current_request_id().as_deref(),
+                "browser form token check failed on the server side"
+            );
+            internal()
+        }
+    }
+}
 fn busy() -> Response {
     let mut result = response(StatusCode::SERVICE_UNAVAILABLE, "Server busy; retry later.");
     result
@@ -2255,12 +2522,19 @@ fn busy() -> Response {
         .insert(header::RETRY_AFTER, HeaderValue::from_static("5"));
     result
 }
+/// A local `303` (threat model §13 `redirect` class): no referrer leaves with it, nothing caches it.
 fn redirect(location: &str) -> HttpResult<Response> {
     let mut result = response(StatusCode::SEE_OTHER, "");
-    result.headers_mut().insert(
+    let headers = result.headers_mut();
+    headers.insert(
         header::LOCATION,
         HeaderValue::from_str(location).map_err(|_| bad("unsafe redirect"))?,
     );
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(result)
 }
 
@@ -2274,10 +2548,10 @@ enum LifecycleOperation {
 impl LifecycleOperation {
     fn from_path(path: &str) -> Option<Self> {
         match path {
-            "/erp/module/install" => Some(Self::Install),
-            "/erp/module/upgrade" => Some(Self::Upgrade),
-            "/erp/module/uninstall" => Some(Self::Uninstall),
-            "/erp/module/force-demo" => Some(Self::ForceDemo),
+            routes::MODULE_INSTALL => Some(Self::Install),
+            routes::MODULE_UPGRADE => Some(Self::Upgrade),
+            routes::MODULE_UNINSTALL => Some(Self::Uninstall),
+            routes::MODULE_FORCE_DEMO => Some(Self::ForceDemo),
             _ => None, // Exact canonical paths alone own lifecycle writes.
         }
     }
@@ -2552,6 +2826,49 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.kind(), erp_fields::ErrorKind::Validation);
         assert_eq!(error.message(), "Invalid uninstall impact fingerprint");
+    }
+
+    #[test]
+    fn canonical_path_keeps_its_legacy_mappings() {
+        for (from, to) in [
+            ("/odoo", "/erp"),
+            ("/web", "/erp"),
+            ("/web/login", "/erp/login"),
+            ("/web/login_successful", "/erp/login_successful"),
+            ("/web/session/logout", "/erp/session/logout"),
+            ("/web/module/install", "/erp/module/install"),
+            ("/odoo/action-12", "/erp/action-12"),
+            ("/web/assets/a.js", "/erp/assets/a.js"),
+            ("/json/2/res.partner/read", "/erp/json/2/res.partner/read"),
+            ("/web/dataset/call_kw/x", "/erp/dataset/call_kw/x"),
+            ("/erp/login", "/erp/login"),
+            ("/web/content/3", "/erp/content/3"),
+        ] {
+            assert_eq!(canonical_path(from), to, "{from}");
+        }
+    }
+
+    #[test]
+    fn every_served_legacy_alias_lands_on_a_served_route() {
+        for (legacy, native) in routes::LEGACY_EXACT.iter().chain(routes::LEGACY_PREFIX) {
+            if routes::KNOWN_UNSERVED_ALIAS_TARGETS.contains(native) {
+                continue;
+            }
+            let sample = if routes::LEGACY_EXACT.contains(&(*legacy, *native)) {
+                (*legacy).to_owned()
+            } else {
+                format!("{legacy}sample")
+            };
+            assert!(routes::served(&canonical_path(&sample)), "{sample}");
+        }
+        for path in [
+            "/web/login",
+            "/odoo/action-5",
+            "/web/assets/x.js",
+            "/json/2/res.partner/read",
+        ] {
+            assert!(routes::served(&canonical_path(path)), "{path}");
+        }
     }
 
     #[tokio::test]
@@ -2834,6 +3151,179 @@ mod tests {
             to_bytes(api.into_body(), 4096).await.unwrap().as_ref(),
             b"{\"error\":\"expired\"}"
         );
+    }
+
+    /// it serves, never `'unsafe-inline'`, and shows its own server-generated v4 reference)
+    #[tokio::test]
+    #[allow(clippy::unwrap_used, reason = "test assertions")]
+    async fn error_pages_hash_their_style_and_show_a_fresh_reference() {
+        use base64::Engine as _;
+        use sha2::Digest as _;
+        let mut references = Vec::new();
+        for _ in 0..2 {
+            let page = finish_response(response(StatusCode::FORBIDDEN, "private detail"), true);
+            assert_eq!(page.status(), StatusCode::FORBIDDEN);
+            let stored = page
+                .extensions()
+                .get::<ErrorReference>()
+                .unwrap()
+                .0
+                .as_str()
+                .to_owned();
+            let csp = page.headers()[header::CONTENT_SECURITY_POLICY]
+                .to_str()
+                .unwrap()
+                .to_owned();
+            let body = to_bytes(page.into_body(), 65_536).await.unwrap();
+            let html = String::from_utf8(body.to_vec()).unwrap();
+            assert_eq!(html.matches("<style>").count(), 1, "{html}");
+            assert!(!html.contains("style="), "no style attribute: {html}");
+            let style = html
+                .split("<style>")
+                .nth(1)
+                .unwrap()
+                .split("</style>")
+                .next()
+                .unwrap();
+            assert!(!style.is_empty());
+            let hash = base64::engine::general_purpose::STANDARD
+                .encode(sha2::Sha256::digest(style.as_bytes()));
+            assert_eq!(
+                csp,
+                format!(
+                    "default-src 'none'; style-src 'sha256-{hash}'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+                )
+            );
+            assert!(!csp.contains("unsafe-inline"), "{csp}");
+            let shown = html
+                .split("Reference: <code>")
+                .nth(1)
+                .unwrap()
+                .split("</code>")
+                .next()
+                .unwrap();
+            erp_rpc::CorrelationId::parse(shown).unwrap();
+            assert_eq!(shown.as_bytes()[14], b'4', "a v4 id: {shown}");
+            assert_eq!(shown, stored);
+            assert!(!html.contains("private detail"));
+            references.push(stored);
+        }
+        assert_ne!(
+            references[0], references[1],
+            "each page has its own reference"
+        );
+        // A protocol response is not rendered and carries no reference.
+        let api = finish_response(response(StatusCode::FORBIDDEN, "denied"), false);
+        assert!(api.extensions().get::<ErrorReference>().is_none());
+        assert!(!api.headers().contains_key(header::CONTENT_SECURITY_POLICY));
+    }
+
+    /// Threat model §13: the final response keeps `no-referrer`, defaults to `same-origin`, and
+    /// replaces a weaker value set by a handler.
+    #[test]
+    #[allow(clippy::unwrap_used, reason = "test assertions")]
+    fn final_referrer_policy_is_never_weaker_than_same_origin() {
+        let plain = finish_response(response(StatusCode::OK, "ok"), false);
+        assert_eq!(plain.headers()[header::REFERRER_POLICY], "same-origin");
+
+        let local = finish_response(redirect("/erp/login").unwrap(), false);
+        assert_eq!(local.headers()[header::REFERRER_POLICY], "no-referrer");
+
+        for weaker in [
+            "unsafe-url",
+            "origin-when-cross-origin",
+            "no-referrer, unsafe-url",
+        ] {
+            let mut raw = response(StatusCode::OK, "ok");
+            raw.headers_mut()
+                .insert(header::REFERRER_POLICY, HeaderValue::from_static(weaker));
+            let finished = finish_response(raw, false);
+            let values: Vec<_> = finished
+                .headers()
+                .get_all(header::REFERRER_POLICY)
+                .iter()
+                .map(HeaderValue::as_bytes)
+                .collect();
+            assert_eq!(
+                values,
+                [b"same-origin".as_slice()],
+                "handler value {weaker}"
+            );
+        }
+
+        // A second header after the strict one would win in the browser; both are replaced.
+        let mut raw = redirect("/erp/login").unwrap();
+        raw.headers_mut().append(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("unsafe-url"),
+        );
+        let finished = finish_response(raw, false);
+        let values: Vec<_> = finished
+            .headers()
+            .get_all(header::REFERRER_POLICY)
+            .iter()
+            .map(HeaderValue::as_bytes)
+            .collect();
+        assert_eq!(values, [b"same-origin".as_slice()]);
+    }
+
+    /// bad cookie or token keeps the typed 400)
+    #[tokio::test]
+    #[allow(clippy::unwrap_used, reason = "test assertions")]
+    async fn csrf_key_failure_is_a_server_error() {
+        let refused = csrf_refusal(PrefsError::Key);
+        assert_eq!(refused.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = to_bytes(refused.into_body(), 4096).await.unwrap();
+        assert_eq!(body.as_ref(), b"Internal server error");
+        let text = std::str::from_utf8(&body).unwrap().to_ascii_lowercase();
+        assert!(!text.contains("csrf") && !text.contains("key"), "{text}");
+        for client in [PrefsError::Cookie, PrefsError::Csrf] {
+            let refused = csrf_refusal(client);
+            assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(
+                to_bytes(refused.into_body(), 4096).await.unwrap().as_ref(),
+                b"Session expired (invalid CSRF token)"
+            );
+        }
+    }
+
+    /// busy answer keeps exactly its cleanup headers; no other cookie is carried over)
+    #[test]
+    #[allow(clippy::unwrap_used, reason = "test assertions")]
+    fn busy_keeps_logout_cleanup_headers() {
+        let expired =
+            HeaderValue::from_static("session_id=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
+        let mut failed = internal();
+        failed.headers_mut().append(
+            header::SET_COOKIE,
+            HeaderValue::from_static("other=1; Path=/"),
+        );
+        LogoutCleanup::new(expired.clone()).apply(&mut failed);
+        let replaced = superseded_failure(&failed);
+        assert_eq!(replaced.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(replaced.headers()[header::RETRY_AFTER], "5");
+        let cookies: Vec<_> = replaced
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .collect();
+        assert_eq!(cookies, [&expired]);
+        assert_eq!(
+            replaced.headers()["clear-site-data"],
+            LOGOUT_CLEAR_SITE_DATA
+        );
+        assert!(replaced.extensions().get::<LogoutCleanup>().is_some());
+
+        // An unmarked failure is replaced by the plain busy answer, its cookies dropped.
+        let mut other = internal();
+        other.headers_mut().append(
+            header::SET_COOKIE,
+            HeaderValue::from_static("other=1; Path=/"),
+        );
+        let replaced = superseded_failure(&other);
+        assert_eq!(replaced.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(!replaced.headers().contains_key(header::SET_COOKIE));
+        assert!(!replaced.headers().contains_key("clear-site-data"));
     }
 
     /// the hook's text)

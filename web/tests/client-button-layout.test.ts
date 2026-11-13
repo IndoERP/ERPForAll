@@ -66,7 +66,8 @@ test("button box partitions in order, reserves More space, and preserves origina
   expect(mount("button_box", 2, ["action_0", "action_1"]).host.querySelector("button")).toBeNull();
   expect([...host.querySelectorAll('[data-focus-key]')]).toEqual(controls);
   width(390);
-  expect([...menu.querySelectorAll('[data-focus-key]')]).toEqual(controls);
+  // Phone and tablet widths keep three statistics beside More; the rest wait in the menu, in order.
+  expect([...menu.querySelectorAll('[data-focus-key]')]).toEqual(controls.slice(3));
   more.click(); controls.at(-1)!.click(); expect(calls).toEqual(["action_8"]);
   width(1280);
   expect(new Set(host.querySelectorAll('[data-focus-key]')).size).toBe(8);

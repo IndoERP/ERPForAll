@@ -11,8 +11,8 @@
 //! - bounded C-side work: capped pattern functions, memory-charged `string.rep`/`table.concat`;
 //! - exact, bounded value conversion ([`ScriptValue`]).
 //!
-//! The host integration (transaction, caller's rights, async) is described in
-//! ; the server action runner itself is.
+//! The host integration (transaction, caller's rights, async) is;
+//! the server action runner itself is.
 
 mod context;
 mod convert;

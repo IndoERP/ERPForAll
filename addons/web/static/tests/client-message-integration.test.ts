@@ -37,7 +37,7 @@ test('validation tracks invalid fields and notifies only when requested',()=>{
   const notify=vi.fn(), surface=new RecordForm({form,state,view:description.views.get('form')!,rpc,context:{},run:()=>{},report:()=>{},notify,openRecord:async()=>{},change:()=>{},button:()=>{}});
   surface.render(); expect(surface.valid(false)).toBe(false); expect(notify).not.toHaveBeenCalled();
   expect(form.querySelector('input')?.getAttribute('aria-invalid')).toBe('true');
-  expect(surface.valid()).toBe(false); expect(notify).toHaveBeenCalledExactlyOnceWith('Complete the required fields before saving.');
+  expect(surface.valid()).toBe(false); expect(notify).toHaveBeenCalledExactlyOnceWith('1 field needs a value');
   form.querySelector('input')!.value='Valid';expect(surface.valid()).toBe(true);expect(notify).toHaveBeenCalledTimes(1);
   expect(form.querySelector('input')?.hasAttribute('aria-invalid')).toBe(false);surface.dispose();
 });

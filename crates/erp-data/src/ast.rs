@@ -189,8 +189,7 @@ impl XmlId {
         &self.name
     }
 
-    /// `module.name`, using `default_module` when the ID has no module part
-    /// .
+    /// `module.name`, using `default_module` when the ID has no module part.
     pub fn complete_name(&self, default_module: &str) -> String {
         match &self.module {
             Some(m) => format!("{m}.{}", self.name),
@@ -584,7 +583,7 @@ pub enum FieldValue {
     Html(String),
     /// Nested `<record>` elements of a one2many field, created after the parent.
     SubRecords(Vec<RecordOp>),
-    /// A CSV cell for `load` coercion (`None` for an empty cell).
+    /// A CSV cell for `load()` coercion (`None` for an empty cell).
     CsvCell(Option<String>),
 }
 

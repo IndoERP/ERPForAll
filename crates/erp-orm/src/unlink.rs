@@ -28,10 +28,11 @@
 //! poisons the transaction: the deletion did not happen).
 
 use std::any::Any;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
 use erp_fields::{Cell, Error, FieldType, OnDelete, RecId, Result};
-use erp_registry::{FieldId, ModelId};
+use erp_registry::{FieldId, FieldSpec, ModelId, ModelSpec};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::Transaction;
@@ -59,7 +60,7 @@ impl Records {
     /// effects, `ResourceExhausted` for capture bounds, and database/constraint failures. A
     /// failure after pending business work is discarded also prevents commit, before DELETE.
     pub async fn unlink(&self, tx: &mut Transaction) -> Result<()> {
-        tx.check_records(self)?;
+        tx.admit_records(self).await?;
         if !self.is_empty() {
             check_delete_capture(tx, self)?;
         }
@@ -107,7 +108,7 @@ pub(crate) async fn unlink_records(tx: &mut Transaction, records: &Records) -> R
     if records.is_empty() {
         return Ok(());
     }
-    tx.check_records(records)?;
+    tx.admit_records(records).await?;
     check_delete_capture(tx, records)?;
     tx.require_writable(crate::WriteOp::Unlink, records.spec().name)?;
     let env = records.env().clone();
@@ -178,6 +179,14 @@ fn delete_capture_relevant(tx: &Transaction, root: ModelId) -> Result<bool> {
         }
         for &(owner, field) in tx.shared.relations.referencing(model) {
             let spec = tx.registry().model_by_id(owner);
+            // a company map is never a foreign key: whatever `ondelete` it declares, its cleanup
+            // only changes the holder row, like a set-null link
+            if spec.field_by_id(field).company_dependent {
+                if tx.capture_relevant(owner, field) {
+                    return Ok(true);
+                }
+                continue;
+            }
             match &spec.field_by_id(field).ty {
                 FieldType::Many2one {
                     ondelete: OnDelete::Cascade,
@@ -330,15 +339,22 @@ async fn unlink_checked(
     if ids.is_empty() {
         return Ok(());
     }
-    let force_delete = env
-        .context()
-        .get("force_delete")
-        .is_some_and(|v| v.is_truthy());
-    check_company_dependent_unlink(tx, &env, spec, &ids, force_delete).await?;
+    // The RPC binding refuses the key from callers as well.
+    let force_delete = env.su()
+        && env
+            .context()
+            .get("force_delete")
+            .is_some_and(|v| v.is_truthy());
+    // Company-map references are referential actions run by the ORM: every
+    // refusal first, then the cleanup. An unflushed write to a holder field cannot exist here (the
+    // flush above wrote it); finding one is an invariant break, reported before anything is deleted.
+    refuse_company_dependent_unlink(tx, spec, &ids, force_delete).await?;
+    let property_holders = property_holders_of(tx, model)?;
 
     if crate::ir_default::is_available(&registry) {
         crate::ir_default::discard_records(tx, records).await?;
     }
+    let mut property_affected = clean_company_dependent_references(tx, spec, &ids).await?;
     if spec.name == "ir.sequence" || spec.name == "ir.sequence.date_range" {
         crate::sequence::on_records_unlinked(tx, records, &ids).await?;
     }
@@ -347,7 +363,8 @@ async fn unlink_checked(
         tx.langs_dirty = true;
     }
 
-    let (affected, cascaded) = tx.deletion_dependents(model, &ids).await?;
+    let (mut affected, cascaded) = tx.deletion_dependents(model, &ids).await?;
+    affected.append(&mut property_affected);
     let sql = if spec.eventful {
         erp_sql::relational::delete_records_returning(&spec.table)
     } else {
@@ -408,6 +425,29 @@ async fn unlink_checked(
     tx.access_written(model, None);
     links_to_deleted(tx, &registry, model);
     let mut deleted = tx.forget_deleted(model, &ids);
+    // rows an FK cascade took leave company maps pointing at nothing: forget the maps that can
+    for (holder, field) in property_holders {
+        if let Some(cache) = tx.cache.model(holder) {
+            // what depends on a forgotten map is marked, like any other changed field
+            let cached: Vec<RecId> = cache
+                .cached_values(field)
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect();
+            if !cached.is_empty() {
+                affected.push(Affected {
+                    model: holder,
+                    field,
+                    ids: cached,
+                    nulled: false,
+                });
+            }
+            tx.cache
+                .model_mut(holder)
+                .invalidate(Some(&[field][..]), None);
+        }
+        tx.access_written(holder, Some(&[field]));
+    }
     // rows the database deleted by cascade that the dependents walk named (cached or not)
     for (m, gone) in cascaded {
         tx.access_written(m, None);
@@ -485,7 +525,78 @@ fn decode_ids(rows: &[tokio_postgres::Row]) -> Result<Vec<RecId>> {
     Ok(out)
 }
 
+/// The owners read for the records of a deleted model through one stored inverse column, shared
+/// by every one2many over it.
+enum InverseOwners {
+    /// Every distinct owner id: the inverse is a many2one, or a `many2one_reference` whose model
+    /// field has no column (its one2many fields are then all marked, as before the model filter).
+    Plain(Vec<RecId>),
+    /// The distinct `(owner model name, owner id)` pairs, in row order: the inverse is a
+    /// `many2one_reference` and each one2many over it takes the owners of its own model.
+    Tagged(Vec<(Option<String>, RecId)>),
+}
+
+impl InverseOwners {
+    /// The owner ids for the one2many of the model named `owner_model`, in row order.
+    fn owners(&self, owner_model: &str) -> Vec<RecId> {
+        match self {
+            Self::Plain(ids) => ids.clone(),
+            Self::Tagged(rows) => rows
+                .iter()
+                .filter(|(model, _)| model.as_deref() == Some(owner_model))
+                .map(|(_, id)| *id)
+                .collect(),
+        }
+    }
+}
+
+fn decode_tagged_owners(rows: &[tokio_postgres::Row]) -> Result<Vec<(Option<String>, RecId)>> {
+    let decode = |e: tokio_postgres::Error| {
+        Error::new(erp_fields::ErrorKind::Database, "could not decode an owner").with_source(e)
+    };
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let model: Option<String> = row.try_get(0).map_err(decode)?;
+        let raw: i64 = row.try_get(1).map_err(decode)?;
+        if let Some(id) = RecId::from_real(raw) {
+            out.push((model, id));
+        }
+    }
+    Ok(out)
+}
+
 impl Transaction {
+    /// One statement reading the owners of the deleted `values` of `spec` through the stored
+    /// inverse `inv`; with the model column when `inv` is a `many2one_reference` whose model field
+    /// has a column.
+    async fn read_inverse_owners(
+        &mut self,
+        spec: &ModelSpec,
+        inv: &FieldSpec,
+        values: &[i64],
+    ) -> Result<InverseOwners> {
+        let model_column = match &inv.ty {
+            FieldType::Many2oneReference { model_field } => spec
+                .field(model_field)
+                .filter(|f| f.has_column())
+                .map(|f| f.name),
+            _ => None,
+        };
+        match model_column {
+            Some(model_column) => {
+                let sql =
+                    erp_sql::relational::targets_of_with_model(&spec.table, model_column, inv.name);
+                let rows = self.query(&sql, &[&values]).await?;
+                Ok(InverseOwners::Tagged(decode_tagged_owners(&rows)?))
+            }
+            None => {
+                let sql = erp_sql::relational::targets_of(&spec.table, inv.name);
+                let rows = self.query(&sql, &[&values]).await?;
+                Ok(InverseOwners::Plain(decode_ids(&rows)?))
+            }
+        }
+    }
+
     /// Forget what the follow-delete triggers changed for a deletion ([`FollowEffects`]): the
     /// named caches, and every record of the key-table models.
     pub(crate) fn forget_followed(&mut self, effects: &crate::relational::FollowEffects) {
@@ -536,6 +647,15 @@ impl Transaction {
             return true;
         }
         for &(rm, rf) in shared.relations.referencing(model) {
+            // a company map is cleaned by the unlink itself, not by the database
+            if shared
+                .registry
+                .model_by_id(rm)
+                .field_by_id(rf)
+                .company_dependent
+            {
+                continue;
+            }
             match &shared.registry.model_by_id(rm).field_by_id(rf).ty {
                 FieldType::Many2one {
                     ondelete: OnDelete::SetNull,
@@ -580,6 +700,10 @@ impl Transaction {
             .await?;
             for &(rm, rf) in shared.relations.referencing(m) {
                 let field = registry.model_by_id(rm).field_by_id(rf);
+                // never a foreign key: the company-map cleanup reports its holders itself
+                if field.company_dependent {
+                    continue;
+                }
                 let table = &registry.model_by_id(rm).table;
                 match &field.ty {
                     // `set null` many2one values of other records
@@ -622,7 +746,9 @@ impl Transaction {
                     _ => {}
                 }
             }
-            // x2many values losing the deleted records
+            // x2many values losing the deleted records; the owner reads of this iteration, by
+            // stored inverse field
+            let mut owner_reads: FxHashMap<FieldId, InverseOwners> = FxHashMap::default();
             for &(xm, xf) in shared.relations.x2many_to(m) {
                 if !graph.has_dependents((xm, xf)) {
                     continue;
@@ -631,14 +757,31 @@ impl Transaction {
                 let sql = match &owner_spec.field_by_id(xf).ty {
                     FieldType::One2many { inverse, .. } => match spec.field(inverse) {
                         Some(inv) if inv.has_column() => {
-                            erp_sql::relational::targets_of(&spec.table, inv.name)
+                            // one read per inverse column, shared by every x2many over it
+                            let read = match owner_reads.entry(inv.id) {
+                                Entry::Occupied(hit) => hit.into_mut(),
+                                Entry::Vacant(slot) => {
+                                    let read = self.read_inverse_owners(spec, inv, &values).await?;
+                                    slot.insert(read)
+                                }
+                            };
+                            let found = read.owners(owner_spec.name);
+                            if !found.is_empty() {
+                                out.push(Affected {
+                                    model: xm,
+                                    field: xf,
+                                    ids: found,
+                                    nulled: false,
+                                });
+                            }
+                            continue;
                         }
                         Some(inv) => {
                             // an inverse without a column (a related many2one): its values,
                             // read before the rows go
                             let env = self
                                 .env()
-                                .sudo(true)
+                                .engine_sudo()
                                 .with_context([("active_test", erp_fields::Value::Bool(false))]);
                             let gone_arc: Arc<[RecId]> = Arc::from(gone.clone());
                             let deleted =
@@ -723,7 +866,8 @@ impl Transaction {
                 let FieldType::Many2one { ondelete, .. } = &field.ty else {
                     continue;
                 };
-                if *ondelete == OnDelete::Restrict {
+                // a company map neither cascades nor nulls a cached cell; see the invalidation of the holder fields after the DELETE
+                if *ondelete == OnDelete::Restrict || field.company_dependent {
                     continue;
                 }
                 let cascade = *ondelete == OnDelete::Cascade;
@@ -795,11 +939,13 @@ impl Transaction {
                 continue;
             }
             for &(rm, rf) in shared.relations.referencing(m) {
-                let FieldType::Many2one { ondelete, .. } =
-                    &registry.model_by_id(rm).field_by_id(rf).ty
-                else {
+                let field = registry.model_by_id(rm).field_by_id(rf);
+                let FieldType::Many2one { ondelete, .. } = &field.ty else {
                     continue;
                 };
+                if field.company_dependent {
+                    continue;
+                }
                 match ondelete {
                     OnDelete::SetNull => {
                         if self.cache.model(rm).is_some() {
@@ -889,129 +1035,181 @@ impl Transaction {
     }
 }
 
-async fn check_company_dependent_unlink(
-    tx: &mut Transaction,
-    env: &crate::Env,
-    spec: &erp_registry::ModelSpec,
-    ids: &[RecId],
-    force_delete: bool,
-) -> Result<()> {
-    let registry = env.registry();
-    let sub_ids: Vec<i64> = ids.iter().map(|id| id.get()).collect();
-    let sub_ids_str: Vec<String> = ids.iter().map(|id| id.get().to_string()).collect();
+/// The company-dependent many2one fields (never inherited copies) whose comodel is `model`, with
+/// their owner models.
+fn property_fields(
+    shared: &crate::transaction::Shared,
+    model: ModelId,
+) -> Vec<(ModelId, &FieldSpec)> {
+    shared
+        .relations
+        .referencing(model)
+        .iter()
+        .map(|&(owner, field)| (owner, shared.registry.model_by_id(owner).field_by_id(field)))
+        .filter(|(_, field)| field.company_dependent && field.inherited.is_none())
+        .collect()
+}
 
-    if !force_delete && crate::ir_default::is_available(registry) {
-        let default_check_sql = r#"
-            SELECT f.model, f.name, d.json_value
-            FROM ir_default d
-            JOIN ir_model_fields f ON d.field_id = f.id
-            WHERE f.relation = $1 AND d.json_value = ANY($2)
-            LIMIT 1
-        "#;
-        let rows = tx
-            .query(default_check_sql, &[&spec.name, &sub_ids_str])
-            .await?;
-        if let Some(row) = rows.first() {
-            let _m_name: String = row.try_get(0).map_err(|e| Error::db(e.to_string()))?;
-            let f_name: String = row.try_get(1).map_err(|e| Error::db(e.to_string()))?;
-            let json_v: String = row.try_get(2).map_err(|e| Error::db(e.to_string()))?;
-            return Err(Error::user(format!(
-                "Unable to delete {spec_name},{json_v} because it is used as the default value of {f_name}",
-                spec_name = spec.name,
-            )));
+/// The company-map fields whose cached values can name rows `root`'s deletion removes: the
+/// holders of `root` and of every model reachable from it through cascading foreign keys (a
+/// static walk, so over-invalidation is safe). An unflushed write to such a field is refused: the
+/// unlink flushed before this point, so one would be lost by the invalidation.
+fn property_holders_of(tx: &Transaction, root: ModelId) -> Result<Vec<(ModelId, FieldId)>> {
+    let shared = &tx.shared;
+    let mut reach: FxHashSet<ModelId> = FxHashSet::default();
+    let mut pending = vec![root];
+    while let Some(model) = pending.pop() {
+        if !reach.insert(model) {
+            continue;
         }
-    }
-
-    for other_model in registry.models() {
-        for f in &other_model.fields {
-            if f.company_dependent && f.ty.comodel() == Some(spec.name) {
-                // (a) ondelete = restrict
-                if f.ty.ondelete() == Some(OnDelete::Restrict) && !force_delete {
-                    let sql = format!(
-                        "SELECT id, \"{field}\" FROM \"{table}\" WHERE \"{field}\" IS NOT NULL LIMIT 1",
-                        field = f.name,
-                        table = other_model.table,
-                    );
-                    {
-                        let rows = tx.query(&sql, &[]).await?;
-                        for row in rows {
-                            let other_id: i64 =
-                                row.try_get(0).map_err(|e| Error::db(e.to_string()))?;
-                            let raw_json: serde_json::Value =
-                                row.try_get(1).map_err(|e| Error::db(e.to_string()))?;
-                            if let Some(obj) = raw_json.as_object() {
-                                for (_, v) in obj {
-                                    if let Some(target_id) = v.as_i64()
-                                        && sub_ids.contains(&target_id)
-                                    {
-                                        return Err(Error::user(format!(
-                                            "You cannot delete {spec_name},{target_id}, as it is used by {other_model},{other_id}",
-                                            spec_name = spec.name,
-                                            other_model = other_model.name,
-                                        )));
-                                    }
-                                }
-                            }
-                        }
+        for &(owner, field) in shared.relations.referencing(model) {
+            let spec = shared.registry.model_by_id(owner).field_by_id(field);
+            if !spec.company_dependent
+                && matches!(
+                    spec.ty,
+                    FieldType::Many2one {
+                        ondelete: OnDelete::Cascade,
+                        ..
                     }
-                } else {
-                    // (b) default policy: set null in jsonb
-                    let sql = format!(
-                        "SELECT id, \"{field}\" FROM \"{table}\" WHERE \"{field}\" IS NOT NULL",
-                        field = f.name,
-                        table = other_model.table,
-                    );
-                    {
-                        let rows = tx.query(&sql, &[]).await?;
-                        let mut touched = false;
-                        for row in rows {
-                            let other_id: i64 =
-                                row.try_get(0).map_err(|e| Error::db(e.to_string()))?;
-                            let raw_json: serde_json::Value =
-                                row.try_get(1).map_err(|e| Error::db(e.to_string()))?;
-                            if let Some(obj) = raw_json.as_object() {
-                                let mut modified = false;
-                                let mut new_obj = serde_json::Map::new();
-                                for (k, v) in obj {
-                                    if let Some(target_id) = v.as_i64()
-                                        && sub_ids.contains(&target_id)
-                                    {
-                                        new_obj.insert(k.clone(), serde_json::Value::Null);
-                                        modified = true;
-                                    } else {
-                                        new_obj.insert(k.clone(), v.clone());
-                                    }
-                                }
-                                if modified {
-                                    let update_sql = format!(
-                                        "UPDATE \"{table}\" SET \"{field}\" = $1 WHERE id = $2",
-                                        field = f.name,
-                                        table = other_model.table,
-                                    );
-                                    tx.execute(
-                                        &update_sql,
-                                        &[&serde_json::Value::Object(new_obj), &other_id],
-                                    )
-                                    .await?;
-                                    touched = true;
-                                }
-                            }
-                        }
-                        if touched {
-                            // a rule may read the field this statement changed behind the
-                            // cache: end the memoized record checks and the cached values
-                            tx.access_written(other_model.id, Some(&[f.id]));
-                            tx.cache
-                                .model_mut(other_model.id)
-                                .invalidate(Some(&[f.id]), None);
-                        }
-                    }
-                }
+                )
+            {
+                pending.push(owner);
             }
         }
     }
+    let mut out = Vec::new();
+    for model in reach {
+        for (owner, field) in property_fields(shared, model) {
+            if tx
+                .cache
+                .model(owner)
+                .is_some_and(|cache| !cache.dirty_values(field.id).is_empty())
+            {
+                return Err(Error::programming(format!(
+                    "{}.{}: an unflushed company-dependent write survived the flush before a deletion",
+                    shared.registry.model_by_id(owner).name,
+                    field.name
+                )));
+            }
+            if !out.contains(&(owner, field.id)) {
+                out.push((owner, field.id));
+            }
+        }
+    }
+    Ok(out)
+}
 
+/// `EXISTS` over the entries of the map in column `column` of alias `t` that name a deleted id
+/// (`$1` is the ids as `jsonb[]`).
+fn names_deleted(column: &str) -> String {
+    format!(
+        "CASE WHEN jsonb_typeof(t.{column}) = 'object' THEN EXISTS (SELECT 1 FROM jsonb_each(t.{column}) AS entry WHERE entry.value = ANY($1::jsonb[])) ELSE false END"
+    )
+}
+
+/// First pass of the company-map referential actions: every refusal, before anything changes.
+/// A fallback in `ir.default` of a company-dependent many2one to the model refuses (the most
+/// recent default is named); so does a `restrict` field with a reference stored for any company.
+/// The scans run in PostgreSQL over every row, whatever the caller may see, so the messages name
+/// neither a holder nor a company. `force_delete` skips both.
+async fn refuse_company_dependent_unlink(
+    tx: &mut Transaction,
+    spec: &ModelSpec,
+    ids: &[RecId],
+    force_delete: bool,
+) -> Result<()> {
+    if force_delete {
+        return Ok(());
+    }
+    let shared = Arc::clone(&tx.shared);
+    let fields = property_fields(&shared, spec.id);
+    if fields.is_empty() {
+        return Ok(());
+    }
+    if crate::ir_default::is_available(&shared.registry) {
+        let ids_text: Vec<String> = ids.iter().map(|id| id.get().to_string()).collect();
+        let models: Vec<&str> = fields
+            .iter()
+            .map(|(owner, _)| shared.registry.model_by_id(*owner).name)
+            .collect();
+        let names: Vec<&str> = fields.iter().map(|(_, field)| field.name).collect();
+        let sql = "SELECT f.name, d.json_value FROM ir_default d JOIN ir_model_fields f ON d.field_id = f.id \
+                   WHERE f.relation = $1 AND (f.model, f.name) IN (SELECT * FROM unnest($3::text[], $4::text[])) \
+                   AND d.json_value = ANY($2) ORDER BY d.id DESC LIMIT 1";
+        let rows = tx
+            .query(sql, &[&spec.name, &ids_text, &models, &names])
+            .await?;
+        if let Some(row) = rows.first() {
+            let field: String = row.try_get(0).map_err(|e| Error::db(e.to_string()))?;
+            let value: String = row.try_get(1).map_err(|e| Error::db(e.to_string()))?;
+            return Err(Error::user(format!(
+                "Unable to delete {model},{value} because it is used as the default value of {field}",
+                model = spec.name,
+            )));
+        }
+    }
+    let targets = deleted_json(ids);
+    for (owner, field) in fields {
+        if field.ty.ondelete() != Some(OnDelete::Restrict) {
+            continue;
+        }
+        let table = erp_sql::quote(&shared.registry.model_by_id(owner).table);
+        let sql = format!(
+            "SELECT 1 FROM {table} AS t WHERE {} LIMIT 1",
+            names_deleted(&erp_sql::quote(field.name))
+        );
+        if !tx.query(&sql, &[&targets]).await?.is_empty() {
+            return Err(Error::user(
+                "You cannot delete a record used by a company-dependent field",
+            ));
+        }
+    }
     Ok(())
+}
+
+fn deleted_json(ids: &[RecId]) -> Vec<serde_json::Value> {
+    ids.iter()
+        .map(|id| serde_json::Value::from(id.get()))
+        .collect()
+}
+
+/// Second pass: every reference to a deleted row becomes JSON null in its map, the other entries
+/// kept (one statement per holder field, patching the database's current map atomically). A
+/// `restrict` field reaches here only under `force_delete`; `cascade` behaves as `set null`, the
+/// map holds no foreign key to cascade. The holder rows the statements changed come back as
+/// affected fields, so their dependents are marked after the deletion.
+async fn clean_company_dependent_references(
+    tx: &mut Transaction,
+    spec: &ModelSpec,
+    ids: &[RecId],
+) -> Result<Vec<Affected>> {
+    let shared = Arc::clone(&tx.shared);
+    let targets = deleted_json(ids);
+    let mut out = Vec::new();
+    for (owner, field) in property_fields(&shared, spec.id) {
+        let table = erp_sql::quote(&shared.registry.model_by_id(owner).table);
+        let column = erp_sql::quote(field.name);
+        let sql = format!(
+            "UPDATE {table} AS t SET {column} = (SELECT jsonb_object_agg(entry.key, CASE WHEN entry.value = ANY($1::jsonb[]) THEN 'null'::jsonb ELSE entry.value END) FROM jsonb_each(t.{column}) AS entry) WHERE {} RETURNING t.\"id\"",
+            names_deleted(&column)
+        );
+        let rows = tx.query(&sql, &[&targets]).await?;
+        let changed = decode_ids(&rows)?;
+        if changed.is_empty() {
+            continue;
+        }
+        tx.access_written(owner, Some(&[field.id]));
+        tx.cache
+            .model_mut(owner)
+            .invalidate(Some(&[field.id]), None);
+        out.push(Affected {
+            model: owner,
+            field: field.id,
+            ids: changed,
+            nulled: false,
+        });
+    }
+    Ok(out)
 }
 
 // ---- base implementation of `unlink` ---------------------------------------------------------

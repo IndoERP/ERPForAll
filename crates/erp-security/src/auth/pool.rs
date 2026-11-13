@@ -308,6 +308,8 @@ struct LineageBinding {
     env: erp_orm::Env,
     pool: &'static HashPool,
     admission: OnceLock<(usize, Arc<Semaphore>)>,
+    /// One permit: the API key last-use writes of this lineage, one at a time.
+    last_use_gate: Arc<Semaphore>,
 }
 
 fn registered() -> &'static std::sync::Mutex<Vec<Weak<LineageBinding>>> {
@@ -381,6 +383,11 @@ impl PoolBinding {
         Ok(Arc::clone(gate))
     }
 
+    /// The one-permit gate of the API key last-use writes, shared by every `Auth` of the lineage.
+    pub(crate) fn last_use_gate(&self) -> Arc<Semaphore> {
+        Arc::clone(&self.inner.last_use_gate)
+    }
+
     pub(crate) fn count_dummy_verify(&self) {
         self.inner.pool.count_dummy_verify();
     }
@@ -442,6 +449,7 @@ fn insert_binding(
         env: env.clone(),
         pool,
         admission: OnceLock::new(),
+        last_use_gate: Arc::new(Semaphore::new(1)),
     });
     all.push(Arc::downgrade(&inner));
     PoolBinding { inner }

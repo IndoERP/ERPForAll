@@ -189,7 +189,7 @@ test("plain destinations insert literal text and detached foreign protected sele
 
 test("file paste drop and native rich insertion paths are explicitly blocked", () => {
   const {editor, report, change} = setup(), root=editor.editable; select(root, root.firstChild!.firstChild!, 0);
-  paste(root, {}, [new File(["x"],"image.png",{type:"image/png"})]); expect(report).toHaveBeenLastCalledWith(expect.objectContaining({kind:"unsupported", message:"HTML editor file paste and drop require attachment support (a later release)."}));
+  paste(root, {}, [new File(["x"],"image.png",{type:"image/png"})]); expect(report).toHaveBeenLastCalledWith(expect.objectContaining({kind:"unsupported", message:"HTML editor file paste and drop are not available here."}));
   const drop=new Event("drop",{bubbles:true,cancelable:true}); root.dispatchEvent(drop); expect(drop.defaultPrevented).toBe(true);
   const rich=new InputEvent("beforeinput",{bubbles:true,cancelable:true,inputType:"insertFromPaste"}); root.dispatchEvent(rich); expect(rich.defaultPrevented).toBe(true); expect(change).not.toHaveBeenCalled();
 });
@@ -341,7 +341,7 @@ test("nested block clipboard under inline formatting refuses atomically with con
   select(root,text,4);root.dispatchEvent(new InputEvent("beforeinput",{bubbles:true,cancelable:true,inputType:"insertText",data:"!"}));text.appendData("!");select(root,text,5);root.dispatchEvent(new InputEvent("input",{bubbles:true,inputType:"insertText",data:"!"}));
   editor.undo();const current=root.firstChild!.firstChild!;select(root,current,1,current,3);const before=captureSelection(root),availability=editor.state(),calls=change.mock.calls.length;
   paste(root,{"text/html":"<strong><p>Block</p></strong>"});
-  expect(report).toHaveBeenLastCalledWith(expect.objectContaining({kind:"unsupported",message:"HTML editor block content inside inline formatting is unsupported until a later release."}));
+  expect(report).toHaveBeenLastCalledWith(expect.objectContaining({kind:"unsupported",message:"HTML editor block content inside inline formatting is not supported."}));
   expect(editor.exportHtml()).toBe("<p>Item</p>");expect(document.getSelection()?.toString()).toBe("te");expect(captureSelection(root)).toEqual(before);expect(editor.state()).toEqual(availability);expect(change).toHaveBeenCalledTimes(calls);
   editor.redo();expect(editor.exportHtml()).toBe("<p>Item!</p>");editor.undo();expect(editor.exportHtml()).toBe("<p>Item</p>");expect(document.getSelection()?.toString()).toBe("te");
 });

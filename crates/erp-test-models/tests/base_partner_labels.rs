@@ -15,10 +15,15 @@ use erp_testkit::Harness;
 type Partner = RecordSet<ResPartner>;
 
 async fn harness() -> Harness {
-    Harness::builder([&base_users::ADDON, &erp_addon_base::ADDON])
-        .build()
-        .await
-        .unwrap()
+    Harness::builder([
+        &base_users::ADDON,
+        &erp_addon_base::ADDON,
+        &erp_data::model_data::ADDON,
+    ])
+    .with_decls([erp_data::ir_model_data_decl()])
+    .build()
+    .await
+    .unwrap()
 }
 
 fn partners(tx: &Transaction) -> Records {
@@ -318,6 +323,23 @@ async fn spec_partner_011_english_display_and_stored_name_language_isolation() {
             .await
             .unwrap();
     }
+    erp_orm::reflection::reflect_models(&mut tx).await.unwrap();
+
+    // Load French translation for res.partner.type 'other'
+    let mut imp = erp_data::TranslationImporter::new();
+    let po = r#"
+msgid ""
+msgstr ""
+
+#: model:ir.model.fields.selection,name:base.selection__res_partner__type__other
+msgid "Other"
+msgstr "Autre"
+"#;
+    imp.load_po(po, "t.po", "fr_FR").unwrap();
+    imp.save(&mut tx, erp_data::OverwriteMode::Overwrite)
+        .await
+        .unwrap();
+
     let root = create(&mut tx, named("Parent")).await;
     let address = child(&mut tx, None, &root, "other").await;
     let english = address.with_context([("lang", Value::str("en_US"))]);
@@ -325,6 +347,7 @@ async fn spec_partner_011_english_display_and_stored_name_language_isolation() {
     assert_complete(&mut tx, &english, "Parent, Other").await;
     let french = address.with_context([("lang", Value::str("fr_FR"))]);
     assert_complete(&mut tx, &french, "Parent, Other").await;
+    assert_display(&mut tx, &french, "Parent, Autre").await;
     assert_display(&mut tx, &english, "Parent, Other").await;
     drop(tx);
     h.cleanup().await.unwrap();
@@ -667,7 +690,7 @@ async fn spec_partner_039_explicit_user_link_relational_name_search() {
     let linked = create(&mut tx, named("Vlad the Impaler")).await;
     // This fixture deliberately supplies the existing explicit identity link.
     // It does not claim that user creation already delegates to a new partner.
-    tx.query("INSERT INTO res_users (name, login, email, active, partner_id) VALUES ($1, $2, $3, true, $4) RETURNING id", &[&"Vlad the Impaler", &"vlad-labels", &"vlad.the.impaler@example.com", &linked.ids()[0]]).await.unwrap();
+    tx.query("INSERT INTO res_users (name, login, email, active, partner_id, share) VALUES ($1, $2, $3, true, $4, false) RETURNING id", &[&"Vlad the Impaler", &"vlad-labels", &"vlad.the.impaler@example.com", &linked.ids()[0]]).await.unwrap();
     let domain = Domain::condition("user_ids.email", Operator::ILike, "vlad").unwrap();
     let model = tx.env().model::<ResPartner>().unwrap();
     assert_eq!(

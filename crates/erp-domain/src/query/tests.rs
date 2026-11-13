@@ -1,4 +1,4 @@
-//! Tests of the query AST without a database (design note). Error
+//! Tests of the query AST without a database. Error
 //! tests assert the error kind (through `erp_fields::Error`) and the full message.
 
 #![allow(

@@ -1,0 +1,5 @@
+error: #[rpc] needs an effect: #[rpc(effect = read|write|destructive|external)] or #[rpc(hide)]
+ --> tests/ui/rpc_assistant/no_effect.rs:4:5
+  |
+4 |     #[rpc(assistant = offer)]
+  |     ^

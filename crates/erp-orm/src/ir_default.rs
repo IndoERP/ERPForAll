@@ -53,31 +53,68 @@ pub async fn get_model_defaults(
     model_name: &str,
     condition: Option<&str>,
 ) -> Result<FxHashMap<String, Value>> {
+    model_defaults_as(
+        tx,
+        env,
+        model_name,
+        condition,
+        env.uid(),
+        "_get_model_defaults",
+    )
+    .await
+}
+
+/// Property lookup identity is separate from caller permissions and creation defaults.
+pub(crate) async fn get_property_defaults(
+    tx: &mut Transaction,
+    env: &Env,
+    model: &str,
+) -> Result<FxHashMap<String, Value>> {
+    model_defaults_as(
+        tx,
+        env,
+        model,
+        None,
+        crate::SUPERUSER_ID.into(),
+        "_get_property_defaults",
+    )
+    .await
+}
+
+async fn model_defaults_as(
+    tx: &mut Transaction,
+    env: &Env,
+    model_name: &str,
+    condition: Option<&str>,
+    uid: i64,
+    method: &'static str,
+) -> Result<FxHashMap<String, Value>> {
     let registry = env.registry();
     if registry.model(model_name).is_none() {
         return Err(Error::validation(format!(
             "Model '{model_name}' is not in the registry"
         )));
     }
-    if registry.model("ir.default").is_none() {
-        return Err(Error::validation(
-            "Model 'ir.default' is not in the registry",
-        ));
-    }
+    let defaults = registry
+        .model("ir.default")
+        .ok_or_else(|| Error::validation("Model 'ir.default' is not in the registry"))?;
     if registry.model("ir.model.fields").is_none() {
         return Err(Error::validation(
             "Model 'ir.model.fields' is not in the registry",
         ));
     }
 
-    let uid = env.uid();
     // validated against the subject's newest resolution, also under sudo (review S1)
     let company_id = tx.companies(env).await?.first().map(|c| c.get());
+
+    // Generic writes are staged. A fresh lookup must see them before caching the result
+    // or projecting a property fallback (ordinary precedence is unchanged).
+    Box::pin(tx.flush_model(defaults.id)).await?;
 
     // Check ormcache
     let cache_key = OrmCacheKey::new(
         "ir.default",
-        "_get_model_defaults",
+        method,
         vec![
             Value::Int(uid),
             company_id.map_or(Value::False, Value::Int),
@@ -85,7 +122,10 @@ pub async fn get_model_defaults(
             condition.map_or(Value::False, Value::str),
         ],
     );
-    if let Some(Value::Map(m)) = tx.ormcache_get("ir.default", &cache_key).await? {
+    // Property fallbacks stay snapshot-local. Publishing them in a shared method cache
+    // could serve a value from a newer transaction to an older repeatable-read snapshot.
+    let shared_cache = method != "_get_property_defaults";
+    if shared_cache && let Some(Value::Map(m)) = tx.ormcache_get("ir.default", &cache_key).await? {
         let mut out = FxHashMap::default();
         for (k, v) in m.iter() {
             out.insert(k.clone(), v.clone());
@@ -127,8 +167,10 @@ pub async fn get_model_defaults(
         }
     }
 
-    tx.ormcache_add("ir.default", cache_key, Value::Map(Arc::new(map)))
-        .await?;
+    if shared_cache {
+        tx.ormcache_add("ir.default", cache_key, Value::Map(Arc::new(map)))
+            .await?;
+    }
     Ok(result)
 }
 
@@ -211,6 +253,9 @@ pub async fn set(
         company_id,
     )
     .await?;
+
+    // Cache invalidation below must never discard pending record mutations.
+    tx.flush().await?;
 
     // 4. Ensure ir_model and ir_model_fields record exists
     let field_id = ensure_field_id(tx, env, model_name, field_name).await?;
@@ -441,6 +486,7 @@ pub async fn discard_records(tx: &mut Transaction, records: &Records) -> Result<
               AND d.json_value = ANY($2)
         )
     "#;
+    tx.flush().await?;
     let count = tx.execute(sql, &[&model_name, &ids_json]).await?;
     if count > 0 {
         tx.invalidate_ormcache("ir.default");
@@ -511,6 +557,7 @@ pub async fn discard_values(
               AND d.json_value = ANY($3)
         )
     "#;
+    tx.flush().await?;
     let count = tx
         .execute(sql, &[&model_name, &field_name, &json_vals])
         .await?;

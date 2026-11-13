@@ -1,11 +1,14 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import { array, integer, object, text } from "./metadata.js";
 import { actionButton, button, choose, el, labelled } from "./dom.js";
-import { icon } from "./icons.js";
+import { createChoiceDropdown, type ChoiceDropdown } from "./choice-dropdown.js";
+import { icon, menuIcon } from "./icons.js";
+import { readSettingsItems, type SettingsViewOptions } from "./settings-items.js";
+import type { SettingsItem } from "../generated/human-ui.js";
 import { registerServiceController } from "./registry.js";
 import { ClientError, RpcClient } from "./transport.js";
 
-export interface ServiceController { busy(): boolean; dirty(): boolean; save(): Promise<void>; discard(): void }
+export interface ServiceController { busy(): boolean; dirty(): boolean; save(): Promise<void>; discard(): void; /** Release listeners and ignore late rendering; safe to call repeatedly. */ dispose?(): void }
 
 function renderHighlightedText(container: HTMLElement, textContent: string, query: string): void {
   container.replaceChildren();
@@ -37,11 +40,10 @@ function renderHighlightedText(container: HTMLElement, textContent: string, quer
   }
 }
 
-/** The addon's tile, the same one the Apps page shows: its initial on the addon's tone. Decorative; the name sits beside it. */
+/** Neutral fallback for a settings-only addon without an authorized root menu. */
 function appIcon(appKey: string, appTitle: string): HTMLElement {
   const tile = el("span", undefined, "addon-icon settings-app-icon");
   tile.dataset["letter"] = (appTitle.charAt(0) || appKey.charAt(0)).toUpperCase();
-  tile.dataset["tone"] = String(addonTone(appKey));
   tile.setAttribute("aria-hidden", "true");
   return tile;
 }
@@ -61,6 +63,13 @@ interface SettingBlockInfo {
   labelText: string;
   helpText?: string;
   keyText: string;
+  searchText?: string;
+}
+
+interface SettingBlockGroupInfo {
+  element: HTMLElement;
+  titleText: string;
+  blocks: SettingBlockInfo[];
 }
 
 interface AppGroupInfo {
@@ -69,6 +78,7 @@ interface AppGroupInfo {
   section: HTMLElement;
   tab: HTMLButtonElement;
   blocks: SettingBlockInfo[];
+  blockGroups: SettingBlockGroupInfo[];
 }
 
 export async function settingsView(
@@ -82,24 +92,32 @@ export async function settingsView(
   expectedRegistry?: string,
   controlsHost?: HTMLElement,
   panelHost?: HTMLElement,
-  initialApp: string | null = null
+  initialApp: string | null = null,
+  options: SettingsViewOptions = {}
 ): Promise<ServiceController> {
   let scope: Record<string, unknown> = { kind: "global" }, revision = "", baseline = new Map<string, unknown>(), edits = new Map<string, unknown>(), pending = false, ambiguous = false, generation = 0;
   let declarations: Record<string, unknown>[] = [];
+  let disposed = false;
+  const choiceControls: { control: ChoiceDropdown; readonly: boolean }[] = [];
+  const disposeChoices = (): void => { for (const { control } of choiceControls.splice(0)) control.dispose(); };
+  const dispose = (): void => { if (disposed) return; disposed = true; generation++; disposeChoices(); };
+
+  let items: SettingsItem[] = [], linkPending = false;
   const appGroups = new Map<string, AppGroupInfo>();
   // An addon's own
   // Configuration > Settings menu opens on its app (`app` widget option); without one the first app opens.
   let selectedApp: string | null = initialApp, firstDraw = true;
 
   const sheet = el("div", undefined, "content-sheet settings-sheet");
-  const selector = el("select");
   const form = el("form", undefined, "record-form settings-form");
   const actions = el("div", undefined, "settings-toolbar-actions");
 
-  if (scopeKinds.includes("global")) selector.append(new Option("Global settings", "global"));
-  if (scopeKinds.includes("company")) for (const company of companies) selector.append(new Option(company.name, String(company.id)));
-  if (!selector.options.length) throw new ClientError("server", "No supported settings scope was declared.");
-  scope = selector.value === "global" ? { kind: "global" } : { kind: "company", company_id: Number(selector.value) };
+  const scopeChoices: { value: string; label: string }[] = [];
+  if (scopeKinds.includes("global")) scopeChoices.push({ value: "global", label: "Global settings" });
+  if (scopeKinds.includes("company")) for (const company of companies) scopeChoices.push({ value: String(company.id), label: company.name });
+  if (!scopeChoices.length) throw new ClientError("server", "No supported settings scope was declared.");
+  const firstScope = scopeChoices[0]!.value;
+  scope = firstScope === "global" ? { kind: "global" } : { kind: "company", company_id: Number(firstScope) };
 
   const scopeKey = (value: Record<string, unknown>): string => value["kind"] === "global" ? "global" : String(value["company_id"]);
   const checkScope = (value: unknown, requested: Record<string, unknown>): void => {
@@ -108,9 +126,25 @@ export async function settingsView(
   };
 
   const toolbar = el("div", undefined, "settings-toolbar");
-  const scopeWrapper = labelled("Settings scope", selector);
-  scopeWrapper.classList.add("settings-toolbar-scope");
-  toolbar.append(actions, scopeWrapper);
+  // Segmented control (our own, a radio group): the scope switch is never a native select. One scope needs no switch.
+  const scopeGroup = el("div", undefined, "settings-toolbar-scope settings-scope");
+  scopeGroup.setAttribute("role", "radiogroup");
+  scopeGroup.setAttribute("aria-label", "Settings scope");
+  const scopeButtons = scopeChoices.map(choice => {
+    const segment = el("button", choice.label, "settings-scope-option") as HTMLButtonElement;
+    segment.type = "button"; segment.setAttribute("role", "radio"); segment.dataset["scope"] = choice.value;
+    return segment;
+  });
+  const showScope = (value: string): void => {
+    for (const segment of scopeButtons) {
+      const on = segment.dataset["scope"] === value;
+      segment.setAttribute("aria-checked", String(on)); segment.tabIndex = on ? 0 : -1;
+    }
+  };
+  showScope(firstScope);
+  scopeGroup.append(...scopeButtons);
+  scopeGroup.hidden = scopeChoices.length < 2;
+  toolbar.append(actions, scopeGroup);
 
   if (controlsHost) {
     controlsHost.replaceChildren(toolbar);
@@ -145,7 +179,8 @@ export async function settingsView(
 
   const noResults = el("div", undefined, "settings-no-results");
   noResults.style.display = "none";
-  noResults.append(el("p", "No settings found matching your search.", "muted"));
+  const noResultsText = el("p", "No settings match your search.", "muted");
+  noResults.append(noResultsText);
   content.append(noResults);
 
   container.append(sidebar, content);
@@ -154,17 +189,20 @@ export async function settingsView(
   host.append(sheet);
 
   const disable = (): void => {
+    if (disposed) return;
     for (const raw of sheet.querySelectorAll("input,select,button")) {
       const input = raw as HTMLInputElement;
-      input.disabled = pending || input.dataset["readonly"] === "true";
+      input.disabled = pending || input.dataset["readonly"] === "true" || linkPending && input.hasAttribute("data-setting-link");
     }
     for (const raw of toolbar.querySelectorAll("input,select,button")) {
       const input = raw as HTMLInputElement;
-      input.disabled = pending || input.dataset["readonly"] === "true";
+      input.disabled = pending || input.dataset["readonly"] === "true" || linkPending && input.hasAttribute("data-setting-link");
     }
+    for (const entry of choiceControls) entry.control.setDisabled(pending || entry.readonly);
   };
 
   const operation = async (job: () => Promise<void>): Promise<void> => {
+    if (disposed) throw new ClientError("validation", "This settings view is closed.");
     if (pending) throw new ClientError("validation", "Wait for the settings operation to finish.");
     pending = true; content.setAttribute("aria-busy", "true"); disable();
     try { await job(); } finally { pending = false; content.setAttribute("aria-busy", "false"); disable(); }
@@ -175,28 +213,37 @@ export async function settingsView(
     let totalMatches = 0;
     for (const group of appGroups.values()) {
       let appMatches = 0;
-      for (const blockInfo of group.blocks) {
-        const { element, titleEl, helpEl, labelText, helpText, keyText } = blockInfo;
-        const matches = !query ||
-          labelText.toLowerCase().includes(query) ||
-          keyText.toLowerCase().includes(query) ||
-          (helpText !== undefined && helpText.toLowerCase().includes(query));
-        if (matches) {
-          element.style.display = "";
-          appMatches++;
-          totalMatches++;
-          renderHighlightedText(titleEl, labelText, query);
-          if (helpEl && helpText) renderHighlightedText(helpEl, helpText, query);
-        } else {
-          element.style.display = "none";
-          titleEl.textContent = labelText;
-          if (helpEl && helpText) helpEl.textContent = helpText;
+      for (const bg of group.blockGroups) {
+        let blockMatches = 0;
+        const blockTitleMatches = Boolean(query && bg.titleText.toLowerCase().includes(query));
+        for (const blockInfo of bg.blocks) {
+          const { element, titleEl, helpEl, labelText, helpText, keyText } = blockInfo;
+          const matches = !query ||
+            blockTitleMatches ||
+            Boolean(blockInfo.searchText?.toLowerCase().includes(query)) ||
+            labelText.toLowerCase().includes(query) ||
+            keyText.toLowerCase().includes(query) ||
+            (helpText !== undefined && helpText.toLowerCase().includes(query));
+          if (matches) {
+            element.style.display = "";
+            blockMatches++;
+            appMatches++;
+            totalMatches++;
+            renderHighlightedText(titleEl, labelText, query);
+            if (helpEl && helpText) renderHighlightedText(helpEl, helpText, query);
+          } else {
+            element.style.display = "none";
+            titleEl.textContent = labelText;
+            if (helpEl && helpText) helpEl.textContent = helpText;
+          }
         }
+        bg.element.style.display = blockMatches > 0 || !query ? "" : "none";
       }
       group.section.style.display = query ? (appMatches > 0 ? "" : "none") : (group.appKey === selectedApp ? "" : "none");
       group.tab.style.display = appMatches > 0 || !query ? "" : "none";
     }
     noResults.style.display = totalMatches === 0 && query ? "" : "none";
+    if (totalMatches === 0 && query) noResultsText.textContent = `No settings match “${queryText.trim()}”. Check the spelling, try a shorter word, or clear the search to see every setting.`;
   };
 
   const clearFilter = (): void => { searchInput.value = ""; performFilter(""); };
@@ -217,14 +264,16 @@ export async function settingsView(
   });
 
   const draw = (): void => {
+    if (disposed) return;
+    disposeChoices();
     sidebarList.replaceChildren();
     content.replaceChildren(noResults);
     appGroups.clear();
 
     const grouped = new Map<string, Record<string, unknown>[]>();
-    for (const declaration of declarations) {
-      const key = text(declaration["key"], "setting key");
-      const appKey = key.includes(".") ? key.split(".")[0]! : "general";
+    const itemByKey = new Map(items.map(item => [item.key, item]));
+    for (const declaration of [...declarations, ...items.map(item => ({ ...item }))]) {
+      const appKey = text(declaration["app"], "setting app");
       if (!grouped.has(appKey)) grouped.set(appKey, []);
       grouped.get(appKey)!.push(declaration);
     }
@@ -234,10 +283,17 @@ export async function settingsView(
       if (firstDraw) throw new ClientError("validation", `The addon '${selectedApp}' declares no settings for this page.`);
       selectedApp = null; // A scope switch can leave the app without settings; its first app opens instead.
     }
-    selectedApp ??= grouped.keys().next().value ?? null;
+    selectedApp ??= grouped.has("base") ? "base" : grouped.keys().next().value ?? null;
     firstDraw = false;
-    for (const [appKey, appDecls] of grouped.entries()) {
-      const appTitle = humanizeAppTitle(appKey);
+    const orderedApps = [...grouped.entries()].sort(([a], [b]) => a === "base" ? -1 : b === "base" ? 1 : 0);
+    for (const [appKey, appDecls] of orderedApps) {
+      const rootMenu = options.navigation?.roots.find(root => root.module === appKey);
+      const appTitle = rootMenu?.label ?? humanizeAppTitle(appKey);
+      const makeIcon = (): HTMLElement | SVGSVGElement => {
+        if (!rootMenu) return appIcon(appKey, appTitle);
+        const tile = el("span", undefined, "settings-app-icon settings-menu-icon");
+        tile.setAttribute("aria-hidden", "true"); tile.append(menuIcon(rootMenu.icon)); return tile;
+      };
       const selected = appKey === selectedApp;
 
       const tab = el("button", undefined, "settings-app-tab") as HTMLButtonElement;
@@ -245,103 +301,200 @@ export async function settingsView(
       tab.setAttribute("role", "tab");
       tab.setAttribute("data-app", appKey);
       tab.setAttribute("aria-selected", String(selected));
-      tab.append(appIcon(appKey, appTitle), el("span", appTitle, "settings-app-name"));
+      tab.append(makeIcon(), el("span", appTitle, "settings-app-name"));
       if (selected) tab.classList.add("active");
 
       const section = el("section", undefined, "settings-section");
       section.setAttribute("data-app-section", appKey);
       if (!selected) section.style.display = "none";
       const heading = el("h2", undefined, "settings-section-title");
-      heading.append(appIcon(appKey, appTitle), el("span", appTitle));
+      heading.append(makeIcon(), el("span", appKey === "base" ? "General Settings" : appTitle));
       section.append(heading);
 
-      const blocksContainer = el("div", undefined, "settings-blocks");
-      const blockInfos: SettingBlockInfo[] = [];
-
+      // Group declarations by block with sequence
+      interface RawBlockGroup {
+        title: string;
+        sequence: number;
+        decls: Record<string, unknown>[];
+      }
+      const rawBlocks = new Map<string, RawBlockGroup>();
       for (const declaration of appDecls) {
-        const key = text(declaration["key"], "setting key");
-        const labelStr = text(declaration["label"], "setting label");
-        const kind = text(declaration["kind"], "setting type");
-        const choices = declaration["choices"];
-        const current = baseline.get(key);
-        const helpStr = typeof declaration["help"] === "string" ? declaration["help"] : undefined;
-
-        if ((kind === "selection") !== (choices !== null)) throw new ClientError("server", "Setting choices do not match the declared type.");
-        if (kind === "boolean" && typeof current !== "boolean" || ["integer", "float"].includes(kind) && typeof current !== "number" || ["string", "selection"].includes(kind) && typeof current !== "string") throw new ClientError("server", "Setting value does not match the declared type.");
-
-        const blockEl = el("div", undefined, "setting-block");
-        blockEl.setAttribute("data-setting-key", key);
-
-        const leftPane = el("div", undefined, "setting-left-pane");
-        const rightPane = el("div", undefined, "setting-right-pane");
-
-        const titleRow = el("div", undefined, "setting-title-row");
-        const titleSpan = el("label", labelStr, "setting-label-text");
-        titleRow.append(titleSpan);
-        rightPane.append(titleRow);
-
-        let helpEl: HTMLElement | undefined;
-        if (helpStr) {
-          helpEl = el("div", helpStr, "setting-help text-muted");
-          rightPane.append(helpEl);
+        const blockTitle = text(declaration["block"], "setting block");
+        const seq = integer(declaration["sequence"], "setting sequence");
+        if (!rawBlocks.has(blockTitle)) {
+          rawBlocks.set(blockTitle, { title: blockTitle, sequence: seq, decls: [] });
         }
+        const bGroup = rawBlocks.get(blockTitle)!;
+        if (seq < bGroup.sequence) bGroup.sequence = seq;
+        bGroup.decls.push(declaration);
+      }
 
-        const input = choices === null ? el("input") : el("select");
-        if (input instanceof HTMLSelectElement) {
-          for (const raw of array(choices, "setting choices")) {
-            const pair = array(raw, "setting choice");
-            input.append(new Option(text(pair[1], "choice label"), text(pair[0], "choice value")));
-          }
-          if (![...input.options].some(option => option.value === current)) throw new ClientError("server", "Setting value is outside its declared choices.");
-        } else {
-          if (!["boolean", "integer", "float", "string"].includes(kind)) throw new ClientError("unsupported", `Unsupported setting type: ${kind}.`);
-          input.type = kind === "boolean" ? "checkbox" : kind === "integer" || kind === "float" ? "number" : "text";
-          if (kind === "integer" || kind === "float") input.required = true;
-          if (kind === "float") input.step = "any";
-          input.checked = current === true;
-        }
+      // Sort blocks by minimum sequence, then by title
+      const sortedBlocks = [...rawBlocks.values()].sort((a, b) => a.sequence - b.sequence || a.title.localeCompare(b.title));
 
-        input.value = String(current);
-        input.id = `setting-${key}`;
-        titleSpan.htmlFor = input.id;
-        input.name = key;
-        if (typeof declaration["writable"] !== "boolean") throw new ClientError("server", "Invalid settings write permission.");
-        input.dataset["readonly"] = String(!declaration["writable"]);
+      const blockInfos: SettingBlockInfo[] = [];
+      const blockGroupInfos: SettingBlockGroupInfo[] = [];
 
-        input.addEventListener("change", () => {
-          if (pending || declaration["writable"] !== true) {
-            input.value = String(edits.has(key) ? edits.get(key) : baseline.get(key));
-            if (input instanceof HTMLInputElement && kind === "boolean") input.checked = (edits.has(key) ? edits.get(key) : baseline.get(key)) === true;
-            return;
-          }
-          const value = input instanceof HTMLInputElement && kind === "boolean" ? input.checked : kind === "integer" || kind === "float" ? Number(input.value) : input.value;
-          if (Object.is(value, baseline.get(key))) edits.delete(key); else edits.set(key, value);
+      for (const bGroup of sortedBlocks) {
+        bGroup.decls.sort((a, b) => {
+          const seqA = integer(a["sequence"], "setting sequence");
+          const seqB = integer(b["sequence"], "setting sequence");
+          if (seqA !== seqB) return seqA - seqB;
+          return String(a["key"]).localeCompare(String(b["key"]));
         });
 
-        if (kind === "boolean") {
-          const toggleLabel = labelled("", input);
-          toggleLabel.classList.add("settings-toggle");
-          leftPane.append(toggleLabel);
-        } else {
-          const inputWrapper = el("div", undefined, "setting-value-input");
-          inputWrapper.append(input);
-          rightPane.append(inputWrapper);
+        const blockContainer = el("div", undefined, "settings-block-group");
+        blockContainer.setAttribute("data-block", bGroup.title);
+        const blockHeading = el("h3", bGroup.title, "settings-block-title");
+        blockContainer.append(blockHeading);
+
+        const blocksContainer = el("div", undefined, "settings-blocks");
+        const currentBlockInfos: SettingBlockInfo[] = [];
+        // An action link belongs to the information item it follows: both sit in one box, the link under the value.
+        let infoBox: { body: HTMLElement; info: SettingBlockInfo; links?: HTMLElement } | undefined;
+
+        for (const declaration of bGroup.decls) {
+          const key = text(declaration["key"], "setting key");
+          const labelStr = text(declaration["label"], "setting label");
+          const kind = text(declaration["kind"], "setting type");
+          const item = itemByKey.get(key);
+          if (item) {
+            const row = el("div", undefined, "setting-block settings-panel-item");
+            row.dataset["settingKey"] = key;
+            const body = el("div", undefined, "setting-right-pane");
+            const label = el("span", item.label, "setting-label-text");
+            let detail: HTMLElement | undefined;
+            if (item.kind === "info") {
+              const title = el("div", undefined, "setting-title-row");
+              // A text value names itself ("Main Company"): its label stays for assistive technology and the search only.
+              if (typeof item.value === "string") label.classList.add("visually-hidden");
+              title.append(el("span", String(item.value), "settings-info-value"), label); body.append(title);
+              if (item.detail !== null) { detail = el("div", item.detail, "setting-help settings-info-detail"); body.append(detail); }
+            } else {
+              const navigation = options.navigation;
+              if (!navigation) throw new ClientError("unsupported", "Settings links require the application's navigation service.");
+              const link = el("button", undefined, "link settings-action-link") as HTMLButtonElement;
+              link.type = "button"; link.setAttribute("data-setting-link", "");
+              const arrow = icon("chevron-right"); arrow.setAttribute("aria-hidden", "true"); link.append(arrow, label);
+              link.addEventListener("click", () => {
+                if (disposed || pending || linkPending) return;
+                // Do not use operation(): canLeave must be able to call this service's Save.
+                // Set inside the job: `run` may refuse it (a busy screen), and then nothing would clear the flag.
+                run(async () => { linkPending = true; disable(); try { if (!disposed) await navigation.openTarget(item.target); } finally { linkPending = false; disable(); } });
+              });
+              if (infoBox) {
+                // Found together by the search: the box by its link's name, the link by its box's text.
+                infoBox.links ??= infoBox.body.appendChild(el("div", undefined, "settings-panel-links"));
+                const entry = el("div", undefined, "settings-panel-link"); entry.dataset["settingKey"] = key;
+                entry.append(link); infoBox.links.append(entry);
+                const info: SettingBlockInfo = { element: entry, titleEl: label, labelText: item.label, keyText: key, searchText: `${infoBox.info.labelText} ${infoBox.info.keyText} ${infoBox.info.searchText ?? ""}` };
+                infoBox.info.searchText = `${infoBox.info.searchText ?? ""} ${item.label} ${key}`;
+                blockInfos.push(info); currentBlockInfos.push(info); continue;
+              }
+              body.append(link);
+            }
+            row.append(body); blocksContainer.append(row);
+            const info: SettingBlockInfo = { element: row, titleEl: label, labelText: item.label, keyText: key,
+              ...(detail ? { helpEl: detail, helpText: item.kind === "info" ? item.detail! : "" } : {}),
+              searchText: item.kind === "info" ? `${String(item.value)} ${item.detail ?? ""}` : item.label };
+            infoBox = item.kind === "info" ? { body, info } : undefined;
+            blockInfos.push(info); currentBlockInfos.push(info); continue;
+          }
+          infoBox = undefined;
+          const choices = declaration["choices"];
+          const current = baseline.get(key);
+          const helpStr = typeof declaration["help"] === "string" ? declaration["help"] : undefined;
+
+          if ((kind === "selection") !== (choices !== null)) throw new ClientError("server", "Setting choices do not match the declared type.");
+          if (kind === "boolean" && typeof current !== "boolean" || ["integer", "float"].includes(kind) && typeof current !== "number" || ["string", "selection"].includes(kind) && typeof current !== "string") throw new ClientError("server", "Setting value does not match the declared type.");
+
+          const blockEl = el("div", undefined, "setting-block");
+          blockEl.setAttribute("data-setting-key", key);
+
+          const leftPane = el("div", undefined, "setting-left-pane");
+          const rightPane = el("div", undefined, "setting-right-pane");
+
+          const titleRow = el("div", undefined, "setting-title-row");
+          const titleSpan = el("label", labelStr, "setting-label-text");
+          titleRow.append(titleSpan);
+          rightPane.append(titleRow);
+
+          let helpEl: HTMLElement | undefined;
+          if (helpStr) {
+            helpEl = el("div", helpStr, "setting-help text-muted");
+            rightPane.append(helpEl);
+          }
+
+          if (typeof declaration["writable"] !== "boolean") throw new ClientError("server", "Invalid settings write permission.");
+          const writable = declaration["writable"];
+          const edit = (value: unknown): void => {
+            if (disposed || pending || !writable) return;
+            if (Object.is(value, baseline.get(key))) edits.delete(key); else edits.set(key, value);
+          };
+          let input: HTMLInputElement | HTMLButtonElement;
+          let inputNode: HTMLElement;
+          if (choices !== null) {
+            const parsed = array(choices, "setting choices").map(raw => {
+              const pair = array(raw, "setting choice");
+              return { value: text(pair[0], "choice value"), label: text(pair[1], "choice label") };
+            });
+            if (!parsed.some(choice => choice.value === current)) throw new ClientError("server", "Setting value is outside its declared choices.");
+            const control = createChoiceDropdown({ label: labelStr, choices: parsed, value: String(current), onChange: edit });
+            choiceControls.push({ control, readonly: !writable });
+            input = control.trigger; inputNode = control.element;
+          } else {
+            if (!["boolean", "integer", "float", "string"].includes(kind)) throw new ClientError("unsupported", `Unsupported setting type: ${kind}.`);
+            const field = el("input");
+            field.type = kind === "boolean" ? "checkbox" : kind === "integer" || kind === "float" ? "number" : "text";
+            if (kind === "integer" || kind === "float") field.required = true;
+            if (kind === "float") field.step = "any";
+            field.checked = current === true; field.value = String(current);
+            field.addEventListener("change", () => {
+              if (disposed || pending || !writable) {
+                const value = edits.has(key) ? edits.get(key) : baseline.get(key);
+                field.value = String(value); field.checked = value === true; return;
+              }
+              edit(kind === "boolean" ? field.checked : kind === "integer" || kind === "float" ? Number(field.value) : field.value);
+            });
+            input = field; inputNode = field;
+          }
+          input.id = `setting-${key}`; titleSpan.htmlFor = input.id; input.name = key;
+          input.dataset["readonly"] = String(!writable);
+
+          if (kind === "boolean") {
+            const toggleLabel = labelled("", input);
+            toggleLabel.classList.add("settings-toggle");
+            leftPane.append(toggleLabel);
+          } else {
+            const inputWrapper = el("div", undefined, "setting-value-input");
+            inputWrapper.append(inputNode);
+            rightPane.append(inputWrapper);
+          }
+
+          blockEl.append(leftPane, rightPane);
+          blocksContainer.append(blockEl);
+
+          const info: SettingBlockInfo = {
+            element: blockEl,
+            titleEl: titleSpan,
+            helpEl,
+            labelText: labelStr,
+            helpText: helpStr,
+            keyText: key,
+          };
+          blockInfos.push(info);
+          currentBlockInfos.push(info);
         }
 
-        blockEl.append(leftPane, rightPane);
-        blocksContainer.append(blockEl);
-
-        blockInfos.push({
-          element: blockEl,
-          titleEl: titleSpan,
-          helpEl,
-          labelText: labelStr,
-          helpText: helpStr,
-          keyText: key,
+        blockContainer.append(blocksContainer);
+        section.append(blockContainer);
+        blockGroupInfos.push({
+          element: blockContainer,
+          titleText: bGroup.title,
+          blocks: currentBlockInfos,
         });
       }
 
-      section.append(blocksContainer);
       content.append(section);
       sidebarList.append(tab);
 
@@ -351,13 +504,14 @@ export async function settingsView(
         section,
         tab,
         blocks: blockInfos,
+        blockGroups: blockGroupInfos,
       };
       appGroups.set(appKey, groupInfo);
 
       tab.addEventListener("click", () => { selectApp(appKey); content.scrollTop = 0; });
     }
 
-    if (!declarations.length) {
+    if (!declarations.length && !items.length) {
       content.append(el("p", "No settings are available for this scope.", "settings-empty"));
     }
     if (!panelHost) {
@@ -377,7 +531,14 @@ export async function settingsView(
     checkScope(description["scope"], immutableScope);
     const nextDeclarations = array(description["declarations"], "setting declarations").map(value => object(value));
     const keys = nextDeclarations.map(value => text(value["key"], "setting key"));
+    // The server always places a setting (app, block, sequence); a missing one is a server fault, never a regrouping to "General".
+    for (const value of nextDeclarations) {
+      if (!text(value["app"], "setting app") || !text(value["block"], "setting block")) throw new ClientError("server", `Setting ${String(value["key"])} has an empty app or block.`);
+      integer(value["sequence"], "setting sequence");
+    }
     if (new Set(keys).size !== keys.length) throw new ClientError("server", "Duplicate settings declaration.");
+    const nextItems = readSettingsItems(description, keys);
+    if (nextItems.some(item => item.kind === "link") && !options.navigation) throw new ClientError("unsupported", "Settings links require the application's navigation service.");
     const response = object(await rpc.call("ir.config.setting", "erp_read_values", { scope: immutableScope, keys, context }));
     if (response["wire_major"] !== 1) throw new ClientError("unsupported", "Unsupported settings version.");
     checkScope(response["scope"], immutableScope);
@@ -388,11 +549,12 @@ export async function settingsView(
       nextValues.set(key, entry["value"]);
     }
     if (nextValues.size !== keys.length) throw new ClientError("server", "Settings response omitted a requested key.");
-    if (request !== generation) return;
-    declarations = nextDeclarations; baseline = nextValues; revision = nextRevision; scope = immutableScope; selector.value = scopeKey(scope); edits.clear(); ambiguous = false; draw();
+    if (disposed || request !== generation) return;
+    declarations = nextDeclarations; items = nextItems; baseline = nextValues; revision = nextRevision; scope = immutableScope; showScope(scopeKey(scope)); edits.clear(); ambiguous = false; draw();
   };
 
   const save = async (): Promise<void> => {
+    if (disposed) throw new ClientError("validation", "This settings view is closed.");
     // Hidden blocks cannot show a validation bubble: clear the search and open the app of the first invalid setting.
     if (searchInput.value) clearFilter();
     const invalid = [...form.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input,select")].find(input => !input.checkValidity());
@@ -400,7 +562,7 @@ export async function settingsView(
     if (invalidApp !== undefined) selectApp(invalidApp);
     if (!form.reportValidity()) throw new ClientError("validation", "Correct the invalid settings before saving.");
     return operation(async () => {
-      if (ambiguous) throw new ClientError("ambiguous", "Reload settings to check the previous save before trying again.");
+      if (ambiguous) throw new ClientError("ambiguous", "Discard to reload the settings and check the previous save before trying again.");
       if (!edits.size) return;
       if (!form.reportValidity()) throw new ClientError("validation", "Correct the invalid settings before saving.");
       const requested = { ...scope }, changes = [...edits].map(([key, value]) => ({ key, value }));
@@ -410,38 +572,51 @@ export async function settingsView(
         const response = object(raw);
         if (response["wire_major"] !== 1) throw new ClientError("ambiguous", "Invalid settings save response. Reload to check the result.");
         checkScope(response["scope"], requested); text(response["revision"], "settings revision");
-        await load(requested); notice("Settings saved.");
+        await load(requested); if (!disposed) notice("Settings saved.");
       } catch (error) {
         if (error instanceof ClientError && (error.kind === "ambiguous" || error.status >= 500)) ambiguous = true;
-        if (ambiguous) throw new ClientError("ambiguous", "The settings save could not be confirmed. Reload settings before another write.");
+        if (ambiguous) throw new ClientError("ambiguous", "The settings save could not be confirmed. Discard to reload the settings before another write.");
         throw error;
       }
     });
   };
 
-  const discard = (): void => { if (pending) { notice("Wait for the settings operation to finish."); return; } edits.clear(); draw(); };
+  // The Discard button drops the edits and reads the stored values again (what the removed Reload button did): that also
+  // recovers from an unconfirmed save (`ambiguous` blocks writes) and from a stale revision after another user saved.
+  const discard = (): void => { if (disposed) return; if (pending) { notice("Wait for the settings operation to finish."); return; } edits.clear(); draw(); };
+  const discardAndReload = (): void => run(() => operation(() => load(scope)));
 
   actions.append(
     actionButton("Save", () => run(save), "primary"),
-    actionButton("Discard", discard),
-    actionButton("Reload", () => run(() => operation(async () => { if (edits.size && await choose("Reload settings?", "Unsaved changes will be discarded.", ["Reload", "Cancel"]) !== "Reload") return; await load(scope); })))
+    actionButton("Discard", discardAndReload)
   );
 
-  selector.addEventListener("change", () => {
-    const selected = selector.value; selector.value = scopeKey(scope);
-    if (pending) return;
+  const switchScope = (selected: string): void => {
+    if (pending || selected === scopeKey(scope)) return;
     run(() => operation(async () => {
       if (edits.size && await choose("Unsaved changes", "Discard changes before switching scope?", ["Discard", "Cancel"]) !== "Discard") return;
       const requested = selected === "global" ? { kind: "global" } : { kind: "company", company_id: integer(Number(selected), "company") };
       if (requested["kind"] === "company" && !companies.some(company => company.id === requested["company_id"])) throw new ClientError("validation", "Unsupported company scope.");
       await load(requested);
     }));
+  };
+  scopeGroup.addEventListener("click", event => {
+    const segment = (event.target as Element).closest<HTMLElement>("[data-scope]");
+    if (segment) switchScope(segment.dataset["scope"]!);
+  });
+  scopeGroup.addEventListener("keydown", event => {
+    const step = event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 0;
+    if (!step) return;
+    event.preventDefault();
+    const at = scopeButtons.findIndex(segment => segment === document.activeElement);
+    const next = scopeButtons[(at + step + scopeButtons.length) % scopeButtons.length]!;
+    next.focus(); next.click();
   });
 
   form.addEventListener("submit", event => { event.preventDefault(); run(save); });
 
-  await operation(() => load(scope));
-  return { busy: () => pending, dirty: () => edits.size > 0, save, discard };
+  try { await operation(() => load(scope)); } catch (error) { dispose(); throw error; }
+  return { busy: () => pending, dirty: () => edits.size > 0, save, discard, dispose };
 }
 
 // The server lifecycle states (crates/erp-modules/src/graph.rs ModuleState::as_str) with a label and a
@@ -563,7 +738,8 @@ export async function addonsView(
     const head = el("header", undefined, "addon-info-head");
     const titles = el("div", undefined, "addon-info-titles");
     titles.append(heading, el("code", row.name, "addon-technical-name"));
-    head.append(tileIcon(row), titles, el("span", row.badge.label, `addon-badge addon-badge-${row.badge.token}`));
+    const headClose = button("×", () => dialog.close(), "message-dialog-close"); headClose.setAttribute("aria-label", "Close");
+    head.append(tileIcon(row), titles, el("span", row.badge.label, `addon-badge addon-badge-${row.badge.token}`), headClose);
     const facts = el("dl", undefined, "addon-info-facts");
     const fact = (label: string, value: string | Node): void => {
       const term = el("dt", label), detail = el("dd");
@@ -606,9 +782,356 @@ export async function addonsView(
     return tile;
   };
 
+  const stateBadge = (state: string): { label: string; token: string } => {
+    const normalized = state.replace("_", " ");
+    return ADDON_STATES.get(normalized) || ADDON_STATES.get(state) || { label: state, token: state.replace(/[\s_]+/g, "-") };
+  };
+
+  let detailGeneration = 0;
+  const showDetail = async (row: AddonRow, opener: HTMLElement): Promise<void> => {
+    const generation = ++detailGeneration;
+    let detailData: Record<string, unknown>;
+    try {
+      detailData = object(await rpc.call("ir.module.module", "erp_addon_detail", { name: row.name, context }), "addon detail");
+    } catch (error) {
+      if (generation === detailGeneration) notice(`Failed to load addon details: ${(error as Error).message || "Unknown error"}`);
+      return;
+    }
+    if (generation !== detailGeneration) return;
+
+    const detailContainer = el("div", undefined, "addon-detail");
+
+    const header = el("header", undefined, "addon-detail-head");
+    const backBtn = button("Back", () => exitDetail(), "btn btn-secondary addon-detail-back");
+    backBtn.prepend(icon("arrow-left"));
+
+    const headMain = el("div", undefined, "addon-detail-head-main");
+    const titles = el("div", undefined, "addon-detail-titles");
+    const heading = el("h2", text(detailData["label"], "addon detail label"), "addon-detail-title");
+    titles.append(heading, el("code", row.name, "addon-technical-name"));
+
+    const stateStr = text(detailData["state"], "addon detail state");
+    const badgeInfo = stateBadge(stateStr);
+    const badge = el("span", badgeInfo.label, `addon-badge addon-badge-${badgeInfo.token}`);
+    headMain.append(tileIcon(row), titles, badge);
+
+    const actions = el("div", undefined, "addon-detail-actions");
+    if (stateStr === "uninstalled" && row.installable) {
+      actions.append(button("Install", () => run(() => executeInstall(row)), "primary addon-install"));
+    } else if (stateStr === "installed") {
+      const upgradeBtn = button("Upgrade", () => run(() => executeUpgrade(row)), "primary addon-upgrade");
+      const upgradeRefusal = detailData["upgrade_refusal"];
+      if (upgradeRefusal) {
+        upgradeBtn.disabled = true;
+        upgradeBtn.title = String(upgradeRefusal);
+        const refNote = el("span", String(upgradeRefusal), "addon-refusal-note muted");
+        actions.append(upgradeBtn, refNote);
+      } else {
+        actions.append(upgradeBtn);
+      }
+
+      const uninstallBtn = button("Uninstall", () => run(() => startUninstall(row, uninstallBtn)), "danger addon-uninstall");
+      const uninstallRefusal = detailData["uninstall_refusal"];
+      if (uninstallRefusal) {
+        uninstallBtn.disabled = true;
+        uninstallBtn.title = String(uninstallRefusal);
+        const refNote = el("span", String(uninstallRefusal), "addon-refusal-note muted");
+        actions.append(uninstallBtn, refNote);
+      } else {
+        actions.append(uninstallBtn);
+      }
+    } else {
+      actions.append(el("p", "Pending module operations require operator recovery. Refresh the catalog after background tasks finish.", "addon-transitional-note muted"));
+    }
+
+    header.append(backBtn, headMain, actions);
+
+    const body = el("div", undefined, "addon-detail-body");
+    const summaryText = text(detailData["summary"], "addon detail summary") || row.summary || "No description provided.";
+    body.append(el("p", summaryText, "addon-detail-summary"));
+
+    const facts = el("dl", undefined, "addon-detail-facts");
+    const addFact = (label: string, val: string | Node): void => {
+      const dt = el("dt", label), dd = el("dd");
+      dd.append(val);
+      facts.append(dt, dd);
+    };
+    addFact("Technical name", el("code", row.name));
+    addFact("Version", String(detailData["available_version"] || row.version || "—"));
+    addFact("Installed version", String(detailData["installed_version"] || "—"));
+    addFact("Category", categoryLabel(row));
+    addFact("Type", row.application ? "App" : "Extra");
+    addFact("Author", text(detailData["author"], "addon detail author") || row.author || "—");
+    addFact("License", row.license || "—");
+    addFact("State", badgeInfo.label);
+    body.append(facts);
+
+    const descText = text(detailData["description"], "addon detail description");
+    if (descText) {
+      const descEl = el("div", undefined, "addon-detail-description");
+      descEl.textContent = descText;
+      body.append(descEl);
+    }
+
+    const sections = el("div", undefined, "addon-detail-sections");
+    const pageOf = (data: Record<string, unknown>, key: string): { items: unknown[]; cursor: string | null } => {
+      const page = object(data[key], `addon ${key}`), cursor = page["next_cursor"];
+      return { items: array(page["items"], `addon ${key}`), cursor: cursor === null ? null : text(cursor, `addon ${key} cursor`) };
+    };
+    // One collection (dependencies, dependents, menus, views): the first page comes with the detail, "Load more" asks
+    // for the next one. A reply that arrives after another addon's detail was opened is dropped.
+    const collection = (title: string, key: "dependencies" | "dependents" | "menus" | "views", empty: string, listClass: string, render: (item: unknown) => Node): void => {
+      const section = el("section", undefined, "addon-detail-section");
+      section.append(el("h3", title, "addon-section-title"));
+      const list = el("div", undefined, listClass);
+      const first = pageOf(detailData, key);
+      if (first.items.length === 0) list.append(el("span", empty, "muted"));
+      for (const item of first.items) list.append(render(item));
+      section.append(list);
+      let cursor = first.cursor;
+      if (cursor) {
+        const moreBtn = button("Load more", () => run(async () => {
+          if (!cursor) return;
+          moreBtn.disabled = true;
+          try {
+            const next = pageOf(object(await rpc.call("ir.module.module", "erp_addon_detail", { name: row.name, [`${key}_cursor`]: cursor, context })), key);
+            if (generation !== detailGeneration) return;
+            for (const item of next.items) list.append(render(item));
+            cursor = next.cursor;
+            if (!cursor) moreBtn.remove();
+          } finally {
+            moreBtn.disabled = false;
+          }
+        }), "addon-detail-more");
+        section.append(moreBtn);
+      }
+      sections.append(section);
+    };
+    collection("Dependencies", "dependencies", "None", "addon-depends", item => el("code", text(item, "addon dependency"), "addon-depend"));
+    collection("Dependents", "dependents", "None", "addon-depends", item => el("code", text(item, "addon dependent"), "addon-depend"));
+    collection("Created Menus", "menus", "No menus created.", "addon-metadata-list", item => {
+      const menu = object(item, "addon menu"), name = text(menu["name"], "addon menu name");
+      const itemEl = el("div", undefined, "addon-metadata-item");
+      itemEl.append(el("strong", menu["label"] === undefined || menu["label"] === null ? name : text(menu["label"], "addon menu label") || name), el("code", name));
+      return itemEl;
+    });
+    collection("Created Views", "views", "No views created.", "addon-metadata-list", item => {
+      const view = object(item, "addon view");
+      const itemEl = el("div", undefined, "addon-metadata-item");
+      itemEl.append(el("strong", text(view["name"], "addon view name")), el("span", `[${text(view["kind"], "addon view kind")}]`, "badge addon-view-kind"), el("code", text(view["model"], "addon view model")));
+      return itemEl;
+    });
+
+    body.append(sections);
+    detailContainer.append(header, body);
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        exitDetail();
+      }
+    };
+    detailContainer.addEventListener("keydown", onKeyDown);
+
+    const exitDetail = () => {
+      detailContainer.removeEventListener("keydown", onKeyDown);
+      sheet.replaceChildren(layout);
+      if (opener.isConnected) opener.focus();
+    };
+
+    sheet.replaceChildren(detailContainer);
+    backBtn.focus();
+  };
+
+  const executeInstall = async (row: AddonRow): Promise<void> => {
+    await operation(async () => {
+      if (await choose("Install addon?", `Install ${row.label} and its dependencies?`, ["Install", "Cancel"]) !== "Install") return;
+      try {
+        await rpc.post("/erp/module/install", { modules: [row.name] }, { write: true });
+        notice("Addon installed. Reloading the application…");
+        window.location.reload();
+      } catch (error) {
+        notice("Installation status may have changed. Reload the catalog before trying again.");
+        await render();
+        throw error;
+      }
+    });
+  };
+
+  const executeUpgrade = async (row: AddonRow): Promise<void> => {
+    await operation(async () => {
+      if (await choose("Upgrade addon?", `Upgrade ${row.label} and its dependencies?`, ["Upgrade", "Cancel"]) !== "Upgrade") return;
+      try {
+        await rpc.post("/erp/module/upgrade", { modules: [row.name] }, { write: true });
+        notice("Addon upgraded. Reloading the application…");
+        window.location.reload();
+      } catch (error) {
+        notice("Upgrade status may have changed. Reload the catalog before trying again.");
+        await render();
+        throw error;
+      }
+    });
+  };
+
+  const startUninstall = async (row: AddonRow, opener: HTMLElement): Promise<void> => {
+    let impact: Record<string, unknown> | undefined;
+    await operation(async () => {
+      try {
+        impact = object(await rpc.call("ir.module.module", "erp_preview_uninstall", { modules: [row.name], context }));
+      } catch (error) {
+        notice(`Uninstall preview failed: ${(error as Error).message || "Unable to compute uninstall impact."}`);
+        await render();
+        throw error;
+      }
+    });
+    if (impact) {
+      await confirmUninstall(row, impact, opener);
+    }
+  };
+
+  const confirmUninstall = (row: AddonRow, impact: Record<string, unknown>, opener: HTMLElement): Promise<void> => {
+    return new Promise<void>((resolve, reject) => {
+      const dialog = el("dialog", undefined, "addon-uninstall-dialog");
+      // Decoded before anything is shown: an impact without its fingerprint cannot be confirmed.
+      const fingerprint = text(impact["fingerprint"], "uninstall impact fingerprint");
+      const heading = el("h2", `Uninstall ${row.label}?`, "addon-uninstall-title");
+      heading.id = "addon-uninstall-heading";
+      dialog.setAttribute("aria-labelledby", heading.id);
+
+      const warning = el("div", "Uninstalling modules can be risky. We recommend testing on a staging environment first. All data associated with these modules will be permanently deleted.", "alert alert-warning addon-uninstall-warning");
+
+      const body = el("div", undefined, "addon-uninstall-body");
+      body.append(warning);
+
+      const resolved = array(impact["resolved"], "resolved modules").map(item => text(item, "resolved module"));
+      const modulesSection = el("div", undefined, "addon-impact-section");
+      modulesSection.append(el("h3", "Affected modules:", "addon-impact-subtitle"));
+      const moduleList = el("ul", undefined, "addon-impact-modules");
+      for (const mod of resolved) {
+        moduleList.append(el("li", mod));
+      }
+      modulesSection.append(moduleList);
+      body.append(modulesSection);
+
+      const droppedModels = array(impact["dropped_models"], "dropped models").map(item => object(item));
+      if (droppedModels.length > 0) {
+        const modelsSection = el("div", undefined, "addon-impact-section");
+        modelsSection.append(el("h3", "Models and records to be deleted:", "addon-impact-subtitle"));
+        const table = el("table", undefined, "addon-impact-models-table");
+        const thead = el("thead");
+        const headerRow = el("tr");
+        headerRow.append(el("th", "Model"), el("th", "Table"), el("th", "# Records"));
+        thead.append(headerRow);
+        const tbody = el("tbody");
+        for (const m of droppedModels) {
+          const tr = el("tr");
+          tr.append(
+            el("td", text(m["model"], "dropped model name")),
+            el("td", text(m["table"], "dropped model table")),
+            el("td", text(m["row_count"], "dropped model record count"), "numeric")
+          );
+          tbody.append(tr);
+        }
+        table.append(thead, tbody);
+        modelsSection.append(table);
+        body.append(modelsSection);
+      }
+
+      const targetCount = text(impact["target_count"], "uninstall impact target count");
+      if (targetCount) {
+        body.append(el("p", `Total affected records: ${targetCount}`, "addon-impact-summary muted"));
+      }
+
+      const footer = el("footer", undefined, "addon-uninstall-footer");
+      const cancelBtn = button("Cancel", () => dialog.close(), "btn btn-secondary addon-uninstall-cancel");
+      let subPending = false;
+      let settled = false;
+      const confirmBtn = button("Confirm Uninstall", async () => {
+        if (subPending) return;
+        subPending = true;
+        cancelBtn.disabled = true;
+        confirmBtn.disabled = true;
+        try {
+          await rpc.post("/erp/module/uninstall", {
+            modules: [row.name],
+            impact: fingerprint,
+          }, { write: true });
+          settled = true;
+          dialog.close();
+          notice("Addon uninstalled. Reloading the application…");
+          window.location.reload();
+          resolve();
+        } catch (error) {
+          settled = true;
+          dialog.close();
+          if (error instanceof ClientError && (error.status === 409 || (error as { kind?: string }).kind === "conflict")) {
+            notice("Database state changed since preview. A fresh confirmation is required.");
+          } else {
+            notice("Uninstall status may have changed. Reload the catalog before trying again.");
+          }
+          await render();
+          reject(error);
+        }
+      }, "danger addon-uninstall-confirm");
+
+      footer.append(cancelBtn, confirmBtn);
+      dialog.append(heading, body, footer);
+
+      dialog.addEventListener("keydown", event => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          if (!subPending) dialog.close();
+        } else if (event.key === "Tab") {
+          const focusable = [cancelBtn, confirmBtn].filter(b => !b.disabled);
+          if (focusable.length === 0) return;
+          const first = focusable[0];
+          const last = focusable[focusable.length - 1];
+          if (!first || !last) return;
+          if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+          }
+        }
+      });
+
+      // The browser's own Escape handling too: the dialog stays open while the uninstall request runs.
+      dialog.addEventListener("cancel", event => { if (subPending) event.preventDefault(); });
+      dialog.addEventListener("close", () => {
+        dialog.remove();
+        if (opener.isConnected) opener.focus();
+        if (!settled) {
+          settled = true;
+          resolve();
+        }
+      });
+
+      document.body.append(dialog);
+      dialog.showModal();
+      cancelBtn.focus();
+    });
+  };
+
   const card = (row: AddonRow): HTMLElement => {
     const tile = el("article", undefined, "addon-card addon-tile");
     tile.dataset["addon"] = row.name;
+    tile.tabIndex = 0;
+    tile.setAttribute("role", "article");
+    tile.setAttribute("aria-label", `${row.label} addon card`);
+
+    tile.addEventListener("click", event => {
+      if ((event.target as HTMLElement).closest(".addon-actions")) return;
+      run(() => showDetail(row, tile));
+    });
+    tile.addEventListener("keydown", event => {
+      if ((event.key === "Enter" || event.key === " ") && !(event.target as HTMLElement).closest(".addon-actions")) {
+        event.preventDefault();
+        run(() => showDetail(row, tile));
+      }
+    });
+
     const meta = el("div", undefined, "addon-tile-meta");
     meta.append(el(view.groupBy === "" ? "h2" : "h3", row.label, "addon-name"), el("code", row.name, "addon-technical-name"));
     const summary = el("p", row.summary || "No description provided.", "addon-summary");
@@ -624,27 +1147,11 @@ export async function addonsView(
     const badge = el("span", row.badge.label, `addon-badge addon-badge-${row.badge.token}`);
     actions.append(info, badge);
     if (row.state === "uninstalled" && row.installable) {
-      actions.append(button("Install", () => run(() => operation(async () => {
-        if (await choose("Install addon?", `Install ${row.label} and its dependencies?`, ["Install", "Cancel"]) !== "Install") return;
-        try {
-          await rpc.post("/erp/module/install", { modules: [row.name] }, { write: true });
-          notice("Addon installed. Reloading the application…");
-          window.location.reload();
-        } catch (error) {
-          notice("Installation status may have changed. Reload the catalog before trying again.");
-          await render();
-          throw error;
-        }
-      })), "primary addon-install"));
+      actions.append(button("Install", () => run(() => executeInstall(row)), "primary addon-install"));
     } else if (row.state === "installed") {
-      // the v1 install UI grants no uninstall capability; offer it disabled, never a dialog that fails.
-      const uninstall = button("Uninstall", () => {}, "addon-uninstall");
-      uninstall.disabled = true; uninstall.dataset["locked"] = "true";
-      uninstall.title = UNINSTALL_NOTE;
-      const note = el("span", UNINSTALL_NOTE, "addon-note visually-hidden");
-      note.id = `addon-note-${row.name}`;
-      uninstall.setAttribute("aria-describedby", note.id);
-      actions.append(uninstall, note);
+      const upgrade = button("Upgrade", () => run(() => executeUpgrade(row)), "primary addon-upgrade");
+      const uninstall = button("Uninstall", () => run(() => startUninstall(row, uninstall)), "danger addon-uninstall");
+      actions.append(upgrade, uninstall);
     }
     tile.append(tileIcon(row), meta, summary, facts, actions);
     return tile;
@@ -794,7 +1301,7 @@ registerServiceController("web.settings", {
     if (Object.keys(options).length !== 2 || !Object.hasOwn(options, "app") || scopes.length === 0 || new Set(scopes).size !== scopes.length || scopes.some(scope => scope !== "global" && scope !== "company")) throw new ClientError("unsupported", "Unsupported settings options.");
     if (app !== null && (typeof app !== "string" || !SETTINGS_APP.test(app))) throw new ClientError("unsupported", "Unsupported settings app.");
   },
-  create: env => settingsView(env.host, env.rpc, env.companies, env.run, env.notice, env.context, array(env.options["scope_kinds"], "setting scopes"), env.registry, env.controls, env.panel, env.options["app"] as string | null),
+  create: env => settingsView(env.host, env.rpc, env.companies, env.run, env.notice, env.context, array(env.options["scope_kinds"], "setting scopes"), env.registry, env.controls, env.panel, env.options["app"] as string | null, env.settingsNavigation ? { navigation: env.settingsNavigation } : {}),
 });
 
 registerServiceController("web.addons", {

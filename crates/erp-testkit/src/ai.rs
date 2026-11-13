@@ -6,11 +6,14 @@
 
 use erp_orm::BoxFuture;
 use erp_sdk::ai::{
-    BoxModelStream, CompletionRequest, CompletionResponse, EmbeddingProvider, EmbeddingRequest,
-    EmbeddingResponse, FinishReason, ModelProvider, ProviderError, StreamChunk, UsageRecord,
+    BoxModelStream, CompletionRequest, CompletionResponse, ContentPart, EmbeddingProvider,
+    EmbeddingRequest, EmbeddingResponse, FinishReason, ModelProvider, ProviderError, StreamChunk,
+    ToolCall, ToolCallId, ToolModelProvider, ToolTurnRequest, ToolTurnResponse, ToolTypeError,
+    UsageRecord,
 };
+use std::collections::VecDeque;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 /// Configurable mock language model provider.
 #[derive(Debug, Clone)]
@@ -46,32 +49,23 @@ impl MockModelProvider {
 
     /// Configures a canned completion response.
     pub fn set_canned_completion(&self, response: CompletionResponse) {
-        if let Ok(mut lock) = self.canned_completion.lock() {
-            *lock = Some(response);
-        }
+        *lock(&self.canned_completion) = Some(response);
     }
 
     /// Configures canned stream chunks.
     pub fn set_canned_stream(&self, chunks: Vec<StreamChunk>) {
-        if let Ok(mut lock) = self.canned_chunks.lock() {
-            *lock = chunks;
-        }
+        *lock(&self.canned_chunks) = chunks;
     }
 
     /// Configures an error to return on future calls, or clears the error.
     pub fn set_error(&self, error: Option<ProviderError>) {
-        if let Ok(mut lock) = self.simulated_error.lock() {
-            *lock = error;
-        }
+        *lock(&self.simulated_error) = error;
     }
 
     /// Returns a snapshot of all completion requests received by this mock.
     #[must_use]
     pub fn recorded_completions(&self) -> Vec<CompletionRequest> {
-        self.recorded_completions
-            .lock()
-            .map(|r| r.clone())
-            .unwrap_or_default()
+        lock(&self.recorded_completions).clone()
     }
 }
 
@@ -84,15 +78,13 @@ impl ModelProvider for MockModelProvider {
         &'a self,
         request: &'a CompletionRequest,
     ) -> BoxFuture<'a, Result<CompletionResponse, ProviderError>> {
-        if let Ok(mut recorded) = self.recorded_completions.lock() {
-            recorded.push(request.clone());
-        }
+        lock(&self.recorded_completions).push(request.clone());
 
-        if let Some(err) = self.simulated_error.lock().ok().and_then(|g| g.clone()) {
+        if let Some(err) = lock(&self.simulated_error).clone() {
             return Box::pin(async move { Err(err) });
         }
 
-        if let Some(resp) = self.canned_completion.lock().ok().and_then(|g| g.clone()) {
+        if let Some(resp) = lock(&self.canned_completion).clone() {
             return Box::pin(async move { Ok(resp) });
         }
 
@@ -115,32 +107,27 @@ impl ModelProvider for MockModelProvider {
         &'a self,
         request: &'a CompletionRequest,
     ) -> BoxFuture<'a, Result<BoxModelStream<'a>, ProviderError>> {
-        if let Ok(mut recorded) = self.recorded_completions.lock() {
-            recorded.push(request.clone());
-        }
+        lock(&self.recorded_completions).push(request.clone());
 
-        if let Some(err) = self.simulated_error.lock().ok().and_then(|g| g.clone()) {
+        if let Some(err) = lock(&self.simulated_error).clone() {
             return Box::pin(async move { Err(err) });
         }
 
-        let chunks = if let Ok(canned) = self.canned_chunks.lock() {
-            if !canned.is_empty() {
-                canned.clone()
-            } else {
-                let words: Vec<&str> = request.prompt.split_whitespace().collect();
-                let prompt_tokens = (words.len() as u32).max(1);
-                let completion_tokens = words.len() as u32;
-                let usage =
-                    UsageRecord::new(&self.name, &request.model, prompt_tokens, completion_tokens);
-                let mut out = Vec::new();
-                for w in words {
-                    out.push(StreamChunk::delta(format!("{w} ")));
-                }
-                out.push(StreamChunk::final_chunk(usage, FinishReason::Stop));
-                out
-            }
+        let canned = lock(&self.canned_chunks).clone();
+        let chunks = if !canned.is_empty() {
+            canned
         } else {
-            Vec::new()
+            let words: Vec<&str> = request.prompt.split_whitespace().collect();
+            let prompt_tokens = (words.len() as u32).max(1);
+            let completion_tokens = words.len() as u32;
+            let usage =
+                UsageRecord::new(&self.name, &request.model, prompt_tokens, completion_tokens);
+            let mut out = Vec::new();
+            for w in words {
+                out.push(StreamChunk::delta(format!("{w} ")));
+            }
+            out.push(StreamChunk::final_chunk(usage, FinishReason::Stop));
+            out
         };
 
         let stream: BoxModelStream<'a> = Box::pin(SimpleChunkStream {
@@ -155,7 +142,7 @@ impl ModelProvider for MockModelProvider {
         _model: &'a str,
         text: &'a str,
     ) -> BoxFuture<'a, Result<u32, ProviderError>> {
-        if let Some(err) = self.simulated_error.lock().ok().and_then(|g| g.clone()) {
+        if let Some(err) = lock(&self.simulated_error).clone() {
             return Box::pin(async move { Err(err) });
         }
         let words = text.split_whitespace().count() as u32;
@@ -271,5 +258,172 @@ impl EmbeddingProvider for MockEmbeddingProvider {
         };
 
         Box::pin(async move { Ok(response) })
+    }
+}
+
+/// One queued answer of a [`ScriptedModelProvider`].
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScriptedReply {
+    /// Answer the turn with this response.
+    Response(ToolTurnResponse),
+    /// Fail the turn with this error.
+    Error(ProviderError),
+}
+
+impl ScriptedReply {
+    /// Provider name in the usage of the responses built by [`ScriptedReply::tool_call`] and
+    /// [`ScriptedReply::text`].
+    pub const USAGE_PROVIDER: &'static str = "scripted";
+    /// Model name of the responses built by [`ScriptedReply::tool_call`] and
+    /// [`ScriptedReply::text`].
+    pub const MODEL: &'static str = "scripted-model";
+
+    /// A response holding one tool call, finish reason [`FinishReason::ToolUse`], usage 1 + 1
+    /// tokens. `name` and `arguments` are kept as given, so a test can script a call to a tool
+    /// that does not exist or with arguments that do not fit its schema.
+    ///
+    /// # Errors
+    /// The [`ToolTypeError`] of an invalid id or an oversized name.
+    pub fn tool_call(
+        id: &str,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<ToolTurnResponse, ToolTypeError> {
+        let call = ToolCall::new(ToolCallId::new(id)?, name.to_owned(), arguments)?;
+        ToolTurnResponse::new(
+            Self::MODEL,
+            vec![ContentPart::ToolCall(call)],
+            UsageRecord::new(Self::USAGE_PROVIDER, Self::MODEL, 1, 1),
+            Some(FinishReason::ToolUse),
+        )
+    }
+
+    /// A response holding assistant text, finish reason [`FinishReason::Stop`], usage 1 + 1
+    /// tokens.
+    ///
+    /// # Errors
+    /// None today; the `Result` follows [`ToolTurnResponse::new`].
+    pub fn text(text: &str) -> Result<ToolTurnResponse, ToolTypeError> {
+        ToolTurnResponse::new(
+            Self::MODEL,
+            vec![ContentPart::AssistantText(text.to_owned())],
+            UsageRecord::new(Self::USAGE_PROVIDER, Self::MODEL, 1, 1),
+            Some(FinishReason::Stop),
+        )
+    }
+}
+
+/// A tool-calling test double: answers each tool turn with the next queued [`ScriptedReply`]
+/// and records every request. An exhausted script is a [`ProviderError::Backend`] naming the call,
+/// never a default answer. Text-only requests ([`ModelProvider`]) behave as [`MockModelProvider`]
+/// (echo).
+#[derive(Debug, Clone)]
+pub struct ScriptedModelProvider {
+    name: String,
+    script: Arc<Mutex<VecDeque<ScriptedReply>>>,
+    recorded: Arc<Mutex<Vec<ToolTurnRequest>>>,
+    text: MockModelProvider,
+}
+
+/// Locks test-double state of [`MockModelProvider`] and [`ScriptedModelProvider`]. A poisoned
+/// lock only means another test thread panicked while holding it; each critical section here is
+/// a single assignment, push, pop or clone, so the data is consistent and the guard is taken over.
+/// Configured answers and recorded requests are therefore never dropped or replaced by an empty
+/// default.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+impl ScriptedModelProvider {
+    /// Creates a scripted provider with an empty script.
+    #[must_use]
+    pub fn new(name: impl Into<String>) -> Self {
+        let name = name.into();
+        Self {
+            text: MockModelProvider::new(name.clone()),
+            name,
+            script: Arc::new(Mutex::new(VecDeque::new())),
+            recorded: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Queues a response.
+    pub fn push_reply(&self, response: ToolTurnResponse) {
+        lock(&self.script).push_back(ScriptedReply::Response(response));
+    }
+
+    /// Queues an error.
+    pub fn push_error(&self, error: ProviderError) {
+        lock(&self.script).push_back(ScriptedReply::Error(error));
+    }
+
+    /// Number of queued replies not yet used.
+    #[must_use]
+    pub fn remaining(&self) -> usize {
+        lock(&self.script).len()
+    }
+
+    /// Every tool-turn request received, in order.
+    #[must_use]
+    pub fn recorded_requests(&self) -> Vec<ToolTurnRequest> {
+        lock(&self.recorded).clone()
+    }
+
+    /// Every text-only completion request received, in order.
+    #[must_use]
+    pub fn recorded_completions(&self) -> Vec<CompletionRequest> {
+        self.text.recorded_completions()
+    }
+}
+
+impl ModelProvider for ScriptedModelProvider {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn complete<'a>(
+        &'a self,
+        request: &'a CompletionRequest,
+    ) -> BoxFuture<'a, Result<CompletionResponse, ProviderError>> {
+        self.text.complete(request)
+    }
+
+    fn stream<'a>(
+        &'a self,
+        request: &'a CompletionRequest,
+    ) -> BoxFuture<'a, Result<BoxModelStream<'a>, ProviderError>> {
+        self.text.stream(request)
+    }
+
+    fn count_tokens<'a>(
+        &'a self,
+        model: &'a str,
+        text: &'a str,
+    ) -> BoxFuture<'a, Result<u32, ProviderError>> {
+        self.text.count_tokens(model, text)
+    }
+}
+
+impl ToolModelProvider for ScriptedModelProvider {
+    fn complete_turn<'a>(
+        &'a self,
+        request: &'a ToolTurnRequest,
+    ) -> BoxFuture<'a, Result<ToolTurnResponse, ProviderError>> {
+        let call = {
+            let mut recorded = lock(&self.recorded);
+            recorded.push(request.clone());
+            recorded.len()
+        };
+        let reply = lock(&self.script).pop_front();
+        let outcome = match reply {
+            Some(ScriptedReply::Response(response)) => Ok(response),
+            Some(ScriptedReply::Error(error)) => Err(error),
+            None => Err(ProviderError::Backend {
+                provider: self.name.clone(),
+                message: format!("the script is exhausted at call {call} (no reply queued)"),
+            }),
+        };
+        Box::pin(async move { outcome })
     }
 }

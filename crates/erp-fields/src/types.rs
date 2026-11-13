@@ -1,4 +1,4 @@
-//! Field types after setup, and their database column types (FIELD §4.5, §4.8;,
+//! Field types after setup, and their database column types (FIELD §4.5, §4.8,
 //! ).
 
 use std::fmt;
@@ -151,8 +151,7 @@ impl OnDelete {
     }
 }
 
-/// Selection field `ondelete` policy for selection values added by an extension
-/// .
+/// Selection field `ondelete` policy for selection values added by an extension.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SelectionOnDelete {

@@ -18,10 +18,12 @@
 //!
 //! `Super` may be written without generics; the macro fills in `Super<(A, B), R>`.
 //!
-//! `#[rpc]` next to `#[method]` exposes the method over RPC:
+//! `#[rpc(...)]` next to `#[method]` exposes the method over RPC:
 //!
 //! `#[rpc]` without `effect` (and without `hide`), an unknown effect, a parameter named `ids` or
-//! `context`, and a method name starting with `_` are compile errors.
+//! `context`, and a method name starting with `_` are compile errors. `assistant` takes only
+//! `offer`, and never with `effect = external` or `hide`; it adds an `AssistantOffer` entry, and
+//! every parameter carries its `FromRpc::SHAPE` for the tool schema.
 //!
 //! `#[data_callable]` (or `#[data_callable(model)]`) next to `#[method]` lets a `<function>` of a
 //! data file call the method: same parameter table and binder as `#[rpc]`, no effect
@@ -62,10 +64,12 @@ struct Method {
 
 /// A parsed `#[rpc(...)]`.
 enum Rpc {
-    /// `#[rpc(effect = …[, model])]`, with each argument's `#[arg(default = …)]`.
+    /// `#[rpc(effect = …[, model][, assistant = offer])]`, with each argument's
+    /// `#[arg(default = …)]`.
     Expose {
         effect: syn::Ident,
         model: bool,
+        assistant: bool,
         defaults: Vec<Option<syn::Expr>>,
     },
     /// `#[rpc(hide)]`.
@@ -100,8 +104,20 @@ const EFFECTS: [(&str, &str); 4] = [
     ("external", "External"),
 ];
 
-/// Parse `#[rpc(effect = …, model)]` / `#[rpc(hide)]`: (effect variant, model, hide).
-fn parse_rpc(attr: &syn::Attribute) -> syn::Result<(Option<syn::Ident>, bool, bool)> {
+/// A parsed `#[rpc(...)]` attribute, before the signature checks.
+struct RpcAttr {
+    /// The `Effect` variant, absent with `hide`.
+    effect: Option<syn::Ident>,
+    /// `model`.
+    model: bool,
+    /// `hide`.
+    hide: bool,
+    /// `assistant = offer` ((a)).
+    assistant: bool,
+}
+
+/// Parse `#[rpc(effect = …, model, assistant = offer)]` / `#[rpc(hide)]`.
+fn parse_rpc(attr: &syn::Attribute) -> syn::Result<RpcAttr> {
     const NEEDS_EFFECT: &str =
         "#[rpc] needs an effect: #[rpc(effect = read|write|destructive|external)] or #[rpc(hide)]";
     let metas = match &attr.meta {
@@ -110,8 +126,22 @@ fn parse_rpc(attr: &syn::Attribute) -> syn::Result<(Option<syn::Ident>, bool, bo
         Meta::NameValue(nv) => return err(nv.span(), NEEDS_EFFECT),
     };
     let (mut effect, mut model, mut hide) = (None, false, false);
+    let mut assistant: Option<Span> = None;
     for meta in &metas {
         match (key(meta).as_str(), meta) {
+            ("assistant", Meta::NameValue(nv)) => {
+                if assistant.is_some() {
+                    return err(nv.span(), "`assistant` is given twice");
+                }
+                let is_offer = matches!(
+                    &nv.value,
+                    syn::Expr::Path(p) if p.path.is_ident("offer")
+                );
+                if !is_offer {
+                    return err(nv.value.span(), "expected assistant = offer");
+                }
+                assistant = Some(nv.span());
+            }
             ("effect", Meta::NameValue(nv)) => {
                 if effect.is_some() {
                     return err(nv.span(), "`effect` is given twice");
@@ -147,18 +177,35 @@ fn parse_rpc(attr: &syn::Attribute) -> syn::Result<(Option<syn::Ident>, bool, bo
             (other, _) => {
                 return err(
                     meta.span(),
-                    format!("unknown #[rpc] parameter `{other}`: expected effect, model or hide"),
+                    format!(
+                        "unknown #[rpc] parameter `{other}`: expected effect, model, assistant or \
+                         hide"
+                    ),
                 );
             }
         }
     }
-    if hide && (effect.is_some() || model) {
+    if hide && (effect.is_some() || model || assistant.is_some()) {
         return err(attr.span(), "#[rpc(hide)] takes no other parameter");
     }
     if !hide && effect.is_none() {
         return err(attr.span(), NEEDS_EFFECT);
     }
-    Ok((effect, model, hide))
+    if let Some(span) = assistant
+        && effect.as_ref().is_some_and(|e| e == "External")
+    {
+        return err(
+            span,
+            "assistant = offer cannot be given with effect = external: external methods are never \
+             offered to the assistant",
+        );
+    }
+    Ok(RpcAttr {
+        effect,
+        model,
+        hide,
+        assistant: assistant.is_some(),
+    })
 }
 
 /// Take `#[arg(default = expr)]` off a parameter.
@@ -591,6 +638,7 @@ fn rpc_entry(e: RpcEntry<'_>) -> TokenStream {
             effect,
             model,
             defaults,
+            ..
         } => (
             Some(effect),
             *model,
@@ -647,7 +695,12 @@ fn rpc_entry(e: RpcEntry<'_>) -> TokenStream {
                             };
                         });
                         specs.push(quote! {
-                            #rt::ParamSpec::new(#pname, false, <#ty as #rt::FromRpc>::EXPECTED)
+                            #rt::ParamSpec::with_shape(
+                                #pname,
+                                false,
+                                <#ty as #rt::FromRpc>::EXPECTED,
+                                <#ty as #rt::FromRpc>::SHAPE,
+                            )
                         });
                     }
                     None => {
@@ -655,10 +708,11 @@ fn rpc_entry(e: RpcEntry<'_>) -> TokenStream {
                             let #var: #ty = __args.take::<#ty>(#pname)?;
                         });
                         specs.push(quote! {
-                            #rt::ParamSpec::new(
+                            #rt::ParamSpec::with_shape(
                                 #pname,
                                 <#ty as #rt::FromRpc>::REQUIRED,
                                 <#ty as #rt::FromRpc>::EXPECTED,
+                                <#ty as #rt::FromRpc>::SHAPE,
                             )
                         });
                     }
@@ -681,7 +735,27 @@ fn rpc_entry(e: RpcEntry<'_>) -> TokenStream {
                     }
                 },
             };
+            let offer = match rpc {
+                Rpc::Expose {
+                    assistant: true, ..
+                } => {
+                    let ostat = format_ident!("__ERP_ASSISTANT_OFFER_{}", name_str.to_uppercase());
+                    quote_spanned! {span=>
+                        #[#rt::linkme::distributed_slice(#rt::ASSISTANT_OFFERS)]
+                        #[linkme(crate = #rt::linkme)]
+                        static #ostat: #rt::AssistantOffer = #rt::AssistantOffer {
+                            addon: #addon,
+                            model: <#target as #rt::Model>::MODEL_NAME,
+                            method: #name_str,
+                            file: ::core::file!(),
+                            line: ::core::line!(),
+                        };
+                    }
+                }
+                Rpc::Expose { .. } | Rpc::Hide | Rpc::Data { .. } => TokenStream::new(),
+            };
             quote_spanned! {span=>
+                #offer
                 #[allow(non_snake_case)]
                 fn #bind<'a>(
                     __tx: &'a mut #rt::Transaction,
@@ -1010,7 +1084,14 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
                         "a #[constrains] or #[onchange] method cannot be data-callable",
                     );
                 }
-                if matches!(&rpc_attr, Some((Some(_), _, false))) {
+                if matches!(
+                    &rpc_attr,
+                    Some(RpcAttr {
+                        effect: Some(_),
+                        hide: false,
+                        ..
+                    })
+                ) {
                     return err(
                         attr.span(),
                         "a method with #[rpc(effect = …)] is data-callable already; drop \
@@ -1159,7 +1240,12 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
             None => None,
         };
         let rpc = match rpc_attr {
-            Some((Some(effect), model, false)) => {
+            Some(RpcAttr {
+                effect: Some(effect),
+                model,
+                hide: false,
+                assistant,
+            }) => {
                 for (pat, _) in &args {
                     let syn::Pat::Ident(ident) = pat else {
                         return err(pat.span(), "#[rpc] parameters are plain names");
@@ -1178,6 +1264,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
                 Some(Rpc::Expose {
                     effect,
                     model,
+                    assistant,
                     defaults: arg_defaults,
                 })
             }

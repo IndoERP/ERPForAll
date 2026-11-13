@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use auth_support::*;
-use erp_orm::{BeginOptions, Isolation, Orm, SUPERUSER_ID};
+use erp_orm::{BeginOptions, Isolation, SUPERUSER_ID};
 use erp_sdk::{Error, ErrorKind, Value};
 use erp_security::auth::password::{self, HashParams, limits};
 use erp_security::auth::throttle::{self, ThrottleKey};
@@ -1993,88 +1993,6 @@ async fn the_first_login_uses_the_settings_auth_new_read() {
     assert_eq!(w.auth.stats().settings_loads, 2, "a write reloads");
 }
 
-/// The initial pool `deadlock_timeout` used by the login side, ms (round 6
-/// C5-1): the pool of [`deadlock_world`] starts each connection with it. Below the ORM's default
-/// `lock_timeout` (10 s), so the login's deadlock check runs before its lock limit can fire.
-const DEADLOCK_TIMEOUT_MS: f64 = 5000.0;
-
-/// The world of a forced deadlock (round 6 C5-1): an `Auth` and the other side's ORM on one pool
-/// whose every connection starts with `deadlock_timeout` = [`DEADLOCK_TIMEOUT_MS`], so the login's
-/// backend and the other side's run with the same raised timeout (the test role may set it, as a
-/// superuser; checked on erpforall-pg 2026-10-23, round 6).
-/// The helper locally overrides its detector afterward; login connections keep this setting.
-async fn deadlock_world() -> (Harness, Arc<Auth>, Orm) {
-    let w = world().await;
-    let pool = pool_with_options(&w.h, 4, "-c deadlock_timeout=5s");
-    let orm = orm_on(&w.h, pool).await;
-    let auth = Auth::new(
-        orm.clone(),
-        AuthConfig::DEFAULT,
-        own_pool(HashPoolConfig::DEFAULT),
-    )
-    .await
-    .unwrap();
-    (w.h, Arc::new(auth), orm)
-}
-
-/// The helper's detector runs after the login's 5 s detector. Equal detectors can choose
-/// the helper as the victim even though both sessions reached the arranged cycle; a failed
-/// helper alone does not measure a client scheduling stall. Its lock timeout leaves room for
-/// its detector, without changing the login's production retry or timeout behavior.
-const OTHER_DEADLOCK_TIMEOUT_MS: f64 = 30_000.0;
-
-/// A READ COMMITTED transaction on `orm`, as the system: the other side of a forced deadlock.
-async fn other_side(orm: &Orm) -> erp_sdk::Transaction {
-    let mut tx = orm
-        .begin_opts(BeginOptions::new(SUPERUSER_ID).isolation(Isolation::ReadCommitted))
-        .await
-        .unwrap();
-    let initial: f64 = tx
-        .query(
-            "SELECT setting::float8 FROM pg_settings WHERE name = 'deadlock_timeout'",
-            &[],
-        )
-        .await
-        .unwrap()[0]
-        .get(0);
-    assert_eq!(
-        initial, DEADLOCK_TIMEOUT_MS,
-        "the login pool's detector timeout"
-    );
-    tx.execute("SET LOCAL deadlock_timeout = '30s'", &[])
-        .await
-        .unwrap();
-    tx.execute("SET LOCAL lock_timeout = '45s'", &[])
-        .await
-        .unwrap();
-    let lock_timeout: f64 = tx
-        .query(
-            "SELECT setting::float8 FROM pg_settings WHERE name = 'lock_timeout'",
-            &[],
-        )
-        .await
-        .unwrap()[0]
-        .get(0);
-    assert_eq!(
-        lock_timeout, 45_000.0,
-        "helper lock timeout follows its detector"
-    );
-    tx
-}
-
-/// The result of the other side's blocking request (round 6 C5-2): its error means the other
-/// side, not the login, was refused by the deadlock check, so the panic says so instead of
-/// unwrapping a bare 40P01.
-fn the_other_side_won<T>(result: Result<T, Error>) -> T {
-    result.unwrap_or_else(|e| {
-        panic!(
-            "the other side was the deadlock victim (sqlstate {:?}): the arranged login-victim \
-             ordering was not reached: {e}",
-            e.sqlstate()
-        )
-    })
-}
-
 /// Round 6 C5-2: a refused blocking request of the other side panics with the reason, not a bare
 /// unwrap of the 40P01.
 #[test]
@@ -2086,62 +2004,6 @@ fn a_refused_other_side_says_it_was_the_victim() {
     let refused: Result<(), Error> = Err(Error::new(ErrorKind::Conflict, "deadlock detected")
         .with_sqlstate(Some("40P01".to_owned())));
     the_other_side_won(refused);
-}
-
-/// How long the backend that waits for a lock this transaction holds has waited, ms
-/// (`pg_locks` `waitstart`, server clock), and this transaction's own `deadlock_timeout`, ms;
-/// `None` while none waits or its wait start is not set yet. `pg_locks` and `pg_blocking_pids`
-/// are read live at each statement (`pg_stat_activity` is not: a transaction keeps its first
-/// snapshot of it).
-const LOCK_WAIT_SQL: &str = "\
-SELECT (extract(epoch FROM clock_timestamp() - min(l.waitstart)) * 1000)::float8,
-       (SELECT setting::float8 FROM pg_settings WHERE name = 'deadlock_timeout')
-  FROM pg_locks l
- WHERE NOT l.granted AND l.waitstart IS NOT NULL
-   AND pg_backend_pid() = ANY (pg_blocking_pids(l.pid))";
-
-/// Round 4 C4-3, round 6 C5-1 and C5-3: the gate of a forced deadlock, run by the other side
-/// right before its blocking request. It waits until the login waits for a lock the other side
-/// holds (`pg_locks`, its wait start set), then checks that the login has waited less than half
-/// of the login backend's `deadlock_timeout`.
-///
-/// `pg_settings` here is the helper's session: assert its 30 s detector override. The
-/// login remains on the pool's 5 s setting, checked before the helper's local override.
-/// The wait admission below still uses half of the login's 5 s detector window.
-///
-/// Why half: the login's deadlock check runs once, its own `deadlock_timeout` (dL) after it
-/// started waiting, and on a cycle the backend that runs the check is the one refused. The login
-/// is the victim when the other side's request reaches its lock wait before that check. A request
-/// that arrives later makes the other side the victim whatever the other side's own timeout is
-/// (its check then finds the cycle first), so the admission window remains dL alone.
-/// The helper's later detector removes the equal-timer victim race. The residual timing
-/// assumption: the other side's next statement reaches its lock wait within dL - waited (at least
-/// dL/2 = 2.5 s, one round trip on the same connection). A wrong victim still fails loudly;
-/// that outcome alone does not measure the size or cause of a scheduling delay.
-async fn until_the_login_waits(other: &mut erp_sdk::Transaction) {
-    let started = std::time::Instant::now();
-    loop {
-        let rows = other.query(LOCK_WAIT_SQL, &[]).await.unwrap();
-        let waited: Option<f64> = rows[0].get(0);
-        let timeout: f64 = rows[0].get(1);
-        assert_eq!(
-            timeout, OTHER_DEADLOCK_TIMEOUT_MS,
-            "the helper detector must run after the login detector"
-        );
-        if let Some(waited) = waited {
-            assert!(
-                waited < DEADLOCK_TIMEOUT_MS / 2.0,
-                "the login waited {waited} ms before the other side's request: \
-                 beyond half of its 5000 ms deadlock_timeout"
-            );
-            return;
-        }
-        assert!(
-            started.elapsed() < Duration::from_secs(30),
-            "the login never waited for a lock"
-        );
-        tokio::time::sleep(Duration::from_millis(2)).await;
-    }
 }
 
 /// Database review round 3 DD-1, rust review round 3 RD-5, the success side: the success

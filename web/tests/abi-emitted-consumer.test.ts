@@ -85,7 +85,7 @@ function writeProject(files: Readonly<Record<string, string>>, skipLibCheck: boo
   // ordinary target-implied lib (`ES2022`) is as available here as in any real build — `noLib: true`
   // was tried first and failed (`TS2318: Cannot find global type 'Array'`/`'Object'`/… — TypeScript's
   // own type-checking machinery needs these even for code that only uses primitives), confirmed on the
-  // sixth remote CI run and documented's revision log.
+  // sixth remote CI run and's revision log.
   // This is a deliberately minimal fixture config, not a mirror of the real `tsconfig.dts-consumer.json`
   // (it omits `verbatimModuleSyntax`, `isolatedModules`, `noUnusedLocals`/`Parameters`,
   // `noUncheckedIndexedAccess`): none of those flags affect the assertions below, since this suite

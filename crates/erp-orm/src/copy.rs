@@ -105,7 +105,7 @@ impl Records {
     /// # Ok(()) }
     /// ```
     pub async fn copy(&self, tx: &mut Transaction, default: Option<ValueMap>) -> Result<Records> {
-        tx.check_records(self)?;
+        tx.admit_records(self).await?;
         if let Some(defaults) = &default {
             crate::database_generated::check_write_names(
                 tx,
@@ -134,7 +134,7 @@ impl Records {
         tx: &mut Transaction,
         default: Option<&ValueMap>,
     ) -> Result<Vec<Option<ValueMap>>> {
-        tx.check_records(self)?;
+        tx.admit_records(self).await?;
         if let Some(defaults) = default {
             crate::database_generated::check_write_names(
                 tx,
@@ -228,7 +228,7 @@ async fn base_copy_data(
     records: &Records,
     default: Option<&ValueMap>,
 ) -> Result<Vec<Option<ValueMap>>> {
-    tx.check_records(records)?;
+    tx.admit_records(records).await?;
     if records.is_empty() {
         return Ok(Vec::new());
     }

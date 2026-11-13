@@ -1,13 +1,14 @@
 //! `mail.activity.mixin`: the abstract mixin that gives a model activities, with the scheduling
-//! helpers business code calls, the activities panel data of the chatter and the systray counts.
+//! helpers business code calls, the activities panel data of the chatter.
 //!
-//! and `mail_activity.py` (`_store_activity_fields`, the systray); design note
-//! . Our own implementation. A model gets the activities by inheriting
+//! and `mail_activity.py` (`_store_activity_fields`, the systray).
+//! Our own implementation. A model gets the activities by inheriting
 //! the mixin next to `mail.thread` (`inherit = [MailThread, MailActivityMixin]`): guide
 //! "Add activities to a model".
 //!
-//! The panel ([`ActivityPanel`], method `activities_panel`) and the systray ([`activity_systray`])
-//! are plain typed values; the store topics wrap them when merges.
+//! The panel ([`ActivityPanel`], method `activities_panel`) is a plain typed value; the store topic
+//! wraps it when merges. The activity menu (the systray counts) lives in
+//! [`crate::activity_menu`].
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -15,7 +16,6 @@ use erp_sdk::prelude::*;
 use erp_sdk::{Fetch, Operation};
 
 use crate::activity::{MailActivity, ScheduleRequest, automation_skipped};
-use crate::activity_date::state_of;
 use crate::activity_type::{default_type, load_types};
 
 /// The activity mixin: activities of a record and the status derived from them.
@@ -125,31 +125,6 @@ impl PanelActivity {
 pub struct ActivityPanel {
     /// The activities the caller may read.
     pub activities: Vec<PanelActivity>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct SystrayGroup {
-    /// Model of the records; `None` for personal to-dos.
-    pub res_model: Option<String>,
-    /// Activities due before today.
-    pub overdue: u64,
-    /// Activities due today.
-    pub today: u64,
-    /// Activities due later.
-    pub planned: u64,
-}
-
-impl SystrayGroup {
-    /// Overdue plus today plus planned.
-    pub fn total(&self) -> u64 {
-        self.overdue + self.today + self.planned
-    }
-
-    /// The count the systray badge shows: due today or before.
-    pub fn todo(&self) -> u64 {
-        self.overdue + self.today
-    }
 }
 
 /// Name, category and icon of an activity type, as the panel shows them.
@@ -691,81 +666,5 @@ impl MailActivityMixin {
             });
         }
         Ok(ActivityPanel { activities })
-    }
-}
-
-/// The systray counts of the current user: their active activities by model, split into overdue,
-/// today and planned by the deadline against today in their time zone (UTC without one).
-/// An
-/// activity assigned to the user counts whether or not they still read its record, as the rule
-/// lets them read it.
-///
-/// # Errors
-/// `Validation` when the user's time zone is not a known zone; database and access errors.
-pub async fn activity_systray(env: &Env, tx: &mut Transaction) -> Result<Vec<SystrayGroup>> {
-    let domain = Domain::condition("user_id", Operator::Eq, env.uid())?;
-    let groups = env
-        .records("mail.activity")?
-        ._read_group(
-            tx,
-            ReadGroup::new(domain)
-                .groupby(["res_model", "date_deadline:day"])
-                .aggregates(["__count"]),
-        )
-        .await?;
-    let zones = user_timezones_of(tx, env, env.uid()).await?;
-    let today = Date::context_today(zones.as_deref().unwrap_or("UTC"))?;
-    let mut per: BTreeMap<Option<String>, SystrayGroup> = BTreeMap::new();
-    for row in groups.rows() {
-        let [model, day, count] = row.as_slice() else {
-            return Err(Error::invariant(
-                "the systray statement returned rows of another shape",
-            ));
-        };
-        let model = match model {
-            GroupValue::Str(model) => Some(model.to_string()),
-            GroupValue::False | GroupValue::Null => None,
-            other => {
-                return Err(Error::invariant(format!(
-                    "unexpected systray model value {other:?}"
-                )));
-            }
-        };
-        let GroupValue::Date(day) = day else {
-            return Err(Error::invariant(format!(
-                "unexpected systray deadline value {day:?}"
-            )));
-        };
-        let GroupValue::Int(count) = count else {
-            return Err(Error::invariant(format!(
-                "unexpected systray count value {count:?}"
-            )));
-        };
-        let count =
-            u64::try_from(*count).map_err(|_| Error::invariant("a negative systray count"))?;
-        let group = per.entry(model.clone()).or_insert_with(|| SystrayGroup {
-            res_model: model,
-            overdue: 0,
-            today: 0,
-            planned: 0,
-        });
-        match state_of(true, *day, today) {
-            "overdue" => group.overdue += count,
-            "today" => group.today += count,
-            _ => group.planned += count,
-        }
-    }
-    Ok(per.into_values().collect())
-}
-
-/// The time zone of user `uid`, if set.
-async fn user_timezones_of(tx: &mut Transaction, env: &Env, uid: i64) -> Result<Option<String>> {
-    let user = env.records("res.users")?.sudo(true).browse([uid])?;
-    match user.cell(tx, "tz").await? {
-        Cell::Str(tz) if !tz.is_empty() => Ok(Some(tz.to_string())),
-        Cell::Str(_) | Cell::Null => Ok(None),
-        other => Err(Error::invariant(format!(
-            "res.users.tz is not text: {other:?}"
-        ))),
     }
 }

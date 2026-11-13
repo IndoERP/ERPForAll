@@ -21,7 +21,7 @@
 //!   never ends sessions inside the measured login.
 //! - `argon2id_verify`: the verify alone, which dominates both logins.
 //!
-//! Needs `DATABASE_URL` (a test cluster, like the tests). Results:.
+//! Needs `DATABASE_URL` (a test cluster, like the tests). Results.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

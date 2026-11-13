@@ -1,0 +1,18 @@
+[package]
+name = "erp-addon-account"
+description = "ERPForAll addon account: the accounting application"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+erp-sdk = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+toml = { workspace = true }

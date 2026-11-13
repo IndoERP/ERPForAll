@@ -442,7 +442,10 @@ pub const PARTITION_LOCK_TIMEOUT_BOUNDS: (std::time::Duration, std::time::Durati
 /// before anything runs.
 pub const MAX_PARTITIONS_PER_CALL: usize = erp_registry::MAX_PARTITION_INTERVALS as usize + 1;
 
-/// The model `name` of `registry` and its partitioning; it must be partitioned.
+/// The model `name` of `registry` and its partitioning; it must be partitioned and have a table
+/// of the generic namespace. A model of the closed event namespace is refused: its partitions
+/// are kept by [`Orm::maintain_event_partitions`](crate::Orm::maintain_event_partitions) only, and
+/// nothing retires them before the retention slice (scope §3.5).
 fn partitioned<'r>(
     registry: &'r Registry,
     name: &str,
@@ -451,18 +454,29 @@ fn partitioned<'r>(
     let spec = registry
         .model(name)
         .ok_or_else(|| Error::programming(format!("Model '{name}' does not exist in registry.")))?;
+    if spec.namespace == erp_registry::TableNamespace::Event {
+        return Err(Error::programming(format!(
+            "{call} on '{name}': the model is in the closed event namespace; its partitions are \
+             kept by Orm::maintain_event_partitions, never by the generic partition upkeep"
+        )));
+    }
     let partition = spec.partition.ok_or_else(|| {
         Error::programming(format!("{call} on '{name}': the model is not partitioned"))
     })?;
     Ok((spec, partition))
 }
 
-/// The partitioned models of `registry`, in registry order, with their partitioning.
+/// The partitioned models of `registry` with a table of the generic namespace, in registry order,
+/// with their partitioning. Event-namespace models are left out: the generic upkeep never creates
+/// or retires their partitions ([`Orm::maintain_event_partitions`](crate::Orm::maintain_event_partitions)
+/// keeps them).
 fn partitioned_models(registry: &Registry) -> Vec<(&ModelSpec, erp_registry::Partition)> {
     registry
         .models()
         .iter()
-        // selects the partitioned models; every other model has nothing to maintain
+        // the partitioned models of the generic namespace; every other model has nothing the
+        // generic upkeep may maintain
+        .filter(|m| m.has_generic_table())
         .filter_map(|m| m.partition.map(|p| (m, p)))
         .collect()
 }

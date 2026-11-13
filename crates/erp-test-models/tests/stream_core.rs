@@ -1,4 +1,4 @@
-//! PERF.STREAM-CORE (design note, §3.7, §9.1): rows decoded as
+//! PERF.STREAM-CORE (§3.7, §9.1): rows decoded as
 //! the driver receives them. A flight drains its statements in order, so answers larger than the
 //! driver's buffers cannot deadlock it; an error in the middle of an answer is returned as it is,
 //! and the transaction goes on (a decode error) or is aborted (a server error) exactly as after a

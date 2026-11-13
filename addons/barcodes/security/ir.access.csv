@@ -1,0 +1,5 @@
+id,name,model_id/id,group_id/id,operation,domain
+access_nomenclature_user,Read barcode nomenclatures,model_barcode_nomenclature,base.group_user,r,
+access_nomenclature_manager,Configure barcode nomenclatures,model_barcode_nomenclature,base.group_erp_manager,crud,
+access_rule_user,Read barcode rules,model_barcode_rule,base.group_user,r,
+access_rule_manager,Configure barcode rules,model_barcode_rule,base.group_erp_manager,crud,

@@ -28,7 +28,7 @@ impl fmt::Display for ModuleVersion {
 }
 
 impl ModuleVersion {
-    /// Default version for new modules and.
+    /// Default version for new modules.
     pub fn default_version() -> Self {
         Self::compatible("1.0.0", 1, 0, 0)
     }
@@ -70,7 +70,7 @@ impl ModuleVersion {
         matches!(self, Self::Compatible { .. })
     }
 
-    /// Parse and adapt a manifest version string according to,.
+    /// Parse and adapt a manifest version string according to.
     ///
     /// Rules:
     /// 1. A version must have 2 to 5 dot-separated integer components. Fewer or more components,

@@ -175,8 +175,7 @@ pub enum Error {
     #[error("Missing state for module '{module}'")]
     MissingModuleState { module: ModuleName },
 
-    /// Update mode: modules marked to install, upgrade or remove were left out of the graph
-    /// .
+    /// Update mode: modules marked to install, upgrade or remove were left out of the graph.
     #[error(
         "Modules marked to install, upgrade or remove cannot be loaded:\n{}",
         format_drops(.modules)
@@ -229,8 +228,7 @@ pub enum Error {
     DiscoveryErrors { count: usize, errors: Vec<Error> },
 
     // ---- operations ---------------------------------------------------------------
-    /// Only the superuser runs module operations until M3 adds administrator groups
-    /// .
+    /// Only the superuser runs module operations until M3 adds administrator groups.
     #[error(
         "Access denied to module.{method} for user {uid}: only the superuser may run module operations until M3 adds administrator groups"
     )]
@@ -835,8 +833,8 @@ pub enum Error {
     #[error("Consent for addon '{addon}' refused: {message}")]
     ConsentMismatch { addon: ModuleName, message: String },
 
-    /// A runtime install, upgrade or uninstall of a WebAssembly addon was refused or failed
-    /// . Nothing of it persists. Constructible by [`crate::wasm_lifecycle::ComponentLoader`]
+    /// A runtime install, upgrade or uninstall of a WebAssembly addon was refused or failed.
+    /// Nothing of it persists. Constructible by [`crate::wasm_lifecycle::ComponentLoader`]
     /// implementations, so the variant itself is not `non_exhaustive` (the enum is).
     #[error("WebAssembly addon '{addon}': {reason}")]
     WasmAddon {

@@ -79,8 +79,7 @@ impl<'a> FieldSource for dyn GuardLookup + 'a {
 pub(crate) enum AttrKind {
     /// A Python expression (modifiers, `decoration-*`).
     Expression,
-    /// The `context` attribute: an expression whose `group_by` value is read as field names
-    /// .
+    /// The `context` attribute: an expression whose `group_by` value is read as field names.
     Context,
     /// A bare field name (`date` / `end_date` of a `<filter>`).
     FieldName,

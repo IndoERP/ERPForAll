@@ -195,7 +195,7 @@ async fn elevation_does_not_bypass_generated_protection() {
     let (_, generated, _) = seed(&mut setup).await;
     setup
         .execute(
-            "INSERT INTO res_users(id,name,login,active) VALUES (2,'User','protect-user',true)",
+            "INSERT INTO res_users(id,name,login,active,share) VALUES (2,'User','protect-user',true,false)",
             &[],
         )
         .await

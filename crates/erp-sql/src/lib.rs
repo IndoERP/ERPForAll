@@ -15,10 +15,16 @@
 //!   trigger DDL and the versioned flush `UPDATE`.
 //! - [`constant_filter`], [`exclusion`]: constant domain filters as literal SQL
 //!   predicates; exclusion constraints, period checks and `WITHOUT OVERLAPS` keys.
+//! - [`sqlobj`]: DDL text and canonical hash payloads of addon-owned
+//!   functions, triggers and conditions.
+//! - [`delta`]: validated projection shapes for transactional deltas, canonical
+//!   nullable grain order, exact measure admission and their SQL fragments.
 
+pub mod company;
 pub mod conflict;
 pub mod constant_filter;
 pub mod ddl;
+pub mod delta;
 pub mod dml;
 pub mod exclusion;
 pub mod filter;
@@ -31,6 +37,7 @@ pub mod reference;
 pub mod relational;
 pub mod rows;
 pub mod select;
+pub mod sqlobj;
 pub mod upsert;
 pub mod version;
 

@@ -44,7 +44,7 @@ fn sized(unit: &str, bytes: usize) -> String {
 /// `<p>` + `bytes - 7` bytes of `unit` text + `</p>`: exactly `bytes` long and already in the form the
 /// sanitiser writes, so the output is as long as the input. (Text-led input of exactly the limit
 /// gets a `<p>` wrapper, the output is longer than the limit and is refused: the output must be
-/// acceptable input,; see `lead_r1_tests` in the crate.)
+/// acceptable input; see `lead_r1_tests` in the crate.)
 fn wrapped(unit: &str, bytes: usize) -> String {
     format!("<p>{}</p>", sized(unit, bytes - 7))
 }

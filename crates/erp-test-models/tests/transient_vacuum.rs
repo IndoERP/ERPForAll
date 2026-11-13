@@ -1,4 +1,4 @@
-//! The transient vacuum engine on a real database (package B,,
+//! The transient vacuum engine on a real database (package B,
 //! explicitly, nothing sleeps. The unlink override of the `test_vacuum` fixtures logs every
 //! deleted record in the deleting transaction, so the log shows exactly what the ORM unlink
 //! chain removed and a rollback removes the log with it.

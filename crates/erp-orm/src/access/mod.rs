@@ -80,10 +80,10 @@ pub use static_policy::StaticPolicy;
 
 use crate::field_access::{FieldDenialDetail, FieldMask, FieldOp};
 use crate::principal::{
-    Capability, GroupId, GroupSet, PrincipalBinding, QualifiedXmlId, SnapshotId,
+    Capability, ElevationScope, GroupId, GroupSet, PrincipalBinding, QualifiedXmlId, SnapshotId,
 };
 
-/// The generations a policy snapshot was built for: the registry generation
+/// The generations a policy snapshot was built: the registry generation
 /// and the `policy` signal generation read inside the build's own snapshot. Diagnostics only: the
 /// identity of a snapshot is its [`SnapshotId`] (Revision 3 M1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -381,6 +381,35 @@ pub trait AccessPolicy: Send + Sync + 'static {
     ) -> Result<Option<AccessDomain>> {
         Ok(None)
     }
+
+    /// Check `scope` before a block with it opens:
+    /// [`crate::Transaction::elevated`] calls it after the scope was validated against the
+    /// registry and before the block takes its identity or records anything, so a refused scope
+    /// is never an elevation event. A compiled policy accepts a lifted rule only when it is a
+    /// restriction of the item's model that compiles, does not bear the company (reaches no
+    /// company by any field name, path or reference field, and is not a rule of `res.company`),
+    /// holds no `access` condition or rule operator and applies to an operation the item names;
+    /// it also refuses a named operation whose company confinement is only in permission rules
+    /// (a permission bearing the company, or holding an `access` condition or a rule operator),
+    /// lift or not (a fail-closed rule, accepted).
+    ///
+    /// The default is a policy without restriction rules (a fixed or test policy): a scope that
+    /// lifts nothing passes, any lifted rule is refused, so an implementor that does not decide
+    /// lifts fails closed.
+    ///
+    /// # Errors
+    ///
+    /// `Programming` naming the first rule that cannot be lifted, or the first named operation
+    /// the policy refuses, and why.
+    fn check_scope(&self, scope: &ElevationScope) -> Result<()> {
+        match scope.items().iter().find_map(|item| item.lifted().first()) {
+            None => Ok(()),
+            Some(rule) => Err(Error::programming(format!(
+                "cannot lift restriction rule '{rule}': this access policy has no restriction \
+                 rules to lift"
+            ))),
+        }
+    }
 }
 
 impl<P: AccessPolicy + ?Sized> AccessPolicy for Arc<P> {
@@ -478,5 +507,9 @@ impl<P: AccessPolicy + ?Sized> AccessPolicy for Arc<P> {
         model: &ModelSpec,
     ) -> Result<Option<AccessDomain>> {
         (**self).generated_restriction(b, model)
+    }
+
+    fn check_scope(&self, scope: &ElevationScope) -> Result<()> {
+        (**self).check_scope(scope)
     }
 }

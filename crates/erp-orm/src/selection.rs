@@ -312,7 +312,7 @@ impl<'tx> SelectionContext<'tx> {
     async fn resolve_inner(&mut self, model: &str, field: &str) -> Result<()> {
         locked(&self.budget)?.check()?;
         let records = self.env.records(model)?;
-        self.tx.check_records(&records)?;
+        self.tx.admit_records(&records).await?;
         self.tx
             .check_model(&self.env, records.model_id(), crate::Operation::Read)?;
         self.tx

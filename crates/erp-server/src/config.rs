@@ -25,12 +25,20 @@ pub enum ConfigError {
     /// Configuration or secret file cannot be read securely.
     #[error("server configuration or protected secret file is invalid")]
     Invalid,
+    /// Invalid additive read-audit policy, with sanitized field diagnostics.
+    #[error("{0}")]
+    AuditReadPolicy(#[source] erp_fields::Error),
     /// A D14 scalar or cross-setting startup relationship was refused.
     #[error(transparent)]
     Limit(#[from] StartupLimitError),
     /// Serving requires a separate heartbeat role at the same tenant endpoint.
     #[error("server requires node_database_url_file with a dedicated heartbeat role")]
     NodeConnection,
+    /// A supplied audit reader credential is insecure or crosses the deployment boundary.
+    #[error(
+        "audit reader requires a protected connection to the same database with a distinct role"
+    )]
+    AuditReaderConnection,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -39,6 +47,7 @@ struct RawConfig {
     database_url_file: PathBuf,
     owner_database_url_file: PathBuf,
     node_database_url_file: Option<PathBuf>,
+    audit_reader_database_url_file: Option<PathBuf>,
     node_name: Option<String>,
     shutdown_deadline_secs: Option<u64>,
     #[serde(default)]
@@ -56,6 +65,50 @@ struct RawConfig {
     http_max_connection_age_secs: Option<u64>,
     /// Run the job queue's runner in this process (4); absent means off.
     jobs_run_in_app: Option<bool>,
+    audit_read_policy: Option<toml::Value>,
+    /// The attachment store table. Its keys are validated by `erp-blob`, which
+    /// reads this same file; here it is only allowed to exist.
+    attachments: Option<toml::Value>,
+}
+fn read_audit_policy(value: Option<toml::Value>) -> Result<erp_rpc::ReadAuditPolicy, ConfigError> {
+    let fail =
+        |message: &str| ConfigError::AuditReadPolicy(erp_fields::Error::programming(message));
+    let Some(value) = value else {
+        return Ok(erp_rpc::ReadAuditPolicy::default());
+    };
+    let table = value
+        .as_table()
+        .ok_or_else(|| fail("audit_read_policy must be a table"))?;
+    if table
+        .keys()
+        .any(|key| key != "all_users" && key != "user_groups")
+    {
+        return Err(fail("audit_read_policy contains unknown keys"));
+    }
+    match (table.get("all_users"), table.get("user_groups")) {
+        (Some(all), None) => match all.as_bool() {
+            Some(true) => Ok(erp_rpc::ReadAuditPolicy::all_users()),
+            Some(false) => Ok(erp_rpc::ReadAuditPolicy::default()),
+            None => Err(fail("audit_read_policy.all_users must be a boolean")),
+        },
+        (None, Some(groups)) => {
+            let message = "audit_read_policy.user_groups must be a list of positive group XML IDs";
+            let groups = groups.as_array().ok_or_else(|| fail(message))?;
+            if groups.len() > 256 {
+                return Err(fail(
+                    "audit_read_policy.user_groups has more than 256 entries",
+                ));
+            }
+            let names = groups
+                .iter()
+                .map(|group| group.as_str().ok_or_else(|| fail(message)))
+                .collect::<Result<Vec<_>, _>>()?;
+            erp_rpc::ReadAuditPolicy::user_groups(&names).map_err(ConfigError::AuditReadPolicy)
+        }
+        (None, None) | (Some(_), Some(_)) => Err(fail(
+            "audit_read_policy requires exactly one of all_users or user_groups",
+        )),
+    }
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -69,6 +122,7 @@ pub struct ServerConfig {
     runtime: tokio_postgres::Config,
     owner: tokio_postgres::Config,
     node: Option<tokio_postgres::Config>,
+    audit_reader: Option<tokio_postgres::Config>,
     node_name: String,
     shutdown_deadline: Duration,
     startup_limits: StartupLimits,
@@ -79,6 +133,8 @@ pub struct ServerConfig {
     assets: PathBuf,
     connections: ConnectionLimits,
     jobs_run_in_app: bool,
+    audit_read_policy: erp_rpc::ReadAuditPolicy,
+    attachments: String,
 }
 impl fmt::Debug for ServerConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -155,6 +211,25 @@ impl ServerConfig {
             }
             None => None,
         };
+        let audit_reader = match raw.audit_reader_database_url_file.as_deref() {
+            Some(path) => {
+                let invalid = |_| ConfigError::AuditReaderConnection;
+                let value = read_secret(&resolve(path)).map_err(invalid)?;
+                let reader = connection(&value, &raw.database).map_err(invalid)?;
+                if reader.get_user() == runtime.get_user()
+                    || reader.get_user() == owner.get_user()
+                    || node
+                        .as_ref()
+                        .is_some_and(|node| reader.get_user() == node.get_user())
+                    || reader.get_hosts() != runtime.get_hosts()
+                    || reader.get_ports() != runtime.get_ports()
+                {
+                    return Err(ConfigError::AuditReaderConnection);
+                }
+                Some(reader)
+            }
+            None => None,
+        };
         // Absent values receive documented defaults; supplied invalid values never do.
         let node_name = match raw.node_name {
             Some(name) => name,
@@ -210,6 +285,24 @@ impl ServerConfig {
                 ProxyGate::authenticated(peers, &token).map_err(|_| ConfigError::Invalid)?
             }
         };
+        let attachments = match raw.attachments {
+            Some(_) => text.clone(),
+            None => {
+                let directory = if base.is_absolute() {
+                    base.to_path_buf()
+                } else {
+                    std::env::current_dir()
+                        .map_err(|_| ConfigError::Invalid)?
+                        .join(base)
+                };
+                let path = directory.join("attachments");
+                let path = path.to_str().ok_or(ConfigError::Invalid)?;
+                format!(
+                    "[attachments]\nwrite_store = \"main\"\n[attachments.stores.main]\nkind = \"local\"\npath = {}\n",
+                    toml::Value::String(path.to_owned())
+                )
+            }
+        };
         let defaults = ConnectionLimits::default();
         let connections = ConnectionLimits::new(
             raw.http_header_deadline_secs
@@ -225,6 +318,7 @@ impl ServerConfig {
             runtime,
             owner,
             node,
+            audit_reader,
             node_name,
             shutdown_deadline: Duration::from_secs(shutdown_deadline_secs),
             startup_limits,
@@ -235,7 +329,21 @@ impl ServerConfig {
             assets: resolve(&raw.assets_manifest),
             connections,
             jobs_run_in_app: raw.jobs_run_in_app.unwrap_or(false),
+            attachments,
+            audit_read_policy: read_audit_policy(raw.audit_read_policy)?,
         })
+    }
+    /// Validated additive read-audit policy shared by admission and serving RPC configuration.
+    pub fn read_audit_policy(&self) -> &erp_rpc::ReadAuditPolicy {
+        &self.audit_read_policy
+    }
+
+    /// The TOML text `erp_blob::AttachmentConfig::from_toml` reads: this file when it has an
+    /// `[attachments]` table, otherwise the default store (lead ruling 3): a `local`
+    /// directory named `attachments` next to the configuration file, for one node, with no
+    /// further infrastructure. The directory is created (mode 0700) when the server opens it.
+    pub fn attachments_toml(&self) -> &str {
+        &self.attachments
     }
     /// Configured database identity.
     pub fn database(&self) -> &str {
@@ -274,6 +382,15 @@ impl ServerConfig {
     /// Its absence is valid for commands that do not serve requests.
     pub fn configured_node_connection(&self) -> Option<tokio_postgres::Config> {
         self.node.clone()
+    }
+    /// Optional isolated audit reader credential. Trusted platform composition only: never use
+    /// this connection for ordinary requests or expose it through addon state.
+    pub fn configured_audit_reader_connection(&self) -> Option<tokio_postgres::Config> {
+        self.audit_reader.clone()
+    }
+    /// Request-pool allocation after reserving the optional reader's one connection.
+    pub fn request_pool_size(&self) -> usize {
+        if self.audit_reader.is_some() { 7 } else { 8 }
     }
     /// Validated operator label for the process's node membership.
     pub fn node_name(&self) -> &str {
@@ -321,6 +438,7 @@ impl erp_orm::node::SharedSettings for ServerConfig {
             runtime: _,
             owner: _,
             node: _,
+            audit_reader: _,
             node_name: _,
             shutdown_deadline,
             startup_limits: _,
@@ -331,6 +449,10 @@ impl erp_orm::node::SharedSettings for ServerConfig {
             assets: _,
             connections,
             jobs_run_in_app: _,
+            // Canonical policy is described in the registered RpcConfig section.
+            audit_read_policy: _,
+            // judged by the attachment topology check, not by settings agreement
+            attachments: _,
         } = self;
         out.shared_str("server.database", database)?;
         out.shared_str("server.public_origin", origin)?;
@@ -344,6 +466,7 @@ impl erp_orm::node::SharedSettings for ServerConfig {
             "server.runtime_connection",
             "server.owner_connection",
             "server.node_connection",
+            "server.audit_reader_connection",
             "server.node_name",
             "server.bind",
             "server.addons_path",

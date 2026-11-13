@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use erp_sdk::prelude::*;
 use erp_sdk::{Operation, Operator};
 
-use crate::partner_address::{cells, fields, has_address, replacement};
+use crate::partner_address::{cells, fields, has_address, is_set, replacement};
 use crate::partner_address_budget::AssignmentBudget;
 
 #[derive(Default)]
@@ -32,9 +32,16 @@ struct SyncWork {
     units: usize,
 }
 
+/// The resolved synchronization field lists of one input recordset.
+struct SyncFields {
+    address: Vec<String>,
+    synced_commercial: Vec<String>,
+    commercial: Vec<String>,
+}
+
 struct BatchWork {
     records: Records,
-    address_fields: Vec<String>,
+    fields: SyncFields,
     remaining: VecDeque<(Records, RawVals)>,
     downstream: Vec<(i64, RawVals)>,
     depth: usize,
@@ -421,8 +428,12 @@ async fn single_address(
 
 #[derive(Clone, Copy)]
 enum WriteMode {
-    Upstream,
+    /// Full `write` dispatch: address upstream and every commercial copy, so addon
+    /// write overrides observe them (commercial amendment, decision 3).
+    Full,
+    /// Parent address copied onto a contact through `write_base`.
     Inherited,
+    /// Changed address copied onto direct contact children through `write_base`.
     Downstream,
 }
 
@@ -474,7 +485,7 @@ async fn copy_values(
                     .write_base(tx, payload)
                     .await?;
             }
-            WriteMode::Upstream => targets.write(tx, payload).await?,
+            WriteMode::Full => targets.write(tx, payload).await?,
         }
     }
     Ok(())
@@ -537,6 +548,11 @@ async fn synchronize_inner(
             Work::Synchronize(next) => {
                 locked(&operation.state)?.logical_depth = next.depth;
                 let address_fields = fields(tx, &next.records, "_address_fields").await?;
+                // Resolved by method dispatch (the base hooks issue no statement); the lists
+                // decide whether a commercial step can apply at all.
+                let synced_commercial =
+                    fields(tx, &next.records, "_synced_commercial_fields").await?;
+                let commercial = fields(tx, &next.records, "_commercial_fields").await?;
                 let mut all_fields = address_fields.clone();
                 all_fields.extend(["parent_id".to_owned(), "type".to_owned()]);
                 // Prefetch the whole input once; record continuations share its cache.
@@ -544,7 +560,11 @@ async fn synchronize_inner(
                 let remaining = next.records.iter().zip(next.changes).collect();
                 work.push(Work::Batch(BatchWork {
                     records: next.records,
-                    address_fields,
+                    fields: SyncFields {
+                        address: address_fields,
+                        synced_commercial,
+                        commercial,
+                    },
                     remaining,
                     downstream: Vec::new(),
                     depth: next.depth,
@@ -568,14 +588,9 @@ async fn synchronize_inner(
                     batch.units = batch.units.checked_sub(consumed).ok_or_else(|| {
                         Error::programming("Partner address batch accounting underflow")
                     })?;
-                    let pending = synchronize_records(
-                        tx,
-                        &operation,
-                        &record,
-                        vec![change],
-                        &batch.address_fields,
-                    )
-                    .await?;
+                    let pending =
+                        synchronize_records(tx, &operation, &record, vec![change], &batch.fields)
+                            .await?;
                     for (id, values) in pending {
                         let existing = batch
                             .downstream
@@ -644,8 +659,9 @@ async fn synchronize_records(
     operation: &OperationGuard,
     records: &Records,
     changes: Vec<RawVals>,
-    address_fields: &[String],
+    sync_fields: &SyncFields,
 ) -> Result<Vec<(i64, RawVals)>> {
+    let address_fields = sync_fields.address.as_slice();
     let mut downstream: Vec<(i64, RawVals)> = Vec::new();
     for (record, change) in records.iter().zip(changes) {
         if record.rec_ids()[0].is_new() || change.is_empty() {
@@ -659,14 +675,10 @@ async fn synchronize_records(
         let type_contact = change
             .get("type")
             .is_some_and(|cell| matches!(cell, Cell::Str(value) if value.as_ref() == "contact"));
-        let mut inherited = false;
-        if contact && !parent.is_empty() && (parent_changed || type_contact) {
-            let parent_address = single_address(tx, &parent, address_fields).await?;
-            if parent_changed
-                && has_address(&own)
-                && has_address(&parent_address)
-                && own != parent_address
-            {
+        let mut parent_address = None;
+        if contact && !parent.is_empty() && parent_changed {
+            let address = single_address(tx, &parent, address_fields).await?;
+            if has_address(&own) && has_address(&address) && own != address {
                 operation.schedule(
                     &record,
                     &RawVals::new().set_cell("type", Cell::Str("other".into())),
@@ -678,7 +690,23 @@ async fn synchronize_records(
                     )
                     .await?;
                 contact = false;
-            } else if has_address(&parent_address) {
+            }
+            parent_address = Some(address);
+        }
+        if parent_changed && !parent.is_empty() {
+            // Every type follows its commercial partner, not only contacts.
+            if commercial_from_company(tx, operation, &record, &sync_fields.commercial).await? {
+                // A commercial field may also be an address field (an extension).
+                own = single_address(tx, &record, address_fields).await?;
+            }
+        }
+        let mut inherited = false;
+        if contact && !parent.is_empty() && (parent_changed || type_contact) {
+            let parent_address = match parent_address {
+                Some(address) => address,
+                None => single_address(tx, &parent, address_fields).await?,
+            };
+            if has_address(&parent_address) {
                 copy_values(
                     tx,
                     operation,
@@ -691,6 +719,7 @@ async fn synchronize_records(
                 inherited = true;
             }
         }
+        // 2. To upstream: the address, then the set synced commercial values.
         let mut explicit_address = RawVals::new();
         if !inherited {
             for name in address_fields {
@@ -702,7 +731,24 @@ async fn synchronize_records(
             }
         }
         if contact && !parent.is_empty() && (parent_changed || !explicit_address.is_empty()) {
-            copy_values(tx, operation, &parent, &own, WriteMode::Upstream).await?;
+            copy_values(tx, operation, &parent, &own, WriteMode::Full).await?;
+        }
+        let synced = &sync_fields.synced_commercial;
+        if !parent.is_empty() && (parent_changed || synced.iter().any(|name| change.contains(name)))
+        {
+            commercial_upstream(tx, operation, &record, &parent, synced).await?;
+        }
+        // 3. To downstream: commercial values reach every non-company descendant
+        // now; the address continuation to direct contacts is deferred to the batch.
+        let changed_commercial: Vec<String> = sync_fields
+            .commercial
+            .iter()
+            .filter(|name| change.contains(name.as_str()))
+            .cloned()
+            .collect();
+        if !changed_commercial.is_empty() && own_commercial_partner(tx, &record).await? {
+            let values = single_values(tx, &record, &changed_commercial).await?;
+            commercial_descendants(tx, operation, &record, &values).await?;
         }
         if !explicit_address.is_empty() {
             let id = record.rec_ids()[0].get();
@@ -716,6 +762,149 @@ async fn synchronize_records(
         }
     }
     Ok(downstream)
+}
+
+async fn single_values(
+    tx: &mut Transaction,
+    record: &Records,
+    names: &[String],
+) -> Result<RawVals> {
+    cells(tx, record, names)
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| Error::programming("Partner commercial snapshot requires one record"))
+}
+
+fn set_values(values: RawVals) -> RawVals {
+    let mut result = RawVals::new();
+    for (name, value) in values.iter() {
+        if is_set(value) {
+            result.insert(name.to_owned().into(), value.clone());
+        }
+    }
+    result
+}
+
+/// The commercial partner of one record, read through ordinary authorization.
+async fn commercial_partner(tx: &mut Transaction, record: &Records) -> Result<Records> {
+    let partner = record.related(tx, "commercial_partner_id").await?;
+    if partner.len() != 1 {
+        return Err(Error::programming(
+            "Partner commercial synchronization requires one commercial partner",
+        ));
+    }
+    Ok(partner)
+}
+
+async fn own_commercial_partner(tx: &mut Transaction, record: &Records) -> Result<bool> {
+    Ok(commercial_partner(tx, record).await?.ids() == record.ids())
+}
+
+/// Step 1.1, from-company: a record moved under a parent receives its commercial
+/// partner's set commercial values through full `write`, then its descendants
+/// receive all of them. Returns whether the record itself was written.
+async fn commercial_from_company(
+    tx: &mut Transaction,
+    operation: &OperationGuard,
+    record: &Records,
+    commercial: &[String],
+) -> Result<bool> {
+    if commercial.is_empty() {
+        return Ok(false);
+    }
+    let partner = commercial_partner(tx, record).await?;
+    operation.admit(&partner)?;
+    if partner.ids() == record.ids() {
+        return Ok(false);
+    }
+    let all = single_values(tx, &partner, commercial).await?;
+    let set = set_values(all.clone());
+    if set.is_empty() {
+        return Ok(false);
+    }
+    copy_values(tx, operation, record, &set, WriteMode::Full).await?;
+    commercial_descendants(tx, operation, record, &all).await?;
+    Ok(true)
+}
+
+/// Step 2.2: a contact's set synced commercial values go to its direct parent
+/// through full `write`; a void stays local. The parent's own
+/// synchronization continues the chain.
+async fn commercial_upstream(
+    tx: &mut Transaction,
+    operation: &OperationGuard,
+    record: &Records,
+    parent: &Records,
+    synced: &[String],
+) -> Result<()> {
+    if synced.is_empty() {
+        return Ok(());
+    }
+    let set = set_values(single_values(tx, record, synced).await?);
+    if set.is_empty() {
+        return Ok(());
+    }
+    let current = single_values(tx, parent, synced).await?;
+    if set
+        .iter()
+        .all(|(name, value)| current.get(name) == Some(value))
+    {
+        return Ok(());
+    }
+    if own_commercial_partner(tx, record).await? {
+        return Ok(());
+    }
+    copy_values(tx, operation, parent, &set, WriteMode::Full).await
+}
+
+/// Write `values` (empty ones included) on every descendant of `source` reached
+/// through non-company children, level by level. A company child and its subtree
+/// are a boundary. Each level is one bounded search; exceeding the operation's
+/// identity or depth limits refuses the whole operation, nothing is truncated.
+async fn commercial_descendants(
+    tx: &mut Transaction,
+    operation: &OperationGuard,
+    source: &Records,
+    values: &RawVals,
+) -> Result<()> {
+    if values.is_empty() {
+        return Ok(());
+    }
+    let mut level = source.ids();
+    let mut depth = 0usize;
+    while !level.is_empty() {
+        depth = depth.checked_add(1).ok_or_else(depth_exceeded)?;
+        let domain = Domain::and([
+            Domain::condition("parent_id", Operator::In, level)?,
+            Domain::condition("is_company", Operator::Eq, false)?,
+        ]);
+        let children = source
+            .search_with(
+                tx,
+                &domain,
+                &SearchOptions::new().limit(4097).fetch_fields(names(values)),
+            )
+            .await?;
+        if children.is_empty() {
+            break;
+        }
+        // Refused only when a level beyond 256 really has partners, so a 256-edge
+        // tree is synchronized. Reachable through the ORM: hierarchy validation
+        // bounds only a moved partner's own ancestors, not its descendants' depth.
+        if depth > 256 {
+            return Err(depth_exceeded());
+        }
+        if children.len() > 4096 {
+            return Err(Error::validation(
+                "Partner address maximum visited nodes limit of 4096 exceeded.",
+            ));
+        }
+        operation.admit(&children)?;
+        level = children.ids();
+        copy_values(tx, operation, &children, values, WriteMode::Full).await?;
+    }
+    Ok(())
 }
 
 async fn synchronize_downstream(

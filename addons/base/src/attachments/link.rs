@@ -71,6 +71,8 @@ struct Consumed {
 /// What one digest needs from the store or the row.
 struct Need {
     size: i64,
+    /// An upload already passed soft quota admission, including inline uploads.
+    quota_admitted: bool,
     mimetype: Option<String>,
     /// `None`: the bytes are inline.
     store_id: Option<i16>,
@@ -163,7 +165,7 @@ pub(crate) async fn link(
     if !upload_ids.is_empty() {
         let rows = tx
             .query(
-                "UPDATE ir_blob_upload u SET state = 2 \
+                "UPDATE ir_blob_upload u SET state = 2, reserved_bytes = CASE WHEN inline_data IS NOT NULL THEN 0 ELSE reserved_bytes END \
                  FROM (SELECT id FROM ir_blob_upload WHERE id = ANY($1::text[]::uuid[]) \
                        ORDER BY id FOR UPDATE) l \
                  WHERE u.id = l.id AND u.state = 1 AND u.expires_at > now() \
@@ -208,6 +210,7 @@ pub(crate) async fn link(
             } => {
                 needs.entry(*sha256).or_insert_with(|| Need {
                     size: i64::try_from(bytes.len()).unwrap_or(i64::MAX),
+                    quota_admitted: false,
                     mimetype: Some(mimetype.clone()),
                     store_id: None,
                     inline: Some(bytes.clone()),
@@ -221,8 +224,9 @@ pub(crate) async fn link(
                         "an upload has neither inline bytes nor a store",
                     ));
                 }
-                needs.entry(up.sha256).or_insert_with(|| Need {
+                let need = needs.entry(up.sha256).or_insert_with(|| Need {
                     size: up.size,
+                    quota_admitted: true,
                     mimetype: up.mimetype.clone(),
                     store_id: if up.inline.is_some() {
                         None
@@ -236,6 +240,9 @@ pub(crate) async fn link(
                         Some((id.clone(), up.sha1))
                     },
                 });
+                // An inline source earlier in this batch may name the same digest. Its
+                // uploaded copy supplies admission for the one deduplicated blob too.
+                need.quota_admitted = true;
             }
             Source::Blob(id) => {
                 by_id.insert(*id);
@@ -289,6 +296,27 @@ pub(crate) async fn link(
         .copied()
         .collect();
     let mut inserted: Vec<BlobRow> = Vec::new();
+    // Inline paths have no committed upload reservation. Check their distinct missing
+    // content against the same soft quota before insertion, within the business transaction.
+    let mut inline_charge = 0u64;
+    for digest in &missing {
+        let need = needs
+            .get(digest)
+            .ok_or_else(|| Error::internal("A missing blob lost its content source."))?;
+        if need.inline.is_some() && !need.quota_admitted {
+            inline_charge = inline_charge
+                .checked_add(
+                    u64::try_from(need.size)
+                        .map_err(|_| Error::db("A blob has a negative size."))?,
+                )
+                .ok_or_else(|| {
+                    Error::validation("Attachment batch size exceeds the byte range.")
+                })?;
+        }
+    }
+    if inline_charge > 0 {
+        super::quota::check_storage(tx, rt.limits(), inline_charge).await?;
+    }
     if !missing.is_empty() {
         let digests_param: Vec<Vec<u8>> = missing.iter().map(|d| d.to_vec()).collect();
         let mut sizes = Vec::with_capacity(missing.len());

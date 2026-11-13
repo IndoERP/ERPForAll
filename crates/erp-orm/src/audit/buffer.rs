@@ -149,11 +149,24 @@ pub(crate) struct AuditBuffer {
     /// What the buffer held when a rollback or a reset cleared it, until the next record or take:
     /// the evidence of an attempt that failed after its content was cleared (a failed commit).
     stash: Option<AttemptEvidence>,
+    /// A transaction with a read-audit owner: a rollback inside a method body clears the live
+    /// content, but the owner's attempt row still needs the elevations after the body returned
+    /// (and the service's own commit). The stash then survives an empty clear and is merged back
+    /// into the next recording instead of being dropped.
+    retain_elevations: bool,
 }
 
 impl AuditBuffer {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    /// The buffer of a transaction with a read-audit owner (see `retain_elevations`).
+    pub(crate) fn retaining_elevations() -> Self {
+        Self {
+            retain_elevations: true,
+            ..Self::default()
+        }
     }
 
     fn check_open(&self) -> Result<()> {
@@ -164,9 +177,25 @@ impl AuditBuffer {
         }
     }
 
+    /// Recording starts a new attempt: older cleared content is no longer its evidence, except
+    /// for the elevations an owned read-only transaction must still hand over. Called first by
+    /// every recording, before its dedupe search and its limit checks, so a merged elevation is
+    /// found again (one entry with its count) and counts against the limits.
+    fn merge_stash(&mut self) {
+        let stash = self.stash.take();
+        if self.retain_elevations
+            && let Some(stash) = stash
+        {
+            if self.env.is_none() {
+                self.env = stash.env;
+            }
+            let mut elevations = stash.elevations;
+            elevations.append(&mut self.elevations);
+            self.elevations = elevations;
+        }
+    }
+
     fn bind(&mut self, env: &Env) {
-        // recording starts a new attempt: older cleared content is no longer its evidence
-        self.stash = None;
         if self.env.is_none() {
             self.env = Some(env.clone());
         }
@@ -182,6 +211,7 @@ impl AuditBuffer {
         if self.call.is_some() {
             return Err(AuditError::HeaderTwice.into());
         }
+        self.merge_stash();
         self.bind(env);
         self.call = Some(call);
         Ok(())
@@ -195,6 +225,7 @@ impl AuditBuffer {
 
     pub(crate) fn push_auth(&mut self, depth: usize, event: AuthEvent, env: &Env) -> Result<()> {
         self.check_open()?;
+        self.merge_stash();
         if self.auth.len() + self.elevations.len() >= MAX_EVENTS {
             return Err(limit(format!("more than {MAX_EVENTS} events in one row")).into());
         }
@@ -210,6 +241,7 @@ impl AuditBuffer {
         env: &Env,
     ) -> Result<()> {
         self.check_open()?;
+        self.merge_stash();
         if let Some(entry) = self.elevations.iter_mut().find(|e| e.matches(&observation)) {
             return entry.add_use(depth);
         }
@@ -289,12 +321,24 @@ impl AuditBuffer {
     }
 
     pub(crate) fn clear(&mut self) {
+        let older = self.stash.take();
         let previous = self.take_live();
-        self.stash = previous.has_content().then_some(previous);
+        if previous.has_content() {
+            self.stash = Some(previous);
+        } else if self.retain_elevations {
+            // an owned read-only transaction cleared twice: the first clear's evidence stays
+            self.stash = older;
+        }
     }
 
     fn take_live(&mut self) -> AttemptEvidence {
-        let mut taken = std::mem::take(self);
+        let mut taken = std::mem::replace(
+            self,
+            Self {
+                retain_elevations: self.retain_elevations,
+                ..Self::default()
+            },
+        );
         AttemptEvidence {
             env: taken.env.take(),
             call: taken.call.take(),

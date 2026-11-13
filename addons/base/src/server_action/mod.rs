@@ -1,4 +1,4 @@
-//! Running server actions (`ir.actions.server`,; design,
+//! Running server actions (`ir.actions.server`; design,
 //! brief).
 //!
 //! [`run_server_action`] runs one action **as the caller**: every check and every write goes

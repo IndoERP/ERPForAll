@@ -114,6 +114,14 @@ pub struct ModelDecl {
     /// an extension cannot disable another declaration's opt-in. Refused on abstract, transient
     /// and closed event-namespace models when the registry is built.
     pub eventful: bool,
+    /// Select successful RPC reads for independent auditing.
+    /// Default false; OR-composed through extensions and classical/abstract inheritance.
+    pub audit_reads: bool,
+    /// `owner_only_stored_fields`: `Some(co_owners)` lets only the addon of
+    /// this, the model's creating declaration, and the listed co-owner addons add or change a
+    /// materialized column of the model. `None` keeps the open extension policy. Refused on an
+    /// extension, a runtime declaration and an abstract model when the registry is built.
+    pub owner_only_stored_fields: Option<&'static [&'static str]>,
     /// PostgreSQL extensions the model's raw table objects need (`extensions = [...]`), installed
     /// by schema sync (design §5.3).
     pub extensions: &'static [PgExtension],
@@ -176,6 +184,8 @@ impl ModelDecl {
             table_objects: &[],
             row_version: None,
             eventful: false,
+            audit_reads: false,
+            owner_only_stored_fields: None,
             extensions: &[],
             custom: false,
             kind_follows_model: false,
@@ -352,6 +362,22 @@ impl ModelDecl {
         self
     }
 
+    /// Select successful RPC reads for auditing; false cannot undo another MRO opt-in.
+    /// Abstract declarations contribute to descendants; transient models may opt in.
+    pub const fn audit_reads(mut self, on: bool) -> Self {
+        self.audit_reads = on;
+        self
+    }
+
+    /// Protect the model's materialized columns: only this declaration's
+    /// addon (the owner) and `co_owners` may add a stored column or change one's storage, type,
+    /// relation or generated expression. Nonstored fields, VIRTUAL generated fields and companion
+    /// models stay open to every addon. A co-owner that is installed must depend on the owner.
+    pub const fn owner_only_stored_fields(mut self, co_owners: &'static [&'static str]) -> Self {
+        self.owner_only_stored_fields = Some(co_owners);
+        self
+    }
+
     /// Set `row_version`: `true` adds the server-maintained `row_version` field.
     pub const fn row_version(mut self, on: bool) -> Self {
         self.row_version = Some(on);
@@ -378,8 +404,8 @@ impl ModelDecl {
         self
     }
 
-    /// Draw the table's ids from the named sequence `name`, shared by every model that names it
-    /// . Checked when the registry is built: a valid identifier that is neither a table
+    /// Draw the table's ids from the named sequence `name`, shared by every model that names it.
+    /// Checked when the registry is built: a valid identifier that is neither a table
     /// nor a table's own identity sequence; not on abstract or partitioned models.
     pub const fn id_sequence(mut self, name: &'static str) -> Self {
         self.id_sequence = Some(name);
@@ -680,8 +706,7 @@ pub struct FieldDecl {
     pub compute_sudo: Option<bool>,
     /// `groups`.
     pub groups: Option<&'static str>,
-    /// Explicit `depends=`: replaces the dependencies collected from the compute methods
-    /// .
+    /// Explicit `depends=`: replaces the dependencies collected from the compute methods.
     pub depends: Option<&'static [&'static str]>,
     /// Fields a compute reads without wanting a trigger: prefetched, no dependency
     /// edge.
@@ -717,6 +742,10 @@ pub struct FieldDecl {
     pub tracking: Option<Option<u32>>,
     /// `translate`: translatable textual field stored as JSONB with language keys.
     pub translate: Option<bool>,
+    /// `db_default`: schema sync keeps the static default as the column's database
+    /// default, so a row written outside the ORM without the column takes it. Stored required
+    /// booleans with a static boolean default only (checked at registry build).
+    pub db_default: Option<bool>,
     /// Explicit host HTML policy; omitted Html declarations use the full default allowlists.
     pub html_policy: Option<erp_fields::html::FieldPolicy>,
     /// Generated column expression: `Some(Some(expr))` to set, `Some(None)` for explicit removal.
@@ -779,6 +808,7 @@ impl FieldDecl {
             secret: None,
             tracking: None,
             translate: None,
+            db_default: None,
             html_policy: None,
             generated: None,
             generated_storage: None,
@@ -1206,6 +1236,24 @@ impl FieldDecl {
     /// value (`{"$redacted":"secret"}`).
     pub const fn secret(mut self, on: bool) -> Self {
         self.secret = Some(on);
+        self
+    }
+
+    /// Keep the static default as the column's database default, for a fail-closed
+    /// flag that rows written outside the ORM must not be able to leave out. Registry build
+    /// refuses it unless the field is a stored, required boolean with a static boolean default,
+    /// not company-dependent and not generated; `false` switches it off in an extension.
+    ///
+    /// ```
+    /// use erp_registry::{FieldDecl, StaticValue};
+    /// let share = FieldDecl::boolean("share")
+    ///     .required(true)
+    ///     .default(StaticValue::Bool(true))
+    ///     .db_default(true);
+    /// assert_eq!(share.db_default, Some(true));
+    /// ```
+    pub const fn db_default(mut self, on: bool) -> Self {
+        self.db_default = Some(on);
         self
     }
 

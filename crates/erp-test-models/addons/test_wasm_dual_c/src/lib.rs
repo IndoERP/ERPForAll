@@ -1,6 +1,5 @@
 //! Fixture addon `test_wasm_dual_c`: always native. It overrides the methods of `test_wasm_dual_a`
-//! and `test_wasm_dual_b` from above, so a chain runs native (C) -> WebAssembly (B) -> native (A)
-//! .
+//! and `test_wasm_dual_b` from above, so a chain runs native (C) -> WebAssembly (B) -> native (A).
 
 use erp_addon_test_wasm_dual_a::Dual;
 use erp_sdk::prelude::*;

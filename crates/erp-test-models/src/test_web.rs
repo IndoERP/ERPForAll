@@ -992,8 +992,7 @@ impl MultiTag {
     }
 }
 
-/// `test_orm.move`: computed fields over its own tag and over the payments delegating to it
-/// .
+/// `test_orm.move`: computed fields over its own tag and over the payments delegating to it.
 #[model(name = "test_web.move", description = "Move", addon = "test_web")]
 pub struct Move {
     #[field(many2one, comodel = "test_web.multi_tag")]

@@ -5,6 +5,12 @@ use url::Url;
 
 const SHELL_URI_BYTES: usize = 2048;
 
+/// The view types a page address may name (`?view_type=`): the ones the web client routes
+/// (`addons/web/static/src/client/route.ts`; `tests/redirect.rs` compares the two). An address with another
+/// value is refused, so a view type added to the client without its entry here fails on reload.
+// shortcut: a fixed list, upgrade to the published view types of the registry when an addon can add a page view.
+pub const SHELL_VIEW_TYPES: &[&str] = &["list", "form", "pivot"];
+
 /// Startup-bound canonical origin and registered view capabilities.
 #[derive(Debug)]
 pub struct RedirectPolicy {
@@ -81,6 +87,12 @@ impl RedirectPolicy {
         {
             return Err(BoundaryError::Redirect);
         }
+        // Resolution removes dot segments (`/.//x`, `/a/..//x`, `%2e`) and keeps an empty first
+        // segment (`https://origin//x`), so the input checks above cannot see every route to a
+        // path a browser reads as scheme-relative. Check what is actually returned.
+        if parsed.path().starts_with("//") || decode(parsed.path())?.starts_with("//") {
+            return Err(BoundaryError::Redirect);
+        }
         Ok(parsed[url::Position::BeforePath..].to_owned())
     }
     /// Admit's closed shell state and canonicalize aliases/query ordering.
@@ -136,6 +148,10 @@ impl RedirectPolicy {
                     // deliberately refuses. Refuse before publishing a non-reloadable URL.
                     value.len() <= SHELL_URI_BYTES && !value.contains("//")
                 }
+                "pivot_rows" | "pivot_cols" => pivot_specs(value, false),
+                "pivot_measures" => pivot_specs(value, true),
+                "pivot_open" => pivot_open(value),
+                "pivot_sort" => pivot_sort(value),
                 "method_action" => method_identity(value),
                 "cids" => {
                     let parts: Vec<_> = value.split(',').collect();
@@ -166,6 +182,11 @@ impl RedirectPolicy {
             "search_groupby",
             "method_action",
             "list_tab",
+            "pivot_rows",
+            "pivot_cols",
+            "pivot_measures",
+            "pivot_open",
+            "pivot_sort",
             "cids",
         ] {
             if let Some(value) = state.get(key) {
@@ -191,6 +212,82 @@ fn model_name(value: &str) -> bool {
                 && bytes
                     .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
         })
+}
+/// The pivot view keeps its state in the address. The shapes are closed and bounded here; what a
+/// field name or a group value means is the client's to check against the model.
+const PIVOT_MAX_MEASURES: usize = 16;
+/// Row or column groupings per axis: the grouped read crosses every depth of one axis with every depth of the other,
+/// and one call takes at most 64 grouping sets (7 x 7 = 49 here with the totals).
+const PIVOT_MAX_LEVELS: usize = 6;
+const PIVOT_MAX_PATHS: usize = 1024;
+const PIVOT_MAX_DEPTH: usize = 16;
+fn pivot_field(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    value.len() <= 128
+        && bytes
+            .next()
+            .is_some_and(|b| b.is_ascii_lowercase() || b == b'_')
+        && bytes.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+}
+/// A comma list of `field` or `field:interval` (or `__count` among measures), no repeats; at most 6 groupings or 16 measures.
+fn pivot_specs(value: &str, measures: bool) -> bool {
+    let parts: Vec<_> = value.split(',').collect();
+    let mut unique = BTreeSet::new();
+    parts.len()
+        <= if measures {
+            PIVOT_MAX_MEASURES
+        } else {
+            PIVOT_MAX_LEVELS
+        }
+        && parts.iter().all(|part| {
+            let ok = match part.split_once(':') {
+                None => pivot_field(part),
+                Some((name, interval)) => {
+                    !measures
+                        && pivot_field(name)
+                        && matches!(interval, "day" | "week" | "month" | "quarter" | "year")
+                }
+            };
+            ok && unique.insert(*part)
+        })
+}
+fn pivot_path(value: &serde_json::Value) -> bool {
+    value.as_array().is_some_and(|keys| {
+        keys.len() <= PIVOT_MAX_DEPTH
+            && keys.iter().all(|key| match key {
+                serde_json::Value::String(text) => text.len() <= 256,
+                serde_json::Value::Number(number) => number
+                    .as_i64()
+                    .is_some_and(|n| n.unsigned_abs() <= 9_007_199_254_740_991),
+                serde_json::Value::Bool(_) => true,
+                _ => false,
+            })
+    })
+}
+/// `{"r": [path, ...], "c": [path, ...]}`: the headers kept expanded on the row and the column axis.
+fn pivot_open(value: &str) -> bool {
+    let Ok(serde_json::Value::Object(axes)) = serde_json::from_str::<serde_json::Value>(value)
+    else {
+        return false;
+    };
+    let mut paths = 0;
+    axes.keys().all(|key| matches!(key.as_str(), "r" | "c"))
+        && axes.values().all(|list| {
+            list.as_array().is_some_and(|list| {
+                paths += list.len();
+                paths <= PIVOT_MAX_PATHS && list.iter().all(pivot_path)
+            })
+        })
+}
+/// `["<measure>", "asc" | "desc", path]`: the measure column the rows are sorted by; `[]` is "sorted by nothing".
+fn pivot_sort(value: &str) -> bool {
+    let Ok(serde_json::Value::Array(parts)) = serde_json::from_str::<serde_json::Value>(value)
+    else {
+        return false;
+    };
+    matches!(parts.as_slice(), [])
+        || matches!(parts.as_slice(), [serde_json::Value::String(measure), serde_json::Value::String(order), path]
+        if (measure == "__count" || pivot_field(measure)) && matches!(order.as_str(), "asc" | "desc") && pivot_path(path))
 }
 fn method_identity(value: &str) -> bool {
     let Some((uuid, counter)) = value.split_once(':') else {

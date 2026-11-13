@@ -328,6 +328,18 @@ fn carried_keys_fill_only_what_is_absent() {
     );
 }
 
+#[test]
+fn force_delete_is_server_only() {
+    let body = r#"{"domain":[],"context":{"force_delete":true}}"#;
+    assert_eq!(
+        refusal("/json/2/m.x/search", body, Receiver::Model),
+        (
+            422,
+            "context key 'force_delete' cannot be set by the caller".to_owned()
+        )
+    );
+}
+
 /// The data loader's keys are server-only, the load-state keys included (review A3-S1):
 /// a caller that sent `install_module` with a forged load state could make `ir.ui.view` skip
 /// sibling views in its write check.

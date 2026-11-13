@@ -67,11 +67,36 @@ export function restoreSelection(root: HTMLElement, bookmark: SelectionBookmark)
   root.ownerDocument.getSelection()?.setBaseAndExtent(anchor, bookmark.anchorOffset, focus, bookmark.focusOffset);
 }
 
-function boldAncestor(root: HTMLElement, node: Node): HTMLElement | null {
+/** Inline formatting the editor can write; each maps to tags the server sanitizer keeps. `tag` is what a toggle creates. */
+export const MARKS = {
+  bold: {names: ["strong", "b"], tag: "strong"},
+  italic: {names: ["em", "i"], tag: "em"},
+  underline: {names: ["u"], tag: "u"},
+  strike: {names: ["s"], tag: "s"},
+} as const;
+export type MarkName = keyof typeof MARKS;
+const MARK_TAGS: ReadonlySet<string> = new Set(Object.values(MARKS).flatMap(mark => mark.names));
+
+function markAncestor(root: HTMLElement, node: Node, names: readonly string[]): HTMLElement | null {
   for (let parent = node.parentElement; parent && parent !== root; parent = parent.parentElement) {
-    if (parent.localName === "strong" || parent.localName === "b") return parent;
+    if (names.includes(parent.localName)) return parent;
   }
   return null;
+}
+
+/** True when the selection holds text and every selected text run sits inside the mark. */
+export function rangeHasMark(root: HTMLElement, mark: MarkName): boolean {
+  const range = editableRange(root);
+  if (!range || range.collapsed) return false;
+  const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let found = false;
+  for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+    const from = text === range.startContainer ? range.startOffset : 0, to = text === range.endContainer ? range.endOffset : (text.textContent ?? "").length;
+    if (!range.intersectsNode(text) || to <= from) continue;
+    if (!markAncestor(root, text, MARKS[mark].names)) return false;
+    found = true;
+  }
+  return found;
 }
 
 function position(root: HTMLElement, node: Node, offset: number): number {
@@ -89,8 +114,8 @@ function textPosition(root: HTMLElement, offset: number, preferNext = false): {n
   return last ? {node: last, offset: last.textContent!.length} : {node: root, offset: 0};
 }
 
-function removeBold(root: HTMLElement, text: Text): void {
-  let ancestor = boldAncestor(root, text);
+function removeMark(root: HTMLElement, text: Text, names: readonly string[]): void {
+  let ancestor = markAncestor(root, text, names);
   while (ancestor) {
     const left = root.ownerDocument.createRange(), right = root.ownerDocument.createRange();
     left.selectNodeContents(ancestor); left.setEndBefore(text);
@@ -106,7 +131,7 @@ function removeBold(root: HTMLElement, text: Text): void {
     if (leftContent.textContent || leftContent.querySelector("br")) { const wrapper = ancestor.cloneNode(false); wrapper.appendChild(leftContent); replacement.append(wrapper); }
     replacement.append(middle);
     if (rightContent.textContent || rightContent.querySelector("br")) { const wrapper = ancestor.cloneNode(false); wrapper.appendChild(rightContent); replacement.append(wrapper); }
-    ancestor.replaceWith(replacement); ancestor = boldAncestor(root, text);
+    ancestor.replaceWith(replacement); ancestor = markAncestor(root, text, names);
   }
 }
 
@@ -119,7 +144,7 @@ function normalize(root: HTMLElement): void {
     while (child) {
       const next = child.nextSibling;
       if (child instanceof Text && next instanceof Text) { child.appendData(next.data); next.remove(); continue; }
-      if (child instanceof HTMLElement && next instanceof HTMLElement && ["strong", "b"].includes(child.localName) && child.localName === next.localName && child.attributes.length === 0 && next.attributes.length === 0) {
+      if (child instanceof HTMLElement && next instanceof HTMLElement && MARK_TAGS.has(child.localName) && child.localName === next.localName && child.attributes.length === 0 && next.attributes.length === 0) {
         child.append(...next.childNodes); next.remove(); continue;
       }
       child = next;
@@ -128,7 +153,10 @@ function normalize(root: HTMLElement): void {
 }
 
 /** Toggle only selected text runs. No native execCommand or browser undo authority. */
-export function toggleBold(root: HTMLElement): boolean {
+export function toggleBold(root: HTMLElement): boolean { return toggleMark(root, "bold"); }
+
+export function toggleMark(root: HTMLElement, markName: MarkName): boolean {
+  const mark = MARKS[markName];
   const range = editableRange(root);
   if (!range || range.collapsed) return false;
   const selection = root.ownerDocument.getSelection()!;
@@ -141,7 +169,7 @@ export function toggleBold(root: HTMLElement): boolean {
     if (range.intersectsNode(text)) {
       const start = text === range.startContainer ? range.startOffset : 0;
       const end = text === range.endContainer ? range.endOffset : text.length;
-      if (end > start) runs.push({start: offset + start, end: offset + end, bold: boldAncestor(root, text) !== null});
+      if (end > start) runs.push({start: offset + start, end: offset + end, bold: markAncestor(root, text, mark.names) !== null});
     }
     offset += text.length;
     current = walker.nextNode();
@@ -154,8 +182,8 @@ export function toggleBold(root: HTMLElement): boolean {
     const point = textPosition(root, run.start, true), text = point.node as Text, end = point.offset + run.end - run.start;
     if (end < text.length) text.splitText(end);
     const selected = point.offset > 0 ? text.splitText(point.offset) : text;
-    if (unbold) removeBold(root, selected);
-    else if (!boldAncestor(root, selected)) { const strong = root.ownerDocument.createElement("strong"); selected.replaceWith(strong); strong.append(selected); }
+    if (unbold) removeMark(root, selected, mark.names);
+    else if (!markAncestor(root, selected, mark.names)) { const wrapper = root.ownerDocument.createElement(mark.tag); selected.replaceWith(wrapper); wrapper.append(selected); }
   }
   normalize(root);
   const first = textPosition(root, anchor), last = textPosition(root, focus);

@@ -187,13 +187,22 @@ DECLARE
 BEGIN
     -- Authentication owns this key. Schema convergence never enables it or rewrites enrollment.
     IF to_regclass('public.ir_config_parameter') IS NOT NULL THEN
-        PERFORM pg_advisory_xact_lock(1163022406,6);
+        -- A converged database takes no lock: the registry lock is only needed to insert
+        -- (checked again once held), so a repeated sync never blocks heartbeat renewals.
         IF NOT EXISTS (SELECT FROM public.erp_node_feature WHERE key='auth.login_principal') THEN
-            IF (SELECT count(*) FROM public.erp_node_feature) >= 8 THEN
-                RAISE EXCEPTION 'authentication rollout cannot register a ninth feature key';
+            PERFORM pg_advisory_xact_lock(1163022406,6);
+            IF NOT EXISTS (SELECT FROM public.erp_node_feature WHERE key='auth.login_principal') THEN
+                IF (SELECT count(*) FROM public.erp_node_feature) >= 8 THEN
+                    RAISE EXCEPTION 'authentication rollout cannot register a ninth feature key';
+                END IF;
+                INSERT INTO public.erp_node_feature(key,version) VALUES('auth.login_principal',1);
             END IF;
-            INSERT INTO public.erp_node_feature(key,version) VALUES('auth.login_principal',1);
-        ELSIF EXISTS (SELECT FROM public.erp_node_feature WHERE key='auth.login_principal' AND version<>1) THEN
+        END IF;
+        -- Checked on every path, also after waiting for the lock: a registration that raced in
+        -- with another version is refused, never accepted because the insert was skipped.
+        -- Under a REPEATABLE READ caller the recheck reads the caller's snapshot; a raced row
+        -- then fails the insert on the primary key (loud), not this message.
+        IF EXISTS (SELECT FROM public.erp_node_feature WHERE key='auth.login_principal' AND version<>1) THEN
             RAISE EXCEPTION 'authentication rollout capability version differs from this binary';
         END IF;
     END IF;
@@ -263,7 +272,7 @@ static REQUIRED: [CoreTableRequirement; 3] = [
 
 /// The core tables of authentication, for `OrmBuilder::require_core_tables` at the build site of
 /// every binary that serves authentication or ends sessions (the server, the module system,
-/// tests):. Calling it also keeps the registration in the binary (it references it).
+/// tests). Calling it also keeps the registration in the binary (it references it).
 pub fn core_tables() -> &'static [CoreTableRequirement] {
     // the reference pulls the registration's object file into the binary
     std::hint::black_box(&AUTH_TABLES);

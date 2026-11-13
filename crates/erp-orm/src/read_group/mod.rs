@@ -4,8 +4,7 @@
 //!   {search predicate} GROUP BY ... HAVING ... ORDER BY ... LIMIT ... OFFSET ...`. The predicate is the one
 //!   `search` builds (access domain, active test, relational sub-queries), so access
 //!   restrictions are evaluated in SQL; record rules of comodels restrict many2one path joins and
-//!   many2many relation joins inside the statement too. A domain known to be empty runs nothing
-//!   .
+//!   many2many relation joins inside the statement too. A domain known to be empty runs nothing.
 //! - **Flush.** Pending writes of every field the statement reads (domain, group-bys, aggregates,
 //!   order, `having`) are flushed first; nothing else is.
 
@@ -315,7 +314,7 @@ pub(crate) async fn plan(
     records: &Records,
     args: &ReadGroup,
 ) -> Result<Plan> {
-    tx.check_records(records)?;
+    tx.admit_records(records).await?;
     if args.groupby.len() > 64 {
         return Err(bad(
             args.external,
@@ -370,8 +369,9 @@ pub(crate) async fn plan(
         // nothing runs, but the order and `having` are still checked: a stored query that cannot
         // run must not look valid because its domain happens to match nothing today
         if args.check_empty && !groups.is_empty() {
-            b.orderby(args.order.as_deref(), &groups)?;
-            b.having(&args.having)?;
+            b.prepare_orderby(tx, args.order.as_deref(), &groups)
+                .await?;
+            b.prepare_having(tx, &args.having).await?;
             tx.check_read_pairs(&env, &b.touched)?;
         }
         return Ok(Plan::Empty(empty_result(
@@ -389,8 +389,10 @@ pub(crate) async fn plan(
     let mut having = None;
     let mut group_by = None;
     if !groups.is_empty() {
-        order = b.orderby(args.order.as_deref(), &groups)?;
-        having = b.having(&args.having)?;
+        order = b
+            .prepare_orderby(tx, args.order.as_deref(), &groups)
+            .await?;
+        having = b.prepare_having(tx, &args.having).await?;
         group_by = Some(unique(groups.iter().map(GroupTerm::group_item)).join(", "));
     }
     // the comodel order fields of many2one groups were read while ordering
@@ -705,7 +707,7 @@ async fn grouping_sets_query(
     } else {
         format!("GROUPING({})", items.join(", "))
     };
-    let order_items = b.orderby(order, &terms)?;
+    let order_items = b.prepare_orderby(tx, order, &terms).await?;
     tx.check_read_pairs(&env, &b.touched)?;
     let item_of: FxHashMap<&str, String> = terms
         .iter()

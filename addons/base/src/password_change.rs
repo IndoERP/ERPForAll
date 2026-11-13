@@ -171,7 +171,10 @@ impl ChangePasswordWizard {
 }
 #[methods(ChangePasswordUser)]
 impl ChangePasswordUser {
-    /// Derive the visible login and prevent lines from being attached to another creator's wizard.
+    /// Lines are created only by opening the wizard, in superuser mode (Amendment 1 item
+    /// 6): any other creation, the generic `create` and a wizard's `user_ids` commands included,
+    /// gets the unknown-user answer before anything about the named user is read. Then derive the
+    /// visible login and keep lines on their creator's wizard.
     #[method(override)]
     async fn create(
         this: &RecordSet<ChangePasswordUser>,
@@ -179,6 +182,9 @@ impl ChangePasswordUser {
         vals_list: Vec<RawVals>,
         sup: Super,
     ) -> Result<Records> {
+        if !this.env().su() {
+            return Err(erp_sdk::missing_reset_target());
+        }
         let created: Records = sup.call(tx, this.as_records(), (vals_list,)).await?;
         let wizard = tx.env().records("change.password.wizard")?;
         tx.flush_model(wizard.model_id()).await?;

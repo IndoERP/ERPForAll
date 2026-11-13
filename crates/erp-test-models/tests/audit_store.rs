@@ -623,8 +623,10 @@ async fn insertion_failure_rolls_the_business_change_back() {
     assert_eq!(error.kind(), ErrorKind::Internal);
     assert_eq!(
         error.message(),
-        "a later release (insertion): the audit INSERT failed (SQLSTATE 23514); no partition covers \
-         the row's date, run `erp audit maintain` as the owner role"
+        "a later release (insertion): the audit INSERT failed (SQLSTATE 23514); no partition of \
+         erp_event.ir_audit_entry covers the transaction's day; the event partition upkeep has \
+         not run (it runs at server start and hourly; `erp audit maintain` refreshes both event \
+         tables)"
     );
     assert_eq!(probe(&h).await, 0, "the business change rolled back");
     assert_eq!(rows(&h).await, 0);

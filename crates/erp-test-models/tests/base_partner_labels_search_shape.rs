@@ -34,7 +34,7 @@ fn partners(tx: &Transaction) -> Records {
 }
 
 async fn fixture(tx: &mut Transaction) -> Vec<i64> {
-    tx.batch("INSERT INTO res_users (id, name, login, active) VALUES (2, 'Lookup reader', 'lookup-reader', true)")
+    tx.batch("INSERT INTO res_users (id, name, login, active, share) VALUES (2, 'Lookup reader', 'lookup-reader', true, false)")
         .await
         .unwrap();
     let root = partners(tx)

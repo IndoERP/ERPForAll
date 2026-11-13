@@ -7,7 +7,7 @@ export interface Route {
   menu?: string;
   model?: string;
   id?: string;
-  view_type?: "list" | "form";
+  view_type?: "list" | "form" | "pivot";
   active_id?: string;
   cids?: string[];
   search?: string;
@@ -17,6 +17,12 @@ export interface Route {
   /** Page-lifetime method-action identity; its payload never travels in the URL. */
   method_action?: string;
   list_tab?: string;
+  /** Pivot state: groupings by axis, measures, expanded headers, sorted column. */
+  pivot_rows?: string;
+  pivot_cols?: string;
+  pivot_measures?: string;
+  pivot_open?: string;
+  pivot_sort?: string;
 }
 const fail = (key: string): never => {
   // A caller may supply an unknown query/property name or decimalId label.
@@ -34,7 +40,7 @@ export function rpcId(value: string): number {
   if (!Number.isSafeInteger(id)) throw new ClientError("unsupported", "This record identifier exceeds the browser's safe integer range.");
   return id;
 }
-const queryKeys = ["debug", "menu", "model", "id", "view_type", "active_id", "search", "search_facets", "search_filters", "search_groupby", "method_action", "list_tab"] as const;
+const queryKeys = ["debug", "menu", "model", "id", "view_type", "active_id", "search", "search_facets", "search_filters", "search_groupby", "method_action", "list_tab", "pivot_rows", "pivot_cols", "pivot_measures", "pivot_open", "pivot_sort"] as const;
 const routeKeys = new Set<string>(["action", ...queryKeys, "cids"]);
 const diagnosticKeys = new Set<string>([...routeKeys, "url", "path", "hash"]);
 const byteLength = (value: string): number => new TextEncoder().encode(value).length;
@@ -50,6 +56,31 @@ function transportString(value: unknown, key: string): asserts value is string {
   // encodeURIComponent refuses unpaired surrogates instead of replacing them with U+FFFD.
   try { encodeURIComponent(value); } catch { return fail(key); }
 }
+// The pivot parameters have closed, bounded shapes (the server admits the same: crates/erp-server/src/redirect.rs).
+const pivotField = (value: string): boolean => value.length <= 128 && /^[a-z_][a-z0-9_]*$/.test(value);
+function pivotSpecs(value: string, measures: boolean): boolean {
+  const parts = value.split(",");
+  return parts.length <= (measures ? 16 : 6) && new Set(parts).size === parts.length && parts.every(part => {
+    const [name, interval, ...rest] = part.split(":");
+    if (rest.length) return false;
+    if (interval === undefined) return pivotField(name!);
+    return !measures && pivotField(name!) && ["day", "week", "month", "quarter", "year"].includes(interval);
+  });
+}
+const pivotPath = (value: unknown): boolean => Array.isArray(value) && value.length <= 16
+  && value.every(key => typeof key === "string" ? key.length <= 256 : typeof key === "boolean" || Number.isSafeInteger(key));
+function pivotJson(value: string): unknown { try { return JSON.parse(value); } catch { return undefined; } }
+function pivotOpen(value: string): boolean {
+  const parsed = pivotJson(value);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return false;
+  let paths = 0;
+  return Object.entries(parsed).every(([axis, list]) => (axis === "r" || axis === "c") && Array.isArray(list) && (paths += list.length) <= 1024 && list.every(pivotPath));
+}
+function pivotSort(value: string): boolean {
+  const parsed = pivotJson(value);
+  return Array.isArray(parsed) && (parsed.length === 0 || parsed.length === 3 && typeof parsed[0] === "string" && (parsed[0] === "__count" || pivotField(parsed[0]))
+    && (parsed[1] === "asc" || parsed[1] === "desc") && pivotPath(parsed[2]));
+}
 function validate(route: Route): void {
   if (typeof route !== "object" || route === null || Array.isArray(route)) return fail("url");
   for (const key of Object.keys(route)) if (!routeKeys.has(key)) return fail("url");
@@ -64,7 +95,11 @@ function validate(route: Route): void {
       case "model":
         if (value.length > 128 || !/^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$/.test(value)) return fail(key);
         break;
-      case "view_type": if (value !== "list" && value !== "form") return fail(key); break;
+      case "view_type": if (value !== "list" && value !== "form" && value !== "pivot") return fail(key); break;
+      case "pivot_rows": case "pivot_cols": if (!pivotSpecs(value, false)) return fail(key); break;
+      case "pivot_measures": if (!pivotSpecs(value, true)) return fail(key); break;
+      case "pivot_open": if (!pivotOpen(value)) return fail(key); break;
+      case "pivot_sort": if (!pivotSort(value)) return fail(key); break;
       case "method_action": {
         const match = /^([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}):([1-9][0-9]{0,15})$/.exec(value);
         if (!match || BigInt(match[2]!) > BigInt(Number.MAX_SAFE_INTEGER)) return fail(key);

@@ -59,8 +59,8 @@ fn the_minimal_guest_is_a_component_of_the_addon_world() {
         imports.contains(&contract("orm-host")),
         "orm-host is not imported: {imports:?}"
     );
-    // The host answers WASI imports the Rust standard library adds with a deny-by-default context
-    // ; anything else would be an undeclared capability.
+    // The host answers WASI imports the Rust standard library adds with a deny-by-default context;
+    // anything else would be an undeclared capability.
     let undeclared: Vec<&String> = imports
         .iter()
         .filter(|name| {

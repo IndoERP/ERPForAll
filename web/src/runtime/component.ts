@@ -826,7 +826,7 @@ function slotOf(self: object, name: string): Slot | undefined {
 }
 
 /**
- * `t-call-slot` (§7.2,/046/047): renders `self.props.slots[name].render(scope)` in a child
+ * `t-call-slot` (§7.2,/046/047): renders `self.props.slots[name].render(scope())` in a child
  * owner, rebuilding when `scope()` returns another object; a missing slot renders the fallback, or
  * nothing. Slot content belongs to the caller's template but lives as long as this position.
  */

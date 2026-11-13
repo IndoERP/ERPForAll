@@ -66,6 +66,7 @@ export class Followers {
     this.popover = el("div", undefined, "erp-mail-followers-popover");
     this.popover.setAttribute("role", "dialog");
     this.popover.setAttribute("aria-label", this.t("Followers"));
+    this.popover.tabIndex = -1;
     this.popover.hidden = true;
     this.button.addEventListener("click", () => (this.popover.hidden ? this.open() : this.close(true)));
     this.popover.addEventListener("keydown", (event) => {
@@ -105,7 +106,11 @@ export class Followers {
       this.followers = list.map((f) => ({ ...f, name: f.partnerId === null ? "" : names.get(f.partnerId) ?? `#${f.partnerId}` }));
       this.selfFollowerId = typeof own === "number" ? own : null;
       if (this.selfFollowerId !== null) this.selfPartnerId = this.followers.find((f) => f.id === own)?.partnerId ?? this.selfPartnerId;
-      this.count = Number(panel["count"]);
+      const count = Number(panel["count"]);
+      if (!Number.isSafeInteger(count) || count < 0) {
+        throw new ClientError("server", "store_fetch answered an invalid follower count");
+      }
+      this.count = count;
       this.more = panel["next_after"] !== null && panel["next_after"] !== undefined;
       this.error = null;
     } catch (error) {
@@ -147,6 +152,9 @@ export class Followers {
   /** Runs one follower change; the failure stays in the popover and the list is read again either way. */
   private async change(call: () => Promise<unknown>): Promise<void> {
     if (this.busy) return;
+    const focusKey = this.popover.contains(document.activeElement)
+      ? (document.activeElement as HTMLElement).dataset["key"]
+      : undefined;
     this.busy = true; this.error = null; this.render();
     try {
       await call();
@@ -156,7 +164,7 @@ export class Followers {
       this.error = errorMessage(error);
     } finally {
       this.busy = false;
-      if (!this.disposed) this.render();
+      if (!this.disposed) this.render(focusKey);
     }
   }
 
@@ -178,7 +186,7 @@ export class Followers {
     if (refocus) this.button.focus();
   }
 
-  private render(): void {
+  private render(restoreKey?: string): void {
     if (this.disposed) return;
     const t = this.t;
     const following = this.selfFollowerId !== null;
@@ -187,7 +195,7 @@ export class Followers {
     this.button.setAttribute("aria-label", this.count === null ? t("Followers") : `${t("Followers")}: ${this.count}`);
     this.button.classList.toggle("is-following", following);
     if (this.popover.hidden) return;
-    const focused = this.popover.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset["key"] : undefined;
+    const focused = restoreKey ?? (this.popover.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset["key"] : undefined);
     const body: HTMLElement[] = [];
     if (this.error) {
       const alert = el("div", undefined, "erp-mail-followers-error");
@@ -237,6 +245,22 @@ export class Followers {
       body.push(set);
     }
     this.popover.replaceChildren(...body);
-    if (focused) this.popover.querySelector<HTMLElement>(`[data-key="${focused}"]`)?.focus();
+    if (this.busy) {
+      if (focused && !this.popover.contains(document.activeElement)) {
+        this.popover.focus();
+      }
+    } else if (focused) {
+      const target = this.popover.querySelector<HTMLElement>(`[data-key="${focused}"]:not([disabled])`);
+      if (target) {
+        target.focus();
+      } else {
+        const toggle = this.popover.querySelector<HTMLElement>('[data-key="toggle"]:not([disabled])');
+        if (toggle) {
+          toggle.focus();
+        } else {
+          this.popover.focus();
+        }
+      }
+    }
   }
 }

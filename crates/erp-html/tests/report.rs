@@ -261,7 +261,7 @@ fn report_holds_no_removed_values() {
 }
 
 #[test]
-fn report_is_deterministic_and_counts_the_first_pass_only() {
+fn report_is_deterministic_in_encounter_order() {
     let input = "<foo>a</foo><script>1</script><foo>b</foo>";
     let first = report(input);
     assert_eq!(first, report(input));
@@ -407,6 +407,10 @@ fn strict_accepts_harmless_canonicalisation_and_repair() {
         "<p>unclosed <b>bold",
         "text led<br>line",
         "<p>a<!-- kept comment -->b</p>",
+        "<!-- comment only -->",
+        "<p style=\"\">empty style</p>",
+        "<p style=\" ; \">whitespace style</p>",
+        "<p style=\"color:red/*c*/\">css comment</p>",
         "<p>a &amp; b &nbsp; c</p>",
         "<DIV>upper</DIV>",
     ] {

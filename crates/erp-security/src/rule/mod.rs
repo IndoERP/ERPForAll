@@ -25,8 +25,7 @@
 //! read rules); the `access` operator is kept and resolved
 //! when the predicate is combined (DOM-035). Computing on principal values (`user.x + 1`, string
 //! formatting, `user.has_group(...)`, `user.env.ref(...)`, a search with a computed domain) is
-//! refused: the rule must say it with a path, a literal search or the rule's group
-//! .
+//! refused: the rule must say it with a path, a literal search or the rule's group.
 
 mod unparse;
 
@@ -810,8 +809,8 @@ impl<'r> Builder<'r> {
         }
     }
 
-    /// Prefix-notation list syntax: `&`, `|`, `!` operators, implicit AND at the top
-    /// . Linear; the connective depth is bounded by
+    /// Prefix-notation list syntax: `&`, `|`, `!` operators, implicit AND at the top.
+    /// Linear; the connective depth is bounded by
     /// `erp_domain::MAX_DEPTH` and the items by [`MAX_RULE_ITEMS`].
     fn domain(&mut self, model: &ModelSpec, items: &[Sym]) -> Result<Domain, RuleError> {
         let malformed = || {

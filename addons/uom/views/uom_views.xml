@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<erp>
+  <record id="uom_uom_view_list" model="ir.ui.view">
+    <field name="name">uom.uom.list</field>
+    <field name="model">uom.uom</field>
+    <field name="arch" type="xml">
+      <list string="Units &amp; Packagings">
+        <field name="sequence"/>
+        <field name="name"/>
+        <field name="relative_factor"/>
+        <field name="relative_uom_id"/>
+      </list>
+    </field>
+  </record>
+
+  <record id="uom_uom_view_form" model="ir.ui.view">
+    <field name="name">uom.uom.form</field>
+    <field name="model">uom.uom</field>
+    <field name="arch" type="xml">
+      <form string="Units of Measure" record_mode="record">
+        <sheet>
+          <group>
+            <group name="uom_details">
+              <field name="name"/>
+              <field name="relative_factor"/>
+              <field name="relative_uom_id" placeholder="Reference Unit"/>
+            </group>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+
+  <record id="uom_uom_view_search" model="ir.ui.view">
+    <field name="name">uom.uom.view.search</field>
+    <field name="model">uom.uom</field>
+    <field name="arch" type="xml">
+      <search string="Search UOM">
+        <field name="name"/>
+        <filter string="Archived" name="inactive" domain="[('active', '=', False)]"/>
+      </search>
+    </field>
+  </record>
+
+  <record id="uom_uom_action_list" model="ir.actions.act_window">
+    <field name="name">Units &amp; Packagings</field>
+    <field name="res_model">uom.uom</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="uom_uom_view_list"/>
+    <field name="search_view_id" ref="uom_uom_view_search"/>
+    <field name="help" type="html">
+      <p class="o_view_nocontent_smiling_face">
+        Add a new unit of measure
+      </p>
+    </field>
+  </record>
+
+  <record id="uom_uom_action_view_list" model="ir.actions.act_window.view">
+    <field name="sequence" eval="10"/>
+    <field name="view_mode">list</field>
+    <field name="view_id" ref="uom_uom_view_list"/>
+    <field name="act_window_id" ref="uom_uom_action_list"/>
+  </record>
+
+  <record id="uom_uom_action_view_form" model="ir.actions.act_window.view">
+    <field name="sequence" eval="20"/>
+    <field name="view_mode">form</field>
+    <field name="view_id" ref="uom_uom_view_form"/>
+    <field name="act_window_id" ref="uom_uom_action_list"/>
+  </record>
+
+  <menuitem id="menu_uom_form_action"
+            name="Units of Measure"
+            parent="base.settings_menu"
+            action="uom_uom_action_list"
+            groups="base.group_system"
+            sequence="35"/>
+</erp>

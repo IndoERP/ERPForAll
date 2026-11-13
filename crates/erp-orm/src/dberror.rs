@@ -1,7 +1,9 @@
 //! Database errors to ERPForAll errors (CRUD §4.9).
 //!
 //! Serialization failures and deadlocks are `Concurrency` (the unit of work retries them),
-//! `55P03` is `Lock`, anything else `Database` with its SQLSTATE.
+//! `55P03` is `Lock`. Otherwise an error whose SQLSTATE and CONSTRAINT diagnostic are a condition
+//! an addon declared (contract §6) is `Validation` with the declared message, never the
+//! server's text; anything else is `Database` with its SQLSTATE.
 
 use erp_fields::{Error, ErrorKind};
 use erp_registry::{Registry, TableObjectKind};
@@ -123,6 +125,12 @@ pub(crate) fn map_pg_error(registry: &Registry, err: tokio_postgres::Error) -> E
         // error body shows a fixed text instead (erp-rpc, design note §21)
         (ErrorKind::Lock, db.message().to_owned())
     } else {
+        // only here: the standard states above keep their mapping whatever an addon declares
+        if let Some(identifier) = violated.as_deref()
+            && let Some((id, declared)) = registry.sql_objects().condition(code.code(), identifier)
+        {
+            return declared_condition(id, declared, identifier, err);
+        }
         (ErrorKind::Database, db.message().to_owned())
     };
     let error = Error::database(kind, state, message, err);
@@ -131,6 +139,37 @@ pub(crate) fn map_pg_error(registry: &Registry, err: tokio_postgres::Error) -> E
         Some(c) if code.code().starts_with("23") => error.with_constraint(&c),
         _ => error,
     }
+}
+
+/// The `Validation` error of a declared SQL condition: the declaration's message verbatim (never
+/// the server's message, DETAIL, HINT or CONTEXT), the identifier as the constraint, and a context
+/// naming the qualified identity. Every value is declared static data.
+fn declared_condition(
+    id: erp_registry::SqlObjectId,
+    declared: &erp_registry::SqlCondition,
+    identifier: &str,
+    err: tokio_postgres::Error,
+) -> Error {
+    let state = declared.sqlstate();
+    let context = erp_fields::ValueMap::from([
+        (
+            "sql_condition".to_owned(),
+            erp_fields::Value::str(id.to_string()),
+        ),
+        (
+            "sql_condition_identifier".to_owned(),
+            erp_fields::Value::str(identifier),
+        ),
+        ("sqlstate".to_owned(), erp_fields::Value::str(state)),
+    ]);
+    Error::database(
+        ErrorKind::Validation,
+        Some(state.to_owned()),
+        declared.message(),
+        err,
+    )
+    .with_constraint(identifier)
+    .with_context(erp_fields::Value::Map(std::sync::Arc::new(context)))
 }
 
 /// The `Validation` error of a table object with a declared `message`, in the text

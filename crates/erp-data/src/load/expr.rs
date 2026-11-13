@@ -1,4 +1,4 @@
-//! The bridge to `erp-expr`: evaluation contexts for data files, the `ref`
+//! The bridge to `erp-expr`: evaluation contexts for data files, the `ref()`
 //! resolver, and the conversion of expression values into field values.
 //!
 //! `ref()` is synchronous inside the evaluator, so the loader looks the external ids up first

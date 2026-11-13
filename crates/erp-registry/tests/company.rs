@@ -4,8 +4,9 @@
 
 use erp_fields::ErrorKind;
 use erp_registry::{
-    AddonDescriptor, CheckCompany, CompanyAccessDecl, CompanyMatch, CompanyScope, FieldDecl,
-    ManyMatch, ModelDecl, ModelDef, ModelKind, Registry, RegistryBuilder, SingleMatch,
+    AddonDescriptor, CheckCompany, CompanyAccessDecl, CompanyDelegation, CompanyMatch,
+    CompanyScope, FieldDecl, ManyMatch, ModelDecl, ModelDef, ModelKind, Registry, RegistryBuilder,
+    SingleMatch,
 };
 
 static CO: AddonDescriptor = AddonDescriptor {
@@ -738,6 +739,190 @@ fn an_inherited_copy_of_a_company_bound_field_is_read_as_the_caller() {
     assert_eq!(mode("co.base", "a"), (true, true));
     assert_eq!(mode("co.child", "a"), (false, false));
     assert_eq!(mode("co.child", "b"), (false, false));
+}
+
+/// The delegate many2one of a model built by `_inherits`.
+fn delegate(name: &'static str, parent: &'static str) -> FieldDecl {
+    FieldDecl::many2one(name, parent)
+        .delegate(true)
+        .required(true)
+        .ondelete(erp_fields::OnDelete::Cascade)
+}
+
+/// `co.variant`: delegates to `co.template` through `template_id` (A2), so its
+/// `company_id` (when the template has one) is the template's; `extra` are its own fields.
+fn variant(extra: Vec<FieldDecl>) -> ModelDecl {
+    let mut fields = vec![delegate("template_id", "co.template")];
+    fields.extend(extra);
+    m("co.variant", fields)
+        .company_access(CompanyAccessDecl::unrestricted(
+            "company consistency fixture; access is not under test",
+        ))
+        .inherits(&[("co.template", "template_id")])
+}
+
+/// `co.lot`: a scoped model with a declared check toward the delegating `co.variant` and a link
+/// to it that declares nothing.
+fn lot() -> ModelDecl {
+    doc(
+        "co.lot",
+        vec![
+            FieldDecl::many2one("variant_id", "co.variant").check_company(true),
+            FieldDecl::many2one("plain_id", "co.variant"),
+        ],
+    )
+    .check_company_auto(true)
+}
+
+/// A declared check toward a model whose `company_id` comes by `_inherits` delegation builds; the
+/// delegating model keeps no company scope of its own but records the delegation, also over two
+/// levels of delegation.
+#[test]
+fn a_declared_check_toward_a_delegated_company_builds() {
+    let r = build(vec![
+        company_tree(),
+        doc("co.template", vec![FieldDecl::char("name")]).company_match(CompanyMatch::ParentOf),
+        variant(vec![]),
+        // its required link reaches no company-scoped model, so it declares no company access
+        m("co.pallet", vec![delegate("variant_id", "co.variant")])
+            .inherits(&[("co.variant", "variant_id")]),
+        lot(),
+    ])
+    .unwrap();
+    let template = r.model("co.template").unwrap();
+    let template_company = template.field_id("company_id").unwrap();
+    let v = r.model("co.variant").unwrap();
+    assert_eq!(v.company_scope, None, "the scope itself does not change");
+    assert_eq!(
+        v.company_delegation,
+        Some(CompanyDelegation {
+            field: v.field_id("company_id").unwrap(),
+            delegate: v.field_id("template_id").unwrap(),
+            storing_model: template.id,
+            matching: SingleMatch::ParentOf,
+        })
+    );
+    assert_eq!(
+        template.company_scope,
+        Some(CompanyScope::Single {
+            field: template_company,
+            matching: SingleMatch::ParentOf
+        })
+    );
+    assert_eq!(template.company_delegation, None, "scoped by its own field");
+    let pallet = r.model("co.pallet").unwrap();
+    assert_eq!(pallet.company_scope, None);
+    assert_eq!(
+        pallet.company_delegation,
+        Some(CompanyDelegation {
+            field: pallet.field_id("company_id").unwrap(),
+            delegate: pallet.field_id("variant_id").unwrap(),
+            storing_model: template.id,
+            matching: SingleMatch::ParentOf,
+        })
+    );
+    assert_eq!(
+        field_state(&r, "co.lot", "variant_id"),
+        CheckCompany::Declared
+    );
+    assert!(r.model("co.lot").unwrap().check_company_auto);
+    assert_eq!(r.model("co.lot").unwrap().company_delegation, None);
+}
+
+/// A2-D2: the rule 2 default does not reach a link to a delegating model; only a
+/// declared check does.
+#[test]
+fn a_link_to_a_delegated_company_is_not_checked_by_default() {
+    let r = build(vec![
+        company(),
+        doc("co.template", vec![FieldDecl::char("name")]),
+        variant(vec![]),
+        lot(),
+        // nothing declared on the model either: no checked field, so no model default
+        doc(
+            "co.loose",
+            vec![FieldDecl::many2one("variant_id", "co.variant")],
+        ),
+    ])
+    .unwrap();
+    assert_eq!(field_state(&r, "co.lot", "plain_id"), CheckCompany::Off);
+    assert_eq!(field_state(&r, "co.loose", "variant_id"), CheckCompany::Off);
+    assert!(!r.model("co.loose").unwrap().check_company_auto);
+    // a model scoped by its own company_id records no delegation
+    assert_eq!(r.model("co.lot").unwrap().company_delegation, None);
+}
+
+/// A2-D3: `company_ids` that arrive by delegation are refused as a check target, and the
+/// message names the delegation.
+#[test]
+fn a_declared_check_toward_delegated_company_ids_is_refused() {
+    assert_eq!(
+        refusal(vec![
+            company(),
+            m(
+                "co.template",
+                vec![
+                    FieldDecl::char("name"),
+                    FieldDecl::many2many("company_ids", "res.company"),
+                ],
+            )
+            .company_access(CompanyAccessDecl::unrestricted(
+                "company consistency fixture; access is not under test",
+            )),
+            variant(vec![]),
+            lot(),
+        ]),
+        (
+            ErrorKind::Programming,
+            "co.lot.variant_id declares check_company, but its target co.variant has company_ids \
+             only through the delegation co.variant.template_id to co.template, which the company \
+             check does not support (declared in addon 'co')"
+                .to_owned()
+        )
+    );
+}
+
+/// A2-D3: a check on a field of the delegating model itself is refused, naming the
+/// delegation.
+#[test]
+fn a_declared_check_on_a_delegating_model_is_refused() {
+    assert_eq!(
+        refusal(vec![
+            company(),
+            doc("co.target", vec![]),
+            doc("co.template", vec![FieldDecl::char("name")]),
+            variant(vec![
+                FieldDecl::many2one("t_id", "co.target").check_company(true)
+            ]),
+        ]),
+        (
+            ErrorKind::Programming,
+            "co.variant.t_id declares check_company, but co.variant has its company only through \
+             the delegation co.variant.template_id to co.template; checks on a delegating model's \
+             own fields are not supported (declared in addon 'co')"
+                .to_owned()
+        )
+    );
+}
+
+/// A2-D3: `check_company_auto` on the delegating model itself is refused, naming the
+/// delegation.
+#[test]
+fn check_company_auto_on_a_delegating_model_is_refused() {
+    assert_eq!(
+        refusal(vec![
+            company(),
+            doc("co.template", vec![FieldDecl::char("name")]),
+            variant(vec![]).check_company_auto(true),
+        ]),
+        (
+            ErrorKind::Programming,
+            "co.variant declares check_company_auto, but has its company only through the \
+             delegation co.variant.template_id to co.template; checks on a delegating model's own \
+             fields are not supported (declared in addon 'co')"
+                .to_owned()
+        )
+    );
 }
 
 #[test]

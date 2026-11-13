@@ -51,12 +51,14 @@
                 <field name="author_id"/>
                 <field name="genre_ids" widget="many2many_tags"/>
                 <field name="isbn"/>
-                <field name="publication_year"/>
+                <field name="publication_year" options="{'enable_formatting': False}"/>
+                <field name="pages"/>
                 <field name="rating" widget="priority"/>
                 <field name="book_format" widget="badge"/>
                 <field name="member_discount" widget="percentage"/>
                 <field name="cover_color" widget="color"/>
                 <field name="website" widget="url"/>
+                <field name="description" widget="html"/>
                 <field name="available"/>
             </list>
         </field>
@@ -79,7 +81,9 @@
                             <field name="favorite" widget="boolean_favorite"/>
                         </group>
                         <group string="Catalogue">
-                            <field name="publication_year"/>
+                            <field name="publication_year" options="{'enable_formatting': False}"/>
+                            <field name="published_on"/>
+                            <field name="price"/>
                             <field name="genre_ids" widget="many2many_tags"/>
                             <field name="member_discount" widget="percentage"/>
                             <field name="cover_color" widget="color"/>
@@ -90,6 +94,9 @@
                     <notebook>
                         <page name="summary" string="Summary">
                             <field name="summary" widget="CopyClipboardText"/>
+                        </page>
+                        <page name="description" string="Description">
+                            <field name="description" widget="html"/>
                         </page>
                         <page name="loans" string="Loans">
                             <field name="loan_ids"/>
@@ -181,6 +188,21 @@
             </form>
         </field>
     </record>
+    <!-- Books by author, then by the year published (rows), and by format (columns): how many books, how many pages, what they cost.
+         The pivot expands any header by any field, so a tester can add genre-free groupings such as the rating or the quarter. -->
+    <record id="book_pivot" model="ir.ui.view">
+        <field name="name">sample_library.book.pivot</field>
+        <field name="model">sample_library.book</field>
+        <field name="arch" type="xml">
+            <pivot string="Books" display_quantity="1" default_order="pages desc">
+                <field name="author_id" type="row"/>
+                <field name="published_on" type="row" interval="year"/>
+                <field name="book_format" type="col"/>
+                <field name="pages" type="measure"/>
+                <field name="price" type="measure"/>
+            </pivot>
+        </field>
+    </record>
     <record id="author_action" model="ir.actions.act_window">
         <field name="name">Authors</field>
         <field name="res_model">sample_library.author</field>
@@ -189,7 +211,7 @@
     <record id="book_action" model="ir.actions.act_window">
         <field name="name">Books</field>
         <field name="res_model">sample_library.book</field>
-        <field name="view_mode">list,form</field>
+        <field name="view_mode">list,form,pivot</field>
     </record>
     <record id="loan_action" model="ir.actions.act_window">
         <field name="name">Loans</field>

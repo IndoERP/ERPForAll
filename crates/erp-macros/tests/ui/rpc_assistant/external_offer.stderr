@@ -1,0 +1,5 @@
+error: assistant = offer cannot be given with effect = external: external methods are never offered to the assistant
+ --> tests/ui/rpc_assistant/external_offer.rs:4:30
+  |
+4 |     #[rpc(effect = external, assistant = offer)]
+  |                              ^^^^^^^^^

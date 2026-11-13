@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<odoo>
+ <data noupdate="1">
+  <record id="default_barcode_nomenclature" model="barcode.nomenclature"><field name="name">Standard barcode rules</field></record>
+  <record id="barcode_rule_product" model="barcode.rule"><field name="name">Product fallback</field><field name="barcode_nomenclature_id" ref="default_barcode_nomenclature"/><field name="sequence">90</field></record>
+ </data>
+ <function model="res.company" name="_barcode_assign_defaults"/>
+</odoo>

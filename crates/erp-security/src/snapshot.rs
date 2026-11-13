@@ -15,11 +15,11 @@ use erp_fields::{Error, FieldType, Result};
 use erp_orm::{
     AccessCtx, AccessCtxParts, AccessDecision, AccessDomain, AccessDomainChains, AccessDomainImpl,
     AccessPolicy, ActiveCompanySet, CAPABILITIES, Capability, ElevationKey, ElevationKind,
-    EvidenceColumn, ExplainRequest, Explanation, FieldAccessImpl, FieldAccessTable,
+    ElevationScope, EvidenceColumn, ExplainRequest, Explanation, FieldAccessImpl, FieldAccessTable,
     FieldContextValues, FieldDenialDetail, FieldMask, FieldOp, GRANT_SOURCES, GrantSource, GroupId,
     GroupLookup, GroupSet, GroupSetId, GroupSetInterner, InternedGroups, KindClass, OperationSet,
     PolicyGeneration, PrincipalBinding, PrincipalShape, QualifiedXmlId, RuleKind, RuleOperatorDecl,
-    RuleOrigin, RuleRef, SnapshotId, SnapshotOrigin, SnapshotRef,
+    RuleOrigin, RuleRef, ScopeItem, SnapshotId, SnapshotOrigin, SnapshotRef,
 };
 use erp_registry::{FieldId, FieldSpec, ModelId, ModelSpec, Registry};
 use erp_sql::reference::ReferenceQuery;
@@ -826,12 +826,19 @@ impl PolicySnapshot {
         model: &ModelSpec,
         op: Operation,
     ) -> Result<Vec<EvidenceColumn>> {
-        let mut combine = Combine {
-            snapshot: self,
-            groups: b.resolution().groups(),
-            groups_id: b.groups(),
-            shape: b.shape(),
-            stack: vec![(model.id, op)],
+        let mut combine = Combine::new(self, b, vec![(model.id, op)]);
+        // a scoped binding: a named pair's columns are its restrictions less the
+        // lifted ones (its permissions count as granted, so none is blamed), resolved with the
+        // base shape as its predicate is; an unnamed pair's are the base binding's
+        let named = match b.shape().elevation() {
+            ElevationKey::Scoped(scope) => match named_item(scope, model.id, op) {
+                Some(item) => Some(self.item_lifts(item)?),
+                None => {
+                    combine.on_base = true;
+                    None
+                }
+            },
+            _ => None,
         };
         let mut columns = Vec::new();
         for compiled in self.compiled_rules(model.id) {
@@ -847,12 +854,21 @@ impl PolicySnapshot {
                 Ok(domain) => domain,
                 Err(err) => return Err(rule_error(compiled, model, err)),
             };
+            if let Some(lifted) = &named
+                && (compiled.group.is_some() || lifted.contains(&compiled.id))
+            {
+                continue;
+            }
             let kind = if compiled.group.is_some() {
                 RuleKind::Permission
             } else {
                 RuleKind::Restriction
             };
-            let resolved = combine.resolve(model, domain)?;
+            let resolved = if named.is_some() {
+                combine.with_base(|c| c.resolve(model, domain))?
+            } else {
+                combine.resolve(model, domain)?
+            };
             columns.push(
                 EvidenceColumn::new(compiled.rule.clone(), kind, resolved)
                     .with_mentions_company(compiled.mentions_company),
@@ -1014,15 +1030,277 @@ impl PolicySnapshot {
         model: &ModelSpec,
         op: Operation,
     ) -> Result<AccessDomain> {
-        let mut combine = Combine {
-            snapshot: self,
-            groups: b.resolution().groups(),
-            groups_id: b.groups(),
-            shape: b.shape(),
-            stack: Vec::new(),
-        };
-        combine.domain(model.id, op)
+        Combine::new(self, b, Vec::new()).domain(model.id, op)
     }
+
+    /// The model of a scope item in this snapshot's registry.
+    fn item_model(&self, item: &ScopeItem) -> Result<&ModelSpec> {
+        self.registry
+            .models()
+            .get(item.model().index())
+            .filter(|spec| spec.id == item.model())
+            .ok_or_else(|| {
+                Error::programming(format!(
+                    "the elevation scope names model {}, which is not in the registry of this \
+                     access policy",
+                    item.model().index()
+                ))
+            })
+    }
+
+    /// The rule `xmlid` that `item` of a scope lifts, when it may be lifted (
+    /// does not bear the company (`PolicySnapshot::company_bearing`: the generated company
+    /// restriction, a company named anywhere, a rule of `res.company`, or a read of a company
+    /// field, a relation to `res.company` or a reference field, nested paths included), holds no
+    /// `access` condition or declared rule operator (they bring in another model's whole
+    /// predicate, company restriction included), and applies to an operation the item names.
+    /// Checked in this order at block entry ([`AccessPolicy::check_scope`]) and again by every
+    /// decision that uses the lift, against the snapshot taking it.
+    ///
+    /// # Errors
+    ///
+    /// `Programming` naming the rule and the first reason it cannot be lifted.
+    fn lifted_rule(&self, item: &ScopeItem, xmlid: &QualifiedXmlId) -> Result<&CompiledRule> {
+        let model = self.item_model(item)?;
+        let Some(rule) = self.rules.iter().find(|r| r.xmlid.as_ref() == Some(xmlid)) else {
+            return Err(Error::programming(format!(
+                "cannot lift restriction rule '{xmlid}' on {}: no access rule of this policy has \
+                 that external id",
+                model.name
+            )));
+        };
+        let refuse = |why: &str| {
+            Error::programming(format!(
+                "cannot lift restriction rule '{xmlid}' ({}) on {}: {why}",
+                rule.rule.name(),
+                model.name
+            ))
+        };
+        if rule.group.is_some() {
+            return Err(refuse(
+                "it is a permission of a group, not a restriction (a scope already grants the \
+                 permission of the operations it names)",
+            ));
+        }
+        if rule.model != model.id {
+            return Err(refuse(&format!(
+                "it is a rule of {}, not of the item's model",
+                self.registry.model_by_id(rule.model).name
+            )));
+        }
+        // a rule that does not compile has no company or `access` analysis: refused before both
+        if rule.domain.is_err() {
+            return Err(refuse(
+                "the rule does not compile, and lifting it would turn its denial into an allow",
+            ));
+        }
+        if let Some(why) = self.company_bearing(rule) {
+            return Err(refuse(&format!(
+                "it bears the company ({why}), and a scope never lifts a company restriction"
+            )));
+        }
+        if holds_access(rule) {
+            return Err(refuse(
+                "its domain holds an 'access' condition or a declared rule operator, which brings \
+                 in another model's whole predicate, company restriction included",
+            ));
+        }
+        if !rule.ops.iter().any(|op| item.ops().contains(op)) {
+            let named: Vec<&str> = item.ops().iter().map(Operation::as_str).collect();
+            return Err(refuse(&format!(
+                "it applies to none of the operations the item names ({}), so lifting it changes \
+                 nothing",
+                named.join(", ")
+            )));
+        }
+        Ok(rule)
+    }
+
+    /// The ids of the rules `item` lifts, after the checks of a scope item: every operation it
+    /// names passes `PolicySnapshot::check_confinement`, every lift `PolicySnapshot::lifted_rule`.
+    /// One function for the entry check ([`AccessPolicy::check_scope`]), the re-check of every
+    /// decision and the evidence columns, so the three cannot disagree.
+    ///
+    /// # Errors
+    ///
+    /// `Programming` naming the refused operation or lifted rule and the reason.
+    fn item_lifts(&self, item: &ScopeItem) -> Result<Vec<RuleId>> {
+        let model = self.item_model(item)?;
+        for op in item.ops().iter() {
+            self.check_confinement(model, op)?;
+        }
+        item.lifted()
+            .iter()
+            .map(|xmlid| self.lifted_rule(item, xmlid).map(|rule| rule.id))
+            .collect()
+    }
+
+    /// Why `rule` bears the company for scope purposes (and A6), or `None` when it
+    /// provably does not: a scope never lifts such a restriction, and never drops such a
+    /// permission when it is a model's only company confinement. A rule bears the company when
+    /// it does not compile (what it reads is not known), is the generated company restriction,
+    /// names the company (`mentions_company`: the `company_id(s)` fields and the company
+    /// parameters), is a rule of `res.company`, reads a field of `res.company`, a relational
+    /// field whose comodel is `res.company` or a reference field (`reference`,
+    /// `many2one_reference`: it cannot be proven not to point at a company), or holds a value
+    /// whose reads are not known. The reads are the compiled rule's: every condition field,
+    /// relational path segment, `any` sub-domain (the sub-domain of a literal search included),
+    /// `user.<path>` field and `_inherits` delegate.
+    fn company_bearing(&self, rule: &CompiledRule) -> Option<String> {
+        let Ok(domain) = &rule.domain else {
+            return Some("the rule does not compile, so what it reads is not known".to_owned());
+        };
+        if rule.generated() {
+            return Some("it is the generated company restriction".to_owned());
+        }
+        if rule.mentions_company {
+            return Some("its domain names the company".to_owned());
+        }
+        if self.registry.model_by_id(rule.model).name == COMPANY_MODEL {
+            return Some(format!("it is a rule of {COMPANY_MODEL}"));
+        }
+        for &(model, field) in &rule.reads {
+            let model = self.registry.model_by_id(model);
+            let field = model.field_by_id(field);
+            if model.name == COMPANY_MODEL {
+                return Some(format!(
+                    "it reads {}.{}, a field of {COMPANY_MODEL}",
+                    model.name, field.name
+                ));
+            }
+            match &field.ty {
+                FieldType::Many2one { comodel, .. }
+                | FieldType::One2many { comodel, .. }
+                | FieldType::Many2many { comodel, .. }
+                    if comodel.as_str() == COMPANY_MODEL =>
+                {
+                    return Some(format!(
+                        "it reads {}.{}, a relation to {COMPANY_MODEL}",
+                        model.name, field.name
+                    ));
+                }
+                FieldType::Reference { .. } | FieldType::Many2oneReference { .. } => {
+                    return Some(format!(
+                        "it reads {}.{}, a reference field that may point at a company",
+                        model.name, field.name
+                    ));
+                }
+                _ => {}
+            }
+        }
+        if unknown_reads(domain) {
+            return Some("its domain holds a value whose reads are not known".to_owned());
+        }
+        None
+    }
+
+    /// Refuse naming `op` on `model` in a scope when a permission rule of the model for `op`
+    /// bears the company (`PolicySnapshot::company_bearing`) and no restriction of the model for
+    /// `op` confines to companies: the scope counts the permissions as granted, so it would drop
+    /// the model's only company confinement (for example `res.company`, whose company filter is
+    /// the permission `[('id', 'in', company_ids)]`). Every permission of the snapshot is
+    /// considered, not only the binding's groups, so the decision does not depend on who opens
+    /// the block.
+    ///
+    /// The two sides are strict in opposite directions. A permission counts when it cannot be
+    /// ruled out (the wide `company_bearing` test); as kept confinement only the generated
+    /// company restriction counts (`CompiledRule::generated`, compiling). A handwritten
+    /// restriction never counts, even one naming the company (`mentions_company` says only that
+    /// the domain names a company field or parameter, not that it confines to the user's
+    /// companies: `[('company_id', '!=', False)]` or `['|', ('public', '=', True),
+    /// ('company_id', 'in', company_ids)]` confine nothing), nor a rule of `res.company`, a
+    /// reference read or a company relation under another name. The confinement an `_inherits`
+    /// parent gives is not counted either. A permission holding an `access` condition or a
+    /// declared rule operator counts as bearing the company ([`holds_access`], the test
+    /// `PolicySnapshot::lifted_rule` applies to a lift): it brings in another model's whole
+    /// predicate, company restriction included. A fail-closed rule,
+    /// accepted.
+    ///
+    /// # Errors
+    ///
+    /// `Programming` naming the model, the operation and the permission rules.
+    fn check_confinement(&self, model: &ModelSpec, op: Operation) -> Result<()> {
+        let mut permissions: Vec<String> = Vec::new();
+        for rule in self.rules_of(model.id) {
+            if !rule.ops.contains(op) {
+                continue;
+            }
+            match rule.group {
+                Some(_) if self.company_bearing(rule).is_some() || holds_access(rule) => {
+                    permissions.push(match &rule.xmlid {
+                        Some(xmlid) => xmlid.to_string(),
+                        None => rule.rule.name().to_owned(),
+                    });
+                }
+                Some(_) => {}
+                // the generated company restriction is kept for a named pair (it is never
+                // lifted); no handwritten restriction counts as company confinement
+                None if rule.domain.is_ok() && rule.generated() => {
+                    return Ok(());
+                }
+                None => {}
+            }
+        }
+        if permissions.is_empty() {
+            return Ok(());
+        }
+        Err(Error::programming(format!(
+            "the scope names {} on '{}', which keeps no generated company restriction and whose \
+             permission rules ({}) may bear the company: scoped elevation cannot open it",
+            op.as_str(),
+            model.name,
+            permissions.join(", ")
+        )))
+    }
+}
+
+/// Whether `rule` holds an `access` condition or a declared rule operator: it brings in another
+/// model's whole predicate, company restriction included, so a scope never lifts such a
+/// restriction and never drops such a permission.
+fn holds_access(rule: &CompiledRule) -> bool {
+    !rule.access.is_empty()
+        || !rule.operator_targets.is_empty()
+        || rule.domain.as_ref().is_ok_and(has_access)
+}
+
+/// The company model (a rule that reaches it bears the company).
+const COMPANY_MODEL: &str = "res.company";
+
+/// Whether `domain` holds a value whose reads the compiled rule does not record: an opaque value
+/// anywhere, or a sub-domain outside an `any` condition (`analyze` records no reads for either).
+fn unknown_reads(domain: &Domain) -> bool {
+    fn value(v: &Value) -> bool {
+        match v {
+            Value::Opaque(_) | Value::Domain(_) => true,
+            Value::List(items) => items.iter().any(value),
+            Value::Set(set) => set.iter().any(value),
+            _ => false,
+        }
+    }
+    match domain.kind() {
+        DomainKind::True | DomainKind::False => false,
+        // a declared rule operator's reads are its reference field and model column
+        DomainKind::Custom(node) => RuleOperatorLeaf::of(node.as_ref()).is_none(),
+        DomainKind::Not(child) => unknown_reads(child),
+        DomainKind::And(children) | DomainKind::Or(children) => children.iter().any(unknown_reads),
+        DomainKind::Condition(c) => match (c.operator(), c.value()) {
+            (
+                Operator::Any | Operator::NotAny | Operator::AnyBypass | Operator::NotAnyBypass,
+                Value::Domain(sub),
+            ) => unknown_reads(sub),
+            (_, v) => value(v),
+        },
+    }
+}
+
+/// The item of `scope` that names `op` on `model`, if any.
+fn named_item(scope: &ElevationScope, model: ModelId, op: Operation) -> Option<&ScopeItem> {
+    let items = scope.items();
+    items
+        .binary_search_by_key(&model, ScopeItem::model)
+        .ok()
+        .map(|i| &items[i])
+        .filter(|item| item.ops().contains(op))
 }
 
 /// The model an `access` condition asks about, and the operation (DOM-035): the model itself for
@@ -1106,21 +1384,77 @@ impl GroupLookup for GroupGraph {
 
 /// Stage 4 for one binding: combination, grants, overrides and `access` resolution, with the
 /// resolution stack that refuses cycles.
+///
+/// A scoped binding decides a (model, operation) its scope does not name, and every
+/// `access` condition or rule operator inside a named model's predicate, with its base shape (the
+/// elevation replaced by `None`): the frames share one resolution stack.
 struct Combine<'s> {
     snapshot: &'s PolicySnapshot,
     groups: &'s GroupSet,
     groups_id: GroupSetId,
     shape: &'s PrincipalShape,
+    /// The base shape of a scoped binding; `None` for every other binding.
+    base: Option<PrincipalShape>,
+    /// Whether the current frame decides with `base`.
+    on_base: bool,
     stack: Vec<(ModelId, Operation)>,
 }
 
-impl Combine<'_> {
+impl<'s> Combine<'s> {
+    fn new(
+        snapshot: &'s PolicySnapshot,
+        b: &'s PrincipalBinding<'_>,
+        stack: Vec<(ModelId, Operation)>,
+    ) -> Self {
+        let shape = b.shape();
+        let base = matches!(shape.elevation(), ElevationKey::Scoped(_)).then(|| shape.unelevated());
+        Self {
+            snapshot,
+            groups: b.resolution().groups(),
+            groups_id: b.groups(),
+            shape,
+            base,
+            on_base: false,
+            stack,
+        }
+    }
+
+    /// The shape the current frame decides with.
+    fn current(&self) -> &PrincipalShape {
+        match (&self.base, self.on_base) {
+            (Some(base), true) => base,
+            _ => self.shape,
+        }
+    }
+
+    /// Run `f` deciding with the base shape (the binding's own shape when it is not scoped).
+    fn with_base<T>(&mut self, f: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        let before = std::mem::replace(&mut self.on_base, true);
+        let result = f(self);
+        self.on_base = before;
+        result
+    }
+
+    /// The scope of the current frame, if it decides for a scoped binding.
+    fn scope(&self) -> Option<Arc<ElevationScope>> {
+        match self.current().elevation() {
+            ElevationKey::Scoped(scope) => Some(Arc::clone(scope)),
+            _ => None,
+        }
+    }
+
     fn domain(&mut self, model: ModelId, op: Operation) -> Result<AccessDomain> {
+        // a pair the scope does not name is the base binding's, memoized under the base key
+        if let Some(scope) = self.scope()
+            && named_item(&scope, model, op).is_none()
+        {
+            return self.with_base(|c| c.domain(model, op));
+        }
         let key = CombinedKey {
             model,
             op,
             groups: self.groups_id,
-            shape: self.shape.clone(),
+            shape: self.current().clone(),
         };
         if let Some(hit) = self.snapshot.combined.get(&key) {
             return Ok(hit);
@@ -1140,7 +1474,7 @@ impl Combine<'_> {
     }
 
     fn ctx<'a>(&'a self, spec: &'a ModelSpec) -> Result<AccessCtx<'a>> {
-        let elevation = match self.shape.elevation() {
+        let elevation = match self.current().elevation() {
             ElevationKey::None => ElevationKind::None,
             ElevationKey::Full => ElevationKind::Full,
             ElevationKey::Scoped(_) => ElevationKind::Scoped,
@@ -1152,7 +1486,7 @@ impl Combine<'_> {
         };
         Ok(AccessCtx::new(AccessCtxParts::new(
             self.groups,
-            self.shape.class(),
+            self.current().class(),
             elevation,
             spec,
             &self.snapshot.registry,
@@ -1163,29 +1497,44 @@ impl Combine<'_> {
     fn compute(&mut self, model: ModelId, op: Operation) -> Result<AccessDomain> {
         let snapshot = self.snapshot;
         let spec = snapshot.registry.model_by_id(model);
-        match self.shape.elevation() {
-            ElevationKey::None => {}
+        let scope = match self.current().elevation() {
+            ElevationKey::None => None,
             // superuser mode restricts nothing (the engine allows it before asking)
             ElevationKey::Full => return Ok(AccessDomain::allow_all()),
-            ElevationKey::Scoped(_) => {
-                return Err(Error::programming(
-                    "scoped elevation blocks are not supported until a later release",
-                ));
-            }
+            ElevationKey::Scoped(scope) => Some(Arc::clone(scope)),
             _ => {
                 return Err(Error::programming(
                     "a principal shape has an elevation kind this policy does not know",
                 ));
             }
-        }
+        };
+        // `domain` sends a pair the scope does not name to the base shape: a scoped frame
+        // computes a named pair
+        let item = match &scope {
+            Some(scope) => Some(named_item(scope, model, op).ok_or_else(|| {
+                Error::programming(format!(
+                    "{} ({op}) reached the scoped access computation without an item of the scope \
+                     naming it",
+                    spec.name
+                ))
+            })?),
+            None => None,
+        };
         if let Some(message) = snapshot.drift.get(&model) {
             return Err(Error::access(message.to_string()));
         }
+        // re-checked against this snapshot: the transaction's policy may have been rebuilt since
+        // the block opened, and an item it refuses (a lift, or a named operation that would drop
+        // the model's only company confinement) is an error, never skipped
+        let lifted: Vec<RuleId> = match item {
+            Some(item) => snapshot.item_lifts(item)?,
+            None => Vec::new(),
+        };
         let mut permissions: Vec<Domain> = Vec::new();
         let mut restrictions: Vec<Domain> = Vec::new();
         let mut rules: Vec<RuleRef> = Vec::new();
-        // `_inherits` parents: a parent that denies everything denies the child
-        // , unless the model does not check its parents'
+        // `_inherits` parents: a parent that denies everything denies the child,
+        // unless the model does not check its parents'
         // access (`_check_inherits_access = False`)
         let parents: &[(ModelId, FieldId)] = if spec.inherits_access {
             &spec.inherits
@@ -1215,19 +1564,29 @@ impl Combine<'_> {
             {
                 continue;
             }
-            let domain = match compiled.domain_for(self.shape.companies()) {
+            let domain = match compiled.domain_for(self.current().companies()) {
                 Ok(domain) => domain,
                 Err(err) => return Err(rule_error(compiled, spec, err)),
             };
-            rules.push(compiled.rule.clone());
-            if compiled.group.is_some() {
-                permissions.push(domain.clone());
-            } else {
-                restrictions.push(domain.clone());
+            match (compiled.group, item) {
+                // a named operation: its permissions count as granted
+                (Some(_), Some(_)) => {}
+                (Some(_), None) => {
+                    rules.push(compiled.rule.clone());
+                    permissions.push(domain.clone());
+                }
+                (None, Some(_)) if lifted.contains(&compiled.id) => {}
+                (None, _) => {
+                    rules.push(compiled.rule.clone());
+                    restrictions.push(domain.clone());
+                }
             }
         }
         let mut grants = Vec::new();
-        {
+        if item.is_some() {
+            // the permission OR is TRUE: no grant could change it, so no grant source is asked
+            permissions.push(Domain::TRUE);
+        } else {
             let ctx = self.ctx(spec)?;
             for source in &snapshot.grant_sources {
                 if source.applies(&ctx, spec, op)? {
@@ -1243,7 +1602,13 @@ impl Combine<'_> {
             let ctx = self.ctx(spec)?;
             snapshot.chains.apply(&ctx, op, &combined)?
         };
-        let resolved = self.resolve(spec, &overridden)?;
+        // a named model's predicate resolves its `access` conditions and rule operators with the
+        // base shape: a scope never widens another model's predicate through a reference to it
+        let resolved = if item.is_some() {
+            self.with_base(|c| c.resolve(spec, &overridden))?
+        } else {
+            self.resolve(spec, &overridden)?
+        };
         let analysis = analyze(&snapshot.registry, spec, &resolved)?;
         let mut builder = AccessDomain::builder(resolved)
             .reads(analysis.reads)
@@ -1613,6 +1978,15 @@ impl AccessPolicy for PolicySnapshot {
         }
     }
 
+    /// Every item of `scope` must pass `PolicySnapshot::item_lifts`: no named operation drops a
+    /// model's only company confinement, every lifted rule passes `PolicySnapshot::lifted_rule`.
+    fn check_scope(&self, scope: &ElevationScope) -> Result<()> {
+        for item in scope.items() {
+            self.item_lifts(item)?;
+        }
+        Ok(())
+    }
+
     fn generated_restriction(
         &self,
         b: &PrincipalBinding<'_>,
@@ -1635,14 +2009,10 @@ impl AccessPolicy for PolicySnapshot {
             Ok(domain) => domain,
             Err(err) => return Err(rule_error(compiled, model, err)),
         };
-        let mut combine = Combine {
-            snapshot: self,
-            groups: b.resolution().groups(),
-            groups_id: b.groups(),
-            shape: b.shape(),
-            stack: vec![(model.id, Operation::Write)],
-        };
-        let resolved = combine.resolve(model, domain)?;
+        // the company restriction is never lifted and holds for a scoped binding as for its base:
+        // what it references is resolved with the base shape
+        let mut combine = Combine::new(self, b, vec![(model.id, Operation::Write)]);
+        let resolved = combine.with_base(|c| c.resolve(model, domain))?;
         Ok(Some(
             AccessDomain::builder(resolved)
                 .rule(compiled.rule.clone())
@@ -1703,5 +2073,7 @@ impl AccessPolicy for PolicySnapshot {
 
 #[cfg(test)]
 mod field_tests;
+#[cfg(test)]
+mod scope_tests;
 #[cfg(test)]
 mod tests;

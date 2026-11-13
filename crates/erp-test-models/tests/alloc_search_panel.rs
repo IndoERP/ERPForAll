@@ -34,7 +34,7 @@ alloc::harness!(
     search_panel_method_10k_semantics,
 );
 
-// Measured maxima:; exact driver batch blocks excluded.
+// Measured maxima; exact driver batch blocks excluded.
 const RANGE_BUDGET: f64 = 433.0;
 const MULTI_BUDGET: f64 = 677.0;
 const RANGE_10K_BUDGET: f64 = 50_565.0;

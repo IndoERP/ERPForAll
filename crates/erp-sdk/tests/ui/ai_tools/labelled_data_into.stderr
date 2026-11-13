@@ -1,0 +1,7 @@
+error[E0277]: the trait bound `LabelledData: From<std::string::String>` is not satisfied
+ --> tests/ui/ai_tools/labelled_data_into.rs:7:36
+  |
+7 |     let _data: LabelledData = text.into();
+  |                                    ^^^^ the trait `From<std::string::String>` is not implemented for `LabelledData`
+  |
+  = note: required for `std::string::String` to implement `Into<LabelledData>`

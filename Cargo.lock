@@ -1113,12 +1113,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00d174d5400e5e8fd687ad1049e2f578285fa914201b1af7e8b112a4546bd826"
 
 [[package]]
+name = "erp-addon-account"
+version = "0.1.0"
+dependencies = [
+ "erp-sdk",
+ "toml 0.8.23",
+]
+
+[[package]]
+name = "erp-addon-analytic"
+version = "0.1.0"
+dependencies = [
+ "erp-sdk",
+]
+
+[[package]]
 name = "erp-addon-barcodes"
 version = "0.1.0"
 dependencies = [
  "erp-addon-base",
  "erp-addon-web",
  "erp-sdk",
+ "regex",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -1173,6 +1192,15 @@ dependencies = [
  "thiserror",
  "tokio",
  "toml 0.8.23",
+]
+
+[[package]]
+name = "erp-addon-product-mail"
+version = "0.1.0"
+dependencies = [
+ "erp-addon-mail",
+ "erp-addon-product",
+ "erp-sdk",
 ]
 
 [[package]]
@@ -1407,6 +1435,7 @@ dependencies = [
  "erp-modules",
  "erp-sdk",
  "erp-testkit",
+ "proptest",
  "tokio",
  "toml 0.8.23",
 ]
@@ -1426,12 +1455,14 @@ dependencies = [
  "oxc_minifier",
  "oxc_parser",
  "oxc_span",
+ "rust_xlsxwriter",
  "serde",
  "serde_json",
  "sha2 0.11.1",
  "tempfile",
  "thiserror",
  "tokio",
+ "zip",
 ]
 
 [[package]]
@@ -1450,6 +1481,7 @@ dependencies = [
  "getrandom 0.4.3",
  "infer",
  "object_store",
+ "rustix",
  "serde",
  "sha1",
  "sha2 0.11.1",
@@ -1467,11 +1499,14 @@ dependencies = [
  "addon-acceptance_notes",
  "clap",
  "deadpool-postgres",
+ "erp-addon-account",
+ "erp-addon-analytic",
  "erp-addon-barcodes",
  "erp-addon-barcodes_gs1_nomenclature",
  "erp-addon-base",
  "erp-addon-mail",
  "erp-addon-product",
+ "erp-addon-product-mail",
  "erp-addon-sample_library_wasm",
  "erp-addon-stock",
  "erp-addon-theme-office-blue",
@@ -1503,6 +1538,7 @@ dependencies = [
  "toml 0.8.23",
  "tracing",
  "wat",
+ "zip",
 ]
 
 [[package]]
@@ -1718,7 +1754,9 @@ dependencies = [
  "inventory",
  "linkme",
  "serde",
+ "serde_json",
  "thiserror",
+ "trybuild",
 ]
 
 [[package]]
@@ -1786,6 +1824,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-postgres",
+ "tokio-util",
  "toml 0.8.23",
  "tracing",
  "url",
@@ -1864,6 +1903,7 @@ dependencies = [
  "serde_json",
  "syn 2.0.119",
  "tempfile",
+ "time",
  "tokio",
  "tokio-postgres",
  "tower",
@@ -4229,6 +4269,15 @@ dependencies = [
  "serde",
  "serde_json",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "rust_xlsxwriter"
+version = "0.102.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ca3d0e879a578c1313c2800ab0c6c029d38eed18098675e50341a30d32372ed"
+dependencies = [
+ "zip",
 ]
 
 [[package]]

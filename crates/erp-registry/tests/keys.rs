@@ -1,5 +1,5 @@
-//! Business keys and row versions at registry build (D3; design note
-//! , §4.1, §10). Pure: no database.
+//! Business keys and row versions at registry build (D3,
+//! §4.1, §10). Pure: no database.
 #![allow(clippy::unwrap_used, reason = "tests")]
 
 use erp_fields::{ErrorKind, FieldType, OnDelete};

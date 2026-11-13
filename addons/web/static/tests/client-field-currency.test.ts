@@ -7,7 +7,7 @@ test("monetary safety validates decimal scale without binary multiplication roun
   expect(() => validateMonetaryAmount(0, 2)).not.toThrow();
   expect(() => validateMonetaryAmount(false, 2)).not.toThrow();
   for (const [value, digits] of [[90071992547409.92, 2], [0.125, 2], [1234567890123456, 0], [Infinity, 2]] as const) {
-    expect(() => validateMonetaryAmount(value, digits)).toThrowError(expect.objectContaining({ kind: "unsupported", message: "This amount cannot round-trip safely. Lossless monetary transport requires a later release." }));
+    expect(() => validateMonetaryAmount(value, digits)).toThrowError(expect.objectContaining({ kind: "unsupported", message: "This amount cannot round-trip safely. Lossless monetary transport is not available." }));
   }
 });
 
@@ -15,8 +15,8 @@ test("monetary safety validates decimal scale without binary multiplication roun
 test("unsafe record numbers are refused before field use and writes remain ambiguous", async () => {
   const { RpcClient } = await import("../src/client/transport.js");
   const rpc = new RpcClient(async () => new Response('[{"amount":1.00000000000000001}]', { headers: { "Content-Type": "application/json" } }), () => {});
-  await expect(rpc.call("fixture.record", "web_read", {})).rejects.toMatchObject({ kind: "unsupported", message: "This record contains a number that cannot round-trip safely. Lossless monetary transport requires a later release." });
-  await expect(rpc.call("fixture.record", "web_save", {}, { write: true })).rejects.toMatchObject({ kind: "ambiguous", message: "The change may have been saved, but its numeric response cannot round-trip safely. Check the record before another write. Lossless monetary transport requires a later release." });
+  await expect(rpc.call("fixture.record", "web_read", {})).rejects.toMatchObject({ kind: "unsupported", message: "This record contains a number that cannot round-trip safely. Lossless monetary transport is not available." });
+  await expect(rpc.call("fixture.record", "web_save", {}, { write: true })).rejects.toMatchObject({ kind: "ambiguous", message: "The change may have been saved, but its numeric response cannot round-trip safely. Check the record before another write. Lossless monetary transport is not available." });
 });
 
 /// (partial: authorized currency reads share requests and reject identity mismatches)

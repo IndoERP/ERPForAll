@@ -2,8 +2,7 @@
 //! [`EvalContext`] binds, and every parse and evaluation runs under [`EvalLimits`]: source size,
 //! nesting depth of the tree, of evaluation and of produced values, evaluation steps, and memory
 //! charged in bytes of deep size before any value is built. Exceeding a limit is an
-//! [`ExprError::LimitExceeded`]; nothing panics or aborts. Integers are 64-bit and checked
-//! .
+//! [`ExprError::LimitExceeded`]; nothing panics or aborts. Integers are 64-bit and checked.
 //!
 //! Layer L1: no I/O, no threads, no system clock (the host injects one), builds for
 //! `wasm32-wasip2`.

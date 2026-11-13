@@ -292,8 +292,7 @@ async fn spec_data_004_noupdate_records_are_skipped_in_update_mode_but_kept_load
     h.cleanup().await.unwrap();
 }
 
-/// A record without an id under `noupdate` is skipped in update mode and created in init mode
-/// .
+/// A record without an id under `noupdate` is skipped in update mode and created in init mode.
 #[tokio::test]
 async fn a_noupdate_record_without_an_id_is_skipped_in_update_mode_only() {
     test_env!(h, tx);
@@ -609,8 +608,7 @@ async fn spec_data_010_a_foreign_record_must_exist_unless_forcecreate_is_1() {
     }
 }
 
-/// A foreign id under `noupdate` with an explicit `forcecreate="0"` is skipped, not an error
-/// .
+/// A foreign id under `noupdate` with an explicit `forcecreate="0"` is skipped, not an error.
 #[tokio::test]
 async fn a_missing_foreign_record_with_forcecreate_0_under_noupdate_is_skipped() {
     test_env!(h, tx);
@@ -989,7 +987,7 @@ async fn spec_data_028_the_end_of_an_update_keeps_inherits_parents_of_loaded_chi
 }
 
 /// An external id without a `write_date` is judged by the loaded set like any other: the cleanup
-/// must not filter on `write_date < now`, which skips a NULL (`process_end`).
+/// must not filter on `write_date < now()`, which skips a NULL (`process_end`).
 #[tokio::test]
 async fn an_obsolete_external_id_without_write_date_is_still_removed() {
     test_env!(h, tx);

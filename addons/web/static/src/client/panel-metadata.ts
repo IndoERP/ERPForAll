@@ -9,7 +9,7 @@ type Category = Omit<Extract<WireSection,{kind:"category"}>,"field"> & {field:Fi
 type Filter = Omit<Extract<WireSection,{kind:"filter"}>,"field"|"domain"> & {field:Field;domain:{model:string;ast:ValidatedAst}|null};
 export type AdmittedSection = Category | Filter;
 export interface SectionsPanel {kind:"sections";version:1;viewTypes:readonly string[];sections:readonly AdmittedSection[];notice:string|null}
-export const unavailablePanelMessage="Search panel categories and filters require a later release.";
+export const unavailablePanelMessage="Search panel categories and filters are not available here.";
 const operators=new Set(["=","!=","<","<=",">",">=","=?","=like","=ilike","like","not like","ilike","not ilike","in","not in","child_of","parent_of"]);
 const path=/^[A-Za-z_][A-Za-z0-9_$]{0,62}(?:\.[A-Za-z_][A-Za-z0-9_$]{0,62})*$/;
 const viewKey=/^[a-z][a-z0-9_]{0,63}(?:\.[a-z][a-z0-9_]{0,63})?$/;

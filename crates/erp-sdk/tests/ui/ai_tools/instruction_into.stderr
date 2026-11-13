@@ -1,0 +1,7 @@
+error[E0277]: the trait bound `erp_sdk::ai::Instruction: From<std::string::String>` is not satisfied
+ --> tests/ui/ai_tools/instruction_into.rs:7:42
+  |
+7 |     let _instruction: Instruction = text.into();
+  |                                          ^^^^ the trait `From<std::string::String>` is not implemented for `erp_sdk::ai::Instruction`
+  |
+  = note: required for `std::string::String` to implement `Into<erp_sdk::ai::Instruction>`

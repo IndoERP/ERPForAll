@@ -5,26 +5,30 @@ summary = "The kernel of ERPForAll, needed for every installation"
 category = "Hidden"
 author = "Arkana"
 license = "MIT OR Apache-2.0"
-version = "1.8"
+version = "1.14"
 auto_install = true
 depends = []
-# Loaded by the data loader. ir.capability: which groups hold the core capabilities
-# . res.currency: ISO 4217 currencies. res.lang: base languages (en_US).
+# Loaded by the data loader. ir.capability: which groups hold the core capabilities.
+# res.currency: ISO 4217 currencies. res.lang: base languages (en_US).
 data = [
     "data/bootstrap_groups.xml",
     "data/ir.capability.csv",
     "data/res.currency.csv",
     "data/res_currency_rate_type_data.xml",
+    "data/res_country_data.xml",
+    "data/res.country.state.csv",
     "data/res.lang.csv",
     "data/bootstrap_company.xml",
     "data/partner_industries.xml",
     "data/res_partner_data.xml",
     "data/ir_config_parameter_data.xml",
+    "data/ir_approval_policy_data.xml",
     "security/ir.access.csv",
     "data/settings_views.xml",
     "data/user_preferences_views.xml",
     "data/password_change_views.xml",
     "data/currency_views.xml",
+    "data/country_views.xml",
     "data/partner_views.xml",
     "data/technical_views.xml",
 ]

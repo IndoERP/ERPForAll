@@ -1,6 +1,6 @@
 //! The value forms that read the database or the addon's files: the
 //! `search=` form, `type="file"`, `file=`, lists and tuples, and `type="xml"`/`"html"` with
-//! `%(xid)d` markers..
+//! `%(xid)d` markers.
 //!
 //! [`load_form`] answers for one `<field>` of a record; [`value_op`] for one `<value>` of a list
 //! or tuple (and, for `<function>`, one argument). Both return an `erp_fields::Value` that the

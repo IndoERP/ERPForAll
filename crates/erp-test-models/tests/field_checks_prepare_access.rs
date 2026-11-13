@@ -8,10 +8,13 @@
     reason = "tests"
 )]
 
+mod company_rows_support;
 mod users_support;
 
 use std::sync::Arc;
 
+use company_rows_support::UserKind::Internal;
+use company_rows_support::fixture_user;
 use erp_orm::{Fetch, Orm, PolicyProvider, SearchOptions, UserId};
 use erp_sdk::{Domain, Transaction, Value};
 use erp_security::resolver::Resolver;
@@ -76,25 +79,6 @@ async fn access(client: &Client, name: &str, model: i64, group: i64, ops: &str) 
     .await;
 }
 
-async fn new_user(client: &Client, login: &str, groups: &[i64]) -> i64 {
-    let uid = one(
-        client,
-        "INSERT INTO res_users (name, login, active, share) VALUES ($1, $1, true, false) \
-         RETURNING id::int8",
-        &[&login],
-    )
-    .await;
-    for g in groups {
-        exec(
-            client,
-            "INSERT INTO res_groups_users_rel (uid, gid) VALUES ($1, $2)",
-            &[&uid, g],
-        )
-        .await;
-    }
-    uid
-}
-
 async fn production_orm(h: &Harness) -> Orm {
     let pool = || erp_orm::pool::create_pool(h.db().config(), 2).unwrap();
     let source = PolicySource::build(Arc::clone(h.registry()), pool())
@@ -104,6 +88,8 @@ async fn production_orm(h: &Harness) -> Orm {
     Orm::builder(Arc::clone(h.registry()), pool())
         .policy(provider)
         .resolver(Resolver::id_order())
+        // boss switches to other users: the capability behind it (A4)
+        .impersonate_capability(&erp_security::principal::PRINCIPAL_IMPERSONATE)
         .build()
         .unwrap()
 }
@@ -130,18 +116,42 @@ async fn world() -> World {
     let manager = group(&client, "Access Rights", Some("base.group_erp_manager")).await;
     let extra = group(&client, "Extra", None).await;
     let system = group(&client, "Administrator", Some("base.group_system")).await;
-    new_user(&client, "admin", &[internal, system]).await;
+    let company = company_rows_support::fixture_company(&client).await;
+    fixture_user(&client, "admin", &[internal, system], Internal, company).await;
     let users_model = model(&client, "res.users", "User").await;
     let groups_model = model(&client, "res.groups", "Access Groups").await;
+    // installation emits the generated company restrictions; these databases have no installation
+    company_rows_support::insert_generated(
+        &client,
+        h.registry(),
+        &company_rows_support::PARTNER_AND_USERS,
+    )
+    .await;
+    // base's row for the capability behind `with_user` to another user (A4): boss is
+    // an administrator, so its switches to `me` and `boss2` are admitted
+    exec(
+        &client,
+        "INSERT INTO ir_capability (name, groups) VALUES ('principal.impersonate', \
+         'base.group_system')",
+        &[],
+    )
+    .await;
     access(&client, "internal read users", users_model, internal, "r").await;
     access(&client, "managers write users", users_model, manager, "u").await;
     access(&client, "internal read groups", groups_model, internal, "r").await;
     access(&client, "managers write groups", groups_model, manager, "u").await;
     // user management is a Settings (base.group_system) right here: it exempts the field mask of
     // res.users, which these cases rely on for `group_ids`
-    let boss = new_user(&client, "boss", &[internal, manager, system]).await;
-    let me = new_user(&client, "me", &[internal]).await;
-    let boss2 = new_user(&client, "boss2", &[internal, manager]).await;
+    let boss = fixture_user(
+        &client,
+        "boss",
+        &[internal, manager, system],
+        Internal,
+        company,
+    )
+    .await;
+    let me = fixture_user(&client, "me", &[internal], Internal, company).await;
+    let boss2 = fixture_user(&client, "boss2", &[internal, manager], Internal, company).await;
     let orm = production_orm(&h).await;
     World {
         boss2,

@@ -182,6 +182,11 @@ pub struct JobKindDecl {
     pub max_concurrency: Option<NonZeroU32>,
     /// Outbox events that enqueue this kind (refused until).
     pub triggers: &'static [OutboxTrigger],
+    /// An elevated kind runs as an elevated principal against stores or owner state and may run
+    /// only on an isolated maintenance runner. A runner built with
+    /// [`JobRunnerBuilder::exclude_elevated`](super::JobRunnerBuilder::exclude_elevated) never
+    /// claims it. Default `false`.
+    pub elevated: bool,
 }
 
 impl JobKindDecl {
@@ -203,6 +208,7 @@ impl JobKindDecl {
             isolation: KindIsolation::RepeatableRead,
             max_concurrency: None,
             triggers: &[],
+            elevated: false,
         }
     }
 
@@ -280,6 +286,13 @@ impl JobKindDecl {
     #[must_use]
     pub const fn triggers(mut self, triggers: &'static [OutboxTrigger]) -> Self {
         self.triggers = triggers;
+        self
+    }
+
+    /// Mark the kind elevated: only an isolated maintenance runner may run it.
+    #[must_use]
+    pub const fn elevated(mut self) -> Self {
+        self.elevated = true;
         self
     }
 

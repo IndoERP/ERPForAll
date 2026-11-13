@@ -93,6 +93,13 @@ pub struct IrModelFields {
     /// Translatable flag.
     #[field(boolean, default = false)]
     pub translate: bool,
+    /// Selection values for selection fields.
+    #[field(
+        one2many,
+        comodel = "ir.model.fields.selection",
+        inverse_name = "field_id"
+    )]
+    pub selection_ids: Vec<RecId>,
 }
 
 /// `ir.model.relation`.
@@ -107,4 +114,38 @@ pub struct IrModelRelation {
     /// Module name.
     #[field(char)]
     pub module: Option<Arc<str>>,
+}
+
+/// `ir.model.fields.selection`.
+#[model(
+    name = "ir.model.fields.selection",
+    description = "Fields Selection",
+    order = "sequence, id",
+    constraints = [
+        (
+            "_selection_field_uniq",
+            "UNIQUE (field_id, value)",
+            "Selections values must be unique per field"
+        )
+    ]
+)]
+pub struct IrModelFieldsSelection {
+    /// Field reference.
+    #[field(
+        many2one,
+        comodel = "ir.model.fields",
+        required = true,
+        ondelete = "cascade",
+        index = true
+    )]
+    pub field_id: Option<RecId>,
+    /// Stored selection value key.
+    #[field(char, required = true)]
+    pub value: Option<Arc<str>>,
+    /// Selection display label (translated).
+    #[field(char, translate = true, required = true)]
+    pub name: Option<Arc<str>>,
+    /// Display sequence order.
+    #[field(integer, default = 1000)]
+    pub sequence: i32,
 }

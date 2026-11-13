@@ -1,4 +1,4 @@
-//! Company consistency (`_check_company`, CRUD §4.9, REL §4.12;, design note
+//! Company consistency (`_check_company`, CRUD §4.9, REL §4.12,
 //! ).
 //!
 //! On a model whose `check_company_auto` is on (declared, or by default on a company-scoped model
@@ -19,6 +19,12 @@
 //! `parent_of` match needs. When everything is cached it costs nothing. A one2many field, or a
 //! many2many with a field domain, that is not cached is read through the x2many cache first,
 //! which can cost statements of its own (the default checks neither).
+//!
+//! A checked field whose target has its company by `_inherits` delegation (amendment A2,
+//! `product.product` and its template) adds no branch to that statement: once the statement has
+//! given every target, their companies are read through the ORM's delegated read, an extra read
+//! only when such a field is checked and the companies are not cached. That read follows the
+//! ordinary read path, which flushes only a database-generated column it reads.
 //!
 //! Pending writes are never flushed for the check: every value written in the transaction is in
 //! the cache and wins over the database, and no marked id has a pending value.
@@ -77,6 +83,9 @@ struct Local {
     many: FxHashMap<(ModelId, i64), Vec<i64>>,
     /// Ancestor ids (self included) by company.
     paths: FxHashMap<i64, Vec<i64>>,
+    /// The company (`None` for none) of target records whose company comes by delegation, by
+    /// (comodel, id), read through the ORM after the statement (A2).
+    delegated: FxHashMap<(ModelId, i64), Option<i64>>,
 }
 
 /// Ids to read, by purpose.
@@ -228,7 +237,7 @@ impl Transaction {
             return Ok(());
         };
         let env = records.env().clone();
-        let su = records.sudo(true);
+        let su = records.engine_sudo();
         let su_env = su.env().clone();
         // the validated current company, also under sudo (review S1)
         let current: Option<i64> = self.companies(&env).await?.first().map(|c| c.get());
@@ -241,7 +250,7 @@ impl Transaction {
         for pf in &plan.fields {
             // the checked field itself may be a stored compute with a pending value
             settle.push((plan.model, pf.field));
-            settle.push((pf.comodel, pf.target.field()));
+            settle.push(Self::target_column(&registry, pf)?);
         }
         for (m, f) in settle {
             self.settle(&su_env, m, f).await?;
@@ -250,6 +259,31 @@ impl Transaction {
         self.company_prefetch_other(&su, &plan, &ids).await?;
 
         let mut local = Local::default();
+        for field in plan.fields.iter().filter(|field| field.company_dependent) {
+            if current.is_none()
+                && records.rec_ids().iter().all(|id| {
+                    matches!(
+                        self.cache.get(plan.model, field.field, *id),
+                        Some(Cell::Null)
+                    )
+                })
+            {
+                // A create with omitted properties seeds known SQL NULLs. There is no link
+                // to check and no company whose fallback to project.
+                // Unknown or non-null storage must still go through strict preparation.
+                let links = local.links.entry((plan.model, field.field)).or_default();
+                for id in records.rec_ids() {
+                    links.insert(id.get(), Vec::new());
+                }
+                continue;
+            }
+            self.ensure(&su, field.field).await?;
+            let values = self.cells_of(&su_env, plan.model, field.field, records.rec_ids())?;
+            let links = local.links.entry((plan.model, field.field)).or_default();
+            for (id, value) in records.rec_ids().iter().zip(values) {
+                links.insert(id.get(), id_values(&value));
+            }
+        }
         let requests = self.company_requests(&registry, &plan, &ids, current, &local)?;
         if !requests.is_empty() {
             let size = chunk_size(self)?;
@@ -258,6 +292,9 @@ impl Transaction {
                     .await?;
             }
         }
+        // every target is known now: the delegated companies are read through the ORM
+        self.company_delegated(&su_env, &registry, &plan, &ids, &mut local)
+            .await?;
         let found = self.company_decide(&registry, &plan, &ids, current, &local)?;
         if found.is_empty() {
             return Ok(());
@@ -305,12 +342,28 @@ impl Transaction {
             let comodel = crate::relational::comodel_of(registry, f)?;
             // the registry refuses a checked field whose target has no company scope: reaching
             // here is a broken invariant, never a silent skip (review F3)
-            let (target, matching) = match comodel.company_scope {
-                Some(CompanyScope::Single { field, matching }) => {
+            let (target, matching) = match (comodel.company_scope, comodel.company_delegation) {
+                (Some(CompanyScope::Single { field, matching }), _) => {
                     (TargetScope::Single(field), matching.into())
                 }
-                Some(CompanyScope::Many { field, matching }) => {
+                (Some(CompanyScope::Many { field, matching }), _) => {
                     (TargetScope::Many(field), matching.into())
+                }
+                // the target's company comes by `_inherits` delegation (A2)
+                (None, Some(delegation)) => {
+                    if f.company_dependent {
+                        // checked against the current company through prepared links, a path
+                        // that does not read through a delegation
+                        return Err(Error::programming(format!(
+                            "{}.{} is company-dependent and its target {} has its company through \
+                             delegation; not supported",
+                            spec.name, f.name, comodel.name
+                        )));
+                    }
+                    (
+                        TargetScope::Delegated(delegation.field),
+                        delegation.matching.into(),
+                    )
                 }
                 _ => {
                     return Err(Error::programming(format!(
@@ -420,6 +473,13 @@ impl Transaction {
         pf: &PlanField,
         id: RecId,
     ) -> Option<Vec<i64>> {
+        if pf.company_dependent {
+            return local
+                .links
+                .get(&(plan.model, pf.field))?
+                .get(&id.get())
+                .cloned();
+        }
         match self.cache.get(plan.model, pf.field, id) {
             Some(c) => Some(id_values(&c)),
             None => local
@@ -447,7 +507,121 @@ impl Transaction {
                 Some(c) => Some((None, id_values(&c))),
                 None => local.many.get(&(pf.comodel, id)).map(|v| (None, v.clone())),
             },
+            // read by `company_delegated` after the statement
+            TargetScope::Delegated(_) => local
+                .delegated
+                .get(&(pf.comodel, id))
+                .map(|company| (*company, Vec::new())),
         }
+    }
+
+    /// The column that holds the companies of `pf`'s targets: the comodel's own, or for a target
+    /// whose company comes by delegation the storing model's (A2).
+    ///
+    /// # Errors
+    ///
+    /// `Programming` when the comodel has no delegation or it does not end at a model scoped by
+    /// a `company_id` (registry invariants).
+    fn target_column(registry: &Registry, pf: &PlanField) -> Result<Key> {
+        match pf.target {
+            TargetScope::Single(field) | TargetScope::Many(field) => Ok((pf.comodel, field)),
+            TargetScope::Delegated(_) => {
+                let comodel = registry.model_by_id(pf.comodel);
+                let delegation = comodel.company_delegation.ok_or_else(|| {
+                    Error::programming(format!(
+                        "{} is checked through a company delegation it does not have (registry \
+                         invariant)",
+                        comodel.name
+                    ))
+                })?;
+                let storing = registry.model_by_id(delegation.storing_model);
+                match storing.company_scope {
+                    Some(CompanyScope::Single { field, .. }) => Ok((storing.id, field)),
+                    _ => Err(Error::programming(format!(
+                        "the company delegation of {} ends at {}, which is not scoped by a \
+                         company_id (registry invariant)",
+                        comodel.name, storing.name
+                    ))),
+                }
+            }
+        }
+    }
+
+    /// The companies of the targets of every plan field whose target has its company by
+    /// delegation (A2), read through the ORM's delegated read as superuser, so a pending
+    /// write on the storing model counts, into `local.delegated`. Runs after the statement: every
+    /// target is known then.
+    ///
+    /// # Errors
+    ///
+    /// `Programming` when the read returns no value for a target, or a value that is not a company
+    /// reference; failures of the read.
+    async fn company_delegated(
+        &mut self,
+        su_env: &Env,
+        registry: &Registry,
+        plan: &Plan,
+        ids: &[RecId],
+        local: &mut Local,
+    ) -> Result<()> {
+        for pf in &plan.fields {
+            let field = match pf.target {
+                TargetScope::Delegated(field) => field,
+                // read by the statement
+                TargetScope::Single(_) | TargetScope::Many(_) => continue,
+            };
+            let mut seen: FxHashSet<i64> = FxHashSet::default();
+            let mut wanted: Vec<Option<RecId>> = Vec::new();
+            for id in ids {
+                // a record the statement found no row for (deleted meanwhile): `company_decide`
+                // reports it as a missing record, the same kind as without a delegated field
+                let Some(targets) = self.targets_of(plan, local, pf, *id) else {
+                    continue;
+                };
+                for t in targets {
+                    if local.delegated.contains_key(&(pf.comodel, t)) || !seen.insert(t) {
+                        continue;
+                    }
+                    // a target that is not a database record has no company to read:
+                    // `company_decide` reports it as a missing target, as for a direct target
+                    if let Some(rec) = RecId::from_real(t) {
+                        wanted.push(Some(rec));
+                    }
+                }
+            }
+            if wanted.is_empty() {
+                continue;
+            }
+            let comodel = registry.model_by_id(pf.comodel);
+            let cells = self
+                .cells_by_id(su_env, (pf.comodel, field), &wanted)
+                .await?;
+            for rec in wanted.iter().flatten() {
+                let company = match cells.get(rec) {
+                    Some(Cell::Id(company)) => Some(*company),
+                    Some(Cell::Null) => None,
+                    Some(other) => {
+                        return Err(Error::programming(format!(
+                            "{}.{} of record {} read as {other:?} through its delegation, not a \
+                             company reference",
+                            comodel.name,
+                            comodel.field_by_id(field).name,
+                            rec.get()
+                        )));
+                    }
+                    None => {
+                        return Err(Error::programming(format!(
+                            "reading {}.{} through its delegation gave no value for record {}",
+                            comodel.name,
+                            comodel.field_by_id(field).name,
+                            rec.get()
+                        )));
+                    }
+                };
+                local.delegated.insert((pf.comodel, rec.get()), company);
+            }
+        }
+        Ok(())
     }
 
     /// The ancestor ids of company `id` (itself included); `None` while unknown.
@@ -516,11 +690,9 @@ impl Transaction {
                     Some(t) => wanted.extend(t),
                     None => match pf.kind {
                         _ if pf.company_dependent => {
+                            // the links of every checked record were read into the map above
                             return Err(Error::programming(format!(
-                                "the company check of {}.{} is not supported until a later release: it is \
-                                 company-dependent, its value is not cached, and per-company \
-                                 values cannot be read from the database before per-company \
-                                 storage exists",
+                                "the company check of {}.{} found no link for a checked record (internal invariant)",
                                 spec.name, fs.name
                             )));
                         }
@@ -541,17 +713,21 @@ impl Transaction {
                 }
             }
             let target_key = (pf.comodel, pf.target.field());
-            let mut missing_targets: Vec<i64> = Vec::new();
-            for t in wanted {
-                if self.target_companies(local, pf, t).is_none() {
-                    missing_targets.push(t);
+            let target_requests = match pf.target {
+                TargetScope::Single(_) => Some(&mut req.cols),
+                TargetScope::Many(_) => Some(&mut req.many),
+                // no target branch: read through the delegation once the statement has given
+                // every target (`company_delegated`)
+                TargetScope::Delegated(_) => None,
+            };
+            if let Some(requests) = target_requests {
+                let targets = requests.entry(target_key).or_default();
+                for t in wanted {
+                    if self.target_companies(local, pf, t).is_none() {
+                        targets.insert(t);
+                    }
                 }
             }
-            let targets = match pf.target {
-                TargetScope::Single(_) => req.cols.entry(target_key).or_default(),
-                TargetScope::Many(_) => req.many.entry(target_key).or_default(),
-            };
-            targets.extend(missing_targets);
             if via {
                 match pf.target {
                     TargetScope::Single(_) => {
@@ -560,6 +736,8 @@ impl Transaction {
                     TargetScope::Many(_) => {
                         req.via_many.insert((target_key, links_key));
                     }
+                    // the link rows are read (they give the targets), no target branch
+                    TargetScope::Delegated(_) => {}
                 }
             }
         }
@@ -855,7 +1033,13 @@ impl Transaction {
             }
             for pf in &plan.fields {
                 read.push((plan.model, pf.field));
-                read.push((pf.comodel, pf.target.field()));
+                match pf.target {
+                    TargetScope::Single(field) | TargetScope::Many(field) => {
+                        read.push((pf.comodel, field));
+                    }
+                    // the statement reads nothing of a delegated target
+                    TargetScope::Delegated(_) => {}
+                }
             }
             if let Some(parents) = plan.parents {
                 read.push(parents);
@@ -990,11 +1174,9 @@ impl Transaction {
                     match current {
                         Some(c) => vec![c],
                         None => {
-                            return Err(CompanyError::NoCurrentCompany {
-                                model: spec.name,
-                                field: fs.name,
-                            }
-                            .into());
+                            return Err(Error::validation(
+                                "company-dependent fields require a current company",
+                            ));
                         }
                     }
                 } else {
@@ -1034,7 +1216,9 @@ impl Transaction {
                         },
                     )?;
                     let target = match pf.target {
-                        TargetScope::Single(_) => TargetCompanies::One(one),
+                        TargetScope::Single(_) | TargetScope::Delegated(_) => {
+                            TargetCompanies::One(one)
+                        }
                         TargetScope::Many(_) => TargetCompanies::Many(&many),
                     };
                     if !allowed(pf.matching, &linking, target)? {

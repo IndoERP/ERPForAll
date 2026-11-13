@@ -3503,3 +3503,73 @@ async fn json2_copy_methods_bad_parameters() {
     }
     h.cleanup().await.unwrap();
 }
+
+#[tokio::test]
+async fn test_rpc_x2many_short_commands_res_users() {
+    let h = harness_with(
+        &[&erp_test_models::test_rel::ADDON],
+        RpcConfig::default(),
+        false,
+    )
+    .await;
+    let b = sql(
+        &h,
+        "INSERT INTO test_rel_base (name) VALUES ('b1') RETURNING id::text",
+    )
+    .await;
+    let bid: i64 = b[0].as_ref().unwrap().parse().unwrap();
+    let t = sql(
+        &h,
+        "INSERT INTO test_rel_tag (name) VALUES ('t1') RETURNING id::text",
+    )
+    .await;
+    let tid: i64 = t[0].as_ref().unwrap().parse().unwrap();
+
+    // 1. Valid short command [[4, id]] on write succeeds with 200
+    let r = call(
+        &h,
+        "/json/2/test_rel.base/write",
+        &format!(r#"{{"ids": [{bid}], "vals": {{"tag_ids": [[4, {tid}]]}}}}"#),
+        alice(),
+    )
+    .await;
+    assert_eq!(
+        r.status(),
+        200,
+        "status: {}, body: {}",
+        r.status(),
+        String::from_utf8_lossy(r.body())
+    );
+
+    // 2. Invalid short command [[4]] fails with 422
+    let r = call(
+        &h,
+        "/json/2/test_rel.base/write",
+        &format!(r#"{{"ids": [{bid}], "vals": {{"tag_ids": [[4]]}}}}"#),
+        alice(),
+    )
+    .await;
+    assert_error(
+        &r,
+        422,
+        "erp.exceptions.ValidationError",
+        "Wrong value for test_rel.base.tag_ids: [4]",
+    );
+
+    // 3. Invalid over-long command [[4, 1, 0, 0]] fails with 422
+    let r = call(
+        &h,
+        "/json/2/test_rel.base/write",
+        &format!(r#"{{"ids": [{bid}], "vals": {{"tag_ids": [[4, {tid}, 0, 0]]}}}}"#),
+        alice(),
+    )
+    .await;
+    assert_error(
+        &r,
+        422,
+        "erp.exceptions.ValidationError",
+        &format!("Wrong value for test_rel.base.tag_ids: [4, {tid}, 0, 0]"),
+    );
+
+    h.cleanup().await.unwrap();
+}

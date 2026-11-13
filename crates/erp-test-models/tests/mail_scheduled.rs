@@ -1,7 +1,7 @@
 //! scheduled messages for record threads (`mail.scheduled.message`), on the
 //! production policy (compiled from `ir.access` rows, the principal resolver, the job runner with
-//! the real principal resolver). Spec cases and
-//! , design.
+//! the real principal resolver). Spec,
+//! design.
 //!
 //! The test lives here and not under `addons/mail/tests` because an addon crate may not depend on
 //! `erp-security` (`scripts/check-layers.py`, rule 1). The shipped rows of
@@ -16,9 +16,13 @@
     reason = "tests"
 )]
 
+mod company_rows_support;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use company_rows_support::UserKind::{External, Internal};
+use company_rows_support::fixture_user_with_partner;
 use erp_addon_mail::MailThread;
 use erp_addon_mail::ScheduledMessageRequest as ScheduleRequest;
 use erp_addon_mail::scheduled::{MODEL, SEND_KIND};
@@ -186,32 +190,6 @@ async fn rule(
     .await;
 }
 
-/// A user with its own partner, in `groups`; returns (user, partner).
-async fn user(client: &Client, login: &str, groups: &[i64], share: bool) -> (i64, i64) {
-    let partner = one(
-        client,
-        "INSERT INTO res_partner (name, active) VALUES ($1, true) RETURNING id::int8",
-        &[&login],
-    )
-    .await;
-    let uid = one(
-        client,
-        "INSERT INTO res_users (name, login, active, share, partner_id) \
-         VALUES ($1, $1, true, $2, $3) RETURNING id::int8",
-        &[&login, &share, &partner],
-    )
-    .await;
-    for g in groups {
-        exec(
-            client,
-            "INSERT INTO res_groups_users_rel (uid, gid) VALUES ($1, $2)",
-            &[&uid, g],
-        )
-        .await;
-    }
-    (uid, partner)
-}
-
 struct World {
     h: Harness,
     orm: Orm,
@@ -333,14 +311,36 @@ async fn world() -> World {
     )
     .await;
     rule(&client, "admin tickets", ticket, g_system, "crud", None).await;
-    let ann = user(&client, "ann", &[g_user], false).await;
-    let bob = user(&client, "bob", &[g_user], false).await;
-    let adm = user(&client, "adm", &[g_user, g_system, g_manager], false).await;
-    let por = user(&client, "por", &[g_portal], true).await;
-    let ned = user(&client, "ned", &[g_user, g_partner_writers], false).await;
+    let company = company_rows_support::fixture_company(&client).await;
+    let ann = fixture_user_with_partner(&client, "ann", &[g_user], Internal, company).await;
+    let bob = fixture_user_with_partner(&client, "bob", &[g_user], Internal, company).await;
+    let adm = fixture_user_with_partner(
+        &client,
+        "adm",
+        &[g_user, g_system, g_manager],
+        Internal,
+        company,
+    )
+    .await;
+    let por = fixture_user_with_partner(&client, "por", &[g_portal], External, company).await;
+    let ned = fixture_user_with_partner(
+        &client,
+        "ned",
+        &[g_user, g_partner_writers],
+        Internal,
+        company,
+    )
+    .await;
     // partners are threads whose post access is read (`res.partner` overrides the hook): internal
     // users and portal users may read them, only the writers may write
     let partner_model = model_row(&client, "res.partner", "Contact").await;
+    // installation emits the generated company restrictions; this database has no installation
+    company_rows_support::insert_generated(
+        &client,
+        h.registry(),
+        &company_rows_support::PARTNER_AND_USERS,
+    )
+    .await;
     rule(
         &client,
         "internal partners",
@@ -370,7 +370,7 @@ async fn world() -> World {
     .await;
     let p1 = one(
         &client,
-        "INSERT INTO res_partner (name, active) VALUES ('contact', true) RETURNING id::int8",
+        "INSERT INTO res_partner (name, active, partner_share) VALUES ('contact', true, false) RETURNING id::int8",
         &[],
     )
     .await;
@@ -1695,7 +1695,7 @@ async fn the_methods_send_a_bounded_number_of_statements() {
             ids.push(
                 one(
                     &w.client,
-                    "INSERT INTO res_partner (name, active) VALUES ($1, true) RETURNING id::int8",
+                    "INSERT INTO res_partner (name, active, partner_share) VALUES ($1, true, false) RETURNING id::int8",
                     &[&format!("recipient {n}")],
                 )
                 .await,

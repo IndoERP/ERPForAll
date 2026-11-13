@@ -20,6 +20,8 @@ export interface ConfirmationOptions {
   readonly title?: string; readonly message: string; readonly confirm?: DialogCallback;
   readonly cancel?: DialogCallback; readonly dismiss?: DialogCallback;
   readonly confirmLabel?: string; readonly cancelLabel?: string; readonly contentClass?: string;
+  /** A destructive confirmation (delete): the confirm action uses the danger style, not the accent fill. */
+  readonly destructive?: boolean;
   readonly signal?: AbortSignal;
 }
 interface Entry { readonly handle: DialogHandle; readonly finish: () => void }
@@ -96,6 +98,7 @@ export class DialogService {
     if (this.stack.length >= 8) throw new ClientError("validation", "At most 8 dialogs may be open.");
     if (this.stack.some(entry => entry.handle.dialog === dialog)) throw new ClientError("validation", "The dialog is already attached.");
     const priorParent = this.active();
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
     if (priorParent) { priorParent.inert = true; priorParent.setAttribute("inert", ""); priorParent.setAttribute("aria-hidden", "true"); }
     if (!dialog.isConnected) document.body.append(dialog);
     dialog.dataset["messageDialog"] = "";
@@ -114,6 +117,8 @@ export class DialogService {
       dialog.removeEventListener("cancel", cancel); dialog.removeEventListener("close", finish); hotkeys?.dispose();
       if (dialog.open) dialog.close();
       dialog.remove(); trap?.dispose(); this.publishActive();
+      // Focus returns to the opener (the native dialog does it too; this covers a removed-before-closed shell).
+      if (!this.active() && opener?.isConnected) opener.focus();
       document.body.classList.toggle("message-modal-open", document.querySelector("dialog[data-message-dialog]") !== null);
       try { options.onClose?.(); } catch (error) { this.report(error); }
     };
@@ -136,10 +141,11 @@ export class DialogService {
       document.body.classList.add("message-modal-open");
       // A body control marked `autofocus` (the record picker's search box) takes the first focus instead of the
       // header's close button, the trap's default first candidate.
-      const preferred = dialog.querySelector<HTMLElement>("[autofocus]:not([disabled])");
+      const preferred = dialog.querySelector<HTMLElement>("[autofocus]:not([disabled])") ?? dialog.querySelector<HTMLElement>(".message-dialog-footer [data-default-action]:not([disabled])");
       trap = createFocusTrap(dialog, { onEscape: dismiss, ...(preferred ? { initialFocus: preferred } : {}) });
       hotkeys = createHotkeyController(dialog, { report: this.report, bindings: () => {
-        const first = [...dialog.querySelectorAll<HTMLButtonElement>(".message-dialog-footer button")].find(control => !control.hidden && !control.closest("[hidden],[inert]") && getComputedStyle(control).display !== "none");
+        const usable = [...dialog.querySelectorAll<HTMLButtonElement>(".message-dialog-footer button")].filter(control => !control.hidden && !control.closest("[hidden],[inert]") && getComputedStyle(control).display !== "none");
+        const first = usable.find(control => control.hasAttribute("data-default-action")) ?? usable[0];
         return first ? [{kind:"dom",chord:"ctrl+enter",target:first,allowEditable:true}] : [];
       } });
       this.publishActive();
@@ -150,10 +156,11 @@ export class DialogService {
   confirm(options: ConfirmationOptions): ConfirmationHandle { return this.confirmation(options, false); }
   alert(options: ConfirmationOptions): ConfirmationHandle { return this.confirmation(options, true); }
   private confirmation(options: ConfirmationOptions, alert: boolean): ConfirmationHandle {
-    messageOptions(options, ["title", "message", "confirm", "cancel", "dismiss", "confirmLabel", "cancelLabel", "contentClass", "signal"], "Confirmation");
+    messageOptions(options, ["title", "message", "confirm", "cancel", "dismiss", "confirmLabel", "cancelLabel", "contentClass", "destructive", "signal"], "Confirmation");
     callbacks(options, ["confirm", "cancel", "dismiss"]); messageSignal(options.signal);
     for (const key of ["title", "confirmLabel", "cancelLabel"] as const) if (options[key] !== undefined) boundedText(options[key], key);
     boundedText(options.message, "message");
+    if (options.destructive !== undefined && typeof options.destructive !== "boolean") throw new ClientError("validation", "Dialog destructive must be a boolean.");
     if (options.contentClass !== undefined && (typeof options.contentClass !== "string" || !/^[a-zA-Z0-9_ -]{1,256}$/.test(options.contentClass))) throw new ClientError("validation", "Invalid dialog content class.");
     const body = el("p", options.message);
     const footer = el("div", undefined, "actions");
@@ -174,8 +181,11 @@ export class DialogService {
       finally { pending = false; controls.forEach((control, index) => { control.disabled = previous[index]!; }); }
       return false;
     };
-    footer.append(button(options.confirmLabel ?? "OK", () => { void run("confirm", options.confirm); }, "primary"));
+    // The primary (or destructive) action is last, right-aligned; Ctrl+Enter and the initial focus go to it.
     if (!alert || options.cancel) footer.append(button(options.cancelLabel ?? "Cancel", () => { void run("cancel", options.cancel); }));
+    const confirmButton = button(options.confirmLabel ?? "OK", () => { void run("confirm", options.confirm); }, options.destructive ? "danger" : "primary");
+    confirmButton.dataset["defaultAction"] = "";
+    footer.append(confirmButton);
     handle = this.open({ title: options.title ?? (alert ? "Notice" : "Confirm"), body, size: "sm", footer,
       dismiss: () => run("dismiss", options.dismiss ?? options.cancel),
       onClose: () => { if (!settled) { settled = true; resolve("dismiss"); } },

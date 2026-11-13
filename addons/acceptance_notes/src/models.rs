@@ -17,6 +17,9 @@ pub struct Note {
     /// Plain text content; never interpreted as HTML.
     #[field(text)]
     pub body: Option<Arc<str>>,
+    /// Rich HTML content; sanitized by server before persistence.
+    #[field(html)]
+    pub rich_body: Option<Arc<str>>,
     /// Current company, validated again by ORM access and relation consistency.
     #[field(
         many2one,

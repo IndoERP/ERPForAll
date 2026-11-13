@@ -84,7 +84,7 @@ fn row_indices(n: usize) -> Result<Vec<u32>> {
 
 /// `base.exists`: see the module documentation.
 async fn exists_query(tx: &mut Transaction, records: &Records) -> Result<Records> {
-    tx.check_records(records)?;
+    tx.admit_records(records).await?;
     let real = distinct_real(records);
     if real.is_empty() {
         return Ok(records.clone());
@@ -180,7 +180,7 @@ impl Records {
         tx: &mut Transaction,
         allow_referencing: bool,
     ) -> Result<()> {
-        tx.check_records(self)?;
+        tx.admit_records(self).await?;
         let ids = distinct_real(self);
         if ids.is_empty() {
             return Ok(());
@@ -209,7 +209,7 @@ impl Records {
         allow_referencing: bool,
         limit: Option<u64>,
     ) -> Result<Records> {
-        tx.check_records(self)?;
+        tx.admit_records(self).await?;
         let new_ids: Vec<RecId> = self
             .rec_ids()
             .iter()
@@ -475,8 +475,8 @@ fn group_positions<K: Eq + Hash>(keys: impl IntoIterator<Item = K>) -> Vec<(K, V
 impl Records {
     /// `grouped('field')`: the records partitioned by the record-format value of `field`, keys in
     /// first-occurrence order, each group in this set's order with duplicates and sharing this
-    /// set's prefetch set, so a field loaded through one group is loaded for all
-    /// . A dotted name is not a path: it is an unknown field. An empty recordset
+    /// set's prefetch set, so a field loaded through one group is loaded for all.
+    /// A dotted name is not a path: it is an unknown field. An empty recordset
     /// gives no groups and reads nothing. No aggregation (see `read_group`).
     pub async fn grouped(
         &self,
@@ -850,7 +850,7 @@ impl Records {
         if self.len() < 2 {
             return Ok(self.clone());
         }
-        tx.check_records(self)?;
+        tx.admit_records(self).await?;
         let order = order.unwrap_or_else(|| model_order(self.spec()));
         let mut expanding = Vec::new();
         let terms = order_ranks(tx, self, order, &mut expanding, false).await?;

@@ -199,14 +199,20 @@ async fn create_guarded(
     tx.check_capture_create(records, &vals_list)?;
     crate::event_namespace::check_create_capture(records, &vals_list)?;
     if vals_list.is_empty() {
-        return crate::write::create_records(
+        let (created, _, after) = crate::write::create_records(
             tx,
             records,
             vals_list,
             crate::write::AfterInsert::Nothing,
         )
-        .await
-        .map(|(created, _)| created);
+        .await?;
+        // deferred inverses that nobody runs would be lost without a word
+        if after.is_some() {
+            return Err(Error::programming(
+                "create_records deferred work for a create that asked for none",
+            ));
+        }
+        return Ok(created);
     }
     crate::database_generated::check_write_names(
         tx,
@@ -379,7 +385,8 @@ async fn create_values(
     } else {
         crate::write::AfterInsert::X2many(&postponed)
     };
-    let (created, check) = crate::write::create_records(tx, records, rows, after).await?;
+    let (created, check, after_create) =
+        crate::write::create_records(tx, records, rows, after).await?;
     let model = created.model_id();
     // new rows: memoized checks whose predicates read this model are stale
     tx.access_written(model, None);
@@ -408,7 +415,7 @@ async fn create_values(
             .copied()
             .filter(|i| !i.is_new())
             .collect();
-        let su = created.sudo(true).browse_ids(real);
+        let su = created.engine_sudo().browse_ids(real);
         for (field, o2ms) in over {
             let mut seen: FxHashSet<RecId> = FxHashSet::default();
             let owners: Vec<RecId> = su
@@ -453,6 +460,9 @@ async fn create_values(
         let given: FxHashSet<FieldId> = fields.iter().copied().collect();
         tx.run_constraints(&created, &given, &FxHashSet::default())
             .await?;
+    }
+    if let Some(after_create) = after_create {
+        after_create.run(tx, &created).await?;
     }
     tx.check_company(&created, None).await?;
     // Fused
@@ -670,7 +680,7 @@ async fn write_values(tx: &mut Transaction, records: &Records, mut vals: RawVals
         {
             let mut old = tx.old_values(model, field.id, records.rec_ids());
             if old.iter().any(Option::is_none) && tx.inverse_has_dependents(model, field.id) {
-                records.sudo(true).fetch(tx, Some(&[field.name])).await?;
+                records.engine_sudo().fetch(tx, Some(&[field.name])).await?;
                 old = tx.old_values(model, field.id, records.rec_ids());
             }
             m2o_changes.push((field.id, old, cell.clone()));
@@ -716,7 +726,7 @@ async fn write_values(tx: &mut Transaction, records: &Records, mut vals: RawVals
         .filter(|i| !i.is_new())
         .collect();
     if !real.is_empty() {
-        let su = records.sudo(true).browse_ids(real);
+        let su = records.engine_sudo().browse_ids(real);
         for name in before {
             su.cells(tx, name).await?;
         }

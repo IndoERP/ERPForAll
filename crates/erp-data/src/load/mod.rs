@@ -1,4 +1,4 @@
-//! Loading data files into the database (design;, §8,
+//! Loading data files into the database (design, §8,
 //! §9, §12).
 //!
 //! The readers of this crate (`XmlDataReader`, `parse_csv`) turn a data file into typed
@@ -817,8 +817,9 @@ async fn eval_user_group(
             "Record does not exist or has been deleted: res.users({uid}) (has_group('{group_xmlid}') in a data expression)"
         ))));
     }
-    let user_env = env.with_user(uid);
-    tx.has_group(&user_env, group_xmlid)
+    // asked about, not acted as: no `with_user` switch (A4)
+    let user = erp_orm::UserId::new(uid).map_err(|e| LoadErrorKind::Orm(e.into()))?;
+    tx.user_has_group(&env, user, group_xmlid)
         .await
         .map_err(LoadErrorKind::Orm)
 }

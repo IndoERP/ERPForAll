@@ -371,6 +371,132 @@
       "canonical": null,
       "error_key": "url",
       "browser": true
+    },
+    {
+      "name": "pivot_rows",
+      "input": "/erp/action-42?pivot_rows=partner_id%2Cpublished%3Amonth",
+      "canonical": "/erp/action-42?pivot_rows=partner_id%2Cpublished%3Amonth",
+      "error_key": null,
+      "browser": true
+    },
+    {
+      "name": "pivot_cols",
+      "input": "/erp/action-42?pivot_cols=state",
+      "canonical": "/erp/action-42?pivot_cols=state",
+      "error_key": null,
+      "browser": true
+    },
+    {
+      "name": "pivot_measures",
+      "input": "/erp/action-42?pivot_measures=__count%2Cpages",
+      "canonical": "/erp/action-42?pivot_measures=__count%2Cpages",
+      "error_key": null,
+      "browser": true
+    },
+    {
+      "name": "pivot_open",
+      "input": "/erp/action-42?pivot_open=%7B%22r%22%3A%5B%5B1%5D%2C%5B1%2C%22x%22%5D%5D%2C%22c%22%3A%5B%5B%22high%22%5D%2C%5Bfalse%5D%5D%7D",
+      "canonical": "/erp/action-42?pivot_open=%7B%22r%22%3A%5B%5B1%5D%2C%5B1%2C%22x%22%5D%5D%2C%22c%22%3A%5B%5B%22high%22%5D%2C%5Bfalse%5D%5D%7D",
+      "error_key": null,
+      "browser": true
+    },
+    {
+      "name": "pivot_sort",
+      "input": "/erp/action-42?pivot_sort=%5B%22pages%22%2C%22desc%22%2C%5B%22high%22%5D%5D",
+      "canonical": "/erp/action-42?pivot_sort=%5B%22pages%22%2C%22desc%22%2C%5B%22high%22%5D%5D",
+      "error_key": null,
+      "browser": true
+    },
+    {
+      "name": "pivot rows hour interval",
+      "input": "/erp/action-42?pivot_rows=published%3Ahour",
+      "canonical": null,
+      "error_key": "pivot_rows",
+      "browser": true
+    },
+    {
+      "name": "pivot rows repeat",
+      "input": "/erp/action-42?pivot_rows=state%2Cstate",
+      "canonical": null,
+      "error_key": "pivot_rows",
+      "browser": true
+    },
+    {
+      "name": "pivot rows uppercase",
+      "input": "/erp/action-42?pivot_rows=State",
+      "canonical": null,
+      "error_key": "pivot_rows",
+      "browser": true
+    },
+    {
+      "name": "pivot measures interval",
+      "input": "/erp/action-42?pivot_measures=pages%3Amonth",
+      "canonical": null,
+      "error_key": "pivot_measures",
+      "browser": true
+    },
+    {
+      "name": "pivot rows seven levels",
+      "input": "/erp/action-42?pivot_rows=f0%2Cf1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6",
+      "canonical": null,
+      "error_key": "pivot_rows",
+      "browser": true
+    },
+    {
+      "name": "pivot open not an object",
+      "input": "/erp/action-42?pivot_open=%5B1%5D",
+      "canonical": null,
+      "error_key": "pivot_open",
+      "browser": true
+    },
+    {
+      "name": "pivot open other axis",
+      "input": "/erp/action-42?pivot_open=%7B%22x%22%3A%5B%5D%7D",
+      "canonical": null,
+      "error_key": "pivot_open",
+      "browser": true
+    },
+    {
+      "name": "pivot open null key",
+      "input": "/erp/action-42?pivot_open=%7B%22r%22%3A%5B%5Bnull%5D%5D%7D",
+      "canonical": null,
+      "error_key": "pivot_open",
+      "browser": true
+    },
+    {
+      "name": "pivot open nested key",
+      "input": "/erp/action-42?pivot_open=%7B%22r%22%3A%5B%5B%5B1%5D%5D%5D%7D",
+      "canonical": null,
+      "error_key": "pivot_open",
+      "browser": true
+    },
+    {
+      "name": "pivot open malformed json",
+      "input": "/erp/action-42?pivot_open=%7B%22r%22%3A",
+      "canonical": null,
+      "error_key": "pivot_open",
+      "browser": true
+    },
+    {
+      "name": "pivot sort direction",
+      "input": "/erp/action-42?pivot_sort=%5B%22pages%22%2C%22up%22%2C%5B%5D%5D",
+      "canonical": null,
+      "error_key": "pivot_sort",
+      "browser": true
+    },
+    {
+      "name": "pivot sort shape",
+      "input": "/erp/action-42?pivot_sort=%5B%22pages%22%2C%22asc%22%5D",
+      "canonical": null,
+      "error_key": "pivot_sort",
+      "browser": true
+    },
+    {
+      "name": "pivot_sort none",
+      "input": "/erp/action-42?pivot_sort=%5B%5D",
+      "canonical": "/erp/action-42?pivot_sort=%5B%5D",
+      "error_key": null,
+      "browser": true
     }
   ]
 }

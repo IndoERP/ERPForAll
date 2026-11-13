@@ -1,4 +1,4 @@
-//! Actions (`ir.actions.*`,; design, §6).
+//! Actions (`ir.actions.*`; design, §6).
 //!
 //! Every action type has its own table (`ir_act_window`, `ir_act_url`, `ir_act_client`,
 //! `ir_act_server`), and they share one id space: each typed model draws its ids from the
@@ -19,11 +19,12 @@
 //! - [`IrActionsServer`]: every column of a server action; running them is;
 //! - [`get_bindings`] ([`bindings`]): the contextual actions of a model for a user.
 //!
-//! Not here yet: `ir.actions.report` (the report runtime slices), translated names
-//! , `/web/action/load` and `_get_action_dict`, the clean-up of
-//! `ir.actions.todo`, `ir.filters` and `res.users.action_id` at unlink ([`CLEANUPS`]: those
-//! models and fields do not exist yet, and an action unlink is refused once one of them is
-//! present without its clean-up).
+//! Not here yet: `ir.actions.report` (the report runtime slices), translated names,
+//! `/web/action/load` and `_get_action_dict`, the clean-up of
+//! `ir.actions.todo` and `res.users.action_id` at unlink ([`CLEANUPS`]: those models and
+//! fields do not exist yet, and an action unlink is refused once one of them is present without
+//! its clean-up; `ir.filters.action_id` is `ondelete = "cascade"`, so the database removes the
+//! saved filters of a deleted action).
 
 pub mod bindings;
 pub mod path;
@@ -51,11 +52,9 @@ const PATH_UNIQUE: &str = "ir_actions_path_unique";
 /// fields yet; the task named is the one whose scope reaches them first. [`check_cleanups`]
 /// refuses an action unlink (and the final registry, `_register_hook`) once one of them exists,
 /// so the clean-up cannot be forgotten silently.
-pub const CLEANUPS: [(&str, &str, &str); 3] = [
+pub const CLEANUPS: [(&str, &str, &str); 2] = [
     // the configuration wizards' to-do list: Settings is the first scope that reaches it
     ("ir.actions.todo", "", "a later release"),
-    // saved filters (favorites) of the search view
-    ("ir.filters", "", "a later release"),
     // a user's home action, of the user form
     ("res.users", "action_id", "a later release"),
 ];
@@ -229,6 +228,84 @@ impl IrActionsActions {
             check_action_model(&registry, spec.name)?;
         }
         sup.call(tx, this.as_records(), ()).await
+    }
+
+    /// Read contextual bindings for a model and optional view type.
+    /// Returns a map with "action" and "print" arrays of binding definitions.
+    #[method]
+    #[rpc(effect = read, model)]
+    pub async fn erp_get_bindings(
+        this: &RecordSet<IrActionsActions>,
+        tx: &mut Transaction,
+        model: String,
+        view_type: Option<String>,
+    ) -> Result<Value> {
+        Self::read_bindings(this, tx, model, view_type).await
+    }
+
+    /// Alias for `erp_get_bindings`.
+    #[method]
+    #[rpc(effect = read, model)]
+    pub async fn get_bindings(
+        this: &RecordSet<IrActionsActions>,
+        tx: &mut Transaction,
+        model: String,
+        view_type: Option<String>,
+    ) -> Result<Value> {
+        Self::read_bindings(this, tx, model, view_type).await
+    }
+}
+
+impl IrActionsActions {
+    async fn read_bindings(
+        this: &RecordSet<IrActionsActions>,
+        tx: &mut Transaction,
+        model: String,
+        view_type: Option<String>,
+    ) -> Result<Value> {
+        let env = this.as_records().env();
+        if env.registry().model(&model).is_none() {
+            return Err(Error::validation(format!(
+                "erp_get_bindings: unknown model '{model}'"
+            )));
+        }
+
+        // Caller must have Read access on the target model
+        let records = env.records(&model)?;
+        records.check_access(tx, Operation::Read).await?;
+
+        let bindings = get_bindings(tx, env, &model).await?;
+
+        let matches_view_type = |values: &erp_sdk::ValueMap| -> bool {
+            let Some(req) = view_type.as_deref() else {
+                return true;
+            };
+            match values.get("binding_view_types") {
+                None | Some(Value::False) => true,
+                Some(Value::Str(types)) => types.split(',').map(str::trim).any(|t| t == req),
+                _ => true,
+            }
+        };
+
+        let mut action_list = Vec::new();
+        for b in bindings.action() {
+            if matches_view_type(b.values()) {
+                action_list.push(Value::Map(b.values().clone()));
+            }
+        }
+
+        let mut print_list = Vec::new();
+        for b in bindings.report() {
+            if matches_view_type(b.values()) {
+                print_list.push(Value::Map(b.values().clone()));
+            }
+        }
+
+        let mut result = erp_sdk::ValueMap::new();
+        result.insert("action".to_owned(), Value::List(action_list.into()));
+        result.insert("print".to_owned(), Value::List(print_list.into()));
+
+        Ok(Value::Map(Arc::new(result)))
     }
 }
 

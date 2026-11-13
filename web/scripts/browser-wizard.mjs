@@ -63,7 +63,7 @@ const server=createServer(async(req,res)=>{
   if(pathname.endsWith("confirm_loan") && mode==="uncertain") {res.destroy();return;}
   if(pathname.endsWith("erp_normalize_action_result") && !body.result?.open && mode==="normalization") {res.writeHead(422,{"Content-Type":"application/json"});res.end(JSON.stringify({name:"erp.exceptions.ValidationError",message:"Result refused by fixture."}));return;}
   if(pathname.includes("test.wizard/web_read") && mode==="expired") {res.writeHead(401,{"Content-Type":"application/json"});res.end("{}");return;}
-  if(pathname.endsWith("erp_load_web_menus"))value={wire_major:1,registry_version:"r1",roots:[10],nodes:[{id:10,parent_id:null,label:"Books",action_id:20,children:[],icon:null}]};
+  if(pathname.endsWith("erp_load_web_menus"))value={wire_major:1,registry_version:"r1",roots:[10],nodes:[{ module: null,id:10,parent_id:null,label:"Books",action_id:20,children:[],icon:null}]};
   else if((pathname.endsWith("erp_load_web_action") || pathname.endsWith("erp_load_web_action_views")))value={wire_major:1,id:20,name:"Books",model:"test.book",target:"current",views:[{id:1,type:"form"}],domain:null,context:null};
   else if(pathname.endsWith("get_views"))value=pathname.includes("test.wizard")?wizard:book;
   else if(pathname.endsWith("erp_normalize_action_result"))value={wire_major:1,result:body.result?.open?{kind:"window",name:"Lend book",model:"test.wizard",res_id:null,views:[{id:null,type:"form"}],context:{default_name:"Ada",default_tags:[[6,0,[]]]}}:{kind:"notification",title:"Loan",message:"<b>Saved</b>",level:"success",then_close:mode!=="stay"}};

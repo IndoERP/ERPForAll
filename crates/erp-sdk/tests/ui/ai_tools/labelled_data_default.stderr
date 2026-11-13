@@ -1,0 +1,11 @@
+error[E0599]: no associated function or constant named `default` found for struct `LabelledData` in the current scope
+ --> tests/ui/ai_tools/labelled_data_default.rs:6:31
+  |
+6 |     let _data = LabelledData::default();
+  |                               ^^^^^^^ associated function or constant not found in `LabelledData`
+  |
+note: if you're trying to build a new `LabelledData`, consider using `LabelledData::new` which returns `LabelledData`
+ --> src/native/ai_tools.rs
+  |
+  |     pub fn new(source: DataSource, value: serde_json::Value) -> Self {
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

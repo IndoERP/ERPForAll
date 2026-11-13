@@ -143,8 +143,7 @@ impl AddonEntry {
     }
 }
 
-/// Discovers and caches addon manifests across multiple sources according to,
-/// .
+/// Discovers and caches addon manifests across multiple sources according to.
 ///
 /// Precedence order:
 /// DevFolder (only when dev_mode is true) > Package > Embedded.

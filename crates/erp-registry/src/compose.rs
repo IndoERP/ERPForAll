@@ -20,6 +20,8 @@ use crate::spec::{
     CheckCompany, ComputeRead, FieldDefault, FieldId, FieldSpec, ModelId, ModelSpec, Registry,
     TableObject,
 };
+use crate::sqlobj::SqlObjectLimits;
+use crate::sqlobj::decl::{SqlObjectDecl, SqlObjectManifest};
 
 static GENERATION: AtomicU64 = AtomicU64::new(1);
 
@@ -104,6 +106,9 @@ pub struct RegistryBuilder {
     overlays: Vec<Overlay>,
     linked: bool,
     policy: ManualFieldPolicy,
+    sql_manifests: Vec<&'static SqlObjectManifest>,
+    sql_decls: Vec<&'static SqlObjectDecl>,
+    sql_limits: SqlObjectLimits,
 }
 
 impl RegistryBuilder {
@@ -116,6 +121,9 @@ impl RegistryBuilder {
             overlays: Vec::new(),
             linked: true,
             policy: ManualFieldPolicy::Strict,
+            sql_manifests: Vec::new(),
+            sql_decls: Vec::new(),
+            sql_limits: SqlObjectLimits::DEFAULT,
         }
     }
 
@@ -151,7 +159,47 @@ impl RegistryBuilder {
         self
     }
 
-    /// Whether to use the declarations linked into the binary (`MODEL_DECLS`); default true.
+    /// Require the SQL objects `manifests` list: [`RegistryBuilder::build`]
+    /// refuses with a `Programming` error naming the object and its addon when an installed
+    /// addon's listed key has no declaration, and refuses a declaration its addon's manifest does
+    /// not list. A linked declaration is a static nothing calls, so the linker drops it from a
+    /// binary that references nothing else of its object file; the expectation lives at the
+    /// build site, which is always linked. Manifests of addons outside the set are ignored (one
+    /// binary, several addon sets; a misspelled addon name shows only once its declarations link).
+    /// Calls add up; the same manifest given twice counts once.
+    #[must_use]
+    pub fn require_sql_objects(
+        mut self,
+        manifests: impl IntoIterator<Item = &'static SqlObjectManifest>,
+    ) -> Self {
+        for manifest in manifests {
+            self.sql_manifests.retain(|m| !std::ptr::eq(*m, manifest));
+            self.sql_manifests.push(manifest);
+        }
+        self
+    }
+
+    /// Add SQL object declarations built at runtime (tests). Their addon must be in the set; they
+    /// are resolved with the linked ones into [`Registry::sql_objects`].
+    #[must_use]
+    pub fn with_sql_objects(
+        mut self,
+        decls: impl IntoIterator<Item = &'static SqlObjectDecl>,
+    ) -> Self {
+        self.sql_decls.extend(decls);
+        self
+    }
+
+    /// Lower the SQL object admission bounds (default [`SqlObjectLimits::DEFAULT`]); a bound
+    /// above its default makes [`RegistryBuilder::build`] fail.
+    #[must_use]
+    pub fn sql_object_limits(mut self, limits: SqlObjectLimits) -> Self {
+        self.sql_limits = limits;
+        self
+    }
+
+    /// Whether to use the declarations linked into the binary (`MODEL_DECLS` and
+    /// `SQL_OBJECT_DECLS`); default true.
     #[must_use]
     pub fn linked(mut self, on: bool) -> Self {
         self.linked = on;
@@ -209,10 +257,16 @@ impl RegistryBuilder {
             let result = self.round(&order, &overlays, &mut sink);
             let drops = sink.into_drops()?;
             if drops.is_empty() {
-                return result.map(|mut registry| {
-                    registry.dropped = dropped;
-                    registry
-                });
+                let mut registry = result?;
+                registry.dropped = dropped;
+                registry.sql_objects = crate::sqlobj::graph::resolve(
+                    &registry,
+                    &self.sql_manifests,
+                    &self.sql_decls,
+                    self.linked,
+                    self.sql_limits,
+                )?;
+                return Ok(registry);
             }
             overlays = without_dropped(&overlays, drops, &mut dropped)?;
         }
@@ -307,7 +361,16 @@ impl RegistryBuilder {
             key(a).cmp(&key(b))
         });
         let decls: Vec<&'static ModelDecl> = decls.into_iter().map(|(_, _, _, d)| d).collect();
-        compose(order.to_vec(), &decls, &self.events, sink)
+        // addons a co-owner may name: the installed set and every addon with linked native code
+        let mut known: FxHashSet<&'static str> = order.iter().map(|a| a.name).collect();
+        if self.linked {
+            known.extend(
+                crate::linked_decls()
+                    .filter(|d| !d.runtime)
+                    .map(|d| d.addon),
+            );
+        }
+        compose(order.to_vec(), &known, &decls, &self.events, sink)
     }
 }
 
@@ -634,6 +697,7 @@ fn check_object_names(models: &[ModelSpec]) -> Result<()> {
 
 fn compose(
     addons: Vec<&'static AddonDescriptor>,
+    known: &FxHashSet<&'static str>,
     decls: &[&'static ModelDecl],
     events: &[&'static ModelDecl],
     sink: &mut Sink,
@@ -899,6 +963,8 @@ fn compose(
     crate::company::finish(&mut models, &by_name)?;
     // after the scopes: declarations name the company field of the scope
     crate::company_access::finish(&mut models, &by_name)?;
+    // after every pass: delegated fields are resolved, so `inherited` is final
+    check_event_field_names(&models)?;
     // The model's defining addon protects the whole model. An exact-only extension
     // protects only fields it declares; unrelated base columns keep their original policy.
     // Protection is monotone across later redeclarations (lead scope decision 2026-11-06).
@@ -964,6 +1030,8 @@ fn compose(
             }
         }
     }
+    // after relational setup: guarded relation tables have their final names
+    crate::owner_fields::check(&addons, known, decls, &models, sink)?;
     check_object_names(&models)?;
     crate::drop::check_custom_related(&models, &by_name, sink)?;
     // no field may reference an event model, and it has no relational field (A2-D5)
@@ -982,6 +1050,8 @@ fn compose(
         // set by `RegistryBuilder::build` once a round drops nothing
         dropped: Vec::new(),
         statement_cache,
+        // set by `RegistryBuilder::build` once composition succeeded
+        sql_objects: crate::sqlobj::graph::SqlObjectGraph::default(),
     })
 }
 
@@ -1433,6 +1503,7 @@ impl Merged {
             user_writeable,
             tracking,
             translate,
+            db_default,
             html_policy
         );
         p.kind = match (p.kind, fd.kind) {
@@ -1624,6 +1695,57 @@ fn magic_applies(decl: &ModelDecl) -> bool {
     !decl.is_extension() && decl.kind != ModelKind::Abstract && decl.log_access.unwrap_or(true)
 }
 
+/// The field declarations `decl` contributes in merge order: its own fields, then the audit
+/// fields it adds (`true`), then the `row_version` field when it is the declaration that turned
+/// the row version on.
+pub(crate) fn decl_fields(
+    decl: &'static ModelDecl,
+    row_version_origin: Option<&'static ModelDecl>,
+) -> impl Iterator<Item = (&'static FieldDecl, bool)> {
+    let magic: &'static [FieldDecl] = if magic_applies(decl) {
+        MAGIC_FIELDS
+    } else {
+        &[]
+    };
+    let version: &'static [FieldDecl] = match row_version_origin {
+        Some(origin) if std::ptr::eq(origin, decl) => crate::keys::ROW_VERSION_FIELDS,
+        _ => &[],
+    };
+    decl.fields
+        .iter()
+        .map(|fd| (fd, false))
+        .chain(
+            magic
+                .iter()
+                .filter(move |fd| !decl.fields.iter().any(|own| own.name == fd.name))
+                .map(|fd| (fd, true)),
+        )
+        .chain(version.iter().map(|fd| (fd, false)))
+}
+
+/// Merge and resolve one field from `entries` (in merge order, as `build_model` meets them)
+/// without the registry-wide passes: what the field would be if only these declarations existed.
+/// `None` when `entries` is empty.
+///
+/// # Errors
+///
+/// What merging or resolving the declarations refuses.
+pub(crate) fn merge_declarations(
+    model: &str,
+    entries: impl IntoIterator<Item = (&'static FieldDecl, &'static ModelDecl, bool)>,
+) -> Result<Option<FieldSpec>> {
+    let mut merged: Option<Merged> = None;
+    for (fd, decl, magic) in entries {
+        match &mut merged {
+            Some(m) => m.apply(model, fd, decl)?,
+            None => merged = Some(Merged::start(model, fd, decl, magic)?),
+        }
+    }
+    merged
+        .map(|m| resolve_field(model, FieldId(0), m))
+        .transpose()
+}
+
 fn build_model(
     id: ModelId,
     class: &Class,
@@ -1636,6 +1758,8 @@ fn build_model(
     // opting-in source for diagnostics: an extension can be the declaration that enables it.
     let eventful_origin = mro.iter().find(|decl| decl.eventful);
     let eventful = eventful_origin.is_some();
+    // Read auditing also composes by OR, including abstract and transient declarations.
+    let audit_reads = mro.iter().any(|decl| decl.audit_reads);
     if let Some(origin) = eventful_origin {
         let reason = match class.kind {
             ModelKind::Abstract => Some("abstract models do not support event capture"),
@@ -1706,7 +1830,7 @@ fn build_model(
         None => None,
     };
     // the model's own declarations only: `_inherit` from another model does not carry it, each
-    // table opts in
+    // table opts
     let mut id_sequence: Option<(&'static str, &ModelDecl)> = None;
     for decl in mro.iter().filter(|d| d.name == name) {
         let Some(seq) = decl.id_sequence else {
@@ -1768,22 +1892,7 @@ fn build_model(
     // the declaration that turns the row version on adds its field
     let row_version_origin = crate::keys::row_version_origin(name, mro)?;
     for decl in mro.iter().rev() {
-        let magic = if magic_applies(decl) {
-            MAGIC_FIELDS
-        } else {
-            &[]
-        };
-        let own = decl.fields.iter().map(|fd| (fd, false));
-        let extra = magic
-            .iter()
-            .filter(|fd| !decl.fields.iter().any(|own| own.name == fd.name))
-            .map(|fd| (fd, true));
-        let version: &[FieldDecl] = match row_version_origin {
-            Some(origin) if std::ptr::eq(origin, *decl) => crate::keys::ROW_VERSION_FIELDS,
-            _ => &[],
-        };
-        let extra = extra.chain(version.iter().map(|fd| (fd, false)));
-        for (fd, is_magic) in own.chain(extra) {
+        for (fd, is_magic) in decl_fields(decl, row_version_origin) {
             if decl.addon == MANUAL_ADDON && refused_custom.contains(fd.name) {
                 return Err(declared_twice(sink, fd.name));
             }
@@ -2202,6 +2311,7 @@ fn build_model(
         check_company_auto,
         // resolved by `company::finish`
         company_scope: None,
+        company_delegation: None,
         // resolved by `company_access::finish`; until then the refusing state
         company_access: crate::company_access::CompanyAccessState::Undeclared,
         allow_sudo_commands,
@@ -2214,9 +2324,56 @@ fn build_model(
         row_version,
         tracked,
         eventful,
+        audit_reads,
         // checked and filled by `keys::finish`
         keys: Vec::new(),
     })
+}
+
+/// The most field names one outbox event may carry (capture limits). The registry refuses an eventful
+/// model whose own columns could not fit in one event, and `erp-orm`'s `Envelope::new` uses the same
+/// number as its run-time backstop.
+pub const MAX_EVENT_FIELD_NAMES: usize = 128;
+
+/// Refuses an eventful model with more columns than one event can name.
+///
+/// The ceiling is the set of fields with a column in the model's own table, `id` excluded:
+/// a create lists the given column fields plus the insert-time columns (`create_date`, `write_date`,
+/// server-set fields, `row_version`), and a write lists the changed column fields. The
+/// `inherited.is_none()` and `name != "id"` filters are defensive: a delegated copy has no column
+/// of its own (its column lives in the parent table) and `id` has no column type, so today neither
+/// changes the count; they keep the rule right if either ever does.
+///
+/// # Errors
+///
+/// `Validation` naming the model, the opting-in addon, the count and the limit.
+fn check_event_field_names(models: &[ModelSpec]) -> Result<()> {
+    for model in models.iter().filter(|m| m.eventful) {
+        let count = model
+            .fields
+            .iter()
+            .filter(|f| f.has_column() && f.inherited.is_none() && f.name != "id")
+            .count();
+        if count > MAX_EVENT_FIELD_NAMES {
+            // same rule as `build_model`: the first declaration in the MRO that opts in
+            let addon = model
+                .mro
+                .iter()
+                .find(|decl| decl.eventful)
+                .map(|decl| decl.addon)
+                .ok_or_else(|| {
+                    Error::programming(format!(
+                        "eventful model '{}' has no opting-in declaration in its MRO",
+                        model.name
+                    ))
+                })?;
+            return Err(Error::validation(format!(
+                "model '{}' of addon '{addon}' cannot be eventful: {count} fields with a column exceed the {MAX_EVENT_FIELD_NAMES} field names one event may carry (a later release)",
+                model.name,
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// The most tracked fields one model may have. The flush `UPDATE` returns the row id plus the old
@@ -2558,6 +2715,34 @@ fn resolve_field(model: &str, id: FieldId, merged: Merged) -> Result<FieldSpec> 
             )));
         }
     }
+    if p.company_dependent == Some(true) {
+        let supported = matches!(
+            ty,
+            FieldType::Char { .. }
+                | FieldType::Text
+                | FieldType::Html
+                | FieldType::Boolean
+                | FieldType::Integer
+                | FieldType::Float { .. }
+                | FieldType::Monetary { .. }
+                | FieldType::Selection { .. }
+                | FieldType::Many2one { .. }
+                | FieldType::Date
+                | FieldType::Datetime
+        );
+        if !supported
+            || !store
+            || p.compute.is_some()
+            || p.inverse.is_some()
+            || p.related.is_some()
+            || is_generated
+            || tracking.is_some()
+        {
+            return Err(Error::programming(format!(
+                "field '{model}.{name}': this company-dependent declaration is not supported until a later release"
+            )));
+        }
+    }
     let column = if store {
         if p.company_dependent == Some(true) || translate {
             Some(ColumnType::Jsonb)
@@ -2617,6 +2802,33 @@ fn resolve_field(model: &str, id: FieldId, merged: Merged) -> Result<FieldSpec> 
         Some(DefaultDecl::Value(v)) => Some(FieldDefault::Value(v)),
         Some(DefaultDecl::Fn(f)) => Some(FieldDefault::Fn(f)),
     };
+    // a persistent column default only where schema sync can state it exactly and the
+    // ORM always writes the column itself (a required field with a static default)
+    let db_default = p.db_default.unwrap_or(false);
+    if db_default {
+        let why = if !matches!(ty, FieldType::Boolean) {
+            Some(format!("is {}", ty.type_name()))
+        } else if !store || column.is_none() {
+            Some("is not stored".to_owned())
+        } else if p.company_dependent == Some(true) {
+            Some("is company-dependent".to_owned())
+        } else if is_generated {
+            Some("is generated".to_owned())
+        } else if !required {
+            Some("is not required".to_owned())
+        } else if !matches!(default, Some(FieldDefault::Value(StaticValue::Bool(_)))) {
+            Some("has no static boolean default".to_owned())
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            return Err(Error::programming(format!(
+                "field '{model}.{name}': db_default is for a stored, required boolean \
+                 field with a static boolean default, not company-dependent and not generated; \
+                 this field {why}"
+            )));
+        }
+    }
     let quoted_name = crate::ident::quote_arc(name);
     Ok(FieldSpec {
         id,
@@ -2668,6 +2880,7 @@ fn resolve_field(model: &str, id: FieldId, merged: Merged) -> Result<FieldSpec> 
         change_default: p.change_default.unwrap_or(false),
         user_writeable: p.user_writeable.unwrap_or(false),
         secret: p.secret.unwrap_or(false),
+        db_default,
         tracking,
         inherited: None,
         server_set,
@@ -2789,7 +3002,13 @@ mod manual_extension_tests {
 
     fn compose_with(decl: &'static ModelDecl) -> Result<Registry> {
         let mut sink = Sink::new(ManualFieldPolicy::DropBroken);
-        compose(vec![&BASE_ADDON], &[&BASE_DECL, decl], &[], &mut sink)
+        compose(
+            vec![&BASE_ADDON],
+            &FxHashSet::default(),
+            &[&BASE_DECL, decl],
+            &[],
+            &mut sink,
+        )
     }
 
     /// Custom fields of a model that is gone are dropped; a company access declared with them is

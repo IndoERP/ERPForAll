@@ -53,7 +53,7 @@ impl DescriptionPayload {
             let root_schema = crate::builtin_schemas::builtin_root(kind).ok_or_else(|| {
                 refuse(
                     budget,
-                    "Builtin wire adapter supports only list, form and search",
+                    "Builtin wire adapter supports only list, form, search and pivot",
                 )
             })?;
             if !std::ptr::eq(self.schema.root_node(), root_schema) {
@@ -66,10 +66,11 @@ impl DescriptionPayload {
                 wire::ViewType::List => "web.list_sections_v1",
                 wire::ViewType::Form => "web.form",
                 wire::ViewType::Search => "web.search_sections_v1",
+                wire::ViewType::Pivot => "web.pivot",
                 _ => {
                     return Err(refuse(
                         budget,
-                        "Builtin wire adapter supports only list, form and search; later types require a later release",
+                        "Builtin wire adapter supports only list, form, search and pivot; later types require a later release",
                     ));
                 }
             };
@@ -98,10 +99,11 @@ impl DescriptionPayload {
                 wire::ViewType::List => "list",
                 wire::ViewType::Form => "form",
                 wire::ViewType::Search => "search",
+                wire::ViewType::Pivot => "pivot",
                 _ => {
                     return Err(refuse(
                         budget,
-                        "Builtin wire adapter supports only list, form and search; later types require a later release",
+                        "Builtin wire adapter supports only list, form, search and pivot; later types require a later release",
                     ));
                 }
             };
@@ -357,6 +359,9 @@ impl Output {
             .map(boolean)
             .transpose()?;
         result.no_symbol = optional(source, "no_symbol").map(boolean).transpose()?;
+        result.enable_formatting = optional(source, "enable_formatting")
+            .map(boolean)
+            .transpose()?;
         result.hide_trailing_zeros = optional(source, "hide_trailing_zeros")
             .map(boolean)
             .transpose()?;
@@ -900,6 +905,23 @@ impl Output {
                 children: self.indices(object)?,
                 search_panel: self.panel(object)?,
             },
+            "pivot" => wire::ViewNode::Pivot {
+                children: self.indices(object)?,
+                disable_linking: boolean(required(object, "disable_linking")?)?,
+                display_quantity: boolean(required(object, "display_quantity")?)?,
+                default_order: self.optional_text(object, "default_order")?,
+            },
+            "pivot_field" => wire::ViewNode::PivotField {
+                field: self.field(required(object, "field")?)?,
+                label: self.string(object, "label")?,
+                role: match text_value(object, "role")? {
+                    "row" => wire::PivotRole::Row,
+                    "col" => wire::PivotRole::Col,
+                    "measure" => wire::PivotRole::Measure,
+                    _ => return Err(invalid("Builtin pivot role is invalid")),
+                },
+                interval: self.optional_text(object, "interval")?,
+            },
             "search_field" => wire::ViewNode::SearchField {
                 field: self.field(required(object, "field")?)?,
                 label: self.string(object, "label")?,
@@ -1017,6 +1039,7 @@ fn children(node: &wire::ViewNode) -> &[u32] {
         | wire::ViewNode::Notebook { children }
         | wire::ViewNode::Page { children, .. }
         | wire::ViewNode::Search { children, .. }
+        | wire::ViewNode::Pivot { children, .. }
         | wire::ViewNode::SearchGroup { children, .. } => children,
         wire::ViewNode::Field { .. }
         | wire::ViewNode::Chatter { .. }
@@ -1027,6 +1050,7 @@ fn children(node: &wire::ViewNode) -> &[u32] {
         | wire::ViewNode::NotificationAlert {}
         | wire::ViewNode::Widget { .. }
         | wire::ViewNode::Separator { .. }
+        | wire::ViewNode::PivotField { .. }
         | wire::ViewNode::SearchField { .. }
         | wire::ViewNode::SearchFilter { .. }
         | wire::ViewNode::SearchSeparator {} => &[],
@@ -1103,7 +1127,7 @@ fn validate_layout(
 ) -> ViewResult<()> {
     use wire::ViewNode as N;
     let valid = match node {
-        N::Form { .. } | N::List { .. } | N::Search { .. } => parent.is_none(),
+        N::Form { .. } | N::List { .. } | N::Search { .. } | N::Pivot { .. } => parent.is_none(),
         N::Page { name, label, .. } => {
             matches!(parent, Some(N::Notebook { .. }))
                 && !name.trim().is_empty()
@@ -1147,6 +1171,7 @@ fn validate_layout(
         Some(N::List { .. } | N::Heading { .. } | N::StatButton { .. }) => {
             matches!(node, N::Field { .. })
         }
+        Some(N::Pivot { .. }) => matches!(node, N::PivotField { .. }),
         Some(N::Search { .. }) => matches!(
             node,
             N::SearchField { .. }
@@ -1182,6 +1207,7 @@ fn validate_layout(
                 | N::SearchFilter { .. }
                 | N::SearchSeparator {}
                 | N::SearchGroup { .. }
+                | N::PivotField { .. }
         ),
     };
     if !valid || !allowed_child {

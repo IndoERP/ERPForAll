@@ -180,6 +180,8 @@ fn x2many_element(
                 Json::Int(2..=5),
                 Json::Int(_) | Json::Null | Json::Bool(false),
             ] => element.clone(),
+            // clear: [5]
+            [Json::Int(5)] => element.clone(),
             // set: a list of ids
             [
                 Json::Int(6),

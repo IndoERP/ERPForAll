@@ -1,0 +1,5 @@
+error: expected assistant = offer
+ --> tests/ui/rpc_assistant/quoted_value.rs:4:39
+  |
+4 |     #[rpc(effect = write, assistant = "offer")]
+  |                                       ^^^^^^^

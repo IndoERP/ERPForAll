@@ -1,5 +1,5 @@
-//! The base models whose ORM writes change the access policy or a principal's membership
-//! , registered on the engine's
+//! The base models whose ORM writes change the access policy or a principal's membership,
+//! registered on the engine's
 //! `PolicySourceWrite` point: a write flushes pending computes first and marks the transaction,
 //! and its next engine call flushes these models' pending writes before it rebuilds the policy
 //! privately (policy tables) or re-reads the bound principals (membership).

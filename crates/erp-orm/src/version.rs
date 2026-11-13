@@ -1,4 +1,4 @@
-//! Row versions and write hooks on the ORM side (design note
+//! Row versions and write hooks on the ORM side (
 //! ).
 //!
 //! - A model declared `row_version = true` has a `row_version` field. Every flush `UPDATE` sets
@@ -83,7 +83,7 @@ impl Records {
         tx: &mut Transaction,
         versions: impl IntoIterator<Item = (RecId, i64)>,
     ) -> Result<()> {
-        tx.check_records(self)?;
+        tx.admit_records(self).await?;
         let spec = self.spec();
         if spec.row_version.is_none() {
             return Err(Error::programming(format!(
@@ -383,6 +383,13 @@ impl WriteHooks {
                         hook.model
                     ))
                 })?;
+                if field.company_dependent {
+                    return Err(crate::company_dependent_runtime::unsupported(
+                        spec.name,
+                        field.name,
+                        "write-hook registration",
+                    ));
+                }
                 if field.inherited.is_some() || field.column().is_none() {
                     return Err(Error::programming(format!(
                         "write hook on '{}': field '{name}' is not a column of the model's own \

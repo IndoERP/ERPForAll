@@ -144,6 +144,17 @@ impl PrincipalShape {
     pub fn companies(&self) -> ActiveCompanySet {
         self.companies
     }
+
+    /// The same shape without elevation: the base binding a scoped principal is decided with for
+    /// every (model, operation) its scope does not name. Class and company set are
+    /// kept: a scope never changes either.
+    #[must_use]
+    pub fn unelevated(&self) -> Self {
+        Self {
+            elevation: ElevationKey::None,
+            ..self.clone()
+        }
+    }
 }
 
 /// A principal bound for decisions in one transaction (DN §2.1): the principal, the newest
@@ -210,6 +221,18 @@ impl<'e> PrincipalBinding<'e> {
     #[must_use]
     pub fn with_companies(mut self, companies: ActiveCompanySet) -> Self {
         self.shape.companies = companies;
+        self
+    }
+
+    /// The same binding deciding as if inside a block of `scope`, without a block: for the unit
+    /// tests of a policy crate, which cannot open a transaction. Only the `test-support` feature
+    /// (a dev-dependency of `erp-security`) builds it; the engine binds a scope only through
+    /// [`crate::Transaction::elevated`].
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_scope_for_tests(mut self, scope: Arc<ElevationScope>) -> Self {
+        self.shape.elevation = ElevationKey::Scoped(scope);
         self
     }
 

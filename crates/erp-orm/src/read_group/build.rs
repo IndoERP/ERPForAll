@@ -9,7 +9,7 @@ use std::sync::Arc;
 use erp_fields::{Error, FieldType, Result, Value};
 use erp_registry::{FieldId, FieldSpec, ModelId, ModelSpec, Registry};
 use erp_sql::filter::{can_be_null, make_alias};
-use erp_sql::order::{Nulls, compile_comodel_order};
+use erp_sql::order::{ComodelOrderOptions, Nulls, compile_comodel_order_with_company};
 use erp_sql::param::{Param, Scalar, ScalarKind};
 use erp_sql::{literal, quote};
 use rustc_hash::FxHashMap;
@@ -154,6 +154,8 @@ pub(crate) struct Builder<'r> {
     pub(crate) model: &'r ModelSpec,
     pub(crate) external: bool,
     pub(crate) params: Vec<Param>,
+    property: Option<(erp_sql::company::CompanyValues, usize)>,
+    property_fields: Vec<(ModelId, FieldId)>,
     joins: Vec<(String, String)>,
     /// Alias → reached through `JOIN`s only (a many2one join from it may be an inner join).
     inner: FxHashMap<String, bool>,
@@ -206,6 +208,8 @@ impl<'r> Builder<'r> {
             model,
             external,
             params: filter.params.clone(),
+            property: None,
+            property_fields: Vec::new(),
             joins,
             inner,
             fields: filter.fields.clone(),
@@ -247,6 +251,7 @@ impl<'r> Builder<'r> {
         model: &'r ModelSpec,
         field: &'r FieldSpec,
     ) -> Result<()> {
+        self.prepare_property_sources(tx, model, field).await?;
         if self.closure.is_some() || self.env.su() {
             return Ok(());
         }
@@ -302,6 +307,79 @@ impl<'r> Builder<'r> {
         Ok(())
     }
 
+    async fn prepare_property_sources(
+        &mut self,
+        tx: &mut Transaction,
+        model: &ModelSpec,
+        field: &FieldSpec,
+    ) -> Result<()> {
+        let registry = self.registry;
+        let mut pending = vec![(model.id, field.id)];
+        let mut visited = Vec::new();
+        let mut fields = Vec::new();
+        while let Some(pair) = pending.pop() {
+            if visited.contains(&pair) {
+                continue;
+            }
+            visited.push(pair);
+            let model = registry.model_by_id(pair.0);
+            let field = model.field_by_id(pair.1);
+            if field.has_column() {
+                if field.company_dependent && !self.property_fields.contains(&pair) {
+                    fields.push(pair);
+                }
+            } else if let Some(inherited) = field.inherited {
+                pending.push((model.id, inherited.delegate));
+                pending.push((inherited.parent, inherited.parent_field));
+            } else if let Some(path) = field.related {
+                let mut current = model;
+                for name in path.split('.') {
+                    let next = current.field(name).ok_or_else(|| {
+                        Error::programming(format!(
+                            "invalid related property path on {}.{}",
+                            model.name, field.name
+                        ))
+                    })?;
+                    pending.push((current.id, next.id));
+                    if let FieldType::Many2one { comodel, .. } = &next.ty {
+                        current = registry
+                            .model(comodel)
+                            .ok_or_else(|| Error::programming("unknown related property model"))?;
+                    }
+                }
+            }
+        }
+        if let Some(values) = tx.company_query_values(&self.env, &fields).await? {
+            if let Some((current, slot)) = &mut self.property {
+                current.extend(values)?;
+                self.params[*slot - 1] = current.param()?;
+            } else {
+                self.params.push(values.param()?);
+                self.property = Some((values, self.params.len()));
+            }
+            self.property_fields.extend(fields);
+        }
+        Ok(())
+    }
+
+    fn effective_column(
+        &mut self,
+        model: &ModelSpec,
+        alias: &str,
+        field: &FieldSpec,
+    ) -> Result<String> {
+        if field.company_dependent {
+            let (values, slot) = self
+                .property
+                .as_ref()
+                .ok_or_else(|| erp_sql::company::missing(model, field))?;
+            values.validate(self.registry, &[(model.id, field.id)])?;
+            erp_sql::company::expression(self.registry, model, field, alias, *slot)
+        } else {
+            Ok(format!("{}.{}", quote(alias), quote(field.name)))
+        }
+    }
+
     /// The joins, in order, each alias once.
     pub(crate) fn join_text(&self) -> String {
         merge_joins(&[&self.joins])
@@ -342,14 +420,12 @@ impl<'r> Builder<'r> {
         let inner = self.is_inner(alias) && !can_be_null(field);
         let kind = if inner { "JOIN" } else { "LEFT JOIN" };
         self.read(model.id, field.id);
+        let source = self.effective_column(model, alias, field)?;
         let text = format!(
-            " {kind} {} AS {} ON ({}.{} = {}.{})",
+            r#" {kind} {} AS {} ON ({source} = {}."id")"#,
             quote(&comodel.table),
             quote(&coalias),
-            quote(alias),
-            quote(field.name),
-            quote(&coalias),
-            quote("id")
+            quote(&coalias)
         );
         self.add_join(coalias.clone(), text, inner)?;
         Ok(coalias)
@@ -439,13 +515,11 @@ impl<'r> Builder<'r> {
         {
             self.flush_input(companies.id, path);
         }
+        let source = self.effective_column(model, alias, field)?;
         let text = format!(
-            " LEFT JOIN (SELECT {co_table}.* FROM {co_table} WHERE {pred}) AS {} ON ({}.{} = {}.{})",
+            r#" LEFT JOIN (SELECT {co_table}.* FROM {co_table} WHERE {pred}) AS {} ON ({source} = {}."id")"#,
             quote(&coalias),
-            quote(alias),
-            quote(field.name),
-            quote(&coalias),
-            quote("id")
+            quote(&coalias)
         );
         self.add_join(coalias.clone(), text, false)?;
         Ok(coalias)
@@ -479,7 +553,7 @@ impl<'r> Builder<'r> {
         }
         if field.has_column() {
             self.read(model.id, field.id);
-            return Ok(format!("{}.{}", quote(alias), quote(field.name)));
+            return self.effective_column(model, alias, field);
         }
         if let Some(inherited) = field.inherited {
             let registry = self.registry;
@@ -549,6 +623,7 @@ impl<'r> Builder<'r> {
         alias: &str,
         field: &FieldSpec,
     ) -> Result<String> {
+        self.prepare_property_sources(tx, model, field).await?;
         let registry = self.registry;
         let comodel = crate::relational::comodel_of(registry, field)?;
         let bypass = self.env.su() || field.delegate || field.compute_sudo();
@@ -566,13 +641,12 @@ impl<'r> Builder<'r> {
                         Some(false) => "FALSE".to_owned(),
                         _ => restriction.sql.to_string(),
                     };
+                    let source = self.effective_column(model, alias, field)?;
                     let text = format!(
                         " LEFT JOIN (SELECT {co_table}.* FROM {co_table}{} WHERE {pred}) AS {} ON \
-                         ({}.{} = {}.{})",
+                         ({source} = {}.{})",
                         merge_joins(&[&restriction.join_list]),
                         quote(&coalias),
-                        quote(alias),
-                        quote(field.name),
                         quote(&coalias),
                         quote("id")
                     );
@@ -613,7 +687,7 @@ impl<'r> Builder<'r> {
         }
         let env = tx.field_env(&self.env, model.id, field.id);
         let env = if field.bypass_search_access {
-            env.sudo(true)
+            env.engine_sudo()
         } else {
             env
         };
@@ -712,6 +786,7 @@ impl<'r> Builder<'r> {
                     format!("Invalid field '{}' on model '{}'", parts.field, model.name),
                 )
             })?;
+            self.prepare_property_sources(tx, model, field).await?;
             let main = std::ptr::eq(model, self.model);
             let mut term = GroupTerm {
                 spec: full_spec.to_owned(),
@@ -940,6 +1015,53 @@ impl<'r> Builder<'r> {
         Ok(AggTerm { expr, out })
     }
 
+    /// Prepare only dependencies used by the requested group order.
+    pub(crate) async fn prepare_orderby(
+        &mut self,
+        tx: &mut Transaction,
+        order: Option<&str>,
+        terms: &[GroupTerm],
+    ) -> Result<Vec<OrderItem>> {
+        if let Some(order) = order.filter(|o| !o.trim().is_empty()) {
+            for part in parse_order(order, self.external)? {
+                if !terms.iter().any(|t| t.spec == part.term) {
+                    self.prepare_aggregate(tx, &part.term).await?;
+                }
+            }
+        }
+        let items = self.orderby(order, terms)?;
+        for item in &items {
+            if let OrderItem::Comodel { comodel, .. } = item {
+                let model = self.registry.model_by_id(*comodel);
+                for (mid, fid) in
+                    erp_sql::order::order_fields(self.registry, model, "", self.env.lang())?
+                {
+                    let model = self.registry.model_by_id(mid);
+                    self.prepare_property_sources(tx, model, model.field_by_id(fid))
+                        .await?;
+                }
+            }
+        }
+        Ok(items)
+    }
+
+    /// HAVING can reference aggregates absent from the result projection.
+    pub(crate) async fn prepare_having(
+        &mut self,
+        tx: &mut Transaction,
+        having: &[Value],
+    ) -> Result<Option<String>> {
+        for item in having {
+            if let Value::List(triple) = item
+                && triple.len() == 3
+                && let Value::Str(spec) = &triple[0]
+            {
+                self.prepare_aggregate(tx, spec).await?;
+            }
+        }
+        self.having(having)
+    }
+
     pub(crate) fn orderby(
         &mut self,
         order: Option<&str>,
@@ -1104,18 +1226,19 @@ impl<'r> Builder<'r> {
                     } => {
                         let registry = self.registry;
                         let comodel = registry.model_by_id(*comodel);
-                        let compiled = compile_comodel_order(
+                        let compiled = compile_comodel_order_with_company(
                             registry,
                             comodel,
                             &col(*index),
-                            &format!("__g__o{index}"),
-                            *dir == Dir::Desc,
-                            match nulls {
-                                NullsPos::Default => Nulls::Default,
-                                NullsPos::First => Nulls::First,
-                                NullsPos::Last => Nulls::Last,
-                            },
-                            self.env.lang(),
+                            ComodelOrderOptions::new(&format!("__g__o{index}"))
+                                .descending(*dir == Dir::Desc)
+                                .nulls(match nulls {
+                                    NullsPos::Default => Nulls::Default,
+                                    NullsPos::First => Nulls::First,
+                                    NullsPos::Last => Nulls::Last,
+                                })
+                                .with_lang(self.env.lang()),
+                            self.property.as_ref().map(|(values, slot)| (values, *slot)),
                         )?;
                         for (alias, text) in compiled.joins {
                             if !joins.iter().any(|(a, _)| *a == alias) {

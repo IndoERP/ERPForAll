@@ -60,7 +60,7 @@ const server=createServer(async(req,res)=>{
     if(pathname.includes("fixture.line/get_views") && denyTarget){res.writeHead(403,{"Content-Type":"application/json"});res.end(JSON.stringify({name:"erp.exceptions.AccessError",message:"Related destination denied by fixture."}));return;}
     if(pathname.endsWith("ir.config.setting/erp_describe"))value={wire_major:1,registry_version:"r1",scope:{kind:"global"},declarations:officeMenuProbe?[{key:"theme_office_blue.appearance",kind:"selection",label:"Appearance",choices:[["default","Default"],["office-blue","Office Blue"]],writable:true}]:[]};
     else if(pathname.endsWith("erp_read_values"))value={wire_major:1,scope:body.scope,revision:"1",values:[{key:"theme_office_blue.appearance",value:"office-blue",source:"stored"}]};
-    else if(pathname.endsWith("erp_load_web_menus"))value={wire_major:1,registry_version:"r1",roots:[10],nodes:[{id:10,parent_id:null,label:"Parents",action_id:20,children:[],icon:null}]};
+    else if(pathname.endsWith("erp_load_web_menus"))value={wire_major:1,registry_version:"r1",roots:[10],nodes:[{ module: null,id:10,parent_id:null,label:"Parents",action_id:20,children:[],icon:null}]};
     else if(pathname.endsWith("erp_load_web_action_views"))value={action,views:source};
     else if(pathname.endsWith("erp_load_web_action"))value=action;
     else if(pathname.endsWith("get_views"))value=pathname.includes("fixture.line")?target:source;
@@ -74,7 +74,7 @@ const server=createServer(async(req,res)=>{
     else if(pathname.endsWith("web_name_search"))value=[];
     else if(pathname==="/erp/client-error"){res.writeHead(204);res.end();return;}
     else throw new Error(`unknown fixture RPC ${pathname}`);
-    if(officeMenuProbe&&pathname.endsWith("erp_load_web_menus")){value={wire_major:1,registry_version:"r1",roots:[11],nodes:[{id:11,parent_id:null,label:"Settings",action_id:null,children:[12],icon:null},{id:12,parent_id:11,label:"Technical",action_id:null,children:[13],icon:null},{id:13,parent_id:12,label:"Database Structure",action_id:null,children:[10],icon:null},{id:10,parent_id:13,label:"Sequences and Identifiers",action_id:20,children:[],icon:null}]};}
+    if(officeMenuProbe&&pathname.endsWith("erp_load_web_menus")){value={wire_major:1,registry_version:"r1",roots:[11],nodes:[{ module: null,id:11,parent_id:null,label:"Settings",action_id:null,children:[12],icon:null},{ module: null,id:12,parent_id:11,label:"Technical",action_id:null,children:[13],icon:null},{ module: null,id:13,parent_id:12,label:"Database Structure",action_id:null,children:[10],icon:null},{ module: null,id:10,parent_id:13,label:"Sequences and Identifiers",action_id:20,children:[],icon:null}]};}
     res.setHeader("Content-Type","application/json");res.end(JSON.stringify(value));
   }catch(error){serverError=error;res.writeHead(500,{"Content-Type":"application/json"});res.end(JSON.stringify({message:"fixture failure"}));}
 });

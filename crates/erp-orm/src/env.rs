@@ -3,7 +3,7 @@
 //! An `Env` borrows nothing: data lives in the [`crate::Transaction`] that every operation takes
 //! as `&mut`, and all environments of a transaction share its cache. Equal
 //! parameters give equal environments. The [`Principal`] says who
-//! acts; `uid` is its subject and `su` its `Full` elevation.
+//! acts; `uid()` is its subject and `su()` its `Full` elevation.
 
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -13,7 +13,11 @@ use erp_fields::{Error, Result, Value};
 use erp_registry::Registry;
 
 use crate::context::Context;
-use crate::principal::{CompanyId, Elevation, Principal, PrincipalError, SUPERUSER_ID, UserId};
+use crate::principal::block::BlockLife;
+use crate::principal::switch::Switch;
+use crate::principal::{
+    CompanyId, Elevation, Principal, PrincipalError, PrincipalKind, SUPERUSER_ID, UserId,
+};
 use crate::records::{Model, RecordSet, Records};
 
 /// An environment: who acts (the principal) with which context, on which registry.
@@ -26,8 +30,9 @@ pub struct Env {
     principal: Arc<Principal>,
     context: Arc<Context>,
     /// The company context derived from `context` was refused: reported by every use of the
-    /// companies, never by the call that built the environment.
-    company_error: Option<CompanyRefusal>,
+    /// companies, never by the call that built the environment. Behind an
+    /// `Arc` so the rare refusal does not widen every `Env` (and every future holding one).
+    company_error: Option<Arc<CompanyRefusal>>,
     /// How a company-bound refusal read in this environment may name the records it reached. Not
     /// part of the identity of the environment (it changes the wording of a refusal, nothing a
     /// cache holds).
@@ -39,6 +44,16 @@ pub struct Env {
     /// immutable snapshot; input context cannot supply authority. Nested labels reuse the
     /// same snapshot rather than retaining a chain of environments.
     label_reader: Option<Arc<Env>>,
+    /// The scoped elevation block this environment belongs to: every derivation
+    /// copies it, the transaction admits the environment only while the block is open, and a
+    /// widened one refuses every use. Part of the identity of the environment.
+    block: Option<Arc<BlockLife>>,
+    /// The `with_user` switches this environment carries until the transaction decides them
+    /// (A4): a refused switch to the superuser, or a pending switch to
+    /// another user. Every derivation copies them; part of the identity of the environment.
+    /// A thin pointer (`Arc<Vec>`, not `Arc<[_]>`): `Env` is held by value in most engine
+    /// futures, and its growth by this field overflowed the 2 MiB lifecycle guard.
+    switches: Option<Arc<Vec<Switch>>>,
 }
 
 /// Whether a read in an [`Env`] was asked for by the caller or reached through a link (review
@@ -97,12 +112,14 @@ impl CompanyRefusal {
 fn derive(
     principal: &Arc<Principal>,
     context: &Context,
-) -> (Arc<Principal>, Option<CompanyRefusal>) {
+) -> (Arc<Principal>, Option<Arc<CompanyRefusal>>) {
     let derived = match context.allowed_company_ids() {
         Err(error) => {
             return (
                 Arc::clone(principal),
-                Some(CompanyRefusal::Malformed(error.message().to_owned())),
+                Some(Arc::new(CompanyRefusal::Malformed(
+                    error.message().to_owned(),
+                ))),
             );
         }
         Ok(None) => return (Arc::new(principal.with_baseline_companies()), None),
@@ -115,7 +132,10 @@ fn derive(
     };
     match derived {
         Ok(derived) => (Arc::new(derived), None),
-        Err(error) => (Arc::clone(principal), Some(CompanyRefusal::of(&error))),
+        Err(error) => (
+            Arc::clone(principal),
+            Some(Arc::new(CompanyRefusal::of(&error))),
+        ),
     }
 }
 
@@ -134,6 +154,8 @@ impl Env {
             disclosure: Disclosure::Direct,
             lineage: None,
             label_reader: None,
+            block: None,
+            switches: None,
         }
     }
 
@@ -215,6 +237,8 @@ impl Env {
             generation_attachments: attachments,
             label_reader: self.label_reader.as_ref().map(Arc::clone),
             operation_identity: self.operation_identity.clone(),
+            block: self.block.clone(),
+            switches: self.switches.clone(),
         }
     }
 
@@ -239,6 +263,8 @@ impl Env {
             generation_attachments: Arc::clone(&self.generation_attachments),
             label_reader: self.label_reader.as_ref().map(Arc::clone),
             operation_identity: self.operation_identity.clone(),
+            block: self.block.clone(),
+            switches: self.switches.clone(),
         }
     }
 
@@ -290,8 +316,7 @@ impl Env {
         }
     }
 
-    /// `fields.Date.context_today(record)` for this environment: today's date in [`Env::tz`]
-    /// .
+    /// `fields.Date.context_today(record)` for this environment: today's date in [`Env::tz`].
     ///
     /// # Errors
     ///
@@ -327,6 +352,11 @@ impl Env {
     /// the subject is not in; `Validation` when `allowed_company_ids` is not a list of company ids
     /// or a company is listed twice.
     pub fn companies(&self) -> Result<&[CompanyId]> {
+        if let Some(life) = self.block()
+            && life.is_widened()
+        {
+            return Err(life.widened_error());
+        }
         match &self.company_error {
             Some(refusal) => Err(refusal.to_error()),
             None => Ok(self.principal.companies().allowed()),
@@ -358,12 +388,79 @@ impl Env {
         Ok(self.company()?.map(CompanyId::get))
     }
 
+    /// The request transaction's caller for audit reads. Unlike ordinary sudo(false), this
+    /// removes every elevation. A core System transaction has no authenticated reader.
+    pub(crate) fn audit_reader_caller(&self) -> Result<Self> {
+        let original = match self.principal.actor() {
+            Some(crate::Actor::Impersonator(original)) => original.as_ref(),
+            _ => self.principal.as_ref(),
+        };
+        if original.kind() == crate::PrincipalKind::System {
+            return Err(Error::access("a later release: audit access denied"));
+        }
+        let (principal, company_error) = derive(
+            &Arc::new(original.with_elevation(Elevation::None)),
+            &self.context,
+        );
+        let mut caller = self.clone();
+        caller.principal = principal;
+        caller.company_error = company_error;
+        Ok(caller)
+    }
+
     /// `sudo(flag)`: same principal with elevation `Full` (on) or none (off). Turning it on
     /// strips `default_*` keys.
+    ///
+    /// In an environment of a scoped elevation block, turning superuser mode on
+    /// returns an environment that refuses every use ([`Env::companies`] reports it): a scope
+    /// never reaches `Full`. Turning it off keeps the block's lifetime.
     #[must_use]
     pub fn sudo(&self, flag: bool) -> Self {
         let flag = flag || self.principal.subject() == SUPERUSER_ID;
-        if flag == self.su() {
+        if flag {
+            if self.su() {
+                return self.clone();
+            }
+            if let Some(life) = self.block() {
+                return self.widened(life);
+            }
+            return self.with_full(true);
+        }
+        // off: `Full` and a scoped elevation both drop to none (a block's lifetime stays)
+        if matches!(self.principal.elevation(), Elevation::None) {
+            return self.clone();
+        }
+        self.with_full(false)
+    }
+
+    /// Superuser mode for the engine's own privileged steps (constraints, label and related
+    /// reads, `compute_sudo`): as `sudo(true)`, except that an environment of an elevation block
+    /// keeps its lifetime instead of being refused, so the step still ends with the block.
+    ///
+    /// Addon code does receive it: the body of a `compute_sudo` field gets this environment, bound
+    /// to the block. That grants nothing beyond what the base principal's `compute_sudo` already
+    /// runs with outside any block (a `compute_sudo` compute always runs in superuser mode), and
+    /// the environment is refused once the block closed. It is not a way for addon code to turn a
+    /// scope into superuser mode: the public [`Env::sudo`] refuses that.
+    #[must_use]
+    pub(crate) fn engine_sudo(&self) -> Self {
+        if self.su() {
+            return self.clone();
+        }
+        self.with_full(true)
+    }
+
+    /// This environment refusing every use: a widening of block `life`.
+    fn widened(&self, life: BlockLife) -> Self {
+        Self {
+            block: Some(Arc::new(life.widened())),
+            ..self.clone()
+        }
+    }
+
+    fn with_full(&self, flag: bool) -> Self {
+        // a refused switch to the superuser never reaches superuser mode
+        if flag && self.refuses_superuser() {
             return self.clone();
         }
         let (elevation, context) = if flag {
@@ -381,6 +478,8 @@ impl Env {
             generation_attachments: Arc::clone(&self.generation_attachments),
             label_reader: self.label_reader.as_ref().map(Arc::clone),
             operation_identity: self.operation_identity.clone(),
+            block: self.block.clone(),
+            switches: self.switches.clone(),
         }
     }
 
@@ -395,7 +494,12 @@ impl Env {
         let wanted = origin.principal.with_debug(self.principal.debug());
         // the origin's companies are not this environment's: the context decides again
         let (wanted, company_error) = derive(&Arc::new(wanted), &self.context);
-        if *self.principal == *wanted && self.company_error == company_error {
+        // the switches of the principal acted as, not this environment's (A4)
+        let switches = origin.switches.clone();
+        if *self.principal == *wanted
+            && self.company_error == company_error
+            && self.switches == switches
+        {
             return self.clone();
         }
         Self {
@@ -408,21 +512,85 @@ impl Env {
             generation_attachments: Arc::clone(&self.generation_attachments),
             label_reader: self.label_reader.as_ref().map(Arc::clone),
             operation_identity: self.operation_identity.clone(),
+            block: self.block.clone(),
+            switches,
         }
     }
 
-    /// `with_user(uid)`: `su` is false unless uid is the superuser; uid 0 keeps this environment
-    /// . The current principal becomes the new one's actor (its original actor
-    /// when it already impersonates someone). Takes an `i64` or a [`UserId`].
+    /// `with_user(uid)`: `su` is false unless uid is the superuser; uid 0 keeps this environment.
+    /// The current principal becomes the new one's actor (its original actor
+    /// when it already impersonates someone). Takes an `i64` or a [`UserId`]. The new subject is
+    /// resolved by the first operation that decides with it ([`crate::Transaction`]).
     ///
-    /// The permission rule (only `System`, a holder of `principal.impersonate` or the subject
-    /// itself may switch) and resolution of the new subject come with; until then the
-    /// new principal is unresolved, as under today's static policies.
+    /// Who may switch (A4) is decided on the principal of this
+    /// environment, the switcher (never the root actor of an impersonation chain):
+    ///
+    /// - `System`, or a switch to this environment's own subject: admitted;
+    /// - from an environment of a scoped elevation block, a switch to the superuser id is a
+    ///   widening: the environment refuses every use, as after `sudo(true)`;
+    /// - any other principal to the superuser id: refused. The environment keeps this
+    ///   environment's principal without elevation (so `uid()` still names the switcher; it never
+    ///   reports `su()`, kind `System` or subject 1, also after `sudo(true)`), and every engine
+    ///   entry refuses it with `Access` "only the system principal may act as the superuser (user
+    ///   {switcher} called with_user(1))";
+    /// - any other principal to another user: the environment acts for that user once the
+    ///   transaction admits it, which it does at the first use only when the switcher's own
+    ///   subject holds `principal.impersonate` (a scope never carries it; the ORM is told which
+    ///   capability that is with [`crate::OrmBuilder::impersonate_capability`]); otherwise every
+    ///   use is refused with `Access` "user {switcher} may not act as user {target}: with_user
+    ///   needs the capability 'principal.impersonate'".
+    ///
+    /// Addon code that opens a transaction or an environment for a caller uses
+    /// [`crate::Orm::begin_caller`] or [`crate::Orm::env_caller`], which never produce `System`.
     #[must_use]
     pub fn with_user(&self, uid: impl Into<i64>) -> Self {
         let Some(subject) = UserId::from_raw(uid.into()) else {
             return self.clone();
         };
+        // the superuser is `Full`: from an elevation block that is a widening, which
+        // takes precedence over the switch rule
+        if subject == SUPERUSER_ID
+            && let Some(life) = self.block()
+        {
+            return self.widened(life);
+        }
+        let system = self.principal.kind() == PrincipalKind::System && self.switches.is_none();
+        if system || subject == self.principal.subject() {
+            return self.switched(subject);
+        }
+        let switcher = self.principal.with_elevation(Elevation::None);
+        if subject == SUPERUSER_ID {
+            // refused when built: the switcher stays, without elevation
+            let (principal, company_error) = derive(&Arc::new(switcher), &self.context);
+            return Self {
+                principal,
+                company_error,
+                disclosure: Disclosure::Direct,
+                switches: self.with_switch(Switch::Superuser {
+                    switcher: self.principal.subject(),
+                }),
+                ..self.clone()
+            };
+        }
+        let mut env = self.switched(subject);
+        env.switches = self.with_switch(Switch::Pending {
+            switcher: Box::new(switcher),
+            target: subject,
+        });
+        env
+    }
+
+    /// This environment for `subject` without the switch rule (the body of `with_user` once the
+    /// switch is admitted): the engine's own questions about another user use it and never hand
+    /// the environment back ([`crate::Transaction::user_has_group`]). The block widening of a
+    /// switch to the superuser id still applies.
+    #[must_use]
+    pub(crate) fn switched(&self, subject: UserId) -> Self {
+        if subject == SUPERUSER_ID
+            && let Some(life) = self.block()
+        {
+            return self.widened(life);
+        }
         // another subject has other companies: the context is applied to them
         let (principal, company_error) = derive(
             &Arc::new(self.principal.switched_to(subject)),
@@ -438,10 +606,50 @@ impl Env {
             generation_attachments: Arc::clone(&self.generation_attachments),
             label_reader: self.label_reader.as_ref().map(Arc::clone),
             operation_identity: self.operation_identity.clone(),
+            block: self.block.clone(),
+            switches: self.switches.clone(),
         }
     }
 
-    /// The same environment in debug mode (`debug` true: `base.group_no_one` counts,;
+    /// The core's own `System` environment on this environment's registry, lineage and operation
+    /// identity: for an engine step that writes as the core after it checked the caller itself
+    /// ([`crate::Transaction::job_upsert_recurring_own`]). Never handed to addon code.
+    pub(crate) fn core_system(&self) -> Self {
+        Self {
+            registry: Arc::clone(&self.registry),
+            operation_identity: self.operation_identity.clone(),
+            generation_attachments: Arc::clone(&self.generation_attachments),
+            principal: Arc::new(Principal::system()),
+            context: Arc::new(Context::new()),
+            company_error: None,
+            disclosure: Disclosure::Direct,
+            lineage: self.lineage.clone(),
+            label_reader: None,
+            block: None,
+            switches: None,
+        }
+    }
+
+    /// This environment's switches with `switch` added at the end.
+    fn with_switch(&self, switch: Switch) -> Option<Arc<Vec<Switch>>> {
+        let mut all: Vec<Switch> = self.switches().to_vec();
+        all.push(switch);
+        Some(Arc::new(all))
+    }
+
+    /// The `with_user` switches the transaction still has to decide, in the order they were made.
+    pub(crate) fn switches(&self) -> &[Switch] {
+        self.switches.as_deref().map_or(&[], Vec::as_slice)
+    }
+
+    /// Whether this environment carries a refused switch to the superuser.
+    fn refuses_superuser(&self) -> bool {
+        self.switches()
+            .iter()
+            .any(|s| matches!(s, Switch::Superuser { .. }))
+    }
+
+    /// The same environment in debug mode (`debug` true: `base.group_no_one` counts;
     /// the request layer sets it from the session) or out of it. Debug mode adds the `User:` and
     /// `Groups:` lines to field access errors for the policy's debug users.
     #[must_use]
@@ -459,6 +667,8 @@ impl Env {
             generation_attachments: Arc::clone(&self.generation_attachments),
             label_reader: self.label_reader.as_ref().map(Arc::clone),
             operation_identity: self.operation_identity.clone(),
+            block: self.block.clone(),
+            switches: self.switches.clone(),
         }
     }
 
@@ -533,6 +743,8 @@ impl Env {
             generation_attachments: Arc::clone(&self.generation_attachments),
             label_reader: self.label_reader.as_ref().map(Arc::clone),
             operation_identity: self.operation_identity.clone(),
+            block: self.block.clone(),
+            switches: self.switches.clone(),
         }
     }
 
@@ -578,6 +790,36 @@ impl Env {
         self.disclosure == Disclosure::Direct
     }
 
+    /// The elevation block this environment belongs to.
+    pub(crate) fn block(&self) -> Option<BlockLife> {
+        self.block.as_deref().copied()
+    }
+
+    /// The environment of a new elevation block opened from this one (`Transaction::elevated`):
+    /// this environment's principal with `elevation`, carrying `life`. A block opened from an
+    /// environment of another block replaces that block's scope and lifetime (A3: inner scope
+    /// only).
+    pub(crate) fn in_block(&self, elevation: Elevation, life: BlockLife) -> Self {
+        Self {
+            principal: Arc::new(self.principal.with_elevation(elevation)),
+            block: Some(Arc::new(life)),
+            ..self.clone()
+        }
+    }
+
+    /// The base principal of an environment of an elevation block: no block, no elevation. Any
+    /// other environment is returned as it is.
+    pub(crate) fn block_base(&self) -> Self {
+        if self.block.is_none() {
+            return self.clone();
+        }
+        Self {
+            principal: Arc::new(self.principal.with_elevation(Elevation::None)),
+            block: None,
+            ..self.clone()
+        }
+    }
+
     /// `env[model]`: an empty recordset of a model by name.
     pub fn records(&self, model: &str) -> Result<Records> {
         let id = self.registry.model_id(model).ok_or_else(|| {
@@ -600,6 +842,8 @@ impl PartialEq for Env {
             && self.context == other.context
             && self.company_error == other.company_error
             && self.label_reader == other.label_reader
+            && self.block == other.block
+            && self.switches == other.switches
     }
 }
 
@@ -611,6 +855,8 @@ impl Hash for Env {
         self.context.hash(state);
         self.company_error.hash(state);
         self.label_reader.hash(state);
+        self.block.hash(state);
+        self.switches.hash(state);
     }
 }
 
@@ -621,6 +867,8 @@ impl fmt::Debug for Env {
             .field("su", &self.su())
             .field("principal", &self.principal)
             .field("context", &self.context.to_map())
+            .field("block", &self.block)
+            .field("switches", &self.switches)
             .finish_non_exhaustive()
     }
 }

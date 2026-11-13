@@ -215,6 +215,74 @@ async fn install_upgrade_and_uninstall_run_through_the_module_system() {
     db.cleanup().await.unwrap();
 }
 
+/// The live rows of each attachment schedule kind, as `(kind, count)` sorted by kind.
+async fn attachment_schedules(db: &TestDb) -> Vec<(String, i64)> {
+    db.client()
+        .await
+        .unwrap()
+        .query(
+            "SELECT kind, count(*) FROM erp_job WHERE kind = ANY($1) AND state <> 'dead' \
+             GROUP BY kind ORDER BY kind",
+            &[&vec![
+                "base.attachment_clean_staging",
+                "base.attachment_gc",
+                "base.attachment_reconcile",
+            ]],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect()
+}
+
+fn one_schedule_per_kind() -> Vec<(String, i64)> {
+    [
+        "base.attachment_clean_staging",
+        "base.attachment_gc",
+        "base.attachment_reconcile",
+    ]
+    .into_iter()
+    .map(|kind| (kind.to_owned(), 1))
+    .collect()
+}
+
+/// Initializing with the native composition creates the attachment schedules; an upgrade that
+/// leaves `base` alone does not touch them, and `erp module upgrade base` recreates the ones
+/// that were removed.
+#[tokio::test]
+async fn base_install_and_upgrade_keep_the_attachment_schedules() {
+    let addons = addons();
+    let db = initialized(&addons).await;
+    assert_eq!(attachment_schedules(&db).await, one_schedule_per_kind());
+
+    let out = erp(&db, &addons, "install", &["live_demo"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    db.client()
+        .await
+        .unwrap()
+        .execute(
+            "DELETE FROM erp_job WHERE kind LIKE 'base.attachment\\_%'",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(attachment_schedules(&db).await, []);
+
+    let out = erp(&db, &addons, "upgrade", &["live_demo"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(
+        attachment_schedules(&db).await,
+        [],
+        "an upgrade without base keeps the schedules as they are"
+    );
+
+    let out = erp(&db, &addons, "upgrade", &["base"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(attachment_schedules(&db).await, one_schedule_per_kind());
+    db.cleanup().await.unwrap();
+}
+
 /// `--dry-run` resolves the plan without a connection: no `DATABASE_URL` needed.
 #[tokio::test]
 async fn dry_run_needs_no_connection() {

@@ -13,7 +13,7 @@
 
 mod apply;
 mod builtin_schemas;
-pub use builtin_schemas::{form_schema, list_schema, search_schema};
+pub use builtin_schemas::{form_schema, list_schema, pivot_schema, search_schema};
 mod checked_input;
 pub use checked_input::{CheckedContent, CheckedNode, CheckedViewInput};
 mod arch;

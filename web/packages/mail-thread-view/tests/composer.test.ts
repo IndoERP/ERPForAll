@@ -212,6 +212,83 @@ test("a failed post stays as an unsent row that is retried with the same client_
   expect(polite(thread.element)).toBe("Unsent message discarded");
 });
 
+/// (partial: Retry and Discard on a failed pending post move focus before replacing children)
+test("Retry and Discard on failed pending message move focus without dropping to body", async () => {
+  const rig = new Rig();
+  rig.records(ann);
+  rig.load([message(1)]);
+  const thread = rig.thread({ order: "asc" });
+  const composer = rig.composer();
+  const offline = new Error("offline");
+  rig.transport.postHandler = () => Promise.reject(offline);
+  type(field(composer), "Failing msg");
+  expect(await composer.send()).toBe("failed");
+  await settle();
+
+  const row = thread.element.querySelector(".erp-mail-pending") as HTMLElement;
+  expect(row).not.toBeNull();
+  const retry = row.querySelector(".erp-mail-retry") as HTMLButtonElement;
+  retry.focus();
+  expect(thread.element.ownerDocument.activeElement).toBe(retry);
+
+  rig.transport.postHandler = answerWith(rig, 20, true);
+  retry.click();
+  expect(thread.element.ownerDocument.activeElement).not.toBe(thread.element.ownerDocument.body);
+  await settle();
+
+  rig.transport.postHandler = () => Promise.reject(offline);
+  type(field(composer), "Discard me");
+  await composer.send();
+  await settle();
+
+  const secondRow = thread.element.querySelector(".erp-mail-pending") as HTMLElement;
+  const discard = secondRow.querySelector(".erp-mail-discard") as HTMLButtonElement;
+  discard.focus();
+  expect(thread.element.ownerDocument.activeElement).toBe(discard);
+
+  discard.click();
+  expect(thread.element.ownerDocument.activeElement).not.toBe(thread.element.ownerDocument.body);
+  await settle();
+  expect(thread.element.ownerDocument.activeElement).toBe(field(composer));
+});
+
+/// (partial: focus queries its own root and does not jump to a sibling chatter)
+test("pending post focus query is scoped to its own container and does not jump to sibling composer", async () => {
+  const rig1 = new Rig();
+  rig1.records(ann);
+  rig1.load([message(1)]);
+  const container1 = document.createElement("div");
+  container1.className = "erp-mail-chatter";
+  const thread1 = rig1.thread();
+  const composer1 = rig1.composer();
+  container1.append(composer1.element, thread1.element);
+  document.body.append(container1);
+
+  const rig2 = new Rig();
+  rig2.records(ann);
+  rig2.load([message(1)]);
+  const container2 = document.createElement("div");
+  container2.className = "erp-mail-chatter";
+  const thread2 = rig2.thread();
+  const composer2 = rig2.composer();
+  container2.append(composer2.element, thread2.element);
+  document.body.append(container2);
+
+  const offline = new Error("offline");
+  rig2.transport.postHandler = () => Promise.reject(offline);
+  type(field(composer2), "Fail in second");
+  await composer2.send();
+  await settle();
+
+  const row = thread2.element.querySelector(".erp-mail-pending") as HTMLElement;
+  const discard = row.querySelector(".erp-mail-discard") as HTMLButtonElement;
+  discard.click();
+  await settle();
+
+  expect(document.activeElement).toBe(field(composer2));
+  expect(document.activeElement).not.toBe(field(composer1));
+});
+
 test("an answer that breaks the contract or cannot be applied leaves a failed row naming why", async () => {
   const rig = new Rig();
   rig.records(ann);
@@ -410,7 +487,7 @@ test("attach composer action triggers file input when uploadAttachment service i
   const composer = rig.composer();
   const attachBtn = composer.element.querySelector('.erp-mail-composer-action[data-action="attach"]') as HTMLButtonElement;
   expect(attachBtn).not.toBeNull();
-  expect(attachBtn.textContent).toContain("📎");
+  expect(attachBtn.querySelector("svg")).not.toBeNull();
   expect(attachBtn.textContent).toContain("Attach files");
 
   // Clicking attach action triggers chooseFiles (which clicks file input)
@@ -419,4 +496,28 @@ test("attach composer action triggers file input when uploadAttachment service i
   fileInput.click = () => { clicked = true; };
   attachBtn.click();
   expect(clicked).toBe(true);
+});
+
+/// (partial: a failed later upload leaves the earlier file visible as a chip)
+test("when the second of two files fails to upload, the first still shows as a chip", async () => {
+  const rig = new Rig();
+  rig.records(ann);
+  let calls = 0;
+  rig.services = {
+    ...rig.services,
+    uploadAttachment: async (file: File) => {
+      calls += 1;
+      if (calls === 2) throw new Error("upload failed");
+      return { id: 801, name: file.name, size: file.size, mimetype: file.type };
+    },
+  };
+  const composer = rig.composer();
+  const input = composer.element.querySelector<HTMLInputElement>(".erp-mail-file-input")!;
+  Object.defineProperty(input, "files", { value: [new File(["a"], "a.txt"), new File(["b"], "b.txt")], configurable: true });
+  input.dispatchEvent(new Event("change"));
+  await settle();
+  expect(composer.attachments.map((a) => a.id)).toEqual([801]);
+  const chips = composer.element.querySelectorAll(".erp-mail-attachment-chip");
+  expect(chips).toHaveLength(1);
+  expect(chips[0]!.getAttribute("data-id")).toBe("801");
 });

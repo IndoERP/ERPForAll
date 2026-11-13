@@ -41,12 +41,13 @@ mod policy;
 mod rpc;
 pub mod serve;
 mod snapshot;
+pub mod stand_in_base;
 mod sweep;
 mod tag;
 mod timeout_check;
 mod wire;
 
-pub use ai::{MockEmbeddingProvider, MockModelProvider};
+pub use ai::{MockEmbeddingProvider, MockModelProvider, ScriptedModelProvider, ScriptedReply};
 pub use cluster::{
     CLUSTER_LOG_ENV, Cluster, ClusterProbe, ClusterState, DATABASE_URLS_ENV, DEFAULT_MAX_USAGE_PCT,
     MAX_USAGE_ENV, PROBED_UNREACHABLE_ENV, SkippedCluster, Unreachable, UnreachableKind, Usage,

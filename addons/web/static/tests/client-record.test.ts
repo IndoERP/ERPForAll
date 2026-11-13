@@ -183,3 +183,40 @@ test("record defaults preserve absent and malformed placeholder data without syn
   expect(Object.hasOwn(state.values, "hint")).toBe(false); expect(Object.hasOwn(state.values, "name")).toBe(false); expect(state.dirty).toBe(false);
   defaults = { hint: 42 }; await state.load(); expect(state.values["hint"]).toBe(42);
 });
+
+test("editable related field shows typed value right after web_save and normalized value upon reload", async () => {
+  const companyFields: Field[] = [
+    { name: "name", kind: "char", label: "Name", readonly: false, required: true, relation: null, relationField: null, selection: null },
+    { name: "website", kind: "char", label: "Website", readonly: false, required: false, relation: null, relationField: null, selection: null },
+  ];
+  let savedWebsite = "http://acme.example";
+  const rpc = new RpcClient(async (path, init) => {
+    const p = String(path);
+    if (p.endsWith("web_save")) {
+      const body = JSON.parse(String(init?.body)) as { vals?: Record<string, unknown> };
+      const typedWebsite = body.vals?.["website"] as string;
+      return new Response(JSON.stringify([{ id: 1, name: "Acme", website: typedWebsite }]), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify([{ id: 1, name: "Acme", website: savedWebsite }]), {
+      headers: { "Content-Type": "application/json" },
+    });
+  }, () => {});
+
+  const state = new RecordState(rpc, "res.company", companyFields, {});
+  await state.load(1);
+  expect(state.values["website"]).toBe("http://acme.example");
+
+  state.change("website", "sync.example");
+  expect(state.dirty).toBe(true);
+  await state.save();
+
+  expect(state.dirty).toBe(false);
+  expect(state.values["website"]).toBe("sync.example");
+
+  savedWebsite = "http://sync.example";
+  await state.load(1);
+  expect(state.values["website"]).toBe("http://sync.example");
+});
+

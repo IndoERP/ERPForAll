@@ -16,9 +16,10 @@
 //!
 //! Every cell is validated against its field ([`validate_cell`]) whichever surface built it.
 //!
-//! Computed fields (S4a): `create` computes the precomputed fields of the rows before the INSERT
-//! , marks the other stored computes to compute, runs constraints and the inverses of
-//! the given fields; `write` protects the groups of inversed and editable computed fields, notifies
+//! Computed fields (S4a): `create` computes the precomputed fields of the rows before the INSERT,
+//! marks the other stored computes to compute, runs constraints and the inverses of
+//! the given fields (after the x2many values, when the create has any: [`AfterInsert`]); `write`
+//! protects the groups of inversed and editable computed fields, notifies
 //! dependents of the values that changed, then runs constraints and inverses (COMP §4.6–4.7).
 
 use std::any::Any;
@@ -75,7 +76,7 @@ impl Records {
     /// rollback (decision E1, F1). Database-generated output values (NULL included)
     /// and context defaults are refused before dispatching method overrides.
     pub async fn create(&self, tx: &mut Transaction, vals_list: Vec<RawVals>) -> Result<Records> {
-        tx.check_records(self)?;
+        tx.admit_records(self).await?;
         tx.check_capture_create(self, &vals_list)?;
         crate::event_namespace::check_create_capture(self, &vals_list)?;
         let before = tx.mutations();
@@ -106,7 +107,7 @@ impl Records {
     /// writer's actor and effective companies when another environment flushes them. Nested
     /// event-relevant side effects during a mutation or compute are refused by S7.
     pub async fn write(&self, tx: &mut Transaction, vals: RawVals) -> Result<()> {
-        tx.check_records(self)?;
+        tx.admit_records(self).await?;
         tx.check_capture_write(self, &vals)?;
         let before = tx.mutations();
         let result =
@@ -142,7 +143,7 @@ impl Records {
     /// the writer runs, including generated assignments on empty records. A `Validation` error,
     /// or any error after mutation, poisons the transaction until rollback.
     pub async fn write_base(&self, tx: &mut Transaction, vals: RawVals) -> Result<()> {
-        tx.check_records(self)?;
+        tx.admit_records(self).await?;
         let before = tx.mutations();
         let result =
             match crate::database_generated::check_write_names(tx, self.spec(), vals.names()) {
@@ -237,7 +238,7 @@ impl Records {
         tx: &mut Transaction,
         values: impl IntoIterator<Item = (&'v String, &'v Value)>,
     ) -> Result<()> {
-        tx.check_records(self)?;
+        tx.admit_records(self).await?;
         if self.is_empty() {
             crate::database_generated::check_write_names(
                 tx,
@@ -250,8 +251,8 @@ impl Records {
         self.write(tx, vals).await
     }
 
-    /// `records[field] = value` on the dynamic surface: one `write` on the whole set
-    /// ; `id` cannot be assigned.
+    /// `records[field] = value` on the dynamic surface: one `write` on the whole set;
+    /// `id` cannot be assigned.
     pub async fn set_value(&self, tx: &mut Transaction, field: &str, value: Value) -> Result<()> {
         if field == "id" {
             return Err(Error::programming("field 'id' cannot be assigned"));
@@ -278,7 +279,7 @@ impl Records {
         field_name: &str,
         translations: impl IntoIterator<Item = (K, Value)>,
     ) -> Result<bool> {
-        tx.check_records(self)?;
+        tx.admit_records(self).await?;
         self.ensure_one()?;
         // Authorize before capture settlement can flush earlier permitted work.
         self.check_access(tx, Operation::Write).await?;
@@ -568,19 +569,90 @@ pub(crate) enum AfterInsert<'a> {
     /// Nothing: the record check may be fused into the INSERT where the create predicate
     /// qualifies ([`Transaction::fused_create_check`]).
     Nothing,
+    /// An
+    /// inverse that reads the new record with the caller's rights then sees the relations its
+    /// record rules may test (a `res.users` restricted through `company_ids`).
     X2many(&'a FxHashSet<FieldId>),
+}
+
+/// The steps of a create that follow the INSERT and may rewrite the new rows: the editable
+/// related writes through given relations (COMP §4.8) and the inverses of the given fields
+/// (COMP §4.7), both under protection of the given and precomputed groups, then the constraints
+/// of the non-stored inversed fields. [`create_records`] runs them itself unless the create has
+/// x2many values ([`AfterInsert::X2many`]); then the caller runs them once those are written.
+#[must_use = "the inverses and related writes of the create have not run yet"]
+pub(crate) struct AfterCreate {
+    ids: Vec<RecId>,
+    protected: Vec<FxHashSet<FieldId>>,
+    related_writes: Vec<(crate::graph::Path, Cell, Vec<RecId>)>,
+    inversed: Vec<(&'static str, Vec<FieldId>, Vec<RecId>)>,
+    /// Constraints already run (stored fields given or precomputed) or run by the caller
+    /// (the x2many fields): skipped among the inversed fields' constraints.
+    skip: FxHashSet<FieldId>,
+}
+
+impl AfterCreate {
+    /// Run the related writes, the inverses and the constraints of the non-stored inversed
+    /// fields on `created`.
+    pub(crate) async fn run(self, tx: &mut Transaction, created: &Records) -> Result<()> {
+        let model = created.model_id();
+        let registry = Arc::clone(created.env().registry());
+        let spec = registry.model_by_id(model);
+        if !self.related_writes.is_empty() {
+            let guard = tx.guard();
+            let depth = protect_rows(tx, model, &self.ids, &self.protected);
+            let mut result = Ok(());
+            for (path, cell, recs) in self.related_writes {
+                let recs = created.browse_ids(recs);
+                result = tx.write_related_targets(&recs, &path, cell).await;
+                if result.is_err() {
+                    break;
+                }
+            }
+            tx.unprotect_to(depth);
+            guard.disarm();
+            result?;
+        }
+        if self.inversed.is_empty() {
+            return Ok(());
+        }
+        let guard = tx.guard();
+        let depth = protect_rows(tx, model, &self.ids, &self.protected);
+        let mut result = Ok(());
+        let mut inversed = self.inversed;
+        inversed.sort_by_key(|(_, fields, _)| fields.iter().min().copied());
+        for (method, _, recs) in &inversed {
+            let recs = created.browse_ids(recs.iter().copied());
+            result = call_method::<(), ()>(tx, &recs, method, ()).await;
+            if result.is_err() {
+                break;
+            }
+        }
+        tx.unprotect_to(depth);
+        guard.disarm();
+        result?;
+        // constraints of non-stored inversed fields
+        let names: FxHashSet<FieldId> = inversed
+            .iter()
+            .flat_map(|(_, fields, _)| fields.iter().copied())
+            .filter(|f| !spec.field_by_id(*f).store)
+            .collect();
+        tx.run_constraints(created, &names, &self.skip).await
+    }
 }
 
 /// `base.create`: see the module documentation. Also says how the record check runs: fused into
 /// the INSERT where the create predicate qualifies ([`Transaction::fused_create_check`]), after
-/// the create otherwise; `after` decides ([`AfterInsert`]).
+/// the create otherwise; `after` decides ([`AfterInsert`]). With [`AfterInsert::X2many`] the
+/// related writes and inverses are returned, not run ([`AfterCreate`]); with
+/// [`AfterInsert::Nothing`] they have run and none is returned.
 pub(crate) async fn create_records(
     tx: &mut Transaction,
     records: &Records,
     vals_list: Vec<RawVals>,
     after: AfterInsert<'_>,
-) -> Result<(Records, CreateCheck)> {
-    tx.check_records(records)?;
+) -> Result<(Records, CreateCheck, Option<AfterCreate>)> {
+    tx.admit_records(records).await?;
     let relevant = !vals_list.is_empty() && tx.capture_model_relevant(records.model_id());
     let before = tx.mutations();
     let guard = tx.guard();
@@ -601,18 +673,18 @@ async fn create_records_inner(
     records: &Records,
     vals_list: Vec<RawVals>,
     after: AfterInsert<'_>,
-) -> Result<(Records, CreateCheck)> {
+) -> Result<(Records, CreateCheck, Option<AfterCreate>)> {
     let none = FxHashSet::default();
     let (postponed, fuse) = match after {
         AfterInsert::Nothing => (&none, true),
         AfterInsert::X2many(fields) => (fields, false),
     };
-    tx.check_records(records)?;
+    tx.admit_records(records).await?;
     crate::event_namespace::check_create_capture(records, &vals_list)?;
     let env = records.env().clone();
     let model = records.model_id();
     if vals_list.is_empty() {
-        return Ok((records.browse_ids([]), CreateCheck::After));
+        return Ok((records.browse_ids([]), CreateCheck::After, None));
     }
     let registry = Arc::clone(env.registry());
     let spec = registry.model_by_id(model);
@@ -770,6 +842,9 @@ async fn create_records_inner(
     // empty or inverted periods of typed exclusions, before the INSERT
     crate::exclusion::check_rows(spec, &rows)?;
 
+    // Scalar admission (including monetary normalization) is complete. Encode only now.
+    tx.encode_create_properties(&env, spec, &mut rows).await?;
+
     // One column set for the whole call: every column some row gives, NULL where a row gives none
     // (the same as leaving the column out: columns have no database default, schema sync drops the
     // one it uses to fill existing rows). One INSERT shape per batch, ids drawn in input order by
@@ -891,7 +966,19 @@ async fn create_records_inner(
                     .iter()
                     .map(|&r| rows[r][f.index()].clone().unwrap_or(Cell::Null))
                     .collect();
-                arrays.push(array_param(spec.field_by_id(*f).storage(), cells)?);
+                arrays.push(array_param(spec.field_by_id(*f).storage(), cells).map_err(
+                    |error| {
+                        Error::new(
+                            error.kind(),
+                            format!(
+                                "{}.{}: {}",
+                                spec.name,
+                                spec.field_by_id(*f).name,
+                                error.message()
+                            ),
+                        )
+                    },
+                )?);
             }
             if fields.is_empty() {
                 arrays.push(Box::new(chunk.len() as i64));
@@ -1102,47 +1189,22 @@ async fn create_records_inner(
             }
         }
     }
-    if !related_writes.is_empty() {
-        let guard = tx.guard();
-        let depth = protect_rows(tx, model, &ids, &protected);
-        let mut result = Ok(());
-        for (path, cell, recs) in related_writes {
-            let recs = created.browse_ids(recs);
-            result = tx.write_related_targets(&recs, &path, cell).await;
-            if result.is_err() {
-                break;
-            }
+    // The related writes and the inverse methods, under protection of the given and precomputed
+    // groups (COMP §4.7, §4.8): now, or after the caller's x2many writes ([`AfterInsert`]).
+    let after_create = AfterCreate {
+        ids,
+        protected,
+        related_writes,
+        inversed,
+        skip: stored_names.union(postponed).copied().collect(),
+    };
+    let after_create = match after {
+        AfterInsert::Nothing => {
+            after_create.run(tx, &created).await?;
+            None
         }
-        tx.unprotect_to(depth);
-        guard.disarm();
-        result?;
-    }
-
-    // Inverse methods, under protection of the given and precomputed groups (COMP §4.7).
-    if !inversed.is_empty() {
-        let guard = tx.guard();
-        let depth = protect_rows(tx, model, &ids, &protected);
-        let mut result = Ok(());
-        inversed.sort_by_key(|(_, fields, _)| fields.iter().min().copied());
-        for (method, _, recs) in &inversed {
-            let recs = created.browse_ids(recs.iter().copied());
-            result = call_method::<(), ()>(tx, &recs, method, ()).await;
-            if result.is_err() {
-                break;
-            }
-        }
-        tx.unprotect_to(depth);
-        guard.disarm();
-        result?;
-        // constraints of non-stored inversed fields
-        let names: FxHashSet<FieldId> = inversed
-            .iter()
-            .flat_map(|(_, fields, _)| fields.iter().copied())
-            .filter(|f| !spec.field_by_id(*f).store)
-            .collect();
-        let skip: FxHashSet<FieldId> = stored_names.union(postponed).copied().collect();
-        tx.run_constraints(&created, &names, &skip).await?;
-    }
+        AfterInsert::X2many(_) => Some(after_create),
+    };
     if spec.name == "ir.sequence" || spec.name == "ir.sequence.date_range" {
         crate::sequence::on_records_created(tx, &created).await?;
     }
@@ -1155,7 +1217,7 @@ async fn create_records_inner(
     } else {
         CreateCheck::After
     };
-    Ok((created, check))
+    Ok((created, check, after_create))
 }
 
 /// Refuse rows that give no value for a required stored compute computed after the INSERT
@@ -1468,7 +1530,11 @@ async fn precompute_rows(
                 };
                 ids.push(id);
             }
-            let run_env = if fc.sudo { env.sudo(true) } else { env.clone() };
+            let run_env = if fc.sudo {
+                env.engine_sudo()
+            } else {
+                env.clone()
+            };
             // Consumers must never receive an unnormalized monetary input.
             PendingMonetary {
                 spec,
@@ -1702,7 +1768,7 @@ pub(crate) async fn write_records(
     if records.is_empty() {
         return Ok(());
     }
-    tx.check_records(records)?;
+    tx.admit_records(records).await?;
     let env = records.env().clone();
     let model = records.model_id();
     let registry = Arc::clone(env.registry());
@@ -1710,6 +1776,11 @@ pub(crate) async fn write_records(
     tx.check_model(&env, model, Operation::Write)?;
     let shared = Arc::clone(&tx.shared);
     let graph = shared.graph.model(model);
+    let property_input = vals.iter().any(|(name, _)| {
+        spec.field(name)
+            .is_some_and(|field| field.company_dependent)
+    });
+    tx.property_write_origin(records, property_input).await?;
     let mut items: Vec<(FieldId, Cell, bool)> = Vec::new();
     // editable related fields through relations: written on their targets (COMP §4.8)
     let mut related_writes: Vec<(crate::graph::Path, Cell)> = Vec::new();
@@ -1773,8 +1844,7 @@ pub(crate) async fn write_records(
     }
     items.sort_by_key(|(fid, _, _)| (write_sequence(&spec.field_by_id(*fid).ty), *fid));
     // One budget for the whole call. The monetary cells this write stages are known now: refuse
-    // an oversized request before any recompute, protection or staging buffer exists
-    // .
+    // an oversized request before any recompute, protection or staging buffer exists.
     let budget = crate::monetary::StagingBudget::new(records.len());
     let monetary_items = items
         .iter()
@@ -1919,7 +1989,49 @@ async fn write_protected(
             .model_mut(model)
             .clear_pending(fid, records.rec_ids());
         let mut changed = Vec::new();
-        if field.translate {
+        if field.company_dependent {
+            if records.rec_ids().iter().any(|id| id.is_new()) {
+                return Err(crate::company_dependent_runtime::unsupported(
+                    spec.name,
+                    field.name,
+                    "new-record writes",
+                ));
+            }
+            tx.ensure(records, fid).await?;
+            let (company, fallback) = tx.property_context(&env, model, fid)?;
+            for (i, id) in records.rec_ids().iter().enumerate() {
+                let scalar = if monetary.contains(&fid) {
+                    let slot = slots.binary_search(&fid).map_err(|_| {
+                        Error::programming("Monetary property staging lost a field")
+                    })?;
+                    staged[i][slot].as_ref().ok_or_else(|| {
+                        Error::programming("Monetary property staging lost an input")
+                    })?
+                } else {
+                    &cell
+                };
+                crate::company_dependent_runtime::check_required(spec, field, scalar)?;
+                let old = tx.cache.get(model, fid, *id).ok_or_else(|| {
+                    Error::programming("Company-dependent write lost its loaded map")
+                })?;
+                let new =
+                    crate::company_dependent::apply(&field.ty, &old, company, scalar, &fallback)?;
+                if !force && old.same_value(&new) {
+                    continue;
+                }
+                tx.properties_mut()
+                    .baselines
+                    .entry((model, fid, *id))
+                    .or_insert(old);
+                tx.cache
+                    .model_mut(model)
+                    .set(fid, storage, *id, new, stored)?;
+                // a cell is dirty from here on: an error in a later field must poison the
+                // transaction (`poison_after`), not leave an unbound dirty cell
+                tx.note_mutation();
+                changed.push(*id);
+            }
+        } else if field.translate {
             let active = tx.active_languages().await?;
             if !records.rec_ids().iter().all(|id| id.is_new()) && stored {
                 tx.ensure(records, fid).await?;
@@ -1956,6 +2068,7 @@ async fn write_protected(
                     new_json,
                     stored && !id.is_new(),
                 )?;
+                tx.note_mutation();
                 changed.push(*id);
             }
         } else {
@@ -1971,6 +2084,7 @@ async fn write_protected(
                 };
                 if let Some(slot) = &context_slot {
                     tx.slot_set(slot, model, fid, [(*id, cell.clone())])?;
+                    tx.note_mutation();
                     changed.push(*id);
                     continue;
                 }
@@ -1981,6 +2095,7 @@ async fn write_protected(
                     continue;
                 }
                 cache.set(fid, storage, *id, cell.clone(), stored && !id.is_new())?;
+                tx.note_mutation();
                 changed.push(*id);
             }
         }
@@ -2137,8 +2252,7 @@ pub(crate) fn id_param(ids: &[RealId]) -> Vec<i64> {
 impl Transaction {
     /// Recompute and write everything pending, repeating until nothing is left (COMP §4.11).
     /// Recomputation runs in the transaction's base environment ([`Transaction::env`]), whoever
-    /// modified the dependencies, and rows it writes get that environment's uid as `write_uid`
-    /// .
+    /// modified the dependencies, and rows it writes get that environment's uid as `write_uid`.
     ///
     /// Fails with a `Programming` error naming what is still pending (to compute or to write)
     /// when computations keep producing work beyond [`crate::OrmConfig::max_flush_rounds`]
@@ -2351,12 +2465,33 @@ impl Transaction {
                 if crate::precision::usage(field).is_some()
                     && let Some(cell) = self.cache.get(spec.id, *fid, *id)
                 {
-                    crate::precision::validate(self, &env, spec, field, &cell).await?;
+                    let origin = if field.company_dependent {
+                        self.engine
+                            .properties
+                            .origins
+                            .get(&(spec.id, *id))
+                            .cloned()
+                            .ok_or_else(|| {
+                                Error::programming(
+                                    "Company-dependent flush is missing its writer origin",
+                                )
+                            })?
+                    } else {
+                        env.clone()
+                    };
+                    let scalar = if field.company_dependent {
+                        self.prepare_properties(&origin, spec).await?;
+                        let (company, fallback) = self.property_context(&origin, spec.id, *fid)?;
+                        crate::company_dependent::project(&field.ty, &cell, company, &fallback)?
+                    } else {
+                        cell
+                    };
+                    crate::precision::validate(self, &origin, spec, field, &scalar).await?;
                 }
             }
         }
-        // Rows written without a pending write_uid (recompute only) get the flushing uid
-        // , and the audit values set here notify their dependents.
+        // Rows written without a pending write_uid (recompute only) get the flushing uid,
+        // and the audit values set here notify their dependents.
         let mut audit_changes: Vec<(FieldId, Vec<RecId>)> = Vec::new();
         if spec.log_access
             && let Some(wu) = spec.field("write_uid")
@@ -2398,11 +2533,34 @@ impl Transaction {
             let mut arrays: Vec<Box<dyn ToSql + Sync + Send>> =
                 Vec::with_capacity(group_fields.len());
             let mut merge_cols: Vec<&str> = Vec::new();
+            let mut company_cols: Vec<&str> = Vec::new();
             for fid in &group_fields {
                 let field = spec.field_by_id(*fid);
                 let Some(col) = field.column() else { continue };
                 columns.push((field.name, col));
-                if field.translate {
+                if field.company_dependent {
+                    company_cols.push(field.name);
+                    let deltas = rec_ids
+                        .iter()
+                        .map(|id| {
+                            let current = self.cache.get(spec.id, *fid, *id).ok_or_else(|| {
+                                Error::programming("Company-dependent flush lost its map")
+                            })?;
+                            let before = self
+                                .engine
+                                .properties
+                                .baselines
+                                .get(&(spec.id, *fid, *id))
+                                .ok_or_else(|| {
+                                    Error::programming(
+                                        "Company-dependent flush is missing its baseline",
+                                    )
+                                })?;
+                            crate::company_dependent::delta(before, &current)
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    arrays.push(array_param(field.storage(), deltas)?);
+                } else if field.translate {
                     merge_cols.push(field.name);
                     let delta_cells: Vec<Cell> = rec_ids
                         .iter()
@@ -2457,10 +2615,13 @@ impl Transaction {
             };
             changed_fields.sort_by_key(|field| spec.field_by_id(*field).name);
             changed_fields.dedup();
-            if changed_fields.len() > 128 {
+            if changed_fields.len() > erp_registry::MAX_EVENT_FIELD_NAMES {
                 return Err(Error::new(
                     erp_fields::ErrorKind::ResourceExhausted,
-                    "outbox CaptureLimit: event exceeds 128 changed field names",
+                    format!(
+                        "outbox CaptureLimit: event exceeds {} changed field names",
+                        erp_registry::MAX_EVENT_FIELD_NAMES
+                    ),
                 ));
             }
             let changed_names: Vec<&str> = changed_fields
@@ -2485,7 +2646,8 @@ impl Transaction {
                 .expected(expected.is_some())
                 .returning_old(&hooked_names)
                 .returning_changed(&changed_names)
-                .merge_json(&merge_cols);
+                .merge_json(&merge_cols)
+                .merge_company(&company_cols);
             let sql = erp_sql::version::update_from_arrays_cached(
                 self.registry(),
                 spec,
@@ -2628,13 +2790,34 @@ impl Transaction {
             for fid in &group_fields {
                 let fs = spec.field_by_id(*fid);
                 mc.mark_clean(*fid, &rec_ids);
-                if fs.translate {
+                if fs.translate || fs.company_dependent {
                     mc.invalidate(Some(&[*fid][..]), Some(&rec_ids));
                     for id in &rec_ids {
                         self.translated_baselines.remove(&(spec.id, *fid, *id));
                     }
                 }
             }
+            for fid in &group_fields {
+                if spec.field_by_id(*fid).company_dependent {
+                    for id in &rec_ids {
+                        self.properties_mut()
+                            .baselines
+                            .remove(&(spec.id, *fid, *id));
+                    }
+                }
+            }
+            for id in &rec_ids {
+                if !self
+                    .engine
+                    .properties
+                    .baselines
+                    .keys()
+                    .any(|(model, _, record)| *model == spec.id && record == id)
+                {
+                    self.properties_mut().origins.remove(&(spec.id, *id));
+                }
+            }
+            let mc = self.cache.model_mut(spec.id);
             if let Some(wd) = spec.field("write_date").filter(|_| spec.log_access) {
                 match now {
                     Some(n) => {

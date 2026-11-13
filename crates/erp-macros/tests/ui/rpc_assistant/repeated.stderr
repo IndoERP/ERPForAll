@@ -1,0 +1,5 @@
+error: `assistant` is given twice
+ --> tests/ui/rpc_assistant/repeated.rs:4:45
+  |
+4 |     #[rpc(effect = read, assistant = offer, assistant = offer)]
+  |                                             ^^^^^^^^^

@@ -1,4 +1,4 @@
-//! The messaging store wire contract (spec).
+//! The messaging store wire contract.
 //!
 //! Records grouped by model, field operations, a delete marker, a wire major version, a schema
 //! generation and a PostgreSQL snapshot descriptor, plus the validated types that carry them.

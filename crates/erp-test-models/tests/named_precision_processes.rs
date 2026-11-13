@@ -159,7 +159,12 @@ async fn named_precision_survives_process_loss() {
     assert_eq!(ready, format!("ready {}", child.id().unwrap()));
     assert_ne!(child.id().unwrap(), std::process::id());
     let mut before = h.begin().await.unwrap();
-    let items = before.env().records("test_defaults.item").unwrap();
+    let items = before
+        .env()
+        .with_company(1)
+        .unwrap()
+        .records("test_defaults.item")
+        .unwrap();
     let error = items
         .create(&mut before, vec![row("1.234")])
         .await
@@ -184,7 +189,12 @@ async fn named_precision_survives_process_loss() {
     );
     before.rollback().await.unwrap();
     let mut after = h.begin().await.unwrap();
-    let items = after.env().records("test_defaults.item").unwrap();
+    let items = after
+        .env()
+        .with_company(1)
+        .unwrap()
+        .records("test_defaults.item")
+        .unwrap();
     items.create(&mut after, vec![row("1.2345")]).await.unwrap();
     after.rollback().await.unwrap();
     stdin.write_all(b"stage8\n").await.unwrap();
@@ -197,7 +207,12 @@ async fn named_precision_survives_process_loss() {
         .unwrap();
     assert!(!status.success());
     let mut recovered = h.begin().await.unwrap();
-    let items = recovered.env().records("test_defaults.item").unwrap();
+    let items = recovered
+        .env()
+        .with_company(1)
+        .unwrap()
+        .records("test_defaults.item")
+        .unwrap();
     let error = items
         .create(&mut recovered, vec![row("1.23456")])
         .await

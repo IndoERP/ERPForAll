@@ -2,10 +2,10 @@
 //!
 //! - [`Orm`] holds a database's registry, method dispatch tables, access policy and pool;
 //!   [`Orm::begin`] opens a [`Transaction`].
-//! - A [`Transaction`] is owned by one task and passed as `&mut` to every data operation
-//!   . It owns the columnar record cache shared by all environments.
+//! - A [`Transaction`] is owned by one task and passed as `&mut` to every data operation.
+//!   It owns the columnar record cache shared by all environments.
 //! - [`Env`] and recordsets ([`Records`], [`RecordSet<M>`]) are plain values. An `Env` carries the
-//!   [`Principal`] it acts for.
+//!   [`Principal`] it acts.
 //! - `create`, `write` and other model methods dispatch through override chains
 //!   ([`dispatch`]); `base` implements `create` and `write`.
 //! - [`Transaction::init_models`] creates and updates tables, partitioned ones included;
@@ -44,6 +44,8 @@ mod cache;
 mod candidate;
 mod commands;
 mod company;
+pub mod company_dependent;
+mod company_dependent_runtime;
 pub mod compute;
 mod context;
 mod correlation;
@@ -53,6 +55,8 @@ mod core_ddl;
 mod database_generated;
 mod dberror;
 pub(crate) mod defaults;
+/// Transactional deltas: the synchronous guarded apply.
+pub mod delta;
 mod describe;
 mod selection;
 pub use selection::{SelectionContext, SelectionFn, SelectionLimits, SelectionSuper};
@@ -62,6 +66,11 @@ mod env;
 mod event_namespace;
 mod event_schema;
 pub use event_schema::{EVENT_PREMAKE_DAYS, EventSchemaProblem, EventSchemaReport};
+mod event_upkeep;
+pub use event_upkeep::{
+    AUDIT_TABLE_NAME, EventPartitionWindow, EventTableUpkeep, EventUpkeepReport, EventUpkeepTick,
+    OUTBOX_TABLE_NAME,
+};
 mod generation;
 pub use generation::{
     GenerationAttachment, GenerationAttachmentFactory, GenerationCompose, GenerationComposition,
@@ -113,9 +122,12 @@ mod rows_stream;
 pub mod rpc;
 mod rset_ops;
 mod schema;
+mod schema_company;
 pub mod schema_generated;
 mod schema_index;
+mod schema_sqlobj;
 mod schema_steps;
+pub use schema_company::CompanyMigrationPolicy;
 mod search;
 pub mod search_method;
 /// Sequence numbering (`ir.sequence`).
@@ -170,7 +182,10 @@ pub use compute::{
 pub use context::Context;
 pub use core_ddl::{AfterModels, CORE_DDL, CoreDdl, CoreTableRequirement};
 #[doc(hidden)]
-pub use core_ddl::{CorePhase, run as core_ddl_run, validate as core_ddl_validate};
+pub use core_ddl::{
+    CorePhase, pending as core_ddl_pending, refuse_deferred as core_ddl_refuse_deferred,
+    run as core_ddl_run, run_deferred as core_ddl_run_deferred, validate as core_ddl_validate,
+};
 pub use dispatch::{
     BoxFuture, Chain, ChainData, Dispatch, DynSuper, ImplKind, METHOD_CODECS, MethodCodec,
     MethodCodecImpl, MethodDispatchTarget, MethodFn, MethodImpl, MethodInvoker, Super, TypedCodec,
@@ -209,7 +224,7 @@ pub use principal::{
     MAX_XML_ID_LEN, MethodAllow, ModelAllow, OperationSet, Principal, PrincipalBinding,
     PrincipalBuilder, PrincipalError, PrincipalHint, PrincipalKind, PrincipalShape, QualifiedXmlId,
     Resolution, ResolutionEpoch, SUPERUSER_ID, Scope, ScopeBuilder, ScopeItem, SnapshotId,
-    TxSerial, UserId, registered_capability,
+    TxSerial, UserId, missing_reset_target, registered_capability,
 };
 pub use read::{Load, read_value};
 pub use read_group::{Granularity, GroupValue, Groups, ReadGroup, ReadGroupingSets, RecordsAs};
@@ -260,8 +275,9 @@ pub use transaction::raw_row::{IdentityMode, IdentityReport};
 pub use transaction::raw_row::{SqlRow, SqlValue};
 pub use transaction::{
     BaseInstallGrant, BaseInstallGuard, BeginOptions, CommitError, CredentialOptions,
-    FinalStatement, Isolation, OperationControl, OperationKey, Orm, OrmBuilder, OrmConfig,
-    PureMethods, RawStatements, SavepointOutcome, Transaction, TxIntent, WriteOp,
+    FinalStatement, HookScope, Isolation, OperationControl, OperationKey, Orm, OrmBuilder,
+    OrmConfig, PureMethods, RawStatements, ReadAuditOwner, SavepointOutcome, Transaction, TxIntent,
+    WriteOp,
 };
 pub use typed_rel::{Cmd, Many2one, TypedRelation, X2many, X2manyValue};
 pub use upsert::{

@@ -59,6 +59,27 @@ fn nodes_of<'a>(view: &'a serde_json::Value, kind: &str) -> Vec<&'a serde_json::
         .collect()
 }
 
+/// The kind of arena node `i` of a described view.
+fn arena_kind(arena: &[serde_json::Value], i: u64) -> &str {
+    arena[i as usize]["kind"].as_str().unwrap()
+}
+
+/// The child indexes of arena node `i`.
+fn arena_kids(arena: &[serde_json::Value], i: u64) -> Vec<u64> {
+    arena[i as usize]["children"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|child| child.as_u64().unwrap())
+        .collect()
+}
+
+/// Arena node `i`, which must be a field node.
+fn arena_field(arena: &[serde_json::Value], i: u64) -> &serde_json::Value {
+    assert_eq!(arena_kind(arena, i), "field");
+    &arena[i as usize]
+}
+
 #[test]
 fn installed_base_serves_the_preferences_dialog_to_an_internal_user() {
     // The module install plus native RPC chain needs more than the default test-thread stack
@@ -286,7 +307,7 @@ async fn preferences_end_to_end() {
     assert!(description["notices"].as_array().unwrap().is_empty());
     let form = &description["views"][0];
     assert_eq!(form["type"], "form");
-    let fields: Vec<(String, String)> = nodes_of(form, "field")
+    let mut fields: Vec<(String, String)> = nodes_of(form, "field")
         .iter()
         .map(|node| {
             (
@@ -295,15 +316,21 @@ async fn preferences_end_to_end() {
             )
         })
         .collect();
-    assert_eq!(
-        fields,
-        [
-            ("name".to_owned(), "char".to_owned()),
-            ("email".to_owned(), "char".to_owned()),
-            ("lang".to_owned(), "web.preference_choice".to_owned()),
-            ("tz".to_owned(), "web.preference_choice".to_owned()),
-        ]
-    );
+    // the arena order is the layout's business (below); the set is the case's
+    fields.sort();
+    let mut expected_fields: Vec<(String, String)> = [
+        ("name", "char"),
+        ("email", "email"),
+        ("phone", "phone"),
+        ("lang", "web.preference_choice"),
+        ("color_scheme", "radio"),
+        ("tz", "web.preference_choice"),
+    ]
+    .into_iter()
+    .map(|(name, widget)| (name.to_owned(), widget.to_owned()))
+    .collect();
+    expected_fields.sort();
+    assert_eq!(fields, expected_fields);
     let buttons = nodes_of(form, "button");
     assert_eq!(buttons.len(), 2);
     assert_eq!(
@@ -327,14 +354,78 @@ async fn preferences_end_to_end() {
     assert_eq!(cancel[0]["details"]["hotkey"], "x");
     assert_eq!(nodes_of(form, "footer").len(), 1);
 
+    // receives. Group names are not on the wire (a group node carries label, columns, colspan),
+    // so the names the extension points rely on are read from the stored arch below.
+    let arena = form["nodes"].as_array().unwrap().as_slice();
+    let kind = |i: u64| arena_kind(arena, i);
+    let kids = |i: u64| arena_kids(arena, i);
+    let kinds = |i: u64| kids(i).into_iter().map(kind).collect::<Vec<_>>();
+    let field_at = |i: u64| arena_field(arena, i);
+    let root = form["root"].as_u64().unwrap();
+    assert_eq!(kind(root), "form");
+    assert_eq!(kinds(root), ["sheet", "footer"]);
+    let sheet = kids(root)[0];
+    assert_eq!(kinds(sheet), ["title", "notebook"]);
+    let title = kids(sheet)[0];
+    assert_eq!(kinds(title), ["heading", "field", "field"]);
+    let title_kids = kids(title);
+    assert_eq!(arena[title_kids[0] as usize]["level"], 1);
+    let heading_fields = kids(title_kids[0]);
+    assert_eq!(heading_fields.len(), 1);
+    assert_eq!(field_at(heading_fields[0])["field"]["name"], "name");
+    assert_eq!(field_at(title_kids[1])["field"]["name"], "email");
+    assert_eq!(field_at(title_kids[1])["widget"], "email");
+    assert_eq!(field_at(title_kids[2])["field"]["name"], "phone");
+    assert_eq!(field_at(title_kids[2])["widget"], "phone");
+    let notebook = kids(sheet)[1];
+    assert_eq!(kinds(notebook), ["page", "page"]);
+    let pages = kids(notebook);
+    assert_eq!(arena[pages[0] as usize]["name"], "preferences_page");
+    assert_eq!(arena[pages[0] as usize]["label"], "Preferences");
+    assert_eq!(arena[pages[1] as usize]["name"], "calendar");
+    assert_eq!(arena[pages[1] as usize]["label"], "Calendar");
+    // Preferences page: an outer group with a left group (language) and a right group (colour scheme)
+    assert_eq!(kinds(pages[0]), ["group"]);
+    let outer = kids(pages[0])[0];
+    assert_eq!(kinds(outer), ["group", "group"]);
+    let columns = kids(outer);
+    let left = kids(columns[0]);
+    assert_eq!(left.len(), 1);
+    assert_eq!(field_at(left[0])["field"]["name"], "lang");
+    let right = kids(columns[1]);
+    assert_eq!(right.len(), 1);
+    assert_eq!(field_at(right[0])["field"]["name"], "color_scheme");
+    assert_eq!(field_at(right[0])["widget"], "radio");
+    assert_eq!(field_at(right[0])["options"]["horizontal"], true);
+    // Calendar page: an outer group holding one group with the time zone
+    assert_eq!(kinds(pages[1]), ["group"]);
+    let calendar_outer = kids(pages[1])[0];
+    assert_eq!(kinds(calendar_outer), ["group"]);
+    let calendar_group = kids(calendar_outer)[0];
+    assert_eq!(kinds(calendar_group), ["field"]);
+    assert_eq!(field_at(kids(calendar_group)[0])["field"]["name"], "tz");
+    // the names an addon's xpath relies on are in the stored arch
+    let arch: String = client
+        .query_one("SELECT arch_db FROM ir_ui_view WHERE id = $1", &[&view_id])
+        .await
+        .unwrap()
+        .get(0);
+    for name in ["other_preferences", "calendar_preferences"] {
+        assert!(
+            arch.contains(&format!("<group name=\"{name}\"")),
+            "the stored preferences arch has no group named {name}: {arch}"
+        );
+    }
+
     let (status, rows) = call(
         "/json/2/res.users/read",
-        serde_json::json!({"ids": [me], "fields": ["name", "email", "lang", "tz"]}),
+        serde_json::json!({"ids": [me], "fields": ["name", "email", "phone", "lang", "color_scheme", "tz"]}),
     )
     .await;
     assert_eq!(status, 200, "{rows}");
     assert_eq!(rows[0]["lang"], "en_US");
     assert_eq!(rows[0]["tz"], "UTC");
+    assert_eq!(rows[0]["color_scheme"], "system");
     let (status, foreign) = call(
         "/json/2/res.users/read",
         serde_json::json!({"ids": [other], "fields": ["name"]}),
@@ -396,6 +487,53 @@ async fn preferences_end_to_end() {
         "login is not a field a user may write: {refused}"
     );
 
+    let (status, saved) = call(
+        "/json/2/res.users/write",
+        serde_json::json!({"ids": [me], "vals": {"phone": "+62 21 555 0100", "color_scheme": "dark"}}),
+    )
+    .await;
+    assert_eq!(status, 200, "{saved}");
+    let (status, rows) = call(
+        "/json/2/res.users/read",
+        serde_json::json!({"ids": [me], "fields": ["phone", "color_scheme"]}),
+    )
+    .await;
+    assert_eq!(status, 200, "{rows}");
+    assert_eq!(rows[0]["phone"], "+62 21 555 0100");
+    assert_eq!(rows[0]["color_scheme"], "dark");
+    let (status, refused) = call(
+        "/json/2/res.users/write",
+        serde_json::json!({"ids": [me], "vals": {"color_scheme": "sepia"}}),
+    )
+    .await;
+    assert_eq!(status, 422, "{refused}");
+    assert_eq!(refused["name"], "erp.exceptions.ValidationError");
+    assert_eq!(
+        refused["message"],
+        "Wrong value for res.users.color_scheme: 'sepia'"
+    );
+    let (status, refused) = call(
+        "/json/2/res.users/write",
+        serde_json::json!({"ids": [me], "vals": {"color_scheme": false}}),
+    )
+    .await;
+    assert_eq!(status, 422, "{refused}");
+    assert_eq!(refused["name"], "erp.exceptions.ValidationError");
+    assert_eq!(refused["message"], "The color scheme cannot be empty.");
+    let (status, foreign) = call(
+        "/json/2/res.users/write",
+        serde_json::json!({"ids": [other], "vals": {"phone": "000"}}),
+    )
+    .await;
+    assert_eq!(status, 403, "{foreign}");
+    assert_eq!(foreign["name"], "erp.exceptions.AccessError");
+    let (status, ok) = call(
+        "/json/2/res.users/write",
+        serde_json::json!({"ids": [me], "vals": {"phone": false}}),
+    )
+    .await;
+    assert_eq!(status, 200, "clearing the phone is accepted: {ok}");
+
     let (status, done) = call(
         "/json/2/res.users/preference_save",
         serde_json::json!({"ids": [me]}),
@@ -416,7 +554,9 @@ async fn preferences_end_to_end() {
     // The calls the browser makes for the dialog, as the internal user on the installed rows:
     // the record load, the onchange of an edit, the save, and the normalisation of the button's
     // action result (`addons/web/static/src/client/record.ts`, `app.ts`).
-    let spec = serde_json::json!({"name": {}, "email": {}, "lang": {}, "tz": {}});
+    let spec = serde_json::json!({
+        "name": {}, "email": {}, "phone": {}, "lang": {}, "color_scheme": {}, "tz": {}
+    });
     let (status, records) = call(
         "/json/2/res.users/web_read",
         serde_json::json!({"ids": [me], "specification": spec}),
@@ -429,7 +569,10 @@ async fn preferences_end_to_end() {
         "/json/2/res.users/onchange",
         serde_json::json!({
             "ids": [me],
-            "values": {"name": "Prefs User", "email": false, "lang": "en_US", "tz": "Asia/Jakarta"},
+            "values": {
+                "name": "Prefs User", "email": false, "phone": false, "lang": "en_US",
+                "color_scheme": "dark", "tz": "Asia/Jakarta"
+            },
             "field_names": ["tz"],
             "fields_spec": spec,
         }),
@@ -460,14 +603,15 @@ async fn preferences_end_to_end() {
     .await;
     assert_eq!(status, 200, "{normalized}");
 
-    // internal self row and no user-management row, so the dialog's four fields work on their own
+    // internal self row and no user-management row, so the dialog's fields work on their own
     // record and nothing else does
     let (status, ok) = call_as(
         &manager_principal,
         "/json/2/res.users/write",
         serde_json::json!({"ids": [manager], "vals": {
             "name": "Manager Renamed", "email": "manager@example.com",
-            "lang": "en_US", "tz": "Asia/Jakarta"}}),
+            "phone": "+62 21 555 0199", "lang": "en_US", "color_scheme": "light",
+            "tz": "Asia/Jakarta"}}),
     )
     .await;
     assert_eq!(status, 200, "{ok}");

@@ -41,6 +41,30 @@ async fn string(tx: &mut Transaction, r: &Records, field: &str) -> Option<String
     }
 }
 
+async fn industry(tx: &mut Transaction, name: &str) -> i64 {
+    tx.env()
+        .records("res.partner.industry")
+        .unwrap()
+        .create(
+            tx,
+            vec![RawVals::new().set_cell("name", Cell::Str(name.into()))],
+        )
+        .await
+        .unwrap()
+        .ids()[0]
+}
+/// The commercial half: vat and industry from the commercial partner.
+async fn assert_commercial(tx: &mut Transaction, records: &Records, vat: &str, industry: i64) {
+    assert_eq!(
+        records.cells(tx, "vat").await.unwrap(),
+        vec![Cell::Str(vat.into())]
+    );
+    assert_eq!(
+        records.cells(tx, "industry_id").await.unwrap(),
+        vec![Cell::Id(industry)]
+    );
+}
+
 fn full_address(mut values: RawVals, address: [&str; 4]) -> RawVals {
     for (field, value) in ["street", "street2", "zip", "city"]
         .into_iter()
@@ -203,12 +227,15 @@ async fn contact_creation_fills_empty_parent_for_roots_with_and_without_vat() {
 async fn ordered_parent_type_direct_child_and_upstream_changes() {
     let h = harness().await;
     let mut tx = h.begin().await.unwrap();
+    let ghost_industry = industry(&mut tx, "GhostStep industry").await;
     let parent = create(
         &mut tx,
         full_address(
             vals("GhostStep", None, None),
             ["A1", "Suite1", "1000", "City"],
-        ),
+        )
+        .set_cell("vat", Cell::Str("BE0477472701".into()))
+        .set_cell("industry_id", Cell::Id(ghost_industry)),
     )
     .await;
     let child = create(
@@ -243,6 +270,9 @@ async fn ordered_parent_type_direct_child_and_upstream_changes() {
         Some("contact")
     );
     assert_eq!(string(&mut tx, &grandchild, "street").await, None);
+    // Commercial values come from the commercial partner, for the whole subtree.
+    assert_commercial(&mut tx, &child, "BE0477472701", ghost_industry).await;
+    assert_commercial(&mut tx, &grandchild, "BE0477472701", ghost_industry).await;
     child
         .write(
             &mut tx,
@@ -826,7 +856,7 @@ async fn context_parent_name_is_consumed_and_cannot_rename_an_existing_parent() 
 async fn synchronization_depth_fixture(tx: &mut Transaction, edges: i32) -> (Records, Records) {
     let root = create(tx, vals("Depth root", None, Some("Old"))).await;
     tx.flush().await.unwrap();
-    tx.execute("WITH source AS MATERIALIZED (SELECT nextval(pg_get_serial_sequence('res_partner', 'id')) AS id, n FROM generate_series(1,$2::int4) AS n), links AS (SELECT id, COALESCE(lag(id) OVER (ORDER BY n), $1) AS parent_id, n FROM source) INSERT INTO res_partner (id, name, type, active, parent_id, is_company, street) SELECT id, 'sync-depth-' || n::text, 'contact', true, parent_id, false, 'Old' FROM links", &[&root.ids()[0], &edges]).await.unwrap();
+    tx.execute("WITH source AS MATERIALIZED (SELECT nextval(pg_get_serial_sequence('res_partner', 'id')) AS id, n FROM generate_series(1,$2::int4) AS n), links AS (SELECT id, COALESCE(lag(id) OVER (ORDER BY n), $1) AS parent_id, n FROM source) INSERT INTO res_partner (id, name, type, active, parent_id, is_company, street, partner_share) SELECT id, 'sync-depth-' || n::text, 'contact', true, parent_id, false, 'Old', false FROM links", &[&root.ids()[0], &edges]).await.unwrap();
     tx.invalidate_all().await.unwrap();
     let rows = tx
         .query(
@@ -1015,12 +1045,15 @@ async fn explicit_contact_address_clearing_flows_up_to_siblings_and_direct_child
 async fn quick_created_contact_keeps_email_during_parent_address_assignment() {
     let h = harness().await;
     let mut tx = h.begin().await.unwrap();
+    let root_industry = industry(&mut tx, "Root industry").await;
     let parent = create(
         &mut tx,
         full_address(
             vals("Root", None, None),
             ["Street", "Suite", "12345", "City"],
-        ),
+        )
+        .set_cell("vat", Cell::Str("BE0477472701".into()))
+        .set_cell("industry_id", Cell::Id(root_industry)),
     )
     .await;
     let records = model(&tx);
@@ -1058,6 +1091,8 @@ async fn quick_created_contact_keeps_email_during_parent_address_assignment() {
     )
     .await;
     assert_address(&mut tx, &grandchild, [None; 4]).await;
+    assert_commercial(&mut tx, &child, "BE0477472701", root_industry).await;
+    assert_commercial(&mut tx, &grandchild, "BE0477472701", root_industry).await;
     drop(tx);
     h.cleanup().await.unwrap();
 }
@@ -1103,7 +1138,7 @@ async fn synchronization_admits_4096_distinct_nodes_then_refuses_one_more() {
     tx.flush().await.unwrap();
     let child_count = 4095_i32;
     tx.execute(
-        "INSERT INTO res_partner (name, type, active, parent_id, is_company, street) SELECT 'sync-width-' || n::text, 'contact', true, $1, false, 'Old' FROM generate_series(1,$2::int4) AS n",
+        "INSERT INTO res_partner (name, type, active, parent_id, is_company, street, partner_share) SELECT 'sync-width-' || n::text, 'contact', true, $1, false, 'Old', false FROM generate_series(1,$2::int4) AS n",
         &[&root.ids()[0], &child_count],
     )
     .await
@@ -1127,7 +1162,7 @@ async fn synchronization_admits_4096_distinct_nodes_then_refuses_one_more() {
     );
     tx.flush().await.unwrap();
     tx.execute(
-        "INSERT INTO res_partner (name, type, active, parent_id, is_company, street) VALUES ('sync-width-extra', 'contact', true, $1, false, 'Old')",
+        "INSERT INTO res_partner (name, type, active, parent_id, is_company, street, partner_share) VALUES ('sync-width-extra', 'contact', true, $1, false, 'Old', false)",
         &[&root.ids()[0]],
     )
     .await

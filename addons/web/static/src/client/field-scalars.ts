@@ -2,6 +2,7 @@
 import { button, el } from "./dom.js";
 import { absentPlaceholderInput } from "./field-options.js";
 import { fieldShell } from "./field-shell.js";
+import { icon } from "./icons.js";
 import { ClientError } from "./transport.js";
 import { parseNumeric, formatNumeric, percentFromFraction, fractionFromPercent } from "./numeric-values.js";
 import type { FieldControl, FieldControlOptions } from "./fields.js";
@@ -34,7 +35,7 @@ export function scalarControl(options: FieldControlOptions): FieldControl {
     else throw new ClientError("server", "Invalid scalar placeholder field value.");
   }
 
-  if (config.type !== undefined && config.type !== "text" && config.type !== "number") throw new ClientError("unsupported", "Numeric input type must be text or number. Other input types require a later release.");
+  if (config.type !== undefined && config.type !== "text" && config.type !== "number") throw new ClientError("unsupported", "Numeric input type must be text or number. Other input types are not supported.");
   const numericLocale = config.type === "number" ? { decimal_point: ".", thousands_sep: "", grouping: [] } : options.numericLocale;
   const unset = value === null || value === undefined || value === false;
   if (!unset && (field.kind === "char" || field.kind === "text") && typeof value !== "string") throw new ClientError("server", `Invalid text value for ${field.name}.`);
@@ -118,12 +119,16 @@ export function scalarControl(options: FieldControlOptions): FieldControl {
     let shown = text;
     if (numeric && !empty && numericLocale) {
       if (typeof value !== "number") throw new ClientError("server", `Invalid numeric value for ${field.name}.`);
-      // Currency display precision does not relax integer-backed edit admission.
-      shown = percentage ? formatNumeric(percentFromFraction(value), "float", numericLocale, config.digits?.[1]) : formatNumeric(value, widget === "monetary" ? "float" : numericKind, numericLocale, config.digits?.[1]);
-      if (config.hide_trailing_zeros && shown.includes(numericLocale.decimal_point)) {
-        const at = shown.lastIndexOf(numericLocale.decimal_point);
-        const fraction = shown.slice(at + numericLocale.decimal_point.length).replace(/0+$/, "");
-        shown = shown.slice(0, at) + (fraction ? numericLocale.decimal_point + fraction : "");
+      if (config.enable_formatting === false && !percentage) {
+        shown = String(value);
+      } else {
+        // Currency display precision does not relax integer-backed edit admission.
+        shown = percentage ? formatNumeric(percentFromFraction(value), "float", numericLocale, config.digits?.[1]) : formatNumeric(value, widget === "monetary" ? "float" : numericKind, numericLocale, config.digits?.[1]);
+        if (config.hide_trailing_zeros && shown.includes(numericLocale.decimal_point)) {
+          const at = shown.lastIndexOf(numericLocale.decimal_point);
+          const fraction = shown.slice(at + numericLocale.decimal_point.length).replace(/0+$/, "");
+          shown = shown.slice(0, at) + (fraction ? numericLocale.decimal_point + fraction : "");
+        }
       }
     }
     if (percentage && !empty && !config.no_symbol) shown += "%";
@@ -150,7 +155,7 @@ export function scalarControl(options: FieldControlOptions): FieldControl {
   }
   if (config.max_length !== undefined) input.maxLength = config.max_length;
   if (input instanceof HTMLTextAreaElement && config.rows !== undefined) input.rows = config.rows;
-  input.value = numeric && numericLocale && !empty && typeof value === "number" ? percentage ? formatNumeric(percentFromFraction(value), "float", numericLocale, config.digits?.[1]) : formatNumeric(value, numericKind, numericLocale) : text;
+  input.value = numeric && numericLocale && !empty && typeof value === "number" ? config.enable_formatting === false && !percentage ? String(value) : percentage ? formatNumeric(percentFromFraction(value), "float", numericLocale, config.digits?.[1]) : formatNumeric(value, numericKind, numericLocale) : text;
   const shell = wrap(input); let represented = input.value;
   shell.node.classList.toggle("field-empty", empty);
   const validate = (commit: boolean): void => {
@@ -187,7 +192,12 @@ export function scalarControl(options: FieldControlOptions): FieldControl {
     reset = () => { input.type = "password"; reveal.setAttribute("aria-pressed", "false"); };
   }
   const href = ["url", "email", "phone"].includes(widget) && text ? safeLink(widget, text) : null;
-  if (href !== null) { const link = el("a", `Open ${field.label}`, "field-link-action"); link.href = href; link.rel = "noopener noreferrer"; shell.node.append(link); }
+  // An icon at the end of the field's own row; the accessible name and tooltip say what it opens.
+  if (href !== null) {
+    const link = el("a", undefined, "field-link-action"); link.href = href; link.rel = "noopener noreferrer";
+    link.append(icon(widget === "email" ? "mail" : widget === "phone" ? "phone" : "globe")); link.setAttribute("aria-label", `Open ${field.label}`); link.title = `Open ${field.label}`;
+    shell.node.append(link);
+  }
   return { node: shell.node, dispose: reset,
     captureDraft: () => input.value !== represented || !input.validity.valid ? { value: input.value, message: input.validationMessage } : undefined,
     restoreDraft: draft => {

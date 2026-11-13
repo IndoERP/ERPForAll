@@ -1,4 +1,4 @@
-//! Per-transaction time limits ("Timeouts", design note).
+//! Per-transaction time limits ("Timeouts").
 //!
 //! Every transaction sets `lock_timeout` and `statement_timeout` as `SET LOCAL` in the same
 //! message as `BEGIN`, and `transaction_timeout` as a backstop well above them. The backstop ends

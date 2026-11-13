@@ -673,6 +673,9 @@ async fn a_cookie_beside_an_api_key_is_checked_over_the_plan() {
 #[tokio::test]
 async fn an_administrator_reset_of_the_own_password_recomputes_over_the_plan() {
     let w = token_world("ok", false).await;
+    // the reset's company scope (Amendment 1) needs the generated res.users row and a
+    // company the actor belongs to
+    company_scope(&w.h).await;
     let actor = user_with_password(&w.h, "reset-manager", "actor-old").await;
     let mut tx = w.h.begin().await.unwrap();
     let group = named_group(&mut tx, "base.group_erp_manager", "Access Administration").await;
@@ -773,7 +776,18 @@ async fn round_trips(w: &World, key: &IssuedSecret) -> [u64; 3] {
         .await
         .unwrap();
     begun.tx.rollback().await.unwrap();
+    // A never-used key is due: dropping the ticket launches the hourly last-use write, which runs
+    // outside the request and on its own connection. Let it end, or its statements are counted in
+    // the first window below.
     drop(begun);
+    let started = std::time::Instant::now();
+    while w.auth.stats().last_use_writes < 1 {
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "the last-use write never ended"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
     wire.settle_before_block().await;
     let generation = wire.reset_generation();
     let before = wire.count();

@@ -7,7 +7,7 @@
 //! ```
 //!
 //! `ORMX_M2M_SIZES` (default `200000,10000000`) sets the relation table sizes, `ORMX_M2M_RUNS`
-//! (default 30) the runs per cell. Results:.
+//! (default 30) the runs per cell. Results.
 //!
 //! The candidates replace only the writes; the ORM keeps its pre-read of the old pairs (cache,
 //! archived and inaccessible targets need them), so the pre-read is not measured:

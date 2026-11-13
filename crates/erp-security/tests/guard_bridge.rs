@@ -1,5 +1,5 @@
-//! The host-access bridge under the compiled snapshot policy (design
-//! , §9, §10, §21.3): a [`GuardedArch`] captured over the
+//! The host-access bridge under the compiled snapshot policy (design,
+//! §9, §10, §21.3): a [`GuardedArch`] captured over the
 //! real registry, the plan the bundle needs decided by `Transaction::evaluate_guards` in the
 //! pinned `PolicySnapshot`, and `erp_views::host_access::filter` turning both into the allowed part
 //! of the arch. Every refusal of the bridge is checked with its kind and message.

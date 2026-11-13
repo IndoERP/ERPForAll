@@ -704,7 +704,7 @@ impl Transaction {
         let inverse_spec = comodel.field_by_id(inverse_id);
         let env = self
             .field_env(env, spec.id, field.id)
-            .sudo(true)
+            .engine_sudo()
             .with_context([("active_test", Value::Bool(false))]);
         let co = Records::empty(env, comodel.id);
         let id_values: Vec<i64> = ids
@@ -847,7 +847,7 @@ impl Transaction {
         };
         let env = self
             .field_env(env, spec.id, field.id)
-            .sudo(true)
+            .engine_sudo()
             .with_context([("active_test", Value::Bool(false))]);
         let co = Records::empty(env, comodel.id);
         let mut domain = self.shared.relations.domain(spec.id, field.id);
@@ -855,7 +855,7 @@ impl Transaction {
             domain = cap.restrict(comodel, domain)?;
         }
         let filter = crate::search::compile_for(self, &co, &domain, false).await?;
-        let order = crate::search::order_for(self, &co, "")?;
+        let order = crate::search::order_for(self, &co, "", filter.params.len()).await?;
         let mut flush = filter.fields.clone();
         flush.extend(order.fields.iter().copied());
         crate::search::flush_read_inputs(self, &flush).await?;
@@ -864,6 +864,7 @@ impl Transaction {
             extra.push(comodel.field_by_id(active).name);
         }
         let mut params = filter.params.clone();
+        params.extend(order.params.iter().cloned());
         params.push(erp_sql::param::Param::Array(
             erp_sql::param::ScalarKind::Int8,
             ids.iter()
@@ -977,7 +978,7 @@ impl Transaction {
             };
             if !missing.is_empty() {
                 let co = Records::from_parts(
-                    env.sudo(true),
+                    env.engine_sudo(),
                     comodel.id,
                     Arc::from(missing.clone()),
                     Arc::from(missing),
@@ -1277,8 +1278,8 @@ impl Transaction {
 
 impl Records {
     /// The records reached through a relational field (`records.partner_id`, `records.line_ids`):
-    /// for several records the union of their values, without duplicates, in first-seen order
-    /// , in the same environment. The result's prefetch set holds the
+    /// for several records the union of their values, without duplicates, in first-seen order,
+    /// in the same environment. The result's prefetch set holds the
     /// values of the same field over this recordset's prefetch set.
     pub async fn related(&self, tx: &mut Transaction, field: &str) -> Result<Records> {
         let registry = Arc::clone(self.env().registry());
@@ -1609,7 +1610,7 @@ impl Transaction {
         if domain.is_true() || records.is_empty() {
             return Ok(records.rec_ids().to_vec());
         }
-        let su = records.sudo(true);
+        let su = records.engine_sudo();
         let kept = crate::predicate::filter_records(self, &su, domain).await?;
         Ok(kept.rec_ids().to_vec())
     }
@@ -1724,6 +1725,7 @@ fn follow_deletes(registry: &Registry) -> FxHashMap<ModelId, FollowEffects> {
                         ondelete: erp_fields::OnDelete::Cascade,
                     } = &field.ty
                         && field.has_column()
+                        && !field.company_dependent
                         && let Some(target) = registry.model_id(comodel)
                     {
                         seeds.push(target);

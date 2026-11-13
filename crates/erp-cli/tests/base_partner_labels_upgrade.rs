@@ -498,9 +498,26 @@ fn assert_late_failure(error: erp_modules::Error) {
     }
 }
 
-#[tokio::test]
-async fn current_schema_lifecycle_fixture_recomputes_labels_preserves_edits_and_rolls_back_late_failure()
- {
+#[test]
+fn current_schema_lifecycle_fixture_recomputes_labels_preserves_edits_and_rolls_back_late_failure()
+{
+    std::thread::Builder::new()
+        .name("partner-label-lifecycle-2mib".to_owned())
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let scenario = std::pin::pin!(partner_label_lifecycle_scenario());
+            runtime.block_on(scenario);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+async fn partner_label_lifecycle_scenario() {
     let db = TestDb::create().await.unwrap();
     let system = current_system(&db).await;
     let initialized = system

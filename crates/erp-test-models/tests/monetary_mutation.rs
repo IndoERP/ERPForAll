@@ -1819,7 +1819,7 @@ async fn currency_lookup_sudo_allows_denied_currency_reads() {
         .await
         .unwrap();
     let mut tx = h.begin().await.unwrap();
-    tx.batch("INSERT INTO res_users(id,name,login,active) VALUES (42,'Monetary reader','monetary-reader',true)").await.unwrap();
+    tx.batch("INSERT INTO res_users(id,name,login,active,share) VALUES (42,'Monetary reader','monetary-reader',true,false)").await.unwrap();
     let cent = currency(&mut tx, "CNT", "0.01").await;
     let model = tx.env().records("test_monetary_mutation.line").unwrap();
     let row = model
@@ -2176,7 +2176,7 @@ async fn related_currency_preserves_declared_compute_authorization() {
         .await
         .unwrap();
     let mut tx = h.begin().await.unwrap();
-    tx.batch("INSERT INTO res_users(id,name,login,active) VALUES (42,'Related reader','related-reader',true)").await.unwrap();
+    tx.batch("INSERT INTO res_users(id,name,login,active,share) VALUES (42,'Related reader','related-reader',true,false)").await.unwrap();
     let cent = currency(&mut tx, "CNT", "0.01").await;
     let owner = tx
         .env()
@@ -2222,7 +2222,7 @@ async fn related_currency_preserves_declared_compute_authorization() {
 async fn related_currency_keeps_the_readers_company_bound() {
     let h = harness().await;
     let mut setup = h.begin().await.unwrap();
-    setup.batch("INSERT INTO res_users(id,name,login,active) VALUES (42,'Company reader','company-reader',true)").await.unwrap();
+    setup.batch("INSERT INTO res_users(id,name,login,active,share) VALUES (42,'Company reader','company-reader',true,false)").await.unwrap();
     let cent = currency(&mut setup, "CNT", "0.01").await;
     let companies = setup
         .env()
@@ -2947,7 +2947,7 @@ async fn hidden_currency_lookup_does_not_elevate_amount_writes() {
         .await
         .unwrap();
     let mut tx = h.begin().await.unwrap();
-    tx.batch("INSERT INTO res_users(id,name,login,active) VALUES (42,'Amount reader','amount-reader',true)").await.unwrap();
+    tx.batch("INSERT INTO res_users(id,name,login,active,share) VALUES (42,'Amount reader','amount-reader',true,false)").await.unwrap();
     let cent = currency(&mut tx, "CNT", "0.01").await;
     let row = tx
         .env()
@@ -2990,7 +2990,7 @@ async fn hidden_currency_identity_is_available_only_to_rounding() {
         .await
         .unwrap();
     let mut tx = h.begin().await.unwrap();
-    tx.batch("INSERT INTO res_users(id,name,login,active) VALUES (42,'Amount writer','amount-writer',true)").await.unwrap();
+    tx.batch("INSERT INTO res_users(id,name,login,active,share) VALUES (42,'Amount writer','amount-writer',true,false)").await.unwrap();
     let cent = currency(&mut tx, "CNT", "0.01").await;
     let row = tx
         .env()
@@ -3043,7 +3043,7 @@ async fn denied_write_rules_precede_mixed_currency_resolution() {
         .await
         .unwrap();
     let mut tx = h.begin().await.unwrap();
-    tx.batch("INSERT INTO res_users(id,name,login,active) VALUES (42,'Denied writer','denied-writer',true)").await.unwrap();
+    tx.batch("INSERT INTO res_users(id,name,login,active,share) VALUES (42,'Denied writer','denied-writer',true,false)").await.unwrap();
     let cent = currency(&mut tx, "CNT", "0.01").await;
     let unit = currency(&mut tx, "UNT", "1").await;
     let rows = tx
@@ -3214,7 +3214,7 @@ async fn currency_lookup_does_not_elevate_native_compute_inputs() {
         .await
         .unwrap();
     let mut tx = h.begin().await.unwrap();
-    tx.batch("INSERT INTO res_users(id,name,login,active) VALUES (42,'Compute reader','compute-reader',true)").await.unwrap();
+    tx.batch("INSERT INTO res_users(id,name,login,active,share) VALUES (42,'Compute reader','compute-reader',true,false)").await.unwrap();
     let cent = currency(&mut tx, "CNT", "0.01").await;
     let row = tx
         .env()
@@ -3276,7 +3276,7 @@ async fn currency_lookup_does_not_elevate_native_compute_inputs() {
 async fn native_currency_compute_keeps_its_inputs_company_bound() {
     let h = harness().await;
     let mut setup = h.begin().await.unwrap();
-    setup.batch("INSERT INTO res_users(id,name,login,active) VALUES (42,'Company reader','company-reader',true)").await.unwrap();
+    setup.batch("INSERT INTO res_users(id,name,login,active,share) VALUES (42,'Company reader','company-reader',true,false)").await.unwrap();
     let cent = currency(&mut setup, "CNT", "0.01").await;
     let companies = setup
         .env()
@@ -3411,7 +3411,7 @@ async fn native_currency_compute_keeps_rights_across_related_and_delegated_hops(
         .unwrap();
     let mut tx = h.begin().await.unwrap();
     tx.batch(
-        "INSERT INTO res_users(id,name,login,active) VALUES (42,'Hop reader','hop-reader',true)",
+        "INSERT INTO res_users(id,name,login,active,share) VALUES (42,'Hop reader','hop-reader',true,false)",
     )
     .await
     .unwrap();
@@ -3507,7 +3507,7 @@ async fn native_currency_compute_keeps_rights_across_related_and_delegated_hops(
 async fn native_currency_company_hop_case(model: &str) {
     let h = harness().await;
     let mut setup = h.begin().await.unwrap();
-    setup.batch("INSERT INTO res_users(id,name,login,active) VALUES (42,'Company reader','company-reader',true)").await.unwrap();
+    setup.batch("INSERT INTO res_users(id,name,login,active,share) VALUES (42,'Company reader','company-reader',true,false)").await.unwrap();
     let cent = currency(&mut setup, "CNT", "0.01").await;
     let companies = setup
         .env()
@@ -3671,7 +3671,7 @@ async fn empty_currency_hops_do_not_settle_unrelated_native_computes() {
     .await
     .unwrap();
     let mut tx = h.begin().await.unwrap();
-    tx.batch("INSERT INTO res_users(id,name,login,active) VALUES (42,'Empty hop writer','empty-hop-writer',true)").await.unwrap();
+    tx.batch("INSERT INTO res_users(id,name,login,active,share) VALUES (42,'Empty hop writer','empty-hop-writer',true,false)").await.unwrap();
     let parent = tx
         .env()
         .records("test_monetary_mutation.private_compute")

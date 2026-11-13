@@ -1,5 +1,5 @@
-//! Emission of the generated company restrictions in module operations (A1, design
-//! , §11.4) over the fixture "company access": one generated
+//! Emission of the generated company restrictions in module operations (A1, design,
+//! §11.4) over the fixture "company access": one generated
 //! row and one ledger entry per declaring model, rows changed since they were generated, the
 //! explicit restoration and the read-back that refuses a wrong end state.
 //!
@@ -68,17 +68,14 @@ impl Fixture {
 async fn fixture() -> Fixture {
     let db = TestDb::create().await.unwrap();
     let dir = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
-    for (name, manifest) in [
-        (
-            "base",
-            "name = 'Base'\nauto_install = true\ncategory = 'Hidden'\n",
-        ),
-        (ADDON, "name = 'Company access'\ndepends = ['base']\n"),
-    ] {
-        let module = dir.path().join(name);
-        fs::create_dir_all(&module).unwrap();
-        fs::write(module.join("manifest.toml"), manifest).unwrap();
-    }
+    erp_testkit::stand_in_base::write_stand_in_base(dir.path()).unwrap();
+    let module = dir.path().join(ADDON);
+    fs::create_dir_all(&module).unwrap();
+    fs::write(
+        module.join("manifest.toml"),
+        "name = 'Company access'\ndepends = ['base']\n",
+    )
+    .unwrap();
     let mut index = AddonIndex::new(true);
     index.add_dev_path(dir.path());
     // This binary links code for these private fixture artifacts. Bind its provenance to
@@ -169,22 +166,16 @@ async fn installed_company_restriction_enforces_user_crud() {
     let own = company(&mut setup, currency, "Own", Some(root)).await;
     let sibling = company(&mut setup, currency, "Sibling", Some(root)).await;
     let foreign = company(&mut setup, currency, "Foreign", None).await;
+    // base.group_user comes from the stand-in base's data
     let group: i64 = setup
         .query(
-            "INSERT INTO res_groups (name) VALUES ('Company user') RETURNING id::int8",
+            "SELECT res_id::int8 FROM ir_model_data \
+             WHERE module = 'base' AND name = 'group_user' AND model = 'res.groups'",
             &[],
         )
         .await
         .unwrap()[0]
         .get(0);
-    setup
-        .execute(
-            "INSERT INTO ir_model_data (module, name, model, res_id) \
-         VALUES ('base', 'group_user', 'res.groups', $1)",
-            &[&group],
-        )
-        .await
-        .unwrap();
     let uid: i64 = setup
         .query(
             "INSERT INTO res_users (name, login, active, share, company_id) \

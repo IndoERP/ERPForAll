@@ -59,6 +59,16 @@ async fn contract(store: &dyn AttachmentStore, reports_absent: bool) {
     );
     assert_eq!(read_all(store, &key).await, b"abc");
 
+    // Publication must retain the durable intent's staging source for fenced maintenance.
+    let staged_names = store
+        .list(&format!("{}/staging", ns.as_str()), None, 100)
+        .await
+        .unwrap();
+    assert!(
+        staged_names.contains(&staged.key().path()),
+        "promotion removed its staging source: {staged_names:?}"
+    );
+
     // another namespace is refused
     let foreign = Namespace::random().unwrap();
     let other_ns_key = ContentKey::new(foreign.clone(), *other.sha256());
@@ -86,7 +96,7 @@ async fn contract(store: &dyn AttachmentStore, reports_absent: bool) {
         );
     }
 
-    // the size limit stops a stream and keeps nothing
+    // The size limit stops the stream. Its durable intent owns any retained partial.
     let limited = StagingKey::new(ns.clone(), &upload_id(3)).unwrap();
     let mut body: &[u8] = &[7u8; 100];
     let err = store
@@ -98,6 +108,11 @@ async fn contract(store: &dyn AttachmentStore, reports_absent: bool) {
         "object size in bytes exceeds the limit of 99"
     );
     let staging_prefix = format!("{}/staging", ns.as_str());
+    let left = store.list(&staging_prefix, None, 100).await.unwrap();
+    if store.kind() == erp_blob::StoreKind::Local {
+        assert!(left.iter().any(|name| name.contains(&upload_id(3))));
+    }
+    store.delete_staged(&limited).await.unwrap();
     let left = store.list(&staging_prefix, None, 100).await.unwrap();
     assert!(
         left.iter().all(|name| !name.contains(&upload_id(3))),
@@ -255,7 +270,9 @@ async fn object_backend_streams_in_parts_and_nodes_share_one_bucket() {
         payload,
         "another node reads what this node wrote"
     );
-    // the multipart upload that hits the size limit is aborted and leaves no object
+    // The multipart upload that hits the size limit is aborted; successful promotion retained
+    // its earlier source until the cleaner explicitly removes it.
+    node_a.delete_staged(staged.key()).await.unwrap();
     let key2 = erp_blob::StagingKey::new(content.namespace().clone(), &upload_id(2)).unwrap();
     let mut body: &[u8] = &payload;
     let err = node_a

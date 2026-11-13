@@ -740,8 +740,7 @@ impl ResGroups {
         check_users_disjoint(this, tx, &types, &graph).await
     }
 
-    /// No active user may hold two user type groups through its membership in these groups
-    /// .
+    /// No active user may hold two user type groups through its membership in these groups.
     #[constrains("user_ids")]
     async fn _check_user_disjoint_groups(
         this: &RecordSet<ResGroups>,

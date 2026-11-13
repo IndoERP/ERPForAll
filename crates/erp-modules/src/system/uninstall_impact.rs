@@ -21,8 +21,6 @@ pub const MAX_UNINSTALL_CANONICAL_BYTES: usize = 8 * 1024 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum UninstallCompositionBlocker {
-    /// Opening would read generations through an unstabilized Signal source.
-    ConfiguredSignal,
     /// Package lifecycle callbacks have no exact confirmed effect plan yet.
     PackageRuntime,
     /// A custom loader may purge records through undescribed callbacks.
@@ -34,9 +32,6 @@ impl UninstallCompositionBlocker {
     /// Fixed, bounded public diagnostic naming the prerequisite task.
     pub const fn message(self) -> &'static str {
         match self {
-            Self::ConfiguredSignal => {
-                "Native lifecycle opening with configured Signal is unsupported until a later release"
-            }
             Self::PackageRuntime => {
                 "Uninstall impact cannot describe package runtime lifecycle callbacks; unsupported until a later release"
             }
@@ -324,13 +319,13 @@ impl ModuleSystem {
     /// Return the first configured provider with undescribed confirmed-uninstall effects.
     ///
     /// Reads immutable configuration only, without SQL, discovery, callbacks or authority.
-    /// Precedence is Signal, package runtime, custom loader, then host lifecycle services.
+    /// Precedence is package runtime, custom loader, then host lifecycle services.
+    /// Configured Signal stores are safely admitted when backed by verified
+    /// native storage.
     /// `None` means further transaction-bound planning is required, never that uninstall
     /// is supported. Callers still need fresh authorization and a valid confirmed impact.
     pub fn uninstall_composition_blocker(&self) -> Option<UninstallCompositionBlocker> {
-        if self.root.signal().is_some() {
-            Some(UninstallCompositionBlocker::ConfiguredSignal)
-        } else if self.parts.package_runtime.is_some() {
+        if self.parts.package_runtime.is_some() {
             Some(UninstallCompositionBlocker::PackageRuntime)
         } else if !self.parts.schema_only_loader {
             Some(UninstallCompositionBlocker::CustomDataLoader)
@@ -584,6 +579,7 @@ impl ModuleSystem {
             "ir_model",
             "ir_model_fields",
             "ir_model_relation",
+            "ir_model_fields_selection",
             "ir_ui_view",
         ];
         admit_index_expressions(&mut optx.tx, &schema, &scan_tables).await?;
@@ -801,7 +797,13 @@ impl ModuleSystem {
         for row in owned {
             let model: String = row.try_get(0).map_err(shape)?;
             if !dropped_names.contains(&model.as_str())
-                && !["ir.model", "ir.model.fields", "ir.model.relation"].contains(&model.as_str())
+                && ![
+                    "ir.model",
+                    "ir.model.fields",
+                    "ir.model.relation",
+                    "ir.model.fields.selection",
+                ]
+                .contains(&model.as_str())
             {
                 let Some(meta) = new.model(&model) else {
                     return Err(unsupported(format!(
@@ -851,6 +853,17 @@ impl ModuleSystem {
             }
         }
         // Exact reflection cleanup, child rows first. Arbitrary FK effects are checked below.
+        if tables.contains_key("ir_model_fields_selection") {
+            push_delete(
+                &mut optx.tx,
+                &mut deletes,
+                &mut target_count,
+                (&schema, "ir_model_fields_selection"),
+                "field_id IN (SELECT id FROM ir_model_fields WHERE model OPERATOR(pg_catalog.=) ANY($1))",
+                &[&dropped_names],
+            )
+            .await?;
+        }
         if tables.contains_key("ir_model_fields") {
             push_delete(
                 &mut optx.tx,
@@ -894,7 +907,7 @@ impl ModuleSystem {
             .iter()
             .map(|effect| (effect.table.as_str(), effect.ids.as_slice()))
             .collect();
-        let schema_xids = optx.tx.query("SELECT model,res_id FROM ir_model_data WHERE module OPERATOR(pg_catalog.=) ANY($1) AND model OPERATOR(pg_catalog.=) ANY($2) AND res_id IS NOT NULL LIMIT 10001", &[&removed_names, &vec!["ir.model","ir.model.fields","ir.model.relation"]]).await?;
+        let schema_xids = optx.tx.query("SELECT model,res_id FROM ir_model_data WHERE module OPERATOR(pg_catalog.=) ANY($1) AND model OPERATOR(pg_catalog.=) ANY($2) AND res_id IS NOT NULL LIMIT 10001", &[&removed_names, &vec!["ir.model","ir.model.fields","ir.model.relation","ir.model.fields.selection"]]).await?;
         admit_targets(0, schema_xids.len())?;
         for row in schema_xids {
             let model: String = row.try_get(0).map_err(shape)?;
@@ -1301,6 +1314,7 @@ fn native_check_expression(table: &str, expression: &str) -> bool {
         "ir_module_module" => expression == "((state)::text = ANY ((ARRAY['uninstallable'::character varying, 'uninstalled'::character varying, 'installed'::character varying, 'to upgrade'::character varying, 'to remove'::character varying, 'to install'::character varying])::text[]))",
         "erp_signal_generation" => [
             "(key ~ '^(registry|policy|membership|cache:[a-z0-9_.]{1,64})$'::text)",
+            "((key)::text ~ '^(registry|policy|membership|cache:[a-z0-9_.]{1,64})$'::text)",
             "((weight >= 1) AND (weight <= '1099511627776'::bigint))",
         ].contains(&expression),
         "erp_module_lifecycle_audit" => [

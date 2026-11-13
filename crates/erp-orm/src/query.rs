@@ -107,7 +107,7 @@ pub async fn check(tx: &mut Transaction, env: &Env, ast: &QueryAst) -> Result<()
 ///
 /// An environment in superuser mode (`sudo()`, the `System` principal) is refused with an
 /// `Access` error: a stored query runs with the rights of an ordinary principal, and audited
-/// elevated replay is for and.
+/// elevated replay is for.
 ///
 /// Fetches `limit + 1` rows or groups in the one statement and reports `truncated` when the extra
 /// one exists, so a caller always knows whether the result is partial.

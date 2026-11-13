@@ -7,7 +7,7 @@ use erp_sdk::prelude::*;
 erp_sdk::addon!(name = "test_convert_ui");
 
 /// Remembers the `lang` of the environment it was created in, so a test can see which language a
-/// data file loads in: `lang_seen` is `-` when the context has none.
+/// data file loads: `lang_seen` is `-` when the context has none.
 #[model(
     name = "test_convert_ui.lang_probe",
     description = "Test Convert UI Language Probe",

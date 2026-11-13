@@ -2,7 +2,7 @@
 //!
 //! This private service schema belongs to `web`, not to core DDL or a public CRUD model. It
 //! stores raw bytea (not base64 model fields) and exposes no RPC. The host grants runtime SELECT
-//! only; installation/upgrade owns schema and publication..
+//! only; installation/upgrade owns schema and publication.
 use super::assembly::{AssembledBundle, Blob, MAX_BUNDLE_BYTES};
 use erp_sdk::{Error, Result, Transaction};
 

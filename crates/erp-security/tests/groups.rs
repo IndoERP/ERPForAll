@@ -251,6 +251,10 @@ async fn new_user(client: &Client, login: &str, name: &str, groups: &[i64]) -> i
 }
 
 async fn make_orm(h: &Harness) -> Orm {
+    // installation emits the generated company restrictions; this database has no installation
+    let client = connect(h).await;
+    support::insert_generated(&client, h.registry(), &["res.partner", "res.users"]).await;
+    drop(client);
     let source = PolicySource::build(Arc::clone(h.registry()), pool(h, 2))
         .await
         .unwrap();
@@ -739,6 +743,59 @@ async fn spec_sec_026_has_group_on_other_users() {
     };
     assert!(!technical(&mut tx, &env).await);
     assert!(technical(&mut tx, &env.with_debug(true)).await);
+    drop(tx);
+    drop(client);
+    h.cleanup().await.unwrap();
+}
+
+/// debug flag; pinned before moved the answer off `with_user`)
+#[tokio::test]
+async fn has_group_on_a_missing_or_archived_user() {
+    let h = harness().await;
+    let client = connect(&h).await;
+    let ids = seed(&client).await;
+    let group0 = group(&client, "group0", Some(("x_groups", "group0")), None, false).await;
+    let internal = new_user(&client, "internal", "Internal", &[ids.user]).await;
+    let archived = new_user(&client, "archived", "Archived", &[group0, ids.no_one]).await;
+    exec(
+        &client,
+        "UPDATE res_users SET active = false WHERE id = $1",
+        &[&archived],
+    )
+    .await;
+    let orm = make_orm(&h).await;
+    let mut tx = begin(&orm, internal).await;
+    let env = tx.env();
+    let ask = async |tx: &mut Transaction, env: &erp_orm::Env, target: i64, group: &str| {
+        env.records("res.users")
+            .unwrap()
+            .browse([target])
+            .unwrap()
+            .call::<(String,), bool>(tx, "has_group", (group.to_owned(),))
+            .await
+    };
+    let outcomes = [
+        ask(&mut tx, &env, archived, "x_groups.group0").await,
+        ask(&mut tx, &env, archived, "base.group_no_one").await,
+        ask(
+            &mut tx,
+            &env.with_debug(true),
+            archived,
+            "base.group_no_one",
+        )
+        .await,
+        ask(&mut tx, &env, 999_999, "x_groups.group0").await,
+    ];
+    // the principal resolver refuses the other user, whatever the group and the asker's debug
+    // flag; the run on the code before the slice is the raw log under
+    let archived_refusal = format!("The user principal cannot act: user {archived} is archived.");
+    for outcome in &outcomes[..3] {
+        assert_access(outcome.as_ref().unwrap_err(), &archived_refusal);
+    }
+    assert_access(
+        outcomes[3].as_ref().unwrap_err(),
+        "The user principal cannot act: user 999999 does not exist.",
+    );
     drop(tx);
     drop(client);
     h.cleanup().await.unwrap();

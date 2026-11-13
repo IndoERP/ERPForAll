@@ -390,7 +390,7 @@ const ADDONS: [&erp_sdk::AddonDescriptor; 2] = [&erp_addon_base::ADDON, &erp_add
 async fn give_partners(h: &RpcHarness) {
     sql_batch(
         h,
-        "INSERT INTO res_partner (id, name) VALUES (102, 'alice partner'), (103, 'bob partner'); \
+        "INSERT INTO res_partner (id, name, partner_share) VALUES (102, 'alice partner', false), (103, 'bob partner', false); \
          UPDATE res_users SET partner_id = 102, share = false WHERE id = 2; \
          UPDATE res_users SET partner_id = 103, share = true WHERE id = 3",
     )
@@ -516,7 +516,7 @@ async fn one_snapshot_and_one_asof_for_the_whole_call() {
         REACHED.acquire().await.expect("open").forget();
         sql_batch(
             &h,
-            "INSERT INTO res_partner (id, name) VALUES (500, 'late')",
+            "INSERT INTO res_partner (id, name, partner_share) VALUES (500, 'late', false)",
         )
         .await;
         GO.add_permits(1);
@@ -548,6 +548,10 @@ async fn count_partners(h: &RpcHarness) -> i64 {
 }
 
 async fn read_pool_harness() -> RpcHarness {
+    read_pool_harness_with(policy()).await
+}
+
+async fn read_pool_harness_with(policy: FieldPolicy) -> RpcHarness {
     let h = RpcHarness::builder(
         Harness::builder([
             &erp_test_models::base_users::ADDON,
@@ -557,7 +561,7 @@ async fn read_pool_harness() -> RpcHarness {
             &erp_addon_mail::ADDON,
         ])
         .with_static_decls(support::currency_fixture::decls()),
-        policy(),
+        policy,
     )
     .host(|_orm| FixtureHost)
     .config(RpcConfig::default())
@@ -568,8 +572,8 @@ async fn read_pool_harness() -> RpcHarness {
     .expect("rpc harness");
     sql_batch(
         &h,
-        "INSERT INTO res_users (id, name, login, active) VALUES (2, 'alice', 'alice', true), \
-         (3, 'bob', 'bob', true), (4, 'admin', 'admin', true); \
+        "INSERT INTO res_users (id, name, login, active, share) VALUES (2, 'alice', 'alice', true, false), \
+         (3, 'bob', 'bob', true, false), (4, 'admin', 'admin', true, false); \
          SELECT setval(pg_get_serial_sequence('res_users', 'id'), 4)",
     )
     .await;
@@ -605,6 +609,52 @@ async fn answers_are_read_on_the_primary() {
         "erp_read_pool"
     );
     assert!(answer["store"]["asof"]["xmax"].is_string());
+    h.cleanup().await.unwrap();
+}
+
+/// (e),: with a read pool configured, the store-answering thread reads
+/// called on a concrete model (`res.users` inherits `mail.thread`) run on the primary and answer;
+/// routed to the read pool they would get the refusal of `Transaction::store_snapshot`.
+#[tokio::test]
+async fn thread_reads_with_a_store_answer_run_on_the_primary() {
+    // the thread calls ask for the caller's standing: public first, then internal
+    let h = read_pool_harness_with(policy().group_name("base.group_public", "Public")).await;
+    assert!(h.orm().routing_stats().read_pool);
+    let served = || h.orm().routing_stats().read_pool_served;
+    let before = served();
+    let r = call(
+        &h,
+        "/json/2/res.users/search",
+        r#"{"domain": [["id", "=", 2]]}"#,
+        alice(),
+    )
+    .await;
+    ok(&r);
+    assert_eq!(
+        served(),
+        before + 1,
+        "an ordinary read goes to the read pool"
+    );
+    for (method, ids_key) in [
+        ("thread_followers", "follower_ids"),
+        ("thread_subtypes", "subtype_ids"),
+    ] {
+        let before = served();
+        let r = call(
+            &h,
+            &format!("/json/2/res.users/{method}"),
+            r#"{"ids": [2]}"#,
+            alice(),
+        )
+        .await;
+        let answer = ok(&r);
+        assert_eq!(served(), before, "{method} stays on the primary");
+        assert!(answer[ids_key].is_array(), "{method}: {answer}");
+        assert!(
+            answer["store"]["asof"]["xmax"].is_string(),
+            "{method}: {answer}"
+        );
+    }
     h.cleanup().await.unwrap();
 }
 
@@ -921,7 +971,9 @@ async fn the_schema_topic() {
     assert_eq!(model.field("share").unwrap().kind(), FieldKind::Bool);
     assert!(decoded.model("res.partner").is_some());
     let models: Vec<&str> = decoded.models().map(|(n, _)| n.as_str()).collect();
-    // `thread.scheduled` adds its model to the schema `mail` contributes
+    // `thread.scheduled` adds its model to the schema `mail` contributes.
+    // shortcut: `product.product` and `product.template` are named by `mail`'s part although this database has
+    // no `product` ((c).4 is not built yet); task removes both names here.
     assert_eq!(
         models,
         [
@@ -931,7 +983,11 @@ async fn the_schema_topic() {
             "mail.message.subtype",
             "mail.scheduled.message",
             "messaging.self",
-            "res.partner"
+            "product.product",
+            "product.template",
+            "res.company",
+            "res.partner",
+            "res.users"
         ]
     );
     // content-derived: same parts, same token; one more field, another token
@@ -1144,7 +1200,7 @@ async fn two_nodes_answer_the_same() {
     let a = ok(&fetch(&h, &body).await);
     sql_batch(
         &h,
-        "INSERT INTO res_partner (id, name) VALUES (501, 'between')",
+        "INSERT INTO res_partner (id, name, partner_share) VALUES (501, 'between', false)",
     )
     .await;
     let b = ok(&on_second(body).await);

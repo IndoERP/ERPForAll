@@ -1,10 +1,10 @@
 {
   "boundary": "Default-policy element retention source projection; not sanitizer execution or field-write proof. Reseal only after reviewing policy/table/helper/caller changes.",
   "sources": {
-    "crates/erp-html/src/clean.rs": "6f3e0b41166cb853c7411a5ae60a5f8bf3e00fe76ca1e9514eef4108164bb3cd",
-    "crates/erp-html/src/tables.rs": "03ba98ce30f7ba2c9c1cf9d9e4eaabe77e4fc4967dad8c42cab041033805b592",
+    "crates/erp-html/src/clean.rs": "ec72f828ebfca2c2200e8977f842a803fde815316bfc76d0a7d83465763e0593",
+    "crates/erp-html/src/tables.rs": "9d3e060f3b0c51c1a87ce3f1f4e86910a4f86b7fae0f9fc4aea5ce6d501b2be0",
     "crates/erp-html/src/normalize.rs": "0b73cfeac954520e2c9a4516c5dee58daab9b875aa959e52e3e1ab63b2e1fe74",
-    "crates/erp-html/src/serialize.rs": "089b4f29b558e8df4dec3a41dfe86c096e297f0f872cc4744639420f31a688ed",
+    "crates/erp-html/src/serialize.rs": "7b1ebbf3a46f29dd2c012ba2349d07723f33af422313f4c8e7d30b759c977340",
     "crates/erp-html/src/policy.rs": "15f738d9933e3762becf0e356d0cf77d9311bdb6b14cd3a9b6f67d5aa18972d9"
   }
 }

@@ -45,7 +45,13 @@ echo "== browser-human-technical revision=$REVISION_FULL host=$(hostname) starte
 
 eval "$(scripts/web-toolchain.sh env)"
 echo "== node $(node --version)"
-CHROME_BIN="${CHROME_BIN:-google-chrome}"
+if [ -z "${CHROME_BIN:-}" ]; then
+  if [ "$(uname -s)" = Darwin ] && [ -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ]; then
+    CHROME_BIN="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+  else
+    CHROME_BIN="google-chrome"
+  fi
+fi
 export CHROME_BIN
 echo "== chrome $("$CHROME_BIN" --version)"
 command -v psql >/dev/null || die "psql is required"
@@ -65,9 +71,13 @@ MANIFEST="$ROOT/web/dist/human-ui/manifest.json"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/erp-m4tech-browser.XXXXXX")"
 DB="erp_m4tech_browser_$(date -u +%Y%m%d%H%M%S)_$$"
 ROLE="${DB}_web"
+NODE_ROLE="${DB}_node"
+FEATURE_ROLE="${DB}_feature"
 SERVER_PID=""
 DB_CREATED=0
 ROLE_CREATED=0
+NODE_ROLE_CREATED=0
+FEATURE_ROLE_CREATED=0
 # The owner URL with the maintenance database replaced; values are percent-encoded by Python.
 owner_url() {
   python3 -I - "$1" <<'PY'
@@ -108,11 +118,21 @@ cleanup() {
     kill "$SERVER_PID"
     wait "$SERVER_PID" 2>/dev/null || true # its exit status after our TERM is expected nonzero
   fi
+  if [ "$status" -ne 0 ] && [ -f "$WORK/server.log" ]; then
+    echo "== server log on failure:" >&2
+    cat "$WORK/server.log" >&2
+  fi
   if [ "$DB_CREATED" = 1 ]; then
     admin_sql "DROP DATABASE IF EXISTS \"$DB\" WITH (FORCE)" || { echo "cleanup: could not drop database $DB" >&2; status=1; }
   fi
   if [ "$ROLE_CREATED" = 1 ]; then
     admin_sql "DROP ROLE IF EXISTS \"$ROLE\"" || { echo "cleanup: could not drop role $ROLE" >&2; status=1; }
+  fi
+  if [ "$NODE_ROLE_CREATED" = 1 ]; then
+    admin_sql "DROP ROLE IF EXISTS \"$NODE_ROLE\"" || { echo "cleanup: could not drop role $NODE_ROLE" >&2; status=1; }
+  fi
+  if [ "$FEATURE_ROLE_CREATED" = 1 ]; then
+    admin_sql "DROP ROLE IF EXISTS \"$FEATURE_ROLE\"" || { echo "cleanup: could not drop role $FEATURE_ROLE" >&2; status=1; }
   fi
   rm -rf -- "$WORK"
   echo "== browser-human-technical finished status=$status"
@@ -130,27 +150,38 @@ RUNTIME_PASSWORD="$(openssl rand -hex 24)"
 # The generated password is passed on stdin so it never appears in a process listing.
 printf "CREATE ROLE \"%s\" LOGIN PASSWORD '%s'\n" "$ROLE" "$RUNTIME_PASSWORD" | psql -X -v ON_ERROR_STOP=1 -q
 ROLE_CREATED=1
+printf "CREATE ROLE \"%s\" LOGIN PASSWORD '%s' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT\n" "$NODE_ROLE" "$RUNTIME_PASSWORD" | psql -X -v ON_ERROR_STOP=1 -q
+NODE_ROLE_CREATED=1
 
 PORT="$(python3 -I -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
 owner_url "$DB" > "$WORK/owner-url"
 RUNTIME_PASSWORD="$RUNTIME_PASSWORD" runtime_url "$ROLE" "$DB" > "$WORK/runtime-url"
+RUNTIME_PASSWORD="$RUNTIME_PASSWORD" runtime_url "$NODE_ROLE" "$DB" > "$WORK/node-url"
 unset RUNTIME_PASSWORD
 openssl rand -hex 24 > "$WORK/admin-password"
-chmod 600 "$WORK/owner-url" "$WORK/runtime-url" "$WORK/admin-password"
+chmod 600 "$WORK/owner-url" "$WORK/runtime-url" "$WORK/node-url" "$WORK/admin-password"
+STAGED_ADDONS="$WORK/addons"
+mkdir -p "$STAGED_ADDONS"
+rsync -a --exclude='node_modules/' "$ROOT/addons/" "$STAGED_ADDONS/"
 cat > "$WORK/server.toml" <<EOF
 database = "$DB"
 database_url_file = "runtime-url"
 owner_database_url_file = "owner-url"
+node_database_url_file = "node-url"
 bind = "127.0.0.1:$PORT"
 public_origin = "http://127.0.0.1:$PORT"
 proxy_mode = "direct"
-addons_path = ["$ROOT/addons"]
+addons_path = ["$STAGED_ADDONS"]
 assets_manifest = "$MANIFEST"
 EOF
 
 ADMIN_LOGIN="technical-admin"
 echo "== erp db init --config <work>/server.toml --admin-login $ADMIN_LOGIN"
 "$ERP_BIN" db init --config "$WORK/server.toml" --admin-login "$ADMIN_LOGIN" --admin-password-file "$WORK/admin-password"
+echo "== publishing node feature helper roles for $DB"
+admin_sql "CREATE ROLE \"$FEATURE_ROLE\" NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
+FEATURE_ROLE_CREATED=1
+DATABASE_URL="$(owner_url "$DB")" "$ERP_BIN" cluster login-selection publish -d "$DB" --maintenance-role "$FEATURE_ROLE" --request-role "$ROLE"
 echo "== erp server --config <work>/server.toml (127.0.0.1:$PORT)"
 "$ERP_BIN" server --config "$WORK/server.toml" > "$WORK/server.log" 2>&1 &
 SERVER_PID=$!

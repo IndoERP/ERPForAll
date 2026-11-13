@@ -147,7 +147,7 @@ async fn native_lifecycle_denials_have_no_effects() {
     assert_eq!(value["name"], "erp.exceptions.ValidationError");
     assert_eq!(
         value["message"],
-        "Native lifecycle opening with configured Signal is unsupported until a later release"
+        "Uninstall impact cannot describe package runtime lifecycle callbacks; unsupported until a later release"
     );
     assert!(value.get("fingerprint").is_none());
     let uninstall_body = format!(
@@ -285,8 +285,7 @@ async fn native_uninstall_reports_engine_composition_refusal_without_effects() {
         .await
         .unwrap()
         .get(0);
-    let expected =
-        "Native lifecycle opening with configured Signal is unsupported until a later release";
+    let expected = "Uninstall impact cannot describe package runtime lifecycle callbacks; unsupported until a later release";
     let detail = json_post(
         fixture.port,
         &fixture.cookies,
@@ -323,18 +322,23 @@ async fn native_uninstall_reports_engine_composition_refusal_without_effects() {
     }
     let confirmation =
         serde_json::json!({"modules":["sample_library"],"impact":fingerprint}).to_string();
-    for (path, body) in [
+    for (path, body, expected_message) in [
         (
             "/erp/json/2/ir.module.module/erp_preview_uninstall",
             r#"{"modules":["sample_library"]}"#,
+            expected,
         ),
-        ("/erp/module/uninstall", confirmation.as_str()),
+        (
+            "/erp/module/uninstall",
+            confirmation.as_str(),
+            "Uninstall impact cannot describe custom index support on table 'ir_dated_parameter'; unsupported until a later release",
+        ),
     ] {
         let refused = json_post(fixture.port, &fixture.cookies, path, body);
         assert_eq!(refused.status, 422, "{path}: {}", refused.body);
         let error: serde_json::Value = serde_json::from_str(&refused.body).unwrap();
         assert_eq!(error["name"], "erp.exceptions.ValidationError");
-        assert_eq!(error["message"], expected);
+        assert_eq!(error["message"], expected_message);
         assert!(error.get("fingerprint").is_none());
     }
     let after: serde_json::Value = fixture
@@ -505,5 +509,39 @@ async fn native_force_demo_requires_confirmation_a_browser_session_and_is_audite
     let reply = json_post(port, cookie, path, r#"{"confirm":true}"#);
     assert_eq!(reply.status, 200, "{}", reply.body);
     assert_eq!(audit().await, 2);
+    fixture.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_read_audit_policy_survives_lifecycle_recomposition() {
+    let fixture = NativeFixture::start_with_config("\n[audit_read_policy]\nall_users=true\n").await;
+    async fn count(fixture: &NativeFixture) -> i64 {
+        fixture.client.query_one("SELECT count(*) FROM erp_event.ir_audit_entry WHERE entry_kind='attempt' AND outcome='read_ok' AND model='res.partner' AND method='search'", &[]).await.unwrap().get(0)
+    }
+    let before = count(&fixture).await;
+    let reply = json_post(
+        fixture.port,
+        &fixture.cookies,
+        "/erp/json/2/res.partner/search",
+        r#"{"domain":[],"limit":1}"#,
+    );
+    assert_eq!(reply.status, 200, "{}", reply.body);
+    assert_eq!(count(&fixture).await, before + 1);
+    let installed = json_post(
+        fixture.port,
+        &fixture.cookies,
+        "/erp/module/install",
+        r#"{"modules":["sample_library"]}"#,
+    );
+    assert_eq!(installed.status, 200, "{}", installed.body);
+    let before = count(&fixture).await;
+    let reply = json_post(
+        fixture.port,
+        &fixture.cookies,
+        "/erp/json/2/res.partner/search",
+        r#"{"domain":[],"limit":1}"#,
+    );
+    assert_eq!(reply.status, 200, "{}", reply.body);
+    assert_eq!(count(&fixture).await, before + 1);
     fixture.cleanup().await;
 }

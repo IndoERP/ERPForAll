@@ -43,7 +43,7 @@ pub enum Value {
     /// query or raw SQL (see [`Opaque`]).
     Opaque(Opaque),
     NewId,
-    /// A value of the principal a statement runs for: a leaf of a compiled
+    /// A value of the principal a statement runs: a leaf of a compiled
     /// access domain, bound per statement in SQL, never decided in memory (see
     /// [`PrincipalParam`]). Only Rust code builds it; no external input produces one.
     Param(PrincipalParam),

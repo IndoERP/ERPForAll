@@ -41,7 +41,7 @@ alloc::harness!(
     search_panel_rpc_10k_semantics,
 );
 
-// Measured maxima:; exact driver blocks excluded.
+// Measured maxima; exact driver blocks excluded.
 // Requested bytes and peak are diagnostics, not ratchets: driver buffer refills vary by schedule.
 const MEASURED: usize = 32;
 const BUDGET_24: [u64; 2] = [525, 802];

@@ -7,6 +7,7 @@ members = [
     "addons/uom",
     "addons/product",
     "addons/mail",
+    "addons/product_mail",
     "addons/web",
     "addons/theme_office_blue",
     "addons/acceptance_notes",
@@ -22,6 +23,8 @@ members = [
     "addons/purchase_stock",
     "addons/sale_stock",
     "addons/stock_dropshipping",
+    "addons/analytic",
+    "addons/account",
     # sample WebAssembly addons: Rust code packed as .erpaddon components
     "examples/wasm/sample_library_wasm",
     "examples/wasm/sample_library_wasm_policy",
@@ -83,6 +86,7 @@ erp-guest = { path = "crates/erp-guest" }
 erp-addon-base = { path = "addons/base" }
 erp-addon-uom = { path = "addons/uom" }
 erp-addon-product = { path = "addons/product" }
+erp-addon-product-mail = { path = "addons/product_mail" }
 erp-addon-mail = { path = "addons/mail" }
 erp-addon-web = { path = "addons/web" }
 erp-addon-theme-office-blue = { path = "addons/theme_office_blue" }
@@ -99,6 +103,8 @@ erp-addon-stock_landed_costs = { path = "addons/stock_landed_costs" }
 erp-addon-purchase_stock = { path = "addons/purchase_stock" }
 erp-addon-sale_stock = { path = "addons/sale_stock" }
 erp-addon-stock_dropshipping = { path = "addons/stock_dropshipping" }
+erp-addon-analytic = { path = "addons/analytic" }
+erp-addon-account = { path = "addons/account" }
 # Fixture addon crates (tests only)
 erp-addon-test_ext_a = { path = "crates/erp-test-models/addons/test_ext_a" }
 erp-addon-test_ext_b = { path = "crates/erp-test-models/addons/test_ext_b" }
@@ -153,8 +159,10 @@ object_store = { version = "0.14", default-features = false, features = ["aws"] 
 # Stream adapters of that store (MIT; already in the graph through object_store and reqwest).
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 tokio-util = { version = "0.7", default-features = false, features = ["io"] }
-# Packages (erpaddon format,; MIT).
+# Packages (erpaddon format; MIT).
 zip = { version = "9.1", default-features = false, features = ["deflate"] }
+# Spreadsheet download of the pivot view (MIT OR Apache-2.0). No optional features.
+rust_xlsxwriter = { version = "0.102", default-features = false }
 # Keyed digests of shared secrets in node configuration digests (MIT OR Apache-2.0,
 # RustCrypto, same family and digest version as sha2).
 hmac = "0.13"
@@ -320,7 +328,7 @@ hyper = { path = "vendor/hyper" }
 # tokio-postgres for the whole graph (deadpool-postgres included); without `RowStream::poll_next_body`
 # it behaves as released. Provenance and the patch: vendor/README.md.
 tokio-postgres = { path = "vendor/tokio-postgres" }
-# html5ever 0.39.0, vendored so a parse budget can be added inside the tokenizer and tree builder
-# . The copy is patched; with the `budget` feature off it behaves as
-# released (the feature is enabled only by the crates that parse untrusted HTML: erp-ui-compiler/html-budget and,, erp-html). Provenance and patch: vendor/README.md.
+# html5ever 0.39.0, vendored so a parse budget can be added inside the tokenizer and tree builder.
+# The copy is patched; with the `budget` feature off it behaves as
+# released (the feature is enabled only by the crates that parse untrusted HTML: erp-ui-compiler/html-budget, erp-html). Provenance and patch: vendor/README.md.
 html5ever = { path = "vendor/html5ever-bounded" }

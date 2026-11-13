@@ -21,8 +21,7 @@ pub(crate) const SUB_VIEW_TAGS: [&str; 5] = ["form", "list", "graph", "kanban", 
 /// The board task that brings the full view validation (x2many sub-views, per-tag checks).
 pub const FULL_VALIDATION_TASK: &str = "a later release";
 
-/// The view type of QWeb templates, which are combined but never validated
-/// .
+/// The view type of QWeb templates, which are combined but never validated.
 pub const QWEB: &str = "qweb";
 
 /// What validation looks up outside the arch: the registry's models and fields, and which group

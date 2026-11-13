@@ -421,7 +421,7 @@ impl Inputs<'_> {
                     })
                     .collect();
                 let read_env = if self.currency_lookup {
-                    run_env.sudo(true)
+                    run_env.engine_sudo()
                 } else {
                     run_env.clone()
                 };
@@ -465,7 +465,7 @@ impl Inputs<'_> {
                         bound_field = Some(field);
                     }
                     let related_env = if fc.sudo {
-                        run_env.sudo(true)
+                        run_env.engine_sudo()
                     } else {
                         run_env.clone()
                     };
@@ -1428,7 +1428,7 @@ pub(crate) async fn normalize(
             )));
         }
         // Only currency lookup/provider reads are elevated, never amount publication.
-        let records = Records::empty(env.sudo(true), provider.id);
+        let records = Records::empty(env.engine_sudo(), provider.id);
         // At most 256 distinct currencies and recompute_batch rows per native call.
         let batch = tx.config().recompute_batch.clamp(1, 256);
         for (positions, amounts) in positions.chunks(batch).zip(amounts.chunks(batch)) {

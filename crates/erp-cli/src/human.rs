@@ -14,15 +14,15 @@ use erp_security::{resolver::Resolver, source::PolicySource};
 use erp_server::{config::ServerConfig, web::WebApp};
 use std::{path::Path, sync::Arc};
 
-fn failed(message: impl Into<String>) -> CliError {
+pub(crate) fn failed(message: impl Into<String>) -> CliError {
     CliError::Execution(message.into())
 }
-fn config(path: &Path) -> Result<Arc<ServerConfig>> {
+pub(crate) fn config(path: &Path) -> Result<Arc<ServerConfig>> {
     ServerConfig::load(path)
         .map(Arc::new)
         .map_err(|e| failed(e.to_string()))
 }
-fn runtime() -> Result<tokio::runtime::Runtime> {
+pub(crate) fn runtime() -> Result<tokio::runtime::Runtime> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -185,6 +185,9 @@ pub(crate) async fn initialize_async(args: &InitArgs) -> Result<String> {
     grant_runtime(&mut tx, &config).await?;
     tx.commit().await?;
     activation_guard.rollback().await?;
+    crate::audit_reader::verify_configured(&config).await.map_err(|error| {
+        erp_fields::Error::programming("Database initialization COMMITTED, but audit reader admission failed; reconcile the credential and run erp db publish-grants; do not repeat initialization").with_source(error)
+    })?;
     Ok(format!(
         "Database {} initialized with the supplied administrator; no default credentials were created.",
         config.database()
@@ -210,9 +213,11 @@ SELECT NOT has_schema_privilege('public','USAGE') OR EXISTS (
         WHEN c.relkind IN ('r','p') AND c.relname NOT IN
             ('erp_signal_generation','ir_module_post_commit','erp_module_install_audit','erp_module_lifecycle_audit',
              'ir_module_wasm_audit','ir_module_package','erp_transient_vacuum_state','erp_schema_generated','erp_translated_verified',
+             'erp_schema_sql_object','erp_schema_sql_object_dependency',
              'erp_node','erp_node_detail','erp_node_rollout','erp_node_feature','erp_node_feature_digest','installed_addon_identity','installed_addon_identity_audit',
              'ir_ui_asset_blob','ir_ui_asset_bundle','uom_reference_fence','uom_reference_use',
-             'erp_job','erp_job_run','erp_job_item_failure','ir_blob_store')
+             'erp_job','erp_job_run','erp_job_item_failure','ir_blob_store','ir_blob_owner_identity','ir_blob_owner_state','ir_blob_peer_probe','ir_blob_owner_claim','ir_blob_owner_recovery',
+             'ir_blob','ir_blob_inline','ir_blob_upload','ir_blob_usage_base','ir_blob_usage_delta','ir_attachment_pending_guard')
         THEN CASE WHEN c.relname='erp_auth_gc_state' THEN NOT (has_table_privilege(c.oid,'SELECT') AND has_table_privilege(c.oid,'UPDATE'))
         ELSE NOT (has_table_privilege(c.oid,'SELECT') AND has_table_privilege(c.oid,'INSERT')
             AND has_table_privilege(c.oid,'UPDATE') AND has_table_privilege(c.oid,'DELETE')) END
@@ -223,7 +228,8 @@ SELECT NOT has_schema_privilege('public','USAGE') OR EXISTS (
             OR has_any_column_privilege(c.oid,'INSERT') OR has_any_column_privilege(c.oid,'UPDATE')
             OR has_any_column_privilege(c.oid,'REFERENCES')
         WHEN c.relkind='S' AND c.relname NOT IN ('erp_module_install_audit_id_seq','erp_module_lifecycle_audit_id_seq',
-             'ir_module_wasm_audit_id_seq','ir_module_package_id_seq','installed_addon_identity_audit_id_seq','uom_reference_fence_id_seq','uom_reference_use_id_seq')
+             'ir_module_wasm_audit_id_seq','ir_module_package_id_seq','installed_addon_identity_audit_id_seq','uom_reference_fence_id_seq','uom_reference_use_id_seq',
+             'ir_blob_owner_claim_id_seq')
         THEN NOT (has_sequence_privilege(c.oid,'USAGE') AND has_sequence_privilege(c.oid,'SELECT'))
         ELSE FALSE
     END
@@ -238,6 +244,72 @@ OR /*ir_blob_store*/ CASE WHEN to_regclass('public.ir_blob_store') IS NULL THEN 
         OR has_table_privilege(c.oid,'UPDATE') OR has_table_privilege(c.oid,'DELETE')
         OR has_table_privilege(c.oid,'TRUNCATE') OR has_any_column_privilege(c.oid,'UPDATE'))
     ) END /*end ir_blob_store*/
+-- Pending admission guard identity is immutable to request roles.
+OR /*attachment_pending*/ CASE WHEN to_regclass('public.ir_blob_store') IS NULL THEN FALSE
+WHEN to_regclass('public.ir_attachment_pending_guard') IS NULL THEN TRUE
+ELSE EXISTS (
+ SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+ WHERE n.nspname='public' AND c.relname='ir_attachment_pending_guard'
+ AND (NOT has_table_privilege(c.oid,'SELECT') OR NOT has_table_privilege(c.oid,'INSERT')
+ OR has_table_privilege(c.oid,'UPDATE') OR has_table_privilege(c.oid,'DELETE')
+ OR has_table_privilege(c.oid,'TRUNCATE') OR has_table_privilege(c.oid,'REFERENCES')
+ OR has_table_privilege(c.oid,'TRIGGER') OR has_table_privilege(c.oid,'MAINTAIN')
+ OR has_any_column_privilege(c.oid,'REFERENCES')
+ OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped
+ AND has_column_privilege(c.oid,a.attnum,'UPDATE') <> (a.attname='generation')))
+) END /*end attachment_pending*/
+-- Owner coordination is maintained only by the owner-side native handler.
+OR /*attachment_owner*/ CASE WHEN to_regclass('public.ir_blob_store') IS NULL THEN FALSE
+WHEN to_regclass('public.ir_blob_owner_identity') IS NULL OR to_regclass('public.ir_blob_owner_state') IS NULL OR to_regclass('public.ir_blob_peer_probe') IS NULL THEN TRUE
+ELSE EXISTS (
+ SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+ WHERE n.nspname='public' AND c.relname IN ('ir_blob_owner_identity','ir_blob_owner_state','ir_blob_peer_probe')
+ AND (NOT has_table_privilege(c.oid,'SELECT') OR has_table_privilege(c.oid,'INSERT')
+ OR has_table_privilege(c.oid,'UPDATE') OR has_table_privilege(c.oid,'DELETE')
+ OR has_table_privilege(c.oid,'TRUNCATE') OR has_table_privilege(c.oid,'REFERENCES')
+ OR has_table_privilege(c.oid,'TRIGGER') OR has_table_privilege(c.oid,'MAINTAIN')
+ OR has_any_column_privilege(c.oid,'INSERT') OR has_any_column_privilege(c.oid,'UPDATE')
+ OR has_any_column_privilege(c.oid,'REFERENCES'))
+) END /*end attachment_owner*/
+-- Recovery decision metadata is owner-only; request health can read progress only.
+OR /*attachment_recovery*/ CASE WHEN to_regclass('public.ir_blob_store') IS NULL THEN FALSE
+WHEN to_regclass('public.ir_blob_owner_claim') IS NULL OR to_regclass('public.ir_blob_owner_recovery') IS NULL THEN TRUE
+ELSE EXISTS (
+ SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+ WHERE n.nspname='public' AND c.relname IN ('ir_blob_owner_claim','ir_blob_owner_recovery')
+ AND ((has_table_privilege(c.oid,'SELECT') <> (c.relname='ir_blob_owner_recovery'))
+ OR has_table_privilege(c.oid,'INSERT') OR has_table_privilege(c.oid,'UPDATE') OR has_table_privilege(c.oid,'DELETE')
+ OR has_table_privilege(c.oid,'TRUNCATE') OR has_table_privilege(c.oid,'REFERENCES')
+ OR has_table_privilege(c.oid,'TRIGGER') OR has_table_privilege(c.oid,'MAINTAIN')
+ OR has_any_column_privilege(c.oid,'INSERT') OR has_any_column_privilege(c.oid,'UPDATE')
+ OR has_any_column_privilege(c.oid,'REFERENCES')
+ OR (c.relname='ir_blob_owner_claim' AND has_any_column_privilege(c.oid,'SELECT')))
+) OR has_sequence_privilege('public.ir_blob_owner_claim_id_seq','USAGE')
+OR has_sequence_privilege('public.ir_blob_owner_claim_id_seq','SELECT')
+OR has_sequence_privilege('public.ir_blob_owner_claim_id_seq','UPDATE')
+END /*end attachment_recovery*/
+-- Attachment accounting and content rows: request writes append usage; only maintenance
+-- removes bytes, intents or deltas. Effective inherited and column rights count.
+OR /*attachment_quota*/ CASE WHEN to_regclass('public.ir_blob') IS NULL THEN FALSE
+WHEN to_regclass('public.ir_blob_usage_base') IS NULL OR to_regclass('public.ir_blob_usage_delta') IS NULL THEN TRUE
+ELSE EXISTS (
+    SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+    WHERE n.nspname='public' AND c.relkind='r'
+      AND c.relname IN ('ir_blob','ir_blob_inline','ir_blob_upload','ir_blob_usage_base','ir_blob_usage_delta')
+      AND (NOT has_table_privilege(c.oid,'SELECT')
+        OR (c.relname <> 'ir_blob_usage_base' AND NOT has_table_privilege(c.oid,'INSERT'))
+        OR (c.relname = 'ir_blob_usage_base' AND has_any_column_privilege(c.oid,'INSERT'))
+        OR has_table_privilege(c.oid,'UPDATE') OR has_table_privilege(c.oid,'DELETE')
+        OR has_table_privilege(c.oid,'TRUNCATE') OR has_table_privilege(c.oid,'REFERENCES')
+        OR has_table_privilege(c.oid,'TRIGGER') OR has_table_privilege(c.oid,'MAINTAIN')
+        OR has_any_column_privilege(c.oid,'REFERENCES')
+        OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped
+            AND has_column_privilege(c.oid,a.attnum,'UPDATE') <>
+              CASE c.relname
+              WHEN 'ir_blob' THEN a.attname IN ('state','deleting_since','sweep_attempted_at')
+              WHEN 'ir_blob_upload' THEN a.attname IN ('state','sha256','sha1','size','detected_mimetype','inline_data','reserved_bytes','cleanup_error')
+              ELSE FALSE END))
+) END /*end attachment_quota*/
 -- The job queue tables: the runtime role holds SELECT, INSERT and DELETE on all
 -- three, UPDATE only on the lifecycle columns of erp_job and on the error columns of
 -- erp_job_item_failure, and nothing else (no table-level UPDATE, TRUNCATE, REFERENCES, TRIGGER or
@@ -321,21 +393,40 @@ SELECT CASE WHEN to_regclass('public.erp_schema_generated') IS NULL THEN NULL EL
     has_table_privilege('public.erp_schema_generated','TRIGGER') OR
     has_table_privilege('public.erp_schema_generated','MAINTAIN') END";
 
+// SQL object provenance is the schema-sync comparator: no runtime path reads or
+// writes it, so the runtime role holds no privilege at all; NULL when a table is missing.
+const SQL_OBJECT_PROVENANCE_LEAK_SQL: &str = "
+SELECT CASE WHEN to_regclass('public.erp_schema_sql_object') IS NULL
+    OR to_regclass('public.erp_schema_sql_object_dependency') IS NULL THEN NULL ELSE EXISTS (
+    SELECT 1 FROM unnest(ARRAY['public.erp_schema_sql_object','public.erp_schema_sql_object_dependency']) t,
+        unnest(ARRAY['SELECT','INSERT','UPDATE','REFERENCES']) c
+    WHERE has_any_column_privilege(t, c)) OR EXISTS (
+    SELECT 1 FROM unnest(ARRAY['public.erp_schema_sql_object','public.erp_schema_sql_object_dependency']) t,
+        unnest(ARRAY['DELETE','TRUNCATE','TRIGGER','MAINTAIN']) p
+    WHERE has_table_privilege(t, p)) END";
+
 /// `erp audit maintain`: install or verify the audit table and refresh its partition window as the
 /// owner role. No grants are changed.
 pub(crate) fn audit_maintain(args: &ServerArgs) -> Result<String> {
     runtime()?.block_on(audit_maintain_async(args))
 }
 
-async fn audit_maintain_async(args: &ServerArgs) -> Result<String> {
-    let config = config(&args.config)?;
-    let orm = Orm::builder(
+/// An ORM on a one-connection pool of the owner role, over the linked registry: what the owner-side
+/// maintenance commands and the server's scheduled event partition upkeep run on. The pool
+/// connects lazily, at the first transaction.
+pub(crate) fn owner_maintenance_orm(config: &ServerConfig) -> Result<Orm> {
+    Ok(Orm::builder(
         crate::access::registry()?,
         pool_with_size(config.owner_connection(), 1)?,
     )
     .require_core_tables(erp_security::auth::core_tables())
     .require_core_tables(erp_addon_base::partner_hierarchy::core_tables())
-    .build()?;
+    .build()?)
+}
+
+async fn audit_maintain_async(args: &ServerArgs) -> Result<String> {
+    let config = config(&args.config)?;
+    let orm = owner_maintenance_orm(&config)?;
     let mut tx = orm
         .begin_opts(
             erp_orm::BeginOptions::new(SUPERUSER_ID)
@@ -351,8 +442,39 @@ async fn audit_maintain_async(args: &ServerArgs) -> Result<String> {
         }
     };
     tx.commit().await?;
+    // a committed transaction keeps its connection until dropped, and the pool has one
+    drop(tx);
+    // the outbox too, when it is installed: the command a missing-partition error names
+    let upkeep = orm.maintain_event_partitions().await?;
+    let outbox = match &upkeep.outbox {
+        erp_orm::EventTableUpkeep::NotInstalled => "not installed, nothing to do".to_owned(),
+        erp_orm::EventTableUpkeep::Maintained { created } => format!(
+            "verified, {} partition(s) created (today plus {} days)",
+            created.len(),
+            erp_orm::EVENT_PREMAKE_DAYS
+        ),
+        erp_orm::EventTableUpkeep::Busy => {
+            return Err(failed(format!(
+                "Audit table {} for database {}, but the outbox table {} is busy: another \
+                 session held its lock past the partition lock timeout; run the command again",
+                if report.created_table {
+                    "installed"
+                } else {
+                    "verified"
+                },
+                config.database(),
+                erp_orm::OUTBOX_TABLE_NAME
+            )));
+        }
+        other => {
+            return Err(failed(format!(
+                "unknown event partition upkeep outcome for {}: {other:?}",
+                erp_orm::OUTBOX_TABLE_NAME
+            )));
+        }
+    };
     Ok(format!(
-        "Audit table {} for database {}: {} partition(s) created, {} already present (today plus {} days).",
+        "Audit table {} for database {}: {} partition(s) created, {} already present (today plus {} days). Outbox table {}: {outbox}.",
         if report.created_table {
             "installed"
         } else {
@@ -361,7 +483,8 @@ async fn audit_maintain_async(args: &ServerArgs) -> Result<String> {
         config.database(),
         report.created_partitions.len(),
         report.existing_partitions.len(),
-        erp_orm::audit::AUDIT_PREMAKE_DAYS
+        erp_orm::audit::AUDIT_PREMAKE_DAYS,
+        erp_orm::OUTBOX_TABLE_NAME,
     ))
 }
 
@@ -429,7 +552,9 @@ pub(crate) async fn publish_grants_async(args: &ServerArgs) -> Result<String> {
     let ensured = async {
         tx.query(erp_sql::ddl::SCHEMA_LOCK, &[]).await?;
         erp_orm::core_ddl_run(&mut tx, erp_orm::CorePhase::BeforeModels).await?;
-        erp_orm::core_ddl_run(&mut tx, erp_orm::CorePhase::AfterModels).await?;
+        // ensure-only path for a database of an older binary: an entry deferred here (its model
+        // table is created by the upgrade that follows) is refused by that upgrade's own end check
+        let _deferred = erp_orm::core_ddl_run(&mut tx, erp_orm::CorePhase::AfterModels).await?;
         Ok::<(), erp_fields::Error>(())
     }
     .await;
@@ -495,6 +620,29 @@ pub(crate) async fn publish_grants_async(args: &ServerArgs) -> Result<String> {
             ));
         }
     }
+    let sql_object_access: Option<bool> = client
+        .query_one(SQL_OBJECT_PROVENANCE_LEAK_SQL, &[])
+        .await
+        .map_err(|_| {
+            failed(
+                "Runtime grants committed but SQL object provenance privilege verification failed",
+            )
+        })?
+        .try_get(0)
+        .map_err(|_| failed("invalid SQL object provenance privilege state"))?;
+    match sql_object_access {
+        Some(false) => {}
+        Some(true) => {
+            return Err(failed(
+                "Runtime grants committed, but the runtime role can still access erp_schema_sql_object or erp_schema_sql_object_dependency through table or column grants, PUBLIC, or another role; revoke that access, then publish again",
+            ));
+        }
+        None => {
+            return Err(failed(
+                "Runtime grants committed, but the SQL object provenance tables are missing; run the schema sync",
+            ));
+        }
+    }
     // `has_table_privilege` counts PUBLIC and every role the runtime role reaches, which a plain
     // revoke from the role does not: the vacuum leases must be out of its reach.
     let leaked: Option<bool> = client
@@ -523,6 +671,10 @@ pub(crate) async fn publish_grants_async(args: &ServerArgs) -> Result<String> {
             ));
         }
     }
+    drop(client);
+    crate::audit_reader::open(&config, runtime_pool).await.map_err(|error| {
+        erp_fields::Error::programming("Runtime grants COMMITTED, but audit reader admission failed; reconcile the credential and run erp db publish-grants again").with_source(error)
+    })?;
     Ok(format!(
         "Runtime grants published and verified for database {}.",
         config.database()
@@ -628,7 +780,7 @@ pub(crate) async fn grant_runtime(
         ).into()),
     }
     tx.batch(&format!(
-        "REVOKE ALL ON public.erp_schema_generated FROM {role_sql}; GRANT SELECT ON public.erp_schema_generated TO {role_sql}"
+        "REVOKE ALL ON public.erp_schema_generated FROM {role_sql}; GRANT SELECT ON public.erp_schema_generated TO {role_sql}; REVOKE ALL ON public.erp_schema_sql_object, public.erp_schema_sql_object_dependency FROM {role_sql}"
     ))
     .await?;
     // Identity storage is created by schema-sync. Legacy absence is valid; a partial
@@ -669,17 +821,106 @@ pub(crate) async fn grant_runtime(
         .try_get(0)
         .map_err(|_| failed("invalid attachment store registry state"))?;
     if blob_store_installed {
+        let rows = tx
+            .query(
+                "SELECT to_regclass('public.ir_attachment_pending_guard') IS NOT NULL",
+                &[],
+            )
+            .await?;
+        let ready: bool = rows
+            .first()
+            .ok_or_else(|| failed("pending attachment schema state missing"))?
+            .try_get(0)
+            .map_err(|_| failed("invalid pending attachment schema state"))?;
+        if !ready {
+            return Err(failed(
+                "pending attachment admission requires an authorized base upgrade",
+            ));
+        }
+        tx.batch(&format!(
+            /*attachment_pending_grants*/
+            "REVOKE ALL ON public.ir_attachment_pending_guard FROM {role_sql}; \
+             GRANT SELECT,INSERT ON public.ir_attachment_pending_guard TO {role_sql}; \
+             GRANT UPDATE(generation) ON public.ir_attachment_pending_guard TO {role_sql}"
+            /*end attachment_pending_grants*/
+        )).await?;
+    }
+    if blob_store_installed {
         tx.batch(&format!(
             "REVOKE UPDATE, DELETE, TRUNCATE ON public.ir_blob_store FROM {role_sql}"
         ))
         .await?;
     }
-    // Every publication installs or verifies the audit table and refreshes its partition window
-    // , then grants the runtime role its insert-only rights on every installed event
+    if blob_store_installed {
+        // All quota objects must be installed before publishing request privileges.
+        let present = tx.query("SELECT to_regclass('public.ir_blob_usage_base') IS NOT NULL AND to_regclass('public.ir_blob_usage_delta') IS NOT NULL", &[]).await?;
+        let ready: bool = present
+            .first()
+            .ok_or_else(|| failed("attachment accounting schema state missing"))?
+            .try_get(0)
+            .map_err(|_| failed("invalid attachment accounting schema state"))?;
+        if !ready {
+            return Err(failed(
+                "attachment accounting schema requires an authorized base upgrade",
+            ));
+        }
+        tx.batch(&format!(
+            /*attachment_quota_grants*/
+            "REVOKE ALL ON public.ir_blob, public.ir_blob_inline, public.ir_blob_upload, public.ir_blob_usage_base, public.ir_blob_usage_delta FROM {role_sql}; \
+             GRANT SELECT ON public.ir_blob_usage_base TO {role_sql}; \
+             GRANT SELECT, INSERT ON public.ir_blob, public.ir_blob_inline, public.ir_blob_upload, public.ir_blob_usage_delta TO {role_sql}; \
+             GRANT UPDATE(state,deleting_since,sweep_attempted_at) ON public.ir_blob TO {role_sql}; \
+             GRANT UPDATE(state,sha256,sha1,size,detected_mimetype,inline_data,reserved_bytes,cleanup_error) ON public.ir_blob_upload TO {role_sql}"
+            /*end attachment_quota_grants*/
+        )).await?;
+    }
+    if blob_store_installed {
+        let rows = tx.query("SELECT to_regclass('public.ir_blob_owner_identity') IS NOT NULL AND to_regclass('public.ir_blob_owner_state') IS NOT NULL AND to_regclass('public.ir_blob_peer_probe') IS NOT NULL", &[]).await?;
+        let ready: bool = rows
+            .first()
+            .ok_or_else(|| failed("attachment ownership schema state missing"))?
+            .try_get(0)
+            .map_err(|_| failed("invalid attachment ownership schema state"))?;
+        if !ready {
+            return Err(failed(
+                "attachment ownership schema requires an authorized base upgrade",
+            ));
+        }
+        let recovery = tx.query("SELECT to_regclass('public.ir_blob_owner_claim') IS NOT NULL AND to_regclass('public.ir_blob_owner_recovery') IS NOT NULL", &[]).await?;
+        let present: bool = recovery
+            .first()
+            .ok_or_else(|| failed("attachment recovery schema state missing"))?
+            .try_get(0)
+            .map_err(|_| failed("invalid attachment recovery schema state"))?;
+        if !present {
+            return Err(failed(
+                "attachment recovery schema requires an authorized base upgrade",
+            ));
+        }
+        tx.batch(&format!(
+            /*attachment_recovery_grants*/
+            "REVOKE ALL ON public.ir_blob_owner_claim, public.ir_blob_owner_recovery FROM {role_sql}; REVOKE ALL ON SEQUENCE public.ir_blob_owner_claim_id_seq FROM {role_sql}; GRANT SELECT ON public.ir_blob_owner_recovery TO {role_sql}"
+            /*end attachment_recovery_grants*/
+        )).await?;
+        tx.batch(&format!(
+            /*attachment_owner_grants*/
+            "REVOKE ALL ON public.ir_blob_owner_identity, public.ir_blob_owner_state, public.ir_blob_peer_probe FROM {role_sql}; GRANT SELECT ON public.ir_blob_owner_identity, public.ir_blob_owner_state, public.ir_blob_peer_probe TO {role_sql}"
+            /*end attachment_owner_grants*/
+        )).await?;
+    }
+    // Every publication installs or verifies the audit table and refreshes its partition window,
+    // then grants the runtime role its insert-only rights on every installed event
     // table. The outbox table is installed by its own lifecycle step; the grant covers it when it
     // exists.
     tx.install_audit_schema().await?;
     tx.grant_event_runtime_role(role).await?;
+    if let Some(reader) = config.configured_audit_reader_connection() {
+        let reader_role = reader
+            .get_user()
+            .ok_or_else(|| failed("audit reader role missing"))?;
+        tx.grant_audit_reader_role(reader_role, &crate::audit_reader::roles(config)?)
+            .await?;
+    }
     // The transient vacuum leases belong to the maintenance role only.
     tx.revoke_vacuum_request_role(role).await?;
     erp_modules::revoke_post_commit_access(tx, role).await?;
@@ -726,6 +967,21 @@ pub(crate) async fn grant_runtime(
     Ok(())
 }
 
+/// The attachment store runtime of this server, opened from the `[attachments]`
+/// table of the configuration or, when it has none, the default `local` store next to the file
+/// ([`ServerConfig::attachments_toml`]). Opening creates the directory; a table that is invalid or a
+/// store that cannot be opened stops the start with the setting named.
+pub(crate) async fn open_attachments(
+    config: &ServerConfig,
+) -> Result<Arc<erp_sdk::blob::AttachmentRuntime>> {
+    let settings = erp_sdk::blob::AttachmentConfig::from_toml(config.attachments_toml())
+        .map_err(|error| failed(format!("attachments configuration: {error}")))?;
+    erp_sdk::blob::AttachmentRuntime::open(settings)
+        .await
+        .map(Arc::new)
+        .map_err(|error| failed(format!("attachment store: {error}")))
+}
+
 /// The ORM builder every server-composed ORM starts from: the base models' implementations and
 /// constraints, the external-id and attachment unlink hooks, and the installed packages' WebAssembly method layers,
 /// computes and constraints. The request ORM adds its policy, resolver, RPC and signal on top; the
@@ -736,8 +992,12 @@ fn server_orm_builder(
     pool: deadpool_postgres::Pool,
     wasm_methods: Vec<WasmMethodImpl>,
     checks: erp_modules::PackageChecks,
+    attachments: Arc<erp_sdk::blob::AttachmentRuntime>,
 ) -> erp_orm::OrmBuilder {
-    Orm::builder(registry, pool)
+    Orm::builder(Arc::clone(&registry), pool)
+        .generation_attachment(erp_orm::GenerationAttachment::new(registry, attachments))
+        // the capability behind with_user to another user (A4)
+        .impersonate_capability(&erp_security::principal::PRINCIPAL_IMPERSONATE)
         .require_core_tables(erp_security::auth::core_tables())
         .require_core_tables(erp_addon_base::partner_hierarchy::core_tables())
         .impls(erp_modules::base_models::IMPLS.iter().copied())
@@ -756,6 +1016,7 @@ fn server_request_orm_builder(
     pool: deadpool_postgres::Pool,
     wasm_methods: Vec<WasmMethodImpl>,
     checks: erp_modules::PackageChecks,
+    attachments: Arc<erp_sdk::blob::AttachmentRuntime>,
 ) -> Result<erp_orm::OrmBuilder> {
     let table = source
         .env(SUPERUSER_ID, erp_orm::Context::new())
@@ -764,10 +1025,14 @@ fn server_request_orm_builder(
         .require_registry(source.registry())
         .map_err(|error| erp_fields::Error::programming(error.to_string()))?;
     let registry = Arc::clone(source.registry());
-    Ok(
-        server_orm_builder(Arc::clone(&registry), pool, wasm_methods, checks)
-            .generation_attachment(erp_orm::GenerationAttachment::new(registry, table)),
+    Ok(server_orm_builder(
+        Arc::clone(&registry),
+        pool,
+        wasm_methods,
+        checks,
+        attachments,
     )
+    .generation_attachment(erp_orm::GenerationAttachment::new(registry, table)))
 }
 
 /// `erp db vacuum-transient`: the registry and the ORM are composed from the database the way the
@@ -819,6 +1084,7 @@ pub(crate) fn vacuum_transient(args: &VacuumTransientArgs) -> Result<String> {
             pool_with_size(config.owner_connection(), 2)?,
             wasm_methods,
             checks,
+            open_attachments(&config).await?,
         )
         .build()?;
         crate::db::vacuum_with(args, &orm).await
@@ -891,6 +1157,10 @@ pub(crate) async fn grant_vacuum_role_async(args: &GrantVacuumRoleArgs) -> Resul
     ))
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the request ORM's composition inputs, each from a different owner"
+)]
 async fn runtime_auth(
     runtime_pool: deadpool_postgres::Pool,
     policy_pool: deadpool_postgres::Pool,
@@ -899,12 +1169,13 @@ async fn runtime_auth(
     wasm_methods: Vec<WasmMethodImpl>,
     checks: erp_modules::PackageChecks,
     admission: erp_orm::node::NodeAdmission,
+    attachments: Arc<erp_sdk::blob::AttachmentRuntime>,
 ) -> Result<Arc<Auth>> {
     let registry = loaded.registry();
     let source = PolicySource::build(Arc::clone(registry), policy_pool).await?;
     let resolver = Resolver::for_registry(registry)?;
     let provider: Arc<dyn erp_orm::PolicyProvider> = Arc::new(source.clone());
-    let orm = server_request_orm_builder(loaded, runtime_pool, wasm_methods, checks)?
+    let orm = server_request_orm_builder(loaded, runtime_pool, wasm_methods, checks, attachments)?
         .resolver(resolver)
         .policy(provider)
         .rpc_impls([
@@ -955,14 +1226,19 @@ pub(crate) fn serve(args: &ServerArgs) -> Result<()> {
         let admission = membership.admission();
         let identity_addons = membership.identity().addons().digest();
         let startup_result: Result<_> = async {
+            let runtime_pool =
+                pool_with_size(config.runtime_connection(), config.request_pool_size())?;
+            let audit_reader = crate::audit_reader::open(&config, runtime_pool.clone()).await?;
             let lifecycle = Arc::new(NativeLifecycle {
                 admission: admission.clone(),
                 identity_addons,
                 asset_store: Arc::clone(&asset_store),
                 config: Arc::clone(&config),
+                attachments: open_attachments(&config).await?,
                 node,
                 system,
-                runtime_pool: pool_with_size(config.runtime_connection(), 8)?,
+                runtime_pool,
+                audit_reader,
                 policy_pool: pool_with_size(config.runtime_connection(), 2)?,
                 publication_pool,
                 installing: tokio::sync::Mutex::new(()),
@@ -981,7 +1257,9 @@ pub(crate) fn serve(args: &ServerArgs) -> Result<()> {
                 .with_assets(crate::ui_assets::RUNTIME_ABI, assets)
                 .map_err(|error| failed(error.to_string()))?
                 .with_asset_authority(lifecycle.clone())
-                .with_lifecycle(lifecycle);
+                .with_lifecycle(lifecycle)
+                .with_attachment_content(Arc::new(crate::attachment_content::BaseAttachmentContent))
+                .with_pivot_export(Arc::new(crate::pivot_export::WebAddonPivotExport));
             let listener =
                 tokio::net::TcpListener::bind(config.bind().map_err(|e| failed(e.to_string()))?)
                     .await
@@ -1034,11 +1312,14 @@ struct NativeLifecycle {
     // persistent refusal costs each request one authority read, not a queued bounded reload.
     asset_refusal: AssetRefusalGate,
     config: Arc<ServerConfig>,
+    /// The attachment store of this process, opened once and shared by every registry generation.
+    attachments: Arc<erp_sdk::blob::AttachmentRuntime>,
     /// The module system with the lifecycle of the package addons: every load of the installed
     /// set goes through it, so a node follows installs of WebAssembly addons by other nodes.
     node: Node,
     system: Arc<ModuleSystem>,
     runtime_pool: deadpool_postgres::Pool,
+    audit_reader: Option<erp_orm::audit::AuditReaderConnection>,
     policy_pool: deadpool_postgres::Pool,
     publication_pool: deadpool_postgres::Pool,
     installing: tokio::sync::Mutex<()>,
@@ -1225,6 +1506,21 @@ impl NativeLifecycle {
                 "Installed modules are unavailable or require post-commit recovery",
             ));
         }
+        if startup {
+            if loaded
+                .orm
+                .registry()
+                .addons()
+                .iter()
+                .any(|addon| addon.name == "base")
+            {
+                ensure_attachment_schedules(&loaded.orm).await?;
+            } else {
+                tracing::info!("base is not installed; no attachment schedules are kept");
+            }
+            // before the audit admission below, which then judges the window this run left
+            maintain_event_partitions_at_start(&loaded.orm).await?;
+        }
         let asset_admission = if !loaded
             .orm
             .registry()
@@ -1273,13 +1569,90 @@ impl NativeLifecycle {
             wasm_methods,
             checks,
             self.admission.clone(),
+            Arc::clone(&self.attachments),
         )
         .await
         .map_err(cli_field_error)?;
         self.admit_audit_store(&auth).await?;
+        if let Some(reader) = &self.audit_reader {
+            reader.verify().await?;
+        }
         let rpc = runtime_rpc(&auth, &self.config).await?;
         Ok((auth, rpc, asset_admission))
     }
+}
+
+/// Create the attachment schedules that have no live row, once per server start and before the
+/// node reports ready. `owner` is the module system's ORM on the
+/// owner connection: the helper needs no attachment runtime, so no further pool or credential is
+/// opened. READ COMMITTED on the primary lets a second node starting at the same moment wait for
+/// the first one's insert and coalesce into its row (the queue's dedup index) instead of failing
+/// on a serialization or unique conflict. The store topology is not checked here: it stays at
+/// upload and cleanup, where a shared local store is refused. A failure is logged in full at
+/// error level and stops the start with a sanitized cause. The caller runs it only when the loaded
+/// registry has the `base` addon (the attachment job kinds belong to it); without `base` no
+/// schedules are kept and the start only logs that.
+async fn ensure_attachment_schedules(owner: &Orm) -> erp_fields::Result<()> {
+    let refused = |error: &erp_fields::Error| {
+        // The operator's log keeps the full error; the returned one carries only typed causes.
+        tracing::error!(
+            %error,
+            "attachment schedules could not be kept at startup; the node does not start"
+        );
+        erp_fields::Error::new(
+            error.kind(),
+            format!(
+                "Attachment schedules could not be kept at startup: {}",
+                crate::server_runtime::sanitized_cause(error)
+            ),
+        )
+    };
+    let mut tx = owner
+        .begin_opts(
+            erp_orm::BeginOptions::new(SUPERUSER_ID)
+                .isolation(erp_orm::Isolation::ReadCommitted)
+                .on_primary(),
+        )
+        .await
+        .map_err(|error| refused(&error))?;
+    let env = tx.env();
+    if let Err(error) =
+        erp_addon_base::attachments::gc::ensure_missing_schedules(&mut tx, &env).await
+    {
+        let error = refused(&error);
+        if let Err(rollback) = tx.rollback().await {
+            return Err(error.and_also(&refused(&rollback)));
+        }
+        return Err(error);
+    }
+    tx.commit().await.map_err(|error| refused(&error))
+}
+
+/// The event partition upkeep of the outbox and the audit table, once per server start and before
+/// the audit admission. `owner` is the module system's ORM on the owner
+/// connection. A table that is not installed or busy is logged and the start goes on (a busy run
+/// is retried by the hourly tick, and the admission decides on the window that exists); a shape
+/// problem or a database error is logged in full at error level and stops the start with a
+/// sanitized cause.
+async fn maintain_event_partitions_at_start(owner: &Orm) -> erp_fields::Result<()> {
+    let refused = |error: &erp_fields::Error| {
+        tracing::error!(
+            %error,
+            "event partition upkeep failed at startup; the node does not start"
+        );
+        erp_fields::Error::new(
+            error.kind(),
+            format!(
+                "Event partition upkeep failed at startup: {}",
+                crate::server_runtime::sanitized_cause(error)
+            ),
+        )
+    };
+    let report = owner
+        .maintain_event_partitions()
+        .await
+        .map_err(|error| refused(&error))?;
+    crate::server_runtime::log_event_upkeep(&report, "startup").map_err(|error| refused(&error))
 }
 
 /// Whether the server may serve with this audit store state: the
@@ -1700,10 +2073,7 @@ async fn runtime_rpc(
     Ok(Arc::new(erp_rpc::RpcService::new(
         auth.orm().clone(),
         NativeHost { languages },
-        erp_rpc::RpcConfig::builder()
-            .body_bytes(config.startup_limits().rpc_body_bytes())
-            .result_bytes(config.startup_limits().rpc_result_bytes())
-            .build()?,
+        crate::server_runtime::rpc_config(config)?,
     )))
 }
 
@@ -2189,6 +2559,13 @@ mod runtime_shutdown_tests {
 #[cfg(test)]
 mod hierarchy_tests {
     #![allow(clippy::unwrap_used, reason = "test assertions")]
+    fn test_attachments() -> std::sync::Arc<erp_sdk::blob::AttachmentRuntime> {
+        std::sync::Arc::new(erp_sdk::blob::AttachmentRuntime::single(
+            "main",
+            std::sync::Arc::new(erp_sdk::blob::MemoryStore::new()),
+            erp_sdk::blob::AttachmentLimits::default(),
+        ))
+    }
 
     #[tokio::test]
     async fn server_builder_requires_partner_hierarchy_fence() {
@@ -2214,6 +2591,7 @@ mod hierarchy_tests {
             pool,
             Vec::new(),
             erp_modules::PackageChecks::default(),
+            test_attachments(),
         )
         .build()
         .unwrap();
@@ -2306,6 +2684,14 @@ mod h18_request_composition_tests {
     use erp_sdk::views::{InstalledClosure, OwnerBoundViewTypes, PublishedViewTypes};
     use std::sync::Arc;
 
+    fn test_attachments() -> Arc<erp_sdk::blob::AttachmentRuntime> {
+        Arc::new(erp_sdk::blob::AttachmentRuntime::single(
+            "main",
+            Arc::new(erp_sdk::blob::MemoryStore::new()),
+            erp_sdk::blob::AttachmentLimits::default(),
+        ))
+    }
+
     /// table attached to the exact loaded registry, rather than rebuilding without it)
     #[tokio::test]
     async fn request_builder_preserves_the_loaded_view_type_publication() {
@@ -2347,6 +2733,7 @@ mod h18_request_composition_tests {
             pool.clone(),
             Vec::new(),
             erp_modules::PackageChecks::default(),
+            test_attachments(),
         )
         .generation_attachment(erp_orm::GenerationAttachment::new(
             registry.clone(),
@@ -2359,6 +2746,7 @@ mod h18_request_composition_tests {
             pool,
             Vec::new(),
             erp_modules::PackageChecks::default(),
+            test_attachments(),
         )
         .unwrap()
         .build()
@@ -2374,7 +2762,7 @@ mod h18_request_composition_tests {
                 .declarations()
                 .map(|(_, declaration)| declaration.key())
                 .collect::<Vec<_>>(),
-            ["form", "list", "search"]
+            ["form", "list", "pivot", "search"]
         );
     }
 }

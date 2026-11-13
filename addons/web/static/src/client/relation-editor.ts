@@ -88,8 +88,8 @@ export function editRelation(options: RelationEditorOptions): Promise<RelationCh
   options.signal?.addEventListener("abort", externalAbort, { once: true }); disable();
   const rejectCommands = (nodes: readonly Node[]): void => {
     for (const node of nodes) {
-      if (node.kind === "button" || node.kind === "stat_button" || node.kind === "cancel_button") throw new ClientError("unsupported", "Object and footer commands in the relation editor require a later release; open the record to run its actions.");
-      if (node.kind === "widget") throw new ClientError("unsupported", "Service widgets in the relation editor require a later release.");
+      if (node.kind === "button" || node.kind === "stat_button" || node.kind === "cancel_button") throw new ClientError("unsupported", "Object and footer commands in the relation editor are not available here; open the record to run its actions.");
+      if (node.kind === "widget") throw new ClientError("unsupported", "Service widgets in the relation editor are not available here.");
       if ("children" in node) rejectCommands(node.children);
     }
   };
@@ -111,7 +111,7 @@ export function editRelation(options: RelationEditorOptions): Promise<RelationCh
     const current = state;
     surface = new RecordForm({ form, state: current, view, rpc, context, signal: scope.signal, messages: options.messages, editorLocale: options.editorLocale, numericLocale: options.numericLocale,
       notify: message => { status.setAttribute("role", "alert"); status.textContent = message; }, run, report,
-      openRecord: async () => { throw new ClientError("unsupported", "Nested relation-editor navigation requires a later release; open the related record from its own screen."); },
+      openRecord: async () => { throw new ClientError("unsupported", "Nested relation-editor navigation is not available here; open the related record from its own screen."); },
       changeValues: (changes, focus) => run(async () => { if (surface!.needsCommit()) await surface!.commit(); current.changeMany(changes); await current.onchange(Object.keys(changes)); if (!dead) render(focus); }),
       stage: (name, value) => {
         if (dead || uncertain || savePerformed) throw new ClientError("validation", "The relation editor cannot be edited during this operation.");
@@ -122,7 +122,7 @@ export function editRelation(options: RelationEditorOptions): Promise<RelationCh
         await current.onchange(name); if (!dead) { render(focus); if (current.warning) { status.setAttribute("role", "alert"); status.textContent = current.warning; } }
       },
       change: (name, value, focus) => run(async () => { if (surface!.needsCommit()) await surface!.commit(); current.change(name, value); await current.onchange(name); if (!dead) { render(focus); if (current.warning) { status.setAttribute("role", "alert"); status.textContent = current.warning; } } }),
-      button: () => { throw new ClientError("unsupported", "Object buttons in the relation editor require a later release."); } });
+      button: () => { throw new ClientError("unsupported", "Object buttons in the relation editor are not available here."); } });
     status.textContent = current.warning;
   })().catch(error => { if (!scope.signal.aborted) report(error); }).finally(() => { pending = false; if (!dead) render(); });
   if (options.signal?.aborted) handle.dispose();

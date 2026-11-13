@@ -91,15 +91,15 @@ async fn seed(h: &Harness) -> Seeded {
         .unwrap());
     let user = one(tx
         .query(
-            "INSERT INTO res_users (name, login, active, company_id) \
-             VALUES ('Ann', 'ann', true, $1) RETURNING id::int8",
+            "INSERT INTO res_users (name, login, active, share, company_id) \
+             VALUES ('Ann', 'ann', true, false, $1) RETURNING id::int8",
             &[&branch],
         )
         .await
         .unwrap());
     let archived = one(tx
         .query(
-            "INSERT INTO res_users (name, login, active) VALUES ('Old', 'old', false) \
+            "INSERT INTO res_users (name, login, active, share) VALUES ('Old', 'old', false, false) \
              RETURNING id::int8",
             &[],
         )
@@ -107,7 +107,7 @@ async fn seed(h: &Harness) -> Seeded {
         .unwrap());
     let bob = one(tx
         .query(
-            "INSERT INTO res_users (name, login, active) VALUES ('Bob', 'bob', true) \
+            "INSERT INTO res_users (name, login, active, share) VALUES ('Bob', 'bob', true, false) \
              RETURNING id::int8",
             &[],
         )

@@ -2,8 +2,8 @@
 //!
 //! `message_post` keeps its own post check at send time. The delivery
 //! fields and creation are refused to every other path (a direct ORM create or write) unless a
-//! server-only marker, set by those methods for the one call, is present. Delivery is one job per message on the durable queue
-//! , due at the message's date and run as the creator, who is the only user that can
+//! server-only marker, set by those methods for the one call, is present. Delivery is one job per message on the durable queue,
+//! due at the message's date and run as the creator, who is the only user that can
 //! arm or re-arm it (the author of the post is the principal that posts).
 //!
 //! Sending goes through `message_post` of the record's thread, so every override of the post

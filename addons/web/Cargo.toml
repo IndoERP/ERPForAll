@@ -22,6 +22,7 @@ serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 flate2 = "1.1"
+rust_xlsxwriter = { workspace = true }
 brotli = "=8.0.4"
 oxc_allocator.workspace = true
 oxc_parser.workspace = true
@@ -30,6 +31,7 @@ oxc_codegen = "=0.154.0"
 oxc_minifier = "=0.154.0"
 
 [dev-dependencies]
+zip = { workspace = true }
 oxc_ast.workspace = true
 tempfile.workspace = true
 erp-testkit.workspace = true

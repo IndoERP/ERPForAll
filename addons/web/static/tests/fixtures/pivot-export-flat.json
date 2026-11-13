@@ -1,0 +1,67 @@
+{
+  "model": "t.note",
+  "title": "Notes",
+  "headers": [
+    [
+      {
+        "label": "Priority",
+        "rowspan": 2
+      },
+      {
+        "label": "Total",
+        "bold": true
+      }
+    ],
+    [
+      {
+        "label": "Size"
+      }
+    ]
+  ],
+  "rows": [
+    {
+      "label": "Total",
+      "bold": true,
+      "cells": [
+        {
+          "kind": "integer",
+          "value": 1525,
+          "bold": true
+        }
+      ]
+    },
+    {
+      "label": "Normal",
+      "indent": 1,
+      "cells": [
+        {
+          "kind": "integer",
+          "value": 15,
+          "bold": true
+        }
+      ]
+    },
+    {
+      "label": "High",
+      "indent": 1,
+      "cells": [
+        {
+          "kind": "integer",
+          "value": 10,
+          "bold": true
+        }
+      ]
+    },
+    {
+      "label": "None",
+      "indent": 1,
+      "cells": [
+        {
+          "kind": "integer",
+          "value": 1500,
+          "bold": true
+        }
+      ]
+    }
+  ]
+}

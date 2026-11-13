@@ -24,6 +24,7 @@
 //! ```
 
 pub mod apikey;
+mod apikey_legacy;
 pub mod apikey_manage;
 pub mod apikey_store;
 mod apikey_verify;
@@ -32,6 +33,7 @@ pub mod context;
 pub mod cooldown_policy;
 pub mod credential;
 mod dummy;
+pub mod emergency;
 pub mod gc;
 pub mod gc_schedule;
 pub mod hooks;
@@ -53,7 +55,7 @@ mod warn;
 #[doc(hidden)]
 pub mod test_support;
 
-pub use apikey_verify::{ApiKeyBegin, ApiKeyCooldown, ApiKeyRefusal, ApiKeyRequest};
+pub use apikey_verify::{ApiKeyBegin, ApiKeyCooldown, ApiKeyLastUse, ApiKeyRefusal, ApiKeyRequest};
 pub use context::{UserContext, user_context};
 pub use cooldown_policy::{LoginCooldownContext, LoginCooldownPolicy};
 pub use credential::{
@@ -68,7 +70,8 @@ pub use login::{
     Auth, AuthStats, COOLDOWN_MESSAGE, ClientAddr, IdentityCheck, Login, LoginDomain, LoginError,
     LoginLookup, LoginOrder, LoginOrderTerm, LoginRequest, LoginSelectionContext,
     LoginSelectionLimits, NewSession, OrderDirection, PasswordAuthorization, PasswordReset,
-    SESSIONS_PER_USER, SelectionWitness, SessionBegin, SettingsView,
+    SESSIONS_PER_USER, SelectionWitness, SessionAuthorization, SessionBegin, SettingsView,
+    missing_reset_target,
 };
 pub use password::{CostComparison, HashParams, PasswordError, Scheme, StoredHash};
 pub use pool::{HashPool, HashPoolConfig, HashPoolError, HashPoolStats};

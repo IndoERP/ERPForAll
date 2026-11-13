@@ -1,5 +1,5 @@
-//! The load session on a harness transaction: records, `uid` and `context`
-//! , the errors of the minimal record path, and the stubs the later sub-slices
+//! The load session on a harness transaction: records, `uid` and `context`,
+//! the errors of the minimal record path, and the stubs the later sub-slices
 //! replace. No module system: XML text through `XmlDataReader` into `LoadSession::load_file`.
 #![allow(
     clippy::unwrap_used,

@@ -22,7 +22,7 @@ pub(crate) async fn panel_counts(
     field_name: &str,
     domains: &[Domain],
 ) -> Result<Vec<FxHashMap<i64, i64>>> {
-    tx.check_records(records)?;
+    tx.admit_records(records).await?;
     let env = records.env().clone();
     let registry = Arc::clone(env.registry());
     let model = registry.model_by_id(records.model_id());

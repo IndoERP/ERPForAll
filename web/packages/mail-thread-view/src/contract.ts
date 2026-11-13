@@ -206,6 +206,18 @@ function stringField(handle: RecordHandle<string>, field: string, where: string)
   return value;
 }
 
+const SUBTYPE_MODEL = "mail.message.subtype";
+
+/**
+ * A comment posted as a note: the server keeps `is_internal` false for it (that flag is "employee only") and marks the
+ * note through its subtype, whose `internal` field is true. Tracking and system rows keep their own look.
+ */
+function isNoteSubtype(store: MessagingStore, handle: RecordHandle<string>, messageType: string): boolean {
+  if (messageType !== "comment" || !declares(store, store.config.messageModel, "subtype_id") || !declares(store, SUBTYPE_MODEL, "internal")) return false;
+  const subtype = handle.get("subtype_id");
+  return typeof subtype === "number" && store.record(SUBTYPE_MODEL, subtype).get("internal") === true;
+}
+
 /**
  * Read one message from the store. Tracked: call it inside an effect to follow the message.
  *
@@ -254,20 +266,29 @@ export function readMessage(store: MessagingStore, id: number, selfPartnerId: nu
       : null;
   const attachments: AttachmentData[] = caps.attachments && attachmentField !== null
     ? handle.many(attachmentField as never).map((a) => {
-        const name = a.get("name");
+        const at = `${where}.${attachmentField}#${String(a.id)}`;
+        // The wire writes an empty optional value as false or null; any other type is wrong data, never a guess.
+        const text = (raw: unknown, field: string): string | null => {
+          if (raw === undefined || raw === null || raw === false || raw === "") return null;
+          if (typeof raw !== "string") throw new ThreadViewError("data", `${at}.${field} must be text or empty, got ${JSON.stringify(raw)}`);
+          return raw;
+        };
         const mimetype = declares(store, ATTACHMENT_MODEL, "mimetype") ? a.get("mimetype") : undefined;
         const fileSize = declares(store, ATTACHMENT_MODEL, "file_size") ? a.get("file_size") : undefined;
         const checksum = declares(store, ATTACHMENT_MODEL, "checksum") ? a.get("checksum") : undefined;
         const type = declares(store, ATTACHMENT_MODEL, "type") ? a.get("type") : undefined;
         const url = declares(store, ATTACHMENT_MODEL, "url") ? a.get("url") : undefined;
+        if (fileSize !== undefined && fileSize !== null && fileSize !== false && (typeof fileSize !== "number" || !Number.isFinite(fileSize))) {
+          throw new ThreadViewError("data", `${at}.file_size must be a number or empty, got ${JSON.stringify(fileSize)}`);
+        }
         return {
           id: a.id as number,
-          name: typeof name === "string" && name !== "" ? name : null,
-          mimetype: typeof mimetype === "string" && mimetype !== "" ? mimetype : null,
-          fileSize: typeof fileSize === "number" && Number.isFinite(fileSize) ? fileSize : null,
-          checksum: typeof checksum === "string" && checksum !== "" ? checksum : null,
-          type: typeof type === "string" && type !== "" ? type : null,
-          url: typeof url === "string" && url !== "" ? url : null,
+          name: text(a.get("name"), "name"),
+          mimetype: text(mimetype, "mimetype"),
+          fileSize: typeof fileSize === "number" ? fileSize : null,
+          checksum: text(checksum, "checksum"),
+          type: text(type, "type"),
+          url: text(url, "url"),
         };
       })
     : [];
@@ -276,7 +297,12 @@ export function readMessage(store: MessagingStore, id: number, selfPartnerId: nu
     for (const reaction of handle.many("reactions")) {
       const content = reaction.get("content");
       const partner = reaction.get("partner_id");
-      if (typeof content !== "string" || content === "" || typeof partner !== "number") continue;
+      if (typeof content !== "string" || content === "") {
+        throw new ThreadViewError("data", `${where}.reactions#${String(reaction.id)}.content must be non-empty text, got ${JSON.stringify(content)}`);
+      }
+      if (typeof partner !== "number") {
+        throw new ThreadViewError("data", `${where}.reactions#${String(reaction.id)}.partner_id must be a partner id, got ${JSON.stringify(partner)}`);
+      }
       const list = groups.get(content);
       if (list === undefined) groups.set(content, [partner]);
       else list.push(partner);
@@ -296,7 +322,7 @@ export function readMessage(store: MessagingStore, id: number, selfPartnerId: nu
     date: parseWireDatetime(handle.get("date"), `${where}.date`),
     authorId: typeof author === "number" ? author : null,
     subject,
-    isInternal: caps.internal && handle.get("is_internal") === true,
+    isInternal: (caps.internal && handle.get("is_internal") === true) || isNoteSubtype(store, handle, messageType),
     parentId: typeof parent === "number" ? parent : null,
     tracking,
     attachments,

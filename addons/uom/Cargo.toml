@@ -12,6 +12,7 @@ erp-modules = { workspace = true }
 
 [dev-dependencies]
 erp-testkit = { workspace = true }
+proptest = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros"] }
 toml = { workspace = true }
 

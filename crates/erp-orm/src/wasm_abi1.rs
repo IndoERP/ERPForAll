@@ -637,7 +637,7 @@ pub async fn wasm_abi1_check_call(
     method: &str,
     args_json: &str,
 ) -> Result<()> {
-    tx.check_records(records)?;
+    tx.admit_records(records).await?;
     if let Some(plan) = json_plan(tx, records, method, args_json)? {
         return Err(plan.reject(tx).await);
     }

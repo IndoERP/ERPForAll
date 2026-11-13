@@ -16,6 +16,25 @@ test("JSON2 sends same-origin cookies and returns the unwrapped method value", a
   })]);
 });
 
+test("a JSON-2 request carries exactly the expected headers and never X-reference-Database", async () => {
+  // TO-SHELL.2: the database comes from the host and the session cookie, never from a request header.
+  const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response("null", { headers: { "Content-Type": "application/json" } }));
+  const client = new RpcClient(fetcher, () => {});
+  await client.call("acceptance.note", "web_search_read", {});
+  await client.call("acceptance.note", "web_save", {}, { write: true });
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  for (const [, init] of fetcher.mock.calls) {
+    expect(init).toBeDefined();
+    const headers = new Headers(init!.headers);
+    expect([...headers.keys()].sort()).toEqual(["accept", "content-type", "x-request-id"]);
+    expect(headers.has("X-reference-Database")).toBe(false);
+    expect(headers.get("Content-Type")).toBe("application/json");
+    expect(headers.get("Accept")).toBe("application/json");
+    expect(headers.get("X-Request-Id")).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+    expect(Object.keys(init!).sort()).toEqual(["body", "cache", "credentials", "headers", "method", "redirect", "signal"]);
+  }
+});
+
 test("auth expiry clears protected state before surfacing the typed failure", async () => {
   const expired = vi.fn();
   const client = new RpcClient(async () => new Response('{"name":"AccessDenied","message":"Sign in again"}', { status: 401 }), expired);

@@ -2,7 +2,7 @@
 //! Message-Id, recipients, author auto-subscription, `client_uid` replay, mentions, `silent`) and
 //! `_message_log_batch`, with the statement count of a post held constant in the follower count
 //! (a ratchet; the §5.1 budget is `DEFERRED_PERFORMANCE`, ADR
-//! 0065). Design note:.
+//! 0065).
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

@@ -15,6 +15,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// the membership trigger on `res_company` (catalog shape and its bump on `active` only) and the
+/// restrict rule of the parent foreign key)
 #[tokio::test]
 #[ignore = "requires ERP_COMPANY_BRANCH_OLD_SOURCE and ERP_COMPANY_BRANCH_OLD_BIN on approved host"]
 async fn genuine_previous_company_schema_upgrade_preserves_identity_and_rolls_back() {
@@ -284,6 +286,98 @@ async fn genuine_previous_company_schema_upgrade_preserves_identity_and_rolls_ba
     client.batch_execute("DROP TRIGGER fixture_company_late_refusal ON ir_module_module; DROP FUNCTION fixture_company_late_refusal()").await.unwrap();
     support::succeeded(upgrade(), "candidate-upgrade");
     support::succeeded(upgrade(), "candidate-repeat");
+    // The upgraded schema carries the trigger that bumps the membership generation when a
+    // company is archived or restored (a user's allowed companies depend on it), and the parent
+    // foreign key refuses to delete a company that still has branches.
+    let trigger = client
+        .query_one(
+            "SELECT t.tgenabled::text, pg_get_triggerdef(t.oid), obj_description(t.oid, 'pg_trigger') \
+               FROM pg_trigger t \
+              WHERE t.tgrelid = 'public.res_company'::regclass \
+                AND t.tgname = 'res_company_membership_bump' AND NOT t.tgisinternal",
+            &[],
+        )
+        .await
+        .expect("the upgrade must leave the res_company membership trigger");
+    assert_eq!(trigger.get::<_, String>(0), "O", "trigger must be enabled");
+    let definition: String = trigger.get(1);
+    assert!(
+        definition.contains("UPDATE OF active"),
+        "trigger must fire on UPDATE OF active: {definition}"
+    );
+    assert!(
+        definition.contains("FOR EACH STATEMENT"),
+        "trigger must be a statement trigger: {definition}"
+    );
+    assert_eq!(
+        trigger.get::<_, Option<String>>(2).as_deref(),
+        Some(
+            "erpforall signal trigger v1: bump membership on INSERT OR DELETE OR TRUNCATE OR UPDATE OF \"active\""
+        )
+    );
+    // Behavior, inside a transaction that is rolled back: the membership generation moves when
+    // `active` is written and does not move when another column is.
+    let membership_rows = async || {
+        client
+            .query_one(
+                "SELECT COALESCE(sum(weight), 0)::int8 FROM public.erp_signal_generation WHERE key = 'membership'",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get::<_, i64>(0)
+    };
+    let generation_before = membership_rows().await;
+    client.batch_execute("BEGIN").await.unwrap();
+    client
+        .execute("UPDATE res_company SET name = name WHERE id = $1", &[&root])
+        .await
+        .unwrap();
+    assert_eq!(
+        membership_rows().await,
+        generation_before,
+        "writing another column must not bump the membership generation"
+    );
+    client
+        .execute(
+            "UPDATE res_company SET active = NOT active WHERE id = $1",
+            &[&root],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        membership_rows().await,
+        generation_before + 1,
+        "writing active must bump the membership generation once"
+    );
+    client.batch_execute("ROLLBACK").await.unwrap();
+    assert_eq!(
+        membership_rows().await,
+        generation_before,
+        "the rolled back probe must leave the generation as it was"
+    );
+    assert_eq!(
+        client
+            .query_one("SELECT active FROM res_company WHERE id = $1", &[&root])
+            .await
+            .unwrap()
+            .get::<_, Option<bool>>(0),
+        Some(true),
+        "the probe must not change the stored state"
+    );
+    let delete_rule: String = client
+        .query_one(
+            "SELECT c.confdeltype::text FROM pg_constraint c \
+               JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey) \
+              WHERE c.conrelid = 'public.res_company'::regclass \
+                AND c.confrelid = 'public.res_company'::regclass \
+                AND c.contype = 'f' AND a.attname = 'parent_id'",
+            &[],
+        )
+        .await
+        .expect("res_company.parent_id must have exactly one foreign key to res_company")
+        .get(0);
+    assert_eq!(delete_rule, "r", "parent_id must restrict deletion");
     let after = client
         .query_one(
             "SELECT name,partner_id,currency_id,parent_path,active FROM res_company WHERE id=$1",

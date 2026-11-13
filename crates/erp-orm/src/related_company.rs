@@ -1,4 +1,4 @@
-//! Company-bound related reads (design note).
+//! Company-bound related reads.
 //!
 //! The hop's company is read in the same fetch as the
 //! values read through it (the company field is in the default prefetch group), so a read costs
@@ -149,7 +149,7 @@ pub(crate) fn superuser_records(
     model: ModelId,
     ids: impl IntoIterator<Item = RecId>,
 ) -> Records {
-    Records::empty(env.sudo(true), model).browse_ids(ids)
+    Records::empty(env.engine_sudo(), model).browse_ids(ids)
 }
 
 /// The text of the hop error (design note §4.1), without the hint.

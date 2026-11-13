@@ -47,13 +47,13 @@ test("SearchModel state composes with canonical shell transport and restores its
 });
 
 /// (partial: shell transport preserves SearchModel's explicit unsupported grouping)
-test("transport admission does not silently enable SearchModel grouping", () => {
+test("transport admission does not silently restore a grouping from the address", () => {
   const canonical = routeUrl(parseRoute(new URL('/erp/action-42?search_groupby=%5B%22priority%22%5D', "https://erp.example.test")));
   const restored = setupModel();
   restored.addFieldFacet("name", "Retained");
   const before = restored.getDomain();
   expect(() => restored.loadFromUrlParams(new URL(canonical, "https://erp.example.test").searchParams)).toThrowError(expect.objectContaining({
-    kind: "unsupported", message: "Grouped lists are not available until a later release and a later release."
+    kind: "unsupported", message: "Restoring a grouping from the address is not available yet."
   }));
   expect(restored.getDomain()).toEqual(before);
 });
@@ -171,8 +171,8 @@ describe("SearchModel State and Domain Construction", () => {
 
   test("unavailable grouping and server favorites fail explicitly", () => {
     const model = setupModel();
-    expect(() => model.toggleGroupBy("priority")).toThrowError(expect.objectContaining({ kind: "unsupported", message: "Grouped lists are not available until a later release and a later release." }));
-    expect(() => model.saveFavorite("Saved", true, true)).toThrowError(expect.objectContaining({ kind: "unsupported", message: "Server favorites are not available until a later release." }));
+    expect(() => model.toggleGroupBy("priority")).toThrowError(expect.objectContaining({ kind: "unsupported", message: "Grouped lists are not available yet." }));
+    expect(() => model.saveFavorite("Saved", true, true)).toThrowError(expect.objectContaining({ kind: "unsupported", message: "Saved favorites are not available yet." }));
     expect(model.getFacets()).toEqual([]);
   });
 
@@ -374,7 +374,7 @@ describe("SearchBar UI Component and User Interactions", () => {
     searchBar.dispose();
   });
 
-  test("toggling search menu button opens Filters, Group By, and Favorites panel", () => {
+  test("toggling the search menu button opens the filters panel", () => {
     const model = setupModel();
     const onChange = vi.fn();
     const searchBar = createSearchBar(model, onChange);
@@ -386,8 +386,8 @@ describe("SearchBar UI Component and User Interactions", () => {
     const panel = searchBar.element.querySelector<HTMLElement>(".erp-search-menu-panel")!;
     expect(panel.style.display).toBe("block");
     expect(panel.textContent).toContain("Filters");
-    expect(panel.textContent).toContain("Group By");
-    expect(panel.textContent).toContain("Favorites");
+    expect(panel.textContent).not.toContain("Group By");
+    expect(panel.textContent).not.toContain("Favorites");
 
     expect(toggleBtn.getAttribute("aria-expanded")).toBe("true");
     expect(toggleBtn.getAttribute("aria-controls")).toBe(panel.id);
@@ -498,7 +498,7 @@ describe("search revision regressions", () => {
     localStorage.setItem("erp_favorites_test.record_2_1", "broken");
     const read = vi.spyOn(Storage.prototype, "getItem"), write = vi.spyOn(Storage.prototype, "setItem");
     const model = setupModel(); expect(model.getFavorites()).toEqual([]);
-    expect(() => model.saveFavorite("Saved", false, false)).toThrowError(expect.objectContaining({kind:"unsupported", message:"Server favorites are not available until a later release."}));
+    expect(() => model.saveFavorite("Saved", false, false)).toThrowError(expect.objectContaining({kind:"unsupported", message:"Saved favorites are not available yet."}));
     expect(read).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
   });
 
@@ -519,7 +519,7 @@ test("search URL limits reject duplicates, unknown keys and too many entries wit
   expect(model.getFacets()).toEqual([]);
   const params = new URLSearchParams({search_facets: "[]"}); params.append("search_facets", "[]");
   expect(() => model.loadFromUrlParams(params)).toThrowError(expect.objectContaining({kind: "validation", message: "Invalid search_facets."}));
-  expect(() => model.loadFromUrlParams(new URLSearchParams({search_groupby: '["priority"]'}))).toThrowError(expect.objectContaining({kind: "unsupported", message: "Grouped lists are not available until a later release and a later release."}));
+  expect(() => model.loadFromUrlParams(new URLSearchParams({search_groupby: '["priority"]'}))).toThrowError(expect.objectContaining({kind: "unsupported", message: "Restoring a grouping from the address is not available yet."}));
 });
 
 test.each(["field", "custom"])("oversized %s state rolls back domain, chips, filters and notifications", kind => {
@@ -558,7 +558,7 @@ test("search icons are decorative and preserve keyboard control labels", () => {
   expect(searchIcon?.getAttribute("focusable")).toBe("false");
   expect(bar.element.querySelector('input[aria-label="Search records"]')).not.toBeNull();
   const toggle = bar.element.querySelector<HTMLButtonElement>(".search-menu-toggle")!;
-  expect(toggle.getAttribute("aria-label")).toBe("Toggle Search Filters, Group By, and Favorites");
+  expect(toggle.getAttribute("aria-label")).toBe("Toggle search filters");
   expect(toggle.querySelector('svg[data-icon="chevron-down"]')).not.toBeNull();
   bar.dispose();
 });

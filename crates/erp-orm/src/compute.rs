@@ -16,7 +16,7 @@
 //!   derive a monetary currency in the same call as the amount. No overrides.
 //!
 //! Overrides (`#[compute(override, ...)]`) receive the rest of the chain as their last parameter
-//! and call it like `super`; their `depends` add to the inherited ones.
+//! and call it like `super()`; their `depends` add to the inherited ones.
 
 use std::collections::{BTreeMap, HashMap};
 use std::marker::PhantomData;

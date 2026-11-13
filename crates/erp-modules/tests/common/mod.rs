@@ -41,6 +41,12 @@ impl Addons {
         addons
     }
 
+    /// Replace the minimal `base` with the test kit's stand-in, for fixtures that link base's code.
+    pub fn stand_in_base(&self) -> &Self {
+        erp_testkit::stand_in_base::write_stand_in_base(self.root.path()).unwrap();
+        self
+    }
+
     pub fn add(&self, name: &str, manifest: &str) -> &Self {
         let dir = self.root.path().join(name);
         fs::create_dir_all(&dir).unwrap();

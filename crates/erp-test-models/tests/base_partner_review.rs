@@ -259,7 +259,7 @@ async fn explicit_language_and_empty_create_do_not_require_language_read_access(
     let mut setup = h.begin().await.unwrap();
     setup
         .batch(
-            "INSERT INTO res_users (id, name, login, active) VALUES (42, 'Clerk', 'clerk', true)",
+            "INSERT INTO res_users (id, name, login, active, share) VALUES (42, 'Clerk', 'clerk', true, false)",
         )
         .await
         .unwrap();

@@ -307,8 +307,8 @@ async fn spec_mod_022_only_administrators_schedule_operations() {
             .unwrap_err(),
         "button_install",
     );
-    // `with_user(1)` from a user's environment is System/full/uid 1 but impersonated: refused,
-    // and the denial names the real caller
+    // `with_user(1)` from a user's environment is refused by the engine rule (A4): the
+    // environment stays the user's own principal without elevation, and the denial names it
     denied(
         system
             .button_install(&user.with_user(1), &names, &opts)

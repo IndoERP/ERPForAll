@@ -1,5 +1,5 @@
-//! Allocation and memory bound of a windowed read (`Records::stream`, design notes
-//! , §3.6, §9.3 and `perf-stream-window.md` §2; standards §5b):
+//! Allocation and memory bound of a windowed read (`Records::stream`,
+//! §3.6, §9.3 and `perf-stream-window.md` §2; standards §5b):
 //! 5 columns of `bench.order.line` (two of them text) for 20,000 and 40,000 lines through a SQL
 //! cursor, every window consumed and let go.
 //!

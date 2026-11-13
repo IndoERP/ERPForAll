@@ -1,5 +1,4 @@
-//! The compiled view architecture and per-user group filtering (`get_view`,,
-//! ;;
+//! The compiled view architecture and per-user group filtering (`get_view`;
 //! ).
 //!
 //! Two stages:
@@ -161,8 +160,7 @@ async fn compile_view(tx: &mut Transaction, view_id: ViewId, model: &str) -> Res
     Ok(CompiledView { guarded, plan })
 }
 
-/// Get the detailed composition of the requested view, filtered for `env`'s user
-/// .
+/// Get the detailed composition of the requested view, filtered for `env`'s user.
 ///
 /// # Errors
 ///

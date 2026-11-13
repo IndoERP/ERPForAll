@@ -3,7 +3,7 @@
 //! skipped before the policy is asked) and as a user principal under `StaticPolicy::AllowAll` (a
 //! principal binding, the policy's mask, one field lookup), and `fields_get` of a model for both.
 //! No statement runs; the setup asserts it. Needs `DATABASE_URL` (the transaction holds a pooled
-//! connection; nothing is sent). Results:.
+//! connection; nothing is sent). Results.
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "benchmark setup")]
 
 use std::hint::black_box;

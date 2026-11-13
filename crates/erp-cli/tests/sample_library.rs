@@ -172,6 +172,68 @@ async fn assert_loan_statusbar(orm: &Orm, expected: bool) {
     tx.rollback().await.unwrap();
 }
 
+/// default order; the table itself is the client's). Books by author then by year published (rows) and by format
+/// (columns), measured in pages and price, with the count shown first.
+async fn assert_book_pivot(orm: &Orm) {
+    let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+    let records = tx.env().records("sample_library.book").unwrap();
+    let Exposure::Exposed(method) = tx
+        .exposure()
+        .get(records.model_id(), "get_views")
+        .unwrap()
+        .clone()
+    else {
+        panic!("get_views is exposed")
+    };
+    let args = erp_fields::ValueMap::from_iter([
+        (
+            "views".into(),
+            Value::List(vec![Value::List(vec![Value::False, Value::str("pivot")].into())].into()),
+        ),
+        ("wire_major".into(), Value::Int(1)),
+        (
+            "options".into(),
+            Value::Map(Arc::new(erp_fields::ValueMap::from_iter([(
+                "mobile".into(),
+                Value::Bool(false),
+            )]))),
+        ),
+    ]);
+    let value = method
+        .call(&mut tx, records, RpcArgs::new(args))
+        .await
+        .unwrap();
+    let view = erp_fields::convert::value_to_json(&value).unwrap();
+    assert_eq!(view["views"][0]["type"], "pivot");
+    assert_eq!(view["views"][0]["renderer"], "web.pivot");
+    let nodes = view["views"][0]["nodes"].as_array().unwrap();
+    assert_eq!(nodes[0]["kind"], "pivot");
+    assert_eq!(nodes[0]["disable_linking"], false);
+    assert_eq!(nodes[0]["display_quantity"], true);
+    assert_eq!(nodes[0]["default_order"], "pages desc");
+    let roles: Vec<_> = nodes[1..]
+        .iter()
+        .map(|node| {
+            (
+                node["field"]["name"].as_str().unwrap(),
+                node["role"].as_str().unwrap(),
+                node.get("interval").and_then(|interval| interval.as_str()),
+            )
+        })
+        .collect();
+    assert_eq!(
+        roles,
+        [
+            ("author_id", "row", None),
+            ("published_on", "row", Some("year")),
+            ("book_format", "col", None),
+            ("pages", "measure", None),
+            ("price", "measure", None)
+        ]
+    );
+    tx.rollback().await.unwrap();
+}
+
 /// Runs `body` on a thread with a large stack: a full install chain exceeds the default one.
 fn big_stack(body: impl std::future::Future<Output = ()> + Send + 'static) {
     thread::Builder::new()
@@ -226,7 +288,7 @@ async fn install_use_upgrade_uninstall() {
     let candidate_manifest = fs::read_to_string(&manifest_path).unwrap();
     fs::write(
         &manifest_path,
-        candidate_manifest.replace("version = \"1.0.4\"", "version = \"1.0.1\""),
+        candidate_manifest.replace("version = \"1.0.7\"", "version = \"1.0.1\""),
     )
     .unwrap();
     let db = TestDb::create().await.unwrap();
@@ -394,7 +456,7 @@ async fn install_use_upgrade_uninstall() {
     let text = fs::read_to_string(&manifest).unwrap();
     fs::write(
         &manifest,
-        text.replace("version = \"1.0.4\"", "version = \"1.1.0\""),
+        text.replace("version = \"1.0.7\"", "version = \"1.1.0\""),
     )
     .unwrap();
     let candidate = system_builder(&db, work.path())
@@ -415,6 +477,7 @@ async fn install_use_upgrade_uninstall() {
     );
     let orm = upgraded.orm;
     assert_loan_statusbar(&orm, true).await;
+    assert_book_pivot(&orm).await;
     assert!(columns(&orm, "sample_library_book").await.contains("shelf"));
     assert_eq!(
         scalar(&orm, "SELECT count(*)::text FROM sample_library_book").await,
@@ -517,6 +580,14 @@ fn sample_library_demo_data_loads_with_demo() {
             )
             .await,
             "Ursula K. Le Guin"
+        );
+        assert_eq!(
+            scalar(
+                &orm,
+                "SELECT b.description FROM sample_library_book b WHERE b.title = 'The Dispossessed'"
+            )
+            .await,
+            "<p>A physicist travels between two worlds with opposite social orders, exploring <strong>anarchism</strong> and capitalism.</p>"
         );
         // the books' genres (many2many) and loans (one2many through loan.book_id)
         assert_eq!(

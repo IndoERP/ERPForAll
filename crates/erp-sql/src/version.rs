@@ -1,4 +1,4 @@
-//! Row versions (design note).
+//! Row versions.
 //!
 //! - [`bump_function`] and [`bump_trigger`]: the `BEFORE UPDATE` trigger that makes every
 //!   `UPDATE` of a versioned row — ORM, raw SQL, migration — bump `row_version` by exactly one. The
@@ -106,6 +106,9 @@ pub struct VersionedUpdate<'a> {
     pub returning_old: &'a [&'a str],
     /// Columns merged as JSONB deltas: `CASE WHEN "__v".c IS NULL THEN NULL ELSE jsonb_strip_nulls(COALESCE("t".c, '{}'::jsonb) || "__v".c) END`.
     pub merge_json: &'a [&'a str],
+    /// Company patches: each key maps to `[value]` (set, including null) or `[]` (remove).
+    /// Company patches take precedence over translation merging for a named column.
+    pub merge_company: &'a [&'a str],
 }
 
 impl<'a> VersionedUpdate<'a> {
@@ -147,6 +150,15 @@ impl<'a> VersionedUpdate<'a> {
     #[must_use]
     pub fn merge_json(mut self, columns: &'a [&'a str]) -> Self {
         self.merge_json = columns;
+        self
+    }
+
+    /// Atomically apply company patches, preserving untouched keys and explicit nulls.
+    /// Empty resulting maps are SQL NULL. The caller validates patch keys and values;
+    /// SQL NULL is an empty patch, not a request to clear all companies.
+    #[must_use]
+    pub fn merge_company(mut self, columns: &'a [&'a str]) -> Self {
+        self.merge_company = columns;
         self
     }
 
@@ -204,7 +216,11 @@ fn update_from_arrays_quoted(
         let q = quote(c);
         out.push_str(&q);
         out.push_str(" = ");
-        if with.merge_json.contains(c) {
+        if with.merge_company.contains(c) {
+            let base = format!("{t}.{q}");
+            let patch = format!("\"__v\".{q}");
+            out.push_str(&company_patch_expression(&base, &patch));
+        } else if with.merge_json.contains(c) {
             out.push_str("CASE WHEN \"__v\".");
             out.push_str(&q);
             out.push_str(" IS NULL THEN NULL ELSE jsonb_strip_nulls(COALESCE(");
@@ -286,6 +302,17 @@ fn update_from_arrays_quoted(
     out
 }
 
+/// Apply a validated company patch to a JSONB map. SQL fragments come from the
+/// quoted statement builder, never from user values. Each delta entry is either
+/// an empty array (remove) or a singleton array (set, including JSON null).
+fn company_patch_expression(base: &str, patch: &str) -> String {
+    format!(
+        "NULLIF((COALESCE({base}, '{{}}'::jsonb) - ARRAY(SELECT key FROM \"pg_catalog\".jsonb_each({patch}))) \
+         || COALESCE((SELECT jsonb_object_agg(key, (SELECT element FROM \"pg_catalog\".jsonb_array_elements(value) AS delta(element))) FROM \"pg_catalog\".jsonb_each({patch}) \
+         WHERE jsonb_array_length(value) > 0), '{{}}'::jsonb), '{{}}'::jsonb)"
+    )
+}
+
 /// Cached statement text for `update_from_arrays` (PERF.SQL-TEXT). A cache hit is meant
 /// to allocate nothing (by construction; not measured, DEFERRED_PERFORMANCE).
 pub fn update_from_arrays_cached(
@@ -303,7 +330,8 @@ pub fn update_from_arrays_cached(
             .expected(with.expected)
             .returning_old(with.returning_old)
             .returning_changed(with.returning_changed)
-            .merge_json(with.merge_json),
+            .merge_json(with.merge_json)
+            .merge_company(with.merge_company),
         || update_from_arrays_quoted(spec.quoted_table(), columns, extra, with),
     )
 }

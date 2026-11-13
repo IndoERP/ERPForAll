@@ -149,6 +149,41 @@ fn attrs<'a>(node: impl Node<'a>, allowed: &[&str]) -> ViewResult<()> {
     })?;
     Ok(())
 }
+/// Row or column groupings per axis: the grouped read crosses the depths of both axes and takes at most 64 sets.
+const PIVOT_MAX_LEVELS: usize = 6;
+/// The grouping intervals of a date or datetime pivot field.
+const PIVOT_INTERVALS: [&str; 5] = ["day", "week", "month", "quarter", "year"];
+/// `default_order="<measure> [asc|desc]"`: the measure is a declared one or `__count`.
+/// Returns the normalized order (direction always present).
+fn pivot_order<'a>(node: impl Node<'a>) -> ViewResult<Option<String>> {
+    let Some(order) = node.attr("default_order") else {
+        return Ok(None);
+    };
+    let mut parts = order.split_whitespace();
+    let (Some(measure), direction, None) = (parts.next(), parts.next(), parts.next()) else {
+        return Err(invalid(
+            "Pivot default_order must read \"<measure> asc\" or \"<measure> desc\".",
+        ));
+    };
+    let direction = direction.unwrap_or("asc");
+    if !matches!(direction, "asc" | "desc") {
+        return Err(invalid(format!(
+            "Pivot default_order direction \"{direction}\" must be asc or desc."
+        )));
+    }
+    let declared = node
+        .children()
+        .any(|child| child.attr("type") == Some("measure") && child.attr("name") == Some(measure));
+    if measure != "__count" && !declared {
+        return Err(invalid(format!(
+            "Pivot default_order names '{measure}', which is neither __count nor a declared measure."
+        )));
+    }
+    Ok(Some(format!("{measure} {direction}")))
+}
+fn pivot_default_order<'a>(node: impl Node<'a>) -> ViewResult<()> {
+    pivot_order(node).map(|_| ())
+}
 fn boolean<'a>(node: impl Node<'a>, key: &str, default: bool) -> ViewResult<bool> {
     match node.attr(key) {
         None => Ok(default),
@@ -226,8 +261,11 @@ fn field<'a, 's>(spec: &'s ModelSpec, node: impl Node<'a>) -> ViewResult<&'s Fie
 fn field_type_name(field: &FieldSpec) -> ViewResult<&'static str> {
     match &field.ty {
         FieldType::Id => Ok("integer"),
+        FieldType::Uuid => Ok("char"),
+        FieldType::Json => Ok("text"),
         FieldType::Char { .. }
         | FieldType::Text
+        | FieldType::Html
         | FieldType::Boolean
         | FieldType::Integer
         | FieldType::Float { .. }
@@ -461,20 +499,32 @@ fn classify<'a, N: Node<'a>>(
                 "form" => &["record_mode", "string", "create", "edit", "delete"],
                 "list" => &["string", "limit", "create", "edit", "delete"],
                 "search" => &["string"],
+                "pivot" => &[
+                    "string",
+                    "disable_linking",
+                    "display_quantity",
+                    "default_order",
+                ],
                 _ => return Err(invalid("Unknown builtin view type.")),
             },
         )?;
+        if key == "pivot" {
+            boolean(node, "disable_linking", false)?;
+            boolean(node, "display_quantity", false)?;
+            pivot_default_order(node)?;
+        }
         return Ok(match key {
             "form" => "form",
             "list" => "list",
             "search" => "search",
+            "pivot" => "pivot",
             _ => return Err(invalid("Unknown builtin view type.")),
         });
     }
     let parent = parent.ok_or_else(|| invalid("Missing parent of a view node."))?;
     let allowed = match parent.tag() {
         "form" if service => node.tag() == "widget",
-        "list" => node.tag() == "field",
+        "list" | "pivot" => node.tag() == "field",
         "search" => matches!(
             node.tag(),
             "field" | "filter" | "separator" | "group" | "searchpanel"
@@ -524,6 +574,105 @@ fn classify<'a, N: Node<'a>>(
         }
     }
     match node.tag() {
+        "field" if key == "pivot" => {
+            // `widget`, `invisible` and `options` stay refused by name: the table formats every measure itself.
+            attrs(node, &["name", "string", "type", "interval"])?;
+            let field = field(spec, node)?;
+            if node.children().next().is_some() {
+                return Err(invalid("Field nodes cannot contain children."));
+            }
+            let kind = field_type_name(field)?;
+            match node.attr("type") {
+                Some(role @ ("row" | "col")) => {
+                    if !matches!(
+                        kind,
+                        "boolean"
+                            | "char"
+                            | "integer"
+                            | "selection"
+                            | "many2one"
+                            | "date"
+                            | "datetime"
+                    ) {
+                        return Err(invalid(format!(
+                            "Pivot field '{}.{}' (type=\"{role}\") is a {kind} field; the pivot view groups by boolean, char, integer, selection, many2one, date and datetime fields.",
+                            spec.name, field.name
+                        )));
+                    }
+                    if let Some(interval) = node.attr("interval") {
+                        if !matches!(kind, "date" | "datetime") {
+                            return Err(invalid(format!(
+                                "Pivot field '{}.{}' has an interval but is a {kind} field; 'interval' applies to date and datetime fields.",
+                                spec.name, field.name
+                            )));
+                        }
+                        if !PIVOT_INTERVALS.contains(&interval) {
+                            return Err(invalid(format!(
+                                "Pivot field '{}.{}' has interval \"{interval}\"; it must be one of day, week, month, quarter or year.",
+                                spec.name, field.name
+                            )));
+                        }
+                    }
+                    let levels = parent
+                        .children()
+                        .filter(|sibling| sibling.attr("type") == Some(role))
+                        .count();
+                    if levels > PIVOT_MAX_LEVELS {
+                        return Err(invalid(format!(
+                            "A pivot view declares at most {PIVOT_MAX_LEVELS} fields with type=\"{role}\"; this one has {levels}."
+                        )));
+                    }
+                    let (name, interval) = (node.attr("name"), node.attr("interval"));
+                    let same = parent
+                        .children()
+                        .filter(|sibling| {
+                            sibling.attr("type") == Some(role)
+                                && sibling.attr("name") == name
+                                && sibling.attr("interval") == interval
+                        })
+                        .count();
+                    if same > 1 {
+                        return Err(invalid(format!(
+                            "Pivot field '{}.{}' is declared twice with type=\"{role}\" and the same interval.",
+                            spec.name, field.name
+                        )));
+                    }
+                }
+                Some("measure") => {
+                    if node.attr("interval").is_some() {
+                        return Err(invalid(format!(
+                            "Pivot measure '{}.{}' has an interval; 'interval' applies to date and datetime row and column fields.",
+                            spec.name, field.name
+                        )));
+                    }
+                    if !matches!(kind, "integer" | "float" | "monetary") {
+                        return Err(invalid(format!(
+                            "Pivot measure '{}.{}' must be an integer, float or monetary field.",
+                            spec.name, field.name
+                        )));
+                    }
+                    let name = node.attr("name");
+                    let declared = parent
+                        .children()
+                        .filter(|sibling| {
+                            sibling.attr("type") == Some("measure") && sibling.attr("name") == name
+                        })
+                        .count();
+                    if declared > 1 {
+                        return Err(invalid(format!(
+                            "Pivot measure '{}.{}' is declared more than once.",
+                            spec.name, field.name
+                        )));
+                    }
+                }
+                _ => {
+                    return Err(invalid(
+                        "A pivot field needs type=\"row\", \"col\" or \"measure\".",
+                    ));
+                }
+            }
+            Ok("pivot_field")
+        }
         "field" if key == "search" => {
             attrs(
                 node,
@@ -1697,6 +1846,32 @@ fn build_entry<'a, N: Node<'a>>(
                     set_children(object, plan, index)?;
                     set_panel(object, node, spec, budget)?;
                 }
+                "pivot" => {
+                    set_children(object, plan, index)?;
+                    object.set("disable_linking", |value| {
+                        value.boolean(boolean(node, "disable_linking", false)?)
+                    })?;
+                    object.set("display_quantity", |value| {
+                        value.boolean(boolean(node, "display_quantity", false)?)
+                    })?;
+                    if let Some(order) = pivot_order(node)? {
+                        object.set("default_order", |value| value.text(&order))?;
+                    }
+                }
+                "pivot_field" => {
+                    let field = field(spec, node)?;
+                    object.set("field", |value| value.field_handle(spec.name, field.name))?;
+                    object.set("label", |value| {
+                        value.text(node.attr("string").unwrap_or(&field.string))
+                    })?;
+                    let role = node.attr("type").ok_or_else(|| {
+                        invalid("A pivot field without a type reached the description builder.")
+                    })?;
+                    object.set("role", |value| value.text(role))?;
+                    if let Some(interval) = node.attr("interval") {
+                        object.set("interval", |value| value.text(interval))?;
+                    }
+                }
                 "sheet" | "title" | "aside" | "header" | "footer" | "button_box" | "notebook" => {
                     set_children(object, plan, index)?
                 }
@@ -2263,7 +2438,7 @@ fn source_expression(
 mod tests {
     use erp_sdk::views::{
         DescriptionBudget, DescriptionBuilder, DescriptionEncoder, ViewCatalogue, ViewDescriptor,
-        ViewError, ViewLimits, form_schema, list_schema, search_schema,
+        ViewError, ViewLimits, form_schema, list_schema, pivot_schema, search_schema,
     };
     use erp_sdk::{
         __private::{FieldDecl, ModelDecl},
@@ -2281,6 +2456,9 @@ mod tests {
         FieldDecl::many2one("partner_id", "res.partner"),
         FieldDecl::many2one("parent_id", "h18.fixture"),
         FieldDecl::one2many("child_ids", "h18.fixture", "parent_id"),
+        FieldDecl::date("deadline"),
+        FieldDecl::datetime("seen_at"),
+        FieldDecl::float("ratio"),
     ]);
 
     // Fixture-only mixins: no registered model inherits mail.thread until.
@@ -2325,12 +2503,211 @@ mod tests {
             "form" => form_schema()?,
             "list" => list_schema()?,
             "search" => search_schema()?,
+            "pivot" => pivot_schema()?,
             _ => panic!("test kind"),
         };
         let payload = DescriptionBuilder::new(&schema, budget)
             .build(|root| super::lower_tree(combined.arch().root(), spec, kind, root))?;
         let bytes = DescriptionEncoder::new(budget, &ViewLimits::default()).encode(&payload)?;
         Ok(serde_json::from_slice(bytes.as_json_bytes()).unwrap())
+    }
+
+    #[test]
+    fn pivot_arch_defaults_and_roles() {
+        let value = fixture(
+            r#"<pivot><field name="state" type="row"/><field name="stage" type="col"/><field name="count" type="measure" string="Total count"/></pivot>"#,
+            "pivot",
+        )
+        .unwrap();
+        assert_eq!(value["nodes"][0]["kind"], "pivot");
+        assert_eq!(value["nodes"][0]["disable_linking"], false);
+        assert_eq!(value["nodes"][0]["display_quantity"], false);
+        let roles: Vec<_> = (1..=3)
+            .map(|i| {
+                (
+                    value["nodes"][i]["kind"].as_str().unwrap().to_owned(),
+                    value["nodes"][i]["role"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            roles,
+            [
+                ("pivot_field", "row"),
+                ("pivot_field", "col"),
+                ("pivot_field", "measure")
+            ]
+            .map(|(a, b)| (a.to_owned(), b.to_owned()))
+        );
+        assert_eq!(value["nodes"][3]["label"], "Total count");
+        let flags = fixture(
+            r#"<pivot disable_linking="1" display_quantity="True"><field name="state" type="row"/></pivot>"#,
+            "pivot",
+        )
+        .unwrap();
+        assert_eq!(flags["nodes"][0]["disable_linking"], true);
+        assert_eq!(flags["nodes"][0]["display_quantity"], true);
+    }
+
+    #[test]
+    fn pivot_refuses_what_the_table_does_not_carry() {
+        let refused = |xml: &str| match fixture(xml, "pivot").unwrap_err() {
+            ViewError::InvalidDescription(message) => message,
+            other => panic!("Unexpected error kind: {other:?}"),
+        };
+        for attribute in ["widget", "invisible", "options"] {
+            let xml =
+                format!(r#"<pivot><field name="count" type="measure" {attribute}="x"/></pivot>"#);
+            assert!(
+                refused(&xml).contains(&format!("'{attribute}'")),
+                "{attribute}"
+            );
+        }
+        assert!(
+            refused(r#"<pivot><field name="name" type="measure"/></pivot>"#)
+                .contains("must be an integer, float or monetary")
+        );
+        assert!(refused(r#"<pivot><field name="state"/></pivot>"#).contains("needs type"));
+        assert!(refused(r#"<pivot><group/></pivot>"#).contains("not allowed under <pivot>"));
+    }
+
+    #[test]
+    fn pivot_orders_several_groupings_and_refuses_unsupported_shapes() {
+        let refused = |xml: &str| match fixture(xml, "pivot").unwrap_err() {
+            ViewError::InvalidDescription(message) => message,
+            other => panic!("Unexpected error kind: {other:?}"),
+        };
+        let value = fixture(
+            r#"<pivot><field name="state" type="row"/><field name="stage" type="col"/><field name="partner_id" type="row"/><field name="active" type="col"/></pivot>"#,
+            "pivot",
+        )
+        .unwrap();
+        let order: Vec<_> = (1..=4)
+            .map(|i| {
+                (
+                    value["nodes"][i]["field"]["name"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned(),
+                    value["nodes"][i]["role"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            order,
+            [
+                ("state", "row"),
+                ("stage", "col"),
+                ("partner_id", "row"),
+                ("active", "col")
+            ]
+            .map(|(a, b)| (a.to_owned(), b.to_owned()))
+        );
+        let kind = refused(r#"<pivot><field name="source" type="row"/></pivot>"#);
+        assert!(kind.contains("is a text field"), "{kind}");
+        assert!(kind.contains("h18.fixture.source"), "{kind}");
+        let float = refused(r#"<pivot><field name="ratio" type="row"/></pivot>"#);
+        assert!(float.contains("is a float field"), "{float}");
+        let many = refused(r#"<pivot><field name="child_ids" type="col"/></pivot>"#);
+        assert!(many.contains("is a one2many field"), "{many}");
+        let twice = refused(
+            r#"<pivot><field name="count" type="measure"/><field name="count" type="measure" string="Again"/></pivot>"#,
+        );
+        assert!(
+            twice.contains("'h18.fixture.count' is declared more than once"),
+            "{twice}"
+        );
+        let same = refused(
+            r#"<pivot><field name="state" type="row"/><field name="state" type="row"/></pivot>"#,
+        );
+        assert!(same.contains("is declared twice"), "{same}");
+        // Six groupings on an axis are the most the grouped read can cross; a seventh is refused.
+        let days = ["day", "week", "month", "quarter", "year"]
+            .map(|interval| format!(r#"<field name="deadline" type="row" interval="{interval}"/>"#))
+            .concat();
+        let six =
+            format!(r#"<pivot>{days}<field name="seen_at" type="row" interval="day"/></pivot>"#);
+        fixture(&six, "pivot").unwrap();
+        let seven = format!(
+            r#"<pivot>{days}<field name="seen_at" type="row" interval="day"/><field name="seen_at" type="row" interval="week"/></pivot>"#
+        );
+        assert!(refused(&seven).contains("at most 6 fields"), "seven rows");
+        // The same date field twice is admitted when the intervals differ.
+        fixture(
+            r#"<pivot><field name="deadline" type="row" interval="year"/><field name="deadline" type="row" interval="month"/></pivot>"#,
+            "pivot",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn pivot_intervals_are_admitted_on_dates_only() {
+        let refused = |xml: &str| match fixture(xml, "pivot").unwrap_err() {
+            ViewError::InvalidDescription(message) => message,
+            other => panic!("Unexpected error kind: {other:?}"),
+        };
+        for interval in ["day", "week", "month", "quarter", "year"] {
+            let xml = format!(
+                r#"<pivot><field name="deadline" type="row" interval="{interval}"/><field name="seen_at" type="col" interval="{interval}"/></pivot>"#
+            );
+            let value = fixture(&xml, "pivot").unwrap();
+            assert_eq!(value["nodes"][1]["interval"], interval);
+            assert_eq!(value["nodes"][2]["interval"], interval);
+        }
+        let none = fixture(
+            r#"<pivot><field name="deadline" type="row"/></pivot>"#,
+            "pivot",
+        )
+        .unwrap();
+        assert!(none["nodes"][1].get("interval").is_none());
+        let wrong = refused(r#"<pivot><field name="state" type="row" interval="month"/></pivot>"#);
+        assert!(
+            wrong.contains("'interval' applies to date and datetime"),
+            "{wrong}"
+        );
+        let measure =
+            refused(r#"<pivot><field name="count" type="measure" interval="month"/></pivot>"#);
+        assert!(measure.contains("has an interval"), "{measure}");
+        let hour = refused(r#"<pivot><field name="seen_at" type="row" interval="hour"/></pivot>"#);
+        assert!(hour.contains("day, week, month, quarter or year"), "{hour}");
+    }
+
+    #[test]
+    fn pivot_default_order_is_validated_and_normalized() {
+        let refused = |xml: &str| match fixture(xml, "pivot").unwrap_err() {
+            ViewError::InvalidDescription(message) => message,
+            other => panic!("Unexpected error kind: {other:?}"),
+        };
+        let desc = fixture(
+            r#"<pivot default_order="count desc"><field name="state" type="row"/><field name="count" type="measure"/></pivot>"#,
+            "pivot",
+        )
+        .unwrap();
+        assert_eq!(desc["nodes"][0]["default_order"], "count desc");
+        let bare = fixture(
+            r#"<pivot default_order="__count"><field name="state" type="row"/></pivot>"#,
+            "pivot",
+        )
+        .unwrap();
+        assert_eq!(bare["nodes"][0]["default_order"], "__count asc");
+        let absent = fixture(
+            r#"<pivot><field name="state" type="row"/></pivot>"#,
+            "pivot",
+        )
+        .unwrap();
+        assert!(absent["nodes"][0].get("default_order").is_none());
+        let unknown = refused(
+            r#"<pivot default_order="ratio asc"><field name="count" type="measure"/></pivot>"#,
+        );
+        assert!(unknown.contains("'ratio'"), "{unknown}");
+        let direction = refused(
+            r#"<pivot default_order="count up"><field name="count" type="measure"/></pivot>"#,
+        );
+        assert!(direction.contains("direction"), "{direction}");
+        let three = refused(
+            r#"<pivot default_order="count asc extra"><field name="count" type="measure"/></pivot>"#,
+        );
+        assert!(three.contains("must read"), "{three}");
     }
 
     #[test]
@@ -2511,6 +2888,45 @@ mod tests {
             ViewError::InvalidDescription(message) => assert_eq!(
                 message,
                 "Invalid value for field option 'placeholder_field' on widget 'char'."
+            ),
+            other => panic!("Unexpected error kind: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn integer_enable_formatting_option_is_a_boolean() {
+        for (flag, expected) in [("True", true), ("False", false)] {
+            let xml = format!(
+                r#"<form><field name="count" options="{{'enable_formatting': {flag}}}"/></form>"#
+            );
+            let value = fixture(&xml, "form").unwrap();
+            assert_eq!(value["nodes"][1]["options"]["enable_formatting"], expected);
+        }
+        for (options, message) in [
+            (
+                "{'enable_formatting': false}",
+                "Invalid value for field option 'enable_formatting' on widget 'integer'.",
+            ),
+            (
+                "{'enable_formatting': 'no'}",
+                "Invalid value for field option 'enable_formatting' on widget 'integer'.",
+            ),
+            (
+                "{'format': False}",
+                "Description payload has an undeclared property",
+            ),
+        ] {
+            let xml = format!(r#"<form><field name="count" options="{options}"/></form>"#);
+            match fixture(&xml, "form").unwrap_err() {
+                ViewError::InvalidDescription(found) => assert_eq!(found, message),
+                other => panic!("Unexpected error kind: {other:?}"),
+            }
+        }
+        let error = fixture(r#"<form><field name="count" widget="percentage" options="{'enable_formatting': False}"/></form>"#, "form").unwrap_err();
+        match error {
+            ViewError::InvalidDescription(found) => assert_eq!(
+                found,
+                "Field option 'enable_formatting' is not supported by widget 'percentage'."
             ),
             other => panic!("Unexpected error kind: {other:?}"),
         }

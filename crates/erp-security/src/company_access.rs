@@ -1,5 +1,5 @@
-//! Generated company restrictions (amendment A1-D2/A1-D3; design
-//! , §6.1): the access rows a model's `company_access`
+//! Generated company restrictions (amendment A1-D2/A1-D3; design,
+//! §6.1): the access rows a model's `company_access`
 //! declaration stands for, and the check of the rows found in a database against them.
 //!
 //! [`generate`] turns every declaration that restricts into plain rule text (the same text a

@@ -22,11 +22,13 @@
 //! - as `System` (superuser mode, the engine allows without asking), the same call must succeed
 //!   and see the hidden record, so the user's refusal comes from the policy and not from a broken
 //!   probe. The exception is `CheckedRefusesSu` (the query AST, which never runs in superuser
-//!   mode): there the `System` call must fail with the `Access` error naming and
-//!   .
+//!   mode): there the `System` call must fail with the `Access` error naming.
 //!
 //! [`sudo_sites_are_listed`] does the same bookkeeping for the `sudo(true)` call sites of every
-//! crate and addon (outside tests): each needs a row with its reason.
+//! crate and addon (outside tests), and for the engine's own `engine_sudo()` calls in `erp-orm`
+//! (superuser mode that keeps an elevation block's lifetime): each needs a row with its
+//! reason. [`read_audit_sites_are_listed`] does it for the call sites of the read-audit owner
+//! (`ReadAuditOwner::new`, `read_only_audited`, `take_audit_attempt`).
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -295,6 +297,12 @@ const ENTRY_POINTS: &[(&str, Class)] = &[
     ),
     ("Transaction::has_group", Unchecked(GROUP_CHECK)),
     ("Transaction::has_groups", Unchecked(GROUP_CHECK)),
+    (
+        "Transaction::user_has_group",
+        Unchecked(
+            "asks the policy whether another user is in a group, decided on that user's resolution in this transaction without handing back an environment of that user (no with_user switch A4); reads no record of any model and cannot elevate; the caller decides who may ask (res.users.has_group)",
+        ),
+    ),
     ("Transaction::has_any_group", Unchecked(GROUP_CHECK)),
     ("Transaction::group_membership", Unchecked(GROUP_CHECK)),
     ("Transaction::has_capability", Unchecked(GROUP_CHECK)),
@@ -304,7 +312,7 @@ const ENTRY_POINTS: &[(&str, Class)] = &[
             "reads no other record: it flushes and returns the raw old and new values the \
              transaction's own writes captured (a later release) for records the caller \
              already wrote; filtering the values by the reader's field access is the consumer's \
-             job (, the mail addon, a later release)",
+             job (the mail addon, a later release)",
         ),
     ),
     (
@@ -312,7 +320,7 @@ const ENTRY_POINTS: &[(&str, Class)] = &[
         Unchecked(
             "decides a view bundle's guard plan for the environment's principal and returns only \
              booleans; it runs the engine's model read check on the root model and every model the \
-             plan reads itself (, tests in erp-security/tests/guard_eval.rs), reads no \
+             plan reads itself (tests in erp-security/tests/guard_eval.rs), reads no \
              record and cannot elevate",
         ),
     ),
@@ -409,6 +417,12 @@ const ENTRY_POINTS: &[(&str, Class)] = &[
         "Transaction::job_upsert_recurring",
         Unchecked(
             "keeps the one recurring row of a schedule in the core table erp_job; only the system principal may call it, the schedule's owner has passed its own access check (a later release)",
+        ),
+    ),
+    (
+        "Transaction::job_upsert_recurring_own",
+        Unchecked(
+            "keeps the recurring row of a user's own schedule in the core table erp_job (ir.cron instead of a superuser switch.2 A4): only a User environment without a with_user switch, outside a block, for a kind that runs as its caller and a run_as equal to that user; never replaces another principal's row (Access); the schedule's owner has passed its own access check",
         ),
     ),
     (
@@ -645,6 +659,12 @@ const ENTRY_POINTS: &[(&str, Class)] = &[
         ),
     ),
     (
+        "Transaction::hook_scope",
+        Unchecked(
+            "borrowing scope that refuses transaction-ending calls and transaction-control SQL inside a hook chain; reads and writes no record",
+        ),
+    ),
+    (
         "Transaction::pure_methods",
         Unchecked(
             "borrowing scope that refuses SQL, record, control and environment effects except the named metadata method chains; reads and writes no record itself (login selection hooks)",
@@ -739,14 +759,76 @@ const ENTRY_POINTS: &[(&str, Class)] = &[
         ),
     ),
     (
+        "Transaction::install_audit_chain_schema",
+        Unchecked(
+            "owner-only closed chain DDL; System/full admission before SQL is covered by audit_chain_schema.rs, chain_installer_requires_system_before_sql",
+        ),
+    ),
+    (
+        "Transaction::initialize_audit_chain",
+        Unchecked(
+            "owner-only explicit epoch initialization; System/full admission before SQL is covered by audit_chain_epochs.rs, epoch_operations_require_system_before_sql",
+        ),
+    ),
+    (
+        "Transaction::seal_audit_batch",
+        Unchecked(
+            "owner-only safe-prefix sealing; System/full before SQL, real owner isolation and rollback are covered by audit_sealer.rs and audit_sealer_concurrency.rs",
+        ),
+    ),
+    (
+        "Transaction::verify_audit_chain",
+        Unchecked(
+            "operator-only read of the audit chain, its seals and anchors, no business model record access and nothing written; System/full admission before SQL is covered by audit_verify.rs, admission_and_isolation_are_explicit",
+        ),
+    ),
+    (
+        "Transaction::new_audit_chain_epoch",
+        Unchecked(
+            "owner-only linked epoch transition; System/full admission before SQL is covered by audit_chain_epochs.rs, epoch_operations_require_system_before_sql",
+        ),
+    ),
+    (
         "Transaction::ensure_audit_partitions",
         Unchecked(
             "operator-only audit partition DDL, no business model record access; requires the fully elevated System principal before advisory lock or SQL (test: system_only_entry_points.rs, ensure_audit_partitions_refuses_a_user_before_sql); upkeep covered by audit_store.rs, install_makes_thirty_two_partitions_and_is_idempotent",
         ),
     ),
+    (
+        "Transaction::audit_attachment_claim",
+        Unchecked(
+            "doc-hidden owner-only claim audit: validates the phase, then before setting the CLI origin reads two booleans (whether the session role owns ir_blob_owner_claim, and whether the claim id exists) and refuses with Access or Programming, leaving the origin unchanged; reads no business model record and writes only the caller's own audit buffer (tests: base_attachment_recovery.rs, claim_audit_refuses_a_request_role and claim_audit_refuses_an_unknown_claim_without_relabelling)",
+        ),
+    ),
     ("Transaction::audit_auth", Unchecked(AUDIT_RECORD)),
     ("Transaction::audit_call", Unchecked(AUDIT_RECORD)),
     ("Transaction::audit_origin", Unchecked(AUDIT_RECORD)),
+    (
+        "Transaction::migrate_company_dependent",
+        Unchecked(
+            "native pre-migration helper: refuses every transaction that is not the superuser's (Access, before the first statement or lock) and then converts one declared company-dependent scalar column under table and schema locks; it reads and writes no record through the ORM (test: company_dependent_schema_migration.rs, limits_and_authority_refuse_without_changing_scalar_data)",
+        ),
+    ),
+    ("Transaction::selection_labels", Unchecked(SELECTION_LABELS)),
+    (
+        "Transaction::selection_labels_for_lang",
+        Unchecked(SELECTION_LABELS),
+    ),
+    (
+        "Transaction::admit_html_translation",
+        Unchecked(
+            "runs the HTML sanitizer over one translation text for the translation importer (erp-data i18n save), which has already been authorized by its own caller; reads and writes no record, changes no cache and no storage, and returns the admitted text (tests: translation_save.rs,)",
+        ),
+    ),
+    (
+        "Transaction::grant_audit_reader_role",
+        Unchecked(
+            "operator-only privilege publication on the audit event objects, reads and writes no record of a model; refused to every principal but System with full elevation before any statement (test: system_only_entry_points.rs, grant_audit_reader_role_refuses_a_user_transaction); publication behaviour in audit_reader_roles.rs",
+        ),
+    ),
+    ("AuditReader::search", Unchecked(AUDIT_READER)),
+    ("AuditReader::export", Unchecked(AUDIT_READER)),
+    ("AuditReader::read", Unchecked(AUDIT_READER)),
     ("Transaction::take_audit_attempt", Unchecked(AUDIT_RECORD)),
     (
         "Transaction::audited_superuser_env",
@@ -755,6 +837,22 @@ const ENTRY_POINTS: &[(&str, Class)] = &[
     (
         "Transaction::audited_unscoped_sudo",
         Unchecked(AUDIT_ELEVATION),
+    ),
+    (
+        "Transaction::elevated",
+        Unchecked(
+            "opens a scoped elevation block and records the elevation before the body; reads and writes no record itself: the body's record operations are rows of this table and pass the engine with the block's environment, which the compiled policy decides by the scope; refused before the body in a read-only transaction without a read-audit owner, for an invalid scope, a lifted rule the policy refuses or a caller outside its block (tests: principal_block.rs, principal_policy.rs)",
+        ),
+    ),
+    (
+        "Transaction::set_next_block_seq_for_tests",
+        Unchecked("test hook setting the next elevation block number (feature test-faults)"),
+    ),
+    (
+        "Transaction::exhaust_tx_serial_for_tests",
+        Unchecked(
+            "test hook making this transaction's next serial come from an exhausted counter (feature test-faults)",
+        ),
     ),
     (
         "Transaction::grant_event_runtime_role",
@@ -785,8 +883,11 @@ const ENTRY_POINTS: &[(&str, Class)] = &[
     ("Transaction::signal_generations", Unchecked(SIGNAL)),
     ("Transaction::init_models", Unchecked(SCHEMA)),
     ("Transaction::init_models_with", Unchecked(SCHEMA)),
+    ("Transaction::init_sql_objects", Unchecked(SCHEMA)),
     ("reflection::reflect_models", Unchecked(SCHEMA)),
     ("core_ddl::run", Unchecked(SCHEMA)),
+    ("core_ddl::run_deferred", Unchecked(SCHEMA)),
+    ("core_ddl::pending", Unchecked(SCHEMA)),
     (
         "defaults::add_missing_defaults_batch",
         Unchecked(
@@ -843,6 +944,18 @@ const ENTRY_POINTS: &[(&str, Class)] = &[
         ),
     ),
     (
+        "Transaction::visible_under_company_restriction",
+        Unchecked(
+            "a probe for core services that decide for a human in a transaction running under another policy (the administrator password reset): returns which of the given ids the named principal sees under the model's generated company restriction; it only narrows, grants nothing and writes nothing, refuses an elevated or System principal and a company outside the principal's companies; not an addon API",
+        ),
+    ),
+    (
+        "delta::apply_synchronous",
+        Unchecked(
+            "writes one adapter-owned projection table (not a model: no ordinary model or RPC access, no record rule) from a netted batch the consumer built inside its own checked source write; returns only the applied measures to that consumer; the access proof of each consumer table is its adapter's reviewed design",
+        ),
+    ),
+    (
         "sequence::next_by_id",
         Gap(
             "raw SQL on ir_sequence; the reference ERP checks ir.sequence read access first (ir_sequence.py:291); owner of ir.sequence (base)",
@@ -859,11 +972,15 @@ const ENTRY_POINTS: &[(&str, Class)] = &[
 /// The audit trail's recording entry points: they touch no model record and read none;
 /// they only buffer ids, enums and counts in the caller's own transaction attempt, written with its
 /// audit row at commit.
+const AUDIT_READER: &str = "reads audit entries from the restricted audit store, authorized by its own checks and not by the probe model: the original authenticated caller's `audit.read` capability, read access to the entry model and its fields, then the caller's current access to every audited target row before the row is returned; a System transaction has no reader and is refused (tests: audit_reader_access.rs, audit_reader_projection_uses_real_current_access_for_every_surface and audit_reader_revocation_company_scope_and_unavailable_reader_fail_closed)";
+
+const SELECTION_LABELS: &str = "returns the (value, label) pairs the registry declares for one static selection field, translated through ir.model.fields.selection with a raw statement, whoever asks: it is the `selection` list `fields_get` shows every user; no record of a business model is read (test: fields_scalar_selection_i18n.rs, spec_field_105_static_selection_labels_follow_context_language)";
+
 const AUDIT_RECORD: &str = "records into the caller's own transaction buffer only (typed ids, enums and counts, no record data read or written); refuses before any statement when the audit store is not ready or the transaction cannot write (tests: audit_store.rs, a_store_that_is_not_ready_refuses_before_any_statement and a_read_only_transaction_refuses_lifecycle_events)";
 
 /// The two audited elevation entry points: `Env::sudo(true)` is already public to core code, these
 /// add the recording the audit trail needs before the elevated environment exists.
-const AUDIT_ELEVATION: &str = "returns the given environment in superuser mode, as the public `Env::sudo(true)` does, after recording the elevation (reason, cause, original attribution) for the transaction's audit row; the recording refuses first when the store is not ready or the transaction is read-only (tests: server_actions.rs flagged_action_runs_as_superuser_and_is_audited; audit_store.rs unscoped_sudo_is_audited_per_call)";
+const AUDIT_ELEVATION: &str = "returns the given environment in superuser mode, as the public `Env::sudo(true)` does, after recording the elevation (reason, cause, original attribution) for the transaction's audit row; an environment of a scoped elevation block is refused before anything is recorded; the recording refuses first when the store is not ready or the transaction is read-only (tests: server_actions.rs flagged_action_runs_as_superuser_and_is_audited; audit_store.rs unscoped_sudo_is_audited_per_call)";
 
 /// Every `sudo(true)` call site outside tests (`<crate>/<file>::<function>`, how many): why it may
 /// leave the engine. replaces them with scoped elevation blocks where it can.
@@ -924,6 +1041,16 @@ const SUDO_SITES: &[(&str, usize, &str)] = &[
         "reads the dated parameters of the caller's company, its ancestors and the shared scope after the caller's model-level read right and company check, so a record rule that filters rows cannot put a farther value in place of the nearer one (the order of `RateBook::load`); keys and companies are bounded and the answer is typed values only",
     ),
     (
+        "base/res_users_settings.rs::own_row",
+        1,
+        "finds the caller's own `res.users.settings` row by `tx.env().uid()`, never by an argument: the row is selected by that user id alone, so a portal user outside `base.group_user` (who has no `ir.access` row on the model; the public user, whom every anonymous visitor shares, is refused by the caller before this) still reads the settings that are theirs; generic `read`/`search` stay under the `ir.access` rows",
+    ),
+    (
+        "base/res_users_settings.rs::set_res_users_settings",
+        1,
+        "after refusing the public user and unknown keys and taking the per-user advisory lock, creates the caller's own settings row with `user_id` set from `tx.env().uid()`: `user_id` is writable by `base.group_system` only, so that a user cannot hand a row to another user through generic `write`/`create`, and the method sets it as superuser for the caller alone",
+    ),
+    (
         "base/res_users_preferences.rs::action_get",
         1,
         "reads the one preferences window action `base.action_res_users_my` as superuser, as the reference ERP's `action_get` does (`res_users.py:829-830`): every internal user opens My Preferences, the action record carries no data of any user, and the client still loads the described form and the user's own record under the caller's rights",
@@ -949,9 +1076,24 @@ const SUDO_SITES: &[(&str, usize, &str)] = &[
         "reads candidate menu metadata and only group/target metadata of caller-readable window/server actions as superuser; visibility still uses caller group membership and model Read, never the filtered groups comodel",
     ),
     (
+        "base/res_partner.rs::_compute_partner_share",
+        1,
+        "the stored compute of partner_share reads the partner's linked users (user_ids, their share and active flags, archived ones included) as superuser: the stored value must be the same whoever triggers the recompute, and a caller who may write a partner need not be able to read its users; the answer is one boolean per partner, no user data leaves the compute",
+    ),
+    (
         "base/res_partner.rs::parent_names",
         1,
         "reads only the name of the parent partner for the complete-name fallback (PARTNER section 4.3, as the reference ERP reads the parent name as the superuser); the answer is names only, and formatted display reads keep the ordinary compute environment",
+    ),
+    (
+        "base/res_company.rs::link_to_creators",
+        1,
+        "links only newly created company IDs to the environment user and reserved superuser after the caller's company Create check, inside the company lifecycle guard/fence; no caller-supplied user ID enters the elevated write",
+    ),
+    (
+        "base/res_users.rs::names_of",
+        1,
+        "formats company-invariant refusals with the offending user's name and names from that user's allowed-company relation; the invalid chosen company is not named; callers are name_of and check_user_companies",
     ),
     (
         "base/res_users.rs::check_user_types",
@@ -1001,6 +1143,11 @@ const SUDO_SITES: &[(&str, usize, &str)] = &[
         "erp-modules/system.rs::record_demo_failure",
         1,
         "the module system records a failed demo in ir.demo_failure (install path, System)",
+    ),
+    (
+        "erp-orm/records.rs::engine_sudo",
+        1,
+        "the recordset form of `Env::engine_sudo`, crate-private: superuser mode for the engine's own steps listed in this table, keeping an elevation block's lifetime; public `sudo(true)` on a block's records refuses every use instead",
     ),
     (
         "erp-orm/related_company.rs::superuser_records",
@@ -1224,6 +1371,16 @@ const SUDO_SITES: &[(&str, usize, &str)] = &[
         "precomputed field groups honor declared compute_sudo, including their monetary output normalization; supplied monetary inputs keep caller authorization",
     ),
     (
+        "erp-orm/access/records.rs::visible_under_company_restriction",
+        1,
+        "the company-restriction probe of runs in superuser mode so that the restriction's own relational traversals bypass the comodels' rules, as in every record check; company_ids binds to the companies the caller names, which must be the principal's; only the visible ids come back",
+    ),
+    (
+        "web/pivot_export.rs::limits",
+        1,
+        "the five declared bounds of the pivot download (global settings the framework reads for itself); a refusal names the bound and its value (a number an internal user may read in Settings anyway), nothing else of the settings leaves; the read check on the document's model runs with the caller's rights",
+    ),
+    (
         "web/metadata.rs::load_action",
         3,
         "group, model and view-mode columns of the window action the caller opens; the caller's groups and read access on res_model are checked before any value leaves",
@@ -1232,6 +1389,11 @@ const SUDO_SITES: &[(&str, usize, &str)] = &[
         "web/metadata.rs::load_action_views",
         1,
         "fixed search_view_id/limit presentation columns of the singleton action already admitted by load_action's record-read, action-group and target-model checks; the view descriptions keep the original caller environment and selected-view/field-group checks, while page limits remain validated",
+    ),
+    (
+        "web/metadata.rs::menu_modules",
+        1,
+        "oldest external-ID module and target ID for the already authorized/pruned menu forest only; set-based identity/size preflights precede bounded presentation reads; no external ID creation or authorization grant (/028)",
     ),
     (
         "web/metadata.rs::load_menus",
@@ -1404,9 +1566,9 @@ const SUDO_SITES: &[(&str, usize, &str)] = &[
         "privileged reads of the type name, category and icon of the activity types and of the partner and name of the users that the caller's own activity panel lists; nothing else is read",
     ),
     (
-        "mail/activity_mixin.rs::user_timezones_of",
+        "mail/activity_menu.rs::scan_limit",
         1,
-        "reads the `tz` cell of one user privileged; the zone name decides the day of a deadline, it is not returned",
+        "reads the system parameter `mail.activity.systray.limit` (`get_int`, one non-secret integer the caller cannot read themselves) to bound the activity menu scan; the value is validated and never returned, and the scan itself runs as the caller",
     ),
     (
         "mail/activity_type.rs::unlink",
@@ -1422,6 +1584,11 @@ const SUDO_SITES: &[(&str, usize, &str)] = &[
         "mail/activity_type.rs::default_type",
         1,
         "privileged search (limit 1) for the first active type of a model or of every model, by sequence (the reference ERP `_default_activity_type_for_model`); only the id leaves the search",
+    ),
+    (
+        "erp-server/web/password_change.rs::execute",
+        1,
+        "opening the password reset wizard creates its lines in superuser mode, after the actor's manager authority and every target were checked: the line model refuses every other creation, and `create_uid` stays the actor",
     ),
 ];
 
@@ -1673,9 +1840,11 @@ fn every_public_entry_point_has_a_row() {
     );
 }
 
-/// Every `sudo(true)` call site outside tests has a row with its reason and count.
-#[test]
-fn sudo_sites_are_listed() {
+/// The call sites `scan` finds in every crate and addon of the workspace, outside tests: library
+/// roots, binaries and build scripts (crates with no library root too).
+fn workspace_sites(
+    scan: fn(&[scan::SourceFile], &str) -> BTreeMap<String, usize>,
+) -> BTreeMap<String, usize> {
     let mut found: BTreeMap<String, usize> = BTreeMap::new();
     for dir in ["crates", "addons"] {
         let mut roots: Vec<PathBuf> = std::fs::read_dir(workspace().join(dir))
@@ -1687,7 +1856,7 @@ fn sudo_sites_are_listed() {
         for root in roots {
             let name = root.file_name().unwrap().to_string_lossy().into_owned();
             let files = scan::module_files(&root.join("src/lib.rs"));
-            found.extend(scan::sudo_sites(&files, &name));
+            found.extend(scan(&files, &name));
         }
         // binaries and build scripts (crates with no library root too)
         let mut dirs: Vec<PathBuf> = std::fs::read_dir(workspace().join(dir))
@@ -1699,9 +1868,16 @@ fn sudo_sites_are_listed() {
         for root in dirs {
             let name = root.file_name().unwrap().to_string_lossy().into_owned();
             let files = scan::other_roots(&root);
-            found.extend(scan::sudo_sites(&files, &name));
+            found.extend(scan(&files, &name));
         }
     }
+    found
+}
+
+/// Every `sudo(true)` call site outside tests has a row with its reason and count.
+#[test]
+fn sudo_sites_are_listed() {
+    let found = workspace_sites(scan::sudo_sites);
     let listed: BTreeMap<String, usize> = SUDO_SITES
         .iter()
         .map(|(site, n, _)| ((*site).to_owned(), *n))
@@ -1710,6 +1886,56 @@ fn sudo_sites_are_listed() {
     assert_eq!(
         found, listed,
         "sudo(true) call sites differ from SUDO_SITES (add or update the row with its reason)"
+    );
+}
+
+/// Every call site outside tests of `ReadAuditOwner::new`, `read_only_audited` and
+/// `Transaction::take_audit_attempt` (`<crate>/<file>::<function> <callee>`, how many): who
+/// declares itself the read-audit owner of a read-only transaction, or takes its evidence out,
+/// and why. An owner promises to write the attempt evidence before it releases the result, and
+/// taking the evidence out of a transaction that is not the caller's own would let an elevated
+/// read go without its row (A2, P4; review cycle 10). Native addon code is bounded by
+/// the P6 lint; until then this list is the boundary.
+const READ_AUDIT_SITES: &[(&str, usize, &str)] = &[
+    (
+        "erp-orm/transaction.rs::read_only_audited read_only_audited",
+        1,
+        "`CredentialOptions::read_only_audited` forwards the owner to the `BeginOptions` it wraps; it declares no owner of its own",
+    ),
+    (
+        "erp-rpc/service.rs::attempt ReadAuditOwner::new",
+        2,
+        "the RPC service is the read-audit owner of every read-effect call, from a constant, never from request input: once for a session call, once for a credential call",
+    ),
+    (
+        "erp-rpc/service.rs::attempt read_only_audited",
+        2,
+        "declares that owner on the begin options of a session call and on the credential options of a credential call",
+    ),
+    (
+        "erp-rpc/service.rs::evidence_of take_audit_attempt",
+        1,
+        "the owner takes the attempt evidence of its own transaction after the body, to write the `read_ok` or attempt row before the result is released",
+    ),
+];
+
+/// Every read-audit owner call site outside tests has a row with its reason and count.
+#[test]
+fn read_audit_sites_are_listed() {
+    let found = workspace_sites(scan::read_audit_sites);
+    let listed: BTreeMap<String, usize> = READ_AUDIT_SITES
+        .iter()
+        .map(|(site, n, _)| ((*site).to_owned(), *n))
+        .collect();
+    assert_eq!(
+        listed.len(),
+        READ_AUDIT_SITES.len(),
+        "a read-audit site has two rows"
+    );
+    assert_eq!(
+        found, listed,
+        "read-audit owner call sites differ from READ_AUDIT_SITES (add or update the row with \
+         its reason)"
     );
 }
 

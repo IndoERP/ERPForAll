@@ -22,8 +22,7 @@
 //! - [`resolver`]: the [`resolver::Resolver`] that reads a principal's subject, groups and
 //!   companies (one statement at transaction start, one to re-read every bound subject);
 //! - [`admin`]: what `erp access report` prints and `erp access disable-rule` does;
-//! - [`auth`]: password login, sessions, the login throttle and `database.secret`
-//!   .
+//! - [`auth`]: password login, sessions, the login throttle and `database.secret`.
 //!
 //! The rows and the compiler are pure; the loader, the source, the resolver and the admin
 //! commands are the I/O.
@@ -32,6 +31,7 @@
 
 pub mod admin;
 mod analyze;
+pub mod audit;
 pub mod auth;
 mod bits;
 pub mod company_access;
@@ -43,6 +43,7 @@ pub mod groups;
 pub mod jobs;
 pub mod loader;
 mod memo;
+pub mod principal;
 pub mod report;
 pub mod resolver;
 pub mod rows;

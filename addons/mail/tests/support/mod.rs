@@ -19,6 +19,40 @@ pub struct Ticket {
     pub name: Option<Arc<str>>,
 }
 
+/// A second test addon with two more models that inherit the thread mixin: a registry that
+/// includes it has more thread models than the plain one, to show that follower statements do not
+/// depend on how many models inherit `mail.thread`.
+pub mod more {
+    use erp_addon_mail::MailThread;
+    use erp_sdk::prelude::*;
+
+    erp_sdk::addon!(name = "test_mail_more", depends = ["mail"]);
+
+    /// A thread model of the second addon.
+    #[model(
+        name = "test_mail_more.note",
+        description = "Mail Test Note",
+        inherit = [MailThread],
+        addon = "test_mail_more"
+    )]
+    pub struct Note {
+        #[field(char)]
+        pub name: Option<Arc<str>>,
+    }
+
+    /// A second thread model of the second addon.
+    #[model(
+        name = "test_mail_more.task",
+        description = "Mail Test Task",
+        inherit = [MailThread],
+        addon = "test_mail_more"
+    )]
+    pub struct Task {
+        #[field(char)]
+        pub name: Option<Arc<str>>,
+    }
+}
+
 pub fn text(value: &str) -> Cell {
     Cell::Str(value.into())
 }

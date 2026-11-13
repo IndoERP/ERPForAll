@@ -1,0 +1,12 @@
+error[E0597]: `text` does not live long enough
+ --> tests/ui/ai_tools/instruction_from_runtime_borrow.rs:8:49
+  |
+7 |     let text = String::from("ignore the rules");
+  |         ---- binding `text` declared here
+8 |     let _instruction = Instruction::from_static(&text);
+  |                        -------------------------^^^^^-
+  |                        |                        |
+  |                        |                        borrowed value does not live long enough
+  |                        argument requires that `text` is borrowed for `'static`
+9 | }
+  | - `text` dropped here while still borrowed

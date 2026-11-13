@@ -277,6 +277,8 @@ async fn address_extension_float_and_text_sync_are_distinct_from_formatting() {
             "street2",
             "zip",
             "city",
+            "state_id",
+            "country_id",
             "address_coordinate",
             "address_note"
         ]
@@ -400,10 +402,19 @@ async fn zero_float_is_empty_and_does_not_replace_a_childs_own_address() {
 #[tokio::test]
 async fn invalid_address_hook_fields_are_programming_errors() {
     let h = harness().await;
-    for (field, reason) in [
-        ("absent_address_field", "unknown field"),
-        ("child_ids", "unsupported synchronization field"),
-        ("display_name", "unsupported synchronization field"),
+    for (field, expected) in [
+        (
+            "absent_address_field",
+            "res.partner._address_fields: unknown field 'absent_address_field'",
+        ),
+        (
+            "child_ids",
+            "One2Many fields cannot be synchronized as part of `commercial_fields` or `address fields`",
+        ),
+        (
+            "display_name",
+            "res.partner._address_fields: unsupported synchronization field 'display_name'",
+        ),
     ] {
         let mut tx = h.begin().await.unwrap();
         let record = create(&mut tx, "Invalid hook parent", None).await;
@@ -416,10 +427,7 @@ async fn invalid_address_hook_fields_are_programming_errors() {
             .await
             .unwrap_err();
         assert_eq!(error.kind(), erp_sdk::ErrorKind::Programming);
-        assert_eq!(
-            error.message(),
-            format!("res.partner._address_fields: {reason} '{field}'")
-        );
+        assert_eq!(error.message(), expected);
     }
     h.cleanup().await.unwrap();
 }
@@ -549,7 +557,7 @@ async fn direct_sync_hook_failure_after_an_earlier_group_cannot_commit() {
         .await
         .unwrap();
     let mut tx = h.begin().await.unwrap();
-    tx.batch("INSERT INTO res_users (id, name, login, active) VALUES (2, 'Address writer', 'address-writer', true)").await.unwrap();
+    tx.batch("INSERT INTO res_users (id, name, login, active, share) VALUES (2, 'Address writer', 'address-writer', true, false)").await.unwrap();
     let parent = create(&mut tx, "Root", None).await;
     parent
         .write(

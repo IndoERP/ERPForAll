@@ -5,7 +5,7 @@
 //!
 //! After the records, the views users copied from the modules' views are deleted: views keyed
 //! `<module>.…` that no real module staying installed names by external id
-//! (`_remove_copied_views`,, called at), with the
+//! (`_remove_copied_views`, called at), with the
 //! views built on them.
 //! The
 //! pseudo-modules (`__export__`, `__import__`, `__cloc_exclude__`: `__…__` names) are not

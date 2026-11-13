@@ -23,22 +23,34 @@
 //! - **`share`.** True unless the user is a direct member of an internal group (`base.group_user`
 //!   or a group implying it, so true for everyone while the database has no `base.group_user`);
 //!   recomputed with the user's groups, and set-based for every user when the group graph
-//!   changes ([`crate::group_graph::recompute_user_share`]). It is a user type
-//!   flag for readers of the model; the principal resolver does not read it.
+//!   changes ([`crate::group_graph::recompute_user_share`]). The principal
+//!   resolver does not read it; the company restriction of `res.users` does.
 //! - **Self-service.** A user who is neither in `base.group_system` nor superuser may
 //!   write on their own record only the fields declared `user_writeable`, enforced
 //!   by a `#[field_access]` override of the model's field mask.
+//! - **Default company.** `company_id` is required by rule,
+//!   not by a NOT NULL column (the bootstrap inserts the superuser before any company exists):
+//!   `default_get` defaults it, and `company_ids`, to the environment's
+//!   company (a `System` principal that names none takes the database's only active company);
+//!   a create that gives `company_id` alone allowed it; an active user's default company is one
+//!   of its `company_ids` ([`check_user_companies`]; a database without companies, and inactive
+//!   users, are exempt); the field is `user_writeable` (the check keeps a self-write inside the
+//!   allowed companies; `company_ids` stays admin-only) and `ondelete = "restrict"`. The base
+//!   1.10 migration ([`crate::migrations::assign_user_companies`]) fills the existing rows or
+//!   refuses the upgrade.
 //! - **Commands.** `res.users` does not allow sudo commands (`_allow_sudo_commands = false`):
 //!   x2many commands that target it run as the transaction's original user.
 //!
 //! Missing groups: the rules do not switch themselves off.
 //!
-//! The bootstrap partner link now lives in `res_users_partner`; delegated partner fields and
-//! `partner_share` remain in the broader partner slice.
+//! The bootstrap partner link lives in `res_users_partner`; `res.partner.partner_share` follows
+//! the users' `share` and `active`, delegated partner fields remain in the
+//! broader partner slice.
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
-use erp_sdk::access::ElevationKind;
+use erp_sdk::access::{ElevationKind, PrincipalKind};
 use erp_sdk::domain::{Operator, Value as DomainValue};
 use erp_sdk::prelude::*;
 use erp_sdk::{Command, Domain, Env, RecId, ValueMap};
@@ -53,7 +65,7 @@ use crate::res_groups::exclusive_groups_error;
 /// The access-related columns of `res.users`.
 #[extend(
     ResUsers,
-    company_access = unrestricted(reason = "base user access currently has no company restriction; the reference ERP's user rule has non-company escapes"),
+    company_access = direct(field = "company_ids", branch = "exact", empty = "deny", escape = "share"),
     allow_sudo_commands = false,
     field_parameters = ["user_writeable"],
     signal_triggers = [
@@ -78,6 +90,29 @@ pub struct ResUsersAccess {
     /// dialog offers the installed languages through the `web.preference_choice` widget.
     #[field(char, user_writeable)]
     pub lang: Option<Arc<str>>,
+    /// Phone number, shown in the header block of My Preferences.
+    /// `user_writeable`: the user's own
+    /// contact detail, the same class as `email`; nothing reads it for access or routing.
+    #[field(char, user_writeable)]
+    pub phone: Option<Arc<str>>,
+    /// Colour scheme the user wants the screen drawn in: `system`, `light` or `dark`.
+    /// Default `system`, applied on create. A plain column of the user, not of
+    /// `res.users.settings` (keeps that model to one key). Not required at the column: a
+    /// required column gets `NOT NULL` and the database default exists only for booleans,
+    /// which would refuse every raw `res.users` insert that omits it. So
+    /// `_check_color_scheme` refuses an empty value on create and write instead. Schema sync adds
+    /// the column with the default, so existing rows read `system` after an upgrade (read from
+    /// `schema.rs`, not run); only a row inserted by raw SQL after the column exists holds no value,
+    /// and no value means `system`. `user_writeable`: a display choice that affects only the
+    /// user's own screen. The client applies it in a later task; until then it is only stored.
+    #[field(
+        selection,
+        selection = [("system", "System"), ("light", "Light"), ("dark", "Dark")],
+        default = "system",
+        string = "Color Scheme",
+        user_writeable
+    )]
+    pub color_scheme: Option<Arc<str>>,
     /// Groups explicitly assigned to the user.
     #[field(
         many2many,
@@ -96,12 +131,21 @@ pub struct ResUsersAccess {
         string = "Groups and implied groups"
     )]
     pub all_group_ids: Vec<RecId>,
-    /// An external (portal or public) user: data sharing only.
+    /// An external (portal or public) user: data sharing only. The escape of the company
+    /// restriction: a user with `share = false` is admitted whatever its
+    /// companies. Required with the static default `true`, so a row that was never computed
+    /// takes the company test (fail closed); the stored compute replaces the default after the
+    /// insert, since a computed field without inverse is not protected by a given value. The
+    /// default is also the column's database default (`db_default`), so a row written
+    /// outside the ORM without `share` is a share user too.
     #[field(
         boolean,
         compute = "_compute_share",
         store,
         compute_sudo,
+        required,
+        default = true,
+        db_default,
         string = "Share User"
     )]
     pub share: bool,
@@ -117,10 +161,20 @@ pub struct ResUsersAccess {
         string = "Role"
     )]
     pub role: Option<Arc<str>>,
-    /// The user's default company.
-    #[field(many2one, comodel = "res.company", string = "Company")]
+    /// The user's default company. Required for an active user by rule, not by a NOT NULL column
+    /// : it defaults to the environment's company, must be one of `company_ids` while
+    /// the user is active ([`check_user_companies`]) and cannot be deleted while a user has it.
+    #[field(
+        many2one,
+        comodel = "res.company",
+        string = "Company",
+        ondelete = "restrict",
+        user_writeable
+    )]
     pub company_id: Option<RecId>,
-    /// The companies the user may work in.
+    /// The companies the user may work in. Administrators only: a self-write could widen access.
+    /// Defaults to the environment's company; a create that gives `company_id` and no
+    /// `company_ids` allows that company.
     #[field(
         many2many,
         comodel = "res.company",
@@ -323,6 +377,162 @@ fn rec_ids(ids: impl IntoIterator<Item = i64>) -> Result<Vec<RecId>> {
         .collect()
 }
 
+/// A `System` principal that names none takes the database's only active company, if
+/// there is exactly one; otherwise there is no default and the membership check refuses the
+/// create.
+async fn default_company(tx: &mut Transaction, env: &Env) -> Result<Option<i64>> {
+    if let Some(company) = tx.companies(env).await?.first() {
+        return Ok(Some(company.get()));
+    }
+    if env.principal().kind() != PrincipalKind::System {
+        return Ok(None);
+    }
+    flush_company_models(tx).await?;
+    let rows = tx
+        .query(
+            "SELECT id::int8 FROM res_company WHERE active IS TRUE ORDER BY id LIMIT 2",
+            &[],
+        )
+        .await?;
+    match rows.as_slice() {
+        [only] => only
+            .try_get(0)
+            .map(Some)
+            .map_err(|e| Error::db(format!("res.users default company: {e}"))),
+        _ => Ok(None),
+    }
+}
+
+/// Pending writes of users and companies reach the tables before the company rules read them.
+async fn flush_company_models(tx: &mut Transaction) -> Result<()> {
+    for name in ["res.users", "res.company"] {
+        let model = tx
+            .env()
+            .registry()
+            .model(name)
+            .map(|m| m.id)
+            .ok_or_else(|| Error::programming(format!("the registry has no {name} model")))?;
+        tx.flush_model(model).await?;
+    }
+    Ok(())
+}
+
+/// The names of `ids` of `model`, in order, read with sudo. The refusals of `check_user_companies`
+/// name only the user being written and that user's allowed companies; the chosen default
+/// company is not named, since a user who writes their own `company_id` may not read it.
+async fn names_of(tx: &mut Transaction, model: &str, ids: &[i64]) -> Result<Vec<String>> {
+    let records = tx
+        .env()
+        .sudo(true)
+        .records(model)?
+        .browse(ids.iter().copied())?;
+    records
+        .values(tx, "name")
+        .await?
+        .into_iter()
+        .map(|name| match name {
+            Value::Str(name) => Ok(name.to_string()),
+            other => Err(Error::programming(format!(
+                "{model}.name holds {other:?}, expected text"
+            ))),
+        })
+        .collect()
+}
+
+/// The name of record `id` of `model`, read with sudo.
+async fn name_of(tx: &mut Transaction, model: &str, id: i64) -> Result<String> {
+    names_of(tx, model, &[id])
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| Error::programming(format!("{model} {id} has no name to show")))
+}
+
+/// allowed companies. Inactive users are not checked, and neither is a database without any
+/// company (it exists only before the base data loads and in harnesses without it). Archived
+/// companies count as allowed, so an archived default company keeps its own refusal
+/// (`company_lifecycle::check_users`).
+///
+/// Concurrency: transactions run at `REPEATABLE READ`, where one transaction that changes the
+/// default company and another that removes the allowed company it relies on would both commit
+/// (write skew). The check therefore locks the rows it relies on, in a fixed order: the
+/// membership row of each default company with `FOR KEY SHARE` (a concurrent removal conflicts)
+/// and the user row with `FOR SHARE` (a concurrent change of the default conflicts). The loser
+/// gets a serialization failure or deadlock, which surfaces as a `Concurrency` error that
+/// `Orm::run` retries; it is never mapped to `Validation`.
+///
+/// # Errors
+///
+/// `Validation` naming the first user (in id order) that has no default company, or whose default
+/// company is not allowed (the text names that user and the user's allowed companies, never the
+/// chosen company: a user writing their own `company_id` may not read it); `Concurrency` as
+/// above; `Programming` when a name is not text.
+pub async fn check_user_companies(users: &Records, tx: &mut Transaction) -> Result<()> {
+    let ids: Vec<i64> = users
+        .rec_ids()
+        .iter()
+        .filter_map(|id| row_id(*id))
+        .collect();
+    if ids.is_empty() {
+        return Ok(());
+    }
+    // pending changes of the users, and of their relation, must reach the tables first
+    flush_company_models(tx).await?;
+    // One statement, so a write of inactive users (the superuser, say) costs one query and a
+    // database without a company none beyond it. The CTE takes the locks (it is materialized so
+    // the planner cannot inline it away): the membership row of each valid user's default company
+    // with FOR KEY SHARE and the user row with FOR SHARE, before the outer query judges anyone.
+    // A database without any company is not checked (`EXISTS` is false for every row).
+    let rows = tx
+        .query(
+            "WITH locked AS MATERIALIZED ( \
+                SELECT u.id FROM res_users u \
+                  JOIN res_company_users_rel r ON r.user_id = u.id AND r.cid = u.company_id \
+                 WHERE u.id = ANY($1::int8[]) AND u.active IS TRUE \
+                 ORDER BY u.id \
+                   FOR KEY SHARE OF r FOR SHARE OF u) \
+             SELECT u.id::int8, u.company_id::int8 FROM res_users u \
+              WHERE u.id = ANY($1::int8[]) AND u.active IS TRUE \
+                AND EXISTS (SELECT 1 FROM res_company) \
+                AND u.id NOT IN (SELECT id FROM locked) \
+              ORDER BY u.id LIMIT 1",
+            &[&ids],
+        )
+        .await?;
+    let Some(row) = rows.first() else {
+        return Ok(());
+    };
+    let decode = |e| Error::db(format!("res.users company check: {e}"));
+    let user: i64 = row.try_get(0).map_err(decode)?;
+    let company: Option<i64> = row.try_get(1).map_err(decode)?;
+    let user_name = name_of(tx, "res.users", user).await?;
+    if company.is_none() {
+        return Err(Error::validation(format!(
+            "The user {user_name} has no default company. Choose one of the user's allowed \
+             companies."
+        )));
+    }
+    let allowed: Vec<i64> = tx
+        .query(
+            "SELECT cid::int8 FROM res_company_users_rel WHERE user_id = $1 ORDER BY cid",
+            &[&user],
+        )
+        .await?
+        .iter()
+        .map(|r| r.try_get(0))
+        .collect::<std::result::Result<_, _>>()
+        .map_err(decode)?;
+    let allowed = if allowed.is_empty() {
+        "none".to_owned()
+    } else {
+        names_of(tx, "res.company", &allowed).await?.join(", ")
+    };
+    Err(Error::validation(format!(
+        "The default company of the user {user_name} is not one of the user's allowed \
+         companies ({allowed})."
+    )))
+}
+
 /// groups.
 async fn check_user_types(users: &Records, tx: &mut Transaction) -> Result<()> {
     let types = user_type_groups(tx).await?;
@@ -418,6 +628,11 @@ impl ResUsersAccess {
     }
 
     /// `share` is false for users that are direct members of an internal group.
+    ///
+    /// The superuser is never a share user, whatever its groups (it holds none): the company
+    /// restriction of `res.users` escapes through `share`, and the superuser row,
+    /// which has no company, must stay readable where its partner is (`partner_share` has the same
+    /// exception).
     #[compute(depends = ["group_ids"])]
     async fn _compute_share(
         this: &RecordSet<ResUsers>,
@@ -425,9 +640,11 @@ impl ResUsersAccess {
         out: &mut Assign<'_, ResUsers>,
     ) -> Result<()> {
         let internal = internal_group_ids(tx).await?;
-        let direct = direct_of(this.as_records(), tx).await?;
-        for (i, groups) in direct.into_iter().enumerate() {
-            let share = !groups.iter().any(|g| internal.contains(g));
+        let users = this.as_records();
+        let direct = direct_of(users, tx).await?;
+        for (i, (id, groups)) in users.rec_ids().iter().zip(direct).enumerate() {
+            let superuser = !id.is_new() && id.get() == erp_sdk::SUPERUSER_ID.get();
+            let share = !superuser && !groups.iter().any(|g| internal.contains(g));
             out.set(i, ResUsersAccess::SHARE, share)?;
         }
         Ok(())
@@ -457,6 +674,8 @@ impl ResUsersAccess {
         sup: Super,
     ) -> Result<ValueMap> {
         let asked = names.iter().any(|n| n == "group_ids");
+        let ask_company = names.iter().any(|n| n == "company_id");
+        let ask_companies = names.iter().any(|n| n == "company_ids");
         let mut defaults: ValueMap = sup.call(tx, this.as_records(), (names,)).await?;
         if asked && !defaults.contains_key("group_ids") {
             let groups = default_groups(tx).await?;
@@ -465,6 +684,33 @@ impl ResUsersAccess {
                     "group_ids".to_owned(),
                     Value::list([Command::Set(rec_ids(groups)?).to_value()]),
                 );
+            }
+        }
+        if (ask_company && !defaults.contains_key("company_id"))
+            || (ask_companies && !defaults.contains_key("company_ids"))
+        {
+            // a company the context or `ir.default` chose is the company of both fields
+            let chosen = match defaults.get("company_id") {
+                Some(Value::Int(id)) => Some(*id),
+                _ => None,
+            };
+            let company = match chosen {
+                Some(id) => Some(id),
+                None => {
+                    let env = this.as_records().env().clone();
+                    default_company(tx, &env).await?
+                }
+            };
+            if let Some(company) = company {
+                if ask_company && !defaults.contains_key("company_id") {
+                    defaults.insert("company_id".to_owned(), Value::Int(company));
+                }
+                if ask_companies && !defaults.contains_key("company_ids") {
+                    defaults.insert(
+                        "company_ids".to_owned(),
+                        Value::list([Command::Set(rec_ids([company])?).to_value()]),
+                    );
+                }
             }
         }
         Ok(defaults)
@@ -476,7 +722,7 @@ impl ResUsersAccess {
     async fn create(
         this: &RecordSet<ResUsers>,
         tx: &mut Transaction,
-        vals_list: Vec<RawVals>,
+        mut vals_list: Vec<RawVals>,
         sup: Super,
     ) -> Result<Records> {
         this.as_records()
@@ -487,6 +733,23 @@ impl ResUsersAccess {
         }
         for vals in &vals_list {
             crate::res_users_preferences::check_preference_values(tx, vals).await?;
+        }
+        // a default company given alone is the allowed company: the
+        // environment's company must not become one of the allowed ones instead
+        for vals in &mut vals_list {
+            let company = match vals.get("company_id") {
+                Some(Cell::Id(company)) => Some(*company),
+                _ => None,
+            };
+            if let Some(company) = company
+                && !vals.contains("company_ids")
+                && vals.commands("company_ids").is_none()
+            {
+                vals.insert_commands(
+                    Cow::Borrowed("company_ids"),
+                    vec![Command::Set(rec_ids([company])?)],
+                );
+            }
         }
         let _lifecycle = crate::company_lifecycle::Guard::enter(tx, &[])?;
         crate::company_lifecycle::fence(tx).await?;
@@ -519,6 +782,18 @@ impl ResUsersAccess {
         vals: RawVals,
         sup: Super,
     ) -> Result<()> {
+        // the user-type flag is the escape of the company restriction: only the
+        // server's compute and the group recompute set it, never a caller
+        if vals.contains("share") && !this.env().is_superuser() {
+            // a caller without write access to the field gets the access error first
+            this.as_records()
+                .check_access(tx, erp_sdk::Operation::Write)
+                .await?;
+            erp_sdk::__private::base_check_write_fields(tx, this.as_records(), &vals)?;
+            return Err(Error::programming(
+                "'res.users.share' is set by the server and cannot be written",
+            ));
+        }
         crate::res_users_auth::check_write(this.as_records(), &vals)?;
         crate::res_users_preferences::check_preference_values(tx, &vals).await?;
         let lifecycle = vals.contains("active") || vals.contains("company_id");
@@ -557,14 +832,34 @@ impl ResUsersAccess {
         Ok(())
     }
 
-    /// No user may be in two of the user type groups, directly or through implied groups
-    /// .
+    /// No user may be in two of the user type groups, directly or through implied groups.
     #[constrains("group_ids")]
     async fn _check_disjoint_groups(
         this: &RecordSet<ResUsers>,
         tx: &mut Transaction,
     ) -> Result<()> {
         check_user_types(this.as_records(), tx).await
+    }
+
+    /// An active user's default company is one of its allowed companies (
+    /// [`check_user_companies`]).
+    #[constrains("company_id", "company_ids", "active")]
+    async fn _check_user_company(this: &RecordSet<ResUsers>, tx: &mut Transaction) -> Result<()> {
+        check_user_companies(this.as_records(), tx).await
+    }
+
+    /// A written colour scheme is never empty. A user row that holds no value
+    /// (inserted by raw SQL after the column exists) is not touched until it is written.
+    #[constrains("color_scheme")]
+    async fn _check_color_scheme(this: &RecordSet<ResUsers>, tx: &mut Transaction) -> Result<()> {
+        let rows = this.as_records().read(tx, &["color_scheme"]).await?;
+        for row in &rows {
+            match row.get("color_scheme") {
+                Some(Value::Str(key)) if !key.is_empty() => {}
+                _ => return Err(Error::validation("The color scheme cannot be empty.")),
+            }
+        }
+        Ok(())
     }
 
     /// The last active member of `base.group_system` cannot be removed (

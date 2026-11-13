@@ -70,6 +70,7 @@ fn decision(node: &wire::ViewNode, allowed: bool) -> Result<Decision> {
     match node {
         wire::ViewNode::Field { .. }
         | wire::ViewNode::SearchField { .. }
+        | wire::ViewNode::PivotField { .. }
         | wire::ViewNode::SearchFilter { .. } => Ok(Decision::Prune),
         _ => Err(Error::access(
             "A nonprunable builtin node references a field the caller cannot read.",
@@ -87,6 +88,7 @@ fn children(node: &wire::ViewNode) -> Result<&[u32]> {
         Form { children, .. }
         | List { children, .. }
         | Search { children, .. }
+        | Pivot { children, .. }
         | Sheet { children }
         | Aside { children }
         | Title { children }
@@ -109,6 +111,7 @@ fn children(node: &wire::ViewNode) -> Result<&[u32]> {
         | Widget { .. }
         | Separator { .. }
         | SearchField { .. }
+        | PivotField { .. }
         | SearchFilter { .. }
         | SearchSeparator {} => Ok(&[]),
         _ => Err(failure(
@@ -122,6 +125,7 @@ fn children_mut(node: &mut wire::ViewNode) -> Result<Option<&mut Vec<u32>>> {
         Form { children, .. }
         | List { children, .. }
         | Search { children, .. }
+        | Pivot { children, .. }
         | Sheet { children }
         | Aside { children }
         | Title { children }
@@ -144,6 +148,7 @@ fn children_mut(node: &mut wire::ViewNode) -> Result<Option<&mut Vec<u32>>> {
         | Widget { .. }
         | Separator { .. }
         | SearchField { .. }
+        | PivotField { .. }
         | SearchFilter { .. }
         | SearchSeparator {} => Ok(None),
         _ => Err(failure(
@@ -230,6 +235,31 @@ fn prune(
             next += 1;
         }
     }
+    // a pruned measure must not stay named by the table's default order
+    let denied: Vec<&str> = view
+        .nodes
+        .iter()
+        .zip(decisions)
+        .filter_map(|(node, decision)| match node {
+            wire::ViewNode::PivotField {
+                field,
+                role: wire::PivotRole::Measure,
+                ..
+            } if *decision == Decision::Prune => Some(field.name.as_str()),
+            _ => None,
+        })
+        .collect();
+    let denied: Vec<String> = denied.into_iter().map(str::to_owned).collect();
+    for node in &mut view.nodes {
+        if let wire::ViewNode::Pivot { default_order, .. } = node
+            && default_order
+                .as_deref()
+                .and_then(|order| order.split_whitespace().next())
+                .is_some_and(|measure| denied.iter().any(|name| name == measure))
+        {
+            *default_order = None;
+        }
+    }
     let mut old = 0;
     view.nodes.retain(|_| {
         let keep = states[old] == 2;
@@ -275,6 +305,9 @@ fn validate_builtin_field_models(model: &str, node: &wire::ViewNode) -> Result<(
         wire::ViewNode::Field { field, .. } => require_builtin_root_field(model, "field", field),
         wire::ViewNode::SearchField { field, .. } => {
             require_builtin_root_field(model, "search_field", field)
+        }
+        wire::ViewNode::PivotField { field, .. } => {
+            require_builtin_root_field(model, "pivot_field", field)
         }
         wire::ViewNode::List {
             search_panel: Some(wire::ListSearchPanel::Selection { field, .. }),
@@ -1080,6 +1113,106 @@ mod tests {
         match &view.nodes[2] {
             wire::ViewNode::SearchFilter { name, .. } => assert_eq!(name, "kept"),
             _ => panic!("filter"),
+        }
+    }
+
+    #[test]
+    fn h18_authorize_prunes_denied_pivot_fields_and_keeps_the_table() {
+        let node = |name: &str, role: wire::PivotRole, interval: Option<&str>| {
+            wire::ViewNode::PivotField {
+                field: wire::FieldRef::new("h18.fixture".to_owned(), name.to_owned()),
+                label: name.to_owned(),
+                role,
+                interval: interval.map(str::to_owned),
+            }
+        };
+        let measure = node("count", wire::PivotRole::Measure, None);
+        assert!(matches!(
+            super::decision(&measure, false).unwrap(),
+            super::Decision::Prune
+        ));
+        assert!(matches!(
+            super::decision(&measure, true).unwrap(),
+            super::Decision::Keep
+        ));
+        let foreign = wire::ViewNode::PivotField {
+            field: wire::FieldRef::new("res.company".to_owned(), "name".to_owned()),
+            label: "Name".to_owned(),
+            role: wire::PivotRole::Row,
+            interval: None,
+        };
+        assert_eq!(
+            super::validate_builtin_field_models("h18.fixture", &foreign)
+                .unwrap_err()
+                .kind(),
+            erp_sdk::ErrorKind::Validation
+        );
+        let mut view = wire::View::new(
+            wire::ViewIdentity::generated(),
+            wire::ViewType::Pivot,
+            "web.pivot".to_owned(),
+            0,
+            vec![
+                wire::ViewNode::Pivot {
+                    children: vec![1, 2, 3, 4, 5, 6],
+                    disable_linking: false,
+                    display_quantity: false,
+                    default_order: Some("count desc".to_owned()),
+                },
+                node("state", wire::PivotRole::Row, None),
+                node("stage", wire::PivotRole::Col, None),
+                node("deadline", wire::PivotRole::Row, Some("month")),
+                node("seen_at", wire::PivotRole::Col, Some("year")),
+                node("partner_id", wire::PivotRole::Col, None),
+                measure,
+            ],
+        );
+        // The caller may not read the row field `state`, the date column `seen_at` nor the measure `count`.
+        super::prune(
+            &mut view,
+            &[
+                super::Decision::Keep,
+                super::Decision::Prune,
+                super::Decision::Keep,
+                super::Decision::Keep,
+                super::Decision::Prune,
+                super::Decision::Keep,
+                super::Decision::Prune,
+            ],
+            &DescriptionBudget::new(),
+        )
+        .unwrap();
+        assert_eq!(view.nodes.len(), 4);
+        let names: Vec<_> = view.nodes[1..]
+            .iter()
+            .map(|node| match node {
+                wire::ViewNode::PivotField {
+                    field, interval, ..
+                } => (field.name.clone(), interval.clone()),
+                _ => panic!("pivot field"),
+            })
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("stage".to_owned(), None),
+                ("deadline".to_owned(), Some("month".to_owned())),
+                ("partner_id".to_owned(), None)
+            ]
+        );
+        match &view.nodes[0] {
+            wire::ViewNode::Pivot {
+                children,
+                default_order,
+                ..
+            } => {
+                assert_eq!(children, &[1, 2, 3]);
+                assert_eq!(
+                    default_order, &None,
+                    "the order named the pruned measure `count`"
+                );
+            }
+            _ => panic!("pivot"),
         }
     }
 }

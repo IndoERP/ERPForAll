@@ -45,9 +45,10 @@ export function constantRelationContext(field: Field): Record<string, unknown> |
   return value as Record<string, unknown>;
 }
 /** Effective domain and context are shared by autocomplete and the existing expanded picker. */
-export function relationQuery(field: Field, values: Readonly<Record<string, unknown>>, context: Record<string, unknown>, fields: readonly Field[] = []): { domain: unknown[]; context: Record<string, unknown> } {
+export function relationQuery(field: Field, values: Readonly<Record<string, unknown>>, context: Record<string, unknown>, fields: readonly Field[] = [], parts: "both" | "context" = "both"): { domain: unknown[]; context: Record<string, unknown> } {
   const documents = {
-    domain: field.options?.domain ? decodeAst(parseBoundedJson(JSON.stringify(field.options.domain))) : undefined,
+    // "context" leaves the domain unread: a caller that never searches must not fail on a domain it does not use.
+    domain: parts === "both" && field.options?.domain ? decodeAst(parseBoundedJson(JSON.stringify(field.options.domain))) : undefined,
     context: field.options?.context ? decodeAst(parseBoundedJson(JSON.stringify(field.options.context))) : undefined,
   };
   const needed = new Set<string>();
@@ -64,6 +65,6 @@ export function relationQuery(field: Field, values: Readonly<Record<string, unkn
   const extra = documents.context ? evaluate(documents.context) : {};
   if (!Array.isArray(domain)) throw new ClientError("validation", "Relation domain must evaluate to a list.");
   if (extra === null || typeof extra !== "object" || Array.isArray(extra)) throw new ClientError("validation", "Relation context must evaluate to a dictionary.");
-  if (Object.hasOwn(extra, "group_by")) throw new ClientError("unsupported", "Relation group_by context requires a later release.");
+  if (Object.hasOwn(extra, "group_by")) throw new ClientError("unsupported", "Relation group_by context is not supported.");
   return { domain, context: { ...context, ...extra } };
 }

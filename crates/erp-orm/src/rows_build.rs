@@ -1,4 +1,4 @@
-//! Building result batches ([`Rows`],; design note)
+//! Building result batches ([`Rows`])
 //! straight from cache cells: one typed column per key, filled record by record, with no map per
 //! record. A [`Level`] is one level of a `read` or `web_read` while it is still being built: the
 //! relational expansion of `web_read` replaces a key's raw ids by a child level and appends rows
@@ -18,7 +18,7 @@ use erp_fields::{
 
 use crate::read::Load;
 
-/// How a NULL cell reads (`read_value`:; REL §4.11).
+/// How a NULL cell reads (`read_value`; REL §4.11).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Null {
     /// `False`.

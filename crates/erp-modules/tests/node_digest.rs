@@ -1,4 +1,4 @@
-//! The node registry's addon digest (`AddonIndex::digest`,, design §8.4).
+//! The node registry's addon digest (`AddonIndex::digest`, design §8.4).
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

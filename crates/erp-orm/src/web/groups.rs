@@ -293,7 +293,7 @@ async fn display_names(
     if ids.is_empty() {
         return Ok(out);
     }
-    let records = first.browse_ids(ids.iter().copied()).sudo(true);
+    let records = first.browse_ids(ids.iter().copied()).engine_sudo();
     let names = tx.display_names_for(&records, first.env()).await?;
     for (id, cell) in ids.into_iter().zip(names) {
         out.insert(id, Value::from_cell(&cell));
@@ -936,13 +936,18 @@ async fn batched_searches(
     let registry = Arc::clone(records.env().registry());
     let spec = registry.model_by_id(records.model_id());
     tx.validate_search_language(records.env()).await?;
-    let order_by = order_for(tx, records, order)?;
+    let order_by = order_for(tx, records, order, 0).await?;
     let table = quote(&spec.table);
     let columns: String = fetch
         .iter()
-        .map(|f| format!(", {table}.{}", quote(spec.field_by_id(*f).name)))
+        .map(|f| {
+            let field = spec.field_by_id(*f);
+            let column = format!("{table}.{}", quote(field.name));
+            let item = erp_sql::company::load_column(&registry, field, &column).unwrap_or(column);
+            format!(", {item}")
+        })
         .collect();
-    let mut params: Vec<Param> = Vec::new();
+    let mut params: Vec<Param> = order_by.params.clone();
     let mut flush: Vec<(erp_registry::ModelId, FieldId)> = order_by.fields.clone();
     let mut subs: Vec<String> = Vec::new();
     for (i, (domain, limit, offset)) in searches.iter().enumerate() {

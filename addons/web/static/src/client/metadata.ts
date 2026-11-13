@@ -51,6 +51,10 @@ export interface Field {
   codeMode?: import("./code-editor-types.js").CodeEditorMode;
   /** Admitted selection keys for this header occurrence; current value is always retained. */
   statusbarVisible?: readonly string[] | null;
+  /** Statusbar states kept behind the overflow control (never the current one). */
+  statusbarFolded?: readonly string[];
+  /** The header owner admits direct state changes by click; absent means display-only. */
+  statusbarClickable?: boolean;
   selection: readonly (readonly [string, string])[] | null; relation: string | null;
   /** The comodel's inverse many2one of a one2many (`relation_field` on the wire), else null. */
   relationField: string | null;
@@ -76,7 +80,12 @@ export type Node = { kind: "field"; field: Field; label: string; widget: string 
   | { kind: "notebook"; children: Node[] }
   | { kind: "page"; name: string; label: string; children: Node[] }
   | { kind: "separator"; label: string }
-  | SearchFieldNode | SearchFilterNode | SearchSeparatorNode | SearchGroupNode;
+  | SearchFieldNode | SearchFilterNode | SearchSeparatorNode | SearchGroupNode
+  | PivotNode | PivotFieldNode;
+/** Pivot root: the two flags of the arch; the grouping and measure fields are its `pivot_field` children. */
+export interface PivotNode { kind: "pivot"; children: Node[]; disableLinking: boolean; displayQuantity: boolean; /** `<measure> asc|desc` as the server normalized it. */ defaultOrder: string | null }
+/** One field of a pivot: a row grouping, a column grouping or a measure. */
+export interface PivotFieldNode { kind: "pivot_field"; field: Field; label: string; role: "row" | "col" | "measure"; /** Date grouping interval of a date or datetime row or column field. */ interval: string | null }
 /** Search field filter occurrence. */
 export interface SearchFieldNode { kind: "search_field"; field: Field; label: string; filterDomain: ValidatedAst | null; operator: string | null }
 /** Predefined search filter or group-by filter. */
@@ -91,7 +100,7 @@ export type ButtonNode = ({ kind: "button" } | { kind: "stat_button"; children: 
 export interface CancelNode { kind: "cancel_button"; label: string; variant: ButtonRank; invisible: ValidatedAst | null; details?: ButtonDetails }
 export type ListSearchPanel = { kind: "selection"; field: Field; label: string; enableCounters: boolean; expand: boolean; defaultValue: string | null; notice: string | null } | { kind: "unsupported"; message: string } | SectionsPanel;
 export interface View {
-  type: "list" | "form" | "search";
+  type: "list" | "form" | "search" | "pivot";
   mode: "record" | "service";
   nodes: Node[];
   fields: Field[];
@@ -167,7 +176,7 @@ function staticModifier(value: unknown, label: string, inherited: boolean): bool
   }
   return node.value.value;
 }
-const kinds = new Set(["char", "text", "boolean", "integer", "float", "monetary", "date", "datetime", "selection", "many2one", "one2many", "many2many"]);
+const kinds = new Set(["char", "text", "html", "boolean", "integer", "float", "monetary", "date", "datetime", "selection", "many2one", "one2many", "many2many"]);
 export function describeViews(raw: unknown, model: string, registryVersion: string): Description {
   const data = object(raw, "view description");
   let contextBytes=0, contextNodes=0, contextCount=0;
@@ -211,7 +220,7 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
     else unsupported("Unknown view identity kind.");
     const sectionRenderer=(type==="list"&&renderer==="web.list_sections_v1")||(type==="search"&&renderer==="web.search_sections_v1");
     if ((type==="list"||type==="search") && renderer.startsWith(`web.${type}_sections_`) && !sectionRenderer) throw new PanelCompatibilityError();
-    if ((type !== "list" && type !== "form" && type !== "search") || (!sectionRenderer&&renderer !== `web.${type}`) || v["schema_major"] !== 1) unsupported(`Unsupported view renderer: ${renderer}.`);
+    if ((type !== "list" && type !== "form" && type !== "search" && type !== "pivot") || (!sectionRenderer&&renderer !== `web.${type}`) || v["schema_major"] !== 1) unsupported(`Unsupported view renderer: ${renderer}.`);
     if (views.has(type)) throw new ClientError("server", "Duplicate view type.");
     const arena = array(v["nodes"], "view nodes"), root = integer(v["root"], "view root");
     if (!arena.length || arena.length > 4096) throw new ClientError("server", "View node limit exceeded.");
@@ -219,8 +228,8 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
     if (totalNodes > 4096) throw new ClientError("server", "Requested views exceed the 4096-node aggregate limit.");
     const rootNode = object(arena[root], "view root");
     if (rootNode["kind"] !== type) throw new ClientError("server", "View root type does not match renderer.");
-    const mode = (type === "list" || type === "search") ? "record" : rootNode["record_mode"];
-    if (mode !== "record" && mode !== "service" || (type === "list" || type === "search") && mode !== "record") unsupported("Unsupported form record mode.");
+    const mode = (type === "list" || type === "search" || type === "pivot") ? "record" : rootNode["record_mode"];
+    if (mode !== "record" && mode !== "service" || (type === "list" || type === "search" || type === "pivot") && mode !== "record") unsupported("Unsupported form record mode.");
     const seen = new Set<number>(), selected: Field[] = [], contextFields = new Set<string>();
     const admitViewContext = (raw: unknown): ValidatedAst => {
       const ast = admitContext(raw);
@@ -247,13 +256,17 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
       else if (kind === "group") closed(node, ["kind", "label", "columns", "colspan", "children"], "view node");
       else if (kind === "page") closed(node, ["kind", "name", "label", "children"], "view node");
       else if (kind === "separator") closed(node, ["kind", "label"], "view node");
+      else if (kind === "pivot") closed(node, ["kind", "children", "disable_linking", "display_quantity", ...(Object.hasOwn(node, "default_order") ? ["default_order"] : [])], "view node");
+      else if (kind === "pivot_field") closed(node, ["kind", "field", "label", "role", ...(Object.hasOwn(node, "interval") ? ["interval"] : [])], "view node");
       else if (kind === "search") closed(node, ["kind", "children", ...(Object.hasOwn(node, "search_panel") ? ["search_panel"] : [])], "view node");
       else if (kind === "search_field") closed(node, ["kind", "field", "label", ...(Object.hasOwn(node, "filter_domain") ? ["filter_domain"] : []), ...(Object.hasOwn(node, "operator") ? ["operator"] : [])], "view node");
       else if (kind === "search_filter") closed(node, ["kind", "name", "label", ...(Object.hasOwn(node, "domain") ? ["domain"] : []), ...(Object.hasOwn(node, "context") ? ["context"] : [])], "view node");
       else if (kind === "search_separator") closed(node, ["kind"], "view node");
       else if (kind === "search_group") closed(node, ["kind", "label", ...(Object.hasOwn(node, "expand") ? ["expand"] : []), "children"], "view node");
       else unsupported(`Unsupported view node: ${String(kind)}.`);
-      if (depth > 1 && (kind === "form" || kind === "list" || kind === "search") || type === "list" && kind !== "list" && kind !== "field"
+      if (depth > 1 && (kind === "form" || kind === "list" || kind === "search" || kind === "pivot") || type === "pivot" && kind !== "pivot" && kind !== "pivot_field"
+        || type !== "pivot" && (kind === "pivot" || kind === "pivot_field") || kind === "pivot_field" && parentKind !== "pivot"
+        || type === "list" && kind !== "list" && kind !== "field"
         || type === "search" && kind !== "search" && kind !== "search_field" && kind !== "search_filter" && kind !== "search_separator" && kind !== "search_group"
         || type !== "search" && (kind === "search" || kind === "search_field" || kind === "search_filter" || kind === "search_separator" || kind === "search_group")
         || parentKind === "search_group" && kind !== "search_filter" && kind !== "search_separator"
@@ -299,10 +312,15 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
         if (relationCount && !statistic) unsupported("relation_count requires a smart button.");
         if (!statistic && widget !== field.kind && (!fieldWidgets.has(widget) || !fieldWidgets.get(widget).kinds.includes(field.kind))) unsupported(`Unsupported field widget or options: ${widget}.`);
         const options = object(node["options"], "field options");
-        let statusbarVisible: readonly string[] | null | undefined;
+        let statusbarVisible: readonly string[] | null | undefined, statusbarFolded: readonly string[] = [], statusbarClickable = false;
         if (widget === "statusbar") {
           if (parentKind !== "header" || field.kind !== "selection") unsupported("The statusbar widget requires a selection field in a record form header.");
-          closed(options, ["visible"], "statusbar options");
+          // `folded` and `clickable` are optional additions to the closed `visible` contract (display-only when absent).
+          const { folded, clickable, ...contract } = options;
+          closed(contract, ["visible"], "statusbar options");
+          statusbarFolded = folded === undefined ? [] : array(folded, "statusbar folded keys").map(key => text(key, "statusbar folded key"));
+          if (new Set(statusbarFolded).size !== statusbarFolded.length || statusbarFolded.some(key => !field.selection?.some(([value]) => value === key))) unsupported("Invalid statusbar folded keys.");
+          statusbarClickable = clickable === undefined ? false : boolean(clickable, "statusbar clickable");
           statusbarVisible = options["visible"] === null ? null : array(options["visible"], "statusbar visible keys").map(key => text(key, "statusbar visible key"));
           if (statusbarVisible !== null && (!statusbarVisible.length || new Set(statusbarVisible).size !== statusbarVisible.length || statusbarVisible.some(key => !field.selection?.some(([value]) => value === key)))) unsupported("Invalid statusbar visible keys.");
         } else if (widget === "code") {
@@ -320,7 +338,7 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
           invisible: staticModifier(mods["invisible"], "invisible", false),
           forceSave: boolean(node["force_save"], "force_save"),
           modifiers: { readonly: mods["readonly"] === null ? null : decodeAst(parseBoundedJson(JSON.stringify(mods["readonly"]))), required: mods["required"] === null ? null : decodeAst(parseBoundedJson(JSON.stringify(mods["required"]))), invisible: mods["invisible"] === null ? null : decodeAst(parseBoundedJson(JSON.stringify(mods["invisible"]))) },
-          ...(widget === "statusbar" ? { statusbarVisible } : {}),
+          ...(widget === "statusbar" ? { statusbarVisible, statusbarFolded, statusbarClickable } : {}),
           ...(widget === "code" ? { codeMode: codeEditorMode(options["mode"]) } : {}) };
         if (statistic && (!occurrence.readonly || occurrence.forceSave)) throw new ClientError("server", "Smart-button statistics must be readonly.");
         // The count provider calls COUNT; loading this O2M into state would materialize ids.
@@ -390,7 +408,7 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
       }
       if (kind === "button" || kind === "stat_button") {
         const name = text(node["name"], "button name"), label = text(node["label"], "button label"), variant = node["variant"];
-        if (node["button_type"] !== "object") unsupported("Only object buttons are supported (a later release).");
+        if (node["button_type"] !== "object") unsupported("Only object buttons are supported.");
         if (name.length>128 || !/^[a-z][a-z0-9_]*$/.test(name) || !label.trim() && !(Object.hasOwn(node,"details") && typeof object(node["details"])["title"]==="string" && String(object(node["details"])["title"]).trim())) throw new ClientError("server", "Invalid button name or label.");
         buttonRank(variant);
         const confirm = buttonConfirmation(node["confirm"]);
@@ -404,6 +422,18 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
         if (kind === "stat_button") return { kind, ...action, children: array(node["children"], "statistic fields").map(child => visit(integer(child, "child index"), depth + 1, kind)) };
         return { kind, ...action };
       }
+      if (kind === "pivot_field") {
+        const ref = object(node["field"]); closed(ref, ["model", "name"], "field reference");
+        const name = text(ref["name"], "field name"), field = fields.get(name);
+        if (!field || ref["model"] !== model) throw new ClientError("server", `Unknown field in view: ${name}.`);
+        const role = node["role"];
+        if (role !== "row" && role !== "col" && role !== "measure") unsupported("Unsupported pivot field role.");
+        const label = text(node["label"], "field label");
+        selected.push({ ...field, label, readonly: true, required: false, invisible: false, forceSave: false });
+        const interval = Object.hasOwn(node, "interval") ? text(node["interval"], "pivot interval") : null;
+        if (interval !== null && !["day", "week", "month", "quarter", "year"].includes(interval)) unsupported("Unsupported pivot interval.");
+        return { kind: "pivot_field", field, label, role: role as "row" | "col" | "measure", interval };
+      }
       if (kind === "search_field") {
         const ref = object(node["field"]); closed(ref, ["model", "name"], "field reference");
         const name = text(ref["name"], "field name"), field = fields.get(name);
@@ -411,7 +441,7 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
         const label = text(node["label"], "field label");
         const filterDomain = Object.hasOwn(node, "filter_domain") && node["filter_domain"] !== null ? decodeAst(parseBoundedJson(JSON.stringify(node["filter_domain"]))) : null;
         const operator = Object.hasOwn(node, "operator") && node["operator"] !== null ? text(node["operator"], "search field operator") : null;
-        if (operator !== null && !["ilike", "=", "!=", ">", "<", ">=", "<="].includes(operator)) unsupported(`Unsupported search field operator '${operator}' for '${model}.${name}'. Additional operators require a later release.`);
+        if (operator !== null && !["ilike", "=", "!=", ">", "<", ">=", "<="].includes(operator)) unsupported(`Unsupported search field operator '${operator}' for '${model}.${name}'.`);
         return { kind: "search_field", field, label, filterDomain, operator };
       }
       if (kind === "search_filter") {
@@ -427,7 +457,7 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
       const children = array(node["children"], "children").map(child => visit(integer(child, "child index"), depth + 1, kind));
       if (kind === "heading") {
         const level = integer(node["level"], "heading level");
-        if (level !== 1 && level !== 2) unsupported("Only title heading levels 1 and 2 are supported (a later release).");
+        if (level !== 1 && level !== 2) unsupported("Only title heading levels 1 and 2 are supported.");
         return { kind, level, children };
       }
       if (kind === "search_group") {
@@ -437,10 +467,11 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
       if (kind === "search") {
         return { kind: "root", children };
       }
+      if (kind === "pivot") return { kind, children, disableLinking: boolean(node["disable_linking"], "pivot disable_linking"), displayQuantity: boolean(node["display_quantity"], "pivot display_quantity"), defaultOrder: Object.hasOwn(node, "default_order") ? text(node["default_order"], "pivot default_order") : null };
       if (kind === "title") return { kind, children };
       if (kind === "group") {
         const columns = integer(node["columns"], "group columns"), colspan = integer(node["colspan"], "group colspan");
-        if ([columns, colspan].some(n => n < 2 || n > 12 || n % 2 !== 0)) throw new ClientError("server", "Unsupported group columns or colspan (a later release).");
+        if ([columns, colspan].some(n => n < 2 || n > 12 || n % 2 !== 0)) throw new ClientError("server", "Unsupported group columns or colspan.");
         return { kind, label: text(node["label"], "group label"), columns, colspan, children };
       }
       if (kind === "page") {

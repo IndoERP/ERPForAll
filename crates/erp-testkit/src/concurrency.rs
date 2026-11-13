@@ -1,4 +1,4 @@
-//! Concurrency tests (design note): two transactions on
+//! Concurrency tests: two transactions on
 //! their own connections, and a wait until one of them is queued behind the other's lock.
 //!
 //! ```ignore

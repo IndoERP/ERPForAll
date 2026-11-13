@@ -4,7 +4,7 @@ use erp_sdk::prelude::*;
 
 /// External ids (module `mail`) of the master subtypes other apps rely on, with the values their
 /// configuration must keep: `internal` (when fixed) and an empty `res_model` (all three are
-/// generic). Spec §4.4, and.
+/// generic). Spec §4.4.
 const PROTECTED: [(&str, Option<bool>); 3] = [
     ("mt_comment", Some(false)),
     ("mt_note", Some(true)),

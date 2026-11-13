@@ -26,7 +26,12 @@ feature-depth = 1
 unmaintained = "all"
 unsound = "all"
 yanked = "deny"
-ignore = []
+ignore = [
+    # rustix 1.1.5, unsound xattr functions with a zero-length buffer; published 2026-11-11. Nothing in this
+    # workspace or in vendor/ calls the rustix xattr functions. Removed with the update to >= 1.1.6: board task
+    # DEPS.RUSTIX-0486 (a lock change takes a full run of its own).
+    { id = "RUSTSEC-2026-0486", reason = "xattr functions are not called; rustix is updated by DEPS.RUSTIX-0486" },
+]
 
 [licenses]
 # Anything not listed here is denied, including GPL-*, LGPL-* and AGPL-*.

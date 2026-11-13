@@ -148,10 +148,14 @@ async fn sudo_false_keeps_the_superuser_elevated() {
     assert!(off.su());
     assert_eq!(off.principal().elevation(), &Elevation::Full);
     assert_eq!(off, system);
+    // switching back to the superuser from the user System made is refused (A4: the
+    // switcher is user 7, not System): no superuser mode, the user's own principal
     let switched_back = system.with_user(7).with_user(SUPERUSER_ID).sudo(false);
-    assert!(switched_back.su());
-    // the original principal comes back, not a System principal impersonated by itself
-    assert_eq!(switched_back, system);
+    assert!(!switched_back.su());
+    assert_eq!(switched_back.uid(), 7);
+    assert_ne!(switched_back, system);
+    // System itself keeps its principal under with_user(1)
+    assert_eq!(system.with_user(SUPERUSER_ID).sudo(false), system);
     // a user still drops elevation
     let user = h.begin_as(5).await.unwrap();
     assert!(!user.env().sudo(true).sudo(false).su());

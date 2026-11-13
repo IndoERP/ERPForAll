@@ -1,4 +1,4 @@
-//! Method dispatch with override chains (Layer 2,, design §7).
+//! Method dispatch with override chains (Layer 2, design §7).
 //!
 //! `#[methods(Model)]` blocks contribute [`MethodImpl`] entries to [`METHOD_IMPLS`]. For each
 //! (model, method) the chain lists the implementations of the declarations in the model's method
@@ -83,8 +83,8 @@ pub static METHOD_IMPLS: [MethodImpl];
 /// What a chain entry is built from: a function linked into the binary, or a WebAssembly export.
 ///
 /// Both kinds sit in one chain, ordered by `(depth, order_name)` of their addons exactly like
-/// native overrides, and `super` crosses from either kind to either kind
-/// . `erp-orm` knows the WASM side only through [`MethodInvoker`]: no WebAssembly
+/// native overrides, and `super` crosses from either kind to either kind.
+/// `erp-orm` knows the WASM side only through [`MethodInvoker`]: no WebAssembly
 /// runtime type appears in this crate.
 #[derive(Clone)]
 pub enum MethodDispatchTarget {
@@ -804,18 +804,18 @@ impl<A: Send + 'static, R: Send + 'static> Super<A, R> {
         records: &'a Records,
         args: A,
     ) -> BoxFuture<'a, Result<R>> {
-        if let Err(error) = tx.check_method_records(records, self.chain.method) {
-            return Box::pin(async move { Err(error) });
-        }
-        if records.model_id() != self.chain.model {
-            let message = format!(
-                "super() of method '{}' called with {records}, not with records of the model whose \
-                 chain it belongs to",
-                self.chain.method
-            );
-            return Box::pin(async move { Err(Error::programming(message)) });
-        }
-        invoke(self.chain, self.next, tx, records, args)
+        Box::pin(async move {
+            // the switchers of the environment's with_user switches first (A4)
+            tx.admit_method_records(records, self.chain.method).await?;
+            if records.model_id() != self.chain.model {
+                return Err(Error::programming(format!(
+                    "super() of method '{}' called with {records}, not with records of the model \
+                     whose chain it belongs to",
+                    self.chain.method
+                )));
+            }
+            invoke(self.chain, self.next, tx, records, args).await
+        })
     }
 }
 
@@ -847,18 +847,18 @@ impl DynSuper {
         records: &'a Records,
         args_json: &'a str,
     ) -> BoxFuture<'a, Result<String>> {
-        if let Err(error) = tx.check_method_records(records, self.chain.method) {
-            return Box::pin(async move { Err(error) });
-        }
-        if records.model_id() != self.chain.model {
-            let message = format!(
-                "super() of method '{}' called with {records}, not with records of the model whose \
-                 chain it belongs to",
-                self.chain.method
-            );
-            return Box::pin(async move { Err(Error::programming(message)) });
-        }
-        invoke_json(self.chain, self.next, tx, records, args_json)
+        Box::pin(async move {
+            // the switchers of the environment's with_user switches first (A4)
+            tx.admit_method_records(records, self.chain.method).await?;
+            if records.model_id() != self.chain.model {
+                return Err(Error::programming(format!(
+                    "super() of method '{}' called with {records}, not with records of the model \
+                     whose chain it belongs to",
+                    self.chain.method
+                )));
+            }
+            invoke_json(self.chain, self.next, tx, records, args_json).await
+        })
     }
 }
 
@@ -986,20 +986,19 @@ pub fn call_method<'a, A: Send + 'static, R: Send + 'static>(
     method: &'static str,
     args: A,
 ) -> BoxFuture<'a, Result<R>> {
-    if let Err(error) = tx.check_method_records(records, method) {
-        return Box::pin(async move { Err(error) });
-    }
-    match tx.dispatch().chain(records.model_id(), method) {
-        Some(chain) => invoke(chain, 0, tx, records, args),
-        None => {
-            let model = records.model_name();
-            Box::pin(async move {
+    Box::pin(async move {
+        // the switchers of the environment's with_user switches first (A4)
+        tx.admit_method_records(records, method).await?;
+        match tx.dispatch().chain(records.model_id(), method) {
+            Some(chain) => invoke(chain, 0, tx, records, args).await,
+            None => {
+                let model = records.model_name();
                 Err(Error::programming(format!(
                     "'{model}' object has no attribute '{method}'"
                 )))
-            })
+            }
         }
-    }
+    })
 }
 
 /// Whether the chain of `method` on `model` has a WebAssembly entry.
@@ -1044,18 +1043,17 @@ pub fn call_method_json<'a>(
     method: &'a str,
     args_json: &'a str,
 ) -> BoxFuture<'a, Result<String>> {
-    if let Err(error) = tx.check_records(records) {
-        return Box::pin(async move { Err(error) });
-    }
-    match tx.dispatch().chain(records.model_id(), method) {
-        Some(chain) => invoke_json(chain, 0, tx, records, args_json),
-        None => {
-            let model = records.model_name();
-            Box::pin(async move {
+    Box::pin(async move {
+        // the switchers of the environment's with_user switches first (A4)
+        tx.admit_records(records).await?;
+        match tx.dispatch().chain(records.model_id(), method) {
+            Some(chain) => invoke_json(chain, 0, tx, records, args_json).await,
+            None => {
+                let model = records.model_name();
                 Err(Error::programming(format!(
                     "'{model}' object has no attribute '{method}'"
                 )))
-            })
+            }
         }
-    }
+    })
 }

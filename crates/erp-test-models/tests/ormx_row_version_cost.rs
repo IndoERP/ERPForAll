@@ -1,6 +1,6 @@
-//! The cost of the row-version trigger (design note) and of
-//! the upsert statement's second branch (§3.3): measurements, not tests. Method and results:
-//! . Run them by hand, in release mode, against one cluster that
+//! The cost of the row-version trigger and of
+//! the upsert statement's second branch (§3.3): measurements, not tests. Method and results.
+//! Run them by hand, in release mode, against one cluster that
 //! no benchmark and no other work shares (never the shared dev cluster `erpforall-pg`):
 //!
 //! ```text

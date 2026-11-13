@@ -181,6 +181,50 @@ impl Transaction {
         self.html_mode = SanitizeMode::Strict;
     }
 
+    /// Admit one translation of an Html field the way a translated write admits it: under the
+    /// field's final policy and this attempt's mode, retaining the removal report with `language`.
+    /// For writers that store translations without the ORM write path (the translation importer).
+    /// Changes no cache and no storage.
+    ///
+    /// # Errors
+    /// `Missing` for an unknown model or field; a programming error for a field that is not Html;
+    /// the sanitizer's typed validation error (no body echoed) for refused content or a breached
+    /// limit, with `html_language` in its context.
+    pub fn admit_html_translation(
+        &mut self,
+        model: &str,
+        field: &str,
+        language: &str,
+        text: &str,
+    ) -> Result<String> {
+        let registry = Arc::clone(self.registry());
+        let spec = registry
+            .model(model)
+            .ok_or_else(|| Error::missing(format!("unknown model '{model}'")))?;
+        let field_spec = spec
+            .field(field)
+            .ok_or_else(|| Error::missing(format!("model '{model}' has no field '{field}'")))?;
+        if !matches!(field_spec.ty, FieldType::Html) {
+            return Err(Error::programming(format!(
+                "{model}.{field}: HTML admission requires an Html field"
+            )));
+        }
+        let admitted = admit_scalar(
+            &mut self.html_reports,
+            spec,
+            field_spec,
+            Cell::Str(Arc::from(text)),
+            Some(language),
+            self.html_mode,
+        )?;
+        match admitted {
+            Cell::Str(text) => Ok(text.to_string()),
+            _ => Err(Error::programming(
+                "HTML admission produced a non-text cell",
+            )),
+        }
+    }
+
     pub(crate) fn admit_html_cell(
         &mut self,
         spec: &ModelSpec,

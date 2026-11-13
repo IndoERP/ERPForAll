@@ -11,7 +11,7 @@ import { open, mkdir, mkdtemp, readFile, readdir, writeFile, rm } from "node:fs/
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { hostname, tmpdir } from "node:os";
+import { hostname, platform, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -61,7 +61,7 @@ await mkdir(output, { recursive: true, mode: 0o700 });
 for (const name of await readdir(output)) if (name.endsWith(".png") || name === "result.json") await rm(path.join(output, name));
 
 const profile = await mkdtemp(path.join(tmpdir(), "erp-technical-chrome-"));
-const chromePath = process.env.CHROME_BIN ?? "google-chrome";
+const chromePath = process.env.CHROME_BIN ?? (platform() === "darwin" ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" : "google-chrome");
 const chrome = spawn(chromePath, ["--headless=new", "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
 
 let socket, session, sequence = 0, phase = "startup", browser, serverVersions, failure;
@@ -92,7 +92,13 @@ try {
     else if (message.method === "Runtime.consoleAPICalled" && message.params.type === "error") consoleErrors.push({ phase, text: message.params.args.map(arg => arg.value ?? arg.description).join(" ") });
     else if (message.method === "Network.responseReceived" && message.params.response.status >= 400) {
       const url = new URL(message.params.response.url);
-      if (url.origin === origin) httpFailures.push({ path: url.pathname, status: message.params.response.status, phase });
+      if (url.origin === origin) {
+        const item = { path: url.pathname, status: message.params.response.status, phase };
+        httpFailures.push(item);
+        call("Network.getResponseBody", { requestId: message.params.requestId }).then(res => {
+          item.body = res.body;
+        }).catch(() => {});
+      }
     }
   });
   call = (method, params = {}, scoped = true) => new Promise((resolve, reject) => {
@@ -141,8 +147,8 @@ try {
   };
   // The client is idle at the expected URL: no load in progress and no error notice.
   const settled = async (url, label) => {
-    await wait(`location.pathname+location.search===${JSON.stringify(url)}&&document.querySelector('[data-client-notice]')?.textContent!=='Loading…'`, label);
-    const notice = await evaluate("document.querySelector('[data-client-notice]').textContent");
+    await wait(`location.pathname+location.search===${JSON.stringify(url)}&&document.querySelector('.client-loading')?.textContent!=='Loading…'`, label);
+    const notice = await evaluate("(document.querySelector('[data-client-notice]')?.innerText || '').trim()");
     check(notice === "", `${label}: client notice "${notice}"`);
   };
   shot = async name => {
@@ -202,8 +208,8 @@ try {
 
   phase = "settings";
   await click(`.app-tile[data-menu-id="${settingsRoot.id}"]`, "Settings app tile");
-  await wait("location.pathname.startsWith('/erp/action-')&&document.querySelector('[data-client-notice]')?.textContent!=='Loading…'", "Settings app loaded");
-  const settingsNotice = await evaluate("document.querySelector('[data-client-notice]').textContent");
+  await wait("location.pathname.startsWith('/erp/action-')&&document.querySelector('.client-loading')?.textContent!=='Loading…'", "Settings app loaded");
+  const settingsNotice = await evaluate("(document.querySelector('[data-client-notice]')?.innerText || '').trim()");
   check(settingsNotice === "", `Settings app: client notice "${settingsNotice}"`);
   await wait(`Boolean(document.querySelector('.nav-dropdown [data-menu-id="${visible[0].menuId}"]'))`, "Technical dropdown");
   const dropdown = `[...document.querySelectorAll('.nav-dropdown')].find(d=>d.querySelector('[data-menu-id="${visible[0].menuId}"]'))`;
@@ -219,6 +225,24 @@ try {
   await wait(`${dropdown}.querySelector('.nav-dropdown-menu').classList.contains('open')`, "Technical dropdown open");
   await shot("00-technical-dropdown");
   done(`Technical dropdown lists exactly the ${visible.length} visible entries under ${headers.length} category headers`);
+
+  // Phone Technical navigation capture under the new theme.
+  phase = "phone navigation";
+  if (await evaluate(`${dropdown}.querySelector('.nav-dropdown-menu').classList.contains('open')`)) {
+    await click(toggleSelector, "Technical dropdown toggle (close)");
+    await wait(`!${dropdown}.querySelector('.nav-dropdown-menu').classList.contains('open')`, "Technical dropdown closed");
+  }
+  await call("Emulation.setDeviceMetricsOverride", { width: 375, height: 812, deviceScaleFactor: 2, mobile: true });
+  await wait("Boolean(document.querySelector('.burger-btn'))", "burger button");
+  await click(".burger-btn", "burger button");
+  await wait("Boolean(document.querySelector('.mobile-drawer:not(.hidden) .mobile-drawer-sections'))", "mobile drawer open");
+  const phoneHasTechnical = await evaluate("Boolean(document.querySelector('.mobile-drawer-sections')?.textContent?.includes('Technical'))");
+  check(phoneHasTechnical, "mobile drawer sections include Technical");
+  await shot("00-technical-mobile-drawer");
+  await click(".drawer-close-btn", "close mobile drawer");
+  await wait("Boolean(document.querySelector('.mobile-drawer.hidden'))", "mobile drawer closed");
+  await call("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+  done("phone Technical navigation captured in mobile drawer");
 
   let index = 0;
   for (const entry of visible) {
@@ -292,7 +316,7 @@ try {
     exceptions,
     console_errors: consoleErrors,
     http_failures: httpFailures,
-    scope: "Desktop 1440x900 only. Mobile layout, axe/contrast and keyboard navigation not covered by this run.",
+    scope: "Desktop 1440x900 and phone 375x812 Technical navigation. Other mobile layouts, axe/contrast and keyboard navigation not covered by this run.",
     performance: "DEFERRED_PERFORMANCE; no timing recorded",
   };
   await writeFile(path.join(output, "result.json"), JSON.stringify(result, null, 2) + "\n");

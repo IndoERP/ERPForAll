@@ -1,4 +1,4 @@
-//! `<menuitem>` as `ir.ui.menu` records..
+//! `<menuitem>` as `ir.ui.menu` records.
 //!
 //! Here one level of the tree is one [`model_data::load_records_cached`] call: the siblings
 //! of every parent of a level are written together, the parent level first, so a tree of any
@@ -179,7 +179,7 @@ fn known_id(
 }
 
 /// The record behind each action external id of the tree: its model and id, and its name for the
-/// menus that need it. The action must exist (`self.env.ref`).
+/// menus that need it. The action must exist (`self.env.ref(...)`).
 struct Action {
     model: String,
     id: i64,

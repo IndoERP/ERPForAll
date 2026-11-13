@@ -39,7 +39,7 @@ test("clipboard denial is visible and ambiguous writes offer no retry action", a
   controller.show(new ClientError("ambiguous", "Check the record before trying again."));
   const dialog = document.querySelector("dialog")!;
   expect(dialog.querySelector("h2")?.textContent).toBe("Check whether your change was saved");
-  expect([...dialog.querySelectorAll("button")].map(b => b.textContent)).toEqual(["Copy details", "Close"]);
+  expect([...dialog.querySelectorAll("button")].map(b => b.textContent)).toEqual(["×", "Copy details", "Close"]);
   dialog.querySelector<HTMLButtonElement>("details button")!.click();
   await vi.waitFor(() => expect(dialog.textContent).toContain("Copy failed. Select and copy the details above."));
 });

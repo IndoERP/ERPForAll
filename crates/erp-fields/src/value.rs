@@ -69,7 +69,7 @@ pub enum Value {
 }
 
 // Every `Value` stays 32 bytes on 64-bit targets: a handle that grew it would cost every value
-// everywhere (design note).
+// everywhere.
 #[cfg(target_pointer_width = "64")]
 const _: () = assert!(std::mem::size_of::<Value>() == 32);
 

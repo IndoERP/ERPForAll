@@ -1,5 +1,5 @@
-//! Business keys and the upsert statement (–D2; design note
-//! , §3.3, §3.5).
+//! Business keys and the upsert statement (–D2,
+//! §3.3, §3.5).
 //!
 //! - [`key_definition`]: the `UNIQUE NULLS NOT DISTINCT (…)` text of a business key constraint.
 //! - [`upsert`]: one `INSERT … ON CONFLICT ON CONSTRAINT … DO UPDATE … WHERE <changed>` per batch
@@ -44,7 +44,12 @@ pub struct KeyColumn<'a> {
 
 /// `<a>.<x> = <b>.<y> AND …` over the key columns, NULL-safe for nullable columns. `left` and
 /// `right` give the alias and the column name to use on each side for every key column.
-fn key_match(key: &[KeyColumn<'_>], left: &str, right: &str, left_cols: &[String]) -> String {
+pub(crate) fn key_match(
+    key: &[KeyColumn<'_>],
+    left: &str,
+    right: &str,
+    left_cols: &[String],
+) -> String {
     key.iter()
         .zip(left_cols)
         .map(|(k, l)| {
@@ -120,6 +125,16 @@ pub struct Upsert<'a> {
     pub returning_old: &'a [(&'a str, ColumnType)],
     /// Ordered NULL-safe OLD/NEW difference flags, appended after the result timestamp.
     pub returning_changed: &'a [&'a str],
+    /// A predicate the update arm must also satisfy (`WHERE (<changed>) AND (<guard>)`), over
+    /// `"__t"` (the existing row) and `EXCLUDED` (the proposed row). A row it refuses is locked and
+    /// left unchanged, so it comes back from the statement's second branch with `written` FALSE.
+    /// `None` leaves the legacy text.
+    pub update_guard: Option<&'a str>,
+    /// A predicate the insert arm's `SELECT ... FROM "__in"` must satisfy (`WHERE <filter>`); a
+    /// filtered row is neither inserted nor returned. It sees the input as `"__in"."c"`. `None`
+    /// leaves the legacy text. When set, the result has one more column, last: `existed`, whether
+    /// the row's key was present in the statement's snapshot.
+    pub insert_filter: Option<&'a str>,
 }
 
 impl<'a> Upsert<'a> {
@@ -143,6 +158,8 @@ impl<'a> Upsert<'a> {
             returning: &[],
             returning_old: &[],
             returning_changed: &[],
+            update_guard: None,
+            insert_filter: None,
         }
     }
 
@@ -187,6 +204,22 @@ impl<'a> Upsert<'a> {
         self
     }
 
+    /// Extra update-arm predicate (see [`Upsert::update_guard`]). Used with
+    /// [`SetAction::Accumulate`], which never clamps, so a guard refusal is a refused row and
+    /// never a silently adjusted value.
+    #[must_use]
+    pub fn update_guard(mut self, guard: Option<&'a str>) -> Self {
+        self.update_guard = guard;
+        self
+    }
+
+    /// Insert-arm filter (see [`Upsert::insert_filter`]).
+    #[must_use]
+    pub fn insert_filter(mut self, filter: Option<&'a str>) -> Self {
+        self.insert_filter = filter;
+        self
+    }
+
     /// Old values returned for updated rows.
     #[must_use]
     pub fn returning_old(mut self, columns: &'a [(&'a str, ColumnType)]) -> Self {
@@ -228,6 +261,10 @@ impl<'a> Upsert<'a> {
 /// which is their current version (under `REPEATABLE READ` a conflicting row the snapshot cannot
 /// see makes the statement fail with `40001` first). The input must not repeat a key (the caller
 /// merges duplicates): PostgreSQL refuses to update a row twice in one statement.
+///
+/// With [`Upsert::insert_filter`] set, a last result column `existed` (`bool`) says whether the
+/// key was present in the statement's snapshot (always TRUE in the second branch); without it the
+/// columns above are unchanged.
 pub fn upsert(s: &Upsert<'_>) -> String {
     let t = quote(s.table);
     let alias = quote("__t");
@@ -288,11 +325,11 @@ pub fn upsert(s: &Upsert<'_>) -> String {
                 let col = quote(c);
                 assigns.push(format!("{col} = EXCLUDED.{col}"));
             }
-            format!(
-                "DO UPDATE SET {} WHERE {}",
-                assigns.join(", "),
-                changed.join(" OR ")
-            )
+            let condition = match s.update_guard {
+                Some(guard) => format!("({}) AND ({guard})", changed.join(" OR ")),
+                None => changed.join(" OR "),
+            };
+            format!("DO UPDATE SET {} WHERE {condition}", assigns.join(", "))
         }
     };
     let rv = quote("row_version");
@@ -317,8 +354,11 @@ pub fn upsert(s: &Upsert<'_>) -> String {
             "\"__o\".{column} IS DISTINCT FROM \"__n\".{column} AS \"__changed{i}\""
         ));
     }
+    let filter = s
+        .insert_filter
+        .map_or_else(String::new, |f| format!(" WHERE {f}"));
     let up = format!(
-        "\"__up\" AS (INSERT INTO {t} AS {alias} ({targets}) SELECT {values} FROM \"__in\" ORDER BY \
+        "\"__up\" AS (INSERT INTO {t} AS {alias} ({targets}) SELECT {values} FROM \"__in\"{filter} ORDER BY \
          \"__ord\" ON CONFLICT ON CONSTRAINT {constraint} {conflict} RETURNING WITH (OLD AS \"__o\", \
          NEW AS \"__n\") {returning})",
         targets = targets.join(", "),
@@ -365,6 +405,15 @@ pub fn upsert(s: &Upsert<'_>) -> String {
     for i in 0..s.returning_changed.len() {
         first.push(format!("\"__u\".\"__changed{i}\""));
         second.push("FALSE".to_owned());
+    }
+    if s.insert_filter.is_some() {
+        // The snapshot cannot see this statement's own inserts, so TRUE means the key was there
+        // before the statement began.
+        first.push(format!(
+            "EXISTS (SELECT FROM {t} AS \"__x\" WHERE {})",
+            key_match(s.key, "__i", "__x", &in_keys)
+        ));
+        second.push("TRUE".to_owned());
     }
     format!(
         "WITH {input}, {up} SELECT {first} FROM \"__up\" AS \"__u\" JOIN \"__in\" AS \"__i\" ON \
@@ -696,6 +745,107 @@ mod tests {
                 0
             )
             .ends_with("WHERE (FALSE) IS NOT TRUE")
+        );
+    }
+    #[test]
+    fn guarded_update_arm_and_insert_filter_text() {
+        let columns = [("k", ColumnType::Int8), ("n", ColumnType::Int8)];
+        let key = [KeyColumn {
+            name: "k",
+            nullable: true,
+        }];
+        let sets = [("n", SetAction::Accumulate)];
+        let action = ConflictAction::Update {
+            sets: &sets,
+            audit: &[],
+        };
+        let base = Upsert::new("t", "t_key", &columns, &key, action);
+        // Without the optional parts the text is the legacy text (pinned in
+        // `legacy_statement_text_is_pinned`).
+        assert_eq!(
+            upsert(&base),
+            upsert(&base.update_guard(None).insert_filter(None))
+        );
+        let sql = upsert(
+            &base
+                .update_guard(Some("(GUARD_SQL)"))
+                .insert_filter(Some("(FILTER_SQL)")),
+        );
+        assert!(
+            sql.contains(
+                "SELECT \"k\", \"n\" FROM \"__in\" WHERE (FILTER_SQL) ORDER BY \"__ord\" ON CONFLICT"
+            ),
+            "{sql}"
+        );
+        assert!(
+            sql.contains(
+                "DO UPDATE SET \"n\" = COALESCE(\"__t\".\"n\", 0) + EXCLUDED.\"n\" WHERE \
+                 (EXCLUDED.\"n\" <> 0) AND ((GUARD_SQL)) RETURNING"
+            ),
+            "{sql}"
+        );
+        // The guard does not change the unguarded statement elsewhere: the filter alone only
+        // adds the insert arm's WHERE.
+        let filter_only = upsert(&base.insert_filter(Some("(F)")));
+        assert!(filter_only.contains("FROM \"__in\" WHERE (F) ORDER BY"));
+        assert!(filter_only.contains("WHERE EXCLUDED.\"n\" <> 0 RETURNING"));
+        let guard_only = upsert(&base.update_guard(Some("(G)")));
+        assert!(guard_only.contains("FROM \"__in\" ORDER BY"));
+        assert!(guard_only.contains("WHERE (EXCLUDED.\"n\" <> 0) AND ((G)) RETURNING"));
+    }
+
+    /// The legacy statement text of an upsert without the guard and filter, pinned byte for byte.
+    #[test]
+    fn legacy_statement_text_is_pinned() {
+        let columns = [("k", ColumnType::Int8), ("n", ColumnType::Int8)];
+        let key = [KeyColumn {
+            name: "k",
+            nullable: true,
+        }];
+        let sets = [("n", SetAction::Accumulate)];
+        let action = ConflictAction::Update {
+            sets: &sets,
+            audit: &[],
+        };
+        let now = crate::NOW_UTC;
+        let up_match = "(\"__u\".\"__k0\" = \"__i\".\"k\" OR (\"__u\".\"__k0\" IS NULL AND \"__i\".\"k\" IS NULL))";
+        let row_match =
+            "(\"__t\".\"k\" = \"__i\".\"k\" OR (\"__t\".\"k\" IS NULL AND \"__i\".\"k\" IS NULL))";
+        let expected = format!(
+            "WITH \"__in\" AS MATERIALIZED (SELECT * FROM unnest($1::int8[], $2::int8[]) WITH ORDINALITY AS \"__i\"(\"k\", \"n\", \"__ord\")), \"__up\" AS (INSERT INTO \"t\" AS \"__t\" (\"k\", \"n\") SELECT \"k\", \"n\" FROM \"__in\" ORDER BY \"__ord\" ON CONFLICT ON CONSTRAINT \"t_key\" DO UPDATE SET \"n\" = COALESCE(\"__t\".\"n\", 0) + EXCLUDED.\"n\" WHERE EXCLUDED.\"n\" <> 0 RETURNING WITH (OLD AS \"__o\", NEW AS \"__n\") \"__n\".\"id\" AS \"__id\", \"__n\".\"k\" AS \"__k0\", \"__o\".\"id\" IS NULL AS \"__inserted\") SELECT \"__i\".\"__ord\", \"__u\".\"__id\", \"__u\".\"__inserted\", TRUE, NULL::int8, NULL::int8, {now} FROM \"__up\" AS \"__u\" JOIN \"__in\" AS \"__i\" ON {up_match} UNION ALL SELECT \"__i\".\"__ord\", \"__t\".\"id\", FALSE, FALSE, NULL::int8, NULL::int8, {now} FROM \"__in\" AS \"__i\" JOIN \"t\" AS \"__t\" ON {row_match} WHERE NOT EXISTS (SELECT FROM \"__up\" AS \"__u\" WHERE {up_match})"
+        );
+        assert_eq!(
+            upsert(&Upsert::new("t", "t_key", &columns, &key, action)),
+            expected
+        );
+        // The filter adds the `existed` column, last, to both branches.
+        let filtered =
+            upsert(&Upsert::new("t", "t_key", &columns, &key, action).insert_filter(Some("(F)")));
+        assert!(filtered.contains(&format!(
+            "{now}, EXISTS (SELECT FROM \"t\" AS \"__x\" WHERE (\"__i\".\"k\" = \"__x\".\"k\" OR (\"__i\".\"k\" IS NULL AND \"__x\".\"k\" IS NULL))) FROM \"__up\""
+        )), "{filtered}");
+        assert!(
+            filtered.contains(&format!("{now}, TRUE FROM \"__in\" AS \"__i\" JOIN \"t\"")),
+            "{filtered}"
+        );
+    }
+
+    #[test]
+    fn key_match_is_null_safe_only_for_nullable_columns() {
+        let key = [
+            KeyColumn {
+                name: "a",
+                nullable: false,
+            },
+            KeyColumn {
+                name: "b",
+                nullable: true,
+            },
+        ];
+        let cols = ["a".to_owned(), "b".to_owned()];
+        assert_eq!(
+            key_match(&key, "l", "r", &cols),
+            "\"l\".\"a\" = \"r\".\"a\" AND (\"l\".\"b\" = \"r\".\"b\" OR (\"l\".\"b\" IS NULL AND \"r\".\"b\" IS NULL))"
         );
     }
 }

@@ -1,5 +1,4 @@
-//! Packaging barcodes (`product.uom`): and the product-side check
-//! .
+//! Packaging barcodes (`product.uom`): and the product-side check.
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "tests")]
 
 mod support;

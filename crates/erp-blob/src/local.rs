@@ -21,10 +21,22 @@ use crate::store::{
     DeleteReport, StoreKind,
 };
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod owner;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) mod peer;
+
 const STORE_ID_FILE: &str = ".store-id";
 const READ_CHUNK: usize = 64 * 1024;
 
 /// A directory used as an attachment store.
+///
+/// Linux/macOS owner markers use a short exclusive-create lease plus a stable OS advisory
+/// guard, synced temporary publication and no-replace recovery. Busy locks are retryable;
+/// malformed state and unsupported filesystem primitives refuse. The namespace directory must
+/// not be a symlink. Passing the local probe does not prove shared-filesystem peer admission.
+/// Marker support alone never authorizes garbage collection; the database coordinator also
+/// checks contests, heartbeat health, observation delay and the applicable peer evidence.
 #[derive(Debug)]
 pub struct LocalStore {
     root: PathBuf,
@@ -174,8 +186,13 @@ impl AttachmentStore for LocalStore {
             range_reads: true,
             presign: false,
             create_only: true,
-            if_match_put: false,
+            if_match_put: cfg!(any(target_os = "linux", target_os = "macos")),
         }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn peer_binding(&self) -> Result<String, BlobError> {
+        LocalStore::peer_binding(self)
     }
 
     fn fingerprint(&self) -> Option<String> {
@@ -201,6 +218,76 @@ impl AttachmentStore for LocalStore {
         })
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn probe_owner(&self) -> BoxFuture<'_, Result<(), BlobError>> {
+        Box::pin(owner::probe(self))
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn owner<'a>(
+        &'a self,
+        ns: &'a crate::Namespace,
+    ) -> BoxFuture<'a, Result<Option<crate::OwnerState>, BlobError>> {
+        Box::pin(owner::owner(&self.root, ns))
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn put_owner<'a>(
+        &'a self,
+        ns: &'a crate::Namespace,
+        marker: &'a crate::OwnerMarker,
+        expected: Option<&'a crate::OwnerVersion>,
+    ) -> BoxFuture<'a, Result<crate::OwnerVersion, BlobError>> {
+        Box::pin(owner::put_owner(&self.root, ns, marker, expected))
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn check_owner<'a>(
+        &'a self,
+        ns: &'a crate::Namespace,
+        expected: &'a crate::OwnerVersion,
+    ) -> BoxFuture<'a, Result<(), BlobError>> {
+        Box::pin(async move {
+            match owner::owner(&self.root, ns).await? {
+                Some(found) if found.version() == expected => Ok(()),
+                Some(_) | None => Err(BlobError::OwnerConflict),
+            }
+        })
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn contested<'a>(
+        &'a self,
+        ns: &'a crate::Namespace,
+    ) -> BoxFuture<'a, Result<Option<crate::OwnerMarker>, BlobError>> {
+        Box::pin(owner::contested(&self.root, ns))
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn contest_state<'a>(
+        &'a self,
+        ns: &'a crate::Namespace,
+    ) -> BoxFuture<'a, Result<Option<crate::ContestState>, BlobError>> {
+        Box::pin(async move { owner::contest_state(&self.root, ns).await })
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn resolve_contested<'a>(
+        &'a self,
+        ns: &'a crate::Namespace,
+        chosen: &'a crate::OwnerState,
+        expected: Option<&'a crate::ContestState>,
+    ) -> BoxFuture<'a, Result<crate::ContestState, BlobError>> {
+        Box::pin(async move { owner::resolve_contested(&self.root, ns, chosen, expected).await })
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn create_contested<'a>(
+        &'a self,
+        ns: &'a crate::Namespace,
+        marker: &'a crate::OwnerMarker,
+    ) -> BoxFuture<'a, Result<(), BlobError>> {
+        Box::pin(owner::create_contested(&self.root, ns, marker))
+    }
+
     fn stage<'a>(
         &'a self,
         key: &'a StagingKey,
@@ -220,18 +307,15 @@ impl AttachmentStore for LocalStore {
                 Ok(hasher) => hasher,
                 Err(error) => {
                     drop(file);
-                    let _ = fs::remove_file(&part).await;
                     return Err(error);
                 }
             };
             if let Err(error) = file.sync_all().await {
                 drop(file);
-                let _ = fs::remove_file(&part).await;
                 return Err(BlobError::from_io("sync a staging file", &relative, error));
             }
             drop(file);
             if let Err(error) = fs::rename(&part, &path).await {
-                let _ = fs::remove_file(&part).await;
                 return Err(BlobError::from_io("name a staging file", &relative, error));
             }
             Ok(hasher.finish(key.clone()))
@@ -255,10 +339,10 @@ impl AttachmentStore for LocalStore {
             let target = self.full(&target_rel);
             self.ensure_parent(&target).await?;
             match fs::hard_link(&source, &target).await {
-                Ok(()) => unlink_if_present(&source, &source_rel).await,
+                Ok(()) => Ok(()),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                     check_size(&target, &target_rel, staged.size()).await?;
-                    unlink_if_present(&source, &source_rel).await
+                    Ok(())
                 }
                 // the staging name is gone: a retry after a successful first promote
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {

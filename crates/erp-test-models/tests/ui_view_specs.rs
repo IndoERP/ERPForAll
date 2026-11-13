@@ -1,4 +1,4 @@
-//! `ir.ui.view` records in the database (§9):,
+//! `ir.ui.view` records in the database (§9),
 //! 043, 057, 058, 059 on the `base` addon's model, written and read back through the ORM.
 //! Expected values are the spec's literals or ids our `create` returned.
 #![allow(
@@ -450,6 +450,21 @@ async fn default_view_selection_and_view_ref() {
         err.to_string(),
         "No default view of type 'kanban' could be found! (generated default views come with \
          a later release)"
+    );
+    // The web client's Group By menu reads "no search view" from this sentence's prefix
+    // (`groupByCatalogue` in addons/web/static/src/client/app.ts); changing it breaks lists.
+    let search = ViewType::new(&tx, "search").unwrap();
+    let err = select_view(
+        &mut tx,
+        &ViewRequest::new("test.model_without_a_search_view", &search),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::UserError);
+    assert!(
+        err.to_string()
+            .starts_with("No default view of type 'search' could be found!"),
+        "{err}"
     );
     tx.rollback().await.unwrap();
     h.cleanup().await.unwrap();
@@ -1894,8 +1909,8 @@ fn book_form_b(anchor: &str) -> String {
 }
 
 /// In a module operation, the sibling primary views of modules whose data has not loaded yet are
-/// not combined when a view changes: they still hold their archs of before the upgrade
-/// . At the end of a module's upgrade its `noupdate` views, whose
+/// not combined when a view changes: they still hold their archs of before the upgrade.
+/// At the end of a module's upgrade its `noupdate` views, whose
 /// writes were skipped, are checked (`_validate_module_views`).
 #[tokio::test]
 async fn upgrades_skip_views_not_loaded_yet_and_check_noupdate_views() {

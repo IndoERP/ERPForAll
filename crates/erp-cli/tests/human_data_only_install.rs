@@ -308,7 +308,7 @@ async fn data_only_addon_installs_from_the_addons_screen() {
     assert_eq!(refusal["name"], "erp.exceptions.ValidationError");
     assert_eq!(
         refusal["message"],
-        "Native lifecycle opening with configured Signal is unsupported until a later release"
+        "Uninstall impact cannot describe package runtime lifecycle callbacks; unsupported until a later release"
     );
     let uninstall = json_post(
         port,
@@ -324,7 +324,7 @@ async fn data_only_addon_installs_from_the_addons_screen() {
     assert_eq!(refusal["name"], "erp.exceptions.ValidationError");
     assert_eq!(
         refusal["message"],
-        "Native lifecycle opening with configured Signal is unsupported until a later release"
+        "Uninstall impact cannot describe custom index support on table 'ir_dated_parameter'; unsupported until a later release"
     );
     assert_eq!(
         state_of(&catalogue(port, cookies), "sample_library").as_deref(),

@@ -15,17 +15,22 @@ use futures_util::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::{
     Error as OsError, GetOptions, ObjectStore, ObjectStoreExt, PutMode, PutOptions, PutPayload,
+    UpdateVersion,
 };
 use tokio::io::AsyncReadExt;
 use tokio_util::io::StreamReader;
 
-use crate::BlobError;
 use crate::error::LimitKind;
 use crate::key::{ContentKey, StagingKey, random_uuid_text};
+use crate::owner::{contested_path, owner_path};
 use crate::stage::{Hasher, StageLimits, StagedBlob};
 use crate::store::{
     AttachmentStore, BlobMeta, BlobRead, BodyReader, BoxFuture, ByteRange, Capabilities,
     DeleteReport, StoreKind,
+};
+use crate::{
+    BlobError, ContestState, Namespace, OWNER_MARKER_MAX_BYTES, OwnerMarker, OwnerState,
+    OwnerVersion,
 };
 
 /// The size of one multipart part: the store's memory per upload. Most S3-compatible services
@@ -80,6 +85,20 @@ fn map_err(what: &str, key: &str, error: OsError) -> BlobError {
     }
 }
 
+fn aborted_error(
+    receive: BlobError,
+    result: object_store::Result<()>,
+    relative: &str,
+) -> BlobError {
+    match result {
+        Ok(()) => receive,
+        Err(abort) => BlobError::StagingAbort {
+            receive: Box::new(receive),
+            abort: Box::new(map_err("abort an incomplete upload", relative, abort)),
+        },
+    }
+}
+
 fn variant_name(error: &OsError) -> &'static str {
     match error {
         OsError::Generic { .. } => "request error",
@@ -92,6 +111,99 @@ fn variant_name(error: &OsError) -> &'static str {
 }
 
 impl ObjectBackend {
+    async fn read_marker_bytes(
+        &self,
+        relative: &str,
+    ) -> Result<Option<(Vec<u8>, OwnerVersion)>, BlobError> {
+        let found = match self.inner.get(&self.path(relative)).await {
+            Ok(found) => found,
+            Err(OsError::NotFound { .. }) => return Ok(None),
+            Err(error) => return Err(marker_error("owner marker read", error)),
+        };
+        let bad = || crate::owner::invalid("expected bounded canonical v1 record");
+        if found.meta.size > OWNER_MARKER_MAX_BYTES as u64 {
+            return Err(bad());
+        }
+        let version = marker_version(found.meta.e_tag.as_deref(), found.meta.version.as_deref())?;
+        let mut bytes = Vec::new();
+        let mut stream = found.into_stream();
+        while let Some(chunk) = stream
+            .try_next()
+            .await
+            .map_err(|e| marker_error("owner marker read", e))?
+        {
+            if chunk.len() > OWNER_MARKER_MAX_BYTES.saturating_sub(bytes.len()) {
+                return Err(bad());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(Some((bytes, version)))
+    }
+
+    async fn read_owner_marker(&self, relative: &str) -> Result<Option<OwnerState>, BlobError> {
+        self.read_marker_bytes(relative)
+            .await?
+            .map(|(b, v)| Ok(OwnerState::new(OwnerMarker::decode(&b)?, v)))
+            .transpose()
+    }
+    async fn write_contest(
+        &self,
+        ns: &Namespace,
+        marker: &OwnerMarker,
+        resolved: bool,
+        expected: Option<&OwnerVersion>,
+    ) -> Result<ContestState, BlobError> {
+        let mode = match expected {
+            None => PutMode::Create,
+            Some(v) => PutMode::Update(UpdateVersion {
+                e_tag: Some(v.etag().to_owned()),
+                version: v.object_version().map(str::to_owned),
+            }),
+        };
+        // The same loser can be published again after resolution. Distinct bytes prevent
+        // content-derived validators from returning to the old contest's token (ABA).
+        let mut bytes = b"ERPCAS01".to_vec();
+        bytes.extend(random_uuid_text()?.as_bytes());
+        bytes.extend(crate::owner::contest_bytes(marker, resolved));
+        let r = self
+            .inner
+            .put_opts(
+                &self.path(&contested_path(ns)),
+                PutPayload::from(bytes),
+                PutOptions::from(mode),
+            )
+            .await
+            .map_err(|e| marker_error("conditional contest put", e))?;
+        Ok(ContestState::new(
+            marker.clone(),
+            marker_version(r.e_tag.as_deref(), r.version.as_deref())?,
+            resolved,
+        ))
+    }
+    async fn remove_probe_markers(&self, ns: &Namespace) -> Result<(), BlobError> {
+        // These paths belong only to this randomly named probe. Never delete application markers.
+        // Attempt both removals even if one fails; report every failure through the error chain.
+        let mut failure = None;
+        for relative in [owner_path(ns), contested_path(ns)] {
+            if let Err(error) = self.inner.delete(&self.path(&relative)).await {
+                if matches!(error, OsError::NotFound { .. }) {
+                    continue;
+                }
+                let error = marker_error("owner probe cleanup", error);
+                failure = Some(match failure {
+                    None => error,
+                    Some(previous) => BlobError::OwnerProbeCleanup {
+                        probe: Some(Box::new(previous)),
+                        cleanup: Box::new(error),
+                    },
+                });
+            }
+        }
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
     /// Open over `inner`: the objects live under `prefix`, and a `.store-id` marker object
     /// identifies the bucket and prefix (created if absent). Used with the real service through
     /// [`Self::s3`] and with `object_store`'s in-memory store in tests.
@@ -222,6 +334,24 @@ impl ObjectBackend {
     }
 }
 
+fn marker_version(etag: Option<&str>, version: Option<&str>) -> Result<OwnerVersion, BlobError> {
+    let etag = etag.ok_or(BlobError::OwnerCapabilityMissing {
+        capability: "owner ETag",
+    })?;
+    OwnerVersion::new(etag, version)
+}
+
+fn marker_error(operation: &'static str, error: OsError) -> BlobError {
+    match error {
+        OsError::AlreadyExists { .. } | OsError::Precondition { .. } => BlobError::OwnerConflict,
+        OsError::NotSupported { .. } => BlobError::OwnerCapabilityMissing {
+            capability: operation,
+        },
+        // The shared adapter removes driver URLs and credentials from every other error.
+        other => map_err(operation, "<owner-marker>", other),
+    }
+}
+
 async fn size_check(
     inner: &dyn ObjectStore,
     path: &Path,
@@ -244,6 +374,170 @@ async fn size_check(
 }
 
 impl AttachmentStore for ObjectBackend {
+    fn probe_owner(&self) -> BoxFuture<'_, Result<(), BlobError>> {
+        Box::pin(async move {
+            let ns = Namespace::random()?;
+            let probe = crate::owner::probe_contract(self, &ns).await;
+            let cleanup = self.remove_probe_markers(&ns).await;
+            crate::owner::finish_probe(probe, cleanup)
+        })
+    }
+
+    fn owner<'a>(
+        &'a self,
+        ns: &'a Namespace,
+    ) -> BoxFuture<'a, Result<Option<OwnerState>, BlobError>> {
+        Box::pin(async move { self.read_owner_marker(&owner_path(ns)).await })
+    }
+
+    fn put_owner<'a>(
+        &'a self,
+        ns: &'a Namespace,
+        marker: &'a OwnerMarker,
+        expected: Option<&'a OwnerVersion>,
+    ) -> BoxFuture<'a, Result<OwnerVersion, BlobError>> {
+        Box::pin(async move {
+            let mode = match expected {
+                None => PutMode::Create,
+                Some(expected) => PutMode::Update(UpdateVersion {
+                    e_tag: Some(expected.etag().to_owned()),
+                    version: expected.object_version().map(str::to_owned),
+                }),
+            };
+            let result = self
+                .inner
+                .put_opts(
+                    &self.path(&owner_path(ns)),
+                    PutPayload::from(marker.encode()),
+                    PutOptions::from(mode),
+                )
+                .await
+                .map_err(|e| marker_error("conditional owner put", e))?;
+            marker_version(result.e_tag.as_deref(), result.version.as_deref())
+        })
+    }
+
+    fn check_owner<'a>(
+        &'a self,
+        ns: &'a Namespace,
+        expected: &'a OwnerVersion,
+    ) -> BoxFuture<'a, Result<(), BlobError>> {
+        Box::pin(async move {
+            // Never set GetOptions.version here: it would select a historical owner instead
+            // of fencing against the currently visible one.
+            let options = GetOptions {
+                head: true,
+                if_match: Some(expected.etag().to_owned()),
+                ..GetOptions::default()
+            };
+            let found = match self
+                .inner
+                .get_opts(&self.path(&owner_path(ns)), options)
+                .await
+            {
+                Ok(found) => found,
+                Err(OsError::NotFound { .. }) => return Err(BlobError::OwnerConflict),
+                Err(error) => return Err(marker_error("conditional owner HEAD", error)),
+            };
+            let version =
+                marker_version(found.meta.e_tag.as_deref(), found.meta.version.as_deref())?;
+            if &version != expected {
+                return Err(BlobError::OwnerConflict);
+            }
+            Ok(())
+        })
+    }
+
+    fn contested<'a>(
+        &'a self,
+        ns: &'a Namespace,
+    ) -> BoxFuture<'a, Result<Option<OwnerMarker>, BlobError>> {
+        Box::pin(async move {
+            Ok(self
+                .contest_state(ns)
+                .await?
+                .filter(|s| !s.resolved())
+                .map(|s| s.marker().clone()))
+        })
+    }
+    fn contest_state<'a>(
+        &'a self,
+        ns: &'a Namespace,
+    ) -> BoxFuture<'a, Result<Option<ContestState>, BlobError>> {
+        Box::pin(async move {
+            self.read_marker_bytes(&contested_path(ns))
+                .await?
+                .map(|(b, v)| {
+                    let record = if b.starts_with(b"ERPCAS01") {
+                        let bad = || crate::owner::invalid("invalid object contest envelope");
+                        let nonce = std::str::from_utf8(b.get(8..44).ok_or_else(bad)?)
+                            .map_err(|_| bad())?;
+                        Namespace::parse(nonce).map_err(|_| bad())?;
+                        &b[44..]
+                    } else {
+                        // Preserve legacy active markers and pre-envelope resolution receipts.
+                        b.as_slice()
+                    };
+                    ContestState::decode(record, v)
+                })
+                .transpose()
+        })
+    }
+    fn create_contested<'a>(
+        &'a self,
+        ns: &'a Namespace,
+        loser: &'a OwnerMarker,
+    ) -> BoxFuture<'a, Result<(), BlobError>> {
+        Box::pin(async move {
+            for _ in 0..4 {
+                let found = self.contest_state(ns).await?;
+                if found.as_ref().is_some_and(|s| !s.resolved()) {
+                    return Ok(());
+                }
+                match self
+                    .write_contest(ns, loser, false, found.as_ref().map(ContestState::version))
+                    .await
+                {
+                    Ok(_) => return Ok(()),
+                    Err(BlobError::OwnerConflict) => continue,
+                    Err(e) => return Err(e),
+                }
+            }
+            Err(BlobError::OwnerConflict)
+        })
+    }
+    fn resolve_contested<'a>(
+        &'a self,
+        ns: &'a Namespace,
+        owner: &'a OwnerState,
+        expected: Option<&'a ContestState>,
+    ) -> BoxFuture<'a, Result<ContestState, BlobError>> {
+        Box::pin(async move {
+            if self.owner(ns).await?.as_ref() != Some(owner) {
+                return Err(BlobError::OwnerConflict);
+            }
+            let current = self.contest_state(ns).await?;
+            let receipt = if let Some(s) = current.as_ref()
+                && s.resolved()
+                && s.marker() == owner.marker()
+            {
+                s.clone()
+            } else {
+                if current.as_ref() != expected {
+                    return Err(BlobError::OwnerConflict);
+                }
+                self.write_contest(
+                    ns,
+                    owner.marker(),
+                    true,
+                    expected.map(ContestState::version),
+                )
+                .await?
+            };
+            self.check_owner(ns, owner.version()).await?;
+            Ok(receipt)
+        })
+    }
     fn kind(&self) -> StoreKind {
         StoreKind::S3
     }
@@ -331,7 +625,7 @@ impl AttachmentStore for ObjectBackend {
             .await;
             if let Err(error) = outcome {
                 if let Some(mut active) = upload {
-                    let _ = active.abort().await;
+                    return Err(aborted_error(error, active.abort().await, &relative));
                 }
                 return Err(error);
             }
@@ -361,10 +655,7 @@ impl AttachmentStore for ObjectBackend {
                             .await
                             .map(|_| ())
                             .map_err(|e| map_err("complete an upload", &relative, e)),
-                        Err(e) => {
-                            let _ = active.abort().await;
-                            Err(e)
-                        }
+                        Err(e) => Err(aborted_error(e, active.abort().await, &relative)),
                     }
                 }
             };
@@ -411,10 +702,8 @@ impl AttachmentStore for ObjectBackend {
                 }
                 Err(e) => return Err(map_err("promote an object", &target_rel, e)),
             }
-            match self.inner.delete(&source).await {
-                Ok(()) | Err(OsError::NotFound { .. }) => Ok(()),
-                Err(e) => Err(map_err("remove a staging object", &source_rel, e)),
-            }
+            // The committed upload marker owns the source until fenced maintenance removes it.
+            Ok(())
         })
     }
 
@@ -536,5 +825,34 @@ impl AttachmentStore for ObjectBackend {
             found.truncate(limit);
             Ok(found)
         })
+    }
+}
+
+#[cfg(test)]
+mod abort_diagnostics {
+    use super::*;
+    #[test]
+    fn failed_abort_preserves_receive_kind_and_redacts_backend_text() {
+        let receive = BlobError::LimitExceeded {
+            kind: LimitKind::ObjectBytes,
+            limit: 7,
+        };
+        let abort = OsError::Generic {
+            store: "test",
+            source: Box::new(std::io::Error::other("private provider details")),
+        };
+        let error = aborted_error(receive, Err(abort), "bounded-staging-key");
+        assert_eq!(
+            error.to_string(),
+            "object size in bytes exceeds the limit of 7; aborting the incomplete staging upload also failed: the attachment store is unavailable (retryable): abort an incomplete upload on bounded-staging-key failed (request error)"
+        );
+        assert!(matches!(&error, BlobError::StagingAbort { .. }), "{error}");
+        if let BlobError::StagingAbort { receive, abort } = error {
+            assert!(matches!(
+                *receive,
+                BlobError::LimitExceeded { limit: 7, .. }
+            ));
+            assert!(matches!(*abort, BlobError::Unavailable { .. }));
+        }
     }
 }

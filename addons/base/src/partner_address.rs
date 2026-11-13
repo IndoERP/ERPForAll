@@ -24,7 +24,14 @@ fn recursive_hierarchy() -> Error {
     Error::programming("res.partner.address_get: recursive partner hierarchy")
 }
 
+const ONE2MANY_REFUSAL: &str =
+    "One2Many fields cannot be synchronized as part of `commercial_fields` or `address fields`";
+
 /// Resolve a native field-list hook, preserving its order and removing duplicates.
+///
+/// Used for `_address_fields`, `_synced_commercial_fields` and `_commercial_fields`.
+/// A one2many field is refused with the text; unknown, read-only,
+/// generated and other non-assignable fields are refused naming the hook and field.
 pub(crate) async fn fields(
     tx: &mut Transaction,
     records: &Records,
@@ -37,13 +44,13 @@ pub(crate) async fn fields(
         let field = records.spec().field(&name).ok_or_else(|| {
             Error::programming(format!("res.partner.{hook}: unknown field '{name}'"))
         })?;
+        if matches!(field.ty, FieldType::One2many { .. }) {
+            return Err(Error::programming(ONE2MANY_REFUSAL));
+        }
         if field.readonly
             || field.is_generated()
             || (field.compute.is_some() && field.inverse.is_none() && !field.store)
-            || matches!(
-                field.ty,
-                FieldType::Id | FieldType::RowVersion | FieldType::One2many { .. }
-            )
+            || matches!(field.ty, FieldType::Id | FieldType::RowVersion)
         {
             return Err(Error::programming(format!(
                 "res.partner.{hook}: unsupported synchronization field '{name}'"
@@ -82,14 +89,19 @@ pub(crate) async fn cells(
 }
 
 /// PARTNER §5b keeps numeric zero empty, including extension float coordinates.
-pub(crate) fn has_address(values: &RawVals) -> bool {
-    values.iter().any(|(_, value)| match value {
+pub(crate) fn is_set(value: &Cell) -> bool {
+    match value {
         // A presence check must not expand every relation id into a temporary
         // dynamic Value list. The scalar conversion otherwise preserves the
         // shared truthiness contract, including JSON and numeric zero.
         Cell::Ids(ids) => !ids.is_empty(),
         scalar => Value::from_cell(scalar).is_truthy(),
-    })
+    }
+}
+
+/// True when at least one address value is set (see [`is_set`]).
+pub(crate) fn has_address(values: &RawVals) -> bool {
+    values.iter().any(|(_, value)| is_set(value))
 }
 
 /// Convert snapshot x2many cells into ordinary replacement commands before writing.

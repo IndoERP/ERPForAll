@@ -396,35 +396,53 @@ fn form_commands(model: &ModelSpec, field: &str, value: &Value) -> Result<Vec<Fo
     }
     let mut out = Vec::with_capacity(items.len());
     for item in items.iter() {
-        let Value::List(triple) = item else {
+        let Value::List(elements) = item else {
             return Err(bad_value(model, field, item));
         };
-        if triple.len() != 3 {
+        let Some(Value::Int(code)) = elements.first() else {
+            return Err(bad_value(model, field, item));
+        };
+        // accepted length per command:
+        let valid_len = match *code {
+            0 | 1 | 6 => elements.len() == 3,
+            2..=4 => {
+                (2..=3).contains(&elements.len())
+                    && matches!(
+                        elements.get(2),
+                        None | Some(Value::False | Value::Bool(false) | Value::Int(0))
+                    )
+            }
+            5 => !elements.is_empty() && elements.len() <= 3,
+            // unknown codes are refused by the `other` arm below, which names the code
+            _ => true,
+        };
+        if !valid_len {
             return Err(bad_value(model, field, item));
         }
-        let Value::Int(code) = triple[0] else {
-            return Err(bad_value(model, field, item));
-        };
         out.push(match code {
             0 => FormCommand::Create(
-                match &triple[1] {
-                    Value::Str(s) if !s.is_empty() => Some(s.to_string()),
+                match elements.get(1) {
+                    Some(Value::Str(s)) if !s.is_empty() => Some(s.to_string()),
                     _ => None,
                 },
-                vals_map(model, field, triple.get(2))?,
+                vals_map(model, field, elements.get(2))?,
             ),
             1 => FormCommand::Update(
-                line_ref(model, field, &triple[1])?,
-                vals_map(model, field, triple.get(2))?,
+                line_ref(model, field, elements.get(1).unwrap_or(&Value::False))?,
+                vals_map(model, field, elements.get(2))?,
             ),
-            2 | 3 => FormCommand::Remove(line_ref(model, field, &triple[1])?),
-            4 => match &triple[1] {
-                Value::Int(i) if *i > 0 => FormCommand::Link(*i),
-                other => return Err(bad_value(model, field, other)),
+            2 | 3 => FormCommand::Remove(line_ref(
+                model,
+                field,
+                elements.get(1).unwrap_or(&Value::False),
+            )?),
+            4 => match elements.get(1) {
+                Some(Value::Int(i)) if *i > 0 => FormCommand::Link(*i),
+                other => return Err(bad_value(model, field, other.unwrap_or(&Value::False))),
             },
             5 => FormCommand::Clear,
-            6 => match &triple[2] {
-                Value::List(ids) => FormCommand::Set(
+            6 => match elements.get(2) {
+                Some(Value::List(ids)) => FormCommand::Set(
                     ids.iter()
                         .map(|v| match v {
                             Value::Int(i) if *i > 0 => Ok(*i),
@@ -432,7 +450,7 @@ fn form_commands(model: &ModelSpec, field: &str, value: &Value) -> Result<Vec<Fo
                         })
                         .collect::<Result<Vec<_>>>()?,
                 ),
-                other => return Err(bad_value(model, field, other)),
+                other => return Err(bad_value(model, field, other.unwrap_or(&Value::False))),
             },
             other => {
                 return Err(Error::validation(format!(
@@ -1415,7 +1433,7 @@ fn ensure_parents<'a>(tx: &'a mut Transaction, records: &'a Records) -> BoxFutur
 /// restriction of a column (field groups, enforced) cannot refuse a record
 /// the user may read; the in-memory records of these origins read their values when asked.
 async fn check_readable(tx: &mut Transaction, records: &Records) -> Result<()> {
-    tx.check_records(records)?;
+    tx.admit_records(records).await?;
     let env = records.env();
     let spec = records.spec();
     let mut seen = FxHashSet::default();
@@ -2250,7 +2268,7 @@ pub(crate) async fn onchange(
     field_names: Vec<String>,
     spec: Spec,
 ) -> Result<Value> {
-    tx.check_records(records)?;
+    tx.admit_records(records).await?;
     if records.len() > 1 {
         return Err(Error::validation(format!(
             "onchange works on one record at a time, not on {records}"
@@ -2865,7 +2883,7 @@ impl Records {
         field_names: Vec<String>,
         spec: Spec,
     ) -> Result<Value> {
-        tx.check_records(self)?;
+        tx.admit_records(self).await?;
         crate::database_generated::check_write_names(
             tx,
             self.spec(),

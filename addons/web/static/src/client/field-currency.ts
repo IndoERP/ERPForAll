@@ -6,7 +6,7 @@ import { fieldShell } from "./field-shell.js";
 import { array, integer, object, text } from "./metadata.js";
 import { el } from "./dom.js";
 import { ClientError, type RpcClient } from "./transport.js";
-const unsafe = (): never => { throw new ClientError("unsupported", "This amount cannot round-trip safely. Lossless monetary transport requires a later release."); };
+const unsafe = (): never => { throw new ClientError("unsupported", "This amount cannot round-trip safely. Lossless monetary transport is not available."); };
 /** Admit exact decimal scale using integer arithmetic; binary multiplication never decides safety. */
 export function validateMonetaryAmount(value: number | false, digits: number): void {
   if (!Number.isInteger(digits) || digits < 0 || digits > 20) throw new ClientError("server", "Invalid currency decimal places.");
@@ -86,7 +86,7 @@ export function monetaryControl(options: FieldControlOptions): FieldControl {
       const amount = options.value === null || options.value === undefined ? false : options.value;
       if (amount !== false && typeof amount !== "number") throw new ClientError("server", "Invalid monetary amount.");
       validateMonetaryAmount(amount, currency.digits);
-      if (config.field_digits && !config.digits) throw new ClientError("unsupported", "field_digits requires an explicit digits declaration. Model precision discovery requires a later release.");
+      if (config.field_digits && !config.digits) throw new ClientError("unsupported", "field_digits requires an explicit digits declaration. The model precision cannot be discovered here.");
       const digits = config.field_digits ? config.digits?.[1] : currency.digits;
       child = scalarControl({ ...options, field: { ...field, options: { ...config, digits: [20, digits ?? currency.digits] } }, change: value => {
         if (value !== false && typeof value !== "number") throw new ClientError("server", "Invalid monetary amount.");

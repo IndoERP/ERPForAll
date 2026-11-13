@@ -1309,3 +1309,72 @@ pub struct ChainLink {
     #[field(many2one, comodel = "test_dep.chain")]
     pub chain_id: Many2one<Chain>,
 }
+
+// ----- editable related read-back when target normalises -----------------------
+
+/// Target model whose write and create overrides normalise `value` (prefixes "NORM:").
+#[model(
+    name = "test_dep.norm_target",
+    description = "Dep Normalising Target",
+    addon = "test_depends"
+)]
+pub struct NormTarget {
+    #[field(char)]
+    pub name: Option<Arc<str>>,
+    #[field(char)]
+    pub value: Option<Arc<str>>,
+}
+
+#[methods(NormTarget, addon = "test_depends")]
+impl NormTarget {
+    #[method(override)]
+    async fn create(
+        this: &RecordSet<NormTarget>,
+        tx: &mut Transaction,
+        mut vals_list: Vec<RawVals>,
+        sup: Super,
+    ) -> Result<Records> {
+        for vals in &mut vals_list {
+            if let Some(Cell::Str(s)) = vals.get("value").cloned()
+                && !s.starts_with("NORM:")
+            {
+                vals.insert("value".into(), Cell::Str(format!("NORM:{s}").into()));
+            }
+        }
+        sup.call(tx, this.as_records(), (vals_list,)).await
+    }
+
+    #[method(override)]
+    async fn write(
+        this: &RecordSet<NormTarget>,
+        tx: &mut Transaction,
+        mut vals: RawVals,
+        sup: Super,
+    ) -> Result<()> {
+        if let Some(Cell::Str(s)) = vals.get("value").cloned()
+            && !s.starts_with("NORM:")
+        {
+            vals.insert("value".into(), Cell::Str(format!("NORM:{s}").into()));
+        }
+        sup.call(tx, this.as_records(), (vals,)).await
+    }
+}
+
+/// Source model with non-stored and stored editable related fields.
+#[model(
+    name = "test_dep.norm_source",
+    description = "Dep Normalising Source",
+    addon = "test_depends"
+)]
+pub struct NormSource {
+    #[field(char)]
+    pub name: Option<Arc<str>>,
+    #[field(many2one, comodel = "test_dep.norm_target")]
+    pub target_id: Many2one<NormTarget>,
+    /// Non-stored editable related field.
+    #[field(char, related = "target_id.value", readonly = false)]
+    pub related_value: Option<Arc<str>>,
+    /// Stored editable related field.
+    #[field(char, related = "target_id.value", store, readonly = false)]
+    pub stored_related_value: Option<Arc<str>>,
+}

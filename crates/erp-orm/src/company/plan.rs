@@ -25,13 +25,17 @@ pub(super) enum TargetScope {
     Single(FieldId),
     /// A `company_ids` many2many of the comodel.
     Many(FieldId),
+    /// The comodel's inherited `company_id`, which comes by `_inherits` delegation from the model
+    /// that stores it (A2). The batched statement reads nothing for it: the companies
+    /// are read through the ORM's delegated read once the targets are known.
+    Delegated(FieldId),
 }
 
 impl TargetScope {
-    /// The comodel's company field.
+    /// The comodel's company field (for [`Self::Delegated`], the comodel's inherited copy).
     pub(super) fn field(self) -> FieldId {
         match self {
-            Self::Single(f) | Self::Many(f) => f,
+            Self::Single(f) | Self::Many(f) | Self::Delegated(f) => f,
         }
     }
 }

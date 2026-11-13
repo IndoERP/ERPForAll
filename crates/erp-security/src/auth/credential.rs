@@ -1,5 +1,5 @@
 //! What `res.users._check_credentials(credential, env)` takes and returns (H58,
-//! , §14.4), and the base implementation's password check.
+//! §14.4), and the base implementation's password check.
 //!
 //! `_check_credentials` is a dispatched method chain on `res.users`: the `base` addon defines it
 //! with [`check_password`], and addons that add a credential type (TOTP, passkeys, LDAP, single

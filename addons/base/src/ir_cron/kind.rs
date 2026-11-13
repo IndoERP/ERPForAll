@@ -1,4 +1,4 @@
-//! The `base.cron` job kind: one run of a scheduled action (3,,
+//! The `base.cron` job kind: one run of a scheduled action (3,
 //! 119..123).
 //!
 //! A run is a sequence of chunks, each one transaction opened as the cron's user: a *prepare*

@@ -195,8 +195,9 @@ pub(crate) async fn insert_followers(
                 .await?;
             // A partner is internal when it has an active user that is not a share user.
             // Derived
-            // from `res.users.share` here because base's stored `res.partner.partner_share` is
-            // still a placeholder (true for every non-superuser partner).
+            // from `res.users.share` here, which applies the same rule as base's stored
+            // `res.partner.partner_share`; switching this search to the stored
+            // field is a separate change.
             let internal_users = env
                 .records("res.users")?
                 .sudo(true)

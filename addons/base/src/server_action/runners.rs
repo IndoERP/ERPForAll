@@ -38,11 +38,11 @@ pub static OBJECT_CREATE: RunnerDecl = RunnerDecl::__declare(
 pub static MULTI: RunnerDecl =
     RunnerDecl::__declare(&crate::ADDON, "multi", true, multi, file!(), line!());
 
-/// `code`: Luau on `erp-script`,.
+/// `code`: Luau on `erp-script`.
 pub static CODE: RunnerDecl =
     RunnerDecl::__declare(&crate::ADDON, "code", true, code, file!(), line!());
 
-/// `object_copy`: needs `copy` over JSON-2,.
+/// `object_copy`: needs `copy` over JSON-2.
 pub static OBJECT_COPY: RunnerDecl = RunnerDecl::__declare(
     &crate::ADDON,
     "object_copy",
@@ -52,7 +52,7 @@ pub static OBJECT_COPY: RunnerDecl = RunnerDecl::__declare(
     line!(),
 );
 
-/// `webhook`: post-commit delivery,.
+/// `webhook`: post-commit delivery.
 pub static WEBHOOK: RunnerDecl =
     RunnerDecl::__declare(&crate::ADDON, "webhook", true, webhook, file!(), line!());
 

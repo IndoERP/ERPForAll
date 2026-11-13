@@ -11,7 +11,8 @@
 //! decimal precision lookup in [`decimal_precision`]) and the dated parameter table (H35:
 //! [`dated_parameter`]). brings `ir.config_parameter`
 //! ([`ir_config_parameter`]), passwords, `_check_credentials` and `context_get`
-//! ([`res_users_auth`]) and `res.users.log` ([`res_users_log`]). The M1 fixture models of
+//! ([`res_users_auth`]) and `res.users.log` ([`res_users_log`]). brings the
+//! approval policy revisions and their resolution ([`ir_approval_policy`]). The M1 fixture models of
 //! the core `base` (`res.users`) move here. Until then [`ADDON`] stands for the
 //! core `base` in a registry:
 //!
@@ -31,11 +32,14 @@ pub mod decimal_precision;
 pub mod group_graph;
 pub mod ir_access;
 pub mod ir_actions;
+pub mod ir_approval_policy;
 pub mod ir_capability;
 pub mod ir_config_parameter;
 pub mod ir_config_setting;
 pub mod ir_cron;
 pub mod ir_default;
+pub mod ir_filters;
+pub mod ir_job;
 pub mod ir_model;
 pub mod ir_model_fields_groups;
 pub mod ir_sequence;
@@ -52,6 +56,7 @@ mod partner_labels;
 pub mod password_change;
 mod policy_sources;
 pub mod res_company;
+pub mod res_country;
 pub mod res_currency;
 pub mod res_currency_rate;
 pub mod res_currency_rate_type;
@@ -65,18 +70,24 @@ mod res_users_has_group;
 pub mod res_users_log;
 pub mod res_users_partner;
 pub mod res_users_preferences;
+pub mod res_users_settings;
 pub mod server_action;
+mod settings_general;
 
 pub use dated_parameter::IrDatedParameter;
 pub use decimal_precision::*;
 pub use ir_access::IrAccess;
+pub use ir_actions::IrActionsActions;
+pub use ir_approval_policy::IrApprovalPolicy;
 pub use ir_capability::IrCapability;
 pub use ir_config_parameter::IrConfigParameter;
 pub use ir_default::*;
+pub use ir_filters::IrFilters;
 pub use ir_model::*;
 pub use ir_model_fields_groups::IrModelFieldsGroups;
 pub use ir_sequence::*;
 pub use res_company::*;
+pub use res_country::*;
 pub use res_currency::*;
 pub use res_currency_rate::ResCurrencyRate;
 pub use res_currency_rate_type::{ResCurrencyRateType, SPOT_RATE_TYPE};
@@ -87,6 +98,10 @@ pub use res_users::{ResUsersAccess, Role};
 pub use res_users_auth::ResUsersAuth;
 pub use res_users_log::ResUsersLog;
 pub use res_users_partner::ResUsersPartner;
+pub use res_users_settings::ResUsersSettings;
+
+/// Country, state, and country group usage, with partner address integration.
+pub mod country_guide {}
 
 /// Currency and language addon usage, with executable examples.
 pub mod currencies_languages_guide {}

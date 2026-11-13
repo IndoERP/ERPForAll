@@ -113,6 +113,50 @@ async fn spec_partner_001_base_field_set() {
 }
 
 #[tokio::test]
+async fn spec_partner_business_field_labels() {
+    let h = partner_harness().await;
+    let mut tx = h.begin().await.unwrap();
+    let partners = p_rec(&tx, "res.partner");
+    let partner_fields = partners
+        .fields_get(
+            &mut tx,
+            Some(&["vat", "ref", "street2", "zip"]),
+            Some(&["string"]),
+        )
+        .await
+        .unwrap();
+
+    let string_of =
+        |fields: &std::collections::BTreeMap<String, std::collections::BTreeMap<String, Value>>,
+         name: &str|
+         -> String {
+            fields
+                .get(name)
+                .and_then(|attrs| attrs.get("string"))
+                .and_then(|v| match v {
+                    Value::Str(s) => Some(s.to_string()),
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
+
+    assert_eq!(string_of(&partner_fields, "vat"), "Tax ID");
+    assert_eq!(string_of(&partner_fields, "ref"), "Reference");
+    assert_eq!(string_of(&partner_fields, "street2"), "Street 2");
+    assert_eq!(string_of(&partner_fields, "zip"), "ZIP");
+
+    let companies = p_rec(&tx, "res.company");
+    let company_fields = companies
+        .fields_get(&mut tx, Some(&["vat", "street2", "zip"]), Some(&["string"]))
+        .await
+        .unwrap();
+
+    assert_eq!(string_of(&company_fields, "vat"), "Tax ID");
+    assert_eq!(string_of(&company_fields, "street2"), "Street 2");
+    assert_eq!(string_of(&company_fields, "zip"), "ZIP");
+}
+
+#[tokio::test]
 async fn spec_partner_002_defaults_with_name_only() {
     let h = partner_harness().await;
     let mut tx = h.begin().await.unwrap();
@@ -1288,7 +1332,7 @@ async fn test_partner_hierarchy_inaccessible_ancestor_cycle_is_opaque() {
         .unwrap()
         .ids()[0];
     // Record-rule denial evidence resolves the subject's stored name.
-    setup.batch("INSERT INTO res_users (id, name, login, active) VALUES (99999, 'Hierarchy reader', 'hierarchy-reader', true)").await.unwrap();
+    setup.batch("INSERT INTO res_users (id, name, login, active, share) VALUES (99999, 'Hierarchy reader', 'hierarchy-reader', true, false)").await.unwrap();
     setup.commit().await.unwrap();
 
     let mut user = h.begin_as(99999).await.unwrap();
@@ -1758,7 +1802,7 @@ async fn denied_contact_name_write_authorizes_before_validation() {
             .await
             .unwrap()
             .ids()[0];
-        setup.batch("INSERT INTO res_users (id, name, login, active) VALUES (99999, 'Name writer', 'name-writer', true)").await.unwrap();
+        setup.batch("INSERT INTO res_users (id, name, login, active, share) VALUES (99999, 'Name writer', 'name-writer', true, false)").await.unwrap();
         setup.commit().await.unwrap();
         let mut user = h.begin_as(99999).await.unwrap();
         let contact = p_rec(&user, "res.partner").browse([id]).unwrap();

@@ -1,5 +1,5 @@
 //! Parity tests for named decimal precision (`digits='Name'`).
-//! Spec:.
+//! Spec.
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "tests")]
 
 mod support;
@@ -203,7 +203,7 @@ async fn fields_get_exposes_only_digits_to_users_denied_the_precision_table() {
     configured(&mut setup, 5).await;
     setup
         .batch(
-            "INSERT INTO res_users (id, name, login, active) VALUES (42, 'Clerk', 'clerk', true)",
+            "INSERT INTO res_users (id, name, login, active, share) VALUES (42, 'Clerk', 'clerk', true, false)",
         )
         .await
         .unwrap();
@@ -243,7 +243,7 @@ async fn fields_get_precision_rpc_uses_the_stored_metadata_service() {
     .unwrap();
     let mut tx = h.harness().begin().await.unwrap();
     configured(&mut tx, 8).await;
-    tx.batch("INSERT INTO res_users (id, name, login, active) VALUES (2, 'Alice', 'alice', true)")
+    tx.batch("INSERT INTO res_users (id, name, login, active, share) VALUES (2, 'Alice', 'alice', true, false)")
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -343,7 +343,7 @@ async fn hidden_named_fields_do_not_resolve_their_precision() {
     .await
     .unwrap();
     let mut tx = h.begin().await.unwrap();
-    tx.batch("INSERT INTO res_users (id, name, login, active) VALUES (42, 'Clerk', 'clerk', true)")
+    tx.batch("INSERT INTO res_users (id, name, login, active, share) VALUES (42, 'Clerk', 'clerk', true, false)")
         .await
         .unwrap();
     tx.set_precision("Product Price", 29);

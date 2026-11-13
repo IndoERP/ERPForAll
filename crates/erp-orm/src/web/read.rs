@@ -70,7 +70,7 @@ pub(crate) async fn web_read_batch(
 
 /// [`web_read`] as maps, nested rows as maps and lists of maps (the shape before), for
 /// the group reads and the onchange diff, which rewrite rows by key; they move to batches with
-/// PERF.ROWS-GROUPS and PERF.ROWS-ONCHANGE (design note, §9).
+/// PERF.ROWS-GROUPS and PERF.ROWS-ONCHANGE (§9).
 pub(crate) fn web_read_rows<'a>(
     tx: &'a mut Transaction,
     records: &'a Records,
@@ -117,7 +117,7 @@ fn web_read_level<'a>(
     spec: &'a Spec,
 ) -> BoxFuture<'a, Result<Level>> {
     Box::pin(async move {
-        tx.check_records(records)?;
+        tx.admit_records(records).await?;
         check_spec(records, spec)?;
         let registry = Arc::clone(records.env().registry());
         let model = registry.model_by_id(records.model_id());
@@ -295,7 +295,7 @@ async fn expand_many2one(
         }
     }
     if sub.contains("display_name") {
-        let names = tx.display_names_for(&co.sudo(true), co.env()).await?;
+        let names = tx.display_names_for(&co.engine_sudo(), co.env()).await?;
         let by_target: FxHashMap<i64, &Cell> = co
             .rec_ids()
             .iter()

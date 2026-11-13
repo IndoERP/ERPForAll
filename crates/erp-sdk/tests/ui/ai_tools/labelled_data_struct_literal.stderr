@@ -1,0 +1,7 @@
+error[E0451]: fields `source` and `value` of struct `LabelledData` are private
+ --> tests/ui/ai_tools/labelled_data_struct_literal.rs:6:20
+  |
+6 |     LabelledData { source, value }
+  |                    ^^^^^^  ^^^^^ private field
+  |                    |
+  |                    private field

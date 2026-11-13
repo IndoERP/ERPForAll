@@ -3,8 +3,11 @@
 //! rights of the people around them over RPC. The answer is the user's effective groups, implied
 //! groups included, from the policy the transaction pinned; `base.group_no_one` counts only when
 //! the asking environment is in debug mode. Asking about oneself costs no statement; the first
-//! question about another user costs the principal resolver's one statement.
+//! question about another user costs the principal resolver's one statement. The question about
+//! another user is answered by `Transaction::user_has_group`, which makes no `with_user` switch
+//! (A4), so the asker needs no `principal.impersonate`.
 
+use erp_sdk::UserId;
 use erp_sdk::prelude::*;
 
 /// The methods of `res.users` that answer group questions (no columns of its own).
@@ -35,11 +38,11 @@ impl ResUsersGroupQuestions {
                 "You can ony call user.has_group() with your current user.",
             ));
         }
-        let subject = if own {
-            env.clone()
-        } else {
-            env.with_user(user).with_debug(env.principal().debug())
-        };
-        tx.has_group(&subject, &group_ext_id).await
+        if own {
+            return tx.has_group(env, &group_ext_id).await;
+        }
+        // asked about, not acted as: no `with_user` switch (A4), the asker's debug flag
+        let user = UserId::new(user).map_err(Error::from)?;
+        tx.user_has_group(env, user, &group_ext_id).await
     }
 }

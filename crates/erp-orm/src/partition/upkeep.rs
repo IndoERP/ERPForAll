@@ -869,7 +869,7 @@ impl Orm {
     /// union of both reports for every model, in registry order. A model whose upkeep cannot start
     /// (its lock is held past the timeout, `now` lies ahead of the database's clock by more than
     /// the retention) is a `failed` entry with step [`PartitionStep::Prepare`] naming its table,
-    /// and the other models are maintained all the same. Called at server start and, once
+    /// and the other models are maintained all the same. Called at server start, once
     /// lands, by its maintenance job.
     ///
     /// # Errors

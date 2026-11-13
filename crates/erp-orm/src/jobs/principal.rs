@@ -38,8 +38,8 @@ impl StoredPrincipal {
     /// # Errors
     ///
     /// `Access` for a public or link principal (work started by a public request runs under the
-    /// fixed principal of its kind), `Programming` for an agent or service principal until
-    /// , and `Validation` for more than 256 companies.
+    /// fixed principal of its kind), `Programming` for an agent or service principal until,
+    /// and `Validation` for more than 256 companies.
     pub(crate) fn capture(principal: &Principal) -> Result<Self> {
         match principal.kind() {
             PrincipalKind::User | PrincipalKind::System => {}

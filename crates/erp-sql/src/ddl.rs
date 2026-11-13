@@ -174,6 +174,40 @@ pub fn add_column(table: &str, column: &ColumnDef, default: Option<&str>) -> Vec
     }
 }
 
+/// `ALTER TABLE … ADD COLUMN … DEFAULT <lit> [NOT NULL]` plus its comment, keeping the default
+/// (a `db_default` field's static default stays the column's database default). Existing
+/// rows get the value without a table rewrite (fast default), as with [`add_column`].
+pub fn add_column_keeping_default(table: &str, column: &ColumnDef, default: &str) -> Vec<String> {
+    let (t, c) = (quote(table), quote(&column.name));
+    vec![
+        format!(
+            "ALTER TABLE {t} ADD COLUMN {c} {} DEFAULT {default}{}",
+            column.ty.sql(),
+            if column.not_null { " NOT NULL" } else { "" }
+        ),
+        comment_on_column(table, &column.name, &column.comment),
+    ]
+}
+
+/// `ALTER TABLE … ALTER COLUMN … SET DEFAULT <lit>` (catalog-only, no scan).
+pub fn set_column_default(table: &str, column: &str, default: &str) -> String {
+    format!(
+        "ALTER TABLE {} ALTER COLUMN {} SET DEFAULT {default}",
+        quote(table),
+        quote(column)
+    )
+}
+
+/// `ALTER TABLE … ALTER COLUMN … DROP DEFAULT` (catalog-only, a field that lost
+/// `db_default`).
+pub fn drop_column_default(table: &str, column: &str) -> String {
+    format!(
+        "ALTER TABLE {} ALTER COLUMN {} DROP DEFAULT",
+        quote(table),
+        quote(column)
+    )
+}
+
 /// `ALTER TABLE … ALTER COLUMN … SET EXPRESSION AS (…)`.
 pub fn alter_column_set_expression(table: &str, column: &str, expression: &str) -> String {
     format!(
@@ -888,7 +922,7 @@ pub const SCHEMA_LOCK: &str = "SELECT pg_advisory_xact_lock(4207351906)";
 /// interrupted `CREATE INDEX CONCURRENTLY` leaves an invalid index), `default` (a column with a
 /// database default), `pending` (a column marked with [`PENDING_BACKFILL_COMMENT_PREFIX`]), `ext`,
 /// `trigger` (b = comment; user triggers only) and `function` (b = comment; the row-version bump
-/// function of [`crate::version`],, the signal bump functions and the follow-delete
+/// function of [`crate::version`], the signal bump functions and the follow-delete
 /// function), `schema` and `index_shape` (a = access method, b =
 /// `true` for a partial index, c = the operator class of the first key column when it is not the
 /// type's default, else NULL; design `m3-ormx.md` §6) and `index_unique` (a unique index; a field
@@ -931,9 +965,10 @@ SELECT 'index', t.relname::text, ic.relname::text, pg_get_indexdef(i.indexrelid)
   JOIN pg_namespace n ON n.oid = t.relnamespace
  WHERE n.nspname = current_schema() AND t.relname::text = ANY($1)
 UNION ALL
-SELECT 'default', c.relname::text, a.attname::text, NULL, NULL, NULL
+SELECT 'default', c.relname::text, a.attname::text, pg_get_expr(d.adbin, d.adrelid), NULL, NULL
   FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
   JOIN pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
  WHERE n.nspname = current_schema() AND c.relname::text = ANY($1) AND a.attnum > 0
    AND NOT a.attisdropped AND a.atthasdef AND a.attidentity = '' AND a.attgenerated = ''
 UNION ALL

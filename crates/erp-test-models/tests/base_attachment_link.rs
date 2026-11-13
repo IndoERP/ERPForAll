@@ -442,10 +442,11 @@ async fn writing_the_location_parameter_is_refused() {
     );
 }
 
-/// or blob; the `422 ContentTypeMismatch` of the rpc surface comes with the upload route)
+/// cleanup leaves no row/object/blob; HTTP 422 mapping belongs to the upload route)
 #[tokio::test]
-async fn a_declared_type_that_does_not_match_active_content_is_refused_and_leaves_nothing() {
+async fn a_declared_type_mismatch_is_refused_and_leaves_nothing_after_cleanup() {
     let f = fixture(external_limits()).await;
+    admit_cleanup(f.h.orm()).await;
     let mut tx = f.h.begin().await.unwrap();
     let env = tx.env();
     tx.commit().await.unwrap();
@@ -462,8 +463,31 @@ async fn a_declared_type_that_does_not_match_active_content_is_refused_and_leave
     assert_eq!(err.kind(), ErrorKind::Validation);
     assert_eq!(
         err.message(),
-        "declared content type image/png does not match the content, which is text/html"
+        "declared content type image/png does not match the content, which is text/html (and fenced cleanup pending; the committed reservation is retained)"
     );
+    assert_eq!(
+        scalar(
+            &f.h,
+            "SELECT count(*) FROM ir_blob_upload WHERE state=3 AND reserved_bytes>0"
+        )
+        .await,
+        1
+    );
+    assert_eq!(f.store.staging_keys().len(), 1);
+    let mut clean =
+        f.h.orm()
+            .begin_opts(
+                erp_orm::BeginOptions::new(erp_orm::PrincipalHint::system())
+                    .isolation(erp_orm::Isolation::ReadCommitted),
+            )
+            .await
+            .unwrap();
+    let env = clean.env();
+    attachments::gc::clean_staging(&mut clean, &env, 100)
+        .await
+        .unwrap();
+    clean.commit().await.unwrap();
+    drop(clean);
     let mut tx = f.h.begin().await.unwrap();
     assert_eq!(
         count(&mut tx, "SELECT count(*) FROM ir_blob_upload").await,

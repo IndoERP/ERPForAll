@@ -7,6 +7,8 @@ import { ClientError, RpcClient } from "./transport.js";
 export interface SelectCreateDialogOptions {
   readonly dialogs: DialogService; readonly rpc: RpcClient; readonly model: string; readonly title?: string;
   readonly domain: readonly unknown[]; readonly context: Record<string, unknown>;
+  /** Text the search box starts with (the many2one's typed text). */
+  readonly query?: string;
   readonly select: (choice: RelationChoice) => void | Promise<void>;
   /** Capability supplied by trusted code; resolves only after the embedded editor saves successfully. */
   readonly createEdit?: (input: { domain: readonly unknown[]; context: Record<string, unknown> }) => Promise<RelationChoice | undefined>;
@@ -14,7 +16,7 @@ export interface SelectCreateDialogOptions {
 }
 /** Readonly relational selection. Search semantics stay with the existing name-search contract. */
 export function selectCreateDialog(options: SelectCreateDialogOptions): DialogHandle {
-  messageOptions(options, ["dialogs", "rpc", "model", "title", "domain", "context", "select", "createEdit", "report", "signal"], "Selection dialog");
+  messageOptions(options, ["dialogs", "rpc", "model", "title", "query", "domain", "context", "select", "createEdit", "report", "signal"], "Selection dialog");
   if (!(options.dialogs instanceof DialogService)) throw new ClientError("validation", "Selection dialogs must be a DialogService.");
   if (!(options.rpc instanceof RpcClient)) throw new ClientError("validation", "Selection rpc must be an RpcClient.");
   if (typeof options.model !== "string" || options.model.length > 256 || !/^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$/.test(options.model)) throw new ClientError("validation", "Selection model must be a valid name of at most 256 bytes.");
@@ -30,6 +32,7 @@ export function selectCreateDialog(options: SelectCreateDialogOptions): DialogHa
   // makes the dialog service give it the first focus instead of the close button.
   const search = el("input", undefined, "select-create-search"); search.type = "search"; search.placeholder = "Search…";
   search.setAttribute("aria-label", "Find a record"); search.autofocus = true;
+  if (options.query !== undefined) { if (typeof options.query !== "string") throw new ClientError("validation", "Selection query must be text."); search.value = options.query; }
   const results = el("div", undefined, "select-create-results");
   const status = el("p", undefined, "select-create-status"); status.setAttribute("role", "status");
   body.append(search, status, results);

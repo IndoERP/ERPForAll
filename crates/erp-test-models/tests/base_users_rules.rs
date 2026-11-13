@@ -1310,11 +1310,10 @@ async fn spec_sec_033_users_write_only_user_writeable_fields() {
         s("me@example.com")
     );
     // login and group_ids are not, whatever else is in the same write; nothing is written
-    for field in ["login", "group_ids", "active", "share", "company_id"] {
+    for field in ["login", "group_ids", "active", "share"] {
         let value = match field {
             "group_ids" => set_cmd(&[]),
             "active" | "share" => Value::Bool(true),
-            "company_id" => int(1),
             _ => s("changed"),
         };
         let err = own
@@ -1347,6 +1346,9 @@ async fn spec_sec_033_users_write_only_user_writeable_fields() {
     assert_eq!(described["login"]["readonly"], Value::Bool(true));
     assert_eq!(described["group_ids"]["readonly"], Value::Bool(true));
     assert_eq!(described["email"]["readonly"], Value::Bool(false));
+    // the default company is the one writable company field
+    assert_eq!(described["company_id"]["readonly"], Value::Bool(false));
+    assert_eq!(described["company_ids"]["readonly"], Value::Bool(true));
     // a Settings administrator writes the rest; the superuser needs no group
     let managed = tx
         .env()
@@ -1384,7 +1386,8 @@ async fn spec_sec_033_users_write_only_user_writeable_fields() {
     h.cleanup().await.unwrap();
 }
 
-/// implied groups is in base_groups.rs, `res.partner.partner_share` waits for `res.partner`)
+/// implied groups is in base_groups.rs, the partner half is in
+/// base_partner_users_scope.rs)
 #[tokio::test]
 async fn spec_sec_065_share_follows_a_users_groups() {
     let h = harness().await;
@@ -1473,7 +1476,7 @@ async fn spec_rel_060_users_and_groups_refuse_sudo_commands() {
     let b = base(&mut setup).await;
     setup
         .execute(
-            "INSERT INTO res_users (id, name, login, active) VALUES ($1, 'demo', 'demo', true)",
+            "INSERT INTO res_users (id, name, login, active, share) VALUES ($1, 'demo', 'demo', true, false)",
             &[&DEMO],
         )
         .await
@@ -1486,12 +1489,15 @@ async fn spec_rel_060_users_and_groups_refuse_sudo_commands() {
     let refusal = |model: &str, desc: &str, op: &str| {
         format!("You are not allowed to {op} '{desc}' ({model}) records.")
     };
+    // the admin environment is made by System: demo has no `principal.impersonate` (
+    // A4); the commands still run as the transaction's original principal, demo
+    let as_admin = h
+        .orm()
+        .env(erp_orm::SUPERUSER_ID, erp_orm::Context::new())
+        .with_user(b.admin);
     for (label, groups) in [
         ("sudo", tx.env().records("res.groups").unwrap().sudo(true)),
-        (
-            "with_user(admin)",
-            tx.env().records("res.groups").unwrap().with_user(b.admin),
-        ),
+        ("with_user(admin)", as_admin.records("res.groups").unwrap()),
     ] {
         let g = groups.browse([group]).unwrap();
         // CREATE a user through the group
@@ -1559,7 +1565,7 @@ async fn spec_rel_060_users_and_groups_refuse_sudo_commands() {
         let u = if label == "sudo" {
             u.sudo(true)
         } else {
-            u.with_user(b.admin)
+            u.with_env(as_admin.clone())
         };
         let err = u
             .write_values(

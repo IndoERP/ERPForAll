@@ -1,5 +1,5 @@
-//! Allocation budget of `web_read` with the BENCH-002 specification (design note
-//! , §12; standards §5b): 1,000 and 2,000 orders of 10 lines and two
+//! Allocation budget of `web_read` with the BENCH-002 specification (
+//! §12; standards §5b): 1,000 and 2,000 orders of 10 lines and two
 //! of 50 tags each, read in a transaction whose cache was dropped, as BENCH-002 reads. The
 //! difference of the two runs is the cost of 10,000 lines (and 1,000 orders); it must stay
 //! within the per-line budget, so a map or a copy per row coming back fails here. The statements

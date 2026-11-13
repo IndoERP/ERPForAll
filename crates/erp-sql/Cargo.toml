@@ -13,11 +13,12 @@ erp-domain = { workspace = true }
 erp-expr = { workspace = true }
 erp-fields = { workspace = true }
 erp-registry = { workspace = true }
+# canonical hash payloads of SQL objects (sqlobj): JSON arrays
+serde_json = { workspace = true }
 time = { workspace = true }
 
 [dev-dependencies]
 erp-alloc-budget = { workspace = true }
-serde_json = { workspace = true }
 
 [lints]
 workspace = true

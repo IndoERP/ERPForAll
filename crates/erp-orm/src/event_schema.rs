@@ -18,11 +18,13 @@
 //! - the columns, their types, `NOT NULL` and the generated defaults are exactly the definition: a
 //!   default has to be the built-in function (read with `search_path = pg_catalog`, so a lookalike in
 //!   another schema prints qualified and differs), never an identity or generated column;
-//! - the primary key `(id, create_date)`, the two indexes, no other constraint, trigger or rule;
+//! - the primary key `(id, create_date)`, the two indexes, no other constraint, trigger or rule, and no
+//!   row-level security (enabled, forced or any policy) on the table;
 //! - the id sequence is a plain `bigint` sequence, owned by the `id` column;
 //! - every partition is a plain table of the table, named for one UTC day, with exactly that day as
-//!   its range; no default partition (it would forbid `DETACH PARTITION ... CONCURRENTLY` and catch
-//!   rows the missing-partition error must reject).
+//!   its range, logged (not UNLOGGED), with no trigger, rule, row-level security or policy; no
+//!   default partition (it would forbid `DETACH PARTITION ... CONCURRENTLY` and catch rows the
+//!   missing-partition error must reject).
 //!
 //! Partitions are daily in UTC and the window is today plus [`EVENT_PREMAKE_DAYS`] days. Names and
 //! bounds are computed in SQL from `now() AT TIME ZONE 'UTC'` and written with an explicit `+00`
@@ -171,7 +173,7 @@ impl TableDef {
     fn time_index(&self) -> String {
         format!("{}_time_brin", self.table)
     }
-    fn qualified(&self) -> String {
+    pub(crate) fn qualified(&self) -> String {
         format!("\"{SCHEMA}\".\"{}\"", self.table)
     }
 }
@@ -222,7 +224,8 @@ pub enum EventSchemaProblem {
     /// A default that is not the built-in generator, or an identity or generated column
     /// (`forged-default`).
     ForgedDefault(String),
-    /// A constraint, trigger or rule beyond the primary/UUID composite keys (`forged-constraint`).
+    /// A constraint, trigger or rule beyond the primary/UUID composite keys, or row-level security
+    /// enabled or forced, or a policy, on the table (`forged-constraint`).
     ForgedConstraint(String),
     /// A different primary key or index set (`forged-index`).
     ForgedIndex(String),
@@ -230,7 +233,8 @@ pub enum EventSchemaProblem {
     ForgedSequence(String),
     /// A default partition (`default-partition`).
     DefaultPartition(String),
-    /// A partition that is not a plain table named for one UTC day with exactly that range
+    /// A partition that is not a logged plain table named for one UTC day with exactly that
+    /// range, or that has a trigger, a rule, row-level security enabled or forced, or a policy
     /// (`forged-partition`).
     ForgedPartition(String),
 }
@@ -542,21 +546,34 @@ impl Transaction {
         call: &str,
         install: &str,
     ) -> Result<Vec<String>> {
+        self.maintain_table_partitions(def).await?.ok_or_else(|| {
+            Error::programming(format!(
+                "{call}: {} is not installed; run {install} first",
+                def.qualified()
+            ))
+        })
+    }
+
+    /// The body of the partition upkeep of one event table, under the namespace lock: `None` when
+    /// the table is not installed, otherwise the shape checks, the missing days of the window
+    /// (their names returned in date order) and the partition checks. The caller holds the
+    /// System principal with full elevation.
+    pub(crate) async fn maintain_table_partitions(
+        &mut self,
+        def: &TableDef,
+    ) -> Result<Option<Vec<String>>> {
         self.event_lock().await?;
         let present = self
             .query("SELECT to_regclass($1) IS NOT NULL", &[&def.qualified()])
             .await?[0]
             .get::<_, bool>(0);
         if !present {
-            return Err(Error::programming(format!(
-                "{call}: {} is not installed; run {install} first",
-                def.qualified()
-            )));
+            return Ok(None);
         }
         self.check_event_table(def).await?;
         let (created, _) = self.make_event_partitions(def).await?;
         self.check_event_partitions(def).await?;
-        Ok(created)
+        Ok(Some(created))
     }
 
     /// One lock for the whole event namespace: both tables share the schema creation.
@@ -711,6 +728,11 @@ impl Transaction {
             (Ok(_), Err(error)) => Err(error),
             (Ok(value), Ok(_)) => Ok(value),
         }
+    }
+
+    // Owner-side sealing validates the current persisted input shape without installing anything.
+    pub(crate) async fn check_audit_seal_input(&mut self) -> Result<()> {
+        self.check_event_table(&crate::audit::AUDIT_TABLE).await
     }
 
     /// Everything about the table except its partitions.
@@ -878,6 +900,26 @@ impl Transaction {
             ))
             .into());
         }
+        // A query through the partitioned parent applies the parent's row security, never the
+        // partitions', so a policy here could hide rows from a reader.
+        let security = self
+            .query(
+                "SELECT c.relrowsecurity, c.relforcerowsecurity, \
+                 (SELECT count(*) FROM pg_policy p WHERE p.polrelid = c.oid) \
+                 FROM pg_class c WHERE c.oid = $1::text::regclass",
+                &[&qualified],
+            )
+            .await?;
+        let (enabled, forced, policies): (bool, bool, i64) =
+            (security[0].get(0), security[0].get(1), security[0].get(2));
+        if enabled || forced || policies != 0 {
+            return Err(EventSchemaProblem::ForgedConstraint(format!(
+                "{qualified} has row-level security (enabled: {enabled}, forced: {forced}) and \
+                 {policies} row-level security policy(ies), expected row-level security off \
+                 and no policies"
+            ))
+            .into());
+        }
         Ok(())
     }
 
@@ -1013,8 +1055,8 @@ impl Transaction {
                         "\"{SCHEMA}\".\"{}\" exists (relkind {}) but is not a partition of \
                          \"{}\"",
                         slot.name,
-                        def.table,
-                        row.get::<_, String>(1)
+                        row.get::<_, String>(1),
+                        def.table
                     ))
                     .into());
                 }
@@ -1028,6 +1070,34 @@ impl Transaction {
                         slot.to
                     ))
                     .await?;
+                    // Event partitions are reached through their parent only.
+                    // Owner default ACLs must not create a direct partition escape for a reader,
+                    // runtime role, PUBLIC or an inherited group when upkeep adds a new day.
+                    let grants = self.query(
+                        "SELECT DISTINCT CASE WHEN a.grantee=0 THEN 'PUBLIC'::text ELSE r.rolname::text END \
+                         FROM pg_catalog.pg_class c CROSS JOIN LATERAL pg_catalog.aclexplode(c.relacl) a \
+                         LEFT JOIN pg_catalog.pg_roles r ON r.oid=a.grantee \
+                         WHERE c.oid=$1::text::regclass AND a.grantee<>c.relowner",
+                        &[&format!("\"{SCHEMA}\".{}", erp_sql::quote(&slot.name))],
+                    ).await?;
+                    for grant in grants {
+                        let grantee: Option<String> = grant.try_get(0).map_err(|source| {
+                            Error::db("Cannot decode event partition grant").with_source(source)
+                        })?;
+                        let grantee = grantee.ok_or_else(|| {
+                            Error::programming("Event partition grant names a missing role")
+                        })?;
+                        let target = if grantee == "PUBLIC" {
+                            "PUBLIC".to_owned()
+                        } else {
+                            erp_sql::quote(&grantee)
+                        };
+                        self.batch(&format!(
+                            "REVOKE ALL ON \"{SCHEMA}\".{} FROM {target}",
+                            erp_sql::quote(&slot.name)
+                        ))
+                        .await?;
+                    }
                     created.push(slot.name.clone());
                 }
             }
@@ -1035,8 +1105,8 @@ impl Transaction {
         Ok((created, existing))
     }
 
-    /// Every attached partition: a plain table of ours, named for one UTC day with that day as its
-    /// range, no default partition.
+    /// Every attached partition: a logged plain table of ours, named for one UTC day with that day
+    /// as its range, with no trigger, rule, row-level security or policy; no default partition.
     async fn check_event_partitions(&mut self, def: &TableDef) -> Result<()> {
         self.with_catalog_view(async |tx| {
             let rows = tx
@@ -1048,7 +1118,12 @@ impl Transaction {
                          CASE WHEN c.relname ~ '^{table}_p[0-9]{{8}}$' THEN \
                            to_char(to_date(substr(c.relname, {from}), 'YYYYMMDD'), 'YYYY-MM-DD') END, \
                          CASE WHEN c.relname ~ '^{table}_p[0-9]{{8}}$' THEN \
-                           to_char(to_date(substr(c.relname, {from}), 'YYYYMMDD') + 1, 'YYYY-MM-DD') END \
+                           to_char(to_date(substr(c.relname, {from}), 'YYYYMMDD') + 1, 'YYYY-MM-DD') END, \
+                         c.relpersistence::text, c.relrowsecurity, c.relforcerowsecurity, \
+                         (SELECT count(*) FROM pg_trigger t \
+                           WHERE t.tgrelid = c.oid AND NOT t.tgisinternal), \
+                         (SELECT count(*) FROM pg_rewrite r WHERE r.ev_class = c.oid), \
+                         (SELECT count(*) FROM pg_policy p WHERE p.polrelid = c.oid) \
                          FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid \
                          WHERE i.inhparent = $1::text::regclass ORDER BY c.relname",
                         table = def.table,
@@ -1064,6 +1139,11 @@ impl Transaction {
                 let bound: String = row.get(3);
                 let day: Option<String> = row.get(4);
                 let next: Option<String> = row.get(5);
+                let persistence: String = row.get(6);
+                let row_security: bool = row.get(7);
+                let forced_row_security: bool = row.get(8);
+                let (triggers, rules, policies): (i64, i64, i64) =
+                    (row.get(9), row.get(10), row.get(11));
                 if bound == "DEFAULT" {
                     return Err(EventSchemaProblem::DefaultPartition(format!(
                         "\"{SCHEMA}\".\"{name}\" is a default partition (it forbids DETACH \
@@ -1100,11 +1180,164 @@ impl Transaction {
                     ))
                     .into());
                 }
+                if persistence != "p" {
+                    let state = if persistence == "u" {
+                        "unlogged"
+                    } else {
+                        "not permanent"
+                    };
+                    return Err(EventSchemaProblem::ForgedPartition(format!(
+                        "\"{SCHEMA}\".\"{name}\" is {state} (relpersistence {persistence}), \
+                         expected a logged (permanent) table"
+                    ))
+                    .into());
+                }
+                if triggers != 0 {
+                    return Err(EventSchemaProblem::ForgedPartition(format!(
+                        "\"{SCHEMA}\".\"{name}\" has {triggers} trigger(s), expected none"
+                    ))
+                    .into());
+                }
+                if rules != 0 {
+                    return Err(EventSchemaProblem::ForgedPartition(format!(
+                        "\"{SCHEMA}\".\"{name}\" has {rules} rule(s), expected none"
+                    ))
+                    .into());
+                }
+                if row_security || forced_row_security {
+                    let state = if forced_row_security {
+                        "forced"
+                    } else {
+                        "enabled"
+                    };
+                    return Err(EventSchemaProblem::ForgedPartition(format!(
+                        "\"{SCHEMA}\".\"{name}\" has row-level security {state}, expected off"
+                    ))
+                    .into());
+                }
+                if policies != 0 {
+                    return Err(EventSchemaProblem::ForgedPartition(format!(
+                        "\"{SCHEMA}\".\"{name}\" has {policies} row-level security \
+                         policy(ies), expected none"
+                    ))
+                    .into());
+                }
             }
             Ok(())
         })
         .await
     }
+}
+
+/// PostgreSQL's partition-routing failure on an insert into the event table `table` (unqualified
+/// name): SQLSTATE `23514` without a constraint name, raised on the parent table itself. The table
+/// is read from the server's error fields, which are never translated; only when the error carries
+/// no table (it did not come from the server's error report) is the server's English "no partition
+/// of relation" text used instead. A breach of a table's own CHECK is `23514` too, but names its
+/// constraint, or a partition rather than the parent, so it is never taken for a missing partition.
+/// The one detection of the outbox and the audit INSERT.
+pub(crate) fn is_partition_miss(error: &Error, table: &str) -> bool {
+    let reported = std::error::Error::source(error)
+        .and_then(|source| source.downcast_ref::<tokio_postgres::Error>())
+        .and_then(tokio_postgres::Error::as_db_error)
+        .and_then(|db| db.table());
+    partition_miss(
+        error.sqlstate(),
+        error.constraint(),
+        reported,
+        error.message(),
+        table,
+    )
+}
+
+/// The decision of [`is_partition_miss`] on the error's parts.
+fn partition_miss(
+    sqlstate: Option<&str>,
+    constraint: Option<&str>,
+    reported_table: Option<&str>,
+    message: &str,
+    table: &str,
+) -> bool {
+    if sqlstate != Some("23514") || constraint.is_some() {
+        return false;
+    }
+    match reported_table {
+        Some(reported) => reported == table,
+        None => message.contains("no partition of relation"),
+    }
+}
+
+/// How many days from today [`consecutive_partition_days`] looks ahead.
+pub(crate) const WINDOW_HORIZON_DAYS: i32 = 64;
+
+/// The number of consecutive UTC days, from today, that have an attached partition of the event
+/// table `def` whose oid is `oid`: 0 when today has none, 1 for today alone. The first missing
+/// day ends the count, whatever lies beyond the gap; at most [`WINDOW_HORIZON_DAYS`]. A catalog
+/// read without a name lookup, so it needs no `USAGE` on the schema. A partition whose name has
+/// eight digits that are not a date (`_p20261399`) counts as no day here instead of failing the
+/// read: this count also runs for the cached audit store check and after a busy upkeep, where
+/// `check_event_partitions` (which refuses such a name) has not run.
+pub(crate) async fn consecutive_partition_days(
+    tx: &mut Transaction,
+    oid: i64,
+    def: &TableDef,
+) -> Result<u32> {
+    let rows = tx
+        .query(
+            &format!(
+                "SELECT COALESCE(min(g.n) FILTER (WHERE p.d IS NULL), {horizon})::int4 \
+                 FROM generate_series(0, {horizon} - 1) AS g(n) \
+                 LEFT JOIN (SELECT CASE WHEN pg_input_is_valid(substr(c.relname, {from}), 'date') \
+                   THEN to_date(substr(c.relname, {from}), 'YYYYMMDD') END AS d \
+                   FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid \
+                   WHERE i.inhparent = $1::int8::oid \
+                   AND c.relname ~ '^{table}_p[0-9]{{8}}$') p \
+                   ON p.d = (now() AT TIME ZONE 'UTC')::date + g.n",
+                from = def.table.len() + 3,
+                horizon = WINDOW_HORIZON_DAYS,
+                table = def.table,
+            ),
+            &[&oid],
+        )
+        .await?;
+    let row = rows
+        .first()
+        .ok_or_else(|| Error::db("the partition window query returned no row"))?;
+    let present: i32 = row
+        .try_get(0)
+        .map_err(|source| Error::db("cannot decode the partition window").with_source(source))?;
+    u32::try_from(present).map_err(|_| {
+        Error::internal(format!(
+            "the partition window of {} is negative ({present})",
+            def.qualified()
+        ))
+    })
+}
+
+/// The oid and relkind of the event table `def`, read from the catalog without a name lookup
+/// (`to_regclass` itself fails without `USAGE` on the schema); `None` when it does not exist.
+pub(crate) async fn event_table_oid(
+    tx: &mut Transaction,
+    def: &TableDef,
+) -> Result<Option<(i64, String)>> {
+    let rows = tx
+        .query(
+            "SELECT c.oid::int8, c.relkind::text FROM pg_class c \
+             JOIN pg_namespace n ON n.oid = c.relnamespace \
+             WHERE n.nspname = $1 AND c.relname = $2",
+            &[&SCHEMA, &def.table],
+        )
+        .await?;
+    let Some(row) = rows.first() else {
+        return Ok(None);
+    };
+    let oid: i64 = row
+        .try_get(0)
+        .map_err(|source| Error::db("cannot decode the event table oid").with_source(source))?;
+    let kind: String = row
+        .try_get(1)
+        .map_err(|source| Error::db("cannot decode the event table kind").with_source(source))?;
+    Ok(Some((oid, kind)))
 }
 
 fn nullability(not_null: bool) -> &'static str {
@@ -1184,6 +1417,95 @@ mod tests {
             schema_exists: false,
             can_create_schema: true,
         }
+    }
+
+    fn db_error(state: &str, message: &str) -> Error {
+        Error::new(erp_fields::ErrorKind::Validation, message).with_sqlstate(Some(state.to_owned()))
+    }
+
+    /// The partition-routing failure is `23514` without a constraint name and with PostgreSQL's
+    /// "no partition" text; a named or unnamed check constraint and any other SQLSTATE are not.
+    /// (Errors built here carry no server error fields, so the text fallback decides.)
+    #[test]
+    fn partition_miss_is_the_routing_failure_only() {
+        assert!(is_partition_miss(
+            &db_error(
+                "23514",
+                "no partition of relation \"ir_event_outbox\" found for row"
+            ),
+            "ir_event_outbox"
+        ));
+        assert!(!is_partition_miss(
+            &db_error("23514", "no partition of relation \"x\" found for row")
+                .with_constraint("ir_event_outbox_shape_check"),
+            "ir_event_outbox"
+        ));
+        assert!(!is_partition_miss(
+            &db_error(
+                "23514",
+                "new row for relation \"ir_audit_entry_p20261112\" violates check constraint"
+            ),
+            "ir_audit_entry"
+        ));
+        assert!(!is_partition_miss(
+            &db_error("40001", "no partition of relation \"x\" found for row"),
+            "ir_event_outbox"
+        ));
+        assert!(!is_partition_miss(
+            &Error::programming("no partition of relation \"x\" found for row"),
+            "ir_event_outbox"
+        ));
+    }
+
+    /// With the server's table field present the decision does not read the (localized) text: a
+    /// translated message on the parent table is a miss, the English text on another table is not.
+    #[test]
+    fn partition_miss_uses_the_reported_table_before_the_text() {
+        let translated =
+            "aucune partition de la relation « ir_event_outbox » trouvée pour la ligne";
+        assert!(partition_miss(
+            Some("23514"),
+            None,
+            Some("ir_event_outbox"),
+            translated,
+            "ir_event_outbox"
+        ));
+        assert!(!partition_miss(
+            Some("23514"),
+            None,
+            Some("ir_event_outbox_p20261112"),
+            "no partition of relation \"ir_event_outbox\" found for row",
+            "ir_event_outbox"
+        ));
+        assert!(!partition_miss(
+            Some("23514"),
+            Some("ir_event_outbox_check"),
+            Some("ir_event_outbox"),
+            translated,
+            "ir_event_outbox"
+        ));
+        assert!(!partition_miss(
+            Some("23505"),
+            None,
+            Some("ir_event_outbox"),
+            translated,
+            "ir_event_outbox"
+        ));
+        // no table field: the English text decides
+        assert!(partition_miss(
+            Some("23514"),
+            None,
+            None,
+            "no partition of relation \"ir_audit_entry\" found for row",
+            "ir_audit_entry"
+        ));
+        assert!(!partition_miss(
+            Some("23514"),
+            None,
+            None,
+            translated,
+            "ir_event_outbox"
+        ));
     }
 
     #[test]

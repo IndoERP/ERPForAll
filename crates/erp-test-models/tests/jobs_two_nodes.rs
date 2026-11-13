@@ -1,4 +1,4 @@
-//! stage G: two nodes in one process (Scale-out;,
+//! stage G: two nodes in one process (Scale-out,
 //! processes; the OS-process version belongs to SCALE.TEST.
 #![allow(
     clippy::unwrap_used,

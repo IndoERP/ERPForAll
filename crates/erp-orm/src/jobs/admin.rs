@@ -15,6 +15,15 @@ use super::{JobKey, JobRef, JobState, PrincipalPolicy, Priority, When};
 use crate::principal::{PrincipalKind, SUPERUSER_ID, UserId};
 use crate::{Env, Transaction};
 
+/// What a recurring upsert does with an existing row of another principal.
+#[derive(Debug, Clone, Copy)]
+enum Others {
+    /// Replace it (the system entry).
+    Replace,
+    /// Refuse (the own entry of a user).
+    Refuse,
+}
+
 /// Most keys one [`Transaction::job_cancel_by_keys`] call takes.
 pub const MAX_CANCEL_KEYS: usize = 10_000;
 
@@ -129,6 +138,9 @@ const STATE_SQL: &str = "SELECT state FROM erp_job WHERE job_uuid = $1";
 impl Transaction {
     /// Whether `env` may administer jobs: the system principal, or a user holding `jobs.admin`.
     async fn require_job_admin(&mut self, env: &Env, call: &str) -> Result<()> {
+        // checked before the System shortcut, which never reaches the binding
+        self.prepare_switch(env).await?;
+        self.check_env_block(env)?;
         if env.principal().kind() == PrincipalKind::System {
             return Ok(());
         }
@@ -285,6 +297,9 @@ impl Transaction {
         kind: &str,
         keys: &[JobKey],
     ) -> Result<u64> {
+        // an environment outside its elevation block acts on no job
+        self.prepare_switch(env).await?;
+        self.check_env_block(env)?;
         if keys.is_empty() {
             return Ok(0);
         }
@@ -358,7 +373,9 @@ impl Transaction {
     /// one statement path `ir.cron` and the core schedules use to keep exactly one job row per
     /// schedule (2). A row of another principal is replaced (the stored principal
     /// is never updated in place). Only the system principal may call it: the schedule's owner
-    /// has already passed its own access check.
+    /// has already passed its own access check. A user keeping the schedule of its own
+    /// caller-run job uses [`job_upsert_recurring_own`](Self::job_upsert_recurring_own), which
+    /// never replaces another principal's row.
     ///
     /// # Errors
     ///
@@ -366,12 +383,95 @@ impl Transaction {
     /// kind or a `run_as` on a kind that runs as the system, or a user-run kind without one;
     /// `UserError` when the existing row is running (a running schedule is not rewritten).
     pub async fn job_upsert_recurring(&mut self, env: &Env, spec: RecurringSpec) -> Result<JobRef> {
+        // before the System test: a System environment of a closed block is refused
+        self.prepare_switch(env).await?;
+        self.check_env_block(env)?;
         if env.principal().kind() != PrincipalKind::System {
             return Err(Error::access(
                 "job_upsert_recurring is for the system principal: schedules are kept by the \
                  modules that own them",
             ));
         }
+        self.upsert_recurring_row(env, spec, Others::Replace, None)
+            .await
+    }
+
+    /// [`job_upsert_recurring`](Self::job_upsert_recurring) for a user keeping the schedule of its
+    /// own job (2, A4): `ir.cron` keeps a user's own cron this way instead of
+    /// switching to the superuser. `env` is the user's own environment (kind `User`, outside an
+    /// elevation block, without a `with_user` switch); the kind runs as its caller and `spec`
+    /// runs as `env`'s user. The row is stored as the system entry stores it (the user it runs
+    /// as, no company context of the caller) and attributed to the caller (`enqueued_by_*`). An
+    /// existing row of another principal is never replaced: only the system entry does that,
+    /// also when the insert coalesces into a live row the lookup could not lock. An environment
+    /// with any `with_user` switch is refused here, an admitted one (a holder of
+    /// `principal.impersonate` acting as another user) included: fail closed, a schedule is kept
+    /// by its own user only.
+    ///
+    /// # Errors
+    ///
+    /// `Access` for any other environment, a kind that runs as the system, a `run_as` that is
+    /// not `env`'s user, and an existing row of another principal; `Programming` for an
+    /// unregistered kind or a missing `run_as`; `UserError` when the existing row is running;
+    /// the admission refusals of `env`.
+    pub async fn job_upsert_recurring_own(
+        &mut self,
+        env: &Env,
+        spec: RecurringSpec,
+    ) -> Result<JobRef> {
+        self.prepare_switch(env).await?;
+        self.check_env_block(env)?;
+        if env.principal().kind() != PrincipalKind::User
+            || env.block().is_some()
+            || !env.switches().is_empty()
+        {
+            return Err(Error::access(
+                "job_upsert_recurring_own keeps the schedule of a user acting for itself: call it \
+                 with the user's own environment, outside an elevation block and without with_user",
+            ));
+        }
+        let decl = *kind_map()
+            .get(spec.kind)
+            .ok_or_else(|| error::unknown_kind(spec.kind))?;
+        if !matches!(decl.principal, PrincipalPolicy::Caller) {
+            return Err(Error::access(format!(
+                "job kind '{}' runs as the system principal: only the system keeps its schedule \
+                 (job_upsert_recurring)",
+                spec.kind
+            )));
+        }
+        match spec.run_as {
+            Some(user) if user == env.user_id() => {}
+            Some(user) => {
+                return Err(Error::access(format!(
+                    "job_upsert_recurring_own keeps a schedule that runs as its caller (user {}), \
+                     not as user {user}",
+                    env.user_id()
+                )));
+            }
+            None => {
+                return Err(Error::programming(format!(
+                    "the recurring job of kind '{}' needs the user it runs as (run_as)",
+                    spec.kind
+                )));
+            }
+        }
+        // the row is written as the system entry writes it (the caller was checked above) and is
+        // attributed to the caller
+        let enqueuer = super::StoredPrincipal::capture(env.principal())?;
+        let core = env.core_system();
+        self.upsert_recurring_row(&core, spec, Others::Refuse, Some(&enqueuer))
+            .await
+    }
+
+    /// The body of the recurring upserts: `env` is the system environment that writes the row.
+    async fn upsert_recurring_row(
+        &mut self,
+        env: &Env,
+        spec: RecurringSpec,
+        others: Others,
+        enqueued_by: Option<&super::StoredPrincipal>,
+    ) -> Result<JobRef> {
         let decl = *kind_map()
             .get(spec.kind)
             .ok_or_else(|| error::unknown_kind(spec.kind))?;
@@ -420,6 +520,13 @@ impl Transaction {
                     .await?;
                 return Ok(JobRef::new(id, uuid));
             }
+            if matches!(others, Others::Refuse) {
+                return Err(Error::access(format!(
+                    "the recurring job {key} of kind '{}' runs as {current_kind} \
+                     {current_user}: only the system principal replaces it",
+                    spec.kind
+                )));
+            }
             // another principal: the stored principal is immutable, so the row is replaced
             self.execute("DELETE FROM erp_job WHERE id = $1", &[&id])
                 .await?;
@@ -446,7 +553,33 @@ impl Transaction {
         if let Some(run_as) = run_as {
             request = request.run_as(run_as);
         }
-        let outcome = self.enqueue(env, request).await?;
+        let outcome = self
+            .enqueue_many_by(env, vec![request], enqueued_by)
+            .await?
+            .pop()
+            .ok_or_else(|| Error::internal("enqueue returned no outcome"))?;
+        if matches!(others, Others::Refuse) {
+            // the insert may have coalesced into a live row it could not see locked above: it
+            // must be the caller's own, or nothing of it is touched
+            let rows = self
+                .query(
+                    "SELECT run_as_kind, run_as_user FROM erp_job WHERE id = $1",
+                    &[&outcome.job().id()],
+                )
+                .await?;
+            let row = rows
+                .first()
+                .ok_or_else(|| Error::internal("the recurring job row vanished after enqueue"))?;
+            let stored_kind: String = row.try_get(0).map_err(undecodable)?;
+            let stored_user: i64 = row.try_get(1).map_err(undecodable)?;
+            if stored_kind != kind_text || stored_user != user {
+                return Err(Error::access(format!(
+                    "the recurring job {key} of kind '{}' runs as {stored_kind} {stored_user}: \
+                     only the system principal replaces it",
+                    spec.kind
+                )));
+            }
+        }
         if spec.held {
             self.execute(
                 "UPDATE erp_job SET state = 'held' WHERE id = $1 AND state = 'ready'",
@@ -470,6 +603,9 @@ impl Transaction {
         key: &JobKey,
         at: TimestampTz,
     ) -> Result<bool> {
+        // before the System test: a System environment of a closed block is refused
+        self.prepare_switch(env).await?;
+        self.check_env_block(env)?;
         if env.principal().kind() != PrincipalKind::System {
             return Err(Error::access(
                 "job_set_run_after is for the system principal: schedules are kept by the \

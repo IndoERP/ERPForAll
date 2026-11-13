@@ -212,6 +212,63 @@ pub async fn reflect_models(tx: &mut Transaction) -> Result<()> {
                 tx.execute(xml_sql, &[&field_addon, &field_xml_name, &field_id])
                     .await?;
             }
+
+            // 3. Reflect ir.model.fields.selection
+            if let FieldType::Selection {
+                values: Some(values),
+                ..
+            } = &field.ty
+                && registry.model("ir.model.fields.selection").is_some()
+            {
+                let field_addon = field.modules.first().copied().unwrap_or(model_addon);
+                for (index, (val_key, val_label)) in values.iter().enumerate() {
+                    let sel_rows = tx
+                        .query(
+                            "SELECT id FROM ir_model_fields_selection WHERE field_id = $1 AND value = $2 LIMIT 1",
+                            &[&field_id, &val_key],
+                        )
+                        .await?;
+                    let sel_id: i64 = if let Some(row) = sel_rows.first() {
+                        let sid: i64 = row.try_get(0).map_err(|e| Error::db(e.to_string()))?;
+                        tx.execute(
+                            r#"
+                            UPDATE ir_model_fields_selection
+                            SET sequence = $1,
+                                name = jsonb_set(COALESCE(name, '{}'::jsonb), '{en_US}', to_jsonb($2::text))
+                            WHERE id = $3
+                            "#,
+                            &[&(index as i32), &val_label, &sid],
+                        )
+                        .await?;
+                        sid
+                    } else {
+                        let ins = tx
+                            .query(
+                                r#"
+                                INSERT INTO ir_model_fields_selection (field_id, value, name, sequence)
+                                VALUES ($1, $2, jsonb_build_object('en_US', $3::text), $4)
+                                RETURNING id
+                                "#,
+                                &[&field_id, &val_key, &val_label, &(index as i32)],
+                            )
+                            .await?;
+                        ins[0].try_get(0).map_err(|e| Error::db(e.to_string()))?
+                    };
+
+                    if has_model_data {
+                        let xmodel = model.name.replace('.', "_");
+                        let xvalue = val_key.replace(['.', ' '], "_").to_ascii_lowercase();
+                        let sel_xml_name = format!("selection__{xmodel}__{}__{xvalue}", field.name);
+                        let xml_sql = r#"
+                            INSERT INTO ir_model_data (module, name, model, res_id, noupdate)
+                            VALUES ($1, $2, 'ir.model.fields.selection', $3, false)
+                            ON CONFLICT (module, name) DO UPDATE SET res_id = $3, model = 'ir.model.fields.selection'
+                        "#;
+                        tx.execute(xml_sql, &[&field_addon, &sel_xml_name, &sel_id])
+                            .await?;
+                    }
+                }
+            }
         }
     }
 

@@ -176,8 +176,7 @@ const RELEASE_BROTLI_WINDOW: i32 = 22;
 /// Deterministic gzip and Brotli forms of one verified release file.
 ///
 /// CPU-bound and synchronous. `AssetBundle::load` runs once while the server is composed,
-/// before it accepts requests, so no request ever waits on this; the cost is not measured
-/// .
+/// before it accepts requests, so no request ever waits on this; the cost is not measured.
 fn encode_release(bytes: &[u8]) -> Result<(Vec<u8>, Vec<u8>), AssetError> {
     use std::io::Write;
     let failed = |stage: &'static str| {
@@ -653,31 +652,7 @@ impl PublishedAssets {
     /// Invalid canonical origin, randomness failure or JSON serialization failure.
     pub fn shell(&self, origin: &str) -> Result<ShellAssets, PublicationError> {
         use base64::Engine as _;
-        if origin.len() > 4096 {
-            return Err(refused(
-                PublicationErrorKind::Origin,
-                "invalid canonical shell origin",
-            ));
-        }
-        let parsed = url::Url::parse(origin).map_err(|_| {
-            refused(
-                PublicationErrorKind::Origin,
-                "invalid canonical shell origin",
-            )
-        })?;
-        if !matches!(parsed.scheme(), "http" | "https")
-            || parsed.host_str().is_none()
-            || !parsed.username().is_empty()
-            || parsed.password().is_some()
-            || parsed.path() != "/"
-            || parsed.query().is_some()
-            || parsed.fragment().is_some()
-        {
-            return Err(refused(
-                PublicationErrorKind::Origin,
-                "invalid canonical shell origin",
-            ));
-        }
+        let authority = canonical_authority(origin)?;
         let mut bytes = [0u8; 16];
         getrandom::fill(&mut bytes).map_err(|_| {
             refused(
@@ -686,10 +661,7 @@ impl PublishedAssets {
             )
         })?;
         let nonce = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
-        let authority = &parsed[url::Position::BeforeHost..url::Position::AfterPort];
-        let csp = format!(
-            "default-src 'self'; script-src 'self' 'nonce-{nonce}'; style-src-elem 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' wss://{authority}; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
-        );
+        let csp = shell_policy(&format!("'self' 'nonce-{nonce}'"), &authority);
         let html = format!(
             "<script type=\"importmap\" nonce=\"{nonce}\">{}</script>",
             self.import_map()?
@@ -698,9 +670,81 @@ impl PublishedAssets {
     }
 }
 
+/// The `host[:port]` of a canonical shell origin: `http(s)`, a host, no credentials, path `/`,
+/// no query or fragment. Anything else is refused, never repaired.
+fn canonical_authority(origin: &str) -> Result<String, PublicationError> {
+    let invalid = || {
+        refused(
+            PublicationErrorKind::Origin,
+            "invalid canonical shell origin",
+        )
+    };
+    if origin.len() > 4096 {
+        return Err(invalid());
+    }
+    let parsed = url::Url::parse(origin).map_err(|_| invalid())?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.path() != "/"
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(invalid());
+    }
+    Ok(parsed[url::Position::BeforeHost..url::Position::AfterPort].to_owned())
+}
+
+/// The `shell`/`login` header-class policy (threat model §13) with `script_src` as the value of
+/// `script-src`. Both the nonced shell and the asset-less page use this one string.
+fn shell_policy(script_src: &str, authority: &str) -> String {
+    format!(
+        "default-src 'self'; script-src {script_src}; style-src-elem 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' wss://{authority}; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+    )
+}
+
+/// The shell policy for a page served without a published asset generation: no import map, so
+/// no nonce, and `script-src 'self'` only (the page's module and stylesheet are same-origin).
+/// # Errors
+/// An invalid canonical origin.
+pub(crate) fn static_shell_csp(origin: &str) -> Result<String, PublicationError> {
+    Ok(shell_policy("'self'", &canonical_authority(origin)?))
+}
+
 impl PublicationError {
     pub(crate) fn runtime_mismatch() -> Self {
         refused(PublicationErrorKind::Identity, "runtime mismatch")
+    }
+}
+
+#[cfg(test)]
+mod shell_policy_tests {
+    use super::*;
+
+    /// Threat model §13 `login` class on a page without a published generation: the shell
+    /// policy with `script-src 'self'` and no nonce; an invalid origin is refused, not repaired.
+    #[test]
+    #[allow(clippy::unwrap_used, reason = "test assertions")]
+    fn the_static_shell_policy_is_the_shell_policy_without_a_nonce() {
+        assert_eq!(
+            static_shell_csp("https://erp.example.test:8443/").unwrap(),
+            "default-src 'self'; script-src 'self'; style-src-elem 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' wss://erp.example.test:8443; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+        );
+        for origin in [
+            "https://erp.example.test/erp",
+            "https://user@erp.example.test",
+            "ftp://erp.example.test",
+            "https://erp.example.test/?q=1",
+        ] {
+            let error = static_shell_csp(origin).unwrap_err();
+            assert_eq!(error.kind(), PublicationErrorKind::Origin, "{origin}");
+            assert_eq!(
+                error.to_string(),
+                "asset publication refused: invalid canonical shell origin",
+                "{origin}"
+            );
+        }
     }
 }
 

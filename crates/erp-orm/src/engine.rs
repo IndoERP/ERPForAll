@@ -1,4 +1,4 @@
-//! The compute engine (COMP §4.4–4.6, §4.11;, §6).
+//! The compute engine (COMP §4.4–4.6, §4.11, §6).
 //!
 //! - **Marking** ([`Transaction::modified`], `crate::trigger`): the dependents of changed fields,
 //!   on the same model and through relations, are visited once per record in global rank order;
@@ -105,8 +105,7 @@ impl ContextCache {
             .is_some_and(|per_key| per_key.values().any(|v| !v.is_empty()))
     }
 
-    /// Drop the values of `fields` (all when `None`) for `ids` (all when `None`), in every context
-    /// .
+    /// Drop the values of `fields` (all when `None`) for `ids` (all when `None`), in every context.
     pub(crate) fn invalidate(
         &mut self,
         model: ModelId,
@@ -135,6 +134,7 @@ impl ContextCache {
 /// Engine data saved by [`EngineState::snapshot`].
 #[derive(Debug)]
 pub(crate) struct EngineSnapshot {
+    properties: Arc<crate::company_dependent_runtime::State>,
     new_records: Arc<FxHashMap<RecId, ModelId>>,
     context: Arc<ContextCache>,
     refs: Arc<FxHashMap<String, RecId>>,
@@ -160,6 +160,7 @@ fn not_a_related_source(
 /// Engine state owned by a transaction.
 #[derive(Debug, Default)]
 pub(crate) struct EngineState {
+    pub(crate) properties: Arc<crate::company_dependent_runtime::State>,
     protected: Vec<Protection>,
     pub(crate) context: Arc<ContextCache>,
     pub(crate) next_new: i64,
@@ -294,6 +295,7 @@ impl EngineState {
     /// Forget cached data (savepoint rollback).
     pub(crate) fn clear(&mut self) {
         self.readable.clear();
+        self.properties = Arc::default();
         self.context = Arc::default();
         self.refs = Arc::default();
         self.new_records = Arc::default();
@@ -310,6 +312,7 @@ impl EngineState {
     /// `Arc::make_mut` only then, so an onchange that does not touch them copies nothing.
     pub(crate) fn snapshot(&self) -> EngineSnapshot {
         EngineSnapshot {
+            properties: Arc::clone(&self.properties),
             new_records: Arc::clone(&self.new_records),
             context: Arc::clone(&self.context),
             refs: Arc::clone(&self.refs),
@@ -338,6 +341,7 @@ impl EngineState {
         // Metadata read inside an isolated scope may depend on rows it rolled back.
         self.precisions.clear();
         self.write_precisions.clear();
+        self.properties = snapshot.properties;
         self.new_records = snapshot.new_records;
         self.context = snapshot.context;
         self.refs = snapshot.refs;
@@ -452,7 +456,7 @@ impl Transaction {
     where
         F: AsyncFnOnce(&mut Transaction) -> Result<T>,
     {
-        self.check_records(records)?;
+        self.admit_records(records).await?;
         let spec = records.spec();
         let fids = fields
             .iter()
@@ -559,7 +563,10 @@ impl Transaction {
                 let cell = self
                     .slot_get(&slot, model, field, *id)
                     .unwrap_or(Cell::Null);
-                if fs.translate {
+                if fs.company_dependent {
+                    let (company, fallback) = self.property_context(env, model, field)?;
+                    crate::company_dependent::project(&fs.ty, &cell, company, &fallback)
+                } else if fs.translate {
                     crate::translated::project(spec.name, fs.name, &cell, env.lang())
                 } else {
                     Ok(cell)
@@ -684,7 +691,7 @@ impl Transaction {
                 self.settle_reaching(env, (model, d), ids.clone(), visited)
                     .await?;
             }
-            let su = env.sudo(true);
+            let su = env.engine_sudo();
             for path in fc.input_paths() {
                 let mut reached = ids.clone();
                 for (i, step) in path.iter().enumerate() {
@@ -731,6 +738,9 @@ impl Transaction {
             let model = records.model_id();
             let spec = shared.registry.model_by_id(model);
             let fs = spec.field_by_id(field);
+            if fs.company_dependent && !records.is_empty() {
+                self.prepare_properties(records.env(), spec).await?;
+            }
             crate::database_generated::check_persisted(spec, fs, records.rec_ids())?;
             if fs.is_generated() && fs.inherited.is_none() && !records.is_empty() {
                 Box::pin(self.flush_fields(model, &[field])).await?;
@@ -1254,7 +1264,11 @@ impl Transaction {
         if let Some(origin) = origin {
             self.pending_capture.active = Some(origin);
         }
-        let run_env = if fc.sudo { env.sudo(true) } else { env.clone() };
+        let run_env = if fc.sudo {
+            env.engine_sudo()
+        } else {
+            env.clone()
+        };
         let ids_arc: Arc<[RecId]> = Arc::from(ids.clone());
         let records = Records::from_parts(run_env, model, Arc::clone(&ids_arc), ids_arc);
         // Marked done first, so reading the old value inside does not recompute (COMP §4.5).
@@ -1407,7 +1421,11 @@ impl Transaction {
                     staged[i][slot] = cell;
                 }
             }
-            let run_env = if fc.sudo { env.sudo(true) } else { env.clone() };
+            let run_env = if fc.sudo {
+                env.engine_sudo()
+            } else {
+                env.clone()
+            };
             crate::monetary::normalize(
                 self,
                 &run_env,
@@ -1443,8 +1461,12 @@ impl Transaction {
                     && real.iter().any(|id| !self.cache.contains(model, f, *id))
                 {
                     let real_arc: Arc<[RecId]> = Arc::from(real.clone());
-                    let records =
-                        Records::from_parts(env.sudo(true), model, Arc::clone(&real_arc), real_arc);
+                    let records = Records::from_parts(
+                        env.engine_sudo(),
+                        model,
+                        Arc::clone(&real_arc),
+                        real_arc,
+                    );
                     if let Err(error) = self.load(&records, f).await
                         && error.kind() != erp_fields::ErrorKind::Missing
                     {
@@ -1840,7 +1862,7 @@ impl Transaction {
             )));
         };
         let lenient = Lenient::new(asked.iter().copied());
-        let run_env = env.sudo(true);
+        let run_env = env.engine_sudo();
         let current: Vec<Option<RecId>> = batch.iter().copied().map(Some).collect();
         let bound = bound.tolerating(&lenient);
         let direct = env.is_direct();
@@ -1972,7 +1994,7 @@ impl Transaction {
             let bound = reads.bound;
             let direct = reads.direct;
             let access_env = if reads.native.is_some() {
-                env.sudo(true)
+                env.engine_sudo()
             } else {
                 env.clone()
             };
@@ -2119,7 +2141,11 @@ impl Transaction {
                 };
                 if let Some(path) = path {
                     reads.bound = reads.bound.or_else(|| Bound::of(env, key.0, field));
-                    let run_env = if fc.sudo { env.sudo(true) } else { env.clone() };
+                    let run_env = if fc.sudo {
+                        env.engine_sudo()
+                    } else {
+                        env.clone()
+                    };
                     reads.native = Some(run_env.clone());
                     reads.direct = false;
                     return self
@@ -2137,7 +2163,7 @@ impl Transaction {
             let values = if let Some(fc) = fc.filter(|fc| matches!(fc.source, Source::Chain(_))) {
                 if fc.stored {
                     self.settle_records(env, key.0, key.1, ids).await?;
-                    self.cells_by_id(&env.sudo(true), key, ends).await?
+                    self.cells_by_id(&env.engine_sudo(), key, ends).await?
                 } else {
                     let records = Records::empty(env.clone(), key.0).browse_ids(ids.clone());
                     let cells = self.field_cells_checked(&records, key.1).await?;
@@ -2149,7 +2175,7 @@ impl Transaction {
                     ids.into_iter().zip(cells).collect()
                 }
             } else {
-                self.cells_by_id(&env.sudo(true), key, ends).await?
+                self.cells_by_id(&env.engine_sudo(), key, ends).await?
             };
             ends.iter()
                 .map(|id| match id {
@@ -2264,7 +2290,7 @@ impl Transaction {
         let bound = reads.bound;
         let direct = reads.direct;
         let access_env = if reads.native.is_some() {
-            env.sudo(true)
+            env.engine_sudo()
         } else {
             env.clone()
         };
@@ -2386,7 +2412,7 @@ impl Transaction {
         }
         let real: Arc<[RecId]> = Arc::from(real);
         let sudo = Records::from_parts(
-            records.env().sudo(true),
+            records.env().engine_sudo(),
             records.model_id(),
             Arc::clone(&real),
             Arc::clone(&real),

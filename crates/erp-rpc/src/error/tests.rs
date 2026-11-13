@@ -490,3 +490,78 @@ fn erp_namespace_is_emitted_by_domain_failures() {
     assert_eq!(expired.name(), "erp.http.session.SessionExpiredException");
     assert_eq!(expired.status(), 403);
 }
+
+/// A concealed hook refusal renders byte for byte as the access error with the fixed message,
+/// `debug` included; its code and message never reach the body.
+#[test]
+fn a_concealed_hook_refusal_renders_as_the_ordinary_access_error() {
+    use crate::hook::{CONCEALED_ACCESS_MESSAGE, HookRefusal, RefusalKind};
+    let refusal = HookRefusal::new(
+        "erp.ai.proposal_mismatch",
+        "the proposal belongs to session 7",
+        RefusalKind::Concealed,
+    )
+    .unwrap();
+    let hook = RpcFailure::Hook(refusal.clone());
+    let ordinary = RpcFailure::Domain(Error::access(CONCEALED_ACCESS_MESSAGE));
+    assert_eq!(
+        (hook.status(), hook.name(), hook.message()),
+        (ordinary.status(), ordinary.name(), ordinary.message())
+    );
+    let body = hook.body("", 1, Some("request-1"));
+    assert_eq!(body, ordinary.body("", 1, Some("request-1")));
+    let info = DebugInfo {
+        correlation: Some("01234567-89ab-cdef-0123-456789abcdef".to_owned()),
+        entry: Some("m.f".to_owned()),
+        statement: None,
+    };
+    let shown = info.render(&hook);
+    assert_eq!(shown, info.render(&ordinary));
+    let text = String::from_utf8(body).unwrap();
+    for hidden in [refusal.code(), refusal.message()] {
+        assert!(
+            !text.contains(hidden) && !shown.contains(hidden),
+            "{hidden} leaked"
+        );
+    }
+}
+
+/// A refused hook refusal is 409 with its code as the name and its message.
+#[test]
+fn a_refused_hook_refusal_is_409_with_its_code() {
+    use crate::hook::{HookError, HookRefusal, RefusalKind};
+    let refusal = HookRefusal::new(
+        "erp.ai.proposal_invalidated",
+        "The data moved.",
+        RefusalKind::Refused,
+    )
+    .unwrap();
+    let failure = RpcFailure::from(HookError::Refused(refusal.clone()));
+    assert_eq!(
+        (failure.status(), failure.name(), failure.message()),
+        (409, refusal.code(), refusal.message().to_owned())
+    );
+    assert!(failure.domain_error().is_none(), "never a method failure");
+    let (keys, name, message, arguments, context, debug) = parts(&failure.body("", 1, None));
+    assert_eq!(
+        keys,
+        [
+            "name",
+            "message",
+            "arguments",
+            "timestamp",
+            "context",
+            "debug"
+        ]
+    );
+    assert_eq!(name, format!("{:?}", refusal.code()));
+    assert_eq!(message, format!("{:?}", refusal.message()));
+    assert_eq!(arguments, format!("[{:?}]", refusal.message()));
+    assert_eq!((context.as_str(), debug.as_str()), ("{}", "\"\""));
+    // a database error of the hook stays a domain error (the retry classification sees it)
+    let database = RpcFailure::from(HookError::Database(Error::validation("hook data")));
+    assert_eq!(
+        database.domain_error().map(|e| (e.kind(), e.message())),
+        Some((ErrorKind::Validation, "hook data"))
+    );
+}

@@ -291,3 +291,24 @@ async fn install_audit_schema_refuses_a_user_before_sql() {
 async fn ensure_audit_partitions_refuses_a_user_before_sql() {
     event_ddl_refuses_user_before_sql(EventDdl::EnsureAuditPartitions).await;
 }
+
+/// (partial: a user transaction is refused before any statement).
+#[tokio::test]
+async fn grant_audit_reader_role_refuses_a_user_transaction() {
+    let db = TestDb::create().await.unwrap();
+    let orm = orm_on(&db);
+    let roles = erp_orm::audit::AuditReaderRoles::new("runtime_role", "owner_role", None).unwrap();
+    let mut user = orm.begin(UserId::new(2).unwrap()).await.unwrap();
+    let err = user
+        .grant_audit_reader_role("reader_role", &roles)
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Access);
+    assert_eq!(
+        err.message(),
+        refusal("Transaction::grant_audit_reader_role", 2)
+    );
+    user.rollback().await.unwrap();
+    drop(user);
+    db.cleanup().await.unwrap();
+}

@@ -19,3 +19,4 @@ node_modules/
 /examples/wasm/*/wasm/
 
 # Documentation site build output (scripts/build-doc-site.sh)
+.kg/

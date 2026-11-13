@@ -1,4 +1,4 @@
-//! Administration of the policy from the command line (`erp access`,,
+//! Administration of the policy from the command line (`erp access`,
 //! Revision 2 S3): a report of what the policy holds, and switching off a broken rule, the
 //! recovery path when a rule cannot be compiled. `ir.access` itself is governed by permissions
 //! only, so an administrator can always repair a rule; these run as the `System` principal.

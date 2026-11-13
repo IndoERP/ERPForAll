@@ -212,32 +212,39 @@ pub(crate) async fn root_currency(tx: &mut Transaction, company: &Records) -> Re
     ))
 }
 
+/// Refuse archiving companies that are the default company of an active user. One grouped
+/// statement covers every company of `records`; when several are protected, the one with the
+/// lowest id is named, with its own count of active users, so the answer does not depend on the
+/// order of the selection.
 pub(crate) async fn protect_archive(tx: &mut Transaction, records: &Records) -> Result<()> {
     flush(tx, "res.users", &["active", "company_id"]).await?;
-    for company in records.iter() {
-        let id = company.int()?;
-        let rows = tx
-            .query(
-                "SELECT count(*) FROM res_users WHERE active IS TRUE AND company_id = $1",
-                &[&id],
-            )
-            .await?;
-        let count: i64 = rows[0]
-            .try_get(0)
-            .map_err(|e| Error::db(format!("Company active users: {e}")))?;
-        if count != 0 {
-            let name = company.cell(tx, "name").await?;
-            let Cell::Str(name) = name else {
-                return Err(Error::validation(
-                    "Company name is required for archive validation.",
-                ));
-            };
-            return Err(Error::validation(format!(
-                "The company {name} cannot be archived because it is the default company of {count} active users."
-            )));
-        }
+    let ids = records.ids();
+    if ids.is_empty() {
+        return Ok(());
     }
-    Ok(())
+    let rows = tx
+        .query(
+            "SELECT company_id::int8, count(*)::int8 FROM res_users \
+              WHERE active IS TRUE AND company_id = ANY($1::int8[]) \
+              GROUP BY company_id ORDER BY company_id LIMIT 1",
+            &[&ids],
+        )
+        .await?;
+    let Some(row) = rows.first() else {
+        return Ok(());
+    };
+    let decode = |e| Error::db(format!("Company active users: {e}"));
+    let id: i64 = row.try_get(0).map_err(decode)?;
+    let count: i64 = row.try_get(1).map_err(decode)?;
+    let name = records.browse([id])?.cell(tx, "name").await?;
+    let Cell::Str(name) = name else {
+        return Err(Error::validation(
+            "Company name is required for archive validation.",
+        ));
+    };
+    Err(Error::validation(format!(
+        "The company {name} cannot be archived because it is the default company of {count} active users."
+    )))
 }
 
 pub(crate) async fn check_users(tx: &mut Transaction, users: &Records) -> Result<()> {

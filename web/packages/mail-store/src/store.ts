@@ -131,7 +131,7 @@ function refKey(model: string, id: number): string {
  * `@erpforall/store-wire`, and keeps its memory bounded.
  *
  * Values reach the reactive tables only by projection from the applier after a payload, so a value the applier
- * refused as stale never shows..
+ * refused as stale never shows.
  */
 export class MessagingStore {
   /** The message windows of the store's threads. */

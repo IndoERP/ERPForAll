@@ -116,8 +116,15 @@ impl Transaction {
         origin: Option<RecId>,
         reference: Option<&str>,
     ) -> Result<Records> {
-        self.check_records(model)?;
+        self.admit_records(model).await?;
         let spec = model.spec();
+        if let Some(field) = spec.fields.iter().find(|field| field.company_dependent) {
+            return Err(crate::company_dependent_runtime::unsupported(
+                spec.name,
+                field.name,
+                "new-record construction",
+            ));
+        }
         crate::database_generated::check_write_names(self, spec, vals.names())?;
         if !spec.has_table() {
             return Err(Error::programming(format!(
@@ -378,7 +385,7 @@ impl Transaction {
                 .collect();
             let origins_arc: Arc<[RecId]> = Arc::from(origins);
             let origin_records = Records::from_parts(
-                records.env().sudo(true),
+                records.env().engine_sudo(),
                 model,
                 Arc::clone(&origins_arc),
                 origins_arc,
@@ -1032,7 +1039,7 @@ impl Transaction {
     ) -> Result<RawVals> {
         let mut vals = RawVals::new();
         let origin_records = Records::from_parts(
-            env.sudo(true),
+            env.engine_sudo(),
             spec.id,
             Arc::from([origin]),
             Arc::from([origin]),

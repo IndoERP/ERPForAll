@@ -150,7 +150,7 @@ pub const MAX_DESCRIBED_FIELDS: usize = 4096;
 pub const MAX_PACKAGE_METHODS: usize = MAX_DESCRIBED_METHODS;
 
 /// Revoke from the runtime role `role` everything that would let it write the lifecycle tables:
-/// all privileges on the audit table and its sequence (the install audit's rule,; the server
+/// all privileges on the audit table and its sequence (the install audit's rule; the server
 /// and the operator commands read it with the owner connection) and
 /// every write on the package store (it keeps `SELECT`, which a node needs to follow another node's
 /// install). The release grants call this after granting the runtime role the ordinary tables.
@@ -246,8 +246,8 @@ pub trait ComponentLoader: Send + Sync {
 /// The loader for production: `erp-wasm-host`.
 ///
 /// A component's ORM rights are [`OrmCapabilities::all`]: reading and writing the ORM is the
-/// baseline of every WebAssembly addon and is always bounded by the caller's own access rights
-/// ; the manifest `[wasm]` capabilities name what goes beyond it.
+/// baseline of every WebAssembly addon and is always bounded by the caller's own access rights;
+/// the manifest `[wasm]` capabilities name what goes beyond it.
 pub struct HostLoader {
     host: Arc<WasmHost>,
     limits: Limits,
@@ -672,7 +672,7 @@ pub struct DescribedChecks {
 /// Most computes and constraints (each) one package's `describe()` may declare.
 pub const MAX_PACKAGE_CHECKS: usize = 1024;
 
-/// The computes and constraints `describe` yields for the addon `manifest` names.
+/// The computes and constraints `describe()` yields for the addon `manifest` names.
 ///
 /// A compute runs in the component from plain field values of its `depends` and `reads`; an async
 /// compute, a path through a relation in `depends` or `reads`, and `compute_override` are refused
@@ -883,6 +883,9 @@ fn model_def(addon: &ModuleName, extend: bool, model: &str, entry: &Value) -> Re
             match key.as_str() {
                 // `name` repeats the model name the entry already carries
                 "name" => {}
+                "audit_reads" => {
+                    def.audit_reads = flag(addon, &format!("model '{model}': audit_reads"), value)?
+                }
                 "eventful" => {
                     def.eventful = flag(addon, &format!("model '{model}': eventful"), value)?
                 }
@@ -1178,8 +1181,7 @@ struct Loaded {
     refs: Vec<DescribedRef>,
     capabilities: Vec<String>,
     client_dist_digest: Option<String>,
-    /// The `data` files of the manifest and the models the package declares and extends
-    /// .
+    /// The `data` files of the manifest and the models the package declares and extends.
     data: Arc<PackageData>,
 }
 
@@ -2945,6 +2947,53 @@ mod tests {
                     );
                 }
                 other => panic!("expected typed unsupported eventful input, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn describe_reads_audit_reads_opt_in() {
+        for (value, want) in [
+            (serde_json::json!("true"), true),
+            (serde_json::json!("false"), false),
+        ] {
+            let described = one_model(
+                serde_json::json!({"audit_reads": value}),
+                serde_json::json!([]),
+            );
+            let defs = models_from_describe(&manifest("'base'"), &described).unwrap();
+            assert_eq!(defs[0].audit_reads, want);
+        }
+        let described = one_model(serde_json::json!({}), serde_json::json!([]));
+        let defs = models_from_describe(&manifest("'base'"), &described).unwrap();
+        assert!(!defs[0].audit_reads);
+    }
+
+    #[test]
+    fn describe_refuses_invalid_audit_reads_opt_in() {
+        for value in [
+            serde_json::json!(1),
+            serde_json::json!("\"true\""),
+            serde_json::Value::Null,
+        ] {
+            let described = one_model(
+                serde_json::json!({"audit_reads": value.clone()}),
+                serde_json::json!([]),
+            );
+            let error = models_from_describe(&manifest("'base'"), &described).unwrap_err();
+            match error {
+                Error::WasmAddon {
+                    reason: WasmReason::Unsupported(message),
+                    ..
+                } => {
+                    assert_eq!(
+                        message,
+                        format!(
+                            "model 'w.wiz': audit_reads = {value}: only true and false are read"
+                        )
+                    );
+                }
+                other => panic!("expected typed unsupported audit_reads input, got {other:?}"),
             }
         }
     }

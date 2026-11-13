@@ -1263,3 +1263,195 @@ async fn spec_rel_084_inverse_one2many_with_a_domain_prefetches_once() {
     drop(tx);
     h.cleanup().await.unwrap();
 }
+
+#[tokio::test]
+async fn spec_comp_077_editable_related_field_readback_and_protection() {
+    let h = support::dep_orm().await;
+    let mut tx = h.begin().await.unwrap();
+
+    // 1. Create target with initial value: target create override normalises to "NORM:init".
+    let target = create(
+        &mut tx,
+        "test_dep.norm_target",
+        &[&[("name", s("T1")), ("value", s("init"))]],
+    )
+    .await;
+    assert_eq!(
+        target.values(&mut tx, "value").await.unwrap(),
+        [s("NORM:init")]
+    );
+
+    // 2. Create source pointing to target with editable non-stored related field:
+    // Create passes related_value = "created_val".
+    let source = create(
+        &mut tx,
+        "test_dep.norm_source",
+        &[&[
+            ("name", s("S1")),
+            ("target_id", int(&target, 0)),
+            ("related_value", s("created_val")),
+        ]],
+    )
+    .await;
+    // Same transaction: source reads back the raw assigned value (protected from recomputation).
+    assert_eq!(
+        source.values(&mut tx, "related_value").await.unwrap(),
+        [s("created_val")],
+        "source reads assigned value in same transaction after create"
+    );
+    // Target was written and normalised the value.
+    assert_eq!(
+        target.values(&mut tx, "value").await.unwrap(),
+        [s("NORM:created_val")],
+        "target normalised the value"
+    );
+    // Later read (fresh cache): source follows relation and reads normalised value.
+    tx.invalidate_all().await.unwrap();
+    assert_eq!(
+        source.values(&mut tx, "related_value").await.unwrap(),
+        [s("NORM:created_val")],
+        "source reads normalised value from target after cache clear"
+    );
+
+    // 3. Write on source: related_value = "written_val".
+    write(&mut tx, &source, &[("related_value", s("written_val"))]).await;
+    // Same transaction: source reads back raw written value.
+    assert_eq!(
+        source.values(&mut tx, "related_value").await.unwrap(),
+        [s("written_val")],
+        "source reads written value in same transaction"
+    );
+    // Target was updated and normalised.
+    assert_eq!(
+        target.values(&mut tx, "value").await.unwrap(),
+        [s("NORM:written_val")],
+        "target normalised on write"
+    );
+    // Later read (fresh transaction after commit).
+    tx.commit().await.unwrap();
+    let mut tx = h.begin().await.unwrap();
+    assert_eq!(
+        source.values(&mut tx, "related_value").await.unwrap(),
+        [s("NORM:written_val")],
+        "source reads normalised value in fresh transaction"
+    );
+
+    // 4. Multi-record write: write across multiple sources.
+    let t2 = create(
+        &mut tx,
+        "test_dep.norm_target",
+        &[&[("name", s("T2")), ("value", s("init2"))]],
+    )
+    .await;
+    let s2 = create(
+        &mut tx,
+        "test_dep.norm_source",
+        &[&[
+            ("name", s("S2")),
+            ("target_id", int(&t2, 0)),
+            ("related_value", s("init_s2")),
+        ]],
+    )
+    .await;
+    let multi_sources = source.union(&s2).unwrap();
+    write(
+        &mut tx,
+        &multi_sources,
+        &[("related_value", s("batch_val"))],
+    )
+    .await;
+    // Same transaction: both sources read back "batch_val".
+    assert_eq!(
+        multi_sources
+            .values(&mut tx, "related_value")
+            .await
+            .unwrap(),
+        [s("batch_val"), s("batch_val")],
+        "multi-record write reads back assigned value in same transaction"
+    );
+    // Targets were normalised.
+    assert_eq!(
+        target.values(&mut tx, "value").await.unwrap(),
+        [s("NORM:batch_val")]
+    );
+    assert_eq!(
+        t2.values(&mut tx, "value").await.unwrap(),
+        [s("NORM:batch_val")]
+    );
+    // In fresh transaction, both reflect normalised values.
+    tx.invalidate_all().await.unwrap();
+    assert_eq!(
+        multi_sources
+            .values(&mut tx, "related_value")
+            .await
+            .unwrap(),
+        [s("NORM:batch_val"), s("NORM:batch_val")]
+    );
+
+    // 5. Stored editable related field: write and create do not panic on dirty cache invalidation.
+    let s3 = create(
+        &mut tx,
+        "test_dep.norm_source",
+        &[&[
+            ("name", s("S3")),
+            ("target_id", int(&target, 0)),
+            ("stored_related_value", s("stored_init")),
+        ]],
+    )
+    .await;
+    assert_eq!(
+        s3.values(&mut tx, "stored_related_value").await.unwrap(),
+        [s("stored_init")],
+        "stored editable related field reads back written value in same transaction"
+    );
+    assert_eq!(
+        target.values(&mut tx, "value").await.unwrap(),
+        [s("NORM:stored_init")]
+    );
+    // Write on stored editable related field.
+    write(
+        &mut tx,
+        &s3,
+        &[("stored_related_value", s("stored_update"))],
+    )
+    .await;
+    assert_eq!(
+        s3.values(&mut tx, "stored_related_value").await.unwrap(),
+        [s("stored_update")]
+    );
+    assert_eq!(
+        target.values(&mut tx, "value").await.unwrap(),
+        [s("NORM:stored_update")]
+    );
+    // Flush and commit work cleanly.
+    tx.commit().await.unwrap();
+    let mut tx = h.begin().await.unwrap();
+
+    // 6. New records (draft/onchange): writing an editable related field on a new record.
+    let draft = tx
+        .new_record(
+            &tx.env().records("test_dep.norm_source").unwrap(),
+            erp_sdk::RawVals::new()
+                .set_cell("name", erp_sdk::Cell::Str("Draft".into()))
+                .set_cell("target_id", erp_sdk::Cell::Id(target.rec_ids()[0].get())),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    draft
+        .write_values(
+            &mut tx,
+            &support::map(&[("related_value", s("draft_edit"))]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        draft.values(&mut tx, "related_value").await.unwrap(),
+        [s("draft_edit")],
+        "draft record reads back assigned value"
+    );
+
+    drop(tx);
+    h.cleanup().await.unwrap();
+}

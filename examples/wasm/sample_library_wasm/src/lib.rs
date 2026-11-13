@@ -18,8 +18,7 @@
 //! The book and loan models belong to `sample_library` (its `models/*.toml`): `model_ref!` names
 //! them and the fields this addon reads and writes; only the fields of `#[extend]` are this
 //! addon's own. The component is built with `erp addon build sample_library_wasm --target wasm`,
-//! packed with `erp addon package` and installed with `erp addon install`; see
-//! .
+//! packed with `erp addon package` and installed with `erp addon install`.
 
 use erp_sdk::prelude::*;
 use erp_sdk::serde_json::{Value as Json, json};

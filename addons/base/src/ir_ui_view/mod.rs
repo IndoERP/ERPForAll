@@ -1,5 +1,4 @@
-//! Specs: in
-//! .
+//! Specs: in.
 //!
 //! What the model adds on top of its columns:
 //!
@@ -16,8 +15,7 @@
 //! - An extension view may not have `group_ids`.
 //! - Every write invalidates the `templates` named cache, across nodes through
 //!   `cache:templates`.
-//! - [`select::default_view`] and [`select::select_view`] pick the view a client asks for
-//!   .
+//! - [`select::default_view`] and [`select::select_view`] pick the view a client asks for.
 //!
 //! Not here: the cached, per-user `get_view`; full per-tag validation, x2many
 //! sub-views, generated default views, the view-type registry; translated

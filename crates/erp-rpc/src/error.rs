@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use erp_fields::{Error, ErrorKind, Value};
 
+use crate::hook::{CONCEALED_ACCESS_MESSAGE, HookError, HookRefusal, RefusalKind};
 use crate::idempotency::IdempotencyKey;
 use crate::output::JsonWriter;
 
@@ -19,11 +20,28 @@ pub enum RpcFailure {
     Protocol(ProtocolError),
     /// A transport or infrastructure error (`erp.*` names).
     Infra(InfraError),
+    /// A refusal of the call's [`crate::AttemptHook`]: never retried, never a method failure. A
+    /// [`RefusalKind::Concealed`] one renders as an access error with one fixed message
+    /// ([`CONCEALED_ACCESS_MESSAGE`]), like the confirm endpoint's ownership-mismatch error; a
+    /// [`RefusalKind::Refused`] one as 409 with its code as the error name and its message.
+    /// Server-side callers read it from [`crate::RpcResponse::hook_refusal`].
+    Hook(HookRefusal),
 }
 
 impl From<Error> for RpcFailure {
     fn from(error: Error) -> Self {
         Self::Domain(error)
+    }
+}
+
+impl From<HookError> for RpcFailure {
+    /// A refusal stays typed; a database error of the hook is a domain error, so the ordinary
+    /// classification retries serialization failures and a superseded ORM.
+    fn from(error: HookError) -> Self {
+        match error {
+            HookError::Refused(refusal) => Self::Hook(refusal),
+            HookError::Database(error) => Self::Domain(error),
+        }
     }
 }
 
@@ -173,6 +191,10 @@ impl RpcFailure {
                 | InfraError::AuditUnavailable => 503,
                 InfraError::DeadlineExceeded { .. } => 504,
             },
+            Self::Hook(refusal) => match refusal.kind() {
+                RefusalKind::Concealed => concealed_access().kind().http_status(),
+                RefusalKind::Refused => 409,
+            },
         }
     }
 
@@ -205,6 +227,10 @@ impl RpcFailure {
                 InfraError::DeadlineExceeded { .. } => "erp.deadline_exceeded",
                 InfraError::AuditUnavailable => "erp.audit_unavailable",
             },
+            Self::Hook(refusal) => match refusal.kind() {
+                RefusalKind::Concealed => domain_name(&concealed_access()),
+                RefusalKind::Refused => refusal.code(),
+            },
         }
     }
 
@@ -224,6 +250,10 @@ impl RpcFailure {
                 ),
             },
             Self::Infra(i) => infra_message(i),
+            Self::Hook(refusal) => match refusal.kind() {
+                RefusalKind::Concealed => domain_message(&concealed_access()),
+                RefusalKind::Refused => refusal.message().to_owned(),
+            },
         }
     }
 
@@ -259,7 +289,8 @@ impl RpcFailure {
         w.begin_array();
         w.string(&message);
         match self {
-            Self::Protocol(ProtocolError::SessionExpired(_)) | Self::Infra(_) => {}
+            // a concealed refusal has the arguments of an access error: the message only
+            Self::Protocol(ProtocolError::SessionExpired(_)) | Self::Infra(_) | Self::Hook(_) => {}
             Self::Protocol(_) => w.int(i64::from(self.status())),
             Self::Domain(e) if e.kind() == ErrorKind::Database => match e.sqlstate() {
                 Some(state) => w.string(state),
@@ -366,9 +397,19 @@ impl std::error::Error for RpcFailure {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Domain(e) => Some(e),
+            Self::Hook(refusal) => Some(refusal),
             _ => None,
         }
     }
+}
+
+/// The access error a [`RefusalKind::Concealed`] hook refusal renders as: status, name, message,
+/// arguments and `debug` all come from this one error with one fixed message. It is the same
+/// answer the confirm endpoint gives for an ownership mismatch (endpoint check), so
+/// the caller cannot tell those two apart; it is not meant to match every ORM access denial,
+/// whose texts name models and operations.
+pub(crate) fn concealed_access() -> Error {
+    Error::access(CONCEALED_ACCESS_MESSAGE)
 }
 
 fn domain_name(e: &Error) -> &'static str {
@@ -525,7 +566,18 @@ pub(crate) struct DebugInfo {
 impl DebugInfo {
     pub(crate) fn render(&self, failure: &RpcFailure) -> String {
         let mut lines = vec![format!("kind: {} ({})", failure.name(), failure.status())];
-        if let Some(e) = failure.domain_error() {
+        // a concealed hook refusal shows what the ordinary access error would show, nothing more
+        let concealed_refusal = match failure {
+            RpcFailure::Hook(refusal) if refusal.kind() == RefusalKind::Concealed => {
+                Some(concealed_access())
+            }
+            _ => None,
+        };
+        let shown = match &concealed_refusal {
+            Some(error) => Some(error),
+            None => failure.domain_error(),
+        };
+        if let Some(e) = shown {
             lines.push(format!("error kind: {:?}", e.kind()));
             if let Some(state) = e.sqlstate() {
                 lines.push(format!("sqlstate: {state}"));

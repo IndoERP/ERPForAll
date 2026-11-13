@@ -58,8 +58,7 @@ function reconcileChildren(parent: Element, desired: readonly Node[]): void {
  *
  * Patch points (typed `patch(Thread, …)`): {@link Thread.isSquashed}, {@link Thread.dayLabel}, {@link Thread.emptyLabel}.
  *
- * The rows are laid out by {@link Thread.layout}; moving to a variable-height virtual list replaces that method
- * .
+ * The rows are laid out by {@link Thread.layout}; moving to a variable-height virtual list replaces that method.
  */
 export class Thread {
   /** The thread's root element. */
@@ -109,7 +108,7 @@ export class Thread {
     const parts: Node[] = this.#order === "asc"
       ? [this.#announcer.element, this.#status, this.#older, this.#feed, this.#empty]
       : [this.#announcer.element, this.#status, this.#empty, this.#feed, this.#older];
-    this.element = h(doc, "div", { class: "erp-mail-thread", "data-order": this.#order, id: uniqueId("erp-mail-thread") }, ...parts);
+    this.element = h(doc, "div", { class: "erp-mail-thread", "data-order": this.#order, id: uniqueId("erp-mail-thread"), tabindex: "-1" }, ...parts);
     this.#feed.addEventListener("keydown", (event) => this.#onKeydown(event));
     this.#feed.addEventListener("focusin", (event) => this.#onFocusIn(event));
     try {
@@ -466,7 +465,7 @@ class PendingRow {
   constructor(view: ThreadViewContext, uid: string) {
     const doc = view.document;
     // An article, so that the feed holds nothing else.
-    this.element = h(doc, "article", { class: "erp-mail-pending", "data-uid": uid, "aria-label": t(view, "Unsent message") });
+    this.element = h(doc, "article", { class: "erp-mail-pending", "data-uid": uid, "aria-label": t(view, "Unsent message"), tabindex: "-1" });
     const models = uiModels(view.store);
     this.#stop = effect(() => {
       if (!models.pending.has(uid)) return;
@@ -477,8 +476,42 @@ class PendingRow {
       if (state === "failed") {
         const retry = h(doc, "button", { type: "button", class: "erp-mail-retry" }, t(view, "Retry"));
         const discard = h(doc, "button", { type: "button", class: "erp-mail-discard" }, t(view, "Discard"));
-        retry.addEventListener("click", () => void sendPending(view, uid));
-        discard.addEventListener("click", () => discardPending(view, uid));
+        const focusComposer = (): boolean => {
+          const thread = this.element.closest<HTMLElement>(".erp-mail-thread");
+          const scope = thread?.closest<HTMLElement>(".erp-chatter, .erp-mail-chatter")
+            ?? thread?.parentElement
+            ?? thread
+            ?? this.element;
+          const target = scope.querySelector<HTMLElement>(".erp-mail-draft")
+            ?? scope.querySelector<HTMLElement>(".erp-mail-composer textarea")
+            ?? scope.querySelector<HTMLElement>(".erp-mail-composer button");
+          if (target) {
+            target.focus();
+            return true;
+          }
+          return false;
+        };
+        const focusArticleOrComposer = () => {
+          this.element.focus();
+          if (doc.activeElement !== this.element) {
+            if (!focusComposer()) {
+              const feed = this.element.closest<HTMLElement>(".erp-mail-thread");
+              if (feed) feed.focus();
+            }
+          }
+        };
+        retry.addEventListener("click", () => {
+          focusArticleOrComposer();
+          void sendPending(view, uid);
+        });
+        discard.addEventListener("click", () => {
+          if (!focusComposer()) {
+            const feed = this.element.closest<HTMLElement>(".erp-mail-thread");
+            if (feed) feed.focus();
+            else this.element.focus();
+          }
+          discardPending(view, uid);
+        });
         parts.push(h(doc, "p", { class: "erp-mail-pending-error", role: "alert" }, `${t(view, "The message was not sent.")} ${typeof error === "string" ? error : ""}`.trim()), h(doc, "div", { class: "erp-mail-pending-actions" }, retry, " ", discard));
         this.element.classList.add("is-failed");
       } else {

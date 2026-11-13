@@ -35,6 +35,10 @@ pub struct AttachmentLimits {
     pub name_max_bytes: usize,
     /// How long an unreferenced blob is kept before the sweep removes its bytes.
     pub gc_grace_secs: u64,
+    /// Optional soft database quota, including retained staging bytes.
+    pub quota_bytes: Option<u64>,
+    /// Hard database-wide staging reservation cap, across every node and subject.
+    pub staging_max_bytes: u64,
     /// Pending uploads one subject may hold.
     pub pending_uploads_per_subject: u32,
     /// How long an upload may wait to be linked.
@@ -55,6 +59,8 @@ impl Default for AttachmentLimits {
             max_file_bytes: 128 * 1024 * 1024,
             name_max_bytes: 255,
             gc_grace_secs: 86_400,
+            quota_bytes: None,
+            staging_max_bytes: 4 * 1024 * 1024 * 1024,
             pending_uploads_per_subject: 100,
             upload_ttl_secs: 86_400,
             fingerprint_recheck_secs: 300,
@@ -156,6 +162,8 @@ struct RawAttachments {
     inline_max_bytes: Option<usize>,
     max_file_bytes: Option<u64>,
     gc_grace_secs: Option<u64>,
+    quota_bytes: Option<u64>,
+    staging_max_bytes: Option<u64>,
     pending_uploads_per_subject: Option<u32>,
     upload_ttl_secs: Option<u64>,
     fingerprint_recheck_secs: Option<u64>,
@@ -208,8 +216,16 @@ impl AttachmentConfig {
     /// `postgres` kind (the BASE-B postgres-store follow-up).
     pub fn from_toml(text: &str) -> Result<Self, BlobError> {
         let document: Document = toml::from_str(text).map_err(|e| {
+            let setting = e
+                .span()
+                .and_then(|span| text.get(..span.start))
+                .and_then(|prefix| prefix.rsplit('\n').next())
+                .and_then(|line| line.split_once('='))
+                .map(|(key, _)| key.trim())
+                .filter(|key| matches!(*key, "quota_bytes" | "staging_max_bytes"));
+            let detail = setting.map_or_else(String::new, |key| format!(" (attachments.{key})"));
             BlobError::config(format!(
-                "the [attachments] table is not valid: {}",
+                "the [attachments] table is not valid: {}{detail}",
                 e.message()
             ))
         })?;
@@ -330,9 +346,15 @@ impl AttachmentConfig {
             let (low, high) = AttachmentLimits::GC_GRACE_RANGE;
             limits.gc_grace_secs = bounded("gc_grace_secs", v, low, high)?;
         }
+        if let Some(v) = raw.quota_bytes {
+            limits.quota_bytes = Some(bounded("quota_bytes", v, 1024 * 1024, i64::MAX as u64)?);
+        }
+        if let Some(v) = raw.staging_max_bytes {
+            limits.staging_max_bytes =
+                bounded("staging_max_bytes", v, 1024 * 1024, i64::MAX as u64)?;
+        }
         if let Some(v) = raw.pending_uploads_per_subject {
-            limits.pending_uploads_per_subject =
-                bounded("pending_uploads_per_subject", v, 1, 10_000)?;
+            limits.pending_uploads_per_subject = bounded("pending_uploads_per_subject", v, 1, 100)?;
         }
         if let Some(v) = raw.upload_ttl_secs {
             limits.upload_ttl_secs = bounded("upload_ttl_secs", v, 60, 7 * 86_400)?;

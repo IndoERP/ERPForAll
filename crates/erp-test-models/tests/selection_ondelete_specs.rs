@@ -996,7 +996,7 @@ async fn spec_field_035_all_ondelete_policies_when_value_removed() {
     .unwrap();
 
     let mut tx = h.begin().await.unwrap();
-    let rows = tx.env().records(MODEL).unwrap();
+    let rows = tx.env().with_company(1).unwrap().records(MODEL).unwrap();
 
     let make_vals = |name: &str, state: &str| {
         let values: erp_sdk::ValueMap = [("name", Value::str(name)), ("state", Value::str(state))]
@@ -1090,12 +1090,26 @@ async fn spec_field_035_all_ondelete_policies_when_value_removed() {
     assert_eq!(vals[4]["state"], Value::str("base_val"));
     assert_eq!(vals[4]["active"], Value::Bool(true));
 
-    // r_comp: company 1 and 2 both cleared to null in JSONB
-    let check_json_sql = format!("SELECT \"comp_sel\"::text FROM \"{table}\" WHERE \"id\" = $1");
-    let json_text: String = tx.query(&check_json_sql, &[&r_comp]).await.unwrap()[0].get(0);
-    let json_val: serde_json::Value = serde_json::from_str(&json_text).unwrap();
-    assert_eq!(json_val["1"], serde_json::Value::Null);
-    assert_eq!(json_val["2"], serde_json::Value::Null);
+    // r_comp: companies 1 and 2 are both cleared. With no fallback a cleared value equals the
+    // fallback, so the runtime drops each key and the emptied map is SQL NULL (company-dependent
+    // runtime plan: fallback-equal normalization); every company reads it as null.
+    let check_sql = format!("SELECT \"comp_sel\" IS NULL FROM \"{table}\" WHERE \"id\" = $1");
+    let cleared: bool = tx.query(&check_sql, &[&r_comp]).await.unwrap()[0].get(0);
+    assert!(cleared);
+    for company in [1, 2] {
+        let record = tx
+            .env()
+            .with_company(company)
+            .unwrap()
+            .records(MODEL)
+            .unwrap()
+            .browse([r_comp])
+            .unwrap();
+        assert_eq!(
+            record.value(&mut tx, "comp_sel").await.unwrap(),
+            Value::False
+        );
+    }
 
     tx.rollback().await.unwrap();
     h.cleanup().await.unwrap();

@@ -19,7 +19,7 @@ fn failed_with(context: &str, cause: &(dyn std::error::Error + 'static)) -> CliE
 
 // Source messages can contain connection URLs, SQL values or addon-supplied text. Preserve typed
 // causes and only a small vocabulary of our own fixed GC messages; never render arbitrary Display.
-fn sanitized_cause(error: &(dyn std::error::Error + 'static)) -> String {
+pub(crate) fn sanitized_cause(error: &(dyn std::error::Error + 'static)) -> String {
     let mut parts = Vec::new();
     let mut source = Some(error);
     for _ in 0..8 {
@@ -151,6 +151,15 @@ AND (has_table_privilege(r.oid,c.oid,'SELECT') OR has_table_privilege(r.oid,c.oi
  OR has_any_column_privilege(r.oid,c.oid,'INSERT') OR has_any_column_privilege(r.oid,c.oid,'UPDATE')
  OR has_any_column_privilege(r.oid,c.oid,'REFERENCES'))))";
 
+/// The same shared RPC settings enter node admission and every serving generation.
+pub(crate) fn rpc_config(config: &ServerConfig) -> erp_fields::Result<erp_rpc::RpcConfig> {
+    erp_rpc::RpcConfig::builder()
+        .body_bytes(config.startup_limits().rpc_body_bytes())
+        .result_bytes(config.startup_limits().rpc_result_bytes())
+        .read_audit_policy(config.read_audit_policy().clone())
+        .build()
+}
+
 pub(crate) async fn register(
     config: &ServerConfig,
     system: Arc<ModuleSystem>,
@@ -217,10 +226,7 @@ pub(crate) async fn register(
         .nodename()
         .to_str()
         .map_err(|error| failed_with("host name is not UTF-8", &error))?;
-    let rpc = erp_rpc::RpcConfig::builder()
-        .body_bytes(config.startup_limits().rpc_body_bytes())
-        .result_bytes(config.startup_limits().rpc_result_bytes())
-        .build()?;
+    let rpc = rpc_config(config)?;
     let identity = NodeIdentity::builder(
         NodeRole::App,
         config.node_name(),
@@ -306,6 +312,7 @@ async fn serve_member(
             .map_err(|error| failed_with("could not install server INT handler", &error))?;
     app.set_login_available(false);
     let schedule = GcSchedule::new(pool_with_size(config.runtime_connection(), 1)?);
+    let event_owner = crate::human::owner_maintenance_orm(config)?;
     membership.request_ready().await?;
     let (stop, mut stopped) = tokio::sync::watch::channel(false);
     let http = Arc::clone(app).serve_until(listener, async {
@@ -321,6 +328,7 @@ async fn serve_member(
             received = interrupt.recv() => signal_received(received),
             result = maintenance(app, config, membership) => result,
             result = gc_maintenance(app, &schedule) => result,
+            result = event_upkeep_maintenance(app, &event_owner) => result,
         }
     };
     let drain = async { membership.drain().await.map_err(std::io::Error::other) };
@@ -551,6 +559,127 @@ async fn supervise_collection(
     }
 }
 
+/// How often every node runs the event partition upkeep.
+const EVENT_UPKEEP_PERIOD: Duration = Duration::from_secs(3_600);
+
+/// The scheduled event partition upkeep of this node: every
+/// [`EVENT_UPKEEP_PERIOD`], the upkeep on `owner` (a one-connection owner pool opened once at
+/// start, never bound to a registry generation), then the audit store check on the runtime ORM of
+/// the current generation, whose cached state would otherwise keep refusing after the window was
+/// refreshed. Every node runs it; the namespace advisory lock lets one of them create a day. It
+/// is a timer on the owner pool, not a queue job: the ordinary job runner holds the runtime role
+/// and cannot run DDL, and the isolated runner for elevated kinds is not in place yet.
+async fn event_upkeep_maintenance(app: &WebApp, owner: &erp_orm::Orm) -> std::io::Result<()> {
+    supervise_event_upkeep(EVENT_UPKEEP_PERIOD, async || {
+        let auth = app.current_auth().await;
+        let tick = owner.event_upkeep_tick(auth.orm()).await?;
+        log_event_upkeep(&tick.report, "scheduled")?;
+        if tick.audit_store != erp_orm::audit::AuditStoreState::Ready {
+            tracing::error!(
+                state = %tick.audit_store.describe(),
+                "audit store is not ready after the scheduled event partition upkeep"
+            );
+        }
+        Ok(())
+    })
+    .await
+}
+
+/// Run `tick` every `period`, the first time one period after the call (the server start ran the
+/// upkeep already). A failed tick is logged at error level with the full error and its sanitized
+/// cause, and retried
+/// at the next tick; it never stops the node, so this never returns.
+async fn supervise_event_upkeep(
+    period: Duration,
+    tick: impl AsyncFn() -> erp_fields::Result<()>,
+) -> std::io::Result<()> {
+    let mut ticks = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+    ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    loop {
+        ticks.tick().await;
+        if let Err(error) = tick().await {
+            // the operator's log keeps the full error, as the startup refusal does
+            tracing::error!(
+                %error,
+                kind = ?error.kind(),
+                cause = %sanitized_cause(&error),
+                "scheduled event partition upkeep failed; it runs again at the next tick"
+            );
+        }
+    }
+}
+
+/// Log what an event partition upkeep did (`when`: "startup" or "scheduled"): a busy table at
+/// warning level, created partitions at info, and the window of each installed table, at info
+/// with today covered and two days or more after it, at error otherwise (inserts fail within two
+/// UTC midnights or already do). A table that is not installed is logged at debug level only: it is the normal
+/// state of the outbox until a model opts into events.
+///
+/// # Errors
+///
+/// `Programming` for an outcome this build does not know.
+pub(crate) fn log_event_upkeep(
+    report: &erp_orm::EventUpkeepReport,
+    when: &'static str,
+) -> erp_fields::Result<()> {
+    use erp_orm::EventTableUpkeep;
+    for (table, outcome) in [
+        (erp_orm::OUTBOX_TABLE_NAME, &report.outbox),
+        (erp_orm::AUDIT_TABLE_NAME, &report.audit),
+    ] {
+        match outcome {
+            EventTableUpkeep::NotInstalled => {
+                tracing::debug!(
+                    table,
+                    when,
+                    "event table not installed; no partition upkeep"
+                );
+            }
+            EventTableUpkeep::Busy => tracing::warn!(
+                table,
+                when,
+                "event partition upkeep busy: another session held a lock past the partition \
+                 lock timeout; it runs again at the next tick"
+            ),
+            EventTableUpkeep::Maintained { created } if created.is_empty() => {
+                tracing::debug!(table, when, "event partition window complete");
+            }
+            EventTableUpkeep::Maintained { created } => tracing::info!(
+                table,
+                when,
+                created = ?created,
+                "event partitions created"
+            ),
+            other => {
+                return Err(erp_fields::Error::programming(format!(
+                    "unknown event partition upkeep outcome for {table}: {other:?}"
+                )));
+            }
+        }
+    }
+    for window in report.health.iter().filter(|w| w.installed) {
+        if window.is_short() {
+            tracing::error!(
+                table = window.table,
+                today_covered = window.today_covered,
+                days_left = window.days_left,
+                when,
+                "event partition window is short: inserts fail within two UTC midnights or \
+                 already do; run `erp audit maintain` as the owner role"
+            );
+        } else {
+            tracing::info!(
+                table = window.table,
+                today_covered = window.today_covered,
+                days_left = window.days_left,
+                when,
+                "event partition window"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// The job runner of this process for `orm`, when the configuration asks for one (4):
 /// `jobs_run_in_app = true`. It claims only while the node is ready and divides the database cap
 /// by the live workers of the registry.
@@ -568,6 +697,10 @@ fn spawn_job_runner(
         erp_security::jobs::SecurityJobPrincipalResolver,
     )
     .node_view(move || view.borrow().clone())
+    // this runner works with the runtime ORM; every kind declared elevated (the
+    // attachment maintenance kinds, `erp_addon_base::attachments::gc::ELEVATED_KINDS`) is left to
+    // the isolated maintenance runner.
+    .exclude_elevated()
     .build()
     .map_err(|error| {
         std::io::Error::other(format!(
@@ -839,6 +972,53 @@ mod tests {
             "{log}"
         );
         assert!(!log.contains("private failure"), "{log}");
+    }
+
+    /// A failed scheduled event upkeep is logged at error level with the full error and its
+    /// sanitized cause, and the next tick runs one period later; the supervisor never ends, so the
+    /// node keeps serving.
+    #[tokio::test(start_paused = true)]
+    async fn event_upkeep_failure_is_logged_and_the_next_tick_runs() {
+        let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let logger = erp_server::logging::LineLogger::new(
+            erp_server::logging::LogFilter::parse("debug").unwrap(),
+            CapturedLog(Arc::clone(&bytes)),
+        );
+        let _guard = tracing::subscriber::set_default(logger);
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let started = tokio::time::Instant::now();
+        let outcome = tokio::time::timeout(
+            EVENT_UPKEEP_PERIOD * 4 + Duration::from_secs(1),
+            supervise_event_upkeep(EVENT_UPKEEP_PERIOD, async || {
+                match calls.fetch_add(1, Ordering::SeqCst) {
+                    0 | 2 => Err(erp_fields::Error::db(
+                        "partition upkeep statement failed: FULL-CAUSE",
+                    )
+                    .with_sqlstate(Some("55P03".to_owned()))),
+                    _ => Ok(()),
+                }
+            }),
+        )
+        .await;
+        assert!(outcome.is_err(), "the supervisor ended: {outcome:?}");
+        // the first tick waits one period (startup already ran the upkeep), then one per period
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
+        assert!(tokio::time::Instant::now().duration_since(started) >= EVENT_UPKEEP_PERIOD * 4);
+        let log = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+        let failures: Vec<&str> = log
+            .lines()
+            .filter(|line| line.contains("scheduled event partition upkeep failed"))
+            .collect();
+        assert_eq!(failures.len(), 2, "{log}");
+        assert!(failures.iter().all(|line| line.contains("ERROR")), "{log}");
+        assert!(
+            failures.iter().all(|line| line.contains("sqlstate=55P03")),
+            "{log}"
+        );
+        assert!(
+            failures.iter().all(|line| line.contains("FULL-CAUSE")),
+            "the full error is logged: {log}"
+        );
     }
 
     #[test]

@@ -121,6 +121,40 @@ test("numeric trailing-zero and input type options affect the actual control", (
   expect(edit.node.querySelector<HTMLInputElement>("input")?.value).toBe("1.5"); edit.dispose();
 });
 
+/// (partial: integer enable_formatting false option suppresses grouping)
+test("integer enable_formatting false option suppresses grouping in read and edit modes", () => {
+  const f: Field = { ...field("integer", false, { enable_formatting: false }), kind: "integer" };
+  const locale = { decimal_point: ".", thousands_sep: ",", grouping: [3, 0] };
+  const edit = createFieldControl({ field: f, value: 1968, rpc, context: {}, numericLocale: locale, change: vi.fn(), run: (job: () => Promise<void>) => { void job(); } });
+  expect(edit.node.querySelector<HTMLInputElement>("input")?.value).toBe("1968");
+  edit.dispose();
+
+  const read = createFieldControl({ field: { ...f, readonly: true }, value: 1968, rpc, context: {}, numericLocale: locale, change: vi.fn(), run: (job: () => Promise<void>) => { void job(); } });
+  expect(read.node.querySelector(".field-read-value")?.textContent).toBe("1968");
+  read.dispose();
+
+  const formatted = createFieldControl({ field: { ...f, readonly: true, options: {} }, value: 1968, rpc, context: {}, numericLocale: locale, change: vi.fn(), run: (job: () => Promise<void>) => { void job(); } });
+  expect(formatted.node.querySelector(".field-read-value")?.textContent).toBe("1,968");
+  formatted.dispose();
+});
+
+/// (partial: enable_formatting true keeps grouping on float; a percentage never reads the option)
+test("enable_formatting true keeps grouping and a percentage ignores the option", () => {
+  const locale = { decimal_point: ".", thousands_sep: ",", grouping: [3, 0] };
+  const shown = (f: Field, value: number): string | null | undefined => {
+    const c = createFieldControl({ field: { ...f, readonly: true }, value, rpc, context: {}, numericLocale: locale, change: vi.fn(), run: (job: () => Promise<void>) => { void job(); } });
+    const out = c.node.querySelector(".field-read-value")?.textContent; c.dispose(); return out;
+  };
+  const on: Field = { ...field("float", false, { enable_formatting: true }), kind: "float" };
+  expect(shown(on, 1234567.5)).toBe("1,234,567.5");
+  const off: Field = { ...field("float", false, { enable_formatting: false }), kind: "float" };
+  expect(shown(off, 1234567.5)).toBe("1234567.5");
+  // Never the raw fraction with a percent sign: the option is not the percentage widget's.
+  const pct: Field = { ...field("percentage", false, { enable_formatting: false }), kind: "float" };
+  expect(shown(pct, 0.15)).toMatch(/^15(\.0+)?%$/);
+});
+
+
 /// (partial: normal and debug tooltip text use only authorized occurrence metadata)
 test("debug tooltip distinguishes metadata from normal help without reading field values", async () => {
   const { fieldTooltip } = await import("../src/client/field-shell.js");
@@ -145,14 +179,14 @@ test("widget context dispatch precedence is explicit and unknown identity refuse
 /// (partial: unavailable avatar transport refuses both empty and populated fields)
 test("avatar tags explicitly refuse unavailable image transport before interaction", () => {
   for (const value of [[], [{ id: 1, display_name: "Fixture" }]]) {
-    expect(() => control({ ...field("many2many_tags_avatar"), kind: "many2many", relation: "fixture.tag" }, value)).toThrowError(expect.objectContaining({ kind: "unsupported", message: "Avatar tag data requires a later release." }));
+    expect(() => control({ ...field("many2many_tags_avatar"), kind: "many2many", relation: "fixture.tag" }, value)).toThrowError(expect.objectContaining({ kind: "unsupported", message: "Avatar tags are not supported." }));
   }
 });
 
 /// (partial: unavailable array dependency metadata refuses whitelist_fname explicitly)
 test("selection array-field whitelist declaration reports its completion boundary", async () => {
   const { readFieldOptions } = await import("../src/client/field-options.js");
-  expect(() => readFieldOptions({ whitelist_fname: { model: "fixture.record", name: "allowed" } }, "fixture.record", new Map([["allowed", {}]]))).toThrowError(expect.objectContaining({ kind: "unsupported", message: "Selection whitelist field data requires a later release." }));
+  expect(() => readFieldOptions({ whitelist_fname: { model: "fixture.record", name: "allowed" } }, "fixture.record", new Map([["allowed", {}]]))).toThrowError(expect.objectContaining({ kind: "unsupported", message: "Selection whitelist field data is not supported." }));
 });
 
 /// (partial: malformed scalar record data is refused rather than coerced)

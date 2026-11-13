@@ -197,8 +197,7 @@ impl ProductProduct {
                 }
             }
 
-            // The attribute values follow whichever name is shown, the vendor's included
-            // .
+            // The attribute values follow whichever name is shown, the vendor's included.
             if !combinations[index].is_empty() {
                 name = format!("{name} ({})", combinations[index]);
             }

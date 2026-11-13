@@ -118,7 +118,7 @@ pub fn map(pairs: &[(&str, Value)]) -> std::collections::BTreeMap<String, Value>
 /// A read result as dictionaries all the way down: `Value::Row` handles become `Value::Map`,
 /// `Value::Rows` become lists of maps (`web_read` returns batch handles since PERF.ROWS-READ;
 /// tests that destructure the dictionaries read them through this until PERF.ROWS-API moves
-/// them to `Value::dict`). Equal to the input by `==`.
+/// them to `Value::dict()`). Equal to the input by `==`.
 pub fn deep(value: &Value) -> Value {
     match value {
         Value::Row(row) => Value::Map(std::sync::Arc::new(

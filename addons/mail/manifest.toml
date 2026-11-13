@@ -9,5 +9,8 @@ data = [
     "security/ir.access.csv",
     "data/mail_message_subtype_data.xml",
     "data/mail_activity_type_data.xml",
+    "views/mail_activity_views.xml",
     "views/res_partner_views.xml",
+    "views/res_company_views.xml",
+    "views/res_users_views.xml",
 ]

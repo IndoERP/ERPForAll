@@ -567,7 +567,7 @@ impl RuleRow {
 
     /// Whether the rule comes from a module: it has an external id that is not an export or a
     /// customization ([`NON_STANDARD_PREFIXES`]). Customizing a standard rule copies it and
-    /// archives the original (`customize`,, on the `ir.access` model).
+    /// archives the original (`customize()`, on the `ir.access` model).
     pub fn is_standard(&self) -> bool {
         self.xmlid.as_ref().is_some_and(|x| {
             !NON_STANDARD_PREFIXES
@@ -1263,7 +1263,7 @@ mod tests {
     }
 
     /// `for_*` fields of the `ir.access` model and their inverse come with the access screen,
-    /// , which is where `addons/base` defers them)
+    /// which is where `addons/base` defers them)
     #[test]
     fn spec_sec_006_operation_booleans() {
         let rule = RuleRow::new(rid(1), "n", "m.m", "ru").unwrap();
@@ -1293,7 +1293,7 @@ mod tests {
     }
 
     /// on the `ir.access` model, which copies and archives, comes with the access screen,
-    /// , which is where `addons/base` defers it)
+    /// which is where `addons/base` defers it)
     #[test]
     fn spec_sec_043_standard_rules() {
         let row = |xmlid: Option<&str>| {

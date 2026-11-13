@@ -1,5 +1,5 @@
-// The transaction cannot be used again, not even to commit, while an evaluation of it lives
-// .
+// The transaction cannot be used again, not even to commit, while an evaluation of it lives.
+//
 #![allow(unused)]
 
 use erp_fields::Result;

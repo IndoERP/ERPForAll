@@ -1,4 +1,4 @@
-//! `<template>` as an `ir.ui.view` record..
+//! `<template>` as an `ir.ui.view` record.
 //!
 //! - the target model: `theme.ir.ui.view` for a module named `theme_*`, else `ir.ui.view`;
 //! - whether a root `active="…"` is written: in init mode, or when the view does not exist yet;

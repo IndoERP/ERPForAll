@@ -68,7 +68,12 @@ pub fn select(table: &str, columns: &[&str], clauses: &SearchSql<'_>) -> String 
 }
 
 /// Statement text for `select` built from `ModelSpec` and pre-quoted identifiers.
-pub fn select_spec(spec: &ModelSpec, columns: &[FieldId], clauses: &SearchSql<'_>) -> String {
+pub fn select_spec(
+    registry: &Registry,
+    spec: &ModelSpec,
+    columns: &[FieldId],
+    clauses: &SearchSql<'_>,
+) -> String {
     let mut out = String::with_capacity(
         64 + spec.quoted_table().len() * (columns.len() + 2) + columns.len() * 20,
     );
@@ -77,9 +82,15 @@ pub fn select_spec(spec: &ModelSpec, columns: &[FieldId], clauses: &SearchSql<'_
     out.push_str(".\"id\"");
     for fid in columns {
         out.push_str(", ");
-        out.push_str(spec.quoted_table());
-        out.push('.');
-        out.push_str(spec.field_by_id(*fid).quoted_name());
+        let field = spec.field_by_id(*fid);
+        let mut column = String::new();
+        column.push_str(spec.quoted_table());
+        column.push('.');
+        column.push_str(field.quoted_name());
+        match crate::company::load_column(registry, field, &column) {
+            Some(item) => out.push_str(&item),
+            None => out.push_str(&column),
+        }
     }
     out.push_str(" FROM ");
     out.push_str(spec.quoted_table());
@@ -144,7 +155,9 @@ pub fn select_cached(
     };
     registry
         .statement_cache_of(spec)
-        .select(columns, shape, || select_spec(spec, columns, clauses))
+        .select(columns, shape, || {
+            select_spec(registry, spec, columns, clauses)
+        })
 }
 
 /// `SELECT COUNT(*) FROM "t" [WHERE …]`, or with a limit or offset
@@ -202,6 +215,7 @@ pub fn select_ids_where(
 
 /// Statement text for `select_ids_where_spec` built from `ModelSpec` and pre-quoted identifiers.
 pub fn select_ids_where_spec(
+    registry: &Registry,
     spec: &ModelSpec,
     columns: &[FieldId],
     joins: &str,
@@ -219,9 +233,15 @@ pub fn select_ids_where_spec(
     out.push_str(".\"id\"");
     for fid in columns {
         out.push_str(", ");
-        out.push_str(spec.quoted_table());
-        out.push('.');
-        out.push_str(spec.field_by_id(*fid).quoted_name());
+        let field = spec.field_by_id(*fid);
+        let mut column = String::new();
+        column.push_str(spec.quoted_table());
+        column.push('.');
+        column.push_str(field.quoted_name());
+        match crate::company::load_column(registry, field, &column) {
+            Some(item) => out.push_str(&item),
+            None => out.push_str(&column),
+        }
     }
     out.push_str(" FROM ");
     out.push_str(spec.quoted_table());
@@ -249,7 +269,7 @@ pub fn select_ids_where_cached(
     registry
         .statement_cache_of(spec)
         .select_ids_where(columns, joins, predicate, ids_param, || {
-            select_ids_where_spec(spec, columns, joins, predicate, ids_param)
+            select_ids_where_spec(registry, spec, columns, joins, predicate, ids_param)
         })
 }
 

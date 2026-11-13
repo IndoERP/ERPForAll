@@ -821,12 +821,17 @@ async fn spec_rel_015_company_dependent_many2one_unlink() {
     let t_id = tag_t.ids()[0];
     let s_id = tag_s.ids()[0];
 
-    let rec_a = create(
-        &mut tx,
-        "test_rel.comp_holder",
-        &[&[("name", Value::str("a"))]],
-    )
-    .await;
+    // company-dependent values are stored for the current company, so the holder is created in one
+    let holders = tx
+        .env()
+        .with_company(1)
+        .unwrap()
+        .records("test_rel.comp_holder")
+        .unwrap();
+    let rec_a = holders
+        .create_values(&mut tx, &[map(&[("name", Value::str("a"))])])
+        .await
+        .unwrap();
     let a_id = rec_a.ids()[0];
 
     let company = 1_i64;
@@ -845,9 +850,8 @@ async fn spec_rel_015_company_dependent_many2one_unlink() {
     assert_eq!(err.kind(), ErrorKind::UserError);
     assert_eq!(
         err.message(),
-        format!(
-            "You cannot delete test_rel.tag,{t_id}, as it is used by test_rel.comp_holder,{a_id}"
-        )
+        // The referring record may be hidden: the runtime deliberately omits its identity.
+        "You cannot delete a record used by a company-dependent field"
     );
 
     // After restrict refusal, target t still exists and tag_id remains intact in jsonb

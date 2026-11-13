@@ -209,6 +209,27 @@ impl CompanyScope {
     }
 }
 
+/// A model whose `company_id` comes by `_inherits` delegation from a model scoped by that field
+/// (amendment A2; `product.product` and its template's company).
+///
+/// Recorded on [`ModelSpec::company_delegation`], beside the company scope and never in it: the
+/// delegating model keeps `company_scope == None`, because the scope's consumers read the company
+/// column of the model's own table (see the field's documentation). Only a declared
+/// `check_company` toward such a model reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompanyDelegation {
+    /// The model's inherited `company_id` field.
+    pub field: FieldId,
+    /// The model's delegate many2one that brings `company_id` (the first step of the chain).
+    pub delegate: FieldId,
+    /// The model at the end of the delegation chain, which stores the company and is scoped
+    /// [`CompanyScope::Single`] by it.
+    pub storing_model: ModelId,
+    /// The storing model's match, which targets reached through the delegation ask of the
+    /// records linking to them.
+    pub matching: SingleMatch,
+}
+
 /// A relational field's company check, after defaults and opt-outs.
 ///
 /// ```
@@ -351,12 +372,15 @@ pub struct FieldSpec {
     pub html_policy: Option<erp_fields::html::FieldPolicy>,
     /// `change_default`.
     pub change_default: bool,
-    /// `user_writeable`: a user may write this field of their own `res.users` record
-    /// .
+    /// `user_writeable`: a user may write this field of their own `res.users` record.
     pub user_writeable: bool,
     /// `secret`: the field holds a credential; the audit call digest redacts its value
     /// (redaction v2).
     pub secret: bool,
+    /// `db_default`: schema sync keeps the static default (a boolean) as the column's
+    /// database default instead of dropping it. Only on stored, required boolean fields with a
+    /// static boolean default; never on an `_inherits` copy.
+    pub db_default: bool,
     /// Only stored fields of the model's own
     /// table and stored many2many fields are tracked.
     pub tracking: Option<u32>,
@@ -406,10 +430,11 @@ impl FieldSpec {
         self.compute_read.is_company_bound() && self.related.is_some() && !self.store
     }
 
-    /// The physical cell representation of this field's values. A translated field is stored as a
-    /// jsonb language map, so it is [`Storage::Json`] whatever its type says.
+    /// The physical cell representation. Translated fields hold language maps and company-dependent
+    /// fields hold company maps, so both use [`Storage::Json`] independently of their scalar type.
+    /// ORM callers receive the projected scalar; this describes internal cache/SQL storage.
     pub fn storage(&self) -> Storage {
-        if self.translate {
+        if self.translate || self.company_dependent {
             Storage::Json
         } else {
             self.ty.storage()
@@ -561,6 +586,17 @@ pub struct ModelSpec {
     /// How the model's records belong to companies; `None` when the model is not
     /// company-scoped. Resolved by the registry's company pass.
     pub company_scope: Option<CompanyScope>,
+    /// The delegation that brings the model's `company_id` from an `_inherits` parent, when the
+    /// model has no company scope of its own (amendment A2); resolved by the registry's
+    /// company pass.
+    ///
+    /// Deliberately separate from [`Self::company_scope`]: the consumers of the scope (the company
+    /// check statement, record rules, `within_companies_sql`, access evidence, hop paths) read the
+    /// company column of the model's own table, which a delegating model does not have, and a
+    /// scoped model becomes a default check target for every link to it. Only a declared
+    /// `check_company` toward the model reads this, through the ORM's delegated read. Design,
+    /// "Why the scope itself does not change".
+    pub company_delegation: Option<CompanyDelegation>,
     /// The validated company access (A1-D2, A1-D3), set by the registry's company access
     /// pass. A typed state, not an `Option`: a concrete company-scoped model that declares
     /// nothing is [`CompanyAccessState::Undeclared`] during composition and is refused before a
@@ -589,9 +625,12 @@ pub struct ModelSpec {
     /// The `row_version` field, when a declaration set `row_version = true`.
     pub row_version: Option<FieldId>,
     pub tracked: Vec<FieldId>,
-    /// Whether any loaded declaration opted this regular model into transactional event capture
-    /// . Extensions compose by OR; no extension can disable another's opt-in.
+    /// Whether any loaded declaration opted this regular model into transactional event capture.
+    /// Extensions compose by; no extension can disable another's opt-in.
     pub eventful: bool,
+    /// Select successful RPC reads for independent auditing.
+    /// Default false; OR-composed through extensions and classical/abstract inheritance.
+    pub audit_reads: bool,
     /// Business keys (the checked [`TableObjectKind::Key`] table objects), see
     /// [`ModelSpec::business_key`].
     pub(crate) keys: Vec<crate::keys::BusinessKey>,
@@ -776,6 +815,7 @@ pub struct Registry {
     pub(crate) by_name: FxHashMap<&'static str, ModelId>,
     pub(crate) dropped: Vec<DroppedField>,
     pub(crate) statement_cache: crate::statement_cache::StatementCache,
+    pub(crate) sql_objects: crate::sqlobj::graph::SqlObjectGraph,
 }
 
 impl Registry {
@@ -811,6 +851,12 @@ impl Registry {
     /// logs nothing.
     pub fn dropped_fields(&self) -> &[DroppedField] {
         &self.dropped
+    }
+
+    /// The addon-owned SQL objects of the addon set, validated and resolved in dependency order
+    /// (declarations only, nothing is installed by the registry).
+    pub fn sql_objects(&self) -> &crate::sqlobj::graph::SqlObjectGraph {
+        &self.sql_objects
     }
 
     /// Registry generation (bumped by every rebuild of a database's registry).

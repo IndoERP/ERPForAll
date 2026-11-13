@@ -1,4 +1,4 @@
-//! The store payloads of the thread RPC answers (spec,
+//! The store payloads of the thread RPC answers (
 //! guide).
 //!
 //! A thread call answers with the records it touched in the generic store wire: the schema below
@@ -8,9 +8,9 @@
 //! this file contributes the thread models as a schema part, and the generation token is the
 //! registry's, so a thread answer and a `store_fetch` answer carry the same one.
 //!
-//! The polymorphic thread reference.2 needs every thread model in the schema;
-//! until a thread-model part exists a message and a follower carry the thread as `res_model`
-//! (string) and `res_id` (int).
+//! The thread models are named in the schema so a client can hold a chatter's record; a message and a
+//! follower still carry the thread as `res_model` (string) and `res_id` (int), not as the polymorphic
+//! reference.2.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -56,8 +56,7 @@ pub(crate) const SUBTYPE_FIELDS: [&str; 2] = ["name", "internal"];
 
 /// `ir.attachment` in a store answer: `name`, `mimetype`, `file_size`, `checksum`, `type` and `url`
 /// (see [`thread_schema`]) - metadata only, never content. No access token and no route are
-/// carried: `ir.attachment` has none until
-/// .
+/// carried: `ir.attachment` has none until.
 pub(crate) const ATTACHMENT: &str = "ir.attachment";
 pub(crate) const MESSAGE: &str = "mail.message";
 pub(crate) const FOLLOWERS: &str = "mail.followers";
@@ -72,6 +71,14 @@ crate::store_schema_part!(THREAD_SCHEMA = SchemaPart::new("mail", thread_schema)
 fn thread_schema(f: &mut SchemaFragment) {
     // the partner records the answers carry for the authors, recipients and followers they name
     f.field(PARTNER, "name", FieldSpec::new(FieldKind::String));
+    // every thread model of the repository, so the client can hold their chatter records.
+    // shortcut: only `mail` may contribute a part until installed-only schema filtering exists (
+    // (c).4), so the product bridge's two models are named here (no fields, so no record data); they
+    // move to a `product_mail` part with task.
+    f.model("res.users")
+        .model("res.company")
+        .model("product.template")
+        .model("product.product");
     f.field(SUBTYPE, "name", FieldSpec::new(FieldKind::String));
     f.field(SUBTYPE, "internal", FieldSpec::new(FieldKind::Bool));
     f.field(MESSAGE, "body", FieldSpec::new(FieldKind::Html));
@@ -237,8 +244,14 @@ pub(crate) fn message_entries(
             Wire::Many2One(many2one(get("parent_id")?, "message parent")?),
         ),
     ];
-    if let Value::DateTime(date) = get("date")? {
-        set.push(("date", Wire::Datetime(date.to_string())));
+    match get("date")? {
+        Value::DateTime(date) => set.push(("date", Wire::Datetime(date.to_string()))),
+        Value::False => {}
+        other => {
+            return Err(Error::invariant(format!(
+                "a message date is neither a datetime nor false: {other:?}"
+            )));
+        }
     }
     set.push((
         "is_internal",

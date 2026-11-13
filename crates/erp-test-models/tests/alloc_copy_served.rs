@@ -147,8 +147,8 @@ fn served_copy_semantics() {
                 .unwrap()
                 .parse::<u64>()
                 .unwrap();
-            // ceilings per operation; the four writes include the audit INSERT of the commit preamble
-            // , `copy_data` is a write too
+            // ceilings per operation; the four writes include the audit INSERT of the commit preamble,
+            // `copy_data` is a write too
             let ceiling = [3, 2, 2, 3, 3][index];
             assert!(
                 statements <= ceiling,

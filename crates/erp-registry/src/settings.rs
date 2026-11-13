@@ -1,5 +1,5 @@
 //! Native, addon-owned settings declarations.
-use erp_fields::{Error, Result, Value};
+use erp_fields::{Error, RecId, Result, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Scope vocabulary. Permission checks are independent of this declaration.
@@ -56,6 +56,9 @@ pub struct SettingDecl {
     read_groups: Vec<String>,
     write_groups: Vec<String>,
     validator: Option<Validator>,
+    app: String,
+    block: String,
+    sequence: u32,
 }
 impl std::fmt::Debug for SettingDecl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -63,6 +66,9 @@ impl std::fmt::Debug for SettingDecl {
             .field("key", &self.key)
             .field("scope", &self.scope)
             .field("kind", &self.kind)
+            .field("app", &self.app)
+            .field("block", &self.block)
+            .field("sequence", &self.sequence)
             .finish_non_exhaustive()
     }
 }
@@ -110,6 +116,10 @@ impl SettingDecl {
         {
             return Err(invalid());
         }
+        let default_app = key
+            .split_once('.')
+            .map(|(prefix, _)| prefix.to_string())
+            .ok_or_else(invalid)?;
         let setting = Self {
             key: key.into(),
             label: label.into(),
@@ -119,6 +129,9 @@ impl SettingDecl {
             read_groups: Vec::new(),
             write_groups: Vec::new(),
             validator: None,
+            app: default_app,
+            block: "General".into(),
+            sequence: 100,
         };
         setting.validate(&setting.default)?;
         Ok(setting)
@@ -306,10 +319,364 @@ impl SettingDecl {
     pub fn write_groups(&self) -> &[String] {
         &self.write_groups
     }
+    /// Set the target application / settings page.
+    /// # Errors
+    /// Invalid addon identifier.
+    pub fn app(mut self, app: &str) -> Result<Self> {
+        if !name(app) || app.len() > 128 {
+            return Err(invalid());
+        }
+        self.app = app.into();
+        Ok(self)
+    }
+    /// Alias for `app`.
+    /// # Errors
+    /// Invalid addon identifier.
+    pub fn with_app(self, app: &str) -> Result<Self> {
+        self.app(app)
+    }
+    /// Set the section or block title within the settings page.
+    /// # Errors
+    /// Empty, oversized (> 256 bytes) or containing control characters.
+    pub fn block(mut self, block: &str) -> Result<Self> {
+        if block.is_empty() || block.len() > 256 || block.chars().any(char::is_control) {
+            return Err(invalid());
+        }
+        self.block = block.into();
+        Ok(self)
+    }
+    /// Alias for `block`.
+    /// # Errors
+    /// Empty, oversized (> 256 bytes) or containing control characters.
+    pub fn with_block(self, block: &str) -> Result<Self> {
+        self.block(block)
+    }
+    /// Set the display sort sequence.
+    #[must_use]
+    pub fn sequence(mut self, sequence: u32) -> Self {
+        self.sequence = sequence;
+        self
+    }
+    /// Alias for `sequence`.
+    #[must_use]
+    pub fn with_sequence(self, sequence: u32) -> Self {
+        self.sequence(sequence)
+    }
+    /// Target application settings page.
+    pub fn target_app(&self) -> &str {
+        &self.app
+    }
+    /// Section or block title within the settings page.
+    pub fn block_title(&self) -> &str {
+        &self.block
+    }
+    /// Display sort sequence.
+    pub fn display_sequence(&self) -> u32 {
+        self.sequence
+    }
 }
-/// Immutable installed-addon declarations. No secret setting kind exists in this contract.
+/// External identity of a window action or menu that a link row opens.
+///
+/// Built only by the [`PanelItemDecl`] link constructors, which validate the identity; registry publication
+/// resolves it to exactly one row owned by an addon in the contributor's dependency closure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LinkTarget {
+    /// An `ir.actions.act_window` identity; `record` asks the resolver for the record the action opens.
+    #[non_exhaustive]
+    Action {
+        /// `<module>.<name>` identity of the action.
+        xmlid: String,
+        /// Whether the link opens one record that the declaring addon's resolver names.
+        record: bool,
+    },
+    /// An `ir.ui.menu` identity.
+    #[non_exhaustive]
+    Menu {
+        /// `<module>.<name>` identity of the menu.
+        xmlid: String,
+    },
+}
+impl LinkTarget {
+    /// The `<module>.<name>` identity, whatever the target kind.
+    pub fn xmlid(&self) -> &str {
+        match self {
+            Self::Action { xmlid, .. } | Self::Menu { xmlid } => xmlid,
+        }
+    }
+}
+/// What a panel item shows: a read-only value or a link.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PanelItemKind {
+    /// A read-only value computed by the declaring addon's resolver.
+    Info,
+    /// An arrow link to a window action or a menu.
+    Link(LinkTarget),
+}
+/// A read-only information row or a link row on a Settings app page: a sibling of [`SettingDecl`], never a
+/// setting. It has no default, no write groups and no stored value.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct PanelItemDecl {
+    key: String,
+    label: String,
+    scope: Option<ScopeKind>,
+    kind: PanelItemKind,
+    read_groups: Vec<String>,
+    app: String,
+    block: String,
+    sequence: u32,
+}
+// `<module>.<name>`: module as an addon name, name of ASCII letters, digits and `_`, 256 bytes in total.
+fn external_identity(xmlid: &str) -> bool {
+    let Some((module, local)) = xmlid.split_once('.') else {
+        return false;
+    };
+    xmlid.len() <= 256
+        && name(module)
+        && !local.is_empty()
+        && local
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+impl PanelItemDecl {
+    fn new(key: &str, label: &str, kind: PanelItemKind) -> Result<Self> {
+        if !qualified(key)
+            || label.is_empty()
+            || label.len() > 256
+            || label.chars().any(char::is_control)
+        {
+            return Err(invalid());
+        }
+        let app = key
+            .split_once('.')
+            .map(|(prefix, _)| prefix.to_owned())
+            .ok_or_else(invalid)?;
+        Ok(Self {
+            key: key.into(),
+            label: label.into(),
+            scope: None,
+            kind,
+            read_groups: Vec::new(),
+            app,
+            block: "General".into(),
+            sequence: 100,
+        })
+    }
+    /// Declare a read-only information row; its value comes from the addon's resolver.
+    /// # Errors
+    /// Invalid addon-qualified key or label (1 to 256 bytes, no control characters).
+    pub fn info(key: &str, label: &str) -> Result<Self> {
+        Self::new(key, label, PanelItemKind::Info)
+    }
+    /// Declare a link to a window action; with `record` the resolver names the record it opens.
+    /// # Errors
+    /// Invalid key, label or action identity.
+    pub fn action_link(key: &str, label: &str, action: &str, record: bool) -> Result<Self> {
+        if !external_identity(action) {
+            return Err(invalid());
+        }
+        Self::new(
+            key,
+            label,
+            PanelItemKind::Link(LinkTarget::Action {
+                xmlid: action.into(),
+                record,
+            }),
+        )
+    }
+    /// Declare a link to a menu.
+    /// # Errors
+    /// Invalid key, label or menu identity.
+    pub fn menu_link(key: &str, label: &str, menu: &str) -> Result<Self> {
+        if !external_identity(menu) {
+            return Err(invalid());
+        }
+        Self::new(
+            key,
+            label,
+            PanelItemKind::Link(LinkTarget::Menu { xmlid: menu.into() }),
+        )
+    }
+    /// Set the required read groups (ANY of a nonempty list of external identities).
+    /// # Errors
+    /// Empty, duplicate or malformed group references. Registry publication resolves each reference.
+    pub fn access(mut self, read: &[&str]) -> Result<Self> {
+        self.read_groups = policy(read)?;
+        Ok(self)
+    }
+    /// Set the target application / settings page.
+    /// # Errors
+    /// Invalid addon identifier.
+    pub fn app(mut self, app: &str) -> Result<Self> {
+        if !name(app) || app.len() > 128 {
+            return Err(invalid());
+        }
+        self.app = app.into();
+        Ok(self)
+    }
+    /// Set the block title within the settings page.
+    /// # Errors
+    /// Empty, oversized (> 256 bytes) or containing control characters.
+    pub fn block(mut self, block: &str) -> Result<Self> {
+        if block.is_empty() || block.len() > 256 || block.chars().any(char::is_control) {
+            return Err(invalid());
+        }
+        self.block = block.into();
+        Ok(self)
+    }
+    /// Set the display sort sequence.
+    #[must_use]
+    pub fn sequence(mut self, sequence: u32) -> Self {
+        self.sequence = sequence;
+        self
+    }
+    /// Show the item in one scope only; without this it shows in every scope.
+    #[must_use]
+    pub fn scope(mut self, scope: ScopeKind) -> Self {
+        self.scope = Some(scope);
+        self
+    }
+    /// Addon-qualified identity, unique across settings and items.
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+    /// Declared display label; an information value may override it (singular and plural).
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+    /// Information row or link with its target.
+    pub fn kind(&self) -> &PanelItemKind {
+        &self.kind
+    }
+    /// Required read groups, resolved at publication.
+    pub fn read_groups(&self) -> &[String] {
+        &self.read_groups
+    }
+    /// The one scope the item is restricted to; `None` shows it in every scope.
+    pub fn scope_restriction(&self) -> Option<ScopeKind> {
+        self.scope
+    }
+    /// Whether the item shows in `scope`.
+    pub fn shows_in(&self, scope: ScopeKind) -> bool {
+        self.scope.is_none_or(|only| only == scope)
+    }
+    /// Target application settings page.
+    pub fn target_app(&self) -> &str {
+        &self.app
+    }
+    /// Block title within the settings page.
+    pub fn block_title(&self) -> &str {
+        &self.block
+    }
+    /// Display sort sequence.
+    pub fn display_sequence(&self) -> u32 {
+        self.sequence
+    }
+}
+const ITEM_SCALAR: &str = "A setting item value must be a boolean, text, integer or finite float.";
+const ITEM_LABEL: &str = "A setting item label must be 1 to 256 bytes without control characters.";
+/// Largest detail text, in bytes, that an information value may carry ([`PanelItemValue::detail`]).
+pub const MAX_ITEM_DETAIL_BYTES: usize = 1024;
+fn item_detail_message() -> String {
+    format!(
+        "A setting item detail must be at most {MAX_ITEM_DETAIL_BYTES} bytes; a line feed is its only \
+         allowed control character."
+    )
+}
+const ITEM_NOT_INFO: &str = "Only an information value carries a label or detail.";
+/// The value a resolver returns for one panel item.
+///
+/// Built only through its validating constructors; a value that breaks a bound is a programming error of the
+/// resolver and is never truncated.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum PanelItemValue {
+    /// The value of an information row.
+    #[non_exhaustive]
+    Info {
+        /// Boolean, text, integer or finite float.
+        value: Value,
+        /// Label replacing the declared one (for example the singular form of a count).
+        label: Option<String>,
+        /// Secondary text under the value; line feeds separate lines.
+        detail: Option<String>,
+    },
+    /// The stored record a record link opens.
+    #[non_exhaustive]
+    Record {
+        /// Database id of the record.
+        id: RecId,
+    },
+}
+impl PanelItemValue {
+    /// An information value.
+    /// # Errors
+    /// `Programming` unless `value` is a boolean, text, integer or finite float.
+    pub fn info(value: Value) -> Result<Self> {
+        let scalar = matches!(&value, Value::Bool(_) | Value::Str(_) | Value::Int(_))
+            || matches!(&value, Value::Float(float) if float.is_finite());
+        if !scalar {
+            return Err(Error::programming(ITEM_SCALAR));
+        }
+        Ok(Self::Info {
+            value,
+            label: None,
+            detail: None,
+        })
+    }
+    /// Replace the declared label for this value.
+    /// # Errors
+    /// `Programming` for an empty, oversized (> 256 bytes) or control-character label, or on a record value.
+    pub fn label(self, text: &str) -> Result<Self> {
+        let Self::Info { value, detail, .. } = self else {
+            return Err(Error::programming(ITEM_NOT_INFO));
+        };
+        if text.is_empty() || text.len() > 256 || text.chars().any(char::is_control) {
+            return Err(Error::programming(ITEM_LABEL));
+        }
+        Ok(Self::Info {
+            value,
+            label: Some(text.into()),
+            detail,
+        })
+    }
+    /// Add a secondary text under the value.
+    /// # Errors
+    /// `Programming` for more than 1024 bytes or a control character other than line feed, or on a record value.
+    pub fn detail(self, text: &str) -> Result<Self> {
+        let Self::Info { value, label, .. } = self else {
+            return Err(Error::programming(ITEM_NOT_INFO));
+        };
+        if text.len() > MAX_ITEM_DETAIL_BYTES || text.chars().any(|c| c.is_control() && c != '\n') {
+            return Err(Error::programming(item_detail_message()));
+        }
+        Ok(Self::Info {
+            value,
+            label,
+            detail: Some(text.into()),
+        })
+    }
+    /// The record a record link opens.
+    /// # Errors
+    /// `Programming` for an in-memory new record.
+    pub fn record(id: RecId) -> Result<Self> {
+        if id.is_new() {
+            return Err(Error::programming(
+                "A setting item record must be a stored record.",
+            ));
+        }
+        Ok(Self::Record { id })
+    }
+}
+/// Immutable installed-addon declarations: settings, and the panel items published next to them.
+/// No secret setting kind exists in this contract.
 #[derive(Debug, Default)]
-pub struct SettingsRegistry(BTreeMap<String, SettingDecl>);
+pub struct SettingsRegistry {
+    settings: BTreeMap<String, SettingDecl>,
+    items: BTreeMap<String, PanelItemDecl>,
+}
 impl SettingsRegistry {
     /// Bind declarations to their actual contributing installed addon and resolve all policy references.
     /// # Errors
@@ -333,6 +700,7 @@ impl SettingsRegistry {
                         .iter()
                         .chain(&decl.write_groups)
                         .any(|group| !group_exists(group))
+                    || !installed.contains(decl.target_app())
                 {
                     return Err(invalid());
                 }
@@ -342,14 +710,66 @@ impl SettingsRegistry {
                 }
             }
         }
-        Ok(Self(entries))
+        Ok(Self {
+            settings: entries,
+            items: BTreeMap::new(),
+        })
     }
-    /// Look up a currently installed declaration; absence is explicit.
+    /// Add the installed panel items under the same ownership rule as settings.
+    ///
+    /// `target_exists(owner, target)` answers whether a link target of the contributing addon `owner` resolved
+    /// when the registry was published (exactly one row, owned by an addon in `owner`'s dependency closure).
+    /// # Errors
+    /// `Validation` "invalid declared setting or value" for a wrong or uninstalled owner, a key already used by a
+    /// setting or an item, empty or missing read groups or an uninstalled target app; `Validation` "Setting item
+    /// references an unavailable action or menu." for a link whose target does not exist.
+    pub fn with_items(
+        mut self,
+        contributions: Vec<(String, Vec<PanelItemDecl>)>,
+        installed: &BTreeSet<String>,
+        group_exists: impl Fn(&str) -> bool,
+        target_exists: impl Fn(&str, &LinkTarget) -> bool,
+    ) -> Result<Self> {
+        for (owner, declarations) in contributions {
+            if !installed.contains(&owner) || !name(&owner) {
+                return Err(invalid());
+            }
+            for item in declarations {
+                if item.key.split_once('.').map(|(prefix, _)| prefix) != Some(owner.as_str())
+                    || item.read_groups.is_empty()
+                    || item.read_groups.iter().any(|group| !group_exists(group))
+                    || !installed.contains(item.target_app())
+                    || self.settings.contains_key(&item.key)
+                    || self.items.contains_key(&item.key)
+                {
+                    return Err(invalid());
+                }
+                if let PanelItemKind::Link(target) = &item.kind
+                    && !target_exists(&owner, target)
+                {
+                    return Err(Error::validation(
+                        "Setting item references an unavailable action or menu.",
+                    ));
+                }
+                self.items.insert(item.key.clone(), item);
+            }
+        }
+        Ok(self)
+    }
+    /// Look up a currently installed setting declaration; absence is explicit. Items are never returned.
     pub fn get(&self, key: &str) -> Option<&SettingDecl> {
-        self.0.get(key)
+        self.settings.get(key)
     }
-    /// Declarations sorted by key.
+    /// Setting declarations sorted by key.
     pub fn iter(&self) -> impl Iterator<Item = &SettingDecl> {
-        self.0.values()
+        self.settings.values()
+    }
+    /// Look up a published panel item; absence is explicit.
+    pub fn item(&self, key: &str) -> Option<&PanelItemDecl> {
+        self.items.get(key)
+    }
+    /// Published panel items sorted by key.
+    pub fn items(&self) -> impl Iterator<Item = &PanelItemDecl> {
+        self.items.values()
     }
 }

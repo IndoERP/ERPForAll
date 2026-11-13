@@ -16,7 +16,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use erp_sdk::Operation;
 use erp_sdk::prelude::*;
 
-use erp_addon_base::attachments::{self, AdoptScope, ParentRef};
+use erp_addon_base::attachments::{
+    self, AdoptScope, AttachmentContent, NewAttachment, ParentRef, UploadId,
+};
 
 use crate::followers::{ExistingPolicy, SubtypeChoice, insert_followers};
 use crate::mail_thread::MAX_IDS_PER_CALL;
@@ -109,6 +111,50 @@ impl PostOptions {
     }
 }
 
+/// A staged file to adopt within a post. Content facts are resolved by the attachment linker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct StagedAttachment {
+    name: String,
+    upload_id: UploadId,
+    mimetype: Option<String>,
+}
+impl StagedAttachment {
+    /// Validate bounded file metadata and the upload id's canonical shape.
+    ///
+    /// # Errors
+    /// Validation for an invalid name, media type or upload id.
+    pub fn new(name: String, upload_id: &str, mimetype: Option<String>) -> Result<Self> {
+        if name.is_empty()
+            || name.len() > attachments::NAME_MAX_BYTES
+            || name.bytes().any(|b| matches!(b, 0 | b'\r' | b'\n'))
+        {
+            return Err(Error::validation(
+                "A staged attachment name is 1 to 255 bytes without CR, LF or NUL.",
+            ));
+        }
+        if mimetype.as_ref().is_some_and(|m| m.len() > 127) {
+            return Err(Error::validation(
+                "A staged attachment media type is at most 127 bytes.",
+            ));
+        }
+        Ok(Self {
+            name,
+            upload_id: UploadId::parse(upload_id)?,
+            mimetype,
+        })
+    }
+    fn item(&self) -> NewAttachment {
+        let mut item = NewAttachment::new(
+            self.name.clone(),
+            AttachmentContent::Upload(self.upload_id.clone()),
+        )
+        .pending_in(COMPOSER_MODEL);
+        item.declared_mimetype.clone_from(&self.mimetype);
+        item
+    }
+}
+
 /// A post on one record (`message_post`). Built with [`PostRequest::new`], then fields set.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -126,6 +172,9 @@ pub struct PostRequest {
     /// [`erp_addon_base::attachments::adopt`]). Ignored when a `client_uid` replay returns the
     /// stored message.
     pub attachment_ids: Vec<i64>,
+    /// Ready uploads to adopt atomically after the idempotency lookup. Combined with attachment
+    /// ids, at most MAX_ATTACHMENTS; duplicate staged ids are refused. Ignored on replay.
+    pub staged_uploads: Vec<StagedAttachment>,
     /// Explicit recipients (To).
     pub partner_ids: Vec<i64>,
     /// Structured mentions of the text body.
@@ -150,6 +199,7 @@ impl PostRequest {
             subtype: PostSubtype::Note,
             parent_id: None,
             attachment_ids: Vec::new(),
+            staged_uploads: Vec::new(),
             partner_ids: Vec::new(),
             mentions: Vec::new(),
             silent: false,
@@ -276,7 +326,7 @@ fn invalid_id(what: &str, id: i64) -> Error {
 }
 
 /// `ids` deduplicated in ascending order; every id positive, at most [`MAX_IDS_PER_CALL`].
-fn checked_partner_ids(ids: &[i64]) -> Result<Vec<i64>> {
+pub(crate) fn checked_partner_ids(ids: &[i64]) -> Result<Vec<i64>> {
     if ids.len() > MAX_IDS_PER_CALL {
         return Err(Error::validation(format!(
             "At most {MAX_IDS_PER_CALL} partner ids are accepted per post, not {}.",
@@ -482,6 +532,22 @@ fn check_request(request: &PostRequest) -> Result<Checked> {
         )));
     }
     let partners = checked_partner_ids(&request.partner_ids)?;
+    let total = request
+        .attachment_ids
+        .len()
+        .checked_add(request.staged_uploads.len())
+        .ok_or_else(|| Error::validation("Attachment count exceeds the supported range."))?;
+    if total > MAX_ATTACHMENTS {
+        return Err(Error::validation(format!(
+            "At most {MAX_ATTACHMENTS} attachments are posted with one message, not {total}."
+        )));
+    }
+    let mut staged = BTreeSet::new();
+    for file in &request.staged_uploads {
+        if !staged.insert(file.upload_id.as_str()) {
+            return Err(UploadId::not_usable_error());
+        }
+    }
     let attachments = checked_attachment_ids(&request.attachment_ids)?;
     let mut recipients: BTreeSet<i64> = partners.iter().copied().collect();
     recipients.extend(mentioned);
@@ -796,8 +862,20 @@ pub(crate) async fn message_post(
     record: &Records,
     request: PostRequest,
 ) -> Result<Posted> {
+    if request.staged_uploads.is_empty() {
+        return message_post_inner(tx, record, request).await;
+    }
+    tx.savepoint(async |tx| message_post_inner(tx, record, request).await)
+        .await
+}
+
+async fn message_post_inner(
+    tx: &mut Transaction,
+    record: &Records,
+    request: PostRequest,
+) -> Result<Posted> {
     let res_id = single_id(record)?;
-    let checked = check_request(&request)?;
+    let mut checked = check_request(&request)?;
     let env = record.env().clone();
     require_model_data(&env)?;
     let model = record.model_name().to_owned();
@@ -872,6 +950,21 @@ pub(crate) async fn message_post(
         record
             .call::<_, ()>(tx, "follow", (checked.recipients.clone(), None::<Vec<i64>>))
             .await?;
+    }
+    if !request.staged_uploads.is_empty() {
+        let created = attachments::create(
+            tx,
+            request
+                .staged_uploads
+                .iter()
+                .map(StagedAttachment::item)
+                .collect(),
+        )
+        .await?;
+        checked
+            .attachments
+            .extend(created.iter().map(|id| id.get()));
+        checked.attachments.sort_unstable();
     }
     attachments::adopt(
         tx,

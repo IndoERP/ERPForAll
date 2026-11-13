@@ -537,8 +537,8 @@ mod tests {
             "<t t-name=\"a.T\"><div><i>1</i><i>2</i><i>4</i></div></t>"
         );
         let child = out[1].as_ref().unwrap();
-        // The primary child sees every extension of its parent, also the one declared after it
-        // , then its own extension.
+        // The primary child sees every extension of its parent, also the one declared after it,
+        // then its own extension.
         assert_eq!(child.applied, vec![1, 0, 2, 5, 3, 4]);
         assert_eq!(
             child.xml,

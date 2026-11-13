@@ -34,7 +34,7 @@ test("statinfo reads current record values and rejects malformed server values",
 
 
 /// (partial: RecordForm icon/value/name composition through rerender and overflow)
-test("a declared statistic icon and live count remain on one action after rerender and overflow", () => {
+test("a declared statistic icon and live count remain on one action after rerender and a phone-width resize", () => {
   const width = vi.spyOn(window, "innerWidth", "get").mockReturnValue(1200);
   const action = vi.fn(), controls: HTMLButtonElement[] = [];
   const rpc = new RpcClient(async () => { throw new Error("Unexpected RPC"); }, () => {});
@@ -58,9 +58,10 @@ test("a declared statistic icon and live count remain on one action after rerend
     expect(target.getAttribute("aria-label")).toBe("17 Lines Related records");
     expect(target.querySelectorAll('svg[data-icon="refresh-cw"]')).toHaveLength(1);
     width.mockReturnValue(390); window.dispatchEvent(new Event("resize"));
-    expect(form.querySelector(".form-overflow-menu .form-stat-button")).toBe(target);
-    expect(form.querySelectorAll(".form-stat-button")).toHaveLength(1);
-    form.querySelector<HTMLButtonElement>(".form-overflow-toggle")!.click(); target.click();
+    // A phone keeps up to four statistics in the box: the single action stays direct, with no More menu.
+    expect(form.querySelector(".form-button-box > .form-stat-button")).toBe(target);
+    expect(form.querySelector(".form-overflow-toggle")).toBeNull();
+    target.click();
     expect(action).toHaveBeenCalledTimes(1);
     expect(target.getAttribute("aria-label")).toBe("17 Lines Related records");
     expect(target.querySelectorAll('svg[data-icon="refresh-cw"]')).toHaveLength(1);

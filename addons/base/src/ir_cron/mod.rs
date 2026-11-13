@@ -1,4 +1,4 @@
-//! `ir.cron` and `ir.cron.trigger` on the job queue (spec).
+//! `ir.cron` and `ir.cron.trigger` on the job queue.
 //!
 //! `create`, `write`, `unlink` and `trigger`
 //! keep that row in the same transaction; nothing polls `ir_cron`. The job runs the server action
@@ -13,7 +13,7 @@ pub use progress::commit_progress;
 
 use erp_sdk::jobs::{JobKey, RecurringSpec, When};
 use erp_sdk::prelude::*;
-use erp_sdk::{Cell, Operation, PrincipalKind, SUPERUSER_ID, TimestampTz, UserId};
+use erp_sdk::{Cell, Operation, PrincipalKind, TimestampTz, UserId};
 
 /// The job kind of a scheduled action.
 pub const CRON_KIND: &str = "base.cron";
@@ -210,8 +210,13 @@ pub async fn sync_job(tx: &mut Transaction, env: &Env, id: i64) -> Result<()> {
         .held(!active)
         .run_as(user)
         .payload(&erp_sdk::serde_json::json!({ "cron_id": id }))?;
-    let system = env.with_user(SUPERUSER_ID.get());
-    tx.job_upsert_recurring(&system, spec).await?;
+    // the system keeps any cron's row; a user keeps only its own (`create` and `write` refused
+    // another user's cron before this), without switching to the superuser (A4)
+    if env.principal().kind() == PrincipalKind::System {
+        tx.job_upsert_recurring(env, spec).await?;
+    } else {
+        tx.job_upsert_recurring_own(env, spec).await?;
+    }
     Ok(())
 }
 

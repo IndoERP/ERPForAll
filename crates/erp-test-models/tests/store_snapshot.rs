@@ -1,5 +1,5 @@
-//! step 6: `Transaction::store_snapshot` against a real PostgreSQL database
-//! . Two explicit transactions on two connections,
+//! step 6: `Transaction::store_snapshot` against a real PostgreSQL database.
+//! Two explicit transactions on two connections,
 //! interleaved step by step.
 #![allow(
     clippy::unwrap_used,

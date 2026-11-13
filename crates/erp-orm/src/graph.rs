@@ -27,9 +27,9 @@
 //!   in rank order, followed by itself: reading or searching a stored compute settles them first.
 //! - **Reach.** Whether a change of a field can reach a stored computed field: the marking walk is
 //!   pruned when every target behind an edge is non-stored, uncached and reaches nothing stored
-//!   (`modified` on an empty cache costs 0 statements).
-//! - **Recursive fields.** A field reaching itself through a path is recursive
-//!   ; it is computed level by level.
+//!   (`modified()` on an empty cache costs 0 statements).
+//! - **Recursive fields.** A field reaching itself through a path is recursive;
+//!   it is computed level by level.
 
 use std::sync::Arc;
 

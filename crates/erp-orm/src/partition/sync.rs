@@ -237,7 +237,7 @@ fn refusal(state: &TableState<'_>, change: &Change, visible: bool) -> Error {
     };
     Error::programming(format!(
         "table '{}' {rows}{what}; changing its partitioning is not supported ({PARTITION_ADR}; \
-         business tables: M5 partitioning ADR)",
+         business tables: a later release)",
         state.spec.table
     ))
 }

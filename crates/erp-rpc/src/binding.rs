@@ -23,16 +23,16 @@ pub const MAX_CONTEXT_KEY_BYTES: usize = 256;
 /// in step (review A4-R1).
 pub const SERVER_ONLY_CONTEXT_PREFIX: &str = "install_";
 
-/// Context keys only the server sets (design note §7.2): the loader's. A key whose presence
+/// Context keys only the server sets (design note §7.2): the loader's and `force_delete`. A key whose presence
 /// relaxes a check, an audit, tracking or a constraint belongs here: the load-state keys
 /// (`erp_data::load::load_state`) make `ir.ui.view` skip sibling views in its write check
 /// (review A3-S1).
-pub const SERVER_ONLY_CONTEXT_KEYS: [&str; 14] = server_only_keys();
+pub const SERVER_ONLY_CONTEXT_KEYS: [&str; 15] = server_only_keys();
 
 /// The loader's keys, then the context keys that switch tracking off
 /// ([`erp_orm::TRACKING_DISABLE_KEYS`], the one list the ORM reads: a caller that could send them
 /// would silence the change log of its own writes).
-const fn server_only_keys() -> [&'static str; 14] {
+const fn server_only_keys() -> [&'static str; 15] {
     const LOADER: [&str; 12] = [
         "install_mode",
         "module",
@@ -47,7 +47,7 @@ const fn server_only_keys() -> [&'static str; 14] {
         "install_batch_positions",
         "install_batch_written",
     ];
-    let mut out = [""; 14];
+    let mut out = [""; 15];
     let mut i = 0;
     while i < LOADER.len() {
         out[i] = LOADER[i];
@@ -58,6 +58,9 @@ const fn server_only_keys() -> [&'static str; 14] {
         out[LOADER.len() + j] = erp_orm::TRACKING_DISABLE_KEYS[j];
         j += 1;
     }
+    // `force_delete` skips the deletion refusals of the ORM (restrict and fallback references of
+    // company maps, the view cascade): only server code sets it
+    out[LOADER.len() + j] = "force_delete";
     out
 }
 

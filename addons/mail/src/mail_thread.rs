@@ -2,7 +2,7 @@
 //!
 //! Writing `message_partner_ids` runs the inverse, which follows the added partners with
 //! the default subtypes and unfollows the removed ones.
-//! Design note:.
+//! .
 
 use std::collections::{BTreeMap, BTreeSet};
 

@@ -56,7 +56,7 @@ async fn writer_env(h: &Harness) -> erp_orm::Env {
 async fn prepare(tx: &mut Transaction) {
     tx.install_event_schema().await.unwrap();
     tx.execute(
-        "INSERT INTO res_users (id, name, login, active) VALUES (7, 'compatibility writer', 'compatibility-writer', true)",
+        "INSERT INTO res_users (id, name, login, active, share) VALUES (7, 'compatibility writer', 'compatibility-writer', true, false)",
         &[],
     )
     .await

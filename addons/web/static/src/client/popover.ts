@@ -11,6 +11,8 @@ export interface PopoverOptions {
   dismissOnOutside?: boolean;
   restoreFocus?: boolean;
   presentation?: "anchored" | "sheet";
+  /** Anchored list that lines up with this element: same left edge, never narrower (a field's suggestion list). */
+  alignTo?: HTMLElement;
   signal?: AbortSignal;
   /** Called once after all listeners and DOM have been released. */
   onClose?: (reason: PopoverCloseReason) => void;
@@ -33,10 +35,11 @@ export class PopoverService {
     if (this.dead) throw new ClientError("validation", "Popover service is disposed.");
     if (!(anchor instanceof HTMLElement) || !anchor.isConnected || anchor.ownerDocument !== this.host.ownerDocument) throw new ClientError("validation", "Popover anchor must be connected inside its document.");
     if (!(content instanceof HTMLElement) || content.ownerDocument !== anchor.ownerDocument) throw new ClientError("validation", "Popover content must be an element in the anchor document.");
-    if (options === null || typeof options !== "object" || Object.keys(options).some(key => !["placement", "role", "dismissOnOutside", "restoreFocus", "presentation", "signal", "onClose"].includes(key))) throw new ClientError("validation", "Invalid popover options.");
+    if (options === null || typeof options !== "object" || Object.keys(options).some(key => !["placement", "role", "dismissOnOutside", "restoreFocus", "presentation", "alignTo", "signal", "onClose"].includes(key))) throw new ClientError("validation", "Invalid popover options.");
     const placement = options.placement === undefined ? "bottom" : options.placement;
     if (!PLACEMENTS.includes(placement)) throw new ClientError("validation", "Invalid popover placement.");
     if (options.role !== undefined && !ROLES.includes(options.role)) throw new ClientError("validation", "Invalid popover role.");
+    if (options.alignTo !== undefined && !(options.alignTo instanceof HTMLElement)) throw new ClientError("validation", "Popover alignTo must be an element.");
     if (options.presentation !== undefined && options.presentation !== "anchored" && options.presentation !== "sheet") throw new ClientError("validation", "Invalid popover presentation.");
     if (options.dismissOnOutside !== undefined && typeof options.dismissOnOutside !== "boolean" || options.restoreFocus !== undefined && typeof options.restoreFocus !== "boolean" || options.signal !== undefined && !(options.signal instanceof AbortSignal) || options.onClose !== undefined && typeof options.onClose !== "function") throw new ClientError("validation", "Invalid popover options.");
     if (this.active.size >= 16) throw new ClientError("validation", "Popover limit of 16 reached.");
@@ -58,6 +61,8 @@ export class PopoverService {
     const fit = (): void => {
       if (closed) return;
       if (!anchor.isConnected || !node.isConnected) { handle.close("anchor-removed"); return; }
+      const aligned = options.alignTo?.getBoundingClientRect();
+      if (aligned) node.style.minWidth = `${aligned.width}px`;
       const target = anchor.getBoundingClientRect(), box = node.getBoundingClientRect();
       const viewport = view.visualViewport;
       const width = viewport?.width ?? view.innerWidth, height = viewport?.height ?? view.innerHeight;
@@ -67,8 +72,8 @@ export class PopoverService {
         left = originLeft + 8; top = originTop + Math.max(8, height - box.height - 8);
         node.style.width = `${Math.max(0, width - 16)}px`;
       } else if (placement === "top" || placement === "bottom") {
-        left = target.left + (target.width - box.width) / 2;
-        top = placement === "top" ? target.top - box.height - 8 : target.bottom + 8;
+        left = aligned ? aligned.left : target.left + (target.width - box.width) / 2;
+        top = placement === "top" ? target.top - box.height - 8 : (aligned ?? target).bottom + (aligned ? 2 : 8);
       } else {
         left = placement === "left" ? target.left - box.width - 8 : target.right + 8;
         top = target.top + (target.height - box.height) / 2;

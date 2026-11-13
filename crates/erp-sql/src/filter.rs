@@ -249,6 +249,8 @@ pub enum SubShape {
 /// One element of a predicate's shape. Parameters are consumed in token order.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Token {
+    /// Physical property map is non-null (a proven-safe partial-index prefilter).
+    MapNotNull(Col),
     /// `TRUE` / `FALSE`.
     Const(bool),
     /// `(` of an AND/OR.
@@ -447,6 +449,10 @@ pub struct UserPathShape {
 /// The literal-free description of a predicate's text: equal keys render equal text.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ShapeKey {
+    /// Bound prepared-company context slot, absent for ordinary expressions.
+    pub company_slot: Option<usize>,
+    company_expressions: Vec<(ModelId, Arc<str>, FieldId, String)>,
+    company_targets: Vec<ModelId>,
     /// The model (field ids are relative to the scopes' models).
     pub model: ModelId,
     /// Accent folding in effect.
@@ -463,7 +469,7 @@ impl ShapeKey {
     /// `create` cannot evaluate such a predicate in its own `INSERT … RETURNING` (the statement's
     /// sub-queries do not see the rows it inserts).
     pub fn selects_from(&self, model: ModelId) -> bool {
-        scope_selects(&self.root, model, true)
+        self.company_targets.contains(&model) || scope_selects(&self.root, model, true)
     }
 }
 
@@ -491,7 +497,8 @@ fn token_selects(token: &Token, model: ModelId) -> bool {
         } => *tree == model || params.iter().any(|p| param_selects(p, model)),
         Token::ParamIn { params, .. } => params.iter().any(|p| param_selects(p, model)),
         // own-row columns and fixed texts: nothing is selected from another table
-        Token::Const(_)
+        Token::MapNotNull(_)
+        | Token::Const(_)
         | Token::Open
         | Token::Close
         | Token::And
@@ -562,6 +569,41 @@ pub fn make_alias(from: &str, link: &str) -> Arc<str> {
 
 /// Plan a FULL-optimized domain on `ctx.model`'s table.
 pub fn plan_where(domain: &Domain, ctx: &WhereContext<'_>) -> Result<Plan> {
+    plan_where_inner(domain, ctx, None, None)
+}
+
+/// Discover physical dependencies without rendering or inventing property defaults.
+/// # Errors
+/// As [`plan_where`], except that property preparation is not required for discovery.
+pub fn where_fields(domain: &Domain, ctx: &WhereContext<'_>) -> Result<Vec<(ModelId, FieldId)>> {
+    Ok(plan_where_inner(domain, ctx, Some(1), None)?.fields)
+}
+
+/// Plan with prepared values bound by the caller at `slot`; literal parameters start after it.
+/// # Errors
+/// As [`plan_where`], plus missing prepared fallbacks.
+pub fn plan_where_with_company(
+    domain: &Domain,
+    ctx: &WhereContext<'_>,
+    values: &crate::company::CompanyValues,
+    slot: usize,
+) -> Result<Plan> {
+    if slot == 0 {
+        return Err(Error::programming(
+            "prepared company parameter slot must be positive",
+        ));
+    }
+    let plan = plan_where_inner(domain, ctx, Some(slot), Some(values))?;
+    values.validate(ctx.registry, &plan.fields)?;
+    Ok(plan)
+}
+
+fn plan_where_inner(
+    domain: &Domain,
+    ctx: &WhereContext<'_>,
+    company_slot: Option<usize>,
+    company: Option<&crate::company::CompanyValues>,
+) -> Result<Plan> {
     crate::validate_language(ctx.lang)?;
     let constant = match domain.kind() {
         DomainKind::True => Some(true),
@@ -570,23 +612,141 @@ pub fn plan_where(domain: &Domain, ctx: &WhereContext<'_>) -> Result<Plan> {
     };
     let mut planner = Planner {
         ctx,
+        company_slot,
+        company,
         params: Vec::new(),
         fields: Vec::new(),
         external: domain.is_external(),
     };
     let mut scope = ScopeBuild::new(ctx.model, Arc::from(ctx.model.table.as_str()));
     planner.node(domain, &mut scope, 0)?;
+    for (model, field) in &planner.fields {
+        let model = ctx.registry.model_by_id(*model);
+        let field = model.field_by_id(*field);
+        if field.company_dependent && company_slot.is_none() {
+            return Err(crate::company::missing(model, field));
+        }
+    }
+    let mut company_targets = Vec::new();
+    for &(model, field) in &planner.fields {
+        let field = ctx.registry.model_by_id(model).field_by_id(field);
+        if field.company_dependent
+            && let FieldType::Many2one { comodel, .. } = &field.ty
+        {
+            let target = ctx
+                .registry
+                .model(comodel)
+                .ok_or_else(|| Error::programming("unknown company-dependent comodel"))?;
+            if !company_targets.contains(&target.id) {
+                company_targets.push(target.id);
+            }
+        }
+    }
+    for target in &company_targets {
+        let spec = ctx.registry.model_by_id(*target);
+        if let Some(id) = spec.field("id")
+            && !planner.fields.contains(&(*target, id.id))
+        {
+            planner.fields.push((*target, id.id));
+        }
+    }
+    let root = scope.finish();
+    let mut company_expressions = Vec::new();
+    if let Some(slot) = company_slot {
+        collect_company_expressions(
+            &root,
+            ctx.registry,
+            &planner.fields,
+            slot,
+            &mut company_expressions,
+        )?;
+    }
     Ok(Plan {
         key: ShapeKey {
+            company_slot,
+            company_expressions,
+            company_targets,
             model: ctx.model.id,
             unaccent: ctx.unaccent,
             lang: ctx.lang.map(Arc::from),
-            root: scope.finish(),
+            root,
         },
         params: planner.params,
         fields: planner.fields,
         constant,
     })
+}
+
+fn collect_company_expressions(
+    scope: &ScopeShape,
+    registry: &Registry,
+    fields: &[(ModelId, FieldId)],
+    slot: usize,
+    out: &mut Vec<(ModelId, Arc<str>, FieldId, String)>,
+) -> Result<()> {
+    for (model, alias) in std::iter::once((scope.model, &scope.alias))
+        .chain(scope.joins.iter().map(|j| (j.model, &j.alias)))
+    {
+        let spec = registry.model_by_id(model);
+        for &(_, field) in fields.iter().filter(|(m, _)| *m == model) {
+            let field = spec.field_by_id(field);
+            if field.company_dependent {
+                out.push((
+                    spec.id,
+                    Arc::clone(alias),
+                    field.id,
+                    crate::company::expression(registry, spec, field, alias, slot)?,
+                ));
+            }
+        }
+    }
+    for token in &scope.tokens {
+        if let Token::ParamIn { params, .. } | Token::HierarchyFrom { params, .. } = token {
+            for param in params {
+                if let ParamTest::PathScalar(path) | ParamTest::PathSet(path) = param {
+                    for (i, hop) in path.hops.iter().enumerate() {
+                        let model = registry.model_by_id(hop.model);
+                        let field = model.field_by_id(hop.field);
+                        let alias: Arc<str> = Arc::from(format!("__up{i}"));
+                        if field.company_dependent {
+                            out.push((
+                                model.id,
+                                Arc::clone(&alias),
+                                field.id,
+                                crate::company::expression(registry, model, field, &alias, slot)?,
+                            ));
+                        }
+                    }
+                    let last = path.hops.last().map_or(path.users, |hop| hop.comodel);
+                    let model = registry.model_by_id(last);
+                    let field = model.field_by_id(path.value);
+                    let alias: Arc<str> = Arc::from(format!("__up{}", path.hops.len()));
+                    if field.company_dependent {
+                        out.push((
+                            model.id,
+                            Arc::clone(&alias),
+                            field.id,
+                            crate::company::expression(registry, model, field, &alias, slot)?,
+                        ));
+                    }
+                }
+            }
+        }
+        if let Token::Sub(sub) = token {
+            match &**sub {
+                SubShape::O2m { scope, .. }
+                | SubShape::M2oIn { scope, .. }
+                | SubShape::M2oNotExists { scope, .. } => {
+                    collect_company_expressions(scope, registry, fields, slot, out)?
+                }
+                SubShape::M2m {
+                    scope: Some(scope), ..
+                } => collect_company_expressions(scope, registry, fields, slot, out)?,
+                SubShape::M2m { scope: None, .. } => {}
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Render a shape. Placeholders are numbered from 1 in token order, so the text pairs with the
@@ -596,6 +756,7 @@ pub fn render_where(key: &ShapeKey, registry: &Registry) -> Rendered {
         registry,
         unaccent: key.unaccent,
         lang: key.lang.clone(),
+        company_expressions: &key.company_expressions,
         n: 0,
     };
     let joins = r.joins(&key.root);
@@ -610,6 +771,7 @@ pub fn render_where_at(key: &ShapeKey, registry: &Registry, offset: usize) -> Re
         registry,
         unaccent: key.unaccent,
         lang: key.lang.clone(),
+        company_expressions: &key.company_expressions,
         n: offset,
     };
     let joins = r.joins(&key.root);
@@ -630,6 +792,36 @@ pub fn compile_where(domain: &Domain, ctx: &WhereContext<'_>) -> Result<Filter> 
     })
 }
 
+/// Compile a predicate with its prepared context as the first bound parameter.
+/// # Errors
+/// As [`plan_where_with_company`].
+pub fn compile_where_with_company(
+    domain: &Domain,
+    ctx: &WhereContext<'_>,
+    values: &crate::company::CompanyValues,
+) -> Result<Filter> {
+    let fields = where_fields(domain, ctx)?;
+    if !fields.iter().any(|(model, field)| {
+        ctx.registry
+            .model_by_id(*model)
+            .field_by_id(*field)
+            .company_dependent
+    }) {
+        return compile_where(domain, ctx);
+    }
+    let plan = plan_where_with_company(domain, ctx, values, 1)?;
+    let rendered = render_where_at(&plan.key, ctx.registry, 1);
+    let mut params = vec![values.param()?];
+    params.extend(plan.params);
+    Ok(Filter {
+        sql: rendered.sql,
+        joins: rendered.joins,
+        params,
+        fields: plan.fields,
+        constant: plan.constant,
+    })
+}
+
 /// The SQL text of a field's column on `model`'s table: `"table"."field"`.
 pub fn column(model: &ModelSpec, field: &str) -> String {
     format!("{}.{}", quote(&model.table), quote(field))
@@ -639,7 +831,8 @@ pub fn can_be_null(field: &FieldSpec) -> bool {
     if field.translate {
         return true;
     }
-    !(matches!(field.ty, FieldType::Id) || (field.required && field.has_column()))
+    field.company_dependent
+        || !(matches!(field.ty, FieldType::Id) || (field.required && field.has_column()))
 }
 
 fn is_text(ty: &FieldType) -> bool {
@@ -656,6 +849,7 @@ struct Renderer<'a> {
     unaccent: Unaccent,
     lang: Option<Arc<str>>,
     n: usize,
+    company_expressions: &'a [(ModelId, Arc<str>, FieldId, String)],
 }
 
 impl Renderer<'_> {
@@ -689,11 +883,26 @@ impl Renderer<'_> {
             .registry
             .model_by_id(self.table_model(scope, col.table));
         let field = model.field_by_id(col.field);
-        let table_col = format!(
-            "{}.{}",
-            quote(self.table_alias(scope, col.table)),
-            quote(field.name)
-        );
+        self.value_at(model, field, self.table_alias(scope, col.table))
+    }
+
+    fn value_at(&self, model: &ModelSpec, field: &FieldSpec, alias: &str) -> String {
+        let table_col = format!("{}.{}", quote(alias), quote(field.name));
+        if field.company_dependent {
+            // Keys carry prevalidated expressions. A caller mutating a key's public scope
+            // after planning must never fall back to comparing its physical JSON map.
+            return match self.company_expressions.iter().find(
+                |(prepared_model, prepared_alias, fid, _)| {
+                    *prepared_model == model.id
+                        && prepared_alias.as_ref() == alias
+                        && *fid == field.id
+                },
+            ) {
+                Some((_, _, _, sql)) => sql.clone(),
+                None => "CAST('company-dependent SQL requires prepared company values' AS int8)"
+                    .to_owned(),
+            };
+        }
         if field.translate {
             let lang_code = self
                 .lang
@@ -771,6 +980,16 @@ impl Renderer<'_> {
 
     fn token(&mut self, scope: &ScopeShape, token: &Token, out: &mut String) {
         match token {
+            Token::MapNotNull(col) => {
+                let model = self
+                    .registry
+                    .model_by_id(self.table_model(scope, col.table));
+                out.push_str(&format!(
+                    "{}.{} IS NOT NULL",
+                    quote(self.table_alias(scope, col.table)),
+                    quote(model.field_by_id(col.field).name)
+                ));
+            }
             Token::Const(b) => out.push_str(if *b { "TRUE" } else { "FALSE" }),
             Token::Open | Token::NotOpen => out.push('('),
             Token::Close => out.push(')'),
@@ -1131,21 +1350,26 @@ impl Renderer<'_> {
                     ));
                 }
                 // many2one (planning accepts only stored relational fields)
-                _ => from.push_str(&format!(
-                    " JOIN {} AS {next} ON ({here}.{} = {next}.{})",
-                    quote(&comodel.table),
-                    quote(field.name),
-                    quote("id")
-                )),
+                _ => {
+                    let source = self.value_at(source, field, &format!("__up{i}"));
+                    from.push_str(&format!(
+                        " JOIN {} AS {next} ON ({source} = {next}.{})",
+                        quote(&comodel.table),
+                        quote("id")
+                    ));
+                }
             }
         }
         let last = path.hops.last().map_or(path.users, |h| h.comodel);
-        let value = self.registry.model_by_id(last).field_by_id(path.value).name;
+        let model = self.registry.model_by_id(last);
+        let value = self.value_at(
+            model,
+            model.field_by_id(path.value),
+            &format!("__up{}", path.hops.len()),
+        );
         let uid = self.next("int8");
         format!(
-            "SELECT {}.{} FROM {from} WHERE {}.{} = {uid}",
-            alias(path.hops.len()),
-            quote(value),
+            "SELECT {value} FROM {from} WHERE {}.{} = {uid}",
             alias(0),
             quote("id")
         )
@@ -1317,6 +1541,8 @@ impl ScopeBuild {
 
 struct Planner<'a> {
     ctx: &'a WhereContext<'a>,
+    company_slot: Option<usize>,
+    company: Option<&'a crate::company::CompanyValues>,
     params: Vec<Param>,
     fields: Vec<(ModelId, FieldId)>,
     external: bool,
@@ -1398,6 +1624,42 @@ impl<'a> Planner<'a> {
     }
 
     fn condition(
+        &mut self,
+        condition: &Condition,
+        scope: &mut ScopeBuild,
+        table: u16,
+    ) -> Result<()> {
+        let start = scope.tokens.len();
+        self.condition_inner(condition, scope, table)?;
+        let source = &scope.tables[usize::from(table)];
+        let model = self.model(source.model);
+        if source.inner
+            && let Some(field) = model.field(condition.field_expr())
+            && field.has_column()
+            && field.company_dependent
+            && field.index == Some(erp_fields::IndexKind::BtreeNotNull)
+            && self
+                .company
+                .and_then(|values| values.fallback_matches(model, field, condition))
+                == Some(false)
+        {
+            scope.tokens.splice(
+                start..start,
+                [
+                    Token::Open,
+                    Token::MapNotNull(Col {
+                        table,
+                        field: field.id,
+                    }),
+                    Token::And,
+                ],
+            );
+            scope.tokens.push(Token::Close);
+        }
+        Ok(())
+    }
+
+    fn condition_inner(
         &mut self,
         condition: &Condition,
         scope: &mut ScopeBuild,
@@ -1835,7 +2097,12 @@ impl<'a> Planner<'a> {
         }
         let parent = &scope.tables[usize::from(table)];
         let inner = parent.inner && !can_be_null(field);
-        let alias = make_alias(&parent.alias, field.name);
+        let link = if field.company_dependent {
+            format!("{}__p{}", field.name, self.company_slot.unwrap_or(0))
+        } else {
+            field.name.to_owned()
+        };
+        let alias = make_alias(&parent.alias, &link);
         scope.joins.push(JoinShape {
             left: !inner,
             alias: Arc::clone(&alias),
@@ -2290,15 +2557,6 @@ impl<'a> Planner<'a> {
                         },
                         set,
                     ));
-                }
-                FieldType::Many2one { comodel, .. }
-                    if field.has_column() && field.company_dependent =>
-                {
-                    let what = format!(
-                        "The company-dependent many2one {}.{name} on the user path user.{path}",
-                        model.name
-                    );
-                    return Err(self.not_supported(what, "a later milestone"));
                 }
                 FieldType::Many2one { comodel, .. } if field.has_column() => {
                     self.read(model.id, field);

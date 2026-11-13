@@ -362,7 +362,7 @@ async fn rpc_archive_sequence() {
     .await
     .unwrap();
     let mut setup = h.harness().begin().await.unwrap();
-    setup.batch("INSERT INTO res_users (id, name, login, active) VALUES (2, 'alice', 'alice', true), (3, 'bob', 'bob', true); SELECT setval(pg_get_serial_sequence('res_users', 'id'), 3)").await.unwrap();
+    setup.batch("INSERT INTO res_users (id, name, login, active, share) VALUES (2, 'alice', 'alice', true, false), (3, 'bob', 'bob', true, false); SELECT setval(pg_get_serial_sequence('res_users', 'id'), 3)").await.unwrap();
     let mut ids = Vec::new();
     for name in ["T1", "T2", "T3"] {
         ids.push(tag(&mut setup, name).await.ids()[0]);
@@ -458,7 +458,7 @@ async fn spec_partner_070_category_loop_rpc_preserves_paths() {
     .await
     .unwrap();
     let mut setup = h.harness().begin().await.unwrap();
-    setup.batch("INSERT INTO res_users (id, name, login, active) VALUES (2, 'alice', 'alice', true); SELECT setval(pg_get_serial_sequence('res_users', 'id'), 2)").await.unwrap();
+    setup.batch("INSERT INTO res_users (id, name, login, active, share) VALUES (2, 'alice', 'alice', true, false); SELECT setval(pg_get_serial_sequence('res_users', 'id'), 2)").await.unwrap();
     let customer = tag(&mut setup, "Customer").await;
     let vip = tag(&mut setup, "VIP").await;
     let gold = tag(&mut setup, "Gold").await;
@@ -586,7 +586,7 @@ async fn context_tag_default_does_not_bypass_target_read_access() {
         .await
         .unwrap();
     let mut setup = h.begin().await.unwrap();
-    setup.batch("INSERT INTO res_users (id, name, login, active) VALUES (2, 'alice', 'alice', true); SELECT setval(pg_get_serial_sequence('res_users', 'id'), 2)").await.unwrap();
+    setup.batch("INSERT INTO res_users (id, name, login, active, share) VALUES (2, 'alice', 'alice', true, false); SELECT setval(pg_get_serial_sequence('res_users', 'id'), 2)").await.unwrap();
     let tag_id = tag(&mut setup, "Unreadable tag").await.ids()[0];
     setup.commit().await.unwrap();
     let mut tx = h.begin_as(support::rpc::ALICE).await.unwrap();

@@ -1,5 +1,5 @@
-//! Company access declarations (amendment A1, decisions A1-D2 and A1-D3; design note
-//! , §5).
+//! Company access declarations (amendment A1, decisions A1-D2 and A1-D3,
+//! §5).
 //!
 //! A company-scoped model declares once how the reader's active companies restrict it:
 //!

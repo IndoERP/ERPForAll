@@ -18,8 +18,8 @@ pub struct Resource {
     pub name: Option<Arc<str>>,
 }
 
-/// `scale.booking`: no two bookings of a resource overlap, cancelled ones excepted
-/// . A booking without a stop is open-ended.
+/// `scale.booking`: no two bookings of a resource overlap, cancelled ones excepted.
+/// A booking without a stop is open-ended.
 #[model(
     name = "scale.booking",
     description = "Booking",

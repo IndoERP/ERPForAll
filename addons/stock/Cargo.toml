@@ -9,6 +9,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+erp-addon-barcodes = { workspace = true }
 erp-sdk = { workspace = true }
 erp-addon-product = { workspace = true }
 erp-addon-barcodes_gs1_nomenclature = { workspace = true }

@@ -30,12 +30,13 @@ async fn a_server_with_jobs_run_in_app_runs_due_jobs_and_keeps_the_core_schedule
         );
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
-    // a schedule that is due runs in this process and goes back to waiting for its next turn
+    // a schedule that is due runs in this process and goes back to waiting for its next turn; the
+    // attachment schedules are made due at the same moment, and this runner must leave them
     fixture
         .client
         .execute(
             "UPDATE erp_job SET run_after = clock_timestamp() \
-             WHERE kind = 'core.jobs_history_retention'",
+             WHERE kind = 'core.jobs_history_retention' OR kind LIKE 'base.attachment\\_%'",
             &[],
         )
         .await
@@ -56,19 +57,56 @@ async fn a_server_with_jobs_run_in_app_runs_due_jobs_and_keeps_the_core_schedule
         );
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
+    // the in-app runner excludes the elevated attachment kinds; their due rows were
+    // never claimed
+    assert_attachment_rows_untouched(&fixture).await;
     fixture.cleanup().await;
+}
+
+/// The attachment schedules: one row per kind, every one `ready`, never started, attempts 0.
+async fn assert_attachment_rows_untouched(fixture: &NativeFixture) {
+    let rows: Vec<(String, String, i32, bool)> = fixture
+        .client
+        .query(
+            "SELECT kind, state, attempts, started_at IS NOT NULL FROM erp_job \
+             WHERE kind LIKE 'base.attachment\\_%' ORDER BY kind",
+            &[],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| (row.get(0), row.get(1), row.get(2), row.get(3)))
+        .collect();
+    let expected: Vec<(String, String, i32, bool)> = [
+        "base.attachment_clean_staging",
+        "base.attachment_gc",
+        "base.attachment_owner_heartbeat",
+        "base.attachment_reconcile",
+    ]
+    .into_iter()
+    .map(|kind| (kind.to_owned(), "ready".to_owned(), 0, false))
+    .collect();
+    assert_eq!(rows, expected);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_server_without_the_setting_starts_no_runner() {
     let fixture = NativeFixture::start().await;
     tokio::time::sleep(Duration::from_secs(3)).await;
+    // the attachment schedules exist on every database (base install and every start); without
+    // a runner there is no other row, and none of them is claimed
     let rows: i64 = fixture
         .client
-        .query_one("SELECT count(*) FROM erp_job", &[])
+        .query_one(
+            "SELECT count(*) FROM erp_job WHERE kind NOT IN \
+             ('base.attachment_gc', 'base.attachment_clean_staging', 'base.attachment_reconcile', \
+             'base.attachment_owner_heartbeat')",
+            &[],
+        )
         .await
         .unwrap()
         .get(0);
     assert_eq!(rows, 0);
+    assert_attachment_rows_untouched(&fixture).await;
     fixture.cleanup().await;
 }

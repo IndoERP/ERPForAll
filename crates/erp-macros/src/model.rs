@@ -135,6 +135,39 @@ fn selection_add(expr: &Expr) -> syn::Result<TokenStream> {
     Ok(quote!(&[#(#pairs),*]))
 }
 
+fn selection_ondelete_tokens(expr: &Expr) -> syn::Result<TokenStream> {
+    let rt = rt();
+    let mut policies = Vec::new();
+    let mut keys = std::collections::BTreeSet::new();
+    for item in array(expr)? {
+        let parts = tuple(item);
+        let [key, policy] = parts.as_slice() else {
+            return err(
+                item.span(),
+                "expected (\"selection key\", \"cleanup policy\")",
+            );
+        };
+        let key = lit_str(key)?;
+        if !keys.insert(key.value()) {
+            return err(key.span(), "selection cleanup key is given twice");
+        }
+        let policy = lit_str(policy)?;
+        let variant = match policy.value().as_str() {
+            "set null" => quote!(SetNull),
+            "cascade" => quote!(Cascade),
+            "set default" => quote!(SetDefault),
+            _ => {
+                return err(
+                    policy.span(),
+                    "selection ondelete must be 'set null', 'cascade' or 'set default'",
+                );
+            }
+        };
+        policies.push(quote!((#key, #rt::SelectionOnDeleteDecl::#variant)));
+    }
+    Ok(quote!(&[#(#policies),*]))
+}
+
 fn ondelete_tokens(meta: Option<&Meta>) -> syn::Result<TokenStream> {
     let rt = rt();
     Ok(match meta {
@@ -295,6 +328,7 @@ fn parse_field(name: &str, attr: &syn::Attribute) -> syn::Result<FieldOut> {
             | "delegate"
             | "server_set"
             | "translate"
+            | "db_default"
             | "sanitize") => {
                 let b = flag(meta)?;
                 let m = format_ident!("{}", k);
@@ -439,8 +473,12 @@ fn parse_field(name: &str, attr: &syn::Attribute) -> syn::Result<FieldOut> {
                 Some(m) => selection_add(value(m)?)?,
                 None => quote!(&[]),
             };
+            let ondelete = match opt("ondelete") {
+                Some(meta) => selection_ondelete_tokens(value(meta)?)?,
+                None => quote!(&[]),
+            };
             (
-                quote!(#rt::KindDecl::Selection { values: #values, method: #method, add: #add, ondelete: &[] }),
+                quote!(#rt::KindDecl::Selection { values: #values, method: #method, add: #add, ondelete: #ondelete }),
                 quote!(Text),
             )
         }
@@ -560,7 +598,7 @@ fn parse_field(name: &str, attr: &syn::Attribute) -> syn::Result<FieldOut> {
             "selection" | "selection_method" => matches!(kind.as_str(), "selection" | "reference"),
             "selection_add" => kind == "selection",
             "comodel" => matches!(kind.as_str(), "many2one" | "one2many" | "many2many"),
-            "ondelete" => matches!(kind.as_str(), "many2one" | "many2many"),
+            "ondelete" => matches!(kind.as_str(), "many2one" | "many2many" | "selection"),
             "inverse_name" => kind == "one2many",
             "relation" | "column1" | "column2" => kind == "many2many",
             "model_field" => kind == "many2one_reference",
@@ -615,9 +653,13 @@ struct ModelArgs {
     // (D3)
     row_version: Option<bool>,
     eventful: Option<bool>,
+    audit_reads: Option<bool>,
     /// Business keys: `(declared name, associated constant name)`.
     keys: Vec<(syn::LitStr, syn::Ident)>,
     field_parameters: Option<Vec<syn::LitStr>>,
+    /// `owner_only_stored_fields = ["co_owner", ...]`; the registry refuses
+    /// it on an extension.
+    owner_only_stored_fields: Option<Vec<syn::LitStr>>,
     extensions: Vec<TokenStream>,
 }
 
@@ -698,8 +740,10 @@ fn parse_model_args(attr: TokenStream, mode: Mode) -> syn::Result<ModelArgs> {
         partition: None,
         row_version: None,
         eventful: None,
+        audit_reads: None,
         keys: Vec::new(),
         field_parameters: None,
+        owner_only_stored_fields: None,
         extensions: Vec::new(),
     };
     for (i, meta) in metas.iter().enumerate() {
@@ -724,6 +768,12 @@ fn parse_model_args(attr: TokenStream, mode: Mode) -> syn::Result<ModelArgs> {
                 }
                 args.eventful = Some(lit_bool(value(meta)?)?);
             }
+            "audit_reads" => {
+                if args.audit_reads.is_some() {
+                    return err(meta.span(), "`audit_reads` given twice");
+                }
+                args.audit_reads = Some(lit_bool(value(meta)?)?);
+            }
             "rec_name" => args.rec_name = Some(lit_str(value(meta)?)?),
             "rec_names_search" => {
                 let names = array(value(meta)?)?
@@ -738,6 +788,23 @@ fn parse_model_args(attr: TokenStream, mode: Mode) -> syn::Result<ModelArgs> {
                     .map(|e| lit_str(e))
                     .collect::<syn::Result<Vec<_>>>()?;
                 args.field_parameters = Some(names);
+            }
+            "owner_only_stored_fields" => {
+                if mode == Mode::Extend {
+                    return err(
+                        meta.span(),
+                        "`owner_only_stored_fields` is declared by the model's owner in \
+                         #[model], not in #[extend]",
+                    );
+                }
+                if args.owner_only_stored_fields.is_some() {
+                    return err(meta.span(), "`owner_only_stored_fields` given twice");
+                }
+                let names = array(value(meta)?)?
+                    .iter()
+                    .map(|e| lit_str(e))
+                    .collect::<syn::Result<Vec<_>>>()?;
+                args.owner_only_stored_fields = Some(names);
             }
             "active_name" => args.active_name = Some(lit_str(value(meta)?)?),
             "order" => args.order = Some(lit_str(value(meta)?)?),
@@ -883,7 +950,7 @@ fn parse_model_args(attr: TokenStream, mode: Mode) -> syn::Result<ModelArgs> {
             "exclusions" => args
                 .table_objects
                 .extend(crate::excl::exclusions(value(meta)?)?),
-            // `row_version = true` and business keys; a `key` with
+            // `row_version = true` and business keys; a `key(...)` with
             // `without_overlaps` is the temporal key
             "row_version" => args.row_version = Some(flag(meta)?),
             "keys" => {
@@ -1340,6 +1407,9 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream, mode: Mode) -> syn::R
     if let Some(t) = &args.table {
         calls.push(quote!(.table(#t)));
     }
+    if let Some(on) = args.audit_reads {
+        calls.push(quote!(.audit_reads(#on)));
+    }
     if let Some(on) = args.eventful {
         calls.push(quote!(.eventful(#on)));
     }
@@ -1357,6 +1427,9 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream, mode: Mode) -> syn::R
     }
     if let Some(names) = &args.field_parameters {
         calls.push(quote!(.field_parameters(const { &[#(#names),*] })));
+    }
+    if let Some(names) = &args.owner_only_stored_fields {
+        calls.push(quote!(.owner_only_stored_fields(const { &[#(#names),*] })));
     }
     if let Some(o) = &args.order {
         calls.push(quote!(.order(#o)));
@@ -1887,5 +1960,137 @@ mod exact_numeric_policy_consistency_tests {
                 disabled.unwrap();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod audit_reads_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, reason = "tests")]
+    use super::*;
+    #[test]
+    fn audit_reads_attribute_is_a_boolean_on_models_and_extensions() {
+        assert_eq!(
+            parse_model_args(
+                quote!(name = "test.audit_reads", audit_reads = true),
+                Mode::New
+            )
+            .unwrap()
+            .audit_reads,
+            Some(true)
+        );
+        assert_eq!(
+            parse_model_args(quote!(TestModel, audit_reads = false), Mode::Extend)
+                .unwrap()
+                .audit_reads,
+            Some(false)
+        );
+        let expanded = expand(
+            quote!(name = "test.audit_reads", audit_reads = true),
+            quote!(
+                pub struct Audited {}
+            ),
+            Mode::New,
+        )
+        .unwrap();
+        assert!(expanded.to_string().contains(". audit_reads (true)"));
+        let error = parse_model_args(quote!(name = "test.bad", audit_reads = "true"), Mode::New)
+            .err()
+            .expect("a string is not a boolean");
+        assert_eq!(error.to_string(), "expected `true` or `false`");
+        let duplicate = parse_model_args(
+            quote!(name = "test.bad", audit_reads = true, audit_reads = false),
+            Mode::New,
+        )
+        .err()
+        .expect("duplicate opt-in is ambiguous input");
+        assert_eq!(duplicate.to_string(), "`audit_reads` given twice");
+    }
+}
+
+#[cfg(test)]
+mod owner_only_stored_fields_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, reason = "tests")]
+    use super::*;
+    #[test]
+    fn owner_only_stored_fields_attribute_lists_co_owners() {
+        let args = parse_model_args(
+            quote!(
+                name = "test.owned",
+                owner_only_stored_fields = ["co_a", "co_b"]
+            ),
+            Mode::New,
+        )
+        .unwrap();
+        let names: Vec<String> = args
+            .owner_only_stored_fields
+            .unwrap()
+            .iter()
+            .map(syn::LitStr::value)
+            .collect();
+        assert_eq!(names, ["co_a", "co_b"]);
+        let expanded = expand(
+            quote!(name = "test.owned", owner_only_stored_fields = []),
+            quote!(
+                pub struct Owned {}
+            ),
+            Mode::New,
+        )
+        .unwrap();
+        assert!(
+            expanded
+                .to_string()
+                .contains(". owner_only_stored_fields (const { & [] })")
+        );
+        let duplicate = parse_model_args(
+            quote!(
+                name = "test.bad",
+                owner_only_stored_fields = [],
+                owner_only_stored_fields = []
+            ),
+            Mode::New,
+        )
+        .err()
+        .expect("a second policy is ambiguous input");
+        assert_eq!(
+            duplicate.to_string(),
+            "`owner_only_stored_fields` given twice"
+        );
+        let extension = parse_model_args(
+            quote!(TestModel, owner_only_stored_fields = ["co_a"]),
+            Mode::Extend,
+        )
+        .err()
+        .expect("an extension cannot declare the policy");
+        assert_eq!(
+            extension.to_string(),
+            "`owner_only_stored_fields` is declared by the model's owner in #[model], not in \
+             #[extend]"
+        );
+    }
+}
+
+#[cfg(test)]
+mod selection_cleanup_tests {
+    #![allow(clippy::unwrap_used, reason = "test assertions")]
+    use super::*;
+    #[test]
+    fn selection_add_declares_cleanup_policy() {
+        let expanded=expand(quote!(Base, addon = "stock"),quote! {
+            struct Rules {
+                #[field(selection, selection_add = [("weight", "Weight")], ondelete = [("weight", "set default")])]
+                pub r#type: Option<Arc<str>>,
+            }
+        },Mode::Extend).unwrap().to_string();
+        assert!(expanded.contains("SelectionOnDeleteDecl :: SetDefault"));
+        let error=expand(quote!(Base, addon = "stock"),quote! {
+            struct Rules {
+                #[field(selection, selection_add = [("weight", "Weight")], ondelete = [("weight", "ignore")])]
+                pub r#type: Option<Arc<str>>,
+            }
+        },Mode::Extend).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "selection ondelete must be 'set null', 'cascade' or 'set default'"
+        );
     }
 }

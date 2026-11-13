@@ -95,9 +95,6 @@ impl StoreCell {
     }
 }
 
-/// How many days from today the readiness check looks ahead for consecutive partitions.
-const WINDOW_HORIZON_DAYS: i32 = 64;
-
 impl Orm {
     /// Check the audit store as the connected role: the table, its columns and types, today's
     /// partition and the days ahead, and the `INSERT` right on every supplied column. Caches the
@@ -128,19 +125,10 @@ impl Orm {
 
     async fn read_audit_store_in(tx: &mut crate::Transaction) -> Result<AuditStoreState> {
         let table = AUDIT_TABLE.table;
-        // Catalog reads without a name lookup: `to_regclass` itself fails without schema USAGE.
-        let found = tx
-            .query(
-                "SELECT c.oid::int8, c.relkind::text FROM pg_class c \
-                 JOIN pg_namespace n ON n.oid = c.relnamespace \
-                 WHERE n.nspname = $1 AND c.relname = $2",
-                &[&SCHEMA, &table],
-            )
-            .await?;
-        let Some(row) = found.first() else {
+        let Some((oid, kind)) = crate::event_schema::event_table_oid(tx, &AUDIT_TABLE).await?
+        else {
             return Ok(AuditStoreState::NotInstalled);
         };
-        let (oid, kind): (i64, String) = (row.get(0), row.get(1));
         if kind != "p" {
             return Ok(AuditStoreState::ShapeMismatch(
                 EventSchemaProblem::ForgedRelation(format!(
@@ -202,27 +190,11 @@ impl Orm {
         if !insertable {
             return Ok(AuditStoreState::NoInsertRight);
         }
-        // consecutive daily partitions from today (UTC): the first missing day ends the window,
-        // whatever lies beyond the gap
-        let window = tx
-            .query(
-                &format!(
-                    "SELECT COALESCE(min(g.n) FILTER (WHERE p.d IS NULL), {horizon})::int4 \
-                     FROM generate_series(0, {horizon} - 1) AS g(n) \
-                     LEFT JOIN (SELECT to_date(substr(c.relname, {from}), 'YYYYMMDD') AS d \
-                       FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid \
-                       WHERE i.inhparent = $1::int8::oid \
-                       AND c.relname ~ '^{table}_p[0-9]{{8}}$') p \
-                       ON p.d = (now() AT TIME ZONE 'UTC')::date + g.n",
-                    from = table.len() + 3,
-                    horizon = WINDOW_HORIZON_DAYS
-                ),
-                &[&oid],
-            )
-            .await?;
-        // the number of consecutive days present from today: today alone is 1, today missing is 0
-        let present: i32 = window[0].get(0);
-        let days_left = u32::try_from(present.saturating_sub(1)).unwrap_or(0);
+        // consecutive daily partitions from today (UTC): today alone is 1, today missing is 0;
+        // this state counts the days ahead of today
+        let present =
+            crate::event_schema::consecutive_partition_days(tx, oid, &AUDIT_TABLE).await?;
+        let days_left = present.saturating_sub(1);
         if days_left < 2 {
             return Ok(AuditStoreState::PartitionWindowShort { days_left });
         }

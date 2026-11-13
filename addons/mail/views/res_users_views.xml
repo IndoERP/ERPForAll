@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<erp>
+    <record id="res_users_view_form_inherit_mail" model="ir.ui.view">
+        <field name="name">res.users.form.inherit.mail</field>
+        <field name="model">res.users</field>
+        <field name="inherit_id" ref="base.settings_users_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//sheet" position="after">
+                <chatter/>
+            </xpath>
+        </field>
+    </record>
+    <!-- My Preferences: the notification choice joins the right column -->
+    <record id="users_preferences_form_inherit_mail" model="ir.ui.view">
+        <field name="name">res.users.preferences.form.inherit.mail</field>
+        <field name="model">res.users</field>
+        <field name="inherit_id" ref="base.users_preferences_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//group[@name='other_preferences']" position="inside">
+                <field name="notification_type" widget="radio" string="Notifications" options="{'horizontal': True}"/>
+            </xpath>
+        </field>
+    </record>
+</erp>

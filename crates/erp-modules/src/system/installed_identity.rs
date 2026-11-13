@@ -576,7 +576,10 @@ impl ModuleSystem {
             self.require_initialized(&mut optx.tx).await?;
             optx.tx.query(erp_sql::ddl::SCHEMA_LOCK, &[]).await?;
             erp_orm::core_ddl_run(&mut optx.tx, erp_orm::CorePhase::BeforeModels).await?;
-            erp_orm::core_ddl_run(&mut optx.tx, erp_orm::CorePhase::AfterModels).await?;
+            // ensure-only path: a deferred entry is completed (or refused) by the module operation
+            // that creates its model table, never by an identity write
+            let _deferred =
+                erp_orm::core_ddl_run(&mut optx.tx, erp_orm::CorePhase::AfterModels).await?;
             let mut entries = self.discover().await?;
             let parts = Arc::clone(&self.parts);
             let (entries_out, hashes) = blocking(move || {

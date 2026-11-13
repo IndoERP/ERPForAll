@@ -761,3 +761,100 @@ async fn fresh_auth_cannot_bind_an_unregistered_selection_addon() {
     assert_eq!(count(&fixture.h, "erp_session").await, 0);
     fixture.cleanup().await;
 }
+
+/// Lead review r1 S-1 (its follow-up S1TEST, forced-deadlock
+/// half): a deadlock (40P01) in the success statement of a membership-bound base login (a rollout
+/// feature, no selection witness) reruns begin, `protect_in` and the statement, is counted in
+/// `deadlock_retries.success` and writes one session. The arrangement mirrors
+/// `a_deadlocked_login_success_is_retried` (auth_login.rs): the other side removes bob's oldest
+/// trusted pair first, the login waits for that pair in its success statement, then the other
+/// side asks for bob's user row and the login, which waited first, is refused. The login succeeds
+/// only on the bound path: an unbound base login is refused while the feature is active
+/// (`unbound_base_created_before_activation_cannot_bypass_principal_accounting`).
+#[tokio::test]
+async fn a_deadlocked_bound_login_success_is_retried() {
+    let fixture = Fixture::new(false).await;
+    let orm = orm_on(
+        &fixture.h,
+        pool_with_options(&fixture.h, 4, "-c deadlock_timeout=5s"),
+    )
+    .await;
+    let auth = Arc::new(
+        Auth::with_membership(
+            orm.clone(),
+            AuthConfig::DEFAULT,
+            fixture.pool,
+            fixture.member.admission(),
+        )
+        .await
+        .unwrap(),
+    );
+    let bob = user_with_password(&fixture.h, "bob", "pw").await;
+    serve(&fixture.member).await;
+    fixture.enable(&[&fixture.member]).await;
+    let mut keys = Vec::new();
+    for n in 80..=96 {
+        let addr =
+            erp_security::auth::throttle::address_key(format!("192.0.2.{n}").parse().unwrap());
+        keys.push(
+            auth.throttle_key(erp_security::auth::throttle::ThrottleKey::Trusted(
+                &addr, "bob",
+            ))
+            .await
+            .unwrap()
+            .to_vec(),
+        );
+    }
+    let mut tx = fixture.h.begin().await.unwrap();
+    for (n, key) in keys.iter().enumerate() {
+        // the login's own pair an hour old, the oldest other pair 40 days, the rest a day
+        let age = match n {
+            0 => "1 hour",
+            1 => "40 days",
+            _ => "1 day",
+        };
+        tx.execute(
+            &format!(
+                "INSERT INTO erp_login_throttle (kind, key_hash, failures, last_failure_at) \
+                 VALUES ('trusted', $1, 1, now() - interval '{age}')"
+            ),
+            &[key],
+        )
+        .await
+        .unwrap();
+    }
+    tx.commit().await.unwrap();
+    let mut other = other_side(&orm).await;
+    let removed = other
+        .execute(
+            "DELETE FROM erp_login_throttle WHERE kind = 'trusted' AND key_hash = $1",
+            &[&keys[1]],
+        )
+        .await
+        .unwrap();
+    assert_eq!(removed, 1);
+    let node = Arc::clone(&auth);
+    let attempt = tokio::spawn(async move { login_from(&node, "bob", "pw", "192.0.2.80").await });
+    until_the_login_waits(&mut other).await;
+    the_other_side_won(
+        other
+            .query("SELECT 1 FROM res_users WHERE id = $1 FOR UPDATE", &[&bob])
+            .await,
+    );
+    other.commit().await.unwrap();
+    let outcome = attempt.await.unwrap();
+    let ok = outcome.unwrap_or_else(|e| panic!("the bound login was not retried: {e:?}"));
+    assert_eq!(ok.uid().get(), bob);
+    let stats = auth.stats();
+    assert_eq!(stats.deadlock_retries.success, 1, "{stats:?}");
+    assert_eq!(stats.verdict_failures, 0);
+    assert_eq!(count(&fixture.h, "erp_session").await, 1);
+    assert_eq!(
+        count(&fixture.h, "erp_login_throttle WHERE kind = 'trusted'").await,
+        16,
+        "the login's pair and 15 others"
+    );
+    drop(auth);
+    drop(orm);
+    fixture.cleanup().await;
+}

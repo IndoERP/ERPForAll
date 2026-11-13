@@ -8,10 +8,23 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[features]
+default = ["addon"]
+addon = ["dep:erp-sdk", "dep:erp-addon-base", "dep:erp-addon-web"]
+browser = ["dep:wasm-bindgen"]
+
 [dependencies]
-erp-sdk = { workspace = true }
-erp-addon-base = { workspace = true }
-erp-addon-web = { workspace = true }
+erp-sdk = { workspace = true, optional = true }
+erp-addon-base = { workspace = true, optional = true }
+erp-addon-web = { workspace = true, optional = true }
+
+regex = { version = "=1.13.1", default-features = false, features = ["std", "perf"] }
+serde.workspace = true
+serde_json.workspace = true
+wasm-bindgen = { version = "=0.2.129", optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [lints]
 workspace = true

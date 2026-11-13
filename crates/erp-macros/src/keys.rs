@@ -50,7 +50,7 @@ pub(crate) fn call_args<'a>(
     Ok(out)
 }
 
-/// Whether a `key` names `without_overlaps` (a temporal key, parsed in
+/// Whether a `key(...)` names `without_overlaps` (a temporal key, parsed in
 /// `excl.rs`) rather than being a business key.
 pub(crate) fn is_temporal(e: &Expr) -> bool {
     let Expr::Call(call) = e else { return false };

@@ -6,6 +6,13 @@ pub mod access;
 pub mod addon;
 mod addon_life;
 pub mod args;
+mod attachment_content;
+mod attachment_recovery;
+mod attachment_schedules;
+mod attachments;
+pub mod audit;
+mod audit_reader;
+mod auth_revoke;
 pub mod cluster;
 pub mod db;
 pub mod dev;
@@ -15,15 +22,17 @@ pub mod identity;
 mod live;
 pub mod module;
 pub mod node;
+mod pivot_export;
 pub mod scaffold;
 mod server_runtime;
 
 pub use args::{
     AccessAction, AccessArgs, AccessCommand, AddonAction, AddonBuildArgs, AddonCommand,
-    AddonInstallArgs, AddonPackageArgs, AddonUninstallArgs, BuildObjectArgs, BuildTarget, Cli,
-    ClusterAction, ClusterCommand, Commands, DatabaseName, DbAction, DbCommand, DevArgs,
-    DisableRuleArgs, GrantVacuumRoleArgs, ModuleAction, ModuleCommand, ModuleOpArgs, RolloutAction,
-    RolloutCommand, RolloutOpenArgs, ScaffoldArgs, VacuumTransientArgs,
+    AddonInstallArgs, AddonPackageArgs, AddonUninstallArgs, AuthAction, AuthCommand,
+    BuildObjectArgs, BuildTarget, Cli, ClusterAction, ClusterCommand, Commands, DatabaseName,
+    DbAction, DbCommand, DevArgs, DisableRuleArgs, EmergencyReasonArg, EmergencyRevokeArgs,
+    GrantVacuumRoleArgs, ModuleAction, ModuleCommand, ModuleOpArgs, RolloutAction, RolloutCommand,
+    RolloutOpenArgs, ScaffoldArgs, VacuumTransientArgs,
 };
 pub use error::{CliError, Result};
 pub use module::{
@@ -89,6 +98,10 @@ where
 fn execute(cli: &Cli) -> Result<()> {
     match cli.command {
         Commands::Server(ref args) => human::serve(args),
+        Commands::Attachments(ref cmd) => {
+            println!("{}", attachments::execute(&cmd.action)?);
+            Ok(())
+        }
         Commands::Scaffold(ref args) => {
             let path = scaffold::generate_scaffold(args)?;
             println!(
@@ -173,6 +186,14 @@ fn execute(cli: &Cli) -> Result<()> {
             match cmd.action {
                 args::AuditAction::Maintain(ref args) => {
                     println!("{}", human::audit_maintain(args)?);
+                }
+            }
+            Ok(())
+        }
+        Commands::Auth(ref cmd) => {
+            match cmd.action {
+                AuthAction::EmergencyRevoke(ref args) => {
+                    println!("{}", auth_revoke::emergency_revoke(args)?);
                 }
             }
             Ok(())

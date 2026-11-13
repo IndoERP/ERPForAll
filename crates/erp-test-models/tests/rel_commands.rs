@@ -95,6 +95,190 @@ async fn spec_rel_043_command_lists_are_commands() {
     h.cleanup().await.unwrap();
 }
 
+#[tokio::test]
+async fn x2many_third_element_and_unknown_code_are_refused() {
+    let h = support::rel_orm().await;
+    let tx = h.begin().await.unwrap();
+    let bases = tx.env().records("test_rel.base").unwrap();
+    let tags = tx.env().records("test_rel.tag").unwrap();
+    for code in [2, 3, 4] {
+        let err = bases
+            .commands_from_value(
+                &tags,
+                "tag_ids",
+                &Value::list([Value::list([
+                    Value::Int(code),
+                    Value::Int(1),
+                    Value::Int(7),
+                ])]),
+            )
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Validation);
+        assert_eq!(
+            err.message(),
+            format!("Wrong value for test_rel.base.tag_ids: [{code}, 1, 7]")
+        );
+    }
+    let err = bases
+        .commands_from_value(
+            &tags,
+            "tag_ids",
+            &Value::list([Value::list([Value::Int(9), Value::Int(0), Value::Int(0)])]),
+        )
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Validation);
+    assert_eq!(
+        err.message(),
+        "Unknown command 9 for test_rel.base.tag_ids: [9, 0, 0]"
+    );
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn spec_rel_086_accepted_lengths_of_x2many_command_tuples() {
+    let h = support::rel_orm().await;
+    let tx = h.begin().await.unwrap();
+    let bases = tx.env().records("test_rel.base").unwrap();
+    let tags = tx.env().records("test_rel.tag").unwrap();
+
+    // Accepted short commands: [4, id], [3, id], [2, id], [5], [5, 0]
+    let value = Value::list([
+        Value::list([Value::Int(4), Value::Int(1)]),
+        Value::list([Value::Int(3), Value::Int(2)]),
+        Value::list([Value::Int(2), Value::Int(3)]),
+        Value::list([Value::Int(5)]),
+        Value::list([Value::Int(5), Value::Int(0)]),
+        Value::list([Value::Int(5), Value::Int(0), Value::Int(0)]),
+        Value::list([Value::Int(4), Value::Int(4), Value::Int(0)]),
+    ]);
+    let commands = bases.commands_from_value(&tags, "tag_ids", &value).unwrap();
+    assert_eq!(commands[0], Command::link(rid(1)));
+    assert_eq!(commands[1], Command::unlink(rid(2)));
+    assert_eq!(commands[2], Command::delete(rid(3)));
+    assert_eq!(commands[3], Command::clear());
+    assert_eq!(commands[4], Command::clear());
+    assert_eq!(commands[5], Command::clear());
+    assert_eq!(commands[6], Command::link(rid(4)));
+
+    // Rejected command lengths:
+    // [4] (len 1, LINK requires id)
+    let err = bases
+        .commands_from_value(
+            &tags,
+            "tag_ids",
+            &Value::list([Value::list([Value::Int(4)])]),
+        )
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Validation);
+    assert_eq!(err.message(), "Wrong value for test_rel.base.tag_ids: [4]");
+
+    // [4, 1, 0, 0] (len 4, too long)
+    let err = bases
+        .commands_from_value(
+            &tags,
+            "tag_ids",
+            &Value::list([Value::list([
+                Value::Int(4),
+                Value::Int(1),
+                Value::Int(0),
+                Value::Int(0),
+            ])]),
+        )
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Validation);
+    assert_eq!(
+        err.message(),
+        "Wrong value for test_rel.base.tag_ids: [4, 1, 0, 0]"
+    );
+
+    // [2] (len 1, DELETE requires id)
+    let err = bases
+        .commands_from_value(
+            &tags,
+            "tag_ids",
+            &Value::list([Value::list([Value::Int(2)])]),
+        )
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Validation);
+    assert_eq!(err.message(), "Wrong value for test_rel.base.tag_ids: [2]");
+
+    // [3] (len 1, UNLINK requires id)
+    let err = bases
+        .commands_from_value(
+            &tags,
+            "tag_ids",
+            &Value::list([Value::list([Value::Int(3)])]),
+        )
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Validation);
+    assert_eq!(err.message(), "Wrong value for test_rel.base.tag_ids: [3]");
+
+    // [5, 0, 0, 0] (len 4, CLEAR max len 3)
+    let err = bases
+        .commands_from_value(
+            &tags,
+            "tag_ids",
+            &Value::list([Value::list([
+                Value::Int(5),
+                Value::Int(0),
+                Value::Int(0),
+                Value::Int(0),
+            ])]),
+        )
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Validation);
+    assert_eq!(
+        err.message(),
+        "Wrong value for test_rel.base.tag_ids: [5, 0, 0, 0]"
+    );
+
+    // [6, [1]] (len 2, SET requires 3 elements)
+    let err = bases
+        .commands_from_value(
+            &tags,
+            "tag_ids",
+            &Value::list([Value::list([Value::Int(6), Value::list([Value::Int(1)])])]),
+        )
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Validation);
+    assert_eq!(
+        err.message(),
+        "Wrong value for test_rel.base.tag_ids: [6, [1]]"
+    );
+
+    // [0, 0] (len 2, CREATE requires 3 elements)
+    let err = bases
+        .commands_from_value(
+            &tags,
+            "tag_ids",
+            &Value::list([Value::list([Value::Int(0), Value::Int(0)])]),
+        )
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Validation);
+    assert_eq!(
+        err.message(),
+        "Wrong value for test_rel.base.tag_ids: [0, 0]"
+    );
+
+    // [1, 1] (len 2, UPDATE requires 3 elements)
+    let err = bases
+        .commands_from_value(
+            &tags,
+            "tag_ids",
+            &Value::list([Value::list([Value::Int(1), Value::Int(1)])]),
+        )
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Validation);
+    assert_eq!(
+        err.message(),
+        "Wrong value for test_rel.base.tag_ids: [1, 1]"
+    );
+
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
 fn value_at(value: &Value, i: usize) -> Value {
     match value {
         Value::List(items) => items[i].clone(),

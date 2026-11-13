@@ -54,7 +54,11 @@
         <field name="author_id" ref="author_demo_le_guin"/>
         <field name="isbn">9780061054884</field>
         <field name="publication_year" eval="1974"/>
+        <field name="pages" eval="387"/>
+        <field name="published_on">1974-05-01</field>
+        <field name="price" eval="9.5"/>
         <field name="summary">A physicist travels between two worlds with opposite social orders.</field>
+        <field name="description">&lt;p&gt;A physicist travels between two worlds with opposite social orders, exploring &lt;strong&gt;anarchism&lt;/strong&gt; and capitalism.&lt;/p&gt;</field>
         <field name="website">https://example.org/books/the-dispossessed</field>
         <field name="cover_color">#2f6f8f</field>
         <field name="color" eval="4"/>
@@ -68,18 +72,30 @@
         <field name="title">A Wizard of Earthsea</field>
         <field name="author_id" ref="author_demo_le_guin"/>
         <field name="publication_year" eval="1968"/>
+        <field name="pages" eval="183"/>
+        <field name="published_on">1968-11-01</field>
+        <field name="price" eval="7.25"/>
+        <field name="book_format">hardcover</field>
+        <field name="description">&lt;p&gt;A young wizard named &lt;strong&gt;Ged&lt;/strong&gt; accidentally unleashes a shadow upon the world.&lt;/p&gt;</field>
         <field name="genre_ids" eval="[(4, ref('genre_demo_fantasy'), 0), (4, ref('genre_demo_young_adult'), 0)]"/>
     </record>
     <record id="book_demo_left_hand" model="sample_library.book">
         <field name="title">The Left Hand of Darkness</field>
         <field name="author_id" ref="author_demo_le_guin"/>
         <field name="publication_year" eval="1969"/>
+        <field name="pages" eval="304"/>
+        <field name="published_on">1969-03-01</field>
+        <field name="price" eval="8.75"/>
         <field name="genre_ids" eval="[(4, ref('genre_demo_science_fiction'), 0)]"/>
     </record>
     <record id="book_demo_bumi_manusia" model="sample_library.book">
         <field name="title">Bumi Manusia</field>
         <field name="author_id" ref="author_demo_pramoedya"/>
         <field name="publication_year" eval="1980"/>
+        <field name="pages" eval="535"/>
+        <field name="published_on">1980-08-25</field>
+        <field name="price" eval="12.0"/>
+        <field name="book_format">hardcover</field>
         <field name="available" eval="False"/>
         <field name="genre_ids" eval="[(4, ref('genre_demo_historical'), 0), (4, ref('genre_demo_indonesian'), 0)]"/>
     </record>
@@ -87,18 +103,28 @@
         <field name="title">Anak Semua Bangsa</field>
         <field name="author_id" ref="author_demo_pramoedya"/>
         <field name="publication_year" eval="1980"/>
+        <field name="pages" eval="538"/>
+        <field name="published_on">1980-12-10</field>
+        <field name="price" eval="12.5"/>
         <field name="genre_ids" eval="[(4, ref('genre_demo_historical'), 0), (4, ref('genre_demo_indonesian'), 0)]"/>
     </record>
     <record id="book_demo_jejak_langkah" model="sample_library.book">
         <field name="title">Jejak Langkah</field>
         <field name="author_id" ref="author_demo_pramoedya"/>
         <field name="publication_year" eval="1985"/>
+        <field name="pages" eval="724"/>
+        <field name="published_on">1985-07-15</field>
+        <field name="price" eval="14.0"/>
         <field name="genre_ids" eval="[(4, ref('genre_demo_historical'), 0), (4, ref('genre_demo_indonesian'), 0)]"/>
     </record>
     <record id="book_demo_laskar_pelangi" model="sample_library.book">
         <field name="title">Laskar Pelangi</field>
         <field name="author_id" ref="author_demo_hirata"/>
         <field name="publication_year" eval="2005"/>
+        <field name="pages" eval="529"/>
+        <field name="published_on">2005-09-26</field>
+        <field name="price" eval="6.5"/>
+        <field name="book_format">ebook</field>
         <field name="available" eval="False"/>
         <field name="genre_ids" eval="[(4, ref('genre_demo_indonesian'), 0), (4, ref('genre_demo_young_adult'), 0)]"/>
     </record>
@@ -106,12 +132,19 @@
         <field name="title">Sang Pemimpi</field>
         <field name="author_id" ref="author_demo_hirata"/>
         <field name="publication_year" eval="2006"/>
+        <field name="pages" eval="292"/>
+        <field name="published_on">2006-07-10</field>
+        <field name="price" eval="6.5"/>
+        <field name="book_format">ebook</field>
         <field name="genre_ids" eval="[(4, ref('genre_demo_indonesian'), 0), (4, ref('genre_demo_young_adult'), 0)]"/>
     </record>
     <record id="book_demo_cantik_itu_luka" model="sample_library.book">
         <field name="title">Cantik Itu Luka</field>
         <field name="author_id" ref="author_demo_kurniawan"/>
         <field name="publication_year" eval="2002"/>
+        <field name="pages" eval="520"/>
+        <field name="published_on">2002-04-20</field>
+        <field name="price" eval="11.0"/>
         <field name="genre_ids" eval="[(4, ref('genre_demo_literary'), 0), (4, ref('genre_demo_indonesian'), 0)]"/>
     </record>
     <record id="book_demo_dune" model="sample_library.book">
@@ -119,6 +152,9 @@
         <field name="author_id" ref="author_demo_herbert"/>
         <field name="isbn">9780441172719</field>
         <field name="publication_year" eval="1965"/>
+        <field name="pages" eval="688"/>
+        <field name="published_on">1965-08-01</field>
+        <field name="price" eval="10.25"/>
         <field name="summary">A noble family takes charge of a desert planet that produces a rare resource.</field>
         <field name="website">https://example.org/books/dune</field>
         <field name="cover_color">#c8892e</field>
@@ -133,12 +169,19 @@
         <field name="title">Foundation</field>
         <field name="author_id" ref="author_demo_asimov"/>
         <field name="publication_year" eval="1951"/>
+        <field name="pages" eval="255"/>
+        <field name="published_on">1951-06-01</field>
+        <field name="price" eval="8.0"/>
+        <field name="book_format">hardcover</field>
         <field name="genre_ids" eval="[(4, ref('genre_demo_science_fiction'), 0)]"/>
     </record>
     <record id="book_demo_i_robot" model="sample_library.book">
         <field name="title">I, Robot</field>
         <field name="author_id" ref="author_demo_asimov"/>
         <field name="publication_year" eval="1950"/>
+        <field name="pages" eval="224"/>
+        <field name="published_on">1950-12-02</field>
+        <field name="price" eval="7.5"/>
         <field name="genre_ids" eval="[(4, ref('genre_demo_science_fiction'), 0)]"/>
     </record>
 

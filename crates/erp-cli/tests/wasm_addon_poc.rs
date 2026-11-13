@@ -1144,7 +1144,7 @@ fn a_package_brings_its_screens_and_buttons_to_the_browser() {
         );
 
         // the same server, no restart: the form the web client asks for now carries the
-        // package's fields (buttons wait for the form grammar,; the call a button
+        // package's fields (buttons wait for the form grammar; the call a button
         // would make is tested below)
         let book_views = eventually_ok("the book form after install", || {
             let reply = form_views(port, &admin, "sample_library.book");
@@ -1623,7 +1623,10 @@ fn stop_catalogue_server(mut server: Server) {
 #[test]
 #[ignore = "built and required by CI stage wasm-startup-catalogue via scripts/wasm-poc.sh --startup-catalogue"]
 fn native_startup_catalogue_includes_installed_packages() {
-    big_stack(native_catalogue_roundtrip(CatalogueChange::Upgrade));
+    big_stack(async {
+        clone_start_probe().await;
+        native_catalogue_roundtrip(CatalogueChange::Upgrade).await;
+    });
 }
 
 #[test]
@@ -1636,6 +1639,70 @@ fn native_startup_catalogue_refuses_added_package() {
 #[ignore = "required by CI stage wasm-startup-catalogue"]
 fn native_startup_catalogue_refuses_removed_package() {
     big_stack(native_catalogue_roundtrip(CatalogueChange::Uninstall));
+}
+
+async fn clone_start_probe() {
+    let db = TestDb::create().await.unwrap();
+    let role = format!("{}_web", db.name());
+    create_role(&db, &role).await;
+    let dir = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let addons = dir.path().join("addons");
+    runtime_addons::stage_runtime_addons(&root.join("addons"), &addons).unwrap();
+    let config = config(dir.path(), &db, free_port(), &role, &addons);
+    fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
+    initialize(&config, dir.path());
+    let node = open_node(&db, &addons).await;
+    let env = node.system().system_env(Context::new());
+    let installed = node
+        .system()
+        .button_immediate_install(&env, &[ModuleName::new("sample_library").unwrap()])
+        .await
+        .unwrap();
+    assert!(installed.post_commit.is_clean());
+    drop(installed);
+    drop(node);
+    let installed = result_of(&operator(
+        "install",
+        &config,
+        db.name(),
+        &package("sample_library_wasm"),
+        &["--approve", "none"],
+    ));
+    assert_eq!(installed["addon"], "sample_library_wasm");
+    assert!(!addons.join("sample_library_wasm").exists());
+    let output = Command::new("bash")
+        .arg(root.join("tests/scripts/fixtures/human_clone_start/python.sh"))
+        .arg("-I")
+        .arg(root.join("tests/scripts/fixtures/human_clone_start/native_probe.py"))
+        .arg(root)
+        .arg(env!("CARGO_BIN_EXE_erp"))
+        .arg(&config)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", text(&output.stderr));
+    let proof: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    println!("clone startup fixture: {proof}");
+    assert_eq!(proof["status"], "PASS");
+    assert_eq!(proof["login_http"], 200);
+    assert_eq!(proof["child_reaped"], true);
+    assert_eq!(proof["startup_failure_refused"], true);
+    assert!(
+        proof["inventory"]["modules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["name"] == "base")
+    );
+    assert_eq!(
+        proof["inventory"]["packages"][0]["name"],
+        "sample_library_wasm"
+    );
+    drop_role(db, &role).await;
 }
 
 async fn native_catalogue_roundtrip(change: CatalogueChange) {

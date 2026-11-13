@@ -59,6 +59,7 @@ fn allowed() -> Authorizer {
 async fn installed_note_with_base() -> (TestDb, Addons, ModuleSystem, OperationOutcome) {
     let db = TestDb::create().await.unwrap();
     let addons = Addons::new();
+    addons.stand_in_base();
     addons.add("note", "name='Note'\ndepends=['base']\n");
     let system = builder(&db, &addons)
         .code([&erp_addon_base::ADDON, &NOTE])
@@ -71,7 +72,7 @@ async fn installed_note_with_base() -> (TestDb, Addons, ModuleSystem, OperationO
         .unwrap();
     let mut tx = init.orm.begin(erp_orm::SUPERUSER_ID).await.unwrap();
     tx.install_signal().await.unwrap();
-    tx.batch("INSERT INTO res_users(id, name) VALUES (2, 'Administrator')")
+    tx.batch("INSERT INTO res_users(id, name, share) VALUES (2, 'Administrator', false)")
         .await
         .unwrap();
     tx.commit().await.unwrap();

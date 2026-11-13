@@ -156,8 +156,13 @@ fn singleton_id(this: &RecordSet<Uom>) -> Result<i64> {
         .ok_or_else(|| Error::programming("Expected one unit of measure."))
 }
 
+/// The decimals of the "Product Unit" precision, as configured now.
+pub(crate) async fn product_unit_digits(env: &Env, tx: &mut Transaction) -> Result<u32> {
+    erp_addon_base::decimal_precision::precision_get(env, tx, "Product Unit").await
+}
+
 async fn precision(env: &Env, tx: &mut Transaction) -> Result<Increment> {
-    let digits = erp_addon_base::decimal_precision::precision_get(env, tx, "Product Unit").await?;
+    let digits = product_unit_digits(env, tx).await?;
     Increment::from_places(digits).map_err(numeric)
 }
 

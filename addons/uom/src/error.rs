@@ -38,6 +38,16 @@ pub enum UomError {
         /// The destination unit record identifier.
         target_id: i64,
     },
+    /// The Product Unit digits are outside the supported 0 to 28 range.
+    InvalidDigits {
+        /// The rejected number of decimals.
+        digits: u32,
+    },
+    /// A column name given to the SQL expression builder is not a lowercase SQL identifier.
+    InvalidSqlIdentifier {
+        /// The rejected text.
+        identifier: String,
+    },
     /// A bounded exact-number operation was refused.
     Numeric(MoneyError),
 }
@@ -69,6 +79,14 @@ impl fmt::Display for UomError {
                 f,
                 "One pack of unit of measure {source_id} rounds to 0 in unit of measure {target_id}."
             ),
+            Self::InvalidDigits { digits } => write!(
+                f,
+                "Product Unit digits {digits} are outside the supported range 0 to 28."
+            ),
+            Self::InvalidSqlIdentifier { identifier } => write!(
+                f,
+                "'{identifier}' is not a lowercase SQL identifier (letters, digits and underscores, at most 63 bytes, not starting with a digit)."
+            ),
             Self::Numeric(error) => error.fmt(f),
         }
     }
@@ -82,6 +100,8 @@ impl StdError for UomError {
             | Self::InvalidRootId { .. }
             | Self::ZeroFactor { .. }
             | Self::IncompatibleRoots { .. }
+            | Self::InvalidDigits { .. }
+            | Self::InvalidSqlIdentifier { .. }
             | Self::RoundedZeroPack { .. } => None,
         }
     }
@@ -95,6 +115,17 @@ impl From<MoneyError> for UomError {
 
 impl From<UomError> for erp_sdk::Error {
     fn from(error: UomError) -> Self {
-        Self::validation(error.to_string()).with_source(error)
+        match error {
+            // A caller bug or a corrupt setting, never something the user typed.
+            UomError::InvalidSqlIdentifier { .. } | UomError::InvalidDigits { .. } => {
+                Self::programming(error.to_string()).with_source(error)
+            }
+            UomError::InvalidUnitId { .. }
+            | UomError::InvalidRootId { .. }
+            | UomError::ZeroFactor { .. }
+            | UomError::IncompatibleRoots { .. }
+            | UomError::RoundedZeroPack { .. }
+            | UomError::Numeric(_) => Self::validation(error.to_string()).with_source(error),
+        }
     }
 }

@@ -1,8 +1,8 @@
 //! BASIC optimization (SPEC-DOM §4.4–4.6).
 //!
 //! Only the BASIC level lives here: it
-//! depends on field definitions alone, so its result can be memoized across transactions
-//! . DYNAMIC_VALUES and FULL need the environment (clock, access rules, search
+//! depends on field definitions alone, so its result can be memoized across transactions.
+//! DYNAMIC_VALUES and FULL need the environment (clock, access rules, search
 //! methods, queries) and are built on top of this in `erp-orm`.
 
 use std::cmp::Ordering;

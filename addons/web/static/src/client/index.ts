@@ -2,7 +2,8 @@
 import { Component, mount, onMounted, onWillDestroy } from "@erpforall/elang";
 import { templates } from "@erpforall/human-templates";
 import { parseBoundedJson } from "../../../../../web/packages/expr/src/index.js";
-import { configureClientTemplates } from "./registry.js";
+import { configureClientTemplates, systrayItems } from "./registry.js";
+import { registerBuiltinSystrayItems } from "./activity-menu.js";
 import { HumanApp } from "./app.js";
 import { el, errorMessage } from "./dom.js";
 import { guardSubmit, setSubmitBusy, togglePasswordReveal, updateCapsLockHint } from "./login.js";
@@ -51,6 +52,9 @@ export async function boot(documentRoot: Document = document): Promise<void> {
       if (target.origin !== window.location.origin) throw new Error("Invalid sign-in redirect origin.");
       const page: Login = { csrf: text(data["csrf"], "CSRF token"), database: text(data["database"], "database"), redirect, error: data["error"] === null ? null : text(data["error"], "login error") };
       await mount(LoginPage, host, { templates, props: { page }, dev: false, onError: fail });
-    } else await mount(Shell, host, { templates, props: { host, bootstrap: value }, dev: false, onError: fail });
+    } else {
+      registerBuiltinSystrayItems(systrayItems);
+      await mount(Shell, host, { templates, props: { host, bootstrap: value }, dev: false, onError: fail });
+    }
   } catch (error) { fail(error); }
 }

@@ -1,10 +1,12 @@
 //! `mail.activity`, `mail.activity.type` and `mail.activity.mixin`: defaults and
 //! states, assignment and subscription, done (feedback message, archive), reschedule, the mixin's
-//! automation helpers, the panel data, the systray counts and the access checks. Design note:
-//! .
+//! automation helpers, the panel data, the activity menu (to 387 and 389; 388, the
+//! company case, is tested in `crates/erp-test-models/tests/mail_activity_menu_company.rs`:
+//! building a principal that belongs to several companies needs `erp-orm` types that the layer
+//! check closes to addon crates) and the access checks.
 //!
-//! Not asserted here, with the reason: (bus:), (attachments:
-//! ; the typed refusal is tested untagged), and 135 (chaining:),
+//! Not asserted here, with the reason: (bus:), (attachments;
+//! the typed refusal is tested untagged), and 135 (chaining:),
 //! condition), (searching a computed state needs).
 #![allow(
     clippy::unwrap_used,
@@ -16,9 +18,12 @@
 mod chat;
 mod support;
 
-use erp_addon_mail::{MailActivityMixin, MailThread, ScheduleRequest, activity_systray};
+use erp_addon_mail::{
+    ActivityGroup, ActivityGroups, MAX_OPEN_RECORDS, MailActivityMixin, MailThread, OpenState,
+    ScheduleRequest, activity_group_action, activity_groups,
+};
 use erp_sdk::prelude::*;
-use erp_sdk::{ErrorKind, Operation};
+use erp_sdk::{ErrorKind, Operation, ValueMap};
 use erp_testkit::{DomainPolicy, DomainPolicyBuilder, Harness, Otherwise};
 use support::*;
 
@@ -1551,62 +1556,442 @@ async fn the_panel_lists_activities_in_constant_statements() {
     h.cleanup().await.unwrap();
 }
 
-/// The systray counts the current user's active activities per model by state, in one grouped
-/// statement (plus one read of the time zone), whatever their number.
+/// A thread model with activities whose records can be archived.
+#[model(
+    name = "test_mail.notebook",
+    description = "Mail Test Notebook",
+    inherit = [MailThread, MailActivityMixin],
+    addon = "test_mail"
+)]
+pub struct Notebook {
+    #[field(char)]
+    pub name: Option<Arc<str>>,
+    #[field(boolean, default = true)]
+    pub active: bool,
+}
+
+const NOTEBOOK: &str = "test_mail.notebook";
+const LIMIT: &str = "mail.activity.systray.limit";
+
+async fn notebook(tx: &mut Transaction, name: &str) -> i64 {
+    create(tx, NOTEBOOK, RawVals::new().set_cell("name", text(name))).await
+}
+
+/// An activity of `model`'s record `res_id`, assigned to `user_id`, due on `date`; created
+/// privileged, as the harness principal.
+async fn assigned(
+    tx: &mut Transaction,
+    env: &Env,
+    model: &str,
+    res_id: i64,
+    user_id: i64,
+    date: Date,
+) -> i64 {
+    let vals = RawVals::new()
+        .set_cell("res_model", text(model))
+        .set_cell("res_id", Cell::Id(res_id))
+        .set_cell("user_id", Cell::Id(user_id))
+        .set_cell("date_deadline", Cell::Date(date));
+    env.records("mail.activity")
+        .unwrap()
+        .create(tx, vec![vals])
+        .await
+        .unwrap()
+        .ids()[0]
+}
+
+/// A personal to-do (no document) of `user_id` due on `date`.
+async fn personal(tx: &mut Transaction, env: &Env, user_id: i64, date: Date) -> i64 {
+    let vals = RawVals::new()
+        .set_cell("user_id", Cell::Id(user_id))
+        .set_cell("date_deadline", Cell::Date(date));
+    env.records("mail.activity")
+        .unwrap()
+        .create(tx, vec![vals])
+        .await
+        .unwrap()
+        .ids()[0]
+}
+
+async fn archive(tx: &mut Transaction, env: &Env, model: &str, id: i64) {
+    rec(env, model, id)
+        .write(tx, RawVals::new().set_cell("active", Cell::Bool(false)))
+        .await
+        .unwrap();
+}
+
+fn group<'a>(menu: &'a ActivityGroups, model: &str) -> &'a ActivityGroup {
+    menu.groups()
+        .iter()
+        .find(|group| group.model() == model)
+        .unwrap_or_else(|| panic!("no group for {model}"))
+}
+
+/// The counts of `(overdue, today, planned)` among the activities `ids`, by their computed state.
+async fn tally(tx: &mut Transaction, ids: &[i64]) -> (u32, u32, u32) {
+    let mut counts = (0, 0, 0);
+    for id in ids {
+        match state(tx, *id).await.as_str() {
+            "overdue" => counts.0 += 1,
+            "today" => counts.1 += 1,
+            "planned" => counts.2 += 1,
+            other => panic!("state {other}"),
+        }
+    }
+    counts
+}
+
+fn counts_of(group: &ActivityGroup) -> (u32, u32, u32) {
+    (
+        group.overdue_count(),
+        group.today_count(),
+        group.planned_count(),
+    )
+}
+
+fn sorted(mut ids: Vec<i64>) -> Vec<i64> {
+    ids.sort_unstable();
+    ids
+}
+
+async fn set_limit(tx: &mut Transaction, env: &Env, value: &str) {
+    let existing = ids(
+        tx,
+        "ir.config_parameter",
+        &Domain::condition("key", Operator::Eq, LIMIT).unwrap(),
+    )
+    .await;
+    if let Some(id) = existing.first() {
+        rec(env, "ir.config_parameter", *id)
+            .write(tx, RawVals::new().set_cell("value", text(value)))
+            .await
+            .unwrap();
+    } else {
+        create(
+            tx,
+            "ir.config_parameter",
+            RawVals::new()
+                .set_cell("key", text(LIMIT))
+                .set_cell("value", text(value)),
+        )
+        .await;
+    }
+}
+
 #[tokio::test]
-async fn the_systray_counts_by_model_and_state() {
+async fn the_menu_counts_the_callers_open_activities_per_model() {
     let h = harness().await;
     let mut tx = h.begin().await.unwrap();
     seed(&mut tx).await;
-    user(&mut tx, 42, "other", None).await;
-    let t = task(&mut tx, "T").await;
-    let env = tx.env();
-    activity(&mut tx, &env, t, deadline(days(today(), -1))).await;
-    activity(&mut tx, &env, t, deadline(days(today(), -5))).await;
-    activity(&mut tx, &env, t, deadline(today())).await;
-    activity(&mut tx, &env, t, deadline(days(today(), 4))).await;
-    // another user's and a done one do not count
-    activity(
-        &mut tx,
-        &env,
-        t,
-        deadline(today()).set_cell("user_id", Cell::Id(42)),
-    )
-    .await;
-    let done = activity(&mut tx, &env, t, deadline(today())).await;
-    rec(&env, "mail.activity", done)
-        .write(
-            &mut tx,
-            RawVals::new().set_cell("active", Cell::Bool(false)),
-        )
-        .await
-        .unwrap();
-    // a personal to-do
-    env.records("mail.activity")
-        .unwrap()
-        .create(&mut tx, vec![deadline(days(today(), 2))])
-        .await
-        .unwrap();
-    tx.flush().await.unwrap();
-    let before = tx.query_count();
-    let groups = activity_systray(&env, &mut tx).await.unwrap();
-    let used = tx.query_count() - before;
-    assert!(used <= 2, "systray statements: {used}");
-    assert_eq!(groups.len(), 2);
-    let task_group = groups
-        .iter()
-        .find(|g| g.res_model.as_deref() == Some(TASK))
-        .unwrap();
-    assert_eq!(
-        (task_group.overdue, task_group.today, task_group.planned),
-        (2, 1, 1)
+    user(&mut tx, 41, "other", None).await;
+    user(&mut tx, 42, "me", None).await;
+    let (t1, t2, t3) = (
+        task(&mut tx, "T1").await,
+        task(&mut tx, "T2").await,
+        task(&mut tx, "T3").await,
     );
-    assert_eq!(task_group.total(), 4);
-    assert_eq!(task_group.todo(), 3);
-    let personal = groups.iter().find(|g| g.res_model.is_none()).unwrap();
+    let n1 = notebook(&mut tx, "N1").await;
+    let admin = tx.env();
+    let mine = vec![
+        assigned(&mut tx, &admin, TASK, t1, 42, days(today(), -1)).await,
+        assigned(&mut tx, &admin, TASK, t2, 42, today()).await,
+        assigned(&mut tx, &admin, TASK, t3, 42, days(today(), 1)).await,
+    ];
+    let book = vec![assigned(&mut tx, &admin, NOTEBOOK, n1, 42, today()).await];
+    // a personal to-do of mine: it counts in the Other group, which comes last
+    let todo = personal(&mut tx, &admin, 42, today()).await;
+    // another user's activity and a done one of mine on the same records
+    assigned(&mut tx, &admin, TASK, t1, 41, days(today(), -3)).await;
+    let done = assigned(&mut tx, &admin, TASK, t2, 42, days(today(), -9)).await;
+    archive(&mut tx, &admin, "mail.activity", done).await;
+    let me = tx.env().with_user(42);
+    let menu = activity_groups(&me, &mut tx).await.unwrap();
+    assert_eq!(menu.groups().len(), 3);
+    let tasks = group(&menu, TASK);
+    let books = group(&menu, NOTEBOOK);
+    assert_eq!(counts_of(tasks), tally(&mut tx, &mine).await);
+    assert_eq!(counts_of(books), tally(&mut tx, &book).await);
+    assert_eq!(tasks.addon(), Some("test_mail"));
+    let registry = me.registry();
     assert_eq!(
-        (personal.overdue, personal.today, personal.planned),
-        (0, 0, 1)
+        tasks.name(),
+        registry.model(TASK).unwrap().description.as_str()
+    );
+    assert_eq!(
+        books.name(),
+        registry.model(NOTEBOOK).unwrap().description.as_str()
+    );
+    assert_eq!(tasks.activity_ids(), sorted(mine.clone()).as_slice());
+    assert_eq!(books.activity_ids(), book.as_slice());
+    let mut counter = 0;
+    for g in menu.groups() {
+        assert_eq!(g.total_count(), g.overdue_count() + g.today_count());
+        counter += g.total_count();
+    }
+    assert_eq!(menu.counter(), counter);
+    // the named groups come in name order, the Other group last
+    let (last, named) = menu.groups().split_last().unwrap();
+    assert_eq!(last.model(), "mail.activity");
+    assert_eq!(last.activity_ids(), [todo]);
+    let names: Vec<&str> = named.iter().map(|g| g.name()).collect();
+    assert_eq!(names.len(), 2);
+    assert_eq!(names, {
+        let mut by_name = names.clone();
+        by_name.sort_unstable();
+        by_name
+    });
+    tx.rollback().await.unwrap();
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+/// The RPC `mail.activity.erp_activity_groups` answers the same menu as a map.
+#[tokio::test]
+async fn the_rpc_answers_the_menu_as_a_map() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    user(&mut tx, 42, "me", None).await;
+    let t = task(&mut tx, "T").await;
+    let admin = tx.env();
+    assigned(&mut tx, &admin, TASK, t, 42, days(today(), -1)).await;
+    let me = tx.env().with_user(42);
+    let menu = activity_groups(&me, &mut tx).await.unwrap();
+    let answer = me
+        .records("mail.activity")
+        .unwrap()
+        .call::<_, Value>(&mut tx, "erp_activity_groups", ())
+        .await
+        .unwrap();
+    assert_eq!(answer, menu.to_value());
+    let Value::Map(map) = &answer else {
+        panic!("not a map: {answer:?}");
+    };
+    let keys: Vec<&str> = map.iter().map(|(key, _)| key.as_str()).collect();
+    assert_eq!(keys, ["activity_counter", "groups"]);
+    let Some(Value::List(groups)) = map.get("groups") else {
+        panic!("groups is not a list: {answer:?}");
+    };
+    assert_eq!(groups.len(), 1);
+    for entry in groups.iter() {
+        let Value::Map(entry) = entry else {
+            panic!("a group is not a map: {entry:?}");
+        };
+        let mut keys: Vec<&str> = entry.iter().map(|(key, _)| key.as_str()).collect();
+        keys.sort_unstable();
+        let mut expected = [
+            "model",
+            "name",
+            "addon",
+            "domain",
+            "overdue_count",
+            "today_count",
+            "planned_count",
+            "total_count",
+            "activity_ids",
+        ];
+        expected.sort_unstable();
+        assert_eq!(keys, expected);
+    }
+    tx.rollback().await.unwrap();
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+/// One transaction, three principals: the menu is the caller's every time (no value of one user
+/// is served to another, and the first user's answer is the same when they come back).
+#[tokio::test]
+async fn the_menu_follows_the_user_within_one_transaction() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    user(&mut tx, 41, "first", None).await;
+    user(&mut tx, 42, "second", None).await;
+    let (t1, t2) = (task(&mut tx, "T1").await, task(&mut tx, "T2").await);
+    let admin = tx.env();
+    let first = assigned(&mut tx, &admin, TASK, t1, 41, today()).await;
+    let second = assigned(&mut tx, &admin, TASK, t2, 42, today()).await;
+    let as_41 = tx.env().with_user(41);
+    let as_42 = tx.env().with_user(42);
+    let before = activity_groups(&as_41, &mut tx).await.unwrap();
+    let other = activity_groups(&as_42, &mut tx).await.unwrap();
+    let after = activity_groups(&as_41, &mut tx).await.unwrap();
+    assert_eq!(group(&before, TASK).activity_ids(), [first]);
+    assert_eq!(group(&other, TASK).activity_ids(), [second]);
+    assert_eq!(before, after);
+    tx.rollback().await.unwrap();
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn only_the_most_urgent_activity_of_a_record_counts() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    user(&mut tx, 42, "me", None).await;
+    let t = task(&mut tx, "T").await;
+    let admin = tx.env();
+    let tomorrow = assigned(&mut tx, &admin, TASK, t, 42, days(today(), 1)).await;
+    let yesterday = assigned(&mut tx, &admin, TASK, t, 42, days(today(), -1)).await;
+    let now = assigned(&mut tx, &admin, TASK, t, 42, today()).await;
+    // the same deadline as the most urgent one, created later: the lowest id wins
+    let later = assigned(&mut tx, &admin, TASK, t, 42, days(today(), -1)).await;
+    assert!(yesterday < later);
+    let me = tx.env().with_user(42);
+    let menu = activity_groups(&me, &mut tx).await.unwrap();
+    assert_eq!(menu.groups().len(), 1);
+    let tasks = group(&menu, TASK);
+    assert_eq!(tasks.activity_ids(), [yesterday]);
+    assert_eq!(counts_of(tasks), tally(&mut tx, &[yesterday]).await);
+    assert_eq!(counts_of(tasks), (1, 0, 0));
+    assert!(![tomorrow, now, later].contains(&tasks.activity_ids()[0]));
+    tx.rollback().await.unwrap();
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn activities_without_a_readable_document_count_under_other_activities() {
+    let h = harness_policy(|policy| {
+        policy
+            .rule(
+                TASK,
+                Operation::Read,
+                Domain::condition("name", Operator::Ne, "hidden").unwrap(),
+            )
+            .deny(NOTEBOOK, Operation::Read)
+    })
+    .await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    user(&mut tx, 42, "me", None).await;
+    let admin = tx.env();
+    let hidden = task(&mut tx, "hidden").await;
+    let gone = task(&mut tx, "gone").await;
+    let unregistered = task(&mut tx, "unregistered").await;
+    let book = notebook(&mut tx, "refused").await;
+    let counted = vec![
+        personal(&mut tx, &admin, 42, days(today(), 2)).await,
+        personal(&mut tx, &admin, 42, today()).await,
+        assigned(&mut tx, &admin, TASK, hidden, 42, today()).await,
+        assigned(&mut tx, &admin, NOTEBOOK, book, 42, days(today(), -1)).await,
+        assigned(&mut tx, &admin, TASK, gone, 42, today()).await,
+        assigned(&mut tx, &admin, TASK, unregistered, 42, days(today(), -2)).await,
+    ];
+    // the document of one is deleted underneath it, the model of another is not registered
+    tx.flush().await.unwrap();
+    tx.execute("DELETE FROM test_mail_task WHERE id = $1", &[&gone])
+        .await
+        .unwrap();
+    tx.execute(
+        "UPDATE mail_activity SET res_model = 'gone.model' WHERE id = $1",
+        &[&counted[5]],
+    )
+    .await
+    .unwrap();
+    tx.invalidate_all().await.unwrap();
+    let me = tx.env().with_user(42);
+    let menu = activity_groups(&me, &mut tx).await.unwrap();
+    assert_eq!(menu.groups().len(), 1, "{menu:?}");
+    let other = group(&menu, "mail.activity");
+    assert_eq!(other.name(), "Other Activities");
+    assert_eq!(other.addon(), Some("mail"));
+    assert_eq!(other.domain(), &Value::list([]));
+    assert_eq!(other.activity_ids(), sorted(counted.clone()).as_slice());
+    assert_eq!(counts_of(other), tally(&mut tx, &counted).await);
+    assert_eq!(menu.counter(), other.total_count());
+    // nothing names a document, its model, or the model's label
+    let shown = format!("{menu:?} {:?}", menu.to_value());
+    let registry = me.registry();
+    for needle in [
+        "hidden",
+        "refused",
+        "gone.model",
+        TASK,
+        NOTEBOOK,
+        registry.model(TASK).unwrap().description.as_str(),
+        registry.model(NOTEBOOK).unwrap().description.as_str(),
+    ] {
+        assert!(!shown.contains(needle), "{needle} appears in {shown}");
+    }
+    tx.rollback().await.unwrap();
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_archived_document_keeps_its_activities_and_its_group_includes_archived_records() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    user(&mut tx, 42, "me", None).await;
+    let t = task(&mut tx, "T").await;
+    let n = notebook(&mut tx, "N").await;
+    let admin = tx.env();
+    let on_book = assigned(&mut tx, &admin, NOTEBOOK, n, 42, today()).await;
+    let on_task = assigned(&mut tx, &admin, TASK, t, 42, today()).await;
+    archive(&mut tx, &admin, NOTEBOOK, n).await;
+    let me = tx.env().with_user(42);
+    let menu = activity_groups(&me, &mut tx).await.unwrap();
+    let books = group(&menu, NOTEBOOK);
+    assert_eq!(books.activity_ids(), [on_book]);
+    let archived = Value::list([Value::list([
+        Value::str("active"),
+        Value::str("in"),
+        Value::list([Value::Bool(true), Value::Bool(false)]),
+    ])]);
+    assert_eq!(books.domain(), &archived);
+    let tasks = group(&menu, TASK);
+    assert_eq!(tasks.activity_ids(), [on_task]);
+    assert_eq!(tasks.domain(), &Value::list([]));
+    tx.rollback().await.unwrap();
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+/// refusals with their messages, including a stored value that is not a number; the value 1000
+/// itself is not exercised)
+#[tokio::test]
+async fn the_scan_is_bounded_and_newest_activities_come_first() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    user(&mut tx, 42, "me", None).await;
+    let admin = tx.env();
+    let mut made = Vec::new();
+    for name in ["A", "B", "C"] {
+        let t = task(&mut tx, name).await;
+        made.push(assigned(&mut tx, &admin, TASK, t, 42, today()).await);
+    }
+    let me = tx.env().with_user(42);
+    // no parameter: every activity is scanned
+    let menu = activity_groups(&me, &mut tx).await.unwrap();
+    assert_eq!(group(&menu, TASK).activity_ids(), sorted(made.clone()));
+    set_limit(&mut tx, &admin, "2").await;
+    let menu = activity_groups(&me, &mut tx).await.unwrap();
+    let newest = sorted(made[1..].to_vec());
+    assert_eq!(group(&menu, TASK).activity_ids(), newest.as_slice());
+    set_limit(&mut tx, &admin, "0").await;
+    let menu = activity_groups(&me, &mut tx).await.unwrap();
+    assert_eq!(group(&menu, TASK).activity_ids(), sorted(made.clone()));
+    for value in ["-1", "10001"] {
+        set_limit(&mut tx, &admin, value).await;
+        let error = activity_groups(&me, &mut tx).await.unwrap_err();
+        assert_validation(
+            &error,
+            &format!(
+                "The system parameter mail.activity.systray.limit must be between 1 and 10000 \
+                 (or 0 for the default 1000), not {value}."
+            ),
+        );
+    }
+    // a stored value that is not a number: the parameter reader's own refusal, not a default
+    set_limit(&mut tx, &admin, "many").await;
+    let error = activity_groups(&me, &mut tx).await.unwrap_err();
+    assert_validation(
+        &error,
+        "ir.config_parameter mail.activity.systray.limit has a stored value that is not of type int",
     );
     tx.rollback().await.unwrap();
     drop(tx);
@@ -1747,6 +2132,346 @@ async fn deleting_anothers_activity_needs_write_not_delete_on_the_record() {
             .await
             .contains(&a)
     );
+    tx.rollback().await.unwrap();
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+const STATES: [(&str, OpenState); 4] = [
+    ("all", OpenState::All),
+    ("overdue", OpenState::Overdue),
+    ("today", OpenState::Today),
+    ("planned", OpenState::Planned),
+];
+
+/// The RPC `mail.activity.erp_activity_group_action` as `env`.
+async fn open_action(tx: &mut Transaction, env: &Env, model: &str, state: &str) -> Result<Value> {
+    env.records("mail.activity")
+        .unwrap()
+        .call::<_, Value>(
+            tx,
+            "erp_activity_group_action",
+            (model.to_owned(), state.to_owned()),
+        )
+        .await
+}
+
+fn member<'a>(action: &'a Value, key: &str) -> &'a Value {
+    let Value::Map(map) = action else {
+        panic!("not a map: {action:?}");
+    };
+    map.get(key)
+        .unwrap_or_else(|| panic!("no {key} in {action:?}"))
+}
+
+/// The ids of the leading `["id", "in", ids]` term and the terms after it.
+fn domain_parts(action: &Value) -> (Vec<i64>, Vec<Value>) {
+    let Value::List(terms) = member(action, "domain") else {
+        panic!("domain is not a list: {action:?}");
+    };
+    let (first, rest) = terms.split_first().expect("an id term");
+    let Value::List(first) = first else {
+        panic!("not a term: {first:?}");
+    };
+    assert_eq!(first[0], Value::str("id"));
+    assert_eq!(first[1], Value::str("in"));
+    let Value::List(ids) = &first[2] else {
+        panic!("ids are not a list: {first:?}");
+    };
+    let ids = ids
+        .iter()
+        .map(|id| match id {
+            Value::Int(id) => *id,
+            other => panic!("id {other:?}"),
+        })
+        .collect();
+    (ids, rest.to_vec())
+}
+
+/// Searches `model` as `env` with the returned domain: the id term and the archived term, the only
+/// two a group can carry.
+async fn search_by_action(
+    tx: &mut Transaction,
+    env: &Env,
+    model: &str,
+    action: &Value,
+) -> Vec<i64> {
+    let (ids, rest) = domain_parts(action);
+    let mut terms = vec![Domain::condition("id", Operator::In, ids).unwrap()];
+    for term in rest {
+        assert_eq!(
+            term,
+            Value::list([
+                Value::str("active"),
+                Value::str("in"),
+                Value::list([Value::Bool(true), Value::Bool(false)]),
+            ])
+        );
+        terms.push(Domain::condition("active", Operator::In, vec![true, false]).unwrap());
+    }
+    let mut found = env
+        .records(model)
+        .unwrap()
+        .search(tx, &Domain::and(terms))
+        .await
+        .unwrap()
+        .ids();
+    found.sort_unstable();
+    found
+}
+
+#[tokio::test]
+async fn a_model_group_opens_its_records_in_one_state() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    user(&mut tx, 42, "me", None).await;
+    let (a, b, c, d) = (
+        notebook(&mut tx, "A").await,
+        notebook(&mut tx, "B").await,
+        notebook(&mut tx, "C").await,
+        notebook(&mut tx, "D").await,
+    );
+    let admin = tx.env();
+    assigned(&mut tx, &admin, NOTEBOOK, a, 42, days(today(), -2)).await;
+    assigned(&mut tx, &admin, NOTEBOOK, a, 42, days(today(), 4)).await;
+    assigned(&mut tx, &admin, NOTEBOOK, b, 42, today()).await;
+    assigned(&mut tx, &admin, NOTEBOOK, c, 42, days(today(), 3)).await;
+    assigned(&mut tx, &admin, NOTEBOOK, d, 42, days(today(), -1)).await;
+    archive(&mut tx, &admin, NOTEBOOK, d).await;
+    let me = tx.env().with_user(42);
+    let menu = activity_groups(&me, &mut tx).await.unwrap();
+    let books = group(&menu, NOTEBOOK);
+    let expected = [
+        ("all", sorted(vec![a, b, d]), books.total_count()),
+        ("overdue", sorted(vec![a, d]), books.overdue_count()),
+        ("today", vec![b], books.today_count()),
+        ("planned", vec![c], books.planned_count()),
+    ];
+    for (state, ids, count) in expected {
+        let action = open_action(&mut tx, &me, NOTEBOOK, state).await.unwrap();
+        assert_eq!(
+            member(&action, "type"),
+            &Value::str("ir.actions.act_window")
+        );
+        assert_eq!(member(&action, "name"), &Value::str(books.name()));
+        assert_eq!(member(&action, "res_model"), &Value::str(NOTEBOOK));
+        assert_eq!(member(&action, "target"), &Value::str("current"));
+        assert_eq!(
+            member(&action, "views"),
+            &Value::list([
+                Value::list([Value::Bool(false), Value::str("list")]),
+                Value::list([Value::Bool(false), Value::str("form")]),
+            ])
+        );
+        assert_eq!(
+            member(&action, "context"),
+            &Value::Map(Arc::new(ValueMap::default()))
+        );
+        let (listed, rest) = domain_parts(&action);
+        assert_eq!(listed, ids, "{state}");
+        assert_eq!(listed.len(), count as usize, "{state}");
+        let Value::List(group_terms) = books.domain() else {
+            panic!("the group's domain is not a list");
+        };
+        assert_eq!(rest.as_slice(), &group_terms[..], "{state}");
+        // the list a client opens: the same records, the archived one included
+        assert_eq!(
+            search_by_action(&mut tx, &me, NOTEBOOK, &action).await,
+            ids,
+            "{state}"
+        );
+    }
+    // the typed accessor agrees with the RPC for every state
+    for (state, parsed) in STATES {
+        let typed = activity_group_action(&me, &mut tx, NOTEBOOK, parsed)
+            .await
+            .unwrap();
+        assert_eq!(
+            typed,
+            open_action(&mut tx, &me, NOTEBOOK, state).await.unwrap()
+        );
+        assert_eq!(books.open_ids(parsed), domain_parts(&typed).0);
+    }
+    tx.rollback().await.unwrap();
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn other_activities_open_the_callers_own_activities_never_the_hidden_documents() {
+    let h = harness_policy(|policy| {
+        policy
+            .rule(
+                TASK,
+                Operation::Read,
+                Domain::condition("name", Operator::Ne, "hidden").unwrap(),
+            )
+            .deny(NOTEBOOK, Operation::Read)
+    })
+    .await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    user(&mut tx, 42, "me", None).await;
+    let admin = tx.env();
+    let hidden = task(&mut tx, "hidden").await;
+    let gone = task(&mut tx, "gone").await;
+    let book = notebook(&mut tx, "refused").await;
+    let todo = personal(&mut tx, &admin, 42, days(today(), 2)).await;
+    let on_hidden = assigned(&mut tx, &admin, TASK, hidden, 42, today()).await;
+    let on_book = assigned(&mut tx, &admin, NOTEBOOK, book, 42, days(today(), -1)).await;
+    let on_gone = assigned(&mut tx, &admin, TASK, gone, 42, days(today(), -3)).await;
+    tx.flush().await.unwrap();
+    tx.execute("DELETE FROM test_mail_task WHERE id = $1", &[&gone])
+        .await
+        .unwrap();
+    tx.invalidate_all().await.unwrap();
+    let me = tx.env().with_user(42);
+    let menu = activity_groups(&me, &mut tx).await.unwrap();
+    let other = group(&menu, "mail.activity");
+    let expected = [
+        ("all", sorted(vec![on_hidden, on_book, on_gone])),
+        ("overdue", sorted(vec![on_book, on_gone])),
+        ("today", vec![on_hidden]),
+        ("planned", vec![todo]),
+    ];
+    for (state, ids) in expected {
+        let action = open_action(&mut tx, &me, "mail.activity", state)
+            .await
+            .unwrap();
+        assert_eq!(member(&action, "res_model"), &Value::str("mail.activity"));
+        assert_eq!(member(&action, "name"), &Value::str("Other Activities"));
+        assert_eq!(
+            member(&action, "domain"),
+            &Value::list([Value::list([
+                Value::str("id"),
+                Value::str("in"),
+                Value::list(ids.iter().map(|id| Value::Int(*id))),
+            ])]),
+            "{state}"
+        );
+        let parsed = STATES.iter().find(|(name, _)| *name == state).unwrap().1;
+        assert_eq!(other.open_ids(parsed), ids, "{state}");
+        // the ids are activity ids: U's own activities, readable as U
+        assert_eq!(
+            search_by_action(&mut tx, &me, "mail.activity", &action).await,
+            ids,
+            "{state}"
+        );
+        // nothing names a hidden or deleted document or its model
+        let shown = format!("{action:?}");
+        for needle in ["hidden", "refused", TASK, NOTEBOOK] {
+            assert!(!shown.contains(needle), "{needle} appears in {shown}");
+        }
+    }
+    // the hidden documents' own ids are not in any answer unless they equal an activity id
+    for (_, parsed) in STATES {
+        let typed = activity_group_action(&me, &mut tx, "mail.activity", parsed)
+            .await
+            .unwrap();
+        let (ids, _) = domain_parts(&typed);
+        assert_eq!(ids, other.open_ids(parsed));
+        for id in ids {
+            assert!([todo, on_hidden, on_book, on_gone].contains(&id));
+        }
+    }
+    tx.rollback().await.unwrap();
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+/// 1000 records; (iv) the public and portal users are in `mail_activity_install.rs`)
+#[tokio::test]
+async fn an_open_request_that_cannot_be_answered_is_refused() {
+    let h = harness_policy(|policy| policy.deny(TASK, Operation::Read)).await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    user(&mut tx, 42, "me", None).await;
+    let admin = tx.env();
+    let n = notebook(&mut tx, "N").await;
+    let t = task(&mut tx, "T").await;
+    let finished = notebook(&mut tx, "Finished").await;
+    assigned(&mut tx, &admin, TASK, t, 42, today()).await;
+    let done = assigned(&mut tx, &admin, NOTEBOOK, finished, 42, today()).await;
+    archive(&mut tx, &admin, "mail.activity", done).await;
+    let me = tx.env().with_user(42);
+    // (i)
+    for state in ["", "ALL", "open"] {
+        let error = open_action(&mut tx, &me, NOTEBOOK, state)
+            .await
+            .unwrap_err();
+        assert_validation(
+            &error,
+            &format!(
+                "The activity state {state:?} is not known; use all, overdue, today or planned."
+            ),
+        );
+    }
+    assert_validation(
+        &OpenState::parse("sometime").unwrap_err(),
+        "The activity state \"sometime\" is not known; use all, overdue, today or planned.",
+    );
+    // (ii) a model that does not exist, one with only a done activity, one U cannot read (its
+    // activity counts as "other") and models without activities: one message each, naming only
+    // the caller's own input
+    for model in [
+        "no.such.model",
+        NOTEBOOK,
+        TASK,
+        "res.partner",
+        "mail.message",
+    ] {
+        for state in ["all", "planned"] {
+            let error = open_action(&mut tx, &me, model, state).await.unwrap_err();
+            assert_validation(
+                &error,
+                &format!(
+                    "You have no open activities on {model:?} any more; open the activity menu \
+                     again."
+                ),
+            );
+        }
+    }
+    assigned(&mut tx, &admin, NOTEBOOK, n, 42, today()).await;
+    // (iii) more than 1000 records in a state: the scan bound is raised so that they are all seen
+    let batch: Vec<RawVals> = (0..=MAX_OPEN_RECORDS)
+        .map(|index| RawVals::new().set_cell("name", text(&format!("bulk {index}"))))
+        .collect();
+    let bulk = admin
+        .records(NOTEBOOK)
+        .unwrap()
+        .create(&mut tx, batch)
+        .await
+        .unwrap()
+        .ids();
+    assert_eq!(bulk.len(), MAX_OPEN_RECORDS + 1);
+    tx.flush().await.unwrap();
+    tx.execute(
+        "INSERT INTO mail_activity (res_model, res_id, date_deadline, user_id, create_uid, \
+         active, automated) SELECT $1, id, CURRENT_DATE + 7, 42, 42, true, false \
+         FROM unnest($2::bigint[]) AS id",
+        &[&NOTEBOOK, &bulk],
+    )
+    .await
+    .unwrap();
+    tx.invalidate_all().await.unwrap();
+    set_limit(&mut tx, &admin, "5000").await;
+    let menu = activity_groups(&me, &mut tx).await.unwrap();
+    assert_eq!(
+        group(&menu, NOTEBOOK).planned_count() as usize,
+        MAX_OPEN_RECORDS + 1
+    );
+    let error = open_action(&mut tx, &me, NOTEBOOK, "planned")
+        .await
+        .unwrap_err();
+    assert_validation(
+        &error,
+        "1001 records match; a list opens at most 1000. Open them from the records' own list \
+         instead.",
+    );
+    // the other states stay answerable: only the over-long one is refused
+    let today_only = open_action(&mut tx, &me, NOTEBOOK, "today").await.unwrap();
+    assert_eq!(domain_parts(&today_only).0, vec![n]);
     tx.rollback().await.unwrap();
     drop(tx);
     h.cleanup().await.unwrap();

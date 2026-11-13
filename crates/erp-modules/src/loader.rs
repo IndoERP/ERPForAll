@@ -148,7 +148,7 @@ impl std::fmt::Debug for SessionContext<'_> {
 }
 
 /// Loads the operations of data files into the database, and removes the records of uninstalled
-/// modules (implemented by [`crate::data_loader::ErpDataLoader`],; as amended by
+/// modules (implemented by [`crate::data_loader::ErpDataLoader`]; as amended by
 /// ).
 ///
 /// One [`LoadSession`] serves one module operation: the module system opens it before the first

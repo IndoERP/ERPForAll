@@ -2,7 +2,7 @@
 import { effect, untrack } from "@erpforall/elang";
 import { checkBaseOptions, createContext, t, type ThreadViewBaseOptions } from "./context";
 import { partnerName } from "./contract";
-import { Announcer, formatBytes, h, uniqueId, SR_ONLY } from "./dom";
+import { Announcer, formatBytes, glyphNode, h, uniqueId, SR_ONLY } from "./dom";
 import { ThreadViewError } from "./errors";
 import { reconcileMentions, type MentionRange } from "./mentions";
 import { submitPost, type PostInput } from "./posting";
@@ -105,15 +105,16 @@ export class Composer {
     const kinds = h(doc, "div", { class: "erp-mail-kinds", role: "group", "aria-label": t(view, "Post type") }, this.#kindButtons.message, this.#kindButtons.note);
     this.#replyChip = h(doc, "div", { class: "erp-mail-reply", hidden: true });
     this.#attachmentsArea = h(doc, "div", { class: "erp-mail-composer-attachments", role: "group", "aria-label": t(view, "Attached files"), hidden: true });
-    this.#fileInput = h(doc, "input", { type: "file", multiple: true, class: "erp-mail-file-input", style: "display: none;" }) as HTMLInputElement;
+    this.#fileInput = h(doc, "input", { type: "file", multiple: true, class: "erp-mail-file-input", hidden: true }) as HTMLInputElement;
     this.#fileInput.addEventListener("change", () => void this.#onFilesSelected());
     this.#errorLine = h(doc, "div", { class: "erp-mail-composer-error", role: "alert", hidden: true });
     this.#actionsRow = h(doc, "div", { class: "erp-mail-composer-actions" });
     this.#send = h(doc, "button", { type: "button", class: "erp-mail-send primary" });
     this.#send.addEventListener("click", () => void this.send());
     this.element = h(doc, "form", { class: "erp-mail-composer", "aria-label": t(view, "Message composer"), novalidate: true },
-      this.#announcer.element, kinds, this.#replyChip, label, this.#field, this.#attachmentsArea, hint, this.#list, this.#errorLine,
-      h(doc, "div", { class: "erp-mail-composer-bar" }, this.#actionsRow, this.#send), this.#fileInput);
+      this.#announcer.element, kinds, this.#replyChip, label, this.#field, this.#attachmentsArea, this.#list, this.#errorLine,
+      // Send, the hint, then the tool icons: the document order is the visual order and the Tab order.
+      h(doc, "div", { class: "erp-mail-composer-bar" }, this.#send, hint, this.#actionsRow), this.#fileInput);
     this.element.addEventListener("submit", (event) => {
       event.preventDefault();
       void this.send();
@@ -348,7 +349,9 @@ export class Composer {
           this.#hidden.push({ id: actionId, reason });
           continue;
         }
-        button.append(...(action.glyph !== undefined ? [h(doc, "span", { class: "erp-mail-glyph", "aria-hidden": "true" }, action.glyph)] : []), untrack(() => action.label(ctx)));
+        const actionLabel = untrack(() => action.label(ctx));
+        button.title = actionLabel;
+        button.append(...(action.glyph !== undefined ? [glyphNode(doc, action.glyph)] : []), h(doc, "span", { class: "erp-mail-action-label" }, actionLabel));
       } catch (error) {
         view.reportError(error);
         continue;
@@ -408,9 +411,10 @@ export class Composer {
           size: result.size ?? file.size,
           mimetype: result.mimetype ?? file.type,
         });
+        // Per file: a later file that fails must not leave an earlier one attached without a chip.
+        this.#renderAttachmentChips();
+        this.#syncDraft();
       }
-      this.#renderAttachmentChips();
-      this.#syncDraft();
     } catch (error) {
       this.#showError(error instanceof Error ? error.message : String(error));
       this.#view.reportError(error);

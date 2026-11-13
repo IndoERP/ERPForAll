@@ -30,7 +30,7 @@ function mockRpc(views: unknown = description): void {
   vi.stubGlobal("fetch", vi.fn(async (raw: string, init?: RequestInit) => {
     const path = String(raw), body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
     const action = { wire_major: 1, id: 20, name: "Notes", model: "test.note", target: "current", views: [{ id: 2, type: "list" }, { id: 1, type: "form" }], domain: null, context: null };
-    const result = path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] }
+    const result = path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] }
       : path.endsWith("erp_load_web_action_views") ? { action, views }
       : path.endsWith("erp_load_web_action") ? action : path.endsWith("get_views") ? views
       : path.endsWith("web_search_read") ? { length: 1, records: [{ id: 5, name: "Café" }] }
@@ -124,5 +124,6 @@ test("expired session replaces protected content with a main, h1 and sign-in lin
   vi.stubGlobal("fetch", vi.fn(async () => new Response('{"message":"Expired"}', { status: 401 })));
   const root = shell(); app = new HumanApp(root, bootstrap); await expect(app.start()).rejects.toMatchObject({ kind: "session", message: "Your session has expired. Sign in again." });
   expect(root.querySelectorAll("main")).toHaveLength(1); expect(headings(root)).toHaveLength(1);
-  expect(root.textContent).not.toContain("Operator"); expect(root.querySelector("a")?.getAttribute("href")).toBe("/erp/login");
+  expect(root.textContent).not.toContain("Operator"); const signIn = new URL(root.querySelector("a")!.href);
+  expect(signIn.pathname).toBe("/erp/login"); expect(signIn.searchParams.get("redirect")).toBe(window.location.pathname + window.location.search);
 });

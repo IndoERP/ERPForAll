@@ -3,6 +3,7 @@ import { button, el } from "./dom.js";
 import type { ButtonNode, CancelNode, Node } from "./metadata.js";
 import { createButtonControl } from "./button-control.js";
 import { createButtonMenu } from "./button-menu.js";
+import { icon } from "./icons.js";
 
 /** Partition already rendered, visible controls without cloning their action or statistic state. */
 function responsiveActions(host: HTMLElement, kind: "header" | "box"): () => void {
@@ -12,12 +13,14 @@ function responsiveActions(host: HTMLElement, kind: "header" | "box"): () => voi
   const menu = el("div", undefined, "form-overflow-menu");
   const controller = createButtonMenu({ opener, menu, items: () => controls.filter(control => control.parentElement === menu) });
   let directCount = -1;
-  const arrange = (): void => {
+  // A strip in the control row shares its line with other controls: it keeps as many buttons as really fit and moves the rest into More.
+  const measured = kind === "box" && host.parentElement?.classList.contains("form-record-smart") === true;
+  const arrange = (forced?: number): void => {
     // ERPForAll's compact office layout uses its existing 700px phone breakpoint.
     // Box allowances are our own presentation choices, not upstream pixel geometry.
     const width = host.ownerDocument.defaultView!.innerWidth;
-    const allowance = kind === "header" ? width <= 700 ? 1 : controls.length : width <= 700 ? 0 : width <= 1000 ? 4 : 6;
-    const next = controls.length <= allowance ? controls.length : kind === "header" ? allowance : Math.max(0, allowance - 1);
+    const allowance = kind === "header" ? width <= 700 ? 1 : controls.length : width <= 1000 ? 4 : 6;
+    const next = forced ?? (controls.length <= allowance ? controls.length : kind === "header" ? allowance : Math.max(0, allowance - 1));
     if (next === directCount) return;
     const focused = host.ownerDocument.activeElement;
     const focusedControl = focused instanceof HTMLButtonElement && controls.includes(focused) ? focused : undefined;
@@ -35,10 +38,83 @@ function responsiveActions(host: HTMLElement, kind: "header" | "box"): () => voi
     else if (focusedControl?.parentElement === host && focusedControl.isConnected && !focusedControl.matches(':disabled,[aria-disabled="true"]') && !focusedControl.closest('[hidden],[inert],[aria-hidden="true"]')) focusedControl.focus();
     else if (lostToggle) controls.find(control => !control.disabled)?.focus();
   };
-  arrange();
+  const fit = (): void => {
+    arrange(measured ? controls.length : undefined);
+    if (!measured) return;
+    // Layout only exists in a real browser; where nothing overflows (or nothing is laid out) the strip stays whole.
+    for (let count = controls.length; count > 1 && host.scrollWidth > host.clientWidth + 1; count--) arrange(count - 1);
+  };
+  fit();
   const view = host.ownerDocument.defaultView!;
-  view.addEventListener("resize", arrange);
-  return () => { view.removeEventListener("resize", arrange); controller.dispose(); };
+  const onResize = (): void => { if (measured) arrange(controls.length); fit(); };
+  view.addEventListener("resize", onResize);
+  // The strip's column changes size with the control row's other content, not only with the window.
+  const observer = measured && typeof ResizeObserver === "function" ? new ResizeObserver(onResize) : undefined;
+  if (observer) observer.observe(host.parentElement!);
+  return () => { view.removeEventListener("resize", onResize); observer?.disconnect(); controller.dispose(); };
+}
+
+
+/** A tab row never wraps: the tabs that do not fit leave the row for a "More" menu (the selected tab always stays). */
+function overflowTabs(tabs: HTMLElement, pages: readonly { tab: HTMLButtonElement; panel: HTMLElement }[], pick: (index: number) => void): { fit(): void; dispose(): void } {
+  const opener = createButtonControl({ label: "More", action: () => {}, className: "form-tab-more" });
+  const menu = el("div", undefined, "form-overflow-menu form-tab-overflow-menu");
+  const items = new Map<number, HTMLButtonElement>();
+  const controller = createButtonMenu({ opener, menu, items: () => [...items.values()].filter(item => !item.hidden) });
+  // A tablist owns tabs only: More and its menu sit beside it, appended once.
+  const bar = el("div", undefined, "form-tabs-bar"), more = el("div", undefined, "form-tab-more-wrap");
+  tabs.replaceWith(bar); more.append(opener, menu); bar.append(tabs, more);
+  const hide = (index: number, hidden: boolean): void => {
+    pages[index]!.tab.hidden = hidden;
+    let item = items.get(index);
+    if (!item) { item = button(pages[index]!.tab.textContent ?? "", () => { controller.close(false); pick(index); fit(); }, "form-tab-overflow-item dropdown-item"); items.set(index, item); menu.append(item); }
+    item.hidden = !hidden;
+  };
+  const selectedIndex = (): number => pages.findIndex(({ tab }) => tab.getAttribute("aria-selected") === "true");
+  const fit = (): void => {
+    // Show everything, then drop tabs from the end (never the selected one) until the row stops overflowing.
+    const active = tabs.ownerDocument.activeElement;
+    const keep = active instanceof HTMLElement && more.contains(active) ? active : undefined;
+    pages.forEach((_page, index) => hide(index, false));
+    opener.hidden = true;
+    if (tabs.scrollWidth > tabs.clientWidth + 1) {
+      opener.hidden = false;
+      for (let index = pages.length - 1; index >= 1 && tabs.scrollWidth > tabs.clientWidth + 1; index--) if (index !== selectedIndex()) hide(index, true);
+    }
+    // Hiding the opener for the measurement must not cost a focused More button its focus.
+    if (keep && tabs.ownerDocument.activeElement !== keep && keep.isConnected && !keep.hidden && !keep.closest("[hidden]")) keep.focus();
+  };
+  fit();
+  const view = tabs.ownerDocument.defaultView!;
+  view.addEventListener("resize", fit);
+  const observer = typeof ResizeObserver === "function" ? new ResizeObserver(fit) : undefined;
+  observer?.observe(tabs);
+  return { fit, dispose: () => { view.removeEventListener("resize", fit); observer?.disconnect(); controller.dispose(); } };
+}
+
+/**
+  My Preferences title block: the record's initial in a circle, drawn like the top bar's, left of a
+ *  column holding the heading and one row per e-mail or phone field with its icon. A presentation rule of the client:
+ *  the view grammar is unchanged and a real picture waits for the Binary field. 
+ */
+function renderProfileTitle(node: Extract<Node, { kind: "title" }>, title: HTMLElement, initial: string, render: (node: Node, parent: HTMLElement, columns: number) => void): void {
+  title.classList.add("form-title-profile");
+  const avatar = el("div", undefined, "user-avatar form-title-avatar");
+  avatar.setAttribute("data-letter", initial);
+  avatar.setAttribute("aria-hidden", "true");
+  const body = el("div", undefined, "form-title-body");
+  title.append(avatar, body);
+  for (const child of node.children) {
+    const rowIcon = child.kind !== "field" || child.field.invisible ? undefined : child.widget === "email" ? "mail" : child.widget === "phone" ? "phone" : undefined;
+    if (!rowIcon) { render(child, body, 2); continue; }
+    const row = el("div", undefined, "form-title-row");
+    row.append(icon(rowIcon));
+    body.append(row);
+    render(child, row, 2);
+    const input = row.querySelector<HTMLInputElement>("input:not([placeholder])");
+    const caption = row.querySelector(".field-label > span")?.textContent?.replace(/\s*\*$/, "").trim();
+    if (input && caption) input.placeholder = caption;
+  }
 }
 
 let nextNotebook = 0;
@@ -50,7 +126,7 @@ export function renderFormLayout(
   /** Header buttons act on the open record; a surface without one (a one2many line form) shows no header. */
   renderButton?: (node: ButtonNode, parent: HTMLElement) => HTMLElement | void,
   renderFooter?: (node: ButtonNode | CancelNode, parent: HTMLElement) => void,
-  presentation?: { headerHost?: HTMLElement; headerActionsHost?: HTMLElement; notebookTabsHost?: HTMLElement; asideHost?: HTMLElement; chatterHost?: HTMLElement; renderChatter?(node: Extract<Node, { kind: "chatter" }>, slot: HTMLElement): void; titleHost?: HTMLElement; displayWidget?(node: Extract<Node,{kind:"ribbon"|"notification_alert"}>,parent:HTMLElement):void }
+  presentation?: { profile?: { initial: string }; headerHost?: HTMLElement; smartHost?: HTMLElement; headerActionsHost?: HTMLElement; notebookTabsHost?: HTMLElement; asideHost?: HTMLElement; chatterHost?: HTMLElement; renderChatter?(node: Extract<Node, { kind: "chatter" }>, slot: HTMLElement): void; titleHost?: HTMLElement; displayWidget?(node: Extract<Node,{kind:"ribbon"|"notification_alert"}>,parent:HTMLElement):void }
 ): { revealField(field: HTMLElement): void; dispose(): void } {
   const stops: (() => void)[] = [];
   const revealers = new Map<HTMLElement, () => void>();
@@ -78,6 +154,7 @@ export function renderFormLayout(
       const title = el("div", undefined, "form-title-block");
       const topLevel = parent === host || parent.classList.contains("form-sheet-layout");
       (topLevel ? presentation?.titleHost ?? parent : parent).append(title);
+      if (presentation?.profile) { renderProfileTitle(node, title, presentation.profile.initial, render); return; }
       node.children.forEach(child => render(child, title, 2)); return;
     }
     if (node.kind === "heading") {
@@ -94,7 +171,23 @@ export function renderFormLayout(
       if (!asideContent(node.children)) return;
       const aside = el("div", undefined, "form-aside");
       (presentation?.asideHost ?? parent).append(aside);
-      node.children.forEach(child => render(child, aside, 2)); return;
+      node.children.forEach(child => render(child, aside, 2));
+      // The rail is a compact card, with or without a chatter above it: its title becomes the disclosure, collapsed when it holds many fields.
+      if (presentation?.asideHost) {
+        const lifted = aside.querySelector<HTMLElement>(".form-group-title");
+        const toggle = button(lifted?.textContent?.trim() || "Details", () => {
+          const collapsed = aside.classList.toggle("is-collapsed");
+          selectedPages.set(node, collapsed ? 0 : 1);
+          toggle.setAttribute("aria-expanded", String(!collapsed));
+        }, "form-aside-toggle");
+        toggle.setAttribute("aria-expanded", "true");
+        lifted?.classList.add("is-lifted");
+        aside.prepend(toggle);
+        // The owner keeps the choice (1 open, 0 collapsed) across re-renders, as it does the notebook tab.
+        const chosen = selectedPages.get(node);
+        if (chosen === undefined ? aside.querySelectorAll(".field-label").length > 3 : chosen === 0) { aside.classList.add("is-collapsed"); toggle.setAttribute("aria-expanded", "false"); }
+      }
+      return;
     }
     if (node.kind === "chatter") {
       // Only the main-route form passes a chatter host; dialogs, x2many forms and the relation editor render nothing.
@@ -139,7 +232,7 @@ export function renderFormLayout(
     if (node.kind === "button_box") {
       if (!renderButton) return;
       const box = el("div", undefined, "form-button-box"); box.setAttribute("role", "group");
-      box.setAttribute("aria-label", "Related records"); parent.append(box);
+      box.setAttribute("aria-label", "Related records"); (presentation?.smartHost ?? parent).append(box);
       node.children.forEach(child => render(child, box, 2));
       if (!box.children.length) box.remove();
       else stops.push(responsiveActions(box, "box"));
@@ -151,7 +244,7 @@ export function renderFormLayout(
       if (node.kind === "stat_button" && control) {
         control.classList.add("form-stat-button");
         const declaredIcon = control.querySelector(":scope > svg.erp-icon");
-        control.replaceChildren(...(declaredIcon ? [declaredIcon] : []));
+        control.replaceChildren(declaredIcon ?? icon("layers"));
         const stats = el("span", undefined, "form-stat-content"); control.append(stats);
         node.children.forEach(child => render(child, stats, 2));
         if (!stats.children.length) stats.append(el("span", node.label, "form-stat-label"));
@@ -187,12 +280,14 @@ export function renderFormLayout(
       (tabsHost ?? notebook).append(tabs); parent.append(notebook);
       const id = `form-notebook-${++nextNotebook}`;
       const pages: { tab: HTMLButtonElement; panel: HTMLElement }[] = [];
+      let refit: (() => void) | undefined;
       const activate = (index: number, focus = false): void => {
         selectedPages.set(node, index);
         pages.forEach(({ tab, panel }, i) => {
           const current = i === index; tab.setAttribute("aria-selected", String(current));
           tab.tabIndex = current ? 0 : -1; panel.hidden = !current;
         });
+        refit?.();
         if (focus) pages[index]?.tab.focus();
       };
       node.children.forEach((page, index) => {
@@ -218,6 +313,7 @@ export function renderFormLayout(
       });
       const selected = selectedPages.get(node) ?? 0;
       if (pages.length) activate(Math.min(selected, pages.length - 1));
+      if (pages.length > 2) { const overflow = overflowTabs(tabs, pages, index => activate(index, true)); refit = overflow.fit; stops.push(overflow.dispose); }
       return;
     }
     throw new Error(`Unexpected record form node: ${node.kind}.`);

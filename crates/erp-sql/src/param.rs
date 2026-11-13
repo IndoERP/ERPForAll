@@ -162,7 +162,7 @@ pub enum Param {
     Array(ScalarKind, Vec<Scalar>),
     /// A row count or offset (`LIMIT`/`OFFSET`), bound as `int8`.
     Count(i64),
-    /// A value of the principal the statement runs for: the ORM replaces it
+    /// A value of the principal the statement runs: the ORM replaces it
     /// with a [`Param::Scalar`] or [`Param::Array`] of `kind` from the principal binding before
     /// the statement runs, so the planned text serves every principal.
     Principal {

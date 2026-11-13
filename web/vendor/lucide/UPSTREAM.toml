@@ -770,3 +770,18 @@ sha256 = "b5f3bf792743edb9e81b543dd1b13ccc26d3afe1d33500a1cd8dee2e052d6197"
 path = "icons/zap.svg"
 upstream = "icons/zap.svg"
 sha256 = "4c395891eab4d1e5627c5d414a16db037317cb2f12453de0f3a1130964c6d444"
+
+[[files]]
+path = "icons/archive-restore.svg"
+upstream = "icons/archive-restore.svg"
+sha256 = "7b589719d9c539dcb77844ea02b7c548f354a74b2931734f57b041d4e9de8ff8"
+
+[[files]]
+path = "icons/undo-2.svg"
+upstream = "icons/undo-2.svg"
+sha256 = "efad2edbbd2be6038cc23fd64df2d012fad5cc6460dfbf227cfa3d990e9e897f"
+
+[[files]]
+path = "icons/redo-2.svg"
+upstream = "icons/redo-2.svg"
+sha256 = "4cbd2cdebc70b6b7979c681ed3f313d9cbb102465dcf7d0d2d6a72c937b344bc"

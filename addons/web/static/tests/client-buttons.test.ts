@@ -57,7 +57,7 @@ describe("metadata", () => {
     expect(parse([{ kind: "form", record_mode: "record", children: [1, 2] }, fieldNode("name"), { kind: "header", children: [] }])).toThrow("Invalid form layout hierarchy.");
     expect(parse([{ kind: "form", record_mode: "record", children: [1] }, buttonNode()])).toThrow("Invalid form layout hierarchy.");
     expect(parse([{ kind: "form", record_mode: "record", children: [1] }, { kind: "header", children: [2] }, fieldNode("name")])).toThrow("Header fields require the statusbar widget.");
-    expect(parse(headerForm(buttonNode({ button_type: "action" })))).toThrow("Only object buttons are supported (a later release).");
+    expect(parse(headerForm(buttonNode({ button_type: "action" })))).toThrow("Only object buttons are supported.");
     expect(parse(headerForm(buttonNode({ variant: "neon" })))).toThrow("Unsupported button variant.");
     expect(parse(headerForm(buttonNode({ name: "Lend" })))).toThrow("Invalid button name or label.");
     expect(parse(headerForm(buttonNode({ extra: true })))).toThrow("Unknown view node member: extra.");
@@ -230,7 +230,7 @@ describe("application", () => {
       calls.push({ path, body });
       const custom = respond(path, body);
       if (custom) return custom;
-      const value = path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ id: 10, parent_id: null, label: "Books", action_id: 20, children: [], icon: null }] }
+      const value = path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, label: "Books", action_id: 20, children: [], icon: null }] }
         : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, { wire_major: 1, id: 20, name: "Books", model: "test.book", target: "current", views: [{ id: 1, type: "form" }], domain: null, context: null }, descriptionOf(nodes))
         : path.endsWith("get_views") ? descriptionOf(nodes)
         : path.endsWith("erp_normalize_action_result") ? { wire_major: 1, result: { kind: "none" } }
@@ -322,6 +322,37 @@ describe("application", () => {
     expect(order.indexOf("web_save")).toBeLessThan(order.indexOf("lend"));
   });
 
+  /// (partial: header action button clicked right after editing a field executes after commit)
+  test("header action button clicked right after editing a field saves and calls the method", async () => {
+    const { root, calls } = await start(() => undefined);
+    const input = root.querySelector<HTMLInputElement>('input[name="name"]')!;
+    input.value = "Dune Messiah";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    root.querySelector<HTMLButtonElement>(".form-header-btn")!.click();
+    await vi.waitFor(() => expect(document.querySelector("dialog")).not.toBeNull());
+    choice("Lend");
+    await vi.waitFor(() => expect(buttons(root)).toEqual(["Return"]));
+    const order = calls.map(call => call.path.split("/").pop());
+    expect(order.indexOf("web_save")).toBeGreaterThan(-1);
+    expect(order.indexOf("web_save")).toBeLessThan(order.indexOf("lend"));
+    const saveCall = calls.find(c => c.path.endsWith("web_save"));
+    expect(saveCall?.body["vals"]).toMatchObject({ name: "Dune Messiah" });
+  });
+
+  /// (partial: save button clicked right after editing a field commits and saves the record)
+  test("save button clicked right after editing a field commits and saves the record", async () => {
+    const { root, calls } = await start(() => undefined);
+    const input = root.querySelector<HTMLInputElement>('input[name="name"]')!;
+    input.value = "Children of Dune";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    root.querySelector<HTMLButtonElement>(".status-btn-save")!.click();
+    await vi.waitFor(() => expect(calls.some(c => c.path.endsWith("web_save"))).toBe(true));
+    const saveCall = calls.find(c => c.path.endsWith("web_save"));
+    expect(saveCall?.body["vals"]).toMatchObject({ name: "Children of Dune" });
+  });
+
   /// (partial: a refused method call shows the shared error dialog and re-enables the buttons)
   test("a server error opens the error dialog and the buttons work again", async () => {
     const { root } = await start(path => path.endsWith("/lend")
@@ -359,13 +390,13 @@ describe("application", () => {
     await vi.waitFor(() => expect(document.querySelectorAll(".choice-dialog .message-dialog-footer button")).toHaveLength(2));
     const choices = [...document.querySelectorAll<HTMLButtonElement>(".choice-dialog .message-dialog-footer button")];
     expect(choices.map(button => button.textContent)).toEqual(["Cancel", "Cancel"]);
-    choices[1]!.click();
+    choices[0]!.click();
     await vi.waitFor(() => expect(document.querySelector(".choice-dialog")).toBeNull());
     await vi.waitFor(() => expect(root.querySelector<HTMLButtonElement>(".form-header-btn")?.disabled).toBe(false));
     expect(calls.filter(call => call.path.endsWith("web_save") || call.path.endsWith("/lend"))).toHaveLength(0);
     root.querySelector<HTMLButtonElement>(".form-header-btn")!.click();
     await vi.waitFor(() => expect(document.querySelectorAll(".choice-dialog .message-dialog-footer button")).toHaveLength(2));
-    document.querySelector<HTMLButtonElement>(".choice-dialog .message-dialog-footer button")!.click();
+    document.querySelector<HTMLButtonElement>(".choice-dialog .message-dialog-footer [data-default-action]")!.click();
     await vi.waitFor(() => expect(calls.filter(call => call.path.endsWith("/lend"))).toHaveLength(1));
     expect(calls.filter(call => call.path.endsWith("web_save"))).toHaveLength(1);
   });
@@ -382,8 +413,8 @@ describe("application", () => {
       await vi.waitFor(() => expect(document.querySelector(".choice-dialog")).not.toBeNull());
       let dialog = document.querySelector<HTMLDialogElement>(".choice-dialog")!;
       expect(document.getElementById(dialog.getAttribute("aria-labelledby")!)?.textContent).toBe("Run operation");
-      expect(dialog.querySelector(".message-dialog-footer button")?.textContent).toBe("Run operation");
-      expect(document.activeElement).toBe(dialog.querySelector(".message-dialog-footer button"));
+      expect(dialog.querySelector(".message-dialog-footer [data-default-action]")?.textContent).toBe("Run operation");
+      expect(document.activeElement).toBe(dialog.querySelector(".message-dialog-footer [data-default-action]"));
       dialog.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", bubbles: true, cancelable: true}));
       await vi.waitFor(() => expect(dialog.isConnected).toBe(false));
       expect(calls.filter(call => call.path.endsWith("/lend") || (call.path.endsWith("erp_load_web_action") && (call.body["ids"] as number[] | undefined)?.[0] === 21))).toHaveLength(0);

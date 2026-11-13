@@ -112,7 +112,7 @@ async fn protected_archived_descendant_refuses_entire_cascading_delete() {
     let h = seed_fixture().await;
     let mut tx = h.begin().await.unwrap();
     tx.batch(
-        "INSERT INTO res_users(id,name,login,active) VALUES(42,'Guard caller','guard-caller',true)",
+        "INSERT INTO res_users(id,name,login,active,share) VALUES(42,'Guard caller','guard-caller',true,false)",
     )
     .await
     .unwrap();

@@ -69,8 +69,8 @@ pub fn mode_on_create(inherit_id: Option<i64>, explicit: Option<ViewMode>) -> Vi
 
 /// The mode a write of `inherit_id` gives one record that `had_parent` before, or `None` when the
 /// record keeps its mode: the `mode` written, else `primary` when the parent is cleared,
-/// `extension` when a view without parent gets one; a re-parented view keeps its mode
-/// . Decided per record, never for a whole batch (BUG-074). Only whether
+/// `extension` when a view without parent gets one; a re-parented view keeps its mode.
+/// Decided per record, never for a whole batch (BUG-074). Only whether
 /// the record had a parent counts, so the old state is a `bool` and cannot be swapped with the new
 /// parent.
 ///

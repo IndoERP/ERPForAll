@@ -3,10 +3,9 @@
 //! RPC service on the production policy (`erp-security` compiled from the shipped rows of
 //! `addons/mail/security/ir.access.csv` and a few rows of the test models, as `mail_thread_access.rs`
 //! does). The test lives here and not under `addons/mail/tests` because an addon crate may not
-//! depend on `erp-security` or `erp-rpc` (`scripts/check-layers.py`). Design note:
-//! .
+//! depend on `erp-security` or `erp-rpc` (`scripts/check-layers.py`).
 //!
-//! Cases to.
+//! Cases.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -19,12 +18,15 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use company_rows_support::UserKind::{External, Internal};
+use company_rows_support::fixture_user_with_partner;
 use erp_addon_base::attachments::{self, AttachmentContent, NewAttachment, ParentRef, UNLINK_HOOK};
 use erp_addon_mail::store_fetch::{Audience, StoreTopic, TopicFuture, TopicInput, TopicOutput};
 use erp_addon_mail::{MailMessage, MailThread, StoreFields, ThreadFacts};
 use erp_blob::{AttachmentRuntime, MemoryStore};
 use erp_orm::{GenerationAttachment, Orm, PolicyProvider, Principal, UserId};
 use erp_rpc::{Caller, RpcCall, RpcConfig, RpcHost, RpcResponse, RpcService};
+use erp_sdk::ErrorKind;
 use erp_sdk::prelude::*;
 use erp_sdk::store_wire::{DecodedPayload, Decoder, FieldValue as Wire, Outcome, WireLimits};
 use erp_security::resolver::Resolver;
@@ -34,6 +36,7 @@ use erp_testkit::tokio_postgres::{Client, NoTls};
 use serde_json::json;
 
 mod attachment_support;
+mod company_rows_support;
 
 mod ext_a {
     use erp_addon_mail::{PostRequest, Posted};
@@ -62,7 +65,24 @@ mod ext_a {
             }
             sup.call(tx, this.as_records(), (request,)).await
         }
+        #[method(override)]
+        async fn _message_post_after_hook(
+            this: &RecordSet<super::DocA>,
+            tx: &mut Transaction,
+            message_id: i64,
+            sup: Super,
+        ) -> Result<()> {
+            if FAIL_AFTER_POST.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(Error::validation(
+                    "fixture: post hook refused after adoption",
+                ));
+            }
+            sup.call(tx, this.as_records(), (message_id,)).await
+        }
     }
+
+    pub static FAIL_AFTER_POST: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
 
     /// Overrides the store entry of messages: a subject that starts with `redact:` is replaced,
     /// one that starts with `unknown-field:` gets a field the store schema does not declare.
@@ -372,31 +392,6 @@ async fn rule(
     .await;
 }
 
-async fn user(client: &Client, login: &str, groups: &[i64], share: bool) -> (i64, i64) {
-    let partner = one(
-        client,
-        "INSERT INTO res_partner (name, active) VALUES ($1, true) RETURNING id::int8",
-        &[&login],
-    )
-    .await;
-    let uid = one(
-        client,
-        "INSERT INTO res_users (name, login, active, share, partner_id) \
-         VALUES ($1, $1, true, $2, $3) RETURNING id::int8",
-        &[&login, &share, &partner],
-    )
-    .await;
-    for g in groups {
-        exec(
-            client,
-            "INSERT INTO res_groups_users_rel (uid, gid) VALUES ($1, $2)",
-            &[&uid, g],
-        )
-        .await;
-    }
-    (uid, partner)
-}
-
 fn pool(h: &Harness, size: usize) -> erp_testkit::deadpool_postgres::Pool {
     erp_orm::pool::create_pool(h.db().config(), size).unwrap()
 }
@@ -523,6 +518,13 @@ async fn world() -> World {
     let doc_r = model_row(&client, DOC_R, "RPC Doc R").await;
     let doc_p = model_row(&client, DOC_P, "RPC Doc P").await;
     let partner_model = model_row(&client, "res.partner", "Contact").await;
+    // installation emits the generated company restrictions; this database has no installation
+    company_rows_support::insert_generated(
+        &client,
+        h.registry(),
+        &company_rows_support::PARTNER_AND_USERS,
+    )
+    .await;
     rule(&client, "internal doc a", doc_a, g_user, "crud", None).await;
     rule(
         &client,
@@ -554,25 +556,30 @@ async fn world() -> World {
         Some("[('name', '!=', 'hidden')]"),
     )
     .await;
+    let company = company_rows_support::fixture_company(&client).await;
     let (public, _) = {
-        let (uid, partner) = user(&client, "pub", &[g_public], true).await;
+        let (uid, partner) =
+            fixture_user_with_partner(&client, "pub", &[g_public], External, company).await;
         (Who { uid, partner }, ())
     };
     let ivy = {
-        let (uid, partner) = user(&client, "ivy", &[g_user], false).await;
+        let (uid, partner) =
+            fixture_user_with_partner(&client, "ivy", &[g_user], Internal, company).await;
         Who { uid, partner }
     };
     let otto = {
-        let (uid, partner) = user(&client, "otto", &[g_user], false).await;
+        let (uid, partner) =
+            fixture_user_with_partner(&client, "otto", &[g_user], Internal, company).await;
         Who { uid, partner }
     };
     let pat = {
-        let (uid, partner) = user(&client, "pat", &[g_portal], true).await;
+        let (uid, partner) =
+            fixture_user_with_partner(&client, "pat", &[g_portal], External, company).await;
         Who { uid, partner }
     };
     let hidden_partner = one(
         &client,
-        "INSERT INTO res_partner (name, active) VALUES ('hidden', true) RETURNING id::int8",
+        "INSERT INTO res_partner (name, active, partner_share) VALUES ('hidden', true, false) RETURNING id::int8",
         &[],
     )
     .await;
@@ -939,7 +946,7 @@ async fn forged_and_unknown_keys_are_refused_with_the_key_names() {
             &format!(
                 "argument 'post' of {entry}: The post has no key '{key}'; its keys are body, \
                  subject, message_type, subtype, parent_id, partner_ids, mentions, silent, \
-                 client_uid, attachment_ids."
+                 client_uid, attachment_ids, staged_uploads."
             ),
         );
     }
@@ -4567,7 +4574,14 @@ async fn an_abandoned_composer_file_is_collected() {
         )
         .await
         .unwrap();
-    let mut tx = w.orm.begin(erp_orm::SUPERUSER_ID).await.unwrap();
+    let mut tx = w
+        .orm
+        .begin_opts(
+            erp_orm::BeginOptions::new(erp_orm::SUPERUSER_ID)
+                .isolation(erp_orm::Isolation::ReadCommitted),
+        )
+        .await
+        .unwrap();
     let env = tx.env();
     let report = erp_addon_base::attachments::gc::clean_staging(&mut tx, &env, 100)
         .await
@@ -4583,5 +4597,569 @@ async fn an_abandoned_composer_file_is_collected() {
         .map(|r| r.get(0))
         .collect();
     assert_eq!(left, vec![young, other]);
+    w.cleanup().await;
+}
+
+/// card calls it. The access check on existing activities is covered by the addon's own
+/// `action_feedback` tests, where the activities and their seeds exist.)
+#[tokio::test]
+async fn activity_action_feedback_is_callable_over_rpc() {
+    let w = world().await;
+    let answer = w
+        .call(
+            w.ivy,
+            "mail.activity",
+            "action_feedback",
+            json!({"ids": [], "feedback": "done", "attachment_ids": []}),
+        )
+        .await;
+    // no activity to complete: nothing is posted and nothing is refused (an absent id answers `false`)
+    assert_eq!(ok(&answer), json!(false));
+    w.cleanup().await;
+}
+
+const STAGED_UNUSABLE: &str = "The upload is not usable: it does not exist, has expired, was already used, or belongs to another user.";
+async fn staged_for(w: &World, who: Who, bytes: &[u8]) -> String {
+    let mut tx = w.orm.begin(UserId::new(who.uid).unwrap()).await.unwrap();
+    let env = tx.env();
+    tx.rollback().await.unwrap();
+    drop(tx);
+    let mut body = bytes;
+    attachments::Uploader::new(&w.orm)
+        .stage(
+            &env,
+            &mut body,
+            attachments::StageRequest::named("staged.txt"),
+        )
+        .await
+        .unwrap()
+        .id
+        .to_string()
+}
+fn descriptor(id: &str) -> serde_json::Value {
+    json!({"name":"staged.txt", "upload_id":id, "mimetype":"text/plain"})
+}
+
+#[tokio::test]
+async fn staged_mail_upload_and_attach_select_exactly_one_source() {
+    let w = world().await;
+    for method in ["thread_upload", "thread_attach"] {
+        for extra in [
+            json!({}),
+            json!({"data":"", "upload_id":"00000000-0000-0000-0000-000000000001"}),
+        ] {
+            let mut input = json!({"ids":[w.doc_shared], "name":"hello.txt"});
+            input
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let response = w.call(w.ivy, DOC_A, method, input).await;
+            assert_error(
+                &response,
+                422,
+                VALIDATION,
+                "Give exactly one of data or upload_id for an attachment.",
+            );
+        }
+        let id = staged_for(&w, w.ivy, b"streamed content").await;
+        let response = w
+            .call(
+                w.ivy,
+                DOC_A,
+                method,
+                json!({"ids":[w.doc_shared],"name":"staged.txt","upload_id":id}),
+            )
+            .await;
+        let up = ok(&response);
+        assert_eq!(up["file_size"], json!(16));
+        assert_eq!(up["mimetype"], json!("text/plain"));
+        let file = up["attachment_id"].as_i64().unwrap();
+        assert_eq!(
+            file_row(&w, file).await.0.as_deref(),
+            Some(if method == "thread_upload" {
+                COMPOSER
+            } else {
+                DOC_A
+            })
+        );
+    }
+    let id = staged_for(&w, w.ivy, b"mine").await;
+    for bad in [id.as_str(), "00000000-0000-0000-0000-000000000001"] {
+        let response = w
+            .call(
+                w.otto,
+                DOC_A,
+                "thread_upload",
+                json!({"ids":[w.doc_shared],"name":"stolen.txt","upload_id":bad}),
+            )
+            .await;
+        assert_error(&response, 422, VALIDATION, STAGED_UNUSABLE);
+    }
+    let response = w
+        .call(
+            w.public,
+            DOC_A,
+            "thread_upload",
+            json!({"ids":[w.doc_shared],"name":"x","upload_id":id}),
+        )
+        .await;
+    assert_error(
+        &response,
+        403,
+        ACCESS,
+        "Public users cannot upload files to a thread.",
+    );
+    w.cleanup().await;
+}
+
+#[tokio::test]
+async fn staged_mail_posts_are_atomic_and_replays_do_not_consume_again() {
+    let w = world().await;
+    let id = staged_for(&w, w.ivy, b"a direct file").await;
+    let file = composer_file(&w, w.ivy, "existing.txt").await;
+    let uid = "ca2e437a-c54e-4098-ad90-f30b7ae6352e";
+    let request = json!({"body":"staged", "client_uid":uid,"attachment_ids":[file], "staged_uploads":[descriptor(&id)]});
+    let answer = ok(&post(&w, w.ivy, w.doc_shared, request.clone()).await);
+    let message = answer["message_id"].as_i64().unwrap();
+    assert_eq!(linked(&w, message).await.len(), 2);
+    let payload = decode(&answer["store"]);
+    assert_eq!(
+        record(&payload, "mail.message", message)["attachment_ids"],
+        &Wire::X2ManyReplace(
+            linked(&w, message)
+                .await
+                .into_iter()
+                .map(|n| u64::try_from(n).unwrap())
+                .collect()
+        )
+    );
+    let fresh = staged_for(&w, w.ivy, b"untouched on replay").await;
+    let mut replay = request.clone();
+    replay["staged_uploads"]
+        .as_array_mut()
+        .unwrap()
+        .push(descriptor(&fresh));
+    let replay = ok(&post(&w, w.ivy, w.doc_shared, replay).await);
+    assert_eq!(replay["message_id"], json!(message));
+    assert_eq!(replay["replayed"], json!(true));
+    assert_eq!(
+        w.n(&format!(
+            "SELECT state::int8 FROM ir_blob_upload WHERE id='{fresh}'"
+        ))
+        .await,
+        1
+    );
+    let response = post(
+        &w,
+        w.ivy,
+        w.doc_shared,
+        json!({"body":"reuse", "staged_uploads":[descriptor(&id)]}),
+    )
+    .await;
+    assert_error(&response, 422, VALIDATION, STAGED_UNUSABLE);
+    let before_files = w.n("SELECT count(*) FROM ir_attachment").await;
+    let before_posts = w.n("SELECT count(*) FROM mail_message").await;
+    let response = post(&w, w.ivy, w.doc_shared, json!({"body":"mixed invalid", "staged_uploads":[descriptor(&fresh),descriptor("00000000-0000-0000-0000-000000000001")]})).await;
+    assert_error(&response, 422, VALIDATION, STAGED_UNUSABLE);
+    assert_eq!(
+        w.n("SELECT count(*) FROM ir_attachment").await,
+        before_files
+    );
+    assert_eq!(w.n("SELECT count(*) FROM mail_message").await, before_posts);
+    assert_eq!(
+        w.n(&format!(
+            "SELECT state::int8 FROM ir_blob_upload WHERE id='{fresh}'"
+        ))
+        .await,
+        1
+    );
+    let response = post(
+        &w,
+        w.ivy,
+        w.doc_shared,
+        json!({"body":"duplicate", "staged_uploads":[descriptor(&fresh),descriptor(&fresh)]}),
+    )
+    .await;
+    assert_error(&response, 422, VALIDATION, STAGED_UNUSABLE);
+    w.cleanup().await;
+}
+
+#[tokio::test]
+async fn staged_mail_preserves_post_only_and_portal_permissions() {
+    let w = world().await;
+    let bytes = vec![b'x'; 4096];
+    let id = staged_for(&w, w.ivy, &bytes).await;
+    let contact = w.otto.partner;
+    let panel = w
+        .call(
+            w.ivy,
+            "res.partner",
+            "thread_attach",
+            json!({"ids":[contact],"name":"large.txt","upload_id":id}),
+        )
+        .await;
+    assert_eq!(panel.status(), 403);
+    assert_eq!(body_json(&panel)["name"], ACCESS);
+    assert!(
+        body_json(&panel)["message"]
+            .as_str()
+            .unwrap()
+            .contains("modify"),
+        "{}",
+        panel.body().escape_ascii()
+    );
+    assert_eq!(
+        w.n(&format!(
+            "SELECT state::int8 FROM ir_blob_upload WHERE id='{id}'"
+        ))
+        .await,
+        1
+    );
+    let upload = ok(&w
+        .call(
+            w.ivy,
+            "res.partner",
+            "thread_upload",
+            json!({"ids":[contact],"name":"large.txt","upload_id":id}),
+        )
+        .await);
+    assert_eq!(upload["file_size"], json!(bytes.len()));
+    let file = upload["attachment_id"].as_i64().unwrap();
+    let direct = staged_for(&w, w.ivy, b"direct reader").await;
+    let answer = ok(&w.call(w.ivy, "res.partner", "thread_post", json!({"ids":[contact],"post":{"body":"reader", "attachment_ids":[file],"staged_uploads":[descriptor(&direct)]}})).await);
+    assert_eq!(
+        linked(&w, answer["message_id"].as_i64().unwrap())
+            .await
+            .len(),
+        2
+    );
+    let portal = staged_for(&w, w.pat, b"portal file").await;
+    let denied = post(
+        &w,
+        w.pat,
+        w.doc_secret,
+        json!({"body":"denied", "staged_uploads":[descriptor(&portal)]}),
+    )
+    .await;
+    assert_eq!(denied.status(), 403);
+    assert_eq!(body_json(&denied)["name"], ACCESS);
+    assert!(!body_json(&denied)["message"].as_str().unwrap().is_empty());
+    assert_eq!(
+        w.n(&format!(
+            "SELECT state::int8 FROM ir_blob_upload WHERE id='{portal}'"
+        ))
+        .await,
+        1
+    );
+    let answer = ok(&post(
+        &w,
+        w.pat,
+        w.doc_shared,
+        json!({"body":"portal", "staged_uploads":[descriptor(&portal)]}),
+    )
+    .await);
+    assert_eq!(
+        linked(&w, answer["message_id"].as_i64().unwrap())
+            .await
+            .len(),
+        1
+    );
+    w.cleanup().await;
+}
+
+#[tokio::test]
+async fn staged_mail_rejects_expired_and_unbounded_descriptors() {
+    let w = world().await;
+    let expired = staged_for(&w, w.ivy, b"expired").await;
+    w.client.execute("UPDATE ir_blob_upload SET expires_at=now()-interval '1 second' WHERE id=$1::text::uuid", &[&expired]).await.unwrap();
+    assert_error(
+        &post(
+            &w,
+            w.ivy,
+            w.doc_shared,
+            json!({"body":"expired","staged_uploads":[descriptor(&expired)]}),
+        )
+        .await,
+        422,
+        VALIDATION,
+        STAGED_UNUSABLE,
+    );
+    let fresh = staged_for(&w, w.ivy, b"still ready").await;
+    for bad in [
+        json!("not a list"),
+        json!([{"name":"x","upload_id":fresh,"size":10}]),
+        json!([{"name":"bad\rname","upload_id":fresh}]),
+        json!([{"name":"x","upload_id":fresh,"mimetype":false}]),
+        json!([{"upload_id":fresh}]),
+    ] {
+        let response = post(
+            &w,
+            w.ivy,
+            w.doc_shared,
+            json!({"body":"bad shape","staged_uploads":bad}),
+        )
+        .await;
+        assert_eq!(response.status(), 422);
+        assert_eq!(body_json(&response)["name"], VALIDATION);
+        assert!(!body_json(&response)["message"].as_str().unwrap().is_empty());
+    }
+    let response = post(&w,w.ivy,w.doc_shared,json!({"body":"too many","attachment_ids":vec![1;100],"staged_uploads":[descriptor(&fresh)]})).await;
+    assert_error(
+        &response,
+        422,
+        VALIDATION,
+        "At most 100 attachments are posted with one message, not 101.",
+    );
+    assert_eq!(
+        w.n(&format!(
+            "SELECT state::int8 FROM ir_blob_upload WHERE id='{fresh}'"
+        ))
+        .await,
+        1
+    );
+    assert_eq!(messages(&w).await, 0);
+    w.cleanup().await;
+}
+
+#[tokio::test]
+async fn staged_mail_typed_post_rollback_preserves_ready_uploads() {
+    let w = world().await;
+    let fresh = staged_for(&w, w.ivy, b"typed rollback").await;
+    let mut tx = w.orm.begin(UserId::new(w.ivy.uid).unwrap()).await.unwrap();
+    let record = tx
+        .env()
+        .records(DOC_A)
+        .unwrap()
+        .browse([w.doc_shared])
+        .unwrap();
+    let mut request =
+        erp_addon_mail::PostRequest::new(erp_addon_mail::Body::Text("typed".to_owned()));
+    request
+        .staged_uploads
+        .push(erp_addon_mail::StagedAttachment::new("fresh.txt".to_owned(), &fresh, None).unwrap());
+    request.staged_uploads.push(
+        erp_addon_mail::StagedAttachment::new(
+            "missing.txt".to_owned(),
+            "00000000-0000-0000-0000-000000000001",
+            None,
+        )
+        .unwrap(),
+    );
+    let error = record
+        .call::<_, erp_addon_mail::Posted>(&mut tx, "message_post", (request,))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Validation);
+    assert_eq!(error.message(), STAGED_UNUSABLE);
+    tx.commit().await.unwrap();
+    drop(tx);
+    assert_eq!(
+        w.n(&format!(
+            "SELECT state::int8 FROM ir_blob_upload WHERE id='{fresh}'"
+        ))
+        .await,
+        1
+    );
+    assert_eq!(messages(&w).await, 0);
+    w.cleanup().await;
+}
+
+#[tokio::test]
+async fn staged_mail_checks_actor_and_company_at_adoption() {
+    use erp_orm::{ApiKeyId, MethodAllow, ModelAllow, PrincipalBuilder, Scope};
+    let w = world().await;
+    let mut tx = w.orm.begin(UserId::new(w.ivy.uid).unwrap()).await.unwrap();
+    let original = tx.env().principal().clone();
+    tx.rollback().await.unwrap();
+    drop(tx);
+    let keyed = |key| {
+        PrincipalBuilder::user(UserId::new(w.ivy.uid).unwrap())
+            .resolution(original.resolution().as_ref().clone())
+            .scope(
+                Scope::builder(ApiKeyId::new(key).unwrap(), "mail fixture")
+                    .models(ModelAllow::All)
+                    .methods(MethodAllow::All)
+                    .build()
+                    .unwrap(),
+            )
+            .build()
+            .unwrap()
+    };
+    let first = keyed(501);
+    let mut tx = w
+        .orm
+        .begin_opts(erp_orm::BeginOptions::for_principal(first.clone()))
+        .await
+        .unwrap();
+    let env = tx.env();
+    tx.rollback().await.unwrap();
+    drop(tx);
+    let mut bytes = b"actor-bound".as_slice();
+    let id = attachments::Uploader::new(&w.orm)
+        .stage(
+            &env,
+            &mut bytes,
+            attachments::StageRequest::named("actor.txt"),
+        )
+        .await
+        .unwrap()
+        .id
+        .to_string();
+    let body = json!({"ids":[w.doc_shared], "name":"actor.txt","upload_id":id});
+    let refused = w
+        .service
+        .call(RpcCall::json2(
+            &format!("/json/2/{DOC_A}/thread_upload"),
+            serde_json::to_vec(&body).unwrap(),
+            Caller::Principal(keyed(502)),
+        ))
+        .await;
+    assert_error(&refused, 422, VALIDATION, STAGED_UNUSABLE);
+    let allowed = w
+        .service
+        .call(RpcCall::json2(
+            &format!("/json/2/{DOC_A}/thread_upload"),
+            serde_json::to_vec(&body).unwrap(),
+            Caller::Principal(first),
+        ))
+        .await;
+    ok(&allowed);
+    let company = one(&w.client,"INSERT INTO res_company(name,currency_id,active) SELECT 'Other company',currency_id,true FROM res_company ORDER BY id LIMIT 1 RETURNING id::int8",&[]).await;
+    let foreign = one(&w.client,"INSERT INTO res_partner(name,company_id,active) VALUES ('foreign contact',$1,true) RETURNING id::int8",&[&company]).await;
+    let id = staged_for(&w, w.ivy, b"company guarded").await;
+    for method in ["thread_upload", "thread_attach"] {
+        let response = w
+            .call(
+                w.ivy,
+                "res.partner",
+                method,
+                json!({"ids":[foreign],"name":"company.txt","upload_id":id}),
+            )
+            .await;
+        assert_eq!(response.status(), 403);
+        assert_eq!(body_json(&response)["name"], ACCESS);
+        assert!(!body_json(&response)["message"].as_str().unwrap().is_empty());
+    }
+    let response = w.call(w.ivy,"res.partner","thread_post",json!({"ids":[foreign],"post":{"body":"company denied","staged_uploads":[descriptor(&id)]}})).await;
+    assert_eq!(response.status(), 403);
+    assert_eq!(body_json(&response)["name"], ACCESS);
+    assert!(!body_json(&response)["message"].as_str().unwrap().is_empty());
+    assert_eq!(
+        w.n(&format!(
+            "SELECT state::int8 FROM ir_blob_upload WHERE id='{id}'"
+        ))
+        .await,
+        1
+    );
+    w.cleanup().await;
+}
+
+#[tokio::test]
+async fn staged_mail_concurrent_composer_cap_is_shared_with_legacy_uploads() {
+    let w = world().await;
+    let staged = staged_for(&w, w.ivy, b"last slot").await;
+    let mut tx = w.orm.begin(UserId::new(w.ivy.uid).unwrap()).await.unwrap();
+    attachments::create_pending(
+        &mut tx,
+        COMPOSER,
+        50,
+        (0..49)
+            .map(|i| {
+                NewAttachment::new(
+                    format!("pending{i}.txt"),
+                    AttachmentContent::Bytes(b"pending".to_vec()),
+                )
+            })
+            .collect(),
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    drop(tx);
+    let (legacy, staged) = tokio::join!(
+        upload_for(&w, w.ivy, "thread_upload", w.doc_shared, HELLO_B64),
+        w.call(
+            w.ivy,
+            DOC_A,
+            "thread_upload",
+            json!({"ids":[w.doc_shared],"name":"staged.txt","upload_id":staged})
+        )
+    );
+    assert_eq!(
+        usize::from(legacy.status() == 200) + usize::from(staged.status() == 200),
+        1
+    );
+    let refused = if legacy.status() == 200 {
+        &staged
+    } else {
+        &legacy
+    };
+    assert_error(
+        refused,
+        422,
+        VALIDATION,
+        "At most 50 uploaded files wait for a message; post or remove some first.",
+    );
+    assert_eq!(w.n("SELECT count(*) FROM ir_attachment WHERE res_model='mail.compose.message' AND coalesce(res_id,0)=0").await,50);
+    w.cleanup().await;
+}
+
+#[tokio::test]
+async fn staged_mail_distinct_uploads_deduplicate_bytes_without_losing_files() {
+    let w = world().await;
+    let a = staged_for(&w, w.ivy, b"same bytes").await;
+    let b = staged_for(&w, w.ivy, b"same bytes").await;
+    let answer = ok(&post(
+        &w,
+        w.ivy,
+        w.doc_shared,
+        json!({"body":"duplicates", "staged_uploads":[descriptor(&a),descriptor(&b)]}),
+    )
+    .await);
+    assert_eq!(
+        linked(&w, answer["message_id"].as_i64().unwrap())
+            .await
+            .len(),
+        2
+    );
+    assert_eq!(w.n("SELECT count(*) FROM ir_blob").await, 1);
+    w.cleanup().await;
+}
+
+#[tokio::test]
+async fn staged_mail_post_hook_failure_rolls_back_message_and_adoption() {
+    let w = world().await;
+    let staged = staged_for(&w, w.ivy, b"post hook rollback").await;
+    let mut tx = w.orm.begin(UserId::new(w.ivy.uid).unwrap()).await.unwrap();
+    let record = tx
+        .env()
+        .records(DOC_A)
+        .unwrap()
+        .browse([w.doc_shared])
+        .unwrap();
+    let mut request =
+        erp_addon_mail::PostRequest::new(erp_addon_mail::Body::Text("hook failure".to_owned()));
+    request
+        .staged_uploads
+        .push(erp_addon_mail::StagedAttachment::new("hook.txt".to_owned(), &staged, None).unwrap());
+    ext_a::FAIL_AFTER_POST.store(true, std::sync::atomic::Ordering::SeqCst);
+    let error = record
+        .call::<_, erp_addon_mail::Posted>(&mut tx, "message_post", (request,))
+        .await
+        .unwrap_err();
+    ext_a::FAIL_AFTER_POST.store(false, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(error.kind(), ErrorKind::Validation);
+    assert_eq!(error.message(), "fixture: post hook refused after adoption");
+    tx.commit().await.unwrap();
+    drop(tx);
+    assert_eq!(messages(&w).await, 0);
+    assert_eq!(w.n("SELECT count(*) FROM ir_attachment").await, 0);
+    assert_eq!(
+        w.n(&format!(
+            "SELECT state::int8 FROM ir_blob_upload WHERE id='{staged}'"
+        ))
+        .await,
+        1
+    );
     w.cleanup().await;
 }

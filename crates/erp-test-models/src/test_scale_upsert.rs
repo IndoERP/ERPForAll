@@ -2,8 +2,8 @@
 //! §4, and 033): `scale.quant` with the business key `_quant_key` over
 //! `product_id, location_id, lot_id` (`lot_id` nullable) and a row version, its targets, and
 //! `scale.serial` with a computed default. Extensions in separate addons add a stored compute, a
-//! constraint and counting `create`/`write` overrides, and an `upsert` override
-//! , so each test installs only what it exercises.
+//! constraint and counting `create`/`write` overrides, and an `upsert` override,
+//! so each test installs only what it exercises.
 
 use std::sync::atomic::{AtomicI64, Ordering};
 

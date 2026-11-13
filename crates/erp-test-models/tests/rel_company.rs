@@ -279,3 +279,159 @@ async fn spec_crud_061_company_check_message_forms() {
     drop(tx);
     h.cleanup().await.unwrap();
 }
+
+/// The error of a refused delegated check: kind, the fixed head and foot of the message.
+fn assert_inconsistent(err: &erp_sdk::Error) {
+    assert_eq!(err.kind(), ErrorKind::UserError, "{err}");
+    assert!(
+        err.message()
+            .starts_with("Uh-oh! You’ve got some company inconsistencies here:"),
+        "{err}"
+    );
+    assert!(
+        err.message()
+            .ends_with("To avoid a mess, no company crossover is allowed!"),
+        "{err}"
+    );
+}
+
+/// A declared check toward a model whose company comes by `_inherits` delegation compares the
+/// delegated company as it stands in the transaction; the link that declares nothing
+/// stays unchecked (A2).
+#[tokio::test]
+async fn spec_crud_067_check_toward_delegated_company() {
+    let h = support::rel_orm().await;
+    let mut tx = h.begin().await.unwrap();
+    let companies = create(
+        &mut tx,
+        "res.company",
+        &[
+            &[("name", Value::str("Company A"))],
+            &[("name", Value::str("Company B"))],
+        ],
+    )
+    .await;
+    let (company_a, company_b) = (companies.ids()[0], companies.ids()[1]);
+    let templates = create(
+        &mut tx,
+        "test_rel.company_template",
+        &[
+            &[
+                ("name", Value::str("TA")),
+                ("company_id", Value::Int(company_a)),
+            ],
+            &[
+                ("name", Value::str("TB")),
+                ("company_id", Value::Int(company_b)),
+            ],
+            &[("name", Value::str("T0"))],
+        ],
+    )
+    .await;
+    let (ta, tb, t0) = (templates.ids()[0], templates.ids()[1], templates.ids()[2]);
+    let variants = create(
+        &mut tx,
+        "test_rel.company_variant",
+        &[
+            &[("template_id", Value::Int(ta))],
+            &[("template_id", Value::Int(tb))],
+            &[("template_id", Value::Int(t0))],
+        ],
+    )
+    .await;
+    let (va, vb, v0) = (variants.ids()[0], variants.ids()[1], variants.ids()[2]);
+    let lots = tx.env().records("test_rel.company_lot").unwrap();
+    // same company, and a variant whose template has no company
+    let lot_a = create(
+        &mut tx,
+        "test_rel.company_lot",
+        &[&[
+            ("name", Value::str("LA")),
+            ("company_id", Value::Int(company_a)),
+            ("variant_id", Value::Int(va)),
+        ]],
+    )
+    .await;
+    create(
+        &mut tx,
+        "test_rel.company_lot",
+        &[&[
+            ("name", Value::str("L0")),
+            ("company_id", Value::Int(company_a)),
+            ("variant_id", Value::Int(v0)),
+        ]],
+    )
+    .await;
+    // the link that declares nothing is not checked (the rule 2 default does not reach it)
+    create(
+        &mut tx,
+        "test_rel.company_lot",
+        &[&[
+            ("name", Value::str("LP")),
+            ("company_id", Value::Int(company_a)),
+            ("variant_plain_id", Value::Int(vb)),
+        ]],
+    )
+    .await;
+    // a variant of another company: refused on create
+    let err = tx
+        .savepoint(async |tx| {
+            lots.create_values(
+                tx,
+                &[map(&[
+                    ("name", Value::str("LB")),
+                    ("company_id", Value::Int(company_a)),
+                    ("variant_id", Value::Int(vb)),
+                ])],
+            )
+            .await
+        })
+        .await
+        .unwrap_err();
+    assert_inconsistent(&err);
+    let lines: Vec<&str> = err.message().lines().collect();
+    assert_eq!(
+        lines.get(1).copied(),
+        Some(
+            "- “LB” belongs to company “Company A” while “Variant” (variant_id: 'TB') belongs to \
+             another company."
+        ),
+        "{err}"
+    );
+    // ... and on write
+    let err = tx
+        .savepoint(async |tx| lot_a.set_value(tx, "variant_id", Value::Int(vb)).await)
+        .await
+        .unwrap_err();
+    assert_inconsistent(&err);
+    // the template's company moves to B in this transaction: the variant's current company is
+    // read through the delegation (this does not prove whether the write was still pending or
+    // already flushed; both give B)
+    let template_a = tx
+        .env()
+        .records("test_rel.company_template")
+        .unwrap()
+        .browse([ta])
+        .unwrap();
+    template_a
+        .set_value(&mut tx, "company_id", Value::Int(company_b))
+        .await
+        .unwrap();
+    let err = tx
+        .savepoint(async |tx| {
+            lots.create_values(
+                tx,
+                &[map(&[
+                    ("name", Value::str("LA2")),
+                    ("company_id", Value::Int(company_a)),
+                    ("variant_id", Value::Int(va)),
+                ])],
+            )
+            .await
+        })
+        .await
+        .unwrap_err();
+    assert_inconsistent(&err);
+    drop(tx);
+    h.cleanup().await.unwrap();
+}

@@ -47,7 +47,7 @@ export function validateDomainCondition(
   }
   if (!OPERATORS.has(operator)) {
     throw new AuthoringError(
-      `Domain operator ${operator} has no authoring control in a later release.`,
+      `Domain operator ${operator} cannot be edited with the visual editor.`,
       0,
       false,
       "unsupported",

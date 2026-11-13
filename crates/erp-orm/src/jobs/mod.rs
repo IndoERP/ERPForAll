@@ -159,7 +159,8 @@ pub struct JobRef {
 }
 
 impl JobRef {
-    pub(crate) fn new(id: i64, uuid: Uuid) -> Self {
+    /// A job reference by row id and uuid.
+    pub fn new(id: i64, uuid: Uuid) -> Self {
         Self { id, uuid }
     }
 

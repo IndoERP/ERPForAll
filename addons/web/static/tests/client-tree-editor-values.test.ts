@@ -154,7 +154,7 @@ test("unknown kinds and invalid policy results refuse rather than choose an inve
     expect.objectContaining({
       kind: "unsupported",
       message:
-        "Binary and collection condition values require a custom tree editor provider (a later release advanced controls).",
+        "Binary and collection condition values require a custom tree editor provider.",
     }),
   );
 });

@@ -1,5 +1,5 @@
-//! Static allow and deny tables, plain data copied from the `definitions` block of
-//! , which records the reference environment's lists.
+//! Static allow and deny tables, plain data copied from the `definitions` block of,
+//! which records the reference environment's lists.
 //!
 //! Every table is a sorted, duplicate-free slice of lower-case ASCII names, looked up by binary
 //! search; the lookups are case-sensitive, so the caller passes names already lower-cased (the HTML

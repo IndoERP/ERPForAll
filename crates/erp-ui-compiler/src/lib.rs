@@ -1,4 +1,4 @@
-//! `erp-ui-compiler`: the Elang template compiler (design note
+//! `erp-ui-compiler`: the Elang template compiler (
 //! ). A pure crate: no I/O, threads or clock, the same bytes from
 //! the same input on every host, native and WASM.
 //!

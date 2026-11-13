@@ -104,7 +104,7 @@ async fn names(tx: &mut Transaction) -> Vec<String> {
         .collect()
 }
 
-/// A statement budget per model,.
+/// A statement budget per model.
 const BUDGET: u64 = 10;
 
 /// 1,000 records of one model cost at most 10 statements, in init and in update

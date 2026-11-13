@@ -48,7 +48,7 @@ Each
           <page name="access_rights" string="Access Rights">
             <group>
               <field name="company_ids"/>
-              <field name="company_id"/>
+              <field name="company_id" required="1"/>
             </group>
             <group string="Groups">
               <field name="group_ids"/>

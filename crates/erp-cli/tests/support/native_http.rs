@@ -1,6 +1,6 @@
 #![allow(dead_code, reason = "shared HTTP test fixture helpers")]
 #[path = "login_rollout.rs"]
-mod login_rollout;
+pub mod login_rollout;
 use erp_testkit::{TestDb, tokio_postgres::config::Host};
 use std::{
     collections::BTreeMap,

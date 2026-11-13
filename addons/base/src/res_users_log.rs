@@ -1,6 +1,6 @@
 //! The audit columns
-//! `create_uid` and `create_date` are the record; the login statement inserts the row itself
-//! . Old rows are collected by the authentication collection
+//! `create_uid` and `create_date` are the record; the login statement inserts the row itself.
+//! Old rows are collected by the authentication collection
 //! (`erp_security::auth::gc`, `Auth::gc_from`), which keeps the newest row of each user.
 //!
 //! The one index, `(create_uid, create_date DESC NULLS LAST, id DESC)`, serves both the lookups

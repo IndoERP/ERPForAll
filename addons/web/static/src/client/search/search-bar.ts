@@ -1,5 +1,6 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import { icon } from "../icons.js";
+import { attachMenuDropdown } from "../menu-dropdown.js";
 import type { AutocompleteItem } from "./types.js";
 import type { SearchModel } from "./search-model.js";
 import { createSearchMenuPanel } from "./search-menu-panel.js";
@@ -11,7 +12,8 @@ export function createSearchBar(
   element: HTMLElement;
   input: HTMLInputElement;
   form: HTMLFormElement;
-  fieldSelect: HTMLSelectElement;
+  /** The field picker: a styled dropdown whose `value` is the chosen field name (as a select's would be). */
+  fieldSelect: HTMLElement & { value: string };
   render(): void;
   dispose(): void;
 } {
@@ -55,16 +57,43 @@ export function createSearchBar(
   input.maxLength = 256;
   let editingFacetId: string | undefined;
 
-  // Search field select (accessible, styled, and backward-compatible)
-  const fieldSelect = document.createElement("select");
-  fieldSelect.className = "search-field-select";
-  fieldSelect.setAttribute("aria-label", "Search field");
+  // Search field picker: the shared menu dropdown, not a native select. Same labels as the chips.
+  const fieldSelect = Object.assign(document.createElement("div"), { value: "" });
+  fieldSelect.className = "search-field-select nav-dropdown";
+  const fieldTrigger = document.createElement("button");
+  fieldTrigger.type = "button";
+  fieldTrigger.className = "search-field-trigger";
+  fieldTrigger.setAttribute("aria-label", "Search field");
+  const fieldMenu = document.createElement("div");
+  fieldMenu.className = "nav-dropdown-menu search-field-menu";
+  fieldMenu.setAttribute("aria-label", "Search field");
+  const fieldOptions = new Map<string, HTMLButtonElement>();
+  let fieldValue = "";
+  const setField = (name: string): void => {
+    if (!fieldOptions.has(name)) return;
+    fieldValue = name;
+    // The accessible name contains the visible name (WCAG 2.5.3).
+    fieldTrigger.setAttribute("aria-label", `Search field: ${model.fieldLabel(name)}`);
+    fieldTrigger.replaceChildren(Object.assign(document.createElement("span"), { textContent: model.fieldLabel(name) }), icon("chevron-down"));
+    for (const [key, option] of fieldOptions) option.setAttribute("aria-checked", String(key === name));
+  };
+  Object.defineProperty(fieldSelect, "value", { get: () => fieldValue, set: setField });
+  const fieldDropdown = attachMenuDropdown({ trigger: fieldTrigger, menu: fieldMenu, mode: "class-open" });
   for (const field of model.getSearchableFields()) {
-    fieldSelect.append(new Option(field.label || field.name, field.name));
+    const option = document.createElement("button");
+    option.type = "button";
+    option.className = "dropdown-item search-field-option";
+    option.setAttribute("role", "menuitemradio");
+    option.dataset["field"] = field.name;
+    option.textContent = model.fieldLabel(field.name);
+    option.addEventListener("click", () => { setField(field.name); fieldDropdown.close(true); });
+    fieldOptions.set(field.name, option);
+    fieldMenu.append(option);
   }
-  if (model.fields.has("name")) {
-    fieldSelect.value = "name";
-  }
+  fieldSelect.append(fieldTrigger, fieldMenu);
+  const firstField = model.getSearchableFields()[0];
+  setField(model.fields.has("name") && fieldOptions.has("name") ? "name" : firstField?.name ?? "");
+  fieldSelect.hidden = fieldOptions.size < 2;
 
   inputContainer.append(iconWrapper, chipsContainer, input);
 
@@ -88,9 +117,11 @@ export function createSearchBar(
   const menuToggle = document.createElement("button");
   menuToggle.type = "button";
   menuToggle.className = "search-menu-toggle o_searchview_dropdown_toggler";
-  menuToggle.setAttribute("aria-label", "Toggle Search Filters, Group By, and Favorites");
-  menuToggle.title = "Filters, Group By, Favorites";
+  menuToggle.setAttribute("aria-label", "Toggle search filters");
+  menuToggle.title = "Filters";
   menuToggle.append(icon("chevron-down"));
+  // A panel with nothing to offer gets no toggle.
+  menuToggle.hidden = model.fields.size === 0 && model.getFilters().length === 0;
 
   // Hidden submit button for native form submission
   const submitBtn = document.createElement("button");
@@ -259,8 +290,6 @@ export function createSearchBar(
             <path fill="currentColor" d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/>
           </svg>
         `;
-      } else {
-        badge.textContent = facet.title;
       }
 
       // Values joined with separator
@@ -270,6 +299,9 @@ export function createSearchBar(
       if (facet.type === "field") {
         // e.g. Name: "Meeting" or "Meeting" or "Project"
         valuesText.textContent = `${facet.title}: ${facet.values.map(v => `"${model.valueLabel(facet.fieldName!, facet.operator ?? "ilike", v)}"`).join(` ${facet.separator} `)}`;
+      } else if (facet.type === "groupBy") {
+        // Words, not only the icon: a grouping chip must read as one without colour or icon.
+        valuesText.textContent = `Group by ${facet.values.join(` ${facet.separator} `)}`;
       } else {
         valuesText.textContent = facet.values.join(` ${facet.separator} `);
       }
@@ -294,7 +326,7 @@ export function createSearchBar(
       const removeBtn = document.createElement("button");
       removeBtn.type = "button";
       removeBtn.className = "chip-remove-btn erp-facet-remove";
-      removeBtn.setAttribute("aria-label", "Remove filter");
+      removeBtn.setAttribute("aria-label", facet.type === "groupBy" ? `Remove grouping by ${facet.values.join(" > ")}` : "Remove filter");
       removeBtn.textContent = "✕";
       removeBtn.addEventListener("click", e => {
         e.stopPropagation();
@@ -303,9 +335,13 @@ export function createSearchBar(
         notifySearchChange();
       });
 
-      chip.append(badge, valuesText, removeBtn);
+      // A field facet reads once as `Label: "value"`; the badge is only the icon of filter, group and favourite facets.
+      if (badge.hasChildNodes()) chip.append(badge);
+      chip.append(valuesText, removeBtn);
       chipsContainer.append(chip);
     }
+    // One line, never a wrap: the chips scroll and the newest stays in view.
+    chipsContainer.scrollLeft = chipsContainer.scrollWidth;
   };
 
   // Keyboard and Input event handlers
@@ -423,6 +459,7 @@ export function createSearchBar(
   const dispose = (): void => {
     document.removeEventListener("click", handleDocClick);
     unsubscribe();
+    fieldDropdown.dispose();
     menuPanel.dispose();
     form.remove();
   };

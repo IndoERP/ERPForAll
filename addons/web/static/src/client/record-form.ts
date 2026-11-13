@@ -19,6 +19,7 @@ import { ClientError, type RpcClient } from "./transport.js";
 
 let nextRecordForm = 0;
 let nextFieldInfo = 0;
+let nextFieldNote = 0;
 
 /** Node-keyed state that survives re-rendering from per-render effective node copies.
  * Effective modifiers copy field and container nodes on every render; keys resolve back to the
@@ -41,7 +42,7 @@ export function formFocus(form: HTMLElement, element: Element | null = document.
 export class RecordForm {
   private readonly currencies = new CurrencyDisplayCache();
   private stops: (() => void)[] = [];
-  private validators: { node: HTMLElement; validate(): boolean }[] = [];
+  private validators: { node: HTMLElement; name: string; validate(): "ok" | "missing" | "invalid" }[] = [];
   private represented: Readonly<Record<string, unknown>> = {};
   private draftVersion = -1;
   private widgetHandles: { name: string; handle: WidgetHandle }[] = [];
@@ -61,16 +62,23 @@ export class RecordForm {
   private readonly onAbort = (): void => this.dispose();
   private readonly pages = new SourceKeyed<number>();
   private layout: ReturnType<typeof renderFormLayout> | undefined;
+  /** The chatter lives across re-renders of the form and is replaced only when the record id changes or the view drops it. */
+  private chatterMount: { id: number | undefined; chatter: Chatter; slot: HTMLElement } | undefined;
+  private chatterSeen = false;
+  /** True while the chatter itself reloads the form, so the reset that follows does not fetch the chatter twice. */
+  private chatterReloading = false;
   constructor(private readonly env: {
     signal?: AbortSignal;
     notify?(message: string): void;
     messages?: MessageServices;
     editorLocale?: EditorLocale;
     numericLocale?: import("./numeric-values.js").NumericLocale;
+    canEdit?: boolean;
     form: HTMLFormElement; state: RecordState; view: View; rpc: RpcClient; context: Record<string, unknown>;
     messagingStore?: MessagingStore;
     /** Signed-in user id (chatter followers). */
     uid?: number;
+    userName?: string;
     run(job: () => Promise<void>): void; report(error: unknown): void;
     openRecord(model: string, id: number): Promise<void>;
     change(name: string, value: unknown, focus: string | undefined): void;
@@ -80,8 +88,10 @@ export class RecordForm {
     /** Commit a staged field through the owner's existing onchange path. */
     commit?(name: string, focus: string | undefined): Promise<void>;
     button(node: ButtonNode, parent: HTMLElement): HTMLElement | void;
-    headerHost?: HTMLElement; headerActionsHost?: HTMLElement; titleHost?: HTMLElement; notebookTabsHost?: HTMLElement; asideHost?: HTMLElement; chatterHost?: HTMLElement;
+    headerHost?: HTMLElement; smartHost?: HTMLElement; headerActionsHost?: HTMLElement; titleHost?: HTMLElement; notebookTabsHost?: HTMLElement; asideHost?: HTMLElement; chatterHost?: HTMLElement;
     footerHost?: HTMLElement;
+    /** Title block drawn as a profile header: the record's initial in a circle, an icon on each e-mail and phone row. */
+    profileTitle?: boolean;
     footer?(node: ButtonNode | CancelNode, parent: HTMLElement): HTMLElement | void;
   }) {
     this.unbind = env.state.bindEditorOwner({
@@ -102,7 +112,7 @@ export class RecordForm {
     env.form.noValidate = true;
     if ((env.titleHost || env.asideHost) && !env.form.id) env.form.id = `record-form-${++nextRecordForm}`;
   }
-  private hosts(): HTMLElement[] { return [this.env.form, this.env.headerHost, this.env.headerActionsHost, this.env.titleHost, this.env.notebookTabsHost, this.env.asideHost].filter((host): host is HTMLElement => host !== undefined); }
+  private hosts(): HTMLElement[] { return [this.env.form, this.env.headerHost, this.env.smartHost, this.env.headerActionsHost, this.env.titleHost, this.env.notebookTabsHost, this.env.asideHost].filter((host): host is HTMLElement => host !== undefined); }
   focus(): string | undefined { return this.hosts().map(host => formFocus(host)).find(key => key !== undefined); }
   controls(): (HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement)[] {
     // Draft engines own their internal input/history policy through setDisabled, not native snapshots.
@@ -113,11 +123,22 @@ export class RecordForm {
   dispose(): void {
     if (this.dead) return;
     this.dead = true; this.epoch++; this.unbind(); this.env.signal?.removeEventListener("abort", this.onAbort); this.clearLayout();
+    this.releaseChatter();
     this.retained.forEach(handle => handle.dispose()); this.retained.clear(); this.effective.clear(); this.pending.clear(); this.nativeDisabled.clear();
+  }
+  private releaseChatter(): void {
+    this.chatterMount?.chatter.dispose(); this.chatterMount?.slot.remove(); this.chatterMount = undefined;
+  }
+  /** The record came from the server again (reload, save, discard): the kept chatter shows the server state again too. */
+  private refreshChatter(): void {
+    const mount = this.chatterMount;
+    if (!mount || this.chatterReloading || mount.id !== this.env.state.id) return;
+    mount.chatter.refresh().catch(error => { if (!this.dead) this.env.report(error); });
   }
   /** Authoritative load/save/discard starts a fresh editor baseline, even for identical source. */
   reset(): void {
     if (this.dead) return;
+    this.refreshChatter();
     if (!this.retained.size) { this.epoch++; this.pending.clear(); this.committed.clear(); return; }
     this.rendering = true; this.epoch++;
     try { this.retained.forEach(handle => handle.dispose()); this.retained.clear(); this.effective.clear(); this.pending.clear(); this.committed.clear(); }
@@ -133,6 +154,7 @@ export class RecordForm {
     if (this.dead) return;
     const disabled = this.disabled || this.saving || this.committing !== undefined || this.env.state.writeUncertain;
     for (const control of this.controls()) {
+      if (control instanceof HTMLButtonElement) continue;
       if (this.committing) { if (!this.nativeDisabled.has(control)) this.nativeDisabled.set(control, control.disabled); control.disabled = true; }
       else if (this.nativeDisabled.has(control)) { control.disabled = this.nativeDisabled.get(control)! || this.disabled || this.saving || this.env.state.writeUncertain; this.nativeDisabled.delete(control); }
     }
@@ -169,26 +191,39 @@ export class RecordForm {
   render(focus = this.focus()): void {
     if (this.dead) throw new ClientError("validation", "The record form is disposed.");
     const { form, state, view } = this.env;
+    const canEdit = this.env.canEdit ?? view.canEdit !== false;
+    const isReadOnly = !canEdit && state.id !== undefined;
     if (this.draftVersion !== state.draftVersion) this.currencies.clear();
     // Capture editor-local text drafts of ordinary controls before the layout is cleared.
     const drafts = new Map<string, { value: string; message: string }>();
-    for (const control of this.controls()) {
-      if ((control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement) && control.name &&
-        (control.closest(".field-dirty,.field-invalid") || !control.validity.valid) && this.draftVersion === state.draftVersion && Object.is(this.represented[control.name], state.values[control.name])) drafts.set(control.name, { value: control.value, message: control.validationMessage });
-    }
     const managed = new Set<string>();
-    if (this.draftVersion === state.draftVersion) for (const { name, handle } of this.widgetHandles) {
-      if (!Object.is(this.represented[name], state.values[name])) continue;
-      const draft = handle.captureDraft?.();
-      if (draft) { drafts.set(name, draft); managed.add(name); }
+    if (!isReadOnly) {
+      for (const control of this.controls()) {
+        if ((control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement) && control.name &&
+          (control.closest(".field-dirty,.field-invalid") || !control.validity.valid) && this.draftVersion === state.draftVersion && Object.is(this.represented[control.name], state.values[control.name])) drafts.set(control.name, { value: control.value, message: control.validationMessage });
+      }
+      if (this.draftVersion === state.draftVersion) for (const { name, handle } of this.widgetHandles) {
+        if (!Object.is(this.represented[name], state.values[name])) continue;
+        const draft = handle.captureDraft?.();
+        if (draft) { drafts.set(name, draft); managed.add(name); }
+      }
     }
     let nodes: Node[];
     try {
       nodes = effectiveNodes(view.nodes, state.fields, state.values);
+      if (isReadOnly) {
+        const markReadonly = (nodeList: readonly Node[]): Node[] => nodeList.map(node =>
+          node.kind === "field" ? { ...node, field: { ...node.field, readonly: true } }
+            : "children" in node ? { ...node, children: markReadonly(node.children) }
+            : node
+        );
+        nodes = markReadonly(nodes);
+      }
       const occurrences = occurrenceFields(nodes);
       const present = new Set(occurrences.map(field => field.name));
-      state.updatePolicy(combineFields([...occurrences, ...view.fields.filter(field => !present.has(field.name))]));
-    } catch (error) { state.updatePolicy(view.fields, error instanceof Error ? error : new Error(String(error))); throw error; }
+      const fallbackFields = isReadOnly ? view.fields.map(f => ({ ...f, readonly: true })) : view.fields;
+      state.updatePolicy(combineFields([...occurrences, ...fallbackFields.filter(field => !present.has(field.name))]));
+    } catch (error) { state.updatePolicy(isReadOnly ? view.fields.map(f => ({ ...f, readonly: true })) : view.fields, error instanceof Error ? error : new Error(String(error))); throw error; }
     const origin = new Map<Node, Node>();
     const pair = (effective: readonly Node[], source: readonly Node[]): void => effective.forEach((node, index) => {
       const declared = source[index];
@@ -208,11 +243,15 @@ export class RecordForm {
     form.replaceChildren();
     this.env.footerHost?.replaceChildren();
     this.env.headerHost?.replaceChildren();
+    this.env.smartHost?.replaceChildren();
     this.env.headerActionsHost?.replaceChildren();
     this.env.titleHost?.replaceChildren();
     this.env.notebookTabsHost?.replaceChildren();
     this.env.asideHost?.replaceChildren();
-    this.env.chatterHost?.replaceChildren();
+    // Everything but the retained chatter slot is rebuilt; detaching the slot would drop focus inside it.
+    const keptSlot = this.chatterMount && this.chatterMount.id === state.id ? this.chatterMount.slot : undefined;
+    for (const child of [...(this.env.chatterHost?.children ?? [])]) if (child !== keptSlot) child.remove();
+    this.chatterSeen = false;
     const declaredTitle = (nodes: readonly Node[]): boolean => nodes.some(node => node.kind === "title" || (node.kind === "root" || node.kind === "sheet") && declaredTitle(node.children));
     // Legacy fallback remains only for views that have not declared a standard XML title region.
     const title = declaredTitle(view.nodes) ? undefined : view.fields.find(f => f.name === "name" && f.kind === "char") ?? view.fields.find(f => f.kind === "char");
@@ -299,13 +338,15 @@ export class RecordForm {
       const empty = widget.isEmpty ? widget.isEmpty(value) : node.field.kind === "boolean" ? false : value === undefined || value === null || value === false || value === "" || Array.isArray(value) && value.length === 0;
       if (typeof empty !== "boolean") throw new ClientError("validation", "Field emptiness hook must return a boolean.");
       handle.node.classList.toggle("field-empty", empty);
-      this.validators.push({ node: handle.node, validate: () => {
+      this.validators.push({ node: handle.node, name: node.field.name, validate: () => {
         const current = state.values[node.field.name];
         const currentEmpty = widget.isEmpty ? widget.isEmpty(current) : node.field.kind === "boolean" ? false : current === undefined || current === null || current === false || current === "" || Array.isArray(current) && current.length === 0;
         if (typeof currentEmpty !== "boolean") throw new ClientError("validation", "Field emptiness hook must return a boolean.");
         const result = widget.isValid ? widget.isValid(current) : true;
         if (typeof result !== "boolean") throw new ClientError("validation", "Field validity hook must return a boolean.");
-        return result && !(widget.isEmpty && node.field.required && !node.field.readonly && !node.field.invisible && currentEmpty);
+        // Only widgets that declare emptiness are judged from the record here; native controls are judged by the browser above.
+        if (widget.isEmpty && node.field.required && !node.field.readonly && !node.field.invisible && currentEmpty) return "missing";
+        return result ? "ok" : "invalid";
       } });
       const tooltip = fieldTooltip(node.field, node.widget, this.env.context["debug"] === true);
       if (tooltip && this.env.messages) {
@@ -319,13 +360,16 @@ export class RecordForm {
           anchor.setAttribute("aria-describedby", [anchor.getAttribute("aria-describedby"), detail.id].filter(Boolean).join(" "));
         }
       }
-    }, this.pages, (node,parent)=>{const control=this.env.button(node,parent);if(control)this.stops.push(()=>disposeViewButton(control));return control;}, this.env.footer ? (node, parent) => {const control=this.env.footer!(node, this.env.footerHost ?? parent);if(control)this.stops.push(()=>disposeViewButton(control));} : undefined, { headerHost: this.env.headerHost, headerActionsHost: this.env.headerActionsHost, notebookTabsHost: this.env.notebookTabsHost, asideHost: this.env.asideHost, chatterHost: this.env.chatterHost, titleHost: this.env.titleHost, displayWidget:(node,parent)=>{
+    }, this.pages, (node,parent)=>{const control=this.env.button(node,parent);if(control)this.stops.push(()=>disposeViewButton(control));return control;}, this.env.footer ? (node, parent) => {const control=this.env.footer!(node, this.env.footerHost ?? parent);if(control)this.stops.push(()=>disposeViewButton(control));} : undefined, { ...(this.env.profileTitle ? { profile: { initial: (typeof state.values["name"] === "string" ? [...state.values["name"].trim()][0]?.toUpperCase() : undefined) ?? "U" } } : {}), headerHost: this.env.headerHost, smartHost: this.env.smartHost, headerActionsHost: this.env.headerActionsHost, notebookTabsHost: this.env.notebookTabsHost, asideHost: this.env.asideHost, chatterHost: this.env.chatterHost, titleHost: this.env.titleHost, displayWidget:(node,parent)=>{
       if(node.kind==="ribbon"){parent.append(renderRibbon({text:node.text,background:node.background,...(node.tooltip!==undefined?{tooltip:node.tooltip}:{})}));return;}
       const messages=this.env.messages;
       if(!messages)throw new ClientError("unsupported","Notification permission guidance requires the form message owner.");
       const handle=notificationPermissionWidget({open:()=>{messages.dialogs.alert({title:"Browser notification permission",message:"Notifications are blocked for this site. Review the site's notification permission in your browser settings."});},report:this.env.report});
       parent.append(handle.node);this.stops.push(handle.dispose);
     }, renderChatter: (node, slot) => {
+      this.chatterSeen = true;
+      if (this.chatterMount && this.chatterMount.id === state.id) { slot.remove(); return; }
+      this.releaseChatter();
       const chatter = new Chatter({
         host: slot,
         model: state.model,
@@ -335,12 +379,29 @@ export class RecordForm {
         reportError: this.env.report,
         reloadOnPost: node.reloadOnPost,
         reloadOnFollower: node.reloadOnFollower,
+        hasActivities: node.hasActivities,
+        reloadOnActivity: node.reloadOnActivity,
         ...(this.env.uid !== undefined ? { uid: this.env.uid } : {}),
-        reloadForm: () => state.id !== undefined ? this.env.state.load(state.id).then(() => this.render()) : Promise.resolve(),
+        ...(this.env.userName !== undefined ? { userName: this.env.userName } : {}),
+        reloadForm: () => {
+          if (state.id === undefined) return Promise.resolve();
+          // A reload replaces the values and drops unsaved edits, so only a clean record is reloaded.
+          const pending = this.needsCommit();
+          if (state.dirty || pending) {
+            const message = "The form was not reloaded because it has unsaved changes. Save or discard them first.";
+            if (!this.env.notify) return Promise.reject(new ClientError("validation", message));
+            this.env.notify(message);
+            return Promise.resolve();
+          }
+          this.chatterReloading = true;
+          return state.load(state.id).then(() => this.render()).finally(() => { this.chatterReloading = false; });
+        },
+        ...(this.env.messages ? { confirm: (message: string) => this.env.messages!.dialogs.confirm({ title: "Delete attachment", message, confirmLabel: "Delete", destructive: true }).result.then(decision => decision === "confirm") } : {}),
         document: this.env.form.ownerDocument,
       });
-      this.stops.push(() => chatter.dispose());
+      this.chatterMount = { id: state.id, chatter, slot };
     } });
+    if (!this.chatterSeen) this.releaseChatter();
     if (pendingTips.length && this.env.messages) {
       const messages = this.env.messages; let live = true, observer: MutationObserver | undefined;
       const attach = (): void => {
@@ -377,21 +438,61 @@ export class RecordForm {
     this.applyDisabled();
     } finally { this.rendering = false; }
   }
-  valid(notify = true): boolean {
-    let draftValid = true;
-    for (const handle of this.retained.values()) if (handle.draft && !handle.draft.validate()) {
-      if (draftValid) { this.layout?.revealField(handle.node); handle.draft.focus(); }
-      draftValid = false;
+  /** Mark one field invalid: danger rule, `aria-invalid` on its control and a short message under it, tied by `aria-describedby`. */
+  private flag(root: HTMLElement, message: string): void {
+    root.classList.add("field-invalid");
+    // A bare control (an addon widget without a field shell) cannot hold a child: its message follows it.
+    const host = root.matches("input,select,textarea,button") ? root.parentElement ?? root : root;
+    let note = host.querySelector<HTMLElement>(":scope > .field-error");
+    if (!note) { note = el("div", undefined, "field-error"); note.setAttribute("role", "status"); if (host === root) root.append(note); else root.after(note); }
+    if (!note.id) note.id = `field-note-${++nextFieldNote}`;
+    if (note.hidden || !note.textContent) { note.textContent = message; note.hidden = false; }
+    const control = root.matches("input,select,textarea,button") ? root : root.querySelector<HTMLElement>("input,select,textarea,button") ?? root;
+    control.setAttribute("aria-invalid", "true");
+    const described = (control.getAttribute("aria-describedby") ?? "").split(" ").filter(Boolean);
+    if (!described.includes(note.id)) control.setAttribute("aria-describedby", [...described, note.id].join(" "));
+  }
+  /** Reveal the tab of the first (document order) invalid field, focus it and say once how many need attention. */
+  private report(found: { root: HTMLElement; focus(): void; missing: boolean }[], notify: boolean): void {
+    found.sort((a, b) => a.root.compareDocumentPosition(b.root) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
+    this.layout?.revealField(found[0]!.root); found[0]!.focus();
+    if (!notify) return;
+    const count = found.length, missing = found.every(item => item.missing);
+    this.env.notify?.(`${count} ${count === 1 ? "field needs" : "fields need"} ${missing ? "a value" : "attention"}`);
+  }
+  /** A save the server refused for naming fields (`Missing required field 'name'`) is shown on those fields, not in a dialog. */
+  flagServerError(error: unknown): boolean {
+    if (this.dead || !(error instanceof ClientError) || error.kind !== "validation" || error.status < 400 || error.status >= 500) return false;
+    const names = new Set([...error.message.matchAll(/\bfields? '([a-z_][a-z0-9_]*)'/g)].map(match => match[1]));
+    const found: { root: HTMLElement; focus(): void; missing: boolean }[] = [];
+    const missing = /\brequired\b/i.test(error.message);
+    for (const item of this.validators) {
+      if (!names.has(item.name) || found.some(entry => entry.root === item.node)) continue;
+      this.flag(item.node, missing ? "This field needs a value." : error.message);
+      found.push({ root: item.node, missing, focus: () => item.node.querySelector<HTMLElement>("input,select,textarea,button")?.focus() });
     }
+    if (!found.length) return false;
+    this.report(found, true);
+    return true;
+  }
+  valid(notify = true): boolean {
+    const found: { root: HTMLElement; focus(): void; missing: boolean }[] = [];
+    for (const handle of this.retained.values()) if (handle.draft && !handle.draft.validate()) found.push({ root: handle.node, missing: false, focus: () => handle.draft!.focus() });
     const controls = this.controls().filter(control => !(control instanceof HTMLButtonElement) && !control.closest(".code-field"));
     for (const control of controls) {
-      if (control.validity.valid) control.removeAttribute("aria-invalid");
-      else control.setAttribute("aria-invalid", "true");
+      if (control.validity.valid) { control.removeAttribute("aria-invalid"); continue; }
+      const root = control.closest<HTMLElement>(".field-shell,.field-label") ?? control;
+      this.flag(root, control.validity.valueMissing ? "This field needs a value." : control.validationMessage);
+      found.push({ root, missing: control.validity.valueMissing, focus: () => control.focus() });
     }
-    const invalid = controls.find(control => !control.validity.valid);
-    if (invalid) { this.layout?.revealField(invalid); invalid.focus(); if (notify) this.env.notify?.("Complete the required fields before saving."); }
-    const widgetInvalid = this.validators.find(item => !item.validate());
-    if (widgetInvalid) { widgetInvalid.node.setAttribute("aria-invalid", "true"); widgetInvalid.node.classList.add("field-invalid"); this.layout?.revealField(widgetInvalid.node); if (!invalid && draftValid) { const control = widgetInvalid.node.querySelector<HTMLElement>("input,select,textarea,button"); control?.focus(); if (notify) this.env.notify?.("Complete the required fields before saving."); } }
-    return this.env.form.reportValidity() && draftValid && widgetInvalid === undefined;
+    for (const item of this.validators) {
+      const result = item.validate();
+      if (result === "ok" || found.some(entry => entry.root === item.node || entry.root.contains(item.node) || item.node.contains(entry.root))) continue;
+      this.flag(item.node, result === "missing" ? "This field needs a value." : "This value is not valid.");
+      found.push({ root: item.node, missing: result === "missing", focus: () => item.node.querySelector<HTMLElement>("input,select,textarea,button")?.focus() });
+    }
+    if (found.length) { this.report(found, notify); return false; }
+    // Controls outside the checked set (a code editor) still use the browser's own check.
+    return this.env.form.reportValidity();
   }
 }

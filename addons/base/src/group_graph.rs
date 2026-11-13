@@ -1,6 +1,6 @@
 //! Set-based helpers shared by `res.groups` and `res.users`: the
 //! implication graph of the groups, the named groups the rules refer to, display names, and the
-//! bulk recompute of the `share` flag.
+//! bulk recompute of the `share` flag and of the partners' `partner_share`.
 //!
 //! A group is named by its external id (`base.group_user`, ...), read from `ir_model_data` with
 //! one statement per call.
@@ -687,34 +687,61 @@ pub async fn display_names(tx: &mut Transaction, ids: &[i64]) -> Result<Vec<(i64
     Ok(out)
 }
 
-/// One `UPDATE` that touches only the rows whose value changes, then the ORM cache of
-/// the column is dropped. `users` restricts it to some users.
+/// Recompute `res.users.share` and `res.partner.partner_share` set-based (
 ///
-/// `res.partner.partner_share` follows the users when the model exists;
-/// `base` has no `res.partner` yet (the partner model arrives with), so nothing else
-/// is written.
+/// - Users: a user is internal (`share = false`) when it is a direct member of an internal group,
+///   external otherwise.
+///   The superuser is never external, whatever its groups, as in
+///   `_compute_share`.
+///
+/// One `UPDATE` per table that touches only the rows whose value changes, each followed by
+/// dropping the ORM cache of its column when a row changed. `users` restricts the users rewritten
+/// to those ids and the partners rewritten to their partners; `None` rewrites every user and
+/// every partner (a group-graph change, the base 1.9 upgrade). A restricted call does not reach
+/// the partner a listed user was moved away from (the per-record compute covers that through
+/// `user_ids`); only tests pass `Some`.
 ///
 /// # Errors
 ///
 /// `Database` for a failed statement.
 pub async fn recompute_user_share(tx: &mut Transaction, users: Option<&[i64]>) -> Result<()> {
-    // a pending `share`, `active` or membership write must reach the table before the set-based
-    // statement reads and rewrites it
+    // a pending `share`, `active`, `partner_id` or membership write must reach the tables before
+    // the set-based statements read and rewrite them
     tx.flush().await?;
     let internal: Vec<i64> = internal_group_ids(tx).await?.into_iter().collect();
     let sql = "\
         WITH _share AS (\
-            SELECT u.id, NOT EXISTS (SELECT 1 FROM res_groups_users_rel r \
-                                      WHERE r.uid = u.id AND r.gid = ANY($1)) AS share \
+            SELECT u.id, (u.id <> $3::int8 \
+                          AND NOT EXISTS (SELECT 1 FROM res_groups_users_rel r \
+                                           WHERE r.uid = u.id AND r.gid = ANY($1))) AS share \
               FROM res_users u \
              WHERE ($2::int8[] IS NULL OR u.id = ANY($2))) \
         UPDATE res_users u SET share = s.share \
           FROM _share s \
          WHERE s.id = u.id AND s.share IS DISTINCT FROM u.share";
     let only: Option<Vec<i64>> = users.map(<[i64]>::to_vec);
-    let changed = tx.execute(sql, &[&internal, &only]).await?;
+    let superuser: i64 = erp_sdk::SUPERUSER_ID.get();
+    let changed = tx.execute(sql, &[&internal, &only, &superuser]).await?;
     if changed > 0 {
         tx.invalidate_model("res.users", Some(&["share"])).await?;
+    }
+    // the partner half reads the `share` values written above
+    let sql = "\
+        WITH _share AS (\
+            SELECT p.id, NOT EXISTS (SELECT 1 FROM res_users u \
+                                      WHERE u.partner_id = p.id \
+                                        AND (u.id = $2::int8 OR (u.active IS TRUE AND u.share IS FALSE))) \
+                         AS partner_share \
+              FROM res_partner p \
+             WHERE ($1::int8[] IS NULL \
+                    OR p.id IN (SELECT u.partner_id FROM res_users u WHERE u.id = ANY($1)))) \
+        UPDATE res_partner p SET partner_share = s.partner_share \
+          FROM _share s \
+         WHERE s.id = p.id AND s.partner_share IS DISTINCT FROM p.partner_share";
+    let changed = tx.execute(sql, &[&only, &superuser]).await?;
+    if changed > 0 {
+        tx.invalidate_model("res.partner", Some(&["partner_share"]))
+            .await?;
     }
     Ok(())
 }

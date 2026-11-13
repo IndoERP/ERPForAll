@@ -1,4 +1,4 @@
-//! Allocation budget of `Records::read_rows` (design note, §12;
+//! Allocation budget of `Records::read_rows` (§12;
 //! standards §5b): 5 fields of 10,000 and 20,000 order lines in a transaction whose cache was
 //! dropped. The difference of the two runs is the cost of 10,000 rows; it must stay within the
 //! per-row budget, which `read`'s dictionaries (one map with owned keys per row) exceed: measured

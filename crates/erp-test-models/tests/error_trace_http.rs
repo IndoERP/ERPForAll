@@ -417,6 +417,94 @@ async fn http_level_refusals_are_logged_once_and_unknown_paths_stay_quiet() {
 }
 
 #[tokio::test]
+async fn a_refused_shell_url_logs_its_fixed_reason_once_and_never_the_query() {
+    let f = fixture("warn").await;
+    let refused = f
+        .send(
+            Request::builder()
+                .uri("/erp?foo=marker-q7v2")
+                .header("x-erp-proxy-token", TOKEN)
+                .header("accept", "text/html")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    let id = header(&refused, "x-request-id").to_owned();
+    let lines = f.log.matching(&id);
+    assert_eq!(lines.len(), 1, "{:#?}", f.log.lines());
+    let line = &lines[0];
+    assert!(
+        line.contains(" WARN  erp::http: http request refused"),
+        "{line}"
+    );
+    for part in [
+        "status=400",
+        "path=/erp ",
+        "reason=\"redirect must be an allowed local shell URL\"",
+    ] {
+        assert!(line.contains(part), "{part} missing in {line}");
+    }
+    assert!(
+        f.log.lines().iter().all(|l| !l.contains("marker-q7v2")),
+        "the query is never logged: {:#?}",
+        f.log.lines()
+    );
+}
+
+#[tokio::test]
+async fn an_error_page_reference_is_generated_and_logged_beside_the_request_id() {
+    let f = fixture("warn").await;
+    let supplied = "0194f5a0-7b1c-7d2e-8f3a-123456789abc";
+    let denied = f
+        .send(
+            Request::builder()
+                .uri("/erp/login")
+                .header("x-request-id", supplied)
+                .header("accept", "text/html")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    assert_eq!(header(&denied, "x-request-id"), supplied);
+    let body = String::from_utf8(
+        to_bytes(denied.into_body(), 1 << 20)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    let reference = body
+        .split("Reference: <code>")
+        .nth(1)
+        .unwrap()
+        .split("</code>")
+        .next()
+        .unwrap()
+        .to_owned();
+    assert!(is_uuid(&reference), "{reference}");
+    assert_ne!(
+        reference, supplied,
+        "the client's id is never the page reference"
+    );
+    let lines = f.log.matching(supplied);
+    assert_eq!(lines.len(), 1, "{:#?}", f.log.lines());
+    let line = &lines[0];
+    assert!(
+        line.contains(" WARN  erp::http: http request refused"),
+        "{line}"
+    );
+    for part in [
+        "status=403".to_owned(),
+        format!("request_id={supplied}"),
+        format!("error_id={reference}"),
+    ] {
+        assert!(line.contains(&part), "{part} missing in {line}");
+    }
+}
+
+#[tokio::test]
 async fn at_info_level_a_not_found_is_logged_with_its_id() {
     let f = fixture("info").await;
     let missing = f

@@ -348,7 +348,7 @@ pub enum AcceptFailure {
 /// How long the accept loop stops taking new connections after an [`AcceptFailure::Pause`].
 pub const ACCEPT_PAUSE: std::time::Duration = std::time::Duration::from_millis(100);
 
-/// Classify an `accept` error (review M1).
+/// Classify an `accept()` error (review M1).
 #[must_use]
 pub fn accept_failure(error: &std::io::Error) -> AcceptFailure {
     use std::io::ErrorKind;

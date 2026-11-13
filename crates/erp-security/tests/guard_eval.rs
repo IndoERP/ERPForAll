@@ -1,7 +1,6 @@
 //! guard evaluation through the compiled policy: `Transaction::evaluate_guards`
 //! decides a plan's node guards on the subject's groups, the record guards on `group_ids` and the
-//! field references on the field masks, in the pinned policy snapshot
-//! .
+//! field references on the field masks, in the pinned policy snapshot.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

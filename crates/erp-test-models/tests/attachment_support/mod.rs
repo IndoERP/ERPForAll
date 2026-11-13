@@ -111,3 +111,25 @@ pub async fn row(tx: &mut Transaction, id: i64) -> (Option<i64>, String, i32, St
     let r = &rows[0];
     (r.get(0), r.get(1), r.get(2), r.get(3))
 }
+
+/// Explicit setup for tests exercising admitted deletion, separate from ordinary/negative fixtures.
+/// Advance through the real coordinator; only this fixture's database timestamps are matured.
+pub async fn admit_cleanup(orm: &erp_sdk::Orm) {
+    use erp_addon_base::attachments::ownership::{self, Purpose, Settlement};
+    use erp_sdk::{BeginOptions, Isolation, SUPERUSER_ID};
+    let options = || BeginOptions::new(SUPERUSER_ID).isolation(Isolation::ReadCommitted);
+    let mut tx = orm.begin_opts(options()).await.unwrap();
+    let p = ownership::prepare(&mut tx, "main", Purpose::Observe)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    drop(tx);
+    let result = p.execute().await;
+    let mut tx = orm.begin_opts(options()).await.unwrap();
+    assert!(matches!(
+        ownership::settle(&mut tx, &p, result).await.unwrap(),
+        Settlement::Confirmed { .. }
+    ));
+    tx.execute("UPDATE ir_blob_owner_state SET observation_started_at=clock_timestamp()-interval '700 seconds',observation_not_before=clock_timestamp()-interval '1 second'",&[]).await.unwrap();
+    tx.commit().await.unwrap();
+}

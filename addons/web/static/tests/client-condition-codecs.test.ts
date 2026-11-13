@@ -144,7 +144,7 @@ test("malformed and unsupported domains retain the exact source and precise erro
       "[('x', 'child_of', 1)]\r\n",
       "unsupported",
       "operator",
-      "Domain operator child_of has no authoring control in a later release.",
+      "Domain operator child_of cannot be edited with the visual editor.",
     ],
     [
       "[('x', '=', context.get('x'))]",

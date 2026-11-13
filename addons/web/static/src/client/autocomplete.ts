@@ -5,12 +5,12 @@ import { el, errorMessage } from "./dom.js";
 import { ClientError } from "./transport.js";
 export type AutocompleteOption = { kind: "option"; label: string; select(): void | Promise<void> } | { kind: "status" | "heading"; label: string };
 export interface AutocompleteSource { options: readonly AutocompleteOption[] | ((query: string, signal: AbortSignal) => readonly AutocompleteOption[] | Promise<readonly AutocompleteOption[]>); placeholder?: string }
-export interface AutocompleteOptions { input: HTMLInputElement; owner: HTMLElement; environment: EditorEnvironment; sources: readonly AutocompleteSource[]; debounceMs?: number; autoSelect?: boolean; focusFirst?: boolean; representedValue?: () => string; onCancel?: () => void; touch?: boolean }
+export interface AutocompleteOptions { /** The field box the suggestion list lines up with (left edge, at least its width). */ alignTo?: HTMLElement; input: HTMLInputElement; owner: HTMLElement; environment: EditorEnvironment; sources: readonly AutocompleteSource[]; debounceMs?: number; autoSelect?: boolean; focusFirst?: boolean; representedValue?: () => string; onCancel?: () => void; touch?: boolean }
 export interface AutocompleteHandle { dropdown: HTMLElement; search(query: string): Promise<void>; toggle(query: string): void; close(): void; dispose(): void; isOpen(): boolean; isDisposed(): boolean }
 let autocompleteIdentity = 0;
 /** Value-independent suggestion interactions; adapters own search permissions and selected identities. */
 export function createAutocomplete(options: AutocompleteOptions): AutocompleteHandle {
-  editorOptions(options, ["input", "owner", "environment", "sources", "debounceMs", "autoSelect", "focusFirst", "representedValue", "onCancel", "touch"], "Autocomplete");
+  editorOptions(options, ["input", "owner", "environment", "sources", "debounceMs", "autoSelect", "focusFirst", "representedValue", "onCancel", "touch", "alignTo"], "Autocomplete");
   editorEnvironment(options.environment);
   const { input, owner, environment } = options;
   if (!(input instanceof HTMLInputElement) || !(owner instanceof HTMLElement) || !owner.contains(input)) throw new ClientError("validation", "Autocomplete requires an input inside its owner.");
@@ -72,7 +72,7 @@ export function createAutocomplete(options: AutocompleteOptions): AutocompleteHa
     opened = true; dropdown.style.display = "block"; input.setAttribute("aria-expanded", "true");
     transitioning = true;
     try {
-      overlay = openEditorOverlay({ anchor: input, content, environment, title, ...(options.touch === undefined ? {} : { touch: options.touch }), onClose: closeState });
+      overlay = openEditorOverlay({ anchor: input, content, environment, title, ...(options.touch === undefined ? {} : { touch: options.touch }), ...(options.alignTo ? { alignTo: options.alignTo } : {}), onClose: closeState });
       if (overlay.mode === "sheet") { inputSlot = document.createComment("editor-input"); input.before(inputSlot); content.prepend(input); input.focus(); }
     }
     catch (error) { opened = false; dropdown.style.display = "none"; input.setAttribute("aria-expanded", "false"); throw error; }

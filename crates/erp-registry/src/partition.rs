@@ -19,7 +19,7 @@ use crate::drop::{DropReason, Sink};
 use crate::spec::{FieldId, FieldSpec, ModelSpec};
 
 /// The decision the partitioning errors point to (its number is assigned when the ADR is accepted).
-pub const PARTITION_ADR: &str = "";
+pub const PARTITION_ADR: &str = "see the documentation";
 
 /// Largest `premake` and `retain` a declaration may give, in intervals.
 pub const MAX_PARTITION_INTERVALS: u32 = 1_000;

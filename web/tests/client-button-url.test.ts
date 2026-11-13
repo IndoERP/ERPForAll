@@ -1,6 +1,6 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import { afterEach, expect, test, vi } from "vitest";
-import { createUrlButton, runUrlButton, type UrlButtonEnvironment } from "../../addons/web/static/src/client/button-url.js";
+import { createUrlButton, openProviderUrl, runUrlButton, type UrlButtonEnvironment } from "../../addons/web/static/src/client/button-url.js";
 import { ClientError } from "../../addons/web/static/src/client/transport.js";
 const harness = () => ({ baseUrl: "https://erp.example/erp", navigate: vi.fn(async () => {}), openExternal: vi.fn((_url: string, _target: "_blank", _features: "noopener,noreferrer"): void => {}) } satisfies UrlButtonEnvironment);
 afterEach(() => document.body.replaceChildren());
@@ -45,4 +45,20 @@ test("unsupported same-origin paths and route parameters retain router errors", 
   expect(env.openExternal).not.toHaveBeenCalled();
   env.navigate.mockRejectedValue(new ClientError("validation", "Unsaved changes"));
   await expect(runUrlButton("/erp", env)).rejects.toMatchObject({ kind: "validation", message: "Unsaved changes" });
+});
+
+/// (partial: provider links that are not client routes load as pages instead of failing in the router)
+test("a provider link to a same-origin page is loaded after the host agreed, a client route still goes through the router", async () => {
+  const navigate = vi.fn(async () => {}), loadPath = vi.fn(async (_url: string) => {});
+  await openProviderUrl("/documentation", { navigate, loadPath });
+  await openProviderUrl("/web/content/5?download=true", { navigate, loadPath });
+  expect(loadPath.mock.calls.map(([url]) => new URL(url).pathname + new URL(url).search)).toEqual(["/documentation", "/web/content/5?download=true"]);
+  expect(navigate).not.toHaveBeenCalled();
+  await openProviderUrl("/erp/action-3", { navigate, loadPath });
+  expect(navigate).toHaveBeenCalledWith({ action: "3" });
+  const open = vi.spyOn(window, "open").mockReturnValue(null);
+  await openProviderUrl("/documentation", { navigate, loadPath, newTab: true });
+  expect(open).toHaveBeenCalledWith(expect.stringContaining("/documentation"), "_blank", "noopener,noreferrer");
+  expect(loadPath).toHaveBeenCalledTimes(2);
+  open.mockRestore();
 });

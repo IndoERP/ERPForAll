@@ -1,4 +1,6 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { expect, test, vi } from "vitest";
 import "../src/client/fields.js";
 import { describeViews, type Field } from "../src/client/metadata.js";
@@ -22,23 +24,79 @@ const render = (value: unknown, overrides: Partial<Field> = {}) => {
 /// (partial: model order/labels and current-state retention render without hardcoded state identity)
 test("statusbar filters choices in model order and always retains the actual current state", () => {
   const { node } = render("review", { statusbarVisible: ["done", "draft"] });
-  expect([...node.querySelectorAll("button")].map(button => button.textContent)).toEqual(["Draft", "Review", "Done"]);
+  expect([...node.querySelectorAll(".statusbar-step")].map(step => step.textContent)).toEqual(["Draft", "Review", "Done"]);
   expect(node.querySelector('[aria-current="step"]')?.textContent).toBe("Review");
   expect(node.getAttribute("aria-label")).toBe("Phase");
-  expect(render(false, { statusbarVisible: ["done", "draft"] }).node.querySelectorAll("button")).toHaveLength(2);
+  expect(render(false, { statusbarVisible: ["done", "draft"] }).node.querySelectorAll(".statusbar-step")).toHaveLength(2);
   expect(render(false).node.querySelector("[aria-current]")).toBeNull();
 });
 /// (partial: display-only default never edits a record even when model field is writable)
-test("statusbar choices are inert without supported explicit clickability", () => {
+test("statusbar choices are inert without explicit clickability", () => {
   for (const policy of [false, true]) {
     const status = render("draft", { readonly: policy });
-    for (const button of status.node.querySelectorAll<HTMLButtonElement>("button")) {
-      expect(button.disabled).toBe(true);
-      button.click(); button.dispatchEvent(new Event("click"));
-    }
+    expect(status.node.querySelectorAll("button")).toHaveLength(0);
+    for (const step of status.node.querySelectorAll<HTMLElement>(".statusbar-step")) { step.click(); step.dispatchEvent(new Event("click")); }
     expect(status.change).not.toHaveBeenCalled();
+    expect(status.node.dataset["clickable"]).toBe("false");
   }
+  // A read-only field stays inert even when the occurrence asks for clicks.
+  const locked = render("draft", { statusbarClickable: true, readonly: true });
+  expect(locked.node.querySelectorAll("button")).toHaveLength(0);
   refuses(() => render("missing"), "server", "Unknown statusbar value for phase.");
+});
+const clickable = (value: unknown, overrides: Partial<Field> = {}) => render(value, { statusbarClickable: true, ...overrides });
+const step = (node: HTMLElement, key: string) => node.querySelector<HTMLElement>(`.statusbar-track [data-value="${key}"]`)!;
+test("clickable statusbar: passed, current and upcoming steps; only other steps are buttons and a click changes the value", () => {
+  const { node, change } = clickable("review");
+  expect(step(node, "draft").className).toContain("is-passed");
+  expect(step(node, "review").className).toContain("is-current");
+  expect(step(node, "done").className).not.toMatch(/is-(passed|current)/);
+  expect(step(node, "review").tagName).toBe("SPAN");
+  expect(step(node, "draft").tagName).toBe("BUTTON");
+  step(node, "review").click();
+  expect(change).not.toHaveBeenCalled();
+  step(node, "done").click();
+  expect(change).toHaveBeenCalledExactlyOnceWith("done");
+});
+test("clickable statusbar has one tab stop; arrows, Home and End move focus only and Enter activates", () => {
+  const { node, change } = clickable("review");
+  document.body.append(node);
+  const draft = step(node, "draft") as HTMLButtonElement, done = step(node, "done") as HTMLButtonElement;
+  expect([draft.tabIndex, done.tabIndex]).toEqual([0, -1]);
+  draft.focus();
+  draft.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }));
+  expect(document.activeElement).toBe(done);
+  expect([draft.tabIndex, done.tabIndex]).toEqual([-1, 0]);
+  done.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true, cancelable: true }));
+  expect(document.activeElement).toBe(draft);
+  draft.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true, cancelable: true }));
+  expect(document.activeElement).toBe(done);
+  done.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }));
+  expect(document.activeElement).toBe(done);
+  expect(change).not.toHaveBeenCalled();
+  node.remove();
+});
+test("folded states sit behind a More states control at the track start; the narrow control shows the current state", () => {
+  const { node, change } = clickable("review", { statusbarFolded: ["done"] });
+  const first = node.querySelector(".statusbar-track > .statusbar-item")!;
+  expect(first.querySelector(".statusbar-more")?.getAttribute("aria-label")).toBe("More states");
+  expect(node.querySelector('.statusbar-track > .statusbar-item > [data-value="done"]')).toBeNull();
+  expect([...first.querySelectorAll<HTMLElement>(".statusbar-menu-item")].map(item => item.dataset["state"])).toEqual(["done"]);
+  first.querySelector<HTMLElement>('.statusbar-menu-item[data-state="done"]')!.click();
+  expect(change).toHaveBeenCalledExactlyOnceWith("done");
+  // The narrow control: the current state, opening the full list (current item disabled); display-only it is plain text.
+  const trigger = node.querySelector<HTMLButtonElement>(".statusbar-compact-trigger")!;
+  expect(trigger.textContent).toBe("Review");
+  expect([...node.querySelectorAll<HTMLButtonElement>(".statusbar-compact .statusbar-menu-item")].map(item => [item.dataset["state"], item.disabled])).toEqual([["draft", false], ["review", true], ["done", false]]);
+  expect(render("review").node.querySelector(".statusbar-compact-value")?.textContent).toBe("Review");
+  expect(render("review").node.querySelector(".statusbar-compact button")).toBeNull();
+  const css = readFileSync(resolve(process.cwd(), "../addons/web/static/src/client/client.css"), "utf8");
+  expect(css).toMatch(/@media \(max-width: 700px\) \{ \.statusbar-track \{ display: none; \} \.statusbar-compact \{ display: flex; \} \}/);
+});
+test("the current state stays visible even when it is folded", () => {
+  const { node } = clickable("done", { statusbarFolded: ["done"] });
+  expect(node.querySelector('.statusbar-track [data-value="done"]')?.getAttribute("aria-current")).toBe("step");
+  expect(node.querySelector(".statusbar-more")).toBeNull();
 });
 const description = () => ({ wire_major: 1, registry_version: "r", description_version: "d", model: "test.flow", fields: { "test.flow": { phase: { type: "selection", label: "Phase", readonly: false, required: false, selection: field.selection, relation: null, relation_field: null } } }, views: [{ identity: { kind: "stored", id: 1 }, type: "form", renderer: "web.form", schema_major: 1, root: 0, nodes: [{ kind: "form", record_mode: "record", children: [1] }, { kind: "header", children: [2] }, { kind: "field", field: { model: "test.flow", name: "phase" }, widget: "statusbar", options: { visible: ["draft", "done"] }, label: "Phase", force_save: false, modifiers: { readonly: null, required: null, invisible: null } }] }], notices: [] });
 /// (partial: strict consumer and shared form layout expose an authorized selection header)
@@ -56,8 +114,14 @@ test("consumer rejects unknown, duplicate, empty and malformed visible keys", ()
     const d = description(); Object.assign(d.views[0]!.nodes[2]!.options!, { visible });
     refuses(() => describeViews(d, "test.flow", "r"), typeof visible === "string" ? "server" : "unsupported", "Invalid statusbar visible keys.");
   }
-  const unknown = description(); Object.assign(unknown.views[0]!.nodes[2]!.options!, { clickable: true });
-  refuses(() => describeViews(unknown, "test.flow", "r"), "unsupported", "Unknown statusbar options member: clickable.");
+  const unknown = description(); Object.assign(unknown.views[0]!.nodes[2]!.options!, { draggable: true });
+  refuses(() => describeViews(unknown, "test.flow", "r"), "unsupported", "Unknown statusbar options member: draggable.");
+  for (const folded of [["missing"], ["draft", "draft"]]) {
+    const d = description(); Object.assign(d.views[0]!.nodes[2]!.options!, { folded });
+    refuses(() => describeViews(d, "test.flow", "r"), "unsupported", "Invalid statusbar folded keys.");
+  }
+  const admitted = description(); Object.assign(admitted.views[0]!.nodes[2]!.options!, { folded: ["done"], clickable: true });
+  expect(describeViews(admitted, "test.flow", "r").views.get("form")!.fields[0]).toMatchObject({ statusbarFolded: ["done"], statusbarClickable: true });
   const missing = description(); Object.assign(missing.views[0]!.nodes[2]!, { options: {} });
   refuses(() => describeViews(missing, "test.flow", "r"), "server", "Missing statusbar options member: visible.");
   const misplaced = description(); Object.assign(misplaced.views[0]!.nodes[1]!, { kind: "sheet" });

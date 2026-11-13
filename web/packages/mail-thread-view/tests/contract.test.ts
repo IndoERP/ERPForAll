@@ -98,3 +98,18 @@ test("the registries are defined once per hub and each guard refuses a malformed
   registries.messageActions.add("ok", { label: () => "Ok", run: () => undefined });
   expect(registries.messageActions.contains("ok")).toBe(true);
 });
+
+/// (partial: malformed reaction rows throw a data error instead of being dropped)
+test("a reaction row without content or partner throws a data error instead of being dropped", () => {
+  const rig = new Rig();
+  rig.records({
+    "res.partner": [{ id: 1, name: "Ann" }],
+    "ir.attachment": [{ id: 6, name: "empty", mimetype: "" }],
+    "mail.message.reaction": [{ id: 1, content: "", partner_id: 1 }, { id: 2, content: "\u{1F44D}", partner_id: null }],
+    "mail.message": [message(10, { reactions: [1] }), message(11, { reactions: [2] }), message(14, { attachments: [6] })],
+  });
+  failsWith(() => readMessage(rig.store, 10, 1), "data", 'mail.message#10.reactions#1.content must be non-empty text, got ""');
+  failsWith(() => readMessage(rig.store, 11, 1), "data", "mail.message#11.reactions#2.partner_id must be a partner id, got null");
+  // An empty optional attachment value is empty, not an error.
+  expect(readMessage(rig.store, 14, 1)?.attachments).toEqual([expect.objectContaining({ id: 6, mimetype: null })]);
+});

@@ -1,7 +1,7 @@
 //! Schema synchronization, introspection, and migration contract for database-generated
 //! scalar fields.
 //!
-//! Covers acceptance cases through.
+//! Covers acceptance through.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

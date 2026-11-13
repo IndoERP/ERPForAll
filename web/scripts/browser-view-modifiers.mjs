@@ -44,7 +44,7 @@ const server = createServer(async (req, res) => {
     if (pathname === "/favicon.ico") { res.writeHead(204); res.end(); return; }
     let input = ""; for await (const chunk of req) { input += chunk; if (input.length > 32768) throw new Error("Oversized fixture request"); }
     const body = JSON.parse(input); calls.push({ path: pathname, body }); let value;
-    if (pathname.endsWith("erp_load_web_menus")) value = { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] };
+    if (pathname.endsWith("erp_load_web_menus")) value = { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] };
     else if ((pathname.endsWith("erp_load_web_action") || pathname.endsWith("erp_load_web_action_views"))) value = { wire_major: 1, id: 20, name: "Notes", model: "test.note", target: "current", views: [{ id: 1, type: "list" }, { id: 2, type: "form" }], domain: null, context: null };
     else if (pathname.endsWith("get_views")) value = description;
     else if (pathname.endsWith("web_search_read")) value = { length: 1, records: [persisted] };

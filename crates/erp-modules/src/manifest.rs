@@ -182,8 +182,8 @@ impl AutoInstall {
 #[serde(deny_unknown_fields)]
 struct RawManifest {
     name: Option<String>,
-    /// Technical name written into a `.erpaddon` manifest, where `name` stays the display name
-    /// . The caller of `from_toml` already knows the technical name; a value that
+    /// Technical name written into a `.erpaddon` manifest, where `name` stays the display name.
+    /// The caller of `from_toml` already knows the technical name; a value that
     /// differs from it is refused.
     technical_name: Option<String>,
     author: Option<String>,

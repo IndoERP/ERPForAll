@@ -20,7 +20,7 @@
 //! - many2many `f`: the mirror field's cached values, else one query of the relation table;
 //!
 //! An edge is not followed when every target behind it is non-stored, uncached and reaches
-//! nothing stored: `modified` on an empty cache costs 0 statements.
+//! nothing stored: `modified()` on an empty cache costs 0 statements.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -391,7 +391,7 @@ impl Transaction {
     /// The environment of traversals: superuser, no active test.
     fn traversal_env(&self) -> Env {
         self.env()
-            .sudo(true)
+            .engine_sudo()
             .with_context([("active_test", erp_fields::Value::Bool(false))])
     }
 

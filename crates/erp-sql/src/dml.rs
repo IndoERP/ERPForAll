@@ -124,7 +124,7 @@ pub fn insert_rows(
     insert_rows_with(table, ids, columns, exprs, None)
 }
 
-/// [`insert_rows`] with the record check of `create` fused in: the INSERT
+/// [`insert_rows`] with the record check of `create` fused: the INSERT
 /// returns `(<predicate>) IS TRUE` for every row it inserts, the predicate reading the inserted
 /// row through the table's name, its parameters numbered after the columns' arrays (or the row
 /// count). The rows come back as `(id, ordinal, timestamp, allowed)`:
@@ -226,12 +226,16 @@ pub fn select_by_ids(table: &str, columns: &[&str]) -> String {
 }
 
 /// Statement text for `select_by_ids` built from `ModelSpec` and pre-quoted identifiers.
-pub fn select_by_ids_spec(spec: &ModelSpec, fields: &[FieldId]) -> String {
+pub fn select_by_ids_spec(registry: &Registry, spec: &ModelSpec, fields: &[FieldId]) -> String {
     let mut out = String::with_capacity(64 + spec.quoted_table().len() + fields.len() * 20);
     out.push_str("SELECT \"id\"");
     for fid in fields {
         out.push_str(", ");
-        out.push_str(spec.field_by_id(*fid).quoted_name());
+        let field = spec.field_by_id(*fid);
+        match crate::company::load_column(registry, field, field.quoted_name()) {
+            Some(item) => out.push_str(&item),
+            None => out.push_str(field.quoted_name()),
+        }
     }
     out.push_str(" FROM ");
     out.push_str(spec.quoted_table());
@@ -244,7 +248,7 @@ pub fn select_by_ids_spec(spec: &ModelSpec, fields: &[FieldId]) -> String {
 pub fn select_by_ids_cached(registry: &Registry, spec: &ModelSpec, fields: &[FieldId]) -> Arc<str> {
     registry
         .statement_cache_of(spec)
-        .select_by_ids(fields, || select_by_ids_spec(spec, fields))
+        .select_by_ids(fields, || select_by_ids_spec(registry, spec, fields))
 }
 
 /// `UPDATE t SET c = v.c, … FROM (SELECT * FROM unnest($1::int8[], $2::<type>[], …) AS

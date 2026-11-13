@@ -1,5 +1,5 @@
-//! The `thread` and `thread.messages` store topics (design note
-//! , spec cases to, guide
+//! The `thread` and `thread.messages` store topics (
+//! guide
 //! "Add chatter to a model").
 //!
 //! `thread.messages` is a keyset page of a record thread's messages

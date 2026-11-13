@@ -94,6 +94,13 @@ pub fn keyset_terms(registry: &Registry, model: &ModelSpec, spec: &str) -> Resul
                 term.field, model.name
             ))
         })?;
+        if field.company_dependent {
+            return Err(unsupported(
+                model,
+                field.name,
+                "company-dependent keys require prepared company values until a later release; use offset pagination",
+            ));
+        }
         if field.inherited.is_some() {
             return Err(unsupported(
                 model,

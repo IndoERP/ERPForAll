@@ -44,6 +44,28 @@ mod test_translated_addon {
         #[field(char, translate = true, required = true)]
         pub title: Option<Arc<str>>,
     }
+
+    #[model(
+        name = "test.translated.html",
+        table = "test_translated_html",
+        addon = "test_translated_save_addon"
+    )]
+    pub struct TestTranslatedHtml {
+        #[field(html, translate = true)]
+        pub body: Option<Arc<str>>,
+        #[field(html, translate = true, sanitize = false)]
+        pub raw: Option<Arc<str>>,
+    }
+
+    #[model(
+        name = "test.translated.html.req",
+        table = "test_translated_html_req",
+        addon = "test_translated_save_addon"
+    )]
+    pub struct TestTranslatedHtmlReq {
+        #[field(html, translate = true, required = true)]
+        pub body: Option<Arc<str>>,
+    }
 }
 
 const MODEL: &str = "test.translated.record";
@@ -547,5 +569,301 @@ async fn two_external_ids_of_one_record_are_one_record_updated_across_chunks() {
     assert_eq!(summary.records_updated, 2);
     assert!(name_of(&mut tx, a).await["fr_FR"].is_string());
     assert_eq!(name_of(&mut tx, b).await["fr_FR"], "from b");
+    h.cleanup().await.unwrap();
+}
+
+const HTML_MODEL: &str = "test.translated.html";
+const HOSTILE: &str = "<p onclick='x'>Bonjour</p><script>alert(1)</script>";
+
+#[tokio::test]
+async fn html_translations_are_admitted_before_the_importer_stores_them() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    setup_langs(&mut tx).await;
+    let both = [("en_US", "<p>Hello</p>")];
+    let target = record(&mut tx, HTML_MODEL, "body", &both, "m.a", false).await;
+    // the reference: the same text written through the ORM translated write
+    let reference = record(
+        &mut tx,
+        HTML_MODEL,
+        "body",
+        &[("en_US", "<p>Hello</p>"), ("fr_FR", HOSTILE)],
+        "m.ref",
+        false,
+    )
+    .await;
+    let before = tx.html_reports().len();
+    importer(HTML_MODEL, "body", &[("m.a", "<p>Hello</p>", HOSTILE)])
+        .save(&mut tx, OverwriteMode::Overwrite)
+        .await
+        .unwrap();
+    let stored = raw(&mut tx, "test_translated_html", "body", target)
+        .await
+        .unwrap();
+    let expected = raw(&mut tx, "test_translated_html", "body", reference)
+        .await
+        .unwrap();
+    assert_eq!(stored["fr_FR"], expected["fr_FR"]);
+    let text = stored["fr_FR"].as_str().unwrap();
+    assert_ne!(text, HOSTILE);
+    assert!(!text.contains("onclick"), "{text}");
+    assert!(!text.contains("<script"), "{text}");
+    assert_eq!(tx.html_reports().len(), before + 1);
+    let report = &tx.html_reports()[before];
+    assert_eq!(report.model(), HTML_MODEL);
+    assert_eq!(report.field(), "body");
+    assert_eq!(report.language(), Some("fr_FR"));
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_seeded_html_source_is_admitted() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    setup_langs(&mut tx).await;
+    let target = record(&mut tx, HTML_MODEL, "body", &[], "m.a", false).await;
+    let reference = record(
+        &mut tx,
+        HTML_MODEL,
+        "body",
+        &[("en_US", HOSTILE)],
+        "m.ref",
+        false,
+    )
+    .await;
+    importer(HTML_MODEL, "body", &[("m.a", HOSTILE, "<p>Bonjour</p>")])
+        .save(&mut tx, OverwriteMode::NoOverwrite)
+        .await
+        .unwrap();
+    let stored = raw(&mut tx, "test_translated_html", "body", target)
+        .await
+        .unwrap();
+    let expected = raw(&mut tx, "test_translated_html", "body", reference)
+        .await
+        .unwrap();
+    assert_eq!(stored["en_US"], expected["en_US"]);
+    assert!(!stored["en_US"].as_str().unwrap().contains("onclick"));
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn strict_mode_refuses_an_html_translation_with_removals_and_stores_nothing() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    setup_langs(&mut tx).await;
+    let target = record(
+        &mut tx,
+        HTML_MODEL,
+        "body",
+        &[("en_US", "<p>Hello</p>")],
+        "m.a",
+        false,
+    )
+    .await;
+    tx.require_strict_html();
+    let expected = tx
+        .admit_html_translation(HTML_MODEL, "body", "fr_FR", HOSTILE)
+        .unwrap_err();
+    let err = importer(HTML_MODEL, "body", &[("m.a", "<p>Hello</p>", HOSTILE)])
+        .save(&mut tx, OverwriteMode::Overwrite)
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Validation);
+    assert_eq!(err.message(), expected.message());
+    assert!(
+        err.message().starts_with("test.translated.html.body:"),
+        "{}",
+        err.message()
+    );
+    assert!(!err.message().contains("alert(1)"), "{}", err.message());
+    let stored = raw(&mut tx, "test_translated_html", "body", target)
+        .await
+        .unwrap();
+    assert!(stored.get("fr_FR").is_none());
+    assert_eq!(stored["en_US"], "<p>Hello</p>");
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_nul_byte_in_an_html_translation_is_refused() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    setup_langs(&mut tx).await;
+    let target = record(
+        &mut tx,
+        HTML_MODEL,
+        "body",
+        &[("en_US", "<p>Hello</p>")],
+        "m.a",
+        false,
+    )
+    .await;
+    let text = "<p>a\u{0}b</p>";
+    let expected = tx
+        .admit_html_translation(HTML_MODEL, "body", "fr_FR", text)
+        .unwrap_err();
+    let err = importer(HTML_MODEL, "body", &[("m.a", "<p>Hello</p>", text)])
+        .save(&mut tx, OverwriteMode::Overwrite)
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Validation);
+    assert_eq!(err.message(), expected.message());
+    let stored = raw(&mut tx, "test_translated_html", "body", target)
+        .await
+        .unwrap();
+    assert!(stored.get("fr_FR").is_none());
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_required_html_source_that_cleans_to_nothing_is_refused() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    setup_langs(&mut tx).await;
+    let id = record(
+        &mut tx,
+        "test.translated.html.req",
+        "body",
+        &[("en_US", "<p>Kept</p>")],
+        "m.r",
+        false,
+    )
+    .await;
+    // an empty column on a required field is a damaged row: lift the constraint to build one
+    tx.execute(
+        "ALTER TABLE test_translated_html_req ALTER COLUMN body DROP NOT NULL",
+        &[],
+    )
+    .await
+    .unwrap();
+    tx.execute(
+        "UPDATE test_translated_html_req SET body = NULL WHERE id = $1",
+        &[&id.get()],
+    )
+    .await
+    .unwrap();
+    // the premise, from our own sanitizer: this source cleans to nothing
+    let cleaned = tx
+        .admit_html_translation(
+            "test.translated.html.req",
+            "body",
+            "en_US",
+            "<script>x</script>",
+        )
+        .unwrap();
+    assert_eq!(cleaned, "");
+    let mut imp = TranslationImporter::new();
+    let po = "msgid \"\"\nmsgstr \"\"\n\n#: model:test.translated.html.req,body:m.r\nmsgid \"<script>x</script>\"\nmsgstr \"<p>Corps</p>\"\n";
+    imp.load_po(po, "t.po", "fr_FR").unwrap();
+    let err = imp
+        .save(&mut tx, OverwriteMode::NoOverwrite)
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Validation);
+    assert_eq!(
+        err.message(),
+        "'m.r' of 'test.translated.html.req': the source text of required field 'body' is empty \
+         after HTML sanitation; en_US cannot be seeded from it"
+    );
+    assert!(
+        raw(&mut tx, "test_translated_html_req", "body", id)
+            .await
+            .is_none()
+    );
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn raw_text_html_translations_are_stored_unchanged_without_a_report() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    setup_langs(&mut tx).await;
+    let id = record(
+        &mut tx,
+        HTML_MODEL,
+        "raw",
+        &[("en_US", "<p>Hello</p>")],
+        "m.a",
+        false,
+    )
+    .await;
+    let before = tx.html_reports().len();
+    importer(HTML_MODEL, "raw", &[("m.a", "<p>Hello</p>", HOSTILE)])
+        .save(&mut tx, OverwriteMode::Overwrite)
+        .await
+        .unwrap();
+    let stored = raw(&mut tx, "test_translated_html", "raw", id)
+        .await
+        .unwrap();
+    assert_eq!(stored["fr_FR"], HOSTILE);
+    assert_eq!(tx.html_reports().len(), before);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn selection_label_translation_fail_loudly_on_malformed_entries() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    setup_langs(&mut tx).await;
+    erp_orm::reflection::reflect_models(&mut tx).await.unwrap();
+
+    // 1. Unknown selection value fails loudly naming field and value
+    let mut imp = TranslationImporter::new();
+    let po_unknown = r#"
+msgid ""
+msgstr ""
+
+#: model:ir.model.fields.selection,name:base.selection__res_partner__type__nonexistent
+msgid "Nonexistent"
+msgstr "Inexistant"
+"#;
+    imp.load_po(po_unknown, "t.po", "fr_FR").unwrap();
+    let err = imp
+        .save(&mut tx, OverwriteMode::Overwrite)
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Missing);
+    assert!(
+        err.message()
+            .contains("unknown selection value 'nonexistent' for field 'type'")
+    );
+
+    // 2. Empty translation label fails loudly naming field and value
+    let mut imp2 = TranslationImporter::new();
+    let po_empty = r#"
+msgid ""
+msgstr ""
+
+#: model:ir.model.fields.selection,name:base.selection__res_partner__type__other
+msgid "Other"
+msgstr "   "
+"#;
+    imp2.load_po(po_empty, "t.po", "fr_FR").unwrap();
+    let err2 = imp2
+        .save(&mut tx, OverwriteMode::Overwrite)
+        .await
+        .unwrap_err();
+    assert_eq!(err2.kind(), ErrorKind::Validation);
+    assert!(
+        err2.message()
+            .contains("selection field 'type' value 'other'")
+    );
+    assert!(err2.message().contains("empty label"));
+
+    // 3. Valid translation succeeds
+    let mut imp3 = TranslationImporter::new();
+    let po_valid = r#"
+msgid ""
+msgstr ""
+
+#: model:ir.model.fields.selection,name:base.selection__res_partner__type__other
+msgid "Other"
+msgstr "Autre"
+"#;
+    imp3.load_po(po_valid, "t.po", "fr_FR").unwrap();
+    let summary = imp3.save(&mut tx, OverwriteMode::Overwrite).await.unwrap();
+    assert_eq!(summary.records_updated, 1);
+
+    drop(tx);
     h.cleanup().await.unwrap();
 }

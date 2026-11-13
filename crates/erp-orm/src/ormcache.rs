@@ -268,8 +268,7 @@ impl Transaction {
         self.shared.ormcache.generation(cache)
     }
 
-    /// `get_value`: the cached value of `key` in cache `cache`, without computing it
-    /// .
+    /// `get_value`: the cached value of `key` in cache `cache`, without computing it.
     ///
     /// The transaction is opened first ([`Transaction::open`]): with signals, its opening flight
     /// reads the cache generations and drops what another process invalidated, so a lookup made
@@ -424,6 +423,12 @@ impl Transaction {
     /// Invalidate a named cache for the rest of this transaction (and for everyone once it
     /// commits).
     pub fn invalidate_ormcache(&mut self, cache: &str) {
+        if cache == "ir.default" {
+            self.properties_mut().defaults.clear();
+            // Nonstored property consumers carry a company context slot. Their inputs can
+            // change through defaults without a record-field mutation to trigger them.
+            self.engine.context = Arc::default();
+        }
         let shared = Arc::clone(&self.shared);
         self.engine.ormcache.touch(cache, &shared.ormcache);
         self.engine.ormcache.top().insert(

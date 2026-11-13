@@ -17,7 +17,7 @@ usage() {
 [ $# -eq 1 ] || usage
 id=$(printf '%s' "$1" | tr 'A-F' 'a-f')
 # strict: a UUID in text form, so the id is safe to pass to grep and nothing else is searched for
-if ! printf '%s' "$id" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'; then
+if ! grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' <<<"$id"; then
   echo "${0##*/}: '$1' is not a request id (a UUID like 0194f5a0-7b1c-7d2e-8f3a-123456789abc)" >&2
   exit 2
 fi

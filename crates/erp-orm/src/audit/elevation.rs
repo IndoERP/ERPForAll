@@ -85,12 +85,8 @@ pub(crate) enum FullCause {
 
 /// What the elevation grants.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "Scoped is constructed by a later release's block entry"
-)]
 pub(crate) enum ElevationGrant {
-    /// A scoped block.
+    /// A scoped block (`Transaction::elevated`).
     Scoped {
         scope: Arc<ElevationScope>,
         block: BlockId,

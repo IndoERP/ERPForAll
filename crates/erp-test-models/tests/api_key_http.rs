@@ -318,7 +318,7 @@ async fn missing_invalid_and_duplicate_bearer_headers_have_a_redacted_challenge(
         &body,
         StatusCode::UNAUTHORIZED,
         "werkzeug.exceptions.Unauthorized",
-        "Imported legacy API keys are not accepted until a later release",
+        "Invalid apikey",
     );
     assert!(!String::from_utf8_lossy(&body).contains(legacy));
     let (response, body) = f
@@ -880,7 +880,13 @@ async fn programmatic_renewal_and_revoke_are_transactional() {
         "erp.exceptions.AccessDenied",
         "The provided API key is invalid or does not belong to the current user.",
     );
-    for method in ["generate", "revoke"] {
+    for (method, message) in [
+        (
+            "generate",
+            "The provided API key is invalid or does not belong to the current user.",
+        ),
+        ("revoke", "The provided API key is invalid."),
+    ] {
         let mut invalid = if method == "generate" {
             payload.clone()
         } else {
@@ -893,7 +899,7 @@ async fn programmatic_renewal_and_revoke_are_transactional() {
             &body,
             StatusCode::FORBIDDEN,
             "erp.exceptions.AccessDenied",
-            "The provided API key is invalid or does not belong to the current user.",
+            message,
         );
         assert!(!String::from_utf8_lossy(&body).contains("malformed-secret-never-echo"));
     }
@@ -922,7 +928,7 @@ async fn programmatic_renewal_and_revoke_are_transactional() {
     let mut metadata = f.h.begin().await.unwrap();
     let rows = metadata
         .query(
-            "SELECT name,expiration_date FROM res_users_apikeys WHERE id<>$1",
+            "SELECT name,expiration_date,scope FROM res_users_apikeys WHERE id<>$1",
             &[&f.key_id],
         )
         .await
@@ -933,6 +939,7 @@ async fn programmatic_renewal_and_revoke_are_transactional() {
         Some(rows[0].get::<_, DateTime>(1)),
         DateTime::parse_odoo(payload["expiration_date"].as_str().unwrap())
     );
+    assert_eq!(rows[0].get::<_, String>(2), "rpc");
     metadata.rollback().await.unwrap();
     drop(metadata);
     let (response, body) = f
@@ -949,8 +956,38 @@ async fn programmatic_renewal_and_revoke_are_transactional() {
         "{}",
         String::from_utf8_lossy(&body)
     );
+    support::set_param(&f.h, "base.programmatic_api_keys_limit", "3").await;
+    let mut chained = payload.clone();
+    chained["key"] = renewed.as_str().into();
+    chained["name"] = "Third key".into();
     let (response, body) = f
-        .management("revoke", serde_json::json!({"key":renewed.as_str()}))
+        .send(
+            f.post("/erp/json/2/res.users.apikeys/generate", 107)
+                .header("authorization", format!("Bearer {}", renewed.as_str()))
+                .body(Body::from(chained.to_string()))
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    let third =
+        erp_security::auth::Zeroizing::new(serde_json::from_slice::<String>(&body).unwrap());
+    assert_ne!(third.as_str(), renewed.as_str());
+    assert_ne!(third.as_str(), f.key.expose());
+    assert_eq!(f.key_count().await, count + 2);
+    let (response, body) = f
+        .send(
+            f.post("/erp/json/2/res.users.apikeys/revoke", 108)
+                .header("authorization", format!("Bearer {}", renewed.as_str()))
+                .body(Body::from(
+                    serde_json::json!({"key":renewed.as_str()}).to_string(),
+                ))
+                .unwrap(),
+        )
         .await;
     assert_eq!(
         response.status(),
@@ -962,7 +999,26 @@ async fn programmatic_renewal_and_revoke_are_transactional() {
         serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
         true
     );
-    assert_eq!(f.key_count().await, count);
+    assert_eq!(f.key_count().await, count + 1);
+    // Only the third key remains next to the fixture's, with its own name, expiry and the `rpc`
+    // scope.
+    let mut metadata = f.h.begin().await.unwrap();
+    let rows = metadata
+        .query(
+            "SELECT name,scope,expiration_date FROM res_users_apikeys WHERE id<>$1",
+            &[&f.key_id],
+        )
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get::<_, String>(0), "Third key");
+    assert_eq!(rows[0].get::<_, String>(1), "rpc");
+    assert_eq!(
+        Some(rows[0].get::<_, DateTime>(2)),
+        DateTime::parse_odoo(chained["expiration_date"].as_str().unwrap())
+    );
+    metadata.rollback().await.unwrap();
+    drop(metadata);
     let (response, body) = f
         .send(
             f.post(PATH, 104)
@@ -1268,6 +1324,17 @@ async fn managed_revocation_is_visible_on_another_node() {
         .tx;
     before.rollback().await.unwrap();
     drop(before);
+    // The never-used key is due: dropping the ticket launches its last-use write on another
+    // connection. Let it end, or node a's revocation of the same row can fail to serialize
+    // (the RPC layer retries that; this direct caller does not).
+    let started = std::time::Instant::now();
+    while b.stats().last_use_writes < 1 {
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "the last-use write never ended"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
     // Revocation is audited: a direct (non-HTTP) caller supplies the operation identity the
     // RPC layer would, and node a checks its audit store once, as a server does at startup.
     a.orm().check_audit_store().await.unwrap();
@@ -1326,4 +1393,103 @@ async fn generic_key_deletion_is_refused() {
         "API keys must be revoked through the dedicated revoke method",
     );
     assert_eq!(f.key_count().await, count);
+}
+
+impl Fixture {
+    /// Poll the counters of this fixture's `Auth` until `ready` holds.
+    async fn until_stats(
+        &self,
+        what: &str,
+        ready: impl Fn(&erp_security::auth::AuthStats) -> bool,
+    ) -> erp_security::auth::AuthStats {
+        let started = std::time::Instant::now();
+        loop {
+            let stats = self.auth.stats();
+            if ready(&stats) {
+                return stats;
+            }
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(30),
+                "never: {what}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    }
+}
+
+/// one JSON-2 request with a due key opens the key in the preflight
+/// and again in the RPC attempt. The credential keeps the first ticket and discards the second, so
+/// the write runs once: one row written, no no-op and no skip from a duplicate ticket. The key table
+/// is locked in SHARE mode while the request runs (the route reads it, the `search_count` call does
+/// not write it), so the first ticket's write is blocked and holds the one-permit gate: a duplicate
+/// ticket dropped by the handler would be counted as skipped before the response returns.
+#[tokio::test]
+async fn one_bearer_request_with_a_due_key_writes_last_use_once() {
+    let f = fixture().await;
+    let mut lock = f.h.begin().await.unwrap();
+    lock.batch("LOCK TABLE res_users_apikeys IN SHARE MODE")
+        .await
+        .unwrap();
+    let (response, body) = f.send(f.bearer(1).body(Body::from(BODY)).unwrap()).await;
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    assert_eq!(f.auth.stats().last_use_skipped, 0);
+    support::until_lock_wait(&f.h).await;
+    lock.commit().await.unwrap();
+    let stats = f
+        .until_stats("the write is counted", |s| s.last_use_writes == 1)
+        .await;
+    assert_eq!(
+        (
+            stats.last_use_noops,
+            stats.last_use_skipped,
+            stats.last_use_errors
+        ),
+        (0, 0, 0)
+    );
+    let mut tx = f.h.begin().await.unwrap();
+    let set: bool = tx
+        .query(
+            "SELECT last_used_at IS NOT NULL FROM res_users_apikeys WHERE id=$1",
+            &[&f.key_id],
+        )
+        .await
+        .unwrap()[0]
+        .get(0);
+    tx.rollback().await.unwrap();
+    assert!(set);
+}
+
+/// a JSON-2 request that revokes its own due key succeeds. The ticket
+/// is held until the request has ended, so the write runs after the delete committed. Derived from
+/// the code: it finds no row, so it is counted as a no-op, not as a write and not as an error.
+#[tokio::test]
+async fn bearer_self_revoke_with_a_due_key_succeeds_and_the_late_write_is_a_noop() {
+    let f = fixture().await;
+    support::set_param(&f.h, "base.enable_programmatic_api_keys", "True").await;
+    let (response, body) = f
+        .management("revoke", serde_json::json!({"key": f.key.expose()}))
+        .await;
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    assert_eq!(f.key_count().await, 0);
+    let stats = f
+        .until_stats("the late write found no row", |s| s.last_use_noops == 1)
+        .await;
+    assert_eq!(
+        (
+            stats.last_use_writes,
+            stats.last_use_skipped,
+            stats.last_use_errors
+        ),
+        (0, 0, 0)
+    );
 }

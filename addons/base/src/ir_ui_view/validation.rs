@@ -173,8 +173,8 @@ impl RegistryLookup for RegistryFields<'_> {
     }
 }
 
-/// The load state of a module operation, read from the context the data loader writes with
-/// . The lists are the context's own: nothing is copied per check
+/// The load state of a module operation, read from the context the data loader writes with.
+/// The lists are the context's own: nothing is copied per check
 /// (review A-R2).
 struct LoadState {
     /// The module loading now; `None` after a module finished, when every module of the
@@ -409,8 +409,8 @@ mod probes {
 }
 
 /// During a module operation, the sibling views whose external ids all belong to data not
-/// loaded yet in it are not combined: they still hold the arch of before the upgrade
-/// . A view without external id is combined.
+/// loaded yet in it are not combined: they still hold the arch of before the upgrade.
+/// A view without external id is combined.
 async fn loaded_only(
     tx: &mut Transaction,
     state: &LoadState,

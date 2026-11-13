@@ -594,8 +594,7 @@ impl Databases {
     /// acceptance"). Run it in its own spawned task (`tokio::spawn`), never inside a request
     /// future that a client disconnect or a timeout can drop. If the future is dropped anyway,
     /// the database keeps its previous registry and the next call may apply an overlay again.
-    /// A per-database schema epoch and an expand/contract swap come with M3
-    /// .
+    /// A per-database schema epoch and an expand/contract swap come with M3.
     ///
     /// # Errors
     ///

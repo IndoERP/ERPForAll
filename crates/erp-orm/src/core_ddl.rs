@@ -145,6 +145,7 @@ pub(crate) const ORM_DDL: &[CoreDdl] = &[
     crate::node::NODE_TABLES,
     crate::vacuum::VACUUM_TABLES,
     crate::schema_generated::GENERATED_TABLES,
+    crate::schema_sqlobj::SQL_OBJECT_TABLES,
     crate::jobs::schema::JOB_TABLES,
 ];
 
@@ -154,51 +155,135 @@ pub(crate) fn all() -> impl Iterator<Item = &'static CoreDdl> {
     ORM_DDL.iter().chain(CORE_DDL.iter())
 }
 
+/// Whether the `AfterModels` DDL of `ddl` is deferred: the registry has a model of the table it
+/// refers to but the table does not exist yet. An upgrade converges the core tables before it
+/// creates the tables of new models (an older database has no `ir_attachment` yet): the schema
+/// step of that upgrade completes the deferred entry.
+async fn is_deferred(tx: &mut crate::Transaction, ddl: &CoreDdl) -> erp_fields::Result<bool> {
+    let Some(after) = ddl.after_models else {
+        return Ok(false);
+    };
+    if tx
+        .env()
+        .registry()
+        .model_by_table(after.needs_table)
+        .is_none()
+    {
+        return Ok(false);
+    }
+    let rows = tx
+        .query("SELECT to_regclass($1) IS NOT NULL", &[&after.needs_table])
+        .await?;
+    let present = rows
+        .first()
+        .ok_or_else(|| erp_fields::Error::invariant("to_regclass returned no row"))?
+        .get::<_, bool>(0);
+    Ok(!present)
+}
+
+/// The `AfterModels` entries still deferred in `tx` (read-only): what an operation must have
+/// completed before it ends ([`refuse_deferred`]).
+///
+/// # Errors
+///
+/// The database's errors.
+#[doc(hidden)]
+pub async fn pending(tx: &mut crate::Transaction) -> erp_fields::Result<Vec<&'static CoreDdl>> {
+    let mut out = Vec::new();
+    for ddl in all() {
+        if is_deferred(tx, ddl).await? {
+            out.push(ddl);
+        }
+    }
+    Ok(out)
+}
+
+/// Refuse an operation that ends with `deferred` entries: the table or column they create is
+/// missing and nothing else reports it.
+///
+/// # Errors
+///
+/// `Programming` naming each table and its owner.
+#[doc(hidden)]
+pub fn refuse_deferred(deferred: &[&CoreDdl]) -> erp_fields::Result<()> {
+    if deferred.is_empty() {
+        return Ok(());
+    }
+    let names: Vec<String> = deferred
+        .iter()
+        .map(|d| format!("'{}' of '{}'", d.name, d.owner))
+        .collect();
+    Err(erp_fields::Error::programming(format!(
+        "the core table DDL after the models never ran for {}: the model table it refers to does not exist and no schema step of this operation created it",
+        names.join(", ")
+    )))
+}
+
+async fn exec(
+    tx: &mut crate::Transaction,
+    ddl: &CoreDdl,
+    sql: &str,
+    doing: &str,
+) -> erp_fields::Result<()> {
+    if let Err(error) = tx.batch(sql).await {
+        return Err(erp_fields::Error::new(
+            error.kind(),
+            format!(
+                "{doing} the core table '{}' of '{}' failed: {}",
+                ddl.name,
+                ddl.owner,
+                error.message()
+            ),
+        )
+        .with_sqlstate(error.sqlstate().map(str::to_owned))
+        .with_source(error));
+    }
+    Ok(())
+}
+
 /// Run the core tables' DDL of `phase` in `tx`, in order: the one sequence
 /// [`crate::Orm::sync_schema`] and the test harness share (before the models' tables, then after
 /// them). A failure names the table and its owner and keeps the SQLSTATE and the source; the
-/// caller ends the transaction.
+/// caller ends the transaction. Returns the `AfterModels` entries that were deferred (a model
+/// table that does not exist yet); the caller completes them with [`run_deferred`] or refuses them with
+/// [`refuse_deferred`].
 ///
 /// # Errors
 ///
 /// The DDL's errors, as above.
 #[doc(hidden)]
-pub async fn run(tx: &mut crate::Transaction, phase: CorePhase) -> erp_fields::Result<()> {
+pub async fn run(
+    tx: &mut crate::Transaction,
+    phase: CorePhase,
+) -> erp_fields::Result<Vec<&'static CoreDdl>> {
+    let mut deferred = Vec::new();
     for ddl in all() {
-        let (sql, doing) = match phase {
-            CorePhase::BeforeModels => (ddl.sql, "creating"),
-            CorePhase::AfterModels => match ddl.after_models {
-                Some(after)
-                    if tx
-                        .env()
-                        .registry()
-                        .model_by_table(after.needs_table)
-                        .is_some() =>
+        match phase {
+            CorePhase::BeforeModels => exec(tx, ddl, ddl.sql, "creating").await?,
+            CorePhase::AfterModels => {
+                let Some(after) = ddl.after_models else {
+                    continue;
+                };
+                if is_deferred(tx, ddl).await? {
+                    tracing::debug!(
+                        target: "erp::schema",
+                        table = ddl.name,
+                        owner = ddl.owner,
+                        needs = after.needs_table,
+                        "core table DDL after the models deferred: the model's table does not \
+                         exist yet"
+                    );
+                    deferred.push(ddl);
+                } else if tx
+                    .env()
+                    .registry()
+                    .model_by_table(after.needs_table)
+                    .is_some()
                 {
-                    // An upgrade converges the core tables before it creates the tables of new
-                    // models (an older database has no `ir_attachment` yet): the schema step of
-                    // that upgrade runs this phase again once the table exists.
-                    let present = tx
-                        .query("SELECT to_regclass($1) IS NOT NULL", &[&after.needs_table])
-                        .await?[0]
-                        .get::<_, bool>(0);
-                    if !present {
-                        tracing::debug!(
-                            target: "erp::schema",
-                            table = ddl.name,
-                            owner = ddl.owner,
-                            needs = after.needs_table,
-                            "core table DDL after the models deferred: the model's table does \
-                             not exist yet"
-                        );
-                        continue;
-                    }
-                    (after.sql, "completing (after the models)")
-                }
-                // the registry has no model of the table it refers to: nothing to refer to
-                // (documented on `AfterModels`); said at debug so "why no FK" has an answer in
-                // the logs (silent-delta N-10)
-                Some(after) => {
+                    exec(tx, ddl, after.sql, "completing (after the models)").await?;
+                } else {
+                    // the registry has no model of the table it refers to: nothing to refer to
+                    // (documented on `AfterModels`); said at debug so "why no FK" has an answer
                     tracing::debug!(
                         target: "erp::schema",
                         table = ddl.name,
@@ -207,26 +292,32 @@ pub async fn run(tx: &mut crate::Transaction, phase: CorePhase) -> erp_fields::R
                         "core table DDL after the models skipped: no model of the registry owns \
                          the table it refers to"
                     );
-                    continue;
                 }
-                None => continue,
-            },
-        };
-        if let Err(error) = tx.batch(sql).await {
-            return Err(erp_fields::Error::new(
-                error.kind(),
-                format!(
-                    "{doing} the core table '{}' of '{}' failed: {}",
-                    ddl.name,
-                    ddl.owner,
-                    error.message()
-                ),
-            )
-            .with_sqlstate(error.sqlstate().map(str::to_owned))
-            .with_source(error));
+            }
         }
     }
-    Ok(())
+    Ok(deferred)
+}
+
+/// Run the `AfterModels` DDL of the `deferred` entries only; returns those still deferred.
+///
+/// # Errors
+///
+/// The DDL's errors, as for [`run`].
+#[doc(hidden)]
+pub async fn run_deferred(
+    tx: &mut crate::Transaction,
+    deferred: &[&'static CoreDdl],
+) -> erp_fields::Result<Vec<&'static CoreDdl>> {
+    let mut still = Vec::new();
+    for &ddl in deferred {
+        if is_deferred(tx, ddl).await? {
+            still.push(ddl);
+        } else if let Some(after) = ddl.after_models {
+            exec(tx, ddl, after.sql, "completing (after the models)").await?;
+        }
+    }
+    Ok(still)
 }
 
 /// Check the registered tables: every table of `required` is created by a linked registration,
@@ -291,4 +382,28 @@ pub fn validate(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// SPEC-ORM-CORE-DDL-DEFERRED (an operation that ends with a deferred entry is refused, the
+    /// refusal names the table and its owner)
+    #[test]
+    fn a_deferred_entry_is_refused_by_name() {
+        assert!(refuse_deferred(&[]).is_ok());
+        let ddl = all().next().expect("erp-orm registers core tables");
+        let error = refuse_deferred(&[ddl]).expect_err("a deferred entry is refused");
+        assert_eq!(error.kind(), erp_fields::ErrorKind::Programming);
+        assert!(error.message().contains(ddl.name), "{}", error.message());
+        assert!(error.message().contains(ddl.owner), "{}", error.message());
+        assert!(
+            error
+                .message()
+                .contains("the model table it refers to does not exist and no schema step"),
+            "{}",
+            error.message()
+        );
+    }
 }

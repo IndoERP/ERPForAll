@@ -518,19 +518,54 @@ fn false_compiled() -> Arc<Compiled> {
 
 /// Optimize `domain` to FULL for `records`' model and environment and plan it; the text comes from
 /// the memo.
-fn compile_domain(
-    tx: &Transaction,
+async fn compile_domain(
+    tx: &mut Transaction,
     records: &Records,
     domain: &Domain,
     unaccent: Unaccent,
 ) -> Result<Arc<Compiled>> {
-    compile_domain_at(tx, records, domain, unaccent, 0)
+    compile_domain_at(tx, records, domain, unaccent, 0).await
+}
+
+fn prepare_sql_domain(tx: &Transaction, records: &Records, domain: &Domain) -> Result<Domain> {
+    let env = records.env();
+    tx.validate_cached_search_language(env)?;
+    let spec = records.spec();
+    tx.check_generated_query_domain(env, spec, domain)?;
+    let tz = ZoneTz::new(env.tz());
+    let now = now_utc()?;
+    {
+        let lookup = crate::access::TxAccess::new(tx, env);
+        let optimized = optimize_domain(
+            &OptimizeCtx {
+                registry: env.registry(),
+                tz: &tz,
+                now,
+                su: env.su(),
+                access: Some(&lookup),
+            },
+            spec,
+            domain,
+            OptimizationLevel::Full,
+        )?;
+        crate::prepare::prepare(
+            &crate::prepare::PrepareCtx {
+                tx,
+                env,
+                tz: &tz,
+                now,
+                access: &lookup,
+            },
+            spec,
+            &optimized,
+        )
+    }
 }
 
 /// [`compile_domain`] with placeholders numbered after `offset` (a sub-query of a statement that
 /// binds `offset` parameters before it); only `offset == 0` texts go through the memo.
-fn compile_domain_at(
-    tx: &Transaction,
+async fn compile_domain_at(
+    tx: &mut Transaction,
     records: &Records,
     domain: &Domain,
     unaccent: Unaccent,
@@ -538,45 +573,23 @@ fn compile_domain_at(
 ) -> Result<Arc<Compiled>> {
     let _search_scope = crate::search_method::scope(tx)?;
     let env = records.env();
-    tx.validate_cached_search_language(env)?;
     let spec = records.spec();
-    tx.check_generated_query_domain(env, spec, domain)?;
-    let tz = ZoneTz::new(env.tz());
-    let now = now_utc()?;
-    let lookup = crate::access::TxAccess::new(tx, env);
-    let optimized = optimize_domain(
-        &OptimizeCtx {
-            registry: env.registry(),
-            tz: &tz,
-            now,
-            su: env.su(),
-            access: Some(&lookup),
-        },
-        spec,
-        domain,
-        OptimizationLevel::Full,
-    )?;
-    let prepared = crate::prepare::prepare(
-        &crate::prepare::PrepareCtx {
-            tx,
-            env,
-            tz: &tz,
-            now,
-            access: &lookup,
-        },
-        spec,
-        &optimized,
-    )?;
+    let prepared = prepare_sql_domain(tx, records, domain)?;
     let registry = env.registry();
-    let mut plan = plan_where(
-        &prepared,
-        &WhereContext {
-            registry,
-            model: spec,
-            unaccent,
-            lang: env.lang(),
-        },
-    )?;
+    let context = WhereContext {
+        registry,
+        model: spec,
+        unaccent,
+        lang: env.lang(),
+    };
+    let fields = erp_sql::filter::where_fields(&prepared, &context)?;
+    let company = tx.company_query_values(env, &fields).await?;
+    let mut plan = match &company {
+        Some(values) => {
+            erp_sql::filter::plan_where_with_company(&prepared, &context, values, offset + 1)?
+        }
+        None => plan_where(&prepared, &context)?,
+    };
     // Ordinary record-rule fields retain their existing privileged predicate semantics.
     // Database expressions may not declassify protected sources.
     for (model, field) in &plan.fields {
@@ -587,13 +600,20 @@ fn compile_domain_at(
     // principal parameters take this environment's values; the text stays principal-free
     tx.bind_principal_params(env, &mut plan.params)?;
     let text = tx.search_memo_text(&plan.key, offset, || {
-        render_where_at(&plan.key, registry, offset)
+        render_where_at(&plan.key, registry, offset + usize::from(company.is_some()))
     });
     let reads_own_rows = plan.key.selects_from(spec.id);
     Ok(Arc::new(Compiled {
         sql: text.sql,
         join_list: text.joins,
-        params: plan.params,
+        params: {
+            let mut params = Vec::new();
+            if let Some(values) = &company {
+                params.push(values.param()?);
+            }
+            params.extend(plan.params);
+            params
+        },
         fields: plan.fields,
         constant: plan.constant,
         reads_own_rows,
@@ -656,25 +676,25 @@ async fn search_access(
     let access = crate::search_method::expand_policy(tx, security.env(), security.spec(), &access)?;
     tx.prepare_access_for_domain(security.env(), &access)
         .await?;
-    crate::hierarchy::resolve(tx, &security.sudo(true), &access, true)
+    crate::hierarchy::resolve(tx, &security.engine_sudo(), &access, true)
         .await
         .map(Some)
 }
 
 /// Steps 1–3 of a search (see the module documentation).
-fn compile_search(
-    tx: &Transaction,
+async fn compile_search(
+    tx: &mut Transaction,
     records: &Records,
     domain: &Domain,
     access: Option<&Domain>,
     active_test: bool,
     unaccent: Unaccent,
 ) -> Result<Arc<Compiled>> {
-    compile_search_at(tx, records, domain, access, active_test, unaccent, 0)
+    compile_search_at(tx, records, domain, access, active_test, unaccent, 0).await
 }
 
-fn compile_search_at(
-    tx: &Transaction,
+async fn compile_search_at(
+    tx: &mut Transaction,
     records: &Records,
     domain: &Domain,
     access: Option<&Domain>,
@@ -682,7 +702,7 @@ fn compile_search_at(
     unaccent: Unaccent,
     offset: usize,
 ) -> Result<Arc<Compiled>> {
-    tx.check_records(records)?;
+    tx.admit_records(records).await?;
     if access.is_some_and(Domain::is_false) {
         return Ok(false_compiled());
     }
@@ -700,7 +720,7 @@ fn compile_search_at(
         let condition = Domain::condition(active, Operator::In, erp_domain::Value::set([true]))?;
         domain = condition & domain;
     }
-    let user = compile_domain_at(tx, records, &domain, unaccent, offset)?;
+    let user = compile_domain_at(tx, records, &domain, unaccent, offset).await?;
     let Some(access) = access else {
         return Ok(user);
     };
@@ -713,7 +733,8 @@ fn compile_search_at(
         access,
         unaccent,
         offset + user.params.len(),
-    )?;
+    )
+    .await?;
     and_compiled(&user, &security)
 }
 
@@ -761,7 +782,7 @@ pub(crate) async fn compile_for(
     let access = search_access(tx, records, &domain).await?;
     let domain = crate::hierarchy::resolve(tx, records, &domain, true).await?;
     let unaccent = tx.unaccent_status().await?;
-    compile_search(tx, records, &domain, access.as_ref(), active_test, unaccent)
+    compile_search(tx, records, &domain, access.as_ref(), active_test, unaccent).await
 }
 
 /// [`compile_for`] for a sub-query embedded in a statement that already binds `offset`
@@ -787,6 +808,7 @@ pub(crate) async fn compile_for_at(
         unaccent,
         offset,
     )
+    .await
 }
 
 /// The access predicate of `records`' model for its environment as a sub-query predicate with
@@ -816,9 +838,11 @@ pub(crate) async fn read_restriction_at(
     let access = crate::search_method::expand_policy(tx, security.env(), security.spec(), &access)?;
     tx.prepare_access_for_domain(security.env(), &access)
         .await?;
-    let access = crate::hierarchy::resolve(tx, &security.sudo(true), &access, true).await?;
+    let access = crate::hierarchy::resolve(tx, &security.engine_sudo(), &access, true).await?;
     let unaccent = tx.unaccent_status().await?;
-    compile_domain_at(tx, records, &access, unaccent, offset).map(Some)
+    compile_domain_at(tx, records, &access, unaccent, offset)
+        .await
+        .map(Some)
 }
 
 /// `records` in an environment whose context is the one every access predicate is compiled
@@ -848,9 +872,9 @@ pub(crate) async fn compile_predicate(
     tx.prepare_access_for_domain(security.env(), &predicate)
         .await?;
     let (resolved, searched) =
-        crate::hierarchy::resolve_tracking(tx, &security.sudo(true), &predicate, true).await?;
+        crate::hierarchy::resolve_tracking(tx, &security.engine_sudo(), &predicate, true).await?;
     let unaccent = tx.unaccent_status().await?;
-    let mut compiled = compile_domain(tx, records, &resolved, unaccent)?;
+    let mut compiled = compile_domain(tx, records, &resolved, unaccent).await?;
     if searched {
         // a start set found by a search: what the predicate lets through depends on data it
         // does not list, so a decision made with it is never remembered. A fresh `Arc` (never
@@ -876,9 +900,9 @@ pub(crate) async fn compile_predicate_at(
     tx.prepare_access_for_domain(security.env(), &predicate)
         .await?;
     let (resolved, searched) =
-        crate::hierarchy::resolve_tracking(tx, &security.sudo(true), &predicate, true).await?;
+        crate::hierarchy::resolve_tracking(tx, &security.engine_sudo(), &predicate, true).await?;
     let unaccent = tx.unaccent_status().await?;
-    let mut compiled = compile_domain_at(tx, records, &resolved, unaccent, offset)?;
+    let mut compiled = compile_domain_at(tx, records, &resolved, unaccent, offset).await?;
     if searched {
         Arc::make_mut(&mut compiled).volatile = true;
     }
@@ -886,25 +910,65 @@ pub(crate) async fn compile_predicate_at(
 }
 
 /// The compiled order `order` (the model's `_order` when empty) of `records`' model.
-pub(crate) fn order_for(tx: &Transaction, records: &Records, order: &str) -> Result<Arc<OrderBy>> {
-    compile_search_order(tx, records, order)
+#[derive(Debug, Clone)]
+pub(crate) struct BoundOrder {
+    order: Arc<OrderBy>,
+    pub(crate) params: Vec<Param>,
+}
+impl std::ops::Deref for BoundOrder {
+    type Target = OrderBy;
+    fn deref(&self) -> &OrderBy {
+        &self.order
+    }
 }
 
-/// The order of a search, through the memo.
-fn compile_search_order(tx: &Transaction, records: &Records, order: &str) -> Result<Arc<OrderBy>> {
+pub(crate) async fn order_for(
+    tx: &mut Transaction,
+    records: &Records,
+    order: &str,
+    offset: usize,
+) -> Result<Arc<BoundOrder>> {
+    compile_search_order(tx, records, order, offset).await
+}
+
+async fn compile_search_order(
+    tx: &mut Transaction,
+    records: &Records,
+    order: &str,
+    offset: usize,
+) -> Result<Arc<BoundOrder>> {
     tx.validate_cached_search_language(records.env())?;
     let spec = records.spec();
     let registry = records.env().registry();
     let lang = records.env().lang();
-    let compiled = tx
-        .shared
-        .search_memo
-        .order(records.model_id(), order, lang, || {
-            compile_order(registry, spec, order, lang)
-        })?;
-    // any position of the order, the comodels' order fields of a many2one term included
+    let fields = erp_sql::order::order_fields(registry, spec, order, lang)?;
+    let company = tx.company_query_values(records.env(), &fields).await?;
+    let (compiled, params) = match company {
+        Some(values) => (
+            Arc::new(erp_sql::order::compile_order_with_company(
+                registry,
+                spec,
+                order,
+                lang,
+                &values,
+                offset + 1,
+            )?),
+            vec![values.param()?],
+        ),
+        None => (
+            tx.shared
+                .search_memo
+                .order(records.model_id(), order, lang, || {
+                    compile_order(registry, spec, order, lang)
+                })?,
+            Vec::new(),
+        ),
+    };
     tx.check_read_pairs(records.env(), &compiled.fields)?;
-    Ok(compiled)
+    Ok(Arc::new(BoundOrder {
+        order: compiled,
+        params,
+    }))
 }
 
 /// Collect into `out` the stored column fields field `fid` reads, following the dependencies of
@@ -1777,7 +1841,7 @@ async fn fetch_group(tx: &mut Transaction, group: Vec<(&Records, FetchPlan)>) ->
 pub struct SearchQuery {
     records: Records,
     filter: Arc<Compiled>,
-    order: Option<Arc<OrderBy>>,
+    order: Option<Arc<BoundOrder>>,
     limit: Option<u64>,
     offset: u64,
     ids: Option<Ids>,
@@ -1829,6 +1893,9 @@ impl SearchQuery {
         limit: Option<u64>,
         joins: &'a str,
     ) -> Result<SearchSql<'a>> {
+        if with_order && let Some(order) = &self.order {
+            params.extend(order.params.iter().cloned());
+        }
         let limit = match limit {
             Some(n) => {
                 params.push(count_param(n)?);
@@ -1870,7 +1937,7 @@ impl SearchQuery {
 
     /// Number of parameters of the filter (a keyset piece numbers its own after them).
     pub(crate) fn filter_params(&self) -> usize {
-        self.filter.params.len()
+        self.filter.params.len() + self.order.as_ref().map_or(0, |order| order.params.len())
     }
 
     /// AND a keyset piece (`erp_sql::keyset`) to the filter; its placeholders are
@@ -1882,6 +1949,9 @@ impl SearchQuery {
             return;
         }
         let mut filter = (*self.filter).clone();
+        if let Some(order) = &mut self.order {
+            filter.params.append(&mut Arc::make_mut(order).params);
+        }
         filter.sql = if filter.constant == Some(true) {
             Arc::from(sql)
         } else {
@@ -1941,10 +2011,11 @@ impl SearchQuery {
         tx: &mut Transaction,
         columns: &[FieldId],
     ) -> Result<Vec<RecId>> {
-        tx.check_records(&self.records)?;
+        tx.admit_records(&self.records).await?;
         tx.validate_search_language(self.records.env()).await?;
         if self.order.is_none() {
-            self.order = Some(compile_search_order(tx, &self.records, "")?);
+            self.order =
+                Some(compile_search_order(tx, &self.records, "", self.filter.params.len()).await?);
         }
         if self.is_empty() {
             return Ok(Vec::new());
@@ -1968,7 +2039,7 @@ impl SearchQuery {
         tx: &mut Transaction,
         columns: &[FieldId],
     ) -> Result<Vec<RecId>> {
-        tx.check_records(&self.records)?;
+        tx.admit_records(&self.records).await?;
         if self.filter.constant == Some(false) {
             return Ok(Vec::new());
         }
@@ -1999,7 +2070,7 @@ impl SearchQuery {
 
     /// The matching ids in order (one query the first time, none afterwards).
     pub async fn ids(&mut self, tx: &mut Transaction) -> Result<Ids> {
-        tx.check_records(&self.records)?;
+        tx.admit_records(&self.records).await?;
         if let Some(ids) = &self.ids {
             return Ok(Arc::clone(ids));
         }
@@ -2015,7 +2086,7 @@ impl SearchQuery {
     }
 
     pub async fn count(&self, tx: &mut Transaction) -> Result<u64> {
-        tx.check_records(&self.records)?;
+        tx.admit_records(&self.records).await?;
         if let Some(ids) = &self.ids {
             return Ok(ids.len() as u64);
         }
@@ -2132,6 +2203,24 @@ fn validate_catalog_value(
     }
 }
 
+fn refuse_catalog_properties(
+    registry: &erp_registry::Registry,
+    fields: &[(ModelId, FieldId)],
+) -> Result<()> {
+    for &(model, field) in fields {
+        let model = registry.model_by_id(model);
+        let field = model.field_by_id(field);
+        if field.company_dependent {
+            return Err(crate::company_dependent_runtime::unsupported(
+                model.name,
+                field.name,
+                "selection catalog expressions",
+            ));
+        }
+    }
+    Ok(())
+}
+
 // ----- public API --------------------------------------------------------------------------------
 
 impl Records {
@@ -2150,7 +2239,7 @@ impl Records {
             bytes,
             charge,
         } = request;
-        tx.check_records(self)?;
+        tx.admit_records(self).await?;
         let env = self.env();
         env.companies()?;
         tx.check_model(env, self.model_id(), Operation::Read)?;
@@ -2181,14 +2270,40 @@ impl Records {
             validate_catalog_domain(domain, spec, charge, 0)?;
         }
         tx.check_domain_fields(env, spec, domain)?;
-        // Pre-provider flush prepared the entire caller transaction, including projections.
-        // Compilers below are synchronous and cannot execute computes or model methods.
+        // A native catalog must not trigger property-default lookups or an implicit flush.
+        // Inspect the complete dependency plans, including user paths in record rules, first.
         let unaccent = tx.unaccent_status().await?;
-        let filter = compile_search(tx, self, domain, access.as_ref(), true, unaccent)?;
+        let registry = env.registry();
+        let mut dependencies = erp_sql::order::order_fields(registry, spec, order, env.lang())?;
+        dependencies.extend(columns.iter().map(|field| (spec.id, *field)));
+        if let Some(active) = spec.active_name {
+            dependencies.push((spec.id, active));
+        }
+        for (domain, policy) in
+            std::iter::once((domain, false)).chain(access.iter().map(|d| (d, true)))
+        {
+            let records = if policy {
+                predicate_records(self)
+            } else {
+                self.clone()
+            };
+            let prepared = prepare_sql_domain(tx, &records, domain)?;
+            dependencies.extend(erp_sql::filter::where_fields(
+                &prepared,
+                &WhereContext {
+                    registry,
+                    model: spec,
+                    unaccent,
+                    lang: env.lang(),
+                },
+            )?);
+        }
+        refuse_catalog_properties(registry, &dependencies)?;
+        let filter = compile_search(tx, self, domain, access.as_ref(), true, unaccent).await?;
         if filter.constant == Some(false) {
             return Ok(Vec::new());
         }
-        let order = compile_search_order(tx, self, order)?;
+        let order = compile_search_order(tx, self, order, filter.params.len()).await?;
         for &(model, field) in &order.fields {
             if model != self.model_id()
                 || !spec.field_by_id(field).has_column()
@@ -2202,6 +2317,7 @@ impl Records {
         erp_sql::order::check_join_conflicts(&[&filter.join_list, &order.joins])?;
         let joins = merge_joins(&[&filter.join_list, &order.joins]);
         let mut params = filter.params.clone();
+        params.extend(order.params.iter().cloned());
         let candidates = pairs
             .checked_add(1)
             .ok_or_else(|| Error::programming("selection candidate count overflow"))?;
@@ -2248,9 +2364,10 @@ impl Records {
             access.as_ref(),
             opts.active_test,
             unaccent,
-        )?;
+        )
+        .await?;
         let order = match opts.order.as_deref() {
-            Some(order) => Some(compile_search_order(tx, self, order)?),
+            Some(order) => Some(compile_search_order(tx, self, order, filter.params.len()).await?),
             None => None,
         };
         if let Some(order) = &order {
@@ -2285,7 +2402,8 @@ impl Records {
         let columns = checked_columns(tx, self.env(), self.spec(), &opts.fetch)?;
         let mut query = self.search_query(tx, domain, opts).await?;
         if query.order.is_none() {
-            query.order = Some(compile_search_order(tx, self, "")?);
+            query.order =
+                Some(compile_search_order(tx, self, "", query.filter.params.len()).await?);
         }
         Ok((query, columns))
     }
@@ -2350,7 +2468,9 @@ impl Records {
         let found = self
             .search_with(tx, &(condition & options.domain.clone()), &opts)
             .await?;
-        let names = tx.display_names_for(&found.sudo(true), found.env()).await?;
+        let names = tx
+            .display_names_for(&found.engine_sudo(), found.env())
+            .await?;
         Ok(found
             .rec_ids()
             .iter()
@@ -2405,7 +2525,7 @@ impl Records {
         tx: &mut Transaction,
         fields: Option<&[&str]>,
     ) -> Result<Option<FetchPlan>> {
-        tx.check_records(self)?;
+        tx.admit_records(self).await?;
         if fields.is_some_and(<[&str]>::is_empty) {
             return Ok(None);
         }
@@ -2811,5 +2931,47 @@ mod native_fields_tests {
         let error = bind(&[mixed]).expect_err("mixed array rejected");
         assert_eq!(error.kind(), ErrorKind::Programming);
         assert_eq!(error.message(), "array parameter with mixed value types");
+    }
+}
+
+#[cfg(test)]
+mod catalog_property_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, reason = "tests")]
+    use super::*;
+    use erp_registry::{AddonDescriptor, FieldDecl, ModelDecl, RegistryBuilder};
+    #[test]
+    fn catalog_properties_refuse_before_implicit_default_preparation() {
+        static ADDON: AddonDescriptor = AddonDescriptor {
+            name: "catalog_property_guard",
+            depends: &[],
+            exact_only: false,
+        };
+        static MODEL: ModelDecl = ModelDecl::new("catalog_property_guard", "catalog.property")
+            .fields(
+                const {
+                    &[
+                        FieldDecl::integer("plain"),
+                        FieldDecl::char("note").company_dependent(true),
+                    ]
+                },
+            );
+        let registry = RegistryBuilder::new([&ADDON])
+            .linked(false)
+            .with_decls([&MODEL])
+            .build()
+            .unwrap();
+        let model = registry.model("catalog.property").unwrap();
+        assert!(
+            refuse_catalog_properties(&registry, &[(model.id, model.field("plain").unwrap().id)])
+                .is_ok()
+        );
+        let error =
+            refuse_catalog_properties(&registry, &[(model.id, model.field("note").unwrap().id)])
+                .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Programming);
+        assert_eq!(
+            error.message(),
+            "catalog.property.note: company-dependent selection catalog expressions is not supported until a later release"
+        );
     }
 }

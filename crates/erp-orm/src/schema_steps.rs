@@ -61,6 +61,7 @@ pub struct SchemaSyncOptions {
     backfill_batch: NonZeroU32,
     fill_batch: NonZeroU32,
     lock_timeouts: StepTimeouts,
+    lifecycle: bool,
 }
 
 /// The timeouts of the statements of a step: two `lock_timeout`s, each within `1 ms..=i32::MAX ms`
@@ -117,6 +118,7 @@ impl SchemaSyncOptions {
                 long: Self::DEFAULT_LONG_LOCK_TIMEOUT,
                 diagnostic: erp_sql::conflict::DIAGNOSTIC_TIMEOUT,
             },
+            lifecycle: false,
         }
     }
 
@@ -201,6 +203,22 @@ impl SchemaSyncOptions {
         }
         self.lock_timeouts.diagnostic = timeout;
         Ok(self)
+    }
+
+    /// Whether the synchronization runs inside an addon install or upgrade lifecycle transaction
+    /// (default false). Only such a synchronization may create or change addon-owned SQL
+    /// objects or their provenance (amendment A6); any other one that would fails with
+    /// a `Programming` error naming the object, and passes when they are all current. The
+    /// module system sets it on its install and upgrade schema step.
+    #[must_use]
+    pub const fn lifecycle(mut self, on: bool) -> Self {
+        self.lifecycle = on;
+        self
+    }
+
+    /// Whether [`Self::lifecycle`] is set.
+    pub const fn is_lifecycle(&self) -> bool {
+        self.lifecycle
     }
 
     /// The row threshold above which a table is large; `None` for [`Self::inline`].
@@ -1024,9 +1042,13 @@ impl Orm {
             Ok(sync) => sync,
             Err(error) => return Err(tx.discard_after(error).await),
         };
-        if let Err(error) =
-            crate::core_ddl::run(&mut tx, crate::core_ddl::CorePhase::AfterModels).await
-        {
+        // every model table exists now: nothing may stay deferred
+        let after =
+            match crate::core_ddl::run(&mut tx, crate::core_ddl::CorePhase::AfterModels).await {
+                Ok(deferred) => crate::core_ddl::refuse_deferred(&deferred),
+                Err(error) => Err(error),
+            };
+        if let Err(error) = after {
             return Err(tx.discard_after(error).await);
         }
         if let Err(error) = tx.commit().await {
@@ -2222,7 +2244,9 @@ impl Orm {
         // A previously planned step may now run under an eventful registry.
         // Check before the first batch or any comment/data mutation.
         let mut admission = self.begin(SUPERUSER_ID).await?;
-        admission.check_backfill_capture(spec, fields)?;
+        admission
+            .check_backfill_admission(spec, table, fields)
+            .await?;
         admission.rollback().await?;
         drop(admission);
         // the labels that replace the pending marks of the comments once every batch has run

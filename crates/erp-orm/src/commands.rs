@@ -201,29 +201,49 @@ impl Records {
         };
         let mut out = Vec::with_capacity(items.len());
         for item in items.iter() {
-            // exactly three elements (F5)
-            let Value::List(triple) = item else {
+            let Value::List(elements) = item else {
                 return Err(wrong_value(self, field, item));
             };
-            if triple.len() != 3 {
-                return Err(wrong_value(self, field, item));
-            }
-            let code = match triple.first() {
+            let code = match elements.first() {
                 Some(Value::Int(c)) => *c,
                 _ => return Err(wrong_value(self, field, item)),
             };
+            // accepted length per command:
+            // 0 (CREATE): 3 elements [0, 0, vals] or [0, ref, vals]
+            // 1 (UPDATE): 3 elements [1, id, vals]
+            // 2 (DELETE): 2 or 3 elements [2, id] or [2, id, 0]
+            // 3 (UNLINK): 2 or 3 elements [3, id] or [3, id, 0]
+            // 4 (LINK): 2 or 3 elements [4, id] or [4, id, 0]
+            // 5 (CLEAR): 1, 2, or 3 elements [5], [5, 0], or [5, 0, 0]
+            // 6 (SET): 3 elements [6, 0, ids]
+            let valid_len = match code {
+                0 | 1 | 6 => elements.len() == 3,
+                2..=4 => {
+                    (2..=3).contains(&elements.len())
+                        && matches!(
+                            elements.get(2),
+                            None | Some(Value::False | Value::Bool(false) | Value::Int(0))
+                        )
+                }
+                5 => !elements.is_empty() && elements.len() <= 3,
+                // unknown codes are refused by the `other` arm below, which names the code
+                _ => true,
+            };
+            if !valid_len {
+                return Err(wrong_value(self, field, item));
+            }
             let id = || -> Result<RecId> {
-                positive_id(self, field, triple.get(1).unwrap_or(&Value::False))
+                positive_id(self, field, elements.get(1).unwrap_or(&Value::False))
             };
             out.push(match code {
-                0 => Command::Create(map_vals(triple.get(2))?),
-                1 => Command::Update(id()?, map_vals(triple.get(2))?),
+                0 => Command::Create(map_vals(elements.get(2))?),
+                1 => Command::Update(id()?, map_vals(elements.get(2))?),
                 2 => Command::Delete(id()?),
                 3 => Command::Unlink(id()?),
                 4 => Command::Link(id()?),
                 5 => Command::Clear,
                 6 => {
-                    let ids = match triple.get(2) {
+                    let ids = match elements.get(2) {
                         // `SET` takes a list of ids (F5)
                         Some(Value::List(ids)) => ids
                             .iter()
@@ -660,7 +680,10 @@ impl Transaction {
         state: &O2mWrite,
         lines: &[RecId],
     ) -> Result<FxHashMap<RecId, Option<RecId>>> {
-        let co = state.comodel.sudo(true).browse_ids(lines.iter().copied());
+        let co = state
+            .comodel
+            .engine_sudo()
+            .browse_ids(lines.iter().copied());
         let mut names = vec![state.inverse];
         if let Some((mf, _)) = state.model_field {
             names.push(mf);
@@ -825,7 +848,7 @@ impl Transaction {
                 .filter(|y| seen.insert(*y))
                 .collect()
         };
-        let su_env = env.sudo(true);
+        let su_env = env.engine_sudo();
         let visible_all = self.x2many_visible(&su_env, model, field, &union).await?;
         let mine: Option<FxHashSet<RecId>> = if !env.su() && !fs.bypass_search_access {
             Some(
@@ -1133,7 +1156,7 @@ impl Transaction {
                 FxHashSet::default()
             } else {
                 let co = Records::from_parts(
-                    records.env().sudo(true),
+                    records.env().engine_sudo(),
                     comodel.id,
                     Arc::from(candidates.clone()),
                     Arc::from(candidates),
@@ -1171,7 +1194,7 @@ impl Transaction {
             let storage = co_spec.field_by_id(inverse).storage();
             let domain = self.shared.relations.domain(co_model, inverse);
             let valid: FxHashSet<RecId> = self
-                .filter_domain(&records.sudo(true), &domain)
+                .filter_domain(&records.engine_sudo(), &domain)
                 .await?
                 .into_iter()
                 .collect();

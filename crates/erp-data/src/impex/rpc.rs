@@ -1,5 +1,4 @@
-//! JSON-2 RPC exposure and argument binders for `load`, `export_data`, and `get_import_templates`
-//! .
+//! JSON-2 RPC exposure and argument binders for `load`, `export_data`, and `get_import_templates`.
 //!
 //! Contributes [`RpcImpl`] entries to [`erp_orm::rpc::RPC_IMPLS`] under model `"base"` and addon `"base"`.
 

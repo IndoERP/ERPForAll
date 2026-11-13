@@ -200,3 +200,130 @@ fn review_eventful_extensions_compose_in_either_boolean_order() {
         );
     }
 }
+
+/// Field names `0..n`, leaked because declarations are `'static`.
+fn wide_fields(n: usize) -> &'static [FieldDecl] {
+    let fields: Vec<FieldDecl> = (0..n)
+        .map(|i| FieldDecl::integer(Box::leak(format!("f{i}").into_boxed_str())))
+        .collect();
+    Box::leak(fields.into_boxed_slice())
+}
+
+/// The names one event may carry for `model`: fields with a column of their own, without `id`.
+fn countable(registry: &Registry, model: &str) -> usize {
+    registry
+        .model(model)
+        .unwrap()
+        .fields
+        .iter()
+        .filter(|f| f.has_column() && f.inherited.is_none() && f.name != "id")
+        .count()
+}
+
+/// Declared fields that make `countable` come to `total`: the registry adds its own columns
+/// (log-access fields), so the baseline is measured from a model with none declared.
+fn declared_for(total: usize) -> usize {
+    let empty = build(vec![ModelDecl::new("eventful_test", "wide.item")]).unwrap();
+    total - countable(&empty, "wide.item")
+}
+
+#[test]
+fn eventful_model_with_128_columns_builds() {
+    let n = declared_for(128);
+    let registry = build(vec![
+        ModelDecl::new("eventful_test", "wide.item")
+            .fields(wide_fields(n))
+            .eventful(true),
+    ])
+    .unwrap();
+    assert_eq!(countable(&registry, "wide.item"), 128);
+    assert!(registry.model("wide.item").unwrap().eventful);
+}
+
+#[test]
+fn eventful_model_with_129_columns_is_refused() {
+    let n = declared_for(129);
+    let error = build(vec![
+        ModelDecl::new("eventful_test", "wide.item")
+            .fields(wide_fields(n))
+            .eventful(true),
+    ])
+    .expect_err("129 names cannot fit in one event");
+    assert_eq!(error.kind(), ErrorKind::Validation);
+    assert_eq!(
+        error.message(),
+        "model 'wide.item' of addon 'eventful_test' cannot be eventful: 129 fields with a column exceed the 128 field names one event may carry (a later release)"
+    );
+}
+
+#[test]
+fn wide_model_that_is_not_eventful_builds() {
+    let n = declared_for(129);
+    let registry = build(vec![
+        ModelDecl::new("eventful_test", "wide.item").fields(wide_fields(n)),
+    ])
+    .unwrap();
+    assert_eq!(countable(&registry, "wide.item"), 129);
+    assert!(!registry.model("wide.item").unwrap().eventful);
+}
+
+#[test]
+fn extension_making_a_wide_model_eventful_is_refused_naming_the_extension() {
+    static EXT: AddonDescriptor = AddonDescriptor {
+        name: "eventful_wide_ext",
+        depends: &["eventful_test"],
+        exact_only: false,
+    };
+    let n = declared_for(129);
+    let decls = vec![
+        ModelDecl::new("eventful_test", "wide.item").fields(wide_fields(n)),
+        ModelDecl::new("eventful_wide_ext", "wide.item")
+            .inherit(&["wide.item"])
+            .eventful(true),
+    ];
+    let error = RegistryBuilder::new([&ADDON, &EXT])
+        .linked(false)
+        .with_decls(decls.into_iter().map(|decl| &*Box::leak(Box::new(decl))))
+        .build()
+        .expect_err("the extension cannot make a 129-column model eventful");
+    assert_eq!(error.kind(), ErrorKind::Validation);
+    assert_eq!(
+        error.message(),
+        "model 'wide.item' of addon 'eventful_wide_ext' cannot be eventful: 129 fields with a column exceed the 128 field names one event may carry (a later release)"
+    );
+}
+
+/// A custom (overlay) field that brings an eventful 128-column model to 129 refuses the build
+/// like any other eventful refusal; the model is wrong, not one field, so no drop policy applies.
+#[test]
+fn overlay_field_pushing_an_eventful_model_over_the_ceiling_is_refused() {
+    use erp_registry::{FieldDef, KindDef, ManualFieldPolicy, Overlay};
+    let decl: &'static ModelDecl = Box::leak(Box::new(
+        ModelDecl::new("eventful_test", "wide.item")
+            .fields(wide_fields(declared_for(128)))
+            .eventful(true),
+    ));
+    let mut overlay = Overlay::new();
+    overlay
+        .add_manual_field(
+            "wide.item",
+            FieldDef::new("x_extra", KindDef::Char { size: None }),
+        )
+        .unwrap();
+    let build = |policy| {
+        RegistryBuilder::new([&ADDON])
+            .linked(false)
+            .with_decls([decl])
+            .overlay(&overlay)
+            .manual_fields(policy)
+            .build()
+    };
+    for policy in [ManualFieldPolicy::Strict, ManualFieldPolicy::DropBroken] {
+        let error = build(policy).expect_err("129 columns cannot be eventful");
+        assert_eq!(error.kind(), ErrorKind::Validation);
+        assert_eq!(
+            error.message(),
+            "model 'wide.item' of addon 'eventful_test' cannot be eventful: 129 fields with a column exceed the 128 field names one event may carry (a later release)"
+        );
+    }
+}

@@ -1,5 +1,5 @@
 //! Business keys and upsert (
-//! design note). The access cases run on the real
+//! ). The access cases run on the real
 //! access engine in `ormx_upsert_access.rs`.
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "tests")]
 

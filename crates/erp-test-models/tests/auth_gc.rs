@@ -1164,3 +1164,109 @@ async fn the_password_column_statement_takes_no_lock_when_the_column_exists() {
     tx.rollback().await.unwrap();
     reader.rollback().await.unwrap();
 }
+
+/// advisory lock, so heartbeat renewals are not blocked by a repeated schema sync)
+#[tokio::test]
+async fn converged_auth_after_models_ddl_holds_no_registry_lock() {
+    let w = world().await;
+    sql(&w.h, AUTH_DDL).await;
+    sql(&w.h, AUTH_AFTER_MODELS_DDL).await;
+    // the converged path: the key row exists, so the sync below reaches the no-lock branch
+    assert!(
+        one_bool(
+            &w.h,
+            "SELECT EXISTS (SELECT FROM public.erp_node_feature \
+             WHERE key = 'auth.login_principal' AND version = 1)",
+            &[],
+        )
+        .await,
+        "the first sync registered the feature key"
+    );
+    let mut tx = w.h.begin().await.unwrap();
+    tx.batch(AUTH_AFTER_MODELS_DDL).await.unwrap();
+    let rows = tx
+        .query(
+            "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND pid = \
+             pg_backend_pid() AND classid = 1163022406 AND objid = 6",
+            &[],
+        )
+        .await
+        .unwrap();
+    let held: i64 = rows[0].get(0);
+    tx.rollback().await.unwrap();
+    assert_eq!(held, 0, "a converged sync must not take the registry lock");
+}
+
+/// commits while a READ COMMITTED after-models sync waits for the registry lock is refused with
+/// the version message, never accepted because the insert was skipped)
+#[tokio::test]
+async fn a_raced_incompatible_registration_is_refused_after_the_lock_wait() {
+    let w = world().await;
+    sql(&w.h, AUTH_DDL).await;
+    sql(&w.h, AUTH_AFTER_MODELS_DDL).await;
+    sql(
+        &w.h,
+        "DELETE FROM public.erp_node_feature_digest WHERE feature = 'auth.login_principal'; \
+         DELETE FROM public.erp_node_feature WHERE key = 'auth.login_principal'",
+    )
+    .await;
+    let mut holder = w.h.begin().await.unwrap();
+    holder
+        .batch("SELECT pg_advisory_xact_lock(1163022406,6)")
+        .await
+        .unwrap();
+    let orm = w.h.orm().clone();
+    let (pid_tx, pid_rx) = tokio::sync::oneshot::channel::<i32>();
+    let sync = tokio::spawn(async move {
+        let mut tx = orm
+            .begin_opts(
+                erp_orm::BeginOptions::new(erp_orm::SUPERUSER_ID)
+                    .on_primary()
+                    .isolation(erp_orm::Isolation::ReadCommitted),
+            )
+            .await
+            .unwrap();
+        let pid: i32 = tx.query("SELECT pg_backend_pid()", &[]).await.unwrap()[0].get(0);
+        pid_tx.send(pid).unwrap();
+        let result = tx.batch(AUTH_AFTER_MODELS_DDL).await;
+        tx.rollback().await.unwrap();
+        result
+    });
+    let sync_pid = pid_rx.await.unwrap();
+    let mut waiting = false;
+    for _ in 0..500 {
+        // only the spawned sync's own backend counts: pg_locks lists the whole cluster
+        if one_bool(
+            &w.h,
+            "SELECT EXISTS (SELECT FROM pg_locks WHERE locktype = 'advisory' \
+             AND classid = 1163022406 AND objid = 6 AND NOT granted AND pid = $1)",
+            &[&sync_pid],
+        )
+        .await
+        {
+            waiting = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(waiting, "the sync never waited for the registry lock");
+    holder
+        .batch(
+            "INSERT INTO public.erp_node_feature(key, version) \
+             VALUES ('auth.login_principal', 2)",
+        )
+        .await
+        .unwrap();
+    holder.commit().await.unwrap();
+    let error = sync
+        .await
+        .unwrap()
+        .expect_err("a raced registration with another version must be refused");
+    assert_eq!(error.sqlstate(), Some("P0001"), "{error}");
+    assert!(
+        error
+            .message()
+            .contains("authentication rollout capability version differs from this binary"),
+        "{error}"
+    );
+}

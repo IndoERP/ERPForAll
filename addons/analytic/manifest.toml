@@ -1,0 +1,9 @@
+name = "Analytic Accounting"
+summary = "Analytic plans, analytic accounts and analytic lines"
+category = "Accounting"
+author = "Arkana"
+license = "MIT OR Apache-2.0"
+version = "1.0.0"
+depends = ["base"]
+data = []
+exact_only = true

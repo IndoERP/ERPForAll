@@ -932,44 +932,40 @@ async fn serialization_failed_attempt_does_not_leave_an_event_on_retry() {
 }
 
 #[tokio::test]
-async fn oversized_capture_cannot_commit_business_rows_after_ignored_error() {
-    let fields = Box::leak(
-        (0..129)
-            .map(|n| FieldDecl::integer(Box::leak(format!("f{n}").into_boxed_str())))
-            .collect::<Vec<_>>()
-            .into_boxed_slice(),
-    );
-    let h = Harness::builder([&base_users::ADDON, &ADDON])
-        .with_decls([ModelDecl::new("test_capture", EVENTFUL)
-            .eventful(true)
-            .fields(fields)])
-        .build()
+async fn envelope_cap_failure_after_insert_cannot_commit_business_rows() {
+    let h = harness().await;
+    let mut tx = begin(&h).await;
+    let records = tx.env().records(EVENTFUL).unwrap();
+    let create_one = |n: i32| {
+        let values = RawVals::new().set_cell("number", Cell::Int(n));
+        (vec![values],)
+    };
+    for n in 0..4096 {
+        erp_orm::call_method::<(Vec<RawVals>,), erp_orm::Records>(
+            &mut tx,
+            &records,
+            "create",
+            create_one(n),
+        )
         .await
         .unwrap();
-    let mut tx = begin(&h).await;
-    tx.install_event_schema().await.unwrap();
-    tx.commit().await.unwrap();
-    let mut values = RawVals::new();
-    for n in 0..129 {
-        values.insert(format!("f{n}").into(), Cell::Int(n));
     }
-    let records = tx.env().records(EVENTFUL).unwrap();
     let error = erp_orm::call_method::<(Vec<RawVals>,), erp_orm::Records>(
         &mut tx,
         &records,
         "create",
-        (vec![values],),
+        create_one(4096),
     )
     .await
     .unwrap_err();
     assert_eq!(error.kind(), ErrorKind::ResourceExhausted);
     assert_eq!(
         error.message(),
-        "outbox CaptureLimit: event exceeds 128 changed field names"
+        "outbox CaptureLimit: transaction exceeds 4096 envelopes"
     );
     assert_eq!(
         count(&mut tx, "test_capture").await,
-        1,
+        4097,
         "admission error must follow INSERT"
     );
     let commit = tx.commit().await.unwrap_err();
@@ -1087,12 +1083,14 @@ async fn missing_partition_at_finalization_rolls_back_business_create() {
     let mut tx = begin(&h).await;
     create(&mut tx, "no partition").await;
     let error = tx.commit().await.unwrap_err();
-    assert_eq!(error.kind(), ErrorKind::Validation);
-    assert_eq!(error.sqlstate(), Some("23514"));
-    // PostgreSQL appends the partition-key timestamp in detail; the primary message is stable.
+    // the typed error naming the upkeep, the database error as its source
+    assert_eq!(error.kind(), ErrorKind::Concurrency);
+    assert_eq!(error.sqlstate(), None);
     assert_eq!(
         error.message(),
-        "The operation cannot be completed: no partition of relation \"ir_event_outbox\" found for row"
+        "outbox: no partition of erp_event.ir_event_outbox covers the transaction's day; the \
+         event partition upkeep has not run (it runs at server start and hourly; `erp audit \
+         maintain` refreshes both event tables)"
     );
     let mut check = h.begin().await.unwrap();
     assert_eq!(count(&mut check, "test_capture").await, 0);

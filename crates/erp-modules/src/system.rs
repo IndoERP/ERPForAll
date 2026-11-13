@@ -1067,6 +1067,8 @@ impl ModuleSystemBuilder {
             // erp-security (the ORM cannot register them): require them here
             .require_job_kinds(erp_security::jobs::core_job_kinds().iter())
             .job_admin_capability(&erp_security::jobs::JOBS_ADMIN)
+            // the capability behind with_user to another user (A4), also erp-security's
+            .impersonate_capability(&erp_security::principal::PRINCIPAL_IMPERSONATE)
             .unlink_hook(erp_data::model_data::UNLINK_HOOK)
             .policy(StaticPolicy::SuperuserOnly)
             .config(self.config)
@@ -1816,7 +1818,7 @@ enum Request {
     /// Like `Upgrade`, but the data loads in `init` mode.
     Reinit(Vec<ModuleName>),
     /// Set `demo` on every module and load the demo files of every installed module, nothing
-    /// else: `force_demo`,.
+    /// else: `force_demo`.
     ForceDemo,
     Uninstall(Vec<ModuleName>),
     /// Run whatever is scheduled (plain load with pending states, initialization).
@@ -2535,6 +2537,8 @@ impl ModuleSystem {
     // ---- immediate operations (MOD §4.2.4) ----------------------------------------------
 
     /// `button_immediate_install`: schedule and install in one transaction.
+    /// The shared engine heap-pins its large inner lifecycle future, so callers
+    /// may await directly without a lifecycle-specific boxing workaround.
     ///
     /// The returned [`OperationOutcome::orm`] has the registry of the new installed set: switch
     /// to it and drop the ORM you called with (its registry is the one before the install).
@@ -2543,8 +2547,8 @@ impl ModuleSystem {
     /// [`Error::AccessDenied`]; [`Error::OperationInProgress`] while another operation runs;
     /// scheduling errors; [`Error::StepFailed`] naming the module and step (hook, schema,
     /// `init()`, data file) that failed; [`Error::LockNotAvailable`] / [`Error::StatementCanceled`];
-    /// after any error nothing of the operation persists and transient states are reset
-    /// . A failing post-commit step is not an error: it is in
+    /// after any error nothing of the operation persists and transient states are reset.
+    /// A failing post-commit step is not an error: it is in
     /// [`OperationOutcome::post_commit`].
     pub async fn button_immediate_install(
         &self,
@@ -2827,6 +2831,9 @@ impl ModuleSystem {
         .await
     }
 
+    /// The engine heap-pins its large inner lifecycle future; callers may await
+    /// directly. Addon callbacks retain responsibility for their own stack requirements.
+    ///
     /// Initialize an empty database: base tables, one row per known
     /// addon with its category chain and external ids, the auto-install seed, then the install
     /// run, all in one transaction.
@@ -2835,6 +2842,12 @@ impl ModuleSystem {
     /// [`Error::DatabaseAlreadyInitialized`]; [`Error::OperationInProgress`]; any error of the
     /// install run (nothing persists).
     pub async fn initialize(&self, options: InitOptions) -> Result<OperationOutcome> {
+        // A small caller-facing future even when the transactional body or its
+        // post-commit phase grows. Keep execution and cancellation in this task.
+        Box::pin(self.initialize_inner(options)).await
+    }
+
+    async fn initialize_inner(&self, options: InitOptions) -> Result<OperationOutcome> {
         let mut optx =
             begin_operation(&self.root, self.parts.timeouts, LockWait::Refuse, true).await?;
         let limits = optx.limits;
@@ -2861,19 +2874,26 @@ impl ModuleSystem {
                 .init_models(&[])
                 .await
                 .map_err(|e| limits.during_schema_step().classify(e.into()))?;
-            erp_orm::core_ddl_run(&mut optx.tx, erp_orm::CorePhase::AfterModels).await?;
+            let deferred =
+                erp_orm::core_ddl_run(&mut optx.tx, erp_orm::CorePhase::AfterModels).await?;
+            erp_orm::core_ddl_refuse_deferred(&deferred)?;
             // The queue runs with the owner's rights: nobody else may write it. (A new table has
             // no PUBLIC privileges; this keeps that true under default privileges set on the
             // schema.)
             optx.tx
                 .batch("REVOKE ALL ON ir_module_post_commit FROM PUBLIC")
                 .await?;
+            // Columns this
+            // statement leaves out take their database default, such as base's fail-closed
+            // `share` (`db_default`), or stay NULL.
             optx.tx
                 .batch(
                     "INSERT INTO res_users (id, name, login, active) \
-                     VALUES (1, 'System', '__system__', false); \
-                     SELECT setval(pg_get_serial_sequence('res_users', 'id'), 1)",
+                     VALUES (1, 'System', '__system__', false)",
                 )
+                .await?;
+            optx.tx
+                .batch("SELECT setval(pg_get_serial_sequence('res_users', 'id'), 1)")
                 .await?;
             let (entries, _) = self.discover_admitted().await?;
             let mut catalog = Catalog::new();
@@ -3085,6 +3105,26 @@ impl ModuleSystem {
         authorizer: Option<&dyn crate::install::InstallAuthorizer>,
         package_lifecycle: bool,
     ) -> Result<OperationOutcome> {
+        // All immediate, authorized and package callers share the same heap-owned
+        // operation state, including failure cleanup and post-commit processing.
+        Box::pin(self.operation_with_authorizer_inner(
+            request,
+            wait,
+            after,
+            authorizer,
+            package_lifecycle,
+        ))
+        .await
+    }
+
+    async fn operation_with_authorizer_inner(
+        &self,
+        request: Request,
+        wait: LockWait,
+        after: AfterCommit,
+        authorizer: Option<&dyn crate::install::InstallAuthorizer>,
+        package_lifecycle: bool,
+    ) -> Result<OperationOutcome> {
         // Native human install/upgrade uses its own closure admission and audit. A package
         // lifecycle operation with a session shares authority checks and actor binding;
         // its package runtime owns admission and audit.
@@ -3118,6 +3158,8 @@ impl ModuleSystem {
             // Idempotent core DDL preserves existing singleton progress (such as the GC cursor).
             optx.tx.query(erp_sql::ddl::SCHEMA_LOCK, &[]).await?;
             erp_orm::core_ddl_run(&mut optx.tx, erp_orm::CorePhase::BeforeModels).await?;
+            // An entry deferred here is completed by the schema step that creates its model
+            // table; one still deferred before the commit is refused below.
             erp_orm::core_ddl_run(&mut optx.tx, erp_orm::CorePhase::AfterModels).await?;
             // Staging changes discovery, not the live package. Validate its immutable old
             // preimage against durable storage before consuming candidate content or effects.
@@ -3182,6 +3224,8 @@ impl ModuleSystem {
             let orm = run.update(&mut optx, &mut catalog).await?;
             self.signal_registry_change(&mut optx.tx, &run).await?;
             run.before_commit(&mut optx.tx).await?;
+            let deferred = erp_orm::core_ddl_pending(&mut optx.tx).await?;
+            erp_orm::core_ddl_refuse_deferred(&deferred)?;
             if let (true, Some(checked)) = (human_native_lifecycle, authorization) {
                 let (operation, requested) = match &request {
                     Request::Install(requested) => {
@@ -5474,8 +5518,7 @@ impl<'s> Run<'s> {
             .await?;
         }
 
-        // The end-of-run cleanup of what the updated modules no longer load, before the uninstall
-        // .
+        // The end-of-run cleanup of what the updated modules no longer load, before the uninstall.
         if let Some(session) = session.as_deref_mut() {
             // A forced demo load reloads no data file, so the cleanup of "records the module no
             // longer loads" would delete every data record of every module: it must not run.
@@ -5619,8 +5662,7 @@ impl<'s> Run<'s> {
         Ok(orm)
     }
 
-    /// Create or alter the tables of the module's affected models, then `init()` on each
-    /// .
+    /// Create or alter the tables of the module's affected models, then `init()` on each.
     async fn update_schema(
         &self,
         tx: &mut Transaction,
@@ -5639,27 +5681,44 @@ impl<'s> Run<'s> {
             .filter(|m| m.has_generic_table())
             .map(|m| m.id)
             .collect();
+        // an install or upgrade is the one place SQL objects may change (A6)
+        let options = self.system.parts.schema_sync.lifecycle(true);
+        let declares_sql_objects = registry
+            .sql_objects()
+            .objects()
+            .iter()
+            .any(|o| o.owner() == module.as_str());
+        if ids.is_empty() && declares_sql_objects {
+            // no table model to sync, but SQL objects to install (plan D9)
+            tx.init_sql_objects(&options).await.map_err(|e| {
+                step_error(module, ModuleStep::Schema, None)(
+                    limits.during_schema_step().classify(e.into()),
+                )
+            })?;
+        }
         if !ids.is_empty() {
             // The schema step lowers the timeouts to its own bounds: a lock or statement error
             // reports the limit it ran under. Work that scans or rewrites a table above the
             // threshold of `schema_sync_options` is not done here: it comes back as steps, queued
             // below in this same transaction and run after the commit (Amendment 2).
-            let sync = tx
-                .init_models_with(&ids, &self.system.parts.schema_sync)
-                .await
-                .map_err(|e| {
-                    step_error(module, ModuleStep::Schema, None)(
-                        limits.during_schema_step().classify(e.into()),
-                    )
-                })?;
+            let sync = tx.init_models_with(&ids, &options).await.map_err(|e| {
+                step_error(module, ModuleStep::Schema, None)(
+                    limits.during_schema_step().classify(e.into()),
+                )
+            })?;
             queue_schema_steps(tx, module, sync)
                 .await
                 .map_err(|e| step_error(module, ModuleStep::Schema, None)(e.into()))?;
             // A core table that refers to a model's table is completed once that table exists:
             // on an upgrade the table of a new model is created by the step above.
-            erp_orm::core_ddl_run(tx, erp_orm::CorePhase::AfterModels)
+            let deferred = erp_orm::core_ddl_pending(tx)
                 .await
                 .map_err(|e| step_error(module, ModuleStep::Schema, None)(e.into()))?;
+            if !deferred.is_empty() {
+                erp_orm::core_ddl_run_deferred(tx, &deferred)
+                    .await
+                    .map_err(|e| step_error(module, ModuleStep::Schema, None)(e.into()))?;
+            }
             self.checkpoint(tx)
                 .await
                 .map_err(step_error(module, ModuleStep::Schema, None))?;
@@ -5897,8 +5956,8 @@ impl<'s> Run<'s> {
         Ok(())
     }
 
-    /// The files of one manifest list, in order. A file listed twice loads twice and is noticed
-    /// ; `.js` is ignored; other extensions fail.
+    /// The files of one manifest list, in order. A file listed twice loads twice and is noticed;
+    /// `.js` is ignored; other extensions fail.
     #[allow(
         clippy::too_many_arguments,
         reason = "one call site; the arguments are the step's context"

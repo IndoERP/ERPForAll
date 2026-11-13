@@ -1,4 +1,4 @@
-//! CSV data files through the module system: and.
+//! CSV data files through the module system.
 //!
 //! Dev-folder addons, a throwaway database on the dev cluster, leaked model declarations. Each
 //! test runs in its own process (nextest).

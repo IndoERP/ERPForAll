@@ -1183,22 +1183,21 @@ async fn a_batch_over_the_chunk_runs_one_statement_per_chunk() {
     h.cleanup().await.unwrap();
 }
 
-/// A company-dependent field is checked against the current company, not the record's. The values
-/// stay in the cache (no flush): per-company storage of such fields arrives with, until
-/// then their jsonb column cannot take an id.
+/// A company-dependent link is checked against the current company, not the record's.
 #[tokio::test]
 async fn company_dependent_fields_are_checked_against_the_current_company() {
     let h = company_orm().await;
     let mut tx = h.begin().await.unwrap();
     let w = world(&mut tx).await;
     let in_root = tx.env().with_company(w.r).unwrap();
-    let dep = accepted_create(
-        &mut tx,
-        "test_company.dep",
-        &[("company_id", Value::Int(w.o))],
-    )
-    .await
-    .ids()[0];
+    // the create stores company-dependent values for a current company: Root
+    let dep = in_root
+        .records("test_company.dep")
+        .unwrap()
+        .create_values(&mut tx, &[map(&[("company_id", Value::Int(w.o))])])
+        .await
+        .unwrap()
+        .ids()[0];
     let with_company = in_root
         .records("test_company.dep")
         .unwrap()
@@ -1228,26 +1227,25 @@ async fn company_dependent_fields_are_checked_against_the_current_company() {
             "'TagO'",
         )]),
     );
-    // without a current company a value cannot be checked
-    let err = tx
-        .savepoint(async |tx| {
-            without_company
-                .set_value(tx, "pref_tag_id", Value::Int(w.tag_r))
-                .await
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(err.kind(), ErrorKind::UserError);
-    assert_eq!(
-        err.message(),
-        "test_company.dep.pref_tag_id is company-dependent and was written without a current \
-         company"
-    );
-    // an empty value needs no company; a value of the current company is consistent
-    without_company
-        .set_value(&mut tx, "pref_tag_id", Value::False)
-        .await
-        .unwrap();
+    // without a current company a company-dependent write is refused by the property runtime
+    // before the consistency check (it has no company to store the value for, not even an empty
+    // one; the runtime plan's "never an implicit company 1")
+    for value in [Value::Int(w.tag_r), Value::False] {
+        let err = tx
+            .savepoint(async |tx| {
+                without_company
+                    .set_value(tx, "pref_tag_id", value.clone())
+                    .await
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Validation);
+        assert_eq!(
+            err.message(),
+            "company-dependent fields require a current company"
+        );
+    }
+    // a value of the current company is consistent
     with_company
         .set_value(&mut tx, "pref_tag_id", Value::Int(w.tag_r))
         .await
@@ -1505,7 +1503,7 @@ async fn the_check_reads_a_big_comodel_through_its_index() {
 /// Review R1: the companies of a `company_ids` target and the link rows of a many2many are raw
 /// reads (archived targets included), so they are read again by every check that needs them: a
 /// warm check of such a field costs exactly one read statement, a warm check of a many2one
-/// company or of cached parent paths none. The cost is documented.
+/// company or of cached parent paths none. The cost is.
 #[tokio::test]
 async fn a_warm_check_of_company_ids_targets_costs_one_read() {
     let h = company_orm().await;

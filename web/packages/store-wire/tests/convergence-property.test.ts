@@ -1,6 +1,6 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
-// Convergence property. The server model and the independent oracle live in
-// ./model/server-model.ts; this file only generates scripts, runs them and compares with the oracle.
+// Convergence property. The server model and the independent oracle live in.
+// /model/server-model.ts; this file only generates scripts, runs them and compares with the oracle.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import fc from "fast-check";

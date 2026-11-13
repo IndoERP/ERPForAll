@@ -9,10 +9,13 @@
 )]
 
 mod attachment_support;
+mod company_rows_support;
 
 use std::sync::Arc;
 
 use attachment_support::{bytes_attachment, count, limits};
+use company_rows_support::UserKind::Internal;
+use company_rows_support::fixture_user;
 use erp_addon_base::attachments::{
     self, AttachmentContent, ListOptions, NewAttachment, ParentRef, UNLINK_HOOK,
 };
@@ -42,24 +45,6 @@ struct World {
 
 async fn one(c: &Client, sql: &str, p: &[&(dyn ToSql + Sync)]) -> i64 {
     c.query_one(sql, p).await.unwrap().get(0)
-}
-
-async fn user(c: &Client, login: &str, groups: &[i64]) -> i64 {
-    let uid = one(
-        c,
-        "INSERT INTO res_users (name, login, active, share) VALUES ($1, $1, true, false) RETURNING id::int8",
-        &[&login],
-    )
-    .await;
-    for g in groups {
-        c.execute(
-            "INSERT INTO res_groups_users_rel (uid, gid) VALUES ($1, $2)",
-            &[&uid, g],
-        )
-        .await
-        .unwrap();
-    }
-    uid
 }
 
 async fn group(c: &Client, name: &str, xmlid: &str) -> i64 {
@@ -119,6 +104,13 @@ async fn world() -> World {
     let attachments_model = model(&client, "ir.attachment").await;
     let users_model = model(&client, "res.users").await;
     let groups_model = model(&client, "res.groups").await;
+    // installation emits the generated company restrictions; this database has no installation
+    company_rows_support::insert_generated(
+        &client,
+        h.registry(),
+        &company_rows_support::PARTNER_AND_USERS,
+    )
+    .await;
     let hide_secret = "[('name', '!=', 'Secret')]";
     access(
         &client,
@@ -177,10 +169,11 @@ async fn world() -> World {
     )
     .await;
     access(&client, "groups read", groups_model, internal, "r", None).await;
-    let admin = user(&client, "admin", &[internal, system]).await;
-    let alice = user(&client, "alice", &[internal]).await;
-    let bob = user(&client, "bob", &[internal]).await;
-    let eve = user(&client, "eve", &[]).await;
+    let company = company_rows_support::fixture_company(&client).await;
+    let admin = fixture_user(&client, "admin", &[internal, system], Internal, company).await;
+    let alice = fixture_user(&client, "alice", &[internal], Internal, company).await;
+    let bob = fixture_user(&client, "bob", &[internal], Internal, company).await;
+    let eve = fixture_user(&client, "eve", &[], Internal, company).await;
     let source = PolicySource::build(Arc::clone(h.registry()), pool(&h, 2))
         .await
         .unwrap();

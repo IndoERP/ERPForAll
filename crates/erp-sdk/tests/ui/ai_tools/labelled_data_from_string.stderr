@@ -1,0 +1,10 @@
+error[E0308]: mismatched types
+ --> tests/ui/ai_tools/labelled_data_from_string.rs:7:36
+  |
+7 |     let _data = LabelledData::from(text);
+  |                 ------------------ ^^^^ expected `LabelledData`, found `String`
+  |                 |
+  |                 arguments to this function are incorrect
+  |
+note: associated function defined here
+ --> $RUST/core/src/convert/mod.rs

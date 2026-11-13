@@ -361,7 +361,7 @@ impl Walk<'_, '_> {
         Ok(match e {
             Expression::Identifier(id) => self.identifier(id.name.as_str())?,
             Expression::ThisExpression(_) => match self.env.trust {
-                // Trusted templates see their component (restricted mode,, will
+                // Trusted templates see their component (restricted mode, will
                 // not expose it).
                 Trust::Trusted => Expr::This,
             },

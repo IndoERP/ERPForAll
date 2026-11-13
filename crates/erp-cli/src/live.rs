@@ -95,9 +95,11 @@ async fn run(
     let builder = ModuleSystem::builder(pool, index)
         .code([
             &erp_addon_base::ADDON,
+            &erp_addon_barcodes::ADDON,
             &erp_addon_uom::ADDON,
             &erp_addon_mail::ADDON,
             &erp_addon_product::ADDON,
+            &erp_addon_product_mail::ADDON,
             &erp_addon_web::ADDON,
             &erp_addon_acceptance_notes::ADDON,
             &erp_addon_theme_office_blue::ADDON,
@@ -111,7 +113,10 @@ async fn run(
         .signal(Signal::new(baseline).with_refresh(crate::node::OwnerRefresh))
         .lifecycle_hook(Arc::new(crate::ui_assets::AssetLifecycle::new(
             crate::ui_assets::host_options()?,
-        )));
+        )))
+        .lifecycle_hook(Arc::new(
+            crate::attachment_schedules::AttachmentScheduleLifecycle,
+        ));
     let builder = match request.identity_previous {
         Some(previous) => match crate::identity::previous_release_identities(previous)? {
             crate::identity::PreviousRelease::Verified(hashes) => builder.identity_previous(hashes),

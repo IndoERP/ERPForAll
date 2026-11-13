@@ -1,0 +1,5 @@
+error: unknown #[rpc] parameter `offer`: expected effect, model, assistant or hide
+ --> tests/ui/rpc_assistant/unknown_parameter.rs:4:26
+  |
+4 |     #[rpc(effect = read, offer)]
+  |                          ^^^^^

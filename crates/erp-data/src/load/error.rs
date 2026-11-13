@@ -81,8 +81,7 @@ pub enum LoadErrorKind {
     Orm(erp_fields::Error),
     /// An external ID string was invalid ([`InvalidXmlId`]).
     InvalidExternalId(crate::ast::InvalidXmlId),
-    /// `ref="…"`, `uid="…"` or `ref()` named an external id that does not exist
-    /// .
+    /// `ref="…"`, `uid="…"` or `ref()` named an external id that does not exist.
     ExternalIdNotFound {
         /// The qualified external id.
         xid: String,
@@ -137,14 +136,12 @@ pub enum LoadErrorKind {
         /// The model the external id points at.
         model: String,
     },
-    /// A record of another module's external id that does not exist and may not be created
-    /// .
+    /// A record of another module's external id that does not exist and may not be created.
     MissingForeignRecord {
         /// The qualified external id.
         xid: String,
     },
-    /// A record's external id names a module that is not part of this install step
-    /// .
+    /// A record's external id names a module that is not part of this install step.
     UninstalledModule {
         /// The qualified external id.
         xid: String,
@@ -209,8 +206,7 @@ pub enum LoadErrorKind {
         /// The board task that adds the model.
         slice: String,
     },
-    /// A `search=` value without a model, on a field that is not relational
-    /// .
+    /// A `search=` value without a model, on a field that is not relational.
     SearchNeedsModel,
     /// An addon file a `<field>` names could not be read.
     File(crate::load::FileReadError),
@@ -499,8 +495,7 @@ impl fmt::Display for DataNotice {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum NoticeKind {
-    /// The file is listed twice in the same manifest list and was loaded twice
-    /// .
+    /// The file is listed twice in the same manifest list and was loaded twice.
     RepeatedFile,
     /// A `.js` file in a data list: valid, not loaded.
     IgnoredFile,
@@ -509,8 +504,7 @@ pub enum NoticeKind {
         /// Why.
         reason: String,
     },
-    /// A `<record forcecreate="0">` was skipped because a `ref=` did not resolve
-    /// .
+    /// A `<record forcecreate="0">` was skipped because a `ref=` did not resolve.
     SkippedUnresolvedRef {
         /// The record's external id, when it has one.
         xid: Option<String>,
@@ -551,8 +545,8 @@ pub enum NoticeKind {
         xmlid: String,
     },
     /// A view named by an external id of a module that stays was deleted with a removed
-    /// module's own view it was built on (the view model's `force_delete` cascade,
-    /// ; review S-4).
+    /// module's own view it was built on (the view model's `force_delete` cascade;
+    /// review S-4).
     PurgeViewCascaded {
         /// The deleted view.
         view_id: i64,

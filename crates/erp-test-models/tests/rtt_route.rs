@@ -20,8 +20,8 @@ use std::time::Duration;
 
 use erp_orm::{
     AccessPolicy, BeginOptions, CompanyId, GroupId, GroupSet, IntoPolicyProvider, ListenerOptions,
-    Operation, Orm, Principal, PrincipalBuilder, PrincipalHint, PrincipalResolver, ReadPoolFailure,
-    Resolution, ResolverStatement, Route, SUPERUSER_ID, Signal, SignalKey, UserId,
+    Operation, Orm, Principal, PrincipalBuilder, PrincipalHint, PrincipalResolver, ReadAuditOwner,
+    ReadPoolFailure, Resolution, ResolverStatement, Route, SUPERUSER_ID, Signal, SignalKey, UserId,
     spawn_in_unit_of_work, unit_of_work,
 };
 use erp_sdk::{Domain, ErrorKind, Operator, Records, Transaction, Value};
@@ -421,6 +421,82 @@ async fn a_read_opened_before_the_write_moves_to_the_primary_at_begin() {
     .await;
     let stats = orm.routing_stats();
     assert_eq!((stats.read_pool_served, stats.unit_of_work_wrote), (0, 1));
+    h.cleanup().await.unwrap();
+}
+
+/// An owned read-only transaction (a read-audit owner is declared) of the superuser.
+fn owned_read_opts() -> BeginOptions {
+    BeginOptions::new(SUPERUSER_ID)
+        .read_only_audited("test.read", ReadAuditOwner::new("rtt-route-test").unwrap())
+}
+
+/// an owned read-only transaction is recorded before the first statement; the first statement
+/// reroutes the transaction to the primary (a write began in the unit of work), and the commit
+/// still hands the elevation to the owner's attempt row.
+#[tokio::test]
+async fn unscoped_sudo_evidence_survives_a_reroute_to_the_primary() {
+    let h = access_harness(open_policy()).await;
+    let orm = routed_orm(&h, open_policy()).await;
+    // the store state is cached per ORM: this one has not checked it yet
+    orm.check_audit_store().await.unwrap();
+    unit_of_work(async {
+        let mut read = orm.begin_opts(owned_read_opts()).await.unwrap();
+        assert_eq!(read.route(), Route::ReadPool);
+        let write = orm.begin(SUPERUSER_ID).await.unwrap();
+        let base = read.env();
+        read.audited_unscoped_sudo(&base, "rtt_route").unwrap();
+        assert_eq!(app_name(&mut read).await, PRIMARY);
+        assert_eq!(read.route(), Route::Primary);
+        read.commit().await.unwrap();
+        let evidence = read.take_audit_attempt();
+        assert!(evidence.has_elevation(), "{evidence:?}");
+        let shown = format!("{evidence:?}");
+        assert!(shown.contains("core.sudo.unscoped"), "{shown}");
+        drop(write);
+    })
+    .await;
+    h.cleanup().await.unwrap();
+}
+
+/// owned read-only transaction that has sent no statement opens the transaction first, so the
+/// reroute to the primary settles before the block exists: the block reads on the primary, and the
+/// commit hands the elevation to the owner's attempt row.
+#[tokio::test]
+async fn a_scoped_block_in_an_owned_read_reroutes_before_the_block_and_keeps_its_evidence() {
+    let h = access_harness(open_policy()).await;
+    let orm = routed_orm(&h, open_policy()).await;
+    // the store state is cached per ORM: this one has not checked it yet
+    orm.check_audit_store().await.unwrap();
+    unit_of_work(async {
+        let mut read = orm.begin_opts(owned_read_opts()).await.unwrap();
+        assert_eq!(read.route(), Route::ReadPool);
+        let write = orm.begin(SUPERUSER_ID).await.unwrap();
+        let model = read.registry().model_id("res.users").unwrap();
+        let scope = erp_orm::ElevationScope::new([erp_orm::ScopeItem::new(
+            model,
+            erp_orm::OperationSet::of([Operation::Read]),
+        )
+        .unwrap()])
+        .unwrap();
+        let reason = erp_orm::audit::ElevationReason::new("rtt.route.block").unwrap();
+        let base = read.env();
+        let app = read
+            .elevated(&base, reason, scope, async |tx, env| {
+                env.records("res.users")?.search(tx, &Domain::TRUE).await?;
+                Ok(app_name(tx).await)
+            })
+            .await
+            .unwrap();
+        assert_eq!(app, PRIMARY);
+        assert_eq!(read.route(), Route::Primary);
+        read.commit().await.unwrap();
+        let evidence = read.take_audit_attempt();
+        assert!(evidence.has_elevation(), "{evidence:?}");
+        let shown = format!("{evidence:?}");
+        assert!(shown.contains("rtt.route.block"), "{shown}");
+        drop(write);
+    })
+    .await;
     h.cleanup().await.unwrap();
 }
 

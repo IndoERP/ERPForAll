@@ -29,6 +29,56 @@ impl LimitKind {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum BlobError {
+    /// A peer transcript or admission prerequisite was not established.
+    #[error("attachment peer probe refused: {reason}")]
+    PeerProbe {
+        /// Fixed diagnostic, never a path or untrusted record.
+        reason: &'static str,
+    },
+    /// Receiving and aborting its incomplete multipart session both failed.
+    #[error("{receive}; aborting the incomplete staging upload also failed: {abort}")]
+    StagingAbort {
+        /// Original receive failure, retained as the primary cause.
+        #[source]
+        receive: Box<BlobError>,
+        /// Separate bounded backend diagnostic for the abort failure.
+        abort: Box<BlobError>,
+    },
+    /// Destructive work lacks a current coordinator/store admission. No paths or marker bytes.
+    #[error("Attachment cleanup refused: {reason}.")]
+    CleanupRefused {
+        /// Fixed diagnostic, never user or store response text.
+        reason: &'static str,
+    },
+    /// Marker operations are unavailable; capability flags cannot grant deletion admission.
+    #[error(
+        "attachment owner fencing is unsupported by this store; local locking requires a later release"
+    )]
+    UnsupportedOwnerFence,
+    /// A real probe did not establish the named conditional operation.
+    #[error("the attachment store lacks required owner-fence capability: {capability}")]
+    OwnerCapabilityMissing {
+        /// A fixed capability name, never a backend response or URL.
+        capability: &'static str,
+    },
+    /// A create-only or compare-and-swap condition failed. The coordinator must contest it.
+    #[error("the attachment owner marker changed or already exists")]
+    OwnerConflict,
+    /// A bounded store record or concurrency token was malformed.
+    #[error("the attachment owner marker is invalid: {reason}")]
+    InvalidOwnerMarker {
+        /// A fixed diagnostic; untrusted marker bytes are not echoed.
+        reason: &'static str,
+    },
+    /// The probe's private markers could not be removed; both failures remain inspectable.
+    #[error("the attachment owner capability probe could not remove its private markers")]
+    OwnerProbeCleanup {
+        /// The original probe failure, if any.
+        probe: Option<Box<BlobError>>,
+        /// The cleanup failure.
+        #[source]
+        cleanup: Box<BlobError>,
+    },
     /// The key is not in the store. Never turned into empty content.
     #[error("the store has no object for key {key}")]
     NotFound {
@@ -93,6 +143,21 @@ pub enum BlobError {
     Busy {
         /// The configured per-node bound.
         permits: u32,
+    },
+    /// Receiving exceeded the lifetime of its durable intent; no body work may outlive cleanup eligibility.
+    #[error("The upload intent expired before receiving completed.")]
+    UploadExpired,
+    /// Storage quota or a hard staging-byte budget was exhausted.
+    #[error("QuotaExceeded: {budget} uses {used} bytes; requested {requested}, limit {limit}")]
+    QuotaExceeded {
+        /// Stable budget identity: database quota, database staging or subject staging.
+        budget: &'static str,
+        /// Bytes already accounted for.
+        used: u64,
+        /// Bytes this admission would add.
+        requested: u64,
+        /// Budget in bytes.
+        limit: u64,
     },
     /// The store configuration is wrong, or names a store kind that is not built yet.
     #[error("attachment store configuration: {message}")]

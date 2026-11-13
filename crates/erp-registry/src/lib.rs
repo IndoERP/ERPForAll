@@ -20,13 +20,16 @@ mod keys;
 mod order;
 mod overlay;
 mod owned;
+mod owner_fields;
 mod partition;
 mod relations;
 mod rpc;
 pub mod settings;
 mod share;
 mod spec;
+mod sqlobj;
 pub mod statement_cache;
+pub mod tool_schema;
 mod transient_policy;
 mod typed_index;
 
@@ -37,8 +40,8 @@ pub use company_access::{
     OwnerGap, OwnerRestriction, ParentDecl, Restriction, UnrestrictedDecl,
 };
 pub use compose::{
-    BASE_ADDON, BASE_DECL, MAGIC_FIELD_NAMES, MAX_TRACKED_FIELDS, RegistryBuilder, USERS_DECL,
-    WEB_ADDON, WEB_DECL, static_default,
+    BASE_ADDON, BASE_DECL, MAGIC_FIELD_NAMES, MAX_EVENT_FIELD_NAMES, MAX_TRACKED_FIELDS,
+    RegistryBuilder, USERS_DECL, WEB_ADDON, WEB_DECL, static_default,
 };
 pub use decl::KeyDecl;
 pub use decl::{
@@ -72,12 +75,22 @@ pub use partition::{
     MAX_PARTITION_INTERVALS, MAX_PARTITIONED_TABLE_LEN, PARTITION_ADR, POLICY_SOURCE_MODELS,
     Partition, PartitionDecl, PartitionInterval, PartitionRetain, partition_name,
 };
-pub use rpc::{Effect, ParamSpec, Receiver};
+pub use rpc::{ArgShape, Effect, ParamSpec, Receiver};
 pub use share::{Databases, RegistryCache};
 pub use spec::{
-    CheckCompany, CompanyMatch, CompanyScope, ComputeRead, EVENT_SCHEMA, FieldDefault, FieldId,
-    FieldSpec, Inherited, ManyMatch, ModelId, ModelSpec, Registry, SingleMatch, TableNamespace,
-    TableObject,
+    CheckCompany, CompanyDelegation, CompanyMatch, CompanyScope, ComputeRead, EVENT_SCHEMA,
+    FieldDefault, FieldId, FieldSpec, Inherited, ManyMatch, ModelId, ModelSpec, Registry,
+    SingleMatch, TableNamespace, TableObject,
+};
+pub use sqlobj::SqlObjectLimits;
+pub use sqlobj::decl::{
+    SqlBodyRender, SqlColumnSet, SqlCompareColumn, SqlConditionDecl, SqlDeferral, SqlDep, SqlEvent,
+    SqlFunctionDecl, SqlLanguage, SqlLevel, SqlObjectDecl, SqlObjectManifest, SqlResult, SqlScalar,
+    SqlSecurity, SqlTiming, SqlTriggerDecl, SqlType, SqlVolatility,
+};
+pub use sqlobj::graph::{
+    SqlCondition, SqlFunction, SqlModelRef, SqlObject, SqlObjectGraph, SqlObjectId, SqlObjectKind,
+    SqlReference, SqlTransition, SqlTrigger, SqlTriggerShape,
 };
 pub use statement_cache::{ModelStatementCache, SelectShape, StatementCache};
 pub use transient_policy::{
@@ -102,6 +115,21 @@ fn linked_decls() -> impl Iterator<Item = &'static ModelDecl> {
 #[cfg(target_family = "wasm")]
 fn linked_decls() -> impl Iterator<Item = &'static ModelDecl> {
     std::iter::empty()
+}
+
+/// SQL object declarations linked into the binary by native addons (native builds only).
+#[cfg(not(target_family = "wasm"))]
+#[linkme::distributed_slice]
+pub static SQL_OBJECT_DECLS: [SqlObjectDecl];
+
+#[cfg(not(target_family = "wasm"))]
+fn linked_sql_objects() -> &'static [SqlObjectDecl] {
+    &SQL_OBJECT_DECLS
+}
+
+#[cfg(target_family = "wasm")]
+fn linked_sql_objects() -> &'static [SqlObjectDecl] {
+    &[]
 }
 
 /// Re-exported for macro output.

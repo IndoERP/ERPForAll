@@ -37,10 +37,17 @@ async fn spec_env_003_superuser_id_forces_superuser_mode() {
     let tx = h.begin_as(5).await.unwrap();
     let env = tx.env();
     assert!(!env.su());
-    assert!(h.orm().env(SUPERUSER_ID, Context::new()).su());
-    assert!(env.with_user(SUPERUSER_ID).su());
+    let system = h.orm().env(SUPERUSER_ID, Context::new());
+    assert!(system.su());
+    // with_user(1) gives superuser mode from the System principal; a user's switch to the
+    // superuser id is refused and never superuser mode (A4)
+    assert!(!system.with_user(5).sudo(true).with_user(SUPERUSER_ID).su());
+    assert!(!env.with_user(SUPERUSER_ID).su());
     let recs = env.records("test_orm.partner").unwrap();
-    assert!(recs.with_user(SUPERUSER_ID).env().su());
+    assert!(!recs.with_user(SUPERUSER_ID).env().su());
+    let system_recs = system.records("test_orm.partner").unwrap();
+    assert!(!system_recs.with_user(5).with_user(SUPERUSER_ID).env().su());
+    assert!(system_recs.with_user(SUPERUSER_ID).env().su());
     assert!(!recs.sudo(true).with_user(5).env().su());
     drop(tx);
     h.cleanup().await.unwrap();

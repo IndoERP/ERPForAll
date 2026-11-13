@@ -1,5 +1,5 @@
 //! Stock hyper 1.12 measured by the served-path harness (PERF.SERVE-HARNESS, perf-serve §3
-//! "First measurements", recorded in perf-serve §12;, G6 items 3–5).
+//! "First measurements", recorded in perf-serve §12, G6 items 3–5).
 //!
 //! Two services, as the design names them: a `service_fn` returning a 4 KiB static body and a
 //! JSON echo of a 2 KiB body, each with hyper's defaults (no timer) and with a Tokio timer and a

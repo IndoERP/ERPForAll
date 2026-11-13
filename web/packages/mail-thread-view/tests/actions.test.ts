@@ -85,8 +85,8 @@ test("bookmark and pin act through the transport on the viewer's flag and are hi
   const thread = rig.thread({ order: "asc" });
   const bookmark = (id: number) => article(thread, id).querySelector<HTMLButtonElement>('[data-action="bookmark"]')!;
   const pin = (id: number) => article(thread, id).querySelector<HTMLButtonElement>('[data-action="pin"]')!;
-  expect([bookmark(1).textContent, bookmark(1).getAttribute("aria-pressed"), bookmark(2).textContent, bookmark(2).getAttribute("aria-pressed")]).toEqual(["*Remove bookmark", "true", "*Bookmark", "false"]);
-  expect([pin(1).textContent, pin(2).textContent, pin(2).getAttribute("aria-pressed")]).toEqual(["^Pin", "^Unpin", "true"]);
+  expect([bookmark(1).textContent, bookmark(1).getAttribute("aria-pressed"), bookmark(2).textContent, bookmark(2).getAttribute("aria-pressed")]).toEqual(["Remove bookmark", "true", "Bookmark", "false"]);
+  expect([pin(1).textContent, pin(2).textContent, pin(2).getAttribute("aria-pressed")]).toEqual(["Pin", "Unpin", "true"]);
   bookmark(1).click();
   bookmark(2).click();
   pin(2).click();

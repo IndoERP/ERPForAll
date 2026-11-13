@@ -260,7 +260,7 @@ impl Transaction {
             )));
         }
         for statement in statements {
-            self.require_writable_sql(statement.sql)?;
+            self.require_writable_sql("ORM statement", statement.sql)?;
         }
         // a flight statement deleting from a followed table forgets what the follow-delete
         // triggers changed, as a sequential one does (review C3-X2)

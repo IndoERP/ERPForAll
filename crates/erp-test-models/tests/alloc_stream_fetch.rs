@@ -1,5 +1,5 @@
-//! Allocation budget of a search with fetched columns (`SearchQuery::execute`, design note
-//! ; standards §5b): 5 columns of `bench.order.line` (two of
+//! Allocation budget of a search with fetched columns (`SearchQuery::execute`;
+//! standards §5b): 5 columns of `bench.order.line` (two of
 //! them text) for 20,000 and 40,000 lines, one statement each, in a transaction whose cache was
 //! dropped. The rows are decoded into the cache as the driver receives them, so what is live
 //! beyond the answer at the peak (`peak_bytes − end_bytes`, the transient) must not grow with the

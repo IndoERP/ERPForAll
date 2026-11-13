@@ -260,6 +260,11 @@ async fn upkeep_recreates_a_missing_partition() {
 
 /// Run `forge` on a fresh install, then install again: it must be refused with `code`.
 async fn forged_after_install(forge: &str, code: &str) {
+    forged_after_install_naming(forge, code, "").await;
+}
+
+/// As [`forged_after_install`], and the refusal message must also contain `fragment` (the cause).
+async fn forged_after_install_naming(forge: &str, code: &str, fragment: &str) {
     let h = harness().await;
     let mut tx = h.begin().await.unwrap();
     tx.install_event_schema().await.unwrap();
@@ -271,7 +276,68 @@ async fn forged_after_install(forge: &str, code: &str) {
         .await
         .expect_err("a forged object must be refused");
     refused(&error, code);
+    assert!(
+        error.message().contains(fragment),
+        "expected the refusal to name {fragment:?}, got: {}",
+        error.message()
+    );
     h.cleanup().await.unwrap();
+}
+
+/// Each forged property of an otherwise correct past-day partition, or of the parent, is refused by
+/// name and cause: UNLOGGED, a trigger, a rule, row-level security enabled, forced, a policy.
+#[tokio::test]
+async fn forged_partition_and_parent_security_are_refused() {
+    // A correctly named, correctly ranged past-day partition, so only the forged property is wrong.
+    const PARTITION: &str = "CREATE TABLE erp_event.ir_event_outbox_p20200101 \
+         PARTITION OF erp_event.ir_event_outbox \
+         FOR VALUES FROM ('2020-01-01 00:00:00+00') TO ('2020-01-02 00:00:00+00'); ";
+    // A partition may be UNLOGGED under a permanent parent (only a partitioned table itself may
+    // not), so the forge flips the correct partition.
+    const UNLOGGED: &str = "ALTER TABLE erp_event.ir_event_outbox_p20200101 SET UNLOGGED";
+    let trigger = "CREATE FUNCTION public.forged_trigger() RETURNS trigger LANGUAGE plpgsql \
+         AS 'BEGIN RETURN NEW; END'; \
+         CREATE TRIGGER t BEFORE INSERT ON erp_event.ir_event_outbox_p20200101 \
+         FOR EACH ROW EXECUTE FUNCTION public.forged_trigger()";
+    for (forge, fragment) in [
+        (UNLOGGED, "unlogged"),
+        (trigger, "trigger"),
+        (
+            "CREATE RULE r AS ON INSERT TO erp_event.ir_event_outbox_p20200101 DO INSTEAD NOTHING",
+            "rule",
+        ),
+        (
+            "ALTER TABLE erp_event.ir_event_outbox_p20200101 ENABLE ROW LEVEL SECURITY",
+            "row-level security",
+        ),
+        (
+            "ALTER TABLE erp_event.ir_event_outbox_p20200101 FORCE ROW LEVEL SECURITY",
+            "row-level security",
+        ),
+        (
+            "CREATE POLICY p ON erp_event.ir_event_outbox_p20200101 USING (true)",
+            "polic",
+        ),
+    ] {
+        forged_after_install_naming(&format!("{PARTITION}{forge}"), "forged-partition", fragment)
+            .await;
+    }
+    for (forge, fragment) in [
+        (
+            "ALTER TABLE erp_event.ir_event_outbox ENABLE ROW LEVEL SECURITY",
+            "row-level security",
+        ),
+        (
+            "ALTER TABLE erp_event.ir_event_outbox FORCE ROW LEVEL SECURITY",
+            "row-level security",
+        ),
+        (
+            "CREATE POLICY p ON erp_event.ir_event_outbox USING (true)",
+            "polic",
+        ),
+    ] {
+        forged_after_install_naming(forge, "forged-constraint", fragment).await;
+    }
 }
 
 /// An existing object of the wrong shape is refused by name, whatever was forged: a default that

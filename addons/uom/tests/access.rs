@@ -19,7 +19,7 @@ async fn privileged_warm_unit_cannot_bypass_caller_model_read_denial() {
     guard_fixture::install(&h).await;
     let mut tx = h.begin().await.unwrap();
     tx.batch(
-        "INSERT INTO res_users (id, name, login, active) VALUES (42, 'Reader', 'reader', true)",
+        "INSERT INTO res_users (id, name, login, active, share) VALUES (42, 'Reader', 'reader', true, false)",
     )
     .await
     .unwrap();
@@ -76,7 +76,7 @@ async fn caller_must_read_target_and_all_ancestors_even_after_system_warmup() {
     guard_fixture::install(&h).await;
     let mut tx = h.begin().await.unwrap();
     tx.batch(
-        "INSERT INTO res_users (id, name, login, active) VALUES (42, 'Reader', 'reader', true)",
+        "INSERT INTO res_users (id, name, login, active, share) VALUES (42, 'Reader', 'reader', true, false)",
     )
     .await
     .unwrap();

@@ -105,3 +105,63 @@ async fn a_revoked_credential_is_rechecked_before_the_method_can_run_again() {
         "the second attempt was refused before invoking the method"
     );
 }
+
+/// A test credential that drops the read-audit owner the service declared: it reopens the same
+/// read intent through `read_only`, which clears the owner.
+#[derive(Debug)]
+struct OwnerDropping {
+    principal: Principal,
+}
+impl RpcCredential for OwnerDropping {
+    fn failure(&self, error: Error) -> erp_rpc::RpcFailure {
+        panic!("the credential itself must not fail: {error:?}");
+    }
+    fn begin<'a>(
+        &'a self,
+        orm: &'a Orm,
+        options: CredentialOptions,
+    ) -> erp_orm::BoxFuture<'a, Result<erp_orm::Transaction>> {
+        Box::pin(async move {
+            assert!(
+                options.read_audit_owner().is_some(),
+                "the service declares its owner on a read call"
+            );
+            let options = options.read_only("test_rpc.effects.probe");
+            assert!(options.read_audit_owner().is_none());
+            match orm
+                .begin_credential(options, &AcceptedCheck(&self.principal))
+                .await?
+            {
+                CredentialBegin::Open { tx, .. } => Ok(tx),
+                CredentialBegin::Refused(()) => panic!("the test credential must accept"),
+            }
+        })
+    }
+}
+
+/// owner of a read-effect call is refused before the method runs.
+#[tokio::test]
+async fn a_credential_that_drops_the_read_audit_owner_is_refused() {
+    let h = harness().await;
+    let principal = principal_with(ALICE, &[1], 1)
+        .scope(scope(7, "owner boundary", ModelAllow::All, false))
+        .build()
+        .unwrap();
+    let response = h
+        .service()
+        .call(
+            RpcCall::json2(
+                "/erp/json/2/test_rpc.effects/probe",
+                b"{}".to_vec(),
+                Caller::Principal(principal.clone()),
+            )
+            .credential(Arc::new(OwnerDropping { principal })),
+        )
+        .await;
+    assert_error(
+        &response,
+        500,
+        "erp.programming",
+        "RPC credential ignored the requested transaction intent",
+    );
+}

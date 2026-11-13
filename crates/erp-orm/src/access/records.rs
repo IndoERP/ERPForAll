@@ -186,6 +186,21 @@ fn memoized(op: Operation) -> bool {
     matches!(op, Operation::Read | Operation::Write)
 }
 
+/// The ids of the rows a company restriction probe read: they come from the table, so an id that
+/// is not a database id is a bug, never dropped.
+fn real_rows(rows: FxHashSet<RecId>, spec: &ModelSpec) -> Result<FxHashSet<RealId>> {
+    rows.into_iter()
+        .map(|id| {
+            id.as_real().ok_or_else(|| {
+                Error::programming(format!(
+                    "the company restriction probe of {} returned a non-database id",
+                    spec.name
+                ))
+            })
+        })
+        .collect()
+}
+
 pub(crate) fn bypass_traversals(domain: &Domain) -> Result<Domain> {
     if !has_checked_traversal(domain) {
         return Ok(domain.clone());
@@ -455,29 +470,10 @@ impl Transaction {
         let Some(restriction) = restriction else {
             return Ok(());
         };
-        let denied: Vec<RealId> = if restriction.is_false() {
-            ids
-        } else if restriction.is_true() {
-            Vec::new()
-        } else {
-            let predicate = bypass_traversals(restriction.domain())?;
-            let probe = Records::from_parts(
-                env.clone(),
-                model,
-                Arc::from(Vec::<RecId>::new()),
-                Arc::from(Vec::<RecId>::new()),
-            );
-            let filter = crate::search::compile_predicate(self, &probe, &predicate).await?;
-            crate::search::flush_read_inputs(self, &filter.fields).await?;
-            let visible: FxHashSet<RecId> =
-                crate::search::fetch_rows(self, spec, &[], &ids, Some(filter.as_ref()))
-                    .await?
-                    .into_iter()
-                    .collect();
-            ids.into_iter()
-                .filter(|id| !visible.contains(&RecId::real(*id)))
-                .collect()
-        };
+        let visible = self
+            .restriction_visible(&env, spec, &restriction, &ids)
+            .await?;
+        let denied: Vec<RealId> = ids.into_iter().filter(|id| !visible.contains(id)).collect();
         if denied.is_empty() {
             return Ok(());
         }
@@ -494,6 +490,159 @@ impl Transaction {
                 spec.name
             ))),
         }
+    }
+
+    /// The records among `ids` of `model` that `principal` may see under the model's declared
+    /// (generated) company restriction, with `companies` as the active-company set, decided by
+    /// `policy`, not by this transaction's policy. Missing and hidden ids are both
+    /// absent from the answer, so a caller cannot tell them apart. Evaluated on this transaction's
+    /// snapshot, one statement per chunk of ids; writes no access memo and grants nothing.
+    ///
+    /// A check for core services that hold a policy and a principal built from the same snapshot
+    /// (Auth's administrator password reset); not an addon API. It can only narrow: the answer is a
+    /// subset of `ids`.
+    ///
+    /// The probe acts as `principal` with `companies` named through the context (an empty context
+    /// would fall back to the principal's own companies), in superuser mode: the restriction's own
+    /// relational traversals bypass the comodels' rules as in every record check, and
+    /// `company_ids` binds to `companies`. An empty `companies` answers nothing after asking the
+    /// policy for its deny variant: the deny variant of a generated restriction admits nothing,
+    /// and no environment can name an empty company set.
+    ///
+    /// Returns the visible ids in input order, each once.
+    ///
+    /// Public for the core services that decide for a human in a transaction running under
+    /// another policy (the administrator password reset of `erp-security`); it is not
+    /// an addon API. It only narrows: it grants nothing and writes nothing, so a caller-supplied
+    /// policy and principal cannot widen access.
+    ///
+    /// # Errors
+    ///
+    /// `Programming`: an unknown model; a model whose `company_access` declares no generated
+    /// restriction; a policy answering `None` for one that does; an elevated or `System`
+    /// principal; a non-positive id. `Access`: a company outside the principal's companies
+    /// ("Access to unauthorized or invalid companies."); the policy's drift refusal. The
+    /// statements' errors.
+    pub async fn visible_under_company_restriction(
+        &mut self,
+        model: &str,
+        ids: &[i64],
+        policy: &dyn super::AccessPolicy,
+        principal: &crate::principal::Principal,
+        companies: &[CompanyId],
+    ) -> Result<Vec<i64>> {
+        const CALL: &str = "visible_under_company_restriction";
+        if principal.kind() == crate::principal::PrincipalKind::System
+            || !matches!(principal.elevation(), crate::principal::Elevation::None)
+        {
+            return Err(Error::programming(format!(
+                "{CALL} decides for a human principal: the {} principal of user {} is elevated or \
+                 the system",
+                principal.kind().as_str(),
+                principal.subject()
+            )));
+        }
+        let registry = Arc::clone(self.registry());
+        let spec = registry
+            .model(model)
+            .ok_or_else(|| Error::programming(format!("{CALL}: unknown model '{model}'")))?;
+        let generates = matches!(
+            spec.company_access,
+            erp_registry::CompanyAccessState::Declared(declared) if declared.generates()
+        );
+        if !generates {
+            return Err(Error::programming(format!(
+                "{CALL}: model '{model}' declares no generated company restriction"
+            )));
+        }
+        let mut seen = FxHashSet::default();
+        let mut wanted: Vec<RealId> = Vec::with_capacity(ids.len());
+        for id in ids {
+            let real = RealId::new(*id)
+                .ok_or_else(|| Error::programming(format!("{CALL}: invalid record id {id}")))?;
+            if seen.insert(real) {
+                wanted.push(real);
+            }
+        }
+        let active = crate::principal::ActiveCompanySet::of(companies);
+        let restriction = {
+            let binding = crate::principal::PrincipalBinding::bind(
+                policy,
+                principal,
+                Arc::clone(principal.resolution()),
+            )?
+            .with_companies(active);
+            policy.generated_restriction(&binding, spec)?
+        };
+        let Some(restriction) = restriction else {
+            return Err(Error::programming(format!(
+                "the access policy answers no generated company restriction for '{model}', which \
+                 declares one"
+            )));
+        };
+        if companies.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut context = crate::context::Context::new();
+        context.set(
+            "allowed_company_ids",
+            erp_fields::Value::List(
+                companies
+                    .iter()
+                    .map(|c| erp_fields::Value::Int(c.get()))
+                    .collect(),
+            ),
+        );
+        let probe = self.env_for(principal.clone(), context).engine_sudo();
+        // the refusal of a company outside the principal's is lazy: surface it before any shortcut
+        probe.companies()?;
+        if wanted.is_empty() {
+            return Ok(Vec::new());
+        }
+        let visible = if restriction.is_true() {
+            // a constant-true restriction admits every row, but the answer still names only rows
+            // that exist: a missing id stays absent, as the contract says
+            let rows = crate::search::fetch_rows(self, spec, &[], &wanted, None).await?;
+            real_rows(rows, spec)?
+        } else {
+            self.restriction_visible(&probe, spec, &restriction, &wanted)
+                .await?
+        };
+        Ok(wanted
+            .into_iter()
+            .filter(|id| visible.contains(id))
+            .map(RealId::get)
+            .collect())
+    }
+
+    /// The records among `ids` that `restriction` (a generated company restriction of `spec`'s
+    /// model) admits, evaluated in `env` (shared by the write path's new-state check and
+    /// [`Transaction::visible_under_company_restriction`]): constants answer at once, otherwise
+    /// one statement per chunk after flushing what the restriction reads.
+    async fn restriction_visible(
+        &mut self,
+        env: &Env,
+        spec: &ModelSpec,
+        restriction: &super::AccessDomain,
+        ids: &[RealId],
+    ) -> Result<FxHashSet<RealId>> {
+        if restriction.is_false() {
+            return Ok(FxHashSet::default());
+        }
+        if restriction.is_true() {
+            return Ok(ids.iter().copied().collect());
+        }
+        let predicate = bypass_traversals(restriction.domain())?;
+        let probe = Records::from_parts(
+            env.clone(),
+            spec.id,
+            Arc::from(Vec::<RecId>::new()),
+            Arc::from(Vec::<RecId>::new()),
+        );
+        let filter = crate::search::compile_predicate(self, &probe, &predicate).await?;
+        crate::search::flush_read_inputs(self, &filter.fields).await?;
+        let rows = crate::search::fetch_rows(self, spec, &[], ids, Some(filter.as_ref())).await?;
+        real_rows(rows, spec)
     }
 
     /// The error of a record check that let none of `denied` through (
@@ -779,7 +928,7 @@ impl Transaction {
         if shown.is_empty() {
             return Ok(names);
         }
-        let su = Records::empty(env.sudo(true), spec.id)
+        let su = Records::empty(env.engine_sudo(), spec.id)
             .browse_ids(shown.iter().map(|(_, id)| *id).collect::<Vec<_>>());
         let cells = su.cells(self, "display_name").await?;
         for ((i, _), cell) in shown.into_iter().zip(cells) {
@@ -930,6 +1079,11 @@ impl Transaction {
     /// The transaction changed `fields` of `model` (`None`: created or deleted rows): drop the
     /// memoized checks whose predicates read them (see [`AccessState::written`]).
     pub(crate) fn access_written(&mut self, model: ModelId, fields: Option<&[FieldId]>) {
+        // Generic default CRUD has the same cache contract as the helper API. Property
+        // consumers depend on these rows without a record-field graph edge.
+        if self.shared.registry.model_by_id(model).name == "ir.default" {
+            self.invalidate_ormcache("ir.default");
+        }
         // Named digits are transaction metadata derived from these rows. This
         // boundary covers create, write, unlink, upsert and explicit model invalidation.
         if self.shared.registry.model_by_id(model).name == "decimal.precision" {
@@ -1006,7 +1160,7 @@ impl Records {
     /// `Access`: the model-level refusal, or the record-level one naming the first existing
     /// record the predicate hides.
     pub async fn check_access(&self, tx: &mut Transaction, op: Operation) -> Result<()> {
-        tx.check_records(self)?;
+        tx.admit_records(self).await?;
         let env = self.env().clone();
         tx.prepare_access(&env).await?;
         tx.check_model(&env, self.model_id(), op)?;
@@ -1030,7 +1184,7 @@ impl Records {
     ///
     /// Failures that are not refusals.
     pub async fn filtered_access(&self, tx: &mut Transaction, op: Operation) -> Result<Records> {
-        tx.check_records(self)?;
+        tx.admit_records(self).await?;
         let env = self.env().clone();
         // a refused company context is an error, never "no records" (review F1/S5)
         env.companies()?;

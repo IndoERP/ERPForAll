@@ -1,0 +1,14 @@
+name = "Accounting"
+summary = "Journals, ledgers, taxes, invoices and payments"
+category = "Accounting"
+author = "Arkana"
+license = "MIT OR Apache-2.0"
+version = "1.0.0"
+depends = ["base", "product", "analytic"]
+application = true
+exact_only = true
+# Data order: security/account_security.xml first, then the default data of each
+# model (data/*.xml), then views and report actions, then menus after the actions they point to, and
+# security/ir.access.csv last. No demo files until the onboarding slice. Tests/manifest_order.rs holds it.
+data = []
+demo = []

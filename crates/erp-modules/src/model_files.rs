@@ -283,6 +283,25 @@ fn read_bounded(path: &Path) -> Result<String> {
     })
 }
 
+/// The task that owns the native-only SQL object surface, named in the refusal.
+const SQL_OBJECT_TASK: &str = "a later release";
+
+/// The first SQL object key a model or a file sets, by name, or `None`. Function bodies,
+/// triggers, condition registrations, grants and table persistence are declared by native addons
+/// only, so a model file refuses each of them at model and file level.
+/// Each name comes from the field itself (`stringify!`), so a key cannot be checked under another
+/// key's name; the five fields are declared on both `RawFile` and `RawModel`.
+macro_rules! first_sql_key {
+    ($raw:expr) => {
+        first_sql_key!(@ $raw; sql_function, sql_trigger, sql_condition, sql_grant, persistence)
+    };
+    (@ $raw:expr; $($key:ident),+) => {
+        [$((stringify!($key), $raw.$key.is_some())),+]
+            .into_iter()
+            .find_map(|(key, set)| set.then_some(key))
+    };
+}
+
 /// Parse one model file of `addon`; `file` (e.g. `models/tag.toml`) names it in errors and orders
 /// its declarations inside the addon.
 ///
@@ -305,6 +324,7 @@ pub fn parse_model_file(addon: &ModuleName, file: &str, content: &str) -> Result
         let line = e.span().map(|s| lines.line_of(s.start));
         Error::model_file(path, line, e.message())
     })?;
+    refuse_sql_key(path, None, first_sql_key!(raw))?;
     if raw.model.len() > MAX_MODELS_PER_FILE {
         return Err(Error::model_file(
             path,
@@ -316,6 +336,7 @@ pub fn parse_model_file(addon: &ModuleName, file: &str, content: &str) -> Result
     for spanned in raw.model {
         let line = lines.line_of(spanned.span().start);
         let model = spanned.into_inner();
+        refuse_sql_key(path, Some(line), first_sql_key!(model))?;
         let def = model_def(addon.as_str(), file, line, model, &lines)
             .map_err(|(at, m)| Error::model_file(path, Some(at.unwrap_or(line)), m))?;
         def.check_limits()
@@ -323,6 +344,21 @@ pub fn parse_model_file(addon: &ModuleName, file: &str, content: &str) -> Result
         defs.push(def);
     }
     Ok(defs)
+}
+
+/// Refuse a SQL object key a model file sets with a `Programming` error naming the key and the
+/// native-only surface.
+fn refuse_sql_key(path: &Path, line: Option<usize>, key: Option<&str>) -> Result<()> {
+    match key {
+        Some(key) => Err(Error::model_file_refused(
+            path,
+            line,
+            erp_fields::Error::programming(format!(
+                "SQL object key '{key}' is native-only in {SQL_OBJECT_TASK}"
+            )),
+        )),
+        None => Ok(()),
+    }
 }
 
 /// Byte offsets of line starts, for 1-based line numbers in O(log n) per lookup.
@@ -363,6 +399,13 @@ fn clip(text: &str) -> String {
 struct RawFile {
     #[serde(default)]
     model: Vec<toml::Spanned<RawModel>>,
+    // refused with a reason: SQL objects are declared by native addons only; read so
+    // the refusal names the key instead of calling it unknown
+    sql_function: Option<toml::Value>,
+    sql_trigger: Option<toml::Value>,
+    sql_condition: Option<toml::Value>,
+    sql_grant: Option<toml::Value>,
+    persistence: Option<toml::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -383,6 +426,7 @@ struct RawModel {
     /// `[model.company_access]` (A1-D2).
     company_access: Option<RawCompanyAccess>,
     eventful: Option<bool>,
+    audit_reads: Option<bool>,
     transient: Option<bool>,
     #[serde(rename = "abstract")]
     is_abstract: Option<bool>,
@@ -402,6 +446,13 @@ struct RawModel {
     /// `[[model.key]]`; only `without_overlaps` keys until.
     #[serde(default)]
     key: Vec<toml::Spanned<RawKey>>,
+    // refused with a reason: SQL objects are declared by native addons only; read so
+    // the refusal names the key instead of calling it unknown
+    sql_function: Option<toml::Value>,
+    sql_trigger: Option<toml::Value>,
+    sql_condition: Option<toml::Value>,
+    sql_grant: Option<toml::Value>,
+    persistence: Option<toml::Value>,
 }
 
 /// `[model.company_access]`: `direct = { … }` and/or `parent = "edge"`, or `unrestricted =
@@ -780,6 +831,8 @@ fn model_header(
     def.check_company_auto = raw.check_company_auto;
     // Absence is the default-false declaration policy, never a fallback for a wrong type.
     def.eventful = raw.eventful.unwrap_or(false);
+    // absent declarations do not opt in; false never narrows composition.
+    def.audit_reads = raw.audit_reads.unwrap_or(false);
     def.company_match = raw
         .company_match
         .as_deref()

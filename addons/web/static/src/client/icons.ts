@@ -69,3 +69,12 @@ export function menuIcon(value: string | null): SVGSVGElement {
   }
   return icon(name);
 }
+
+/** The icons for the entries of one menu, in order. A menu shows an icon on every entry or on none, so the labels
+ *  share one column: when any entry names an icon (or the menu has built-in entries that always carry one, `always`),
+ *  the entries that name none get the default icon. A name this client does not ship is reported once and also
+ *  shows the default icon. */
+export function menuEntryIcons(declared: readonly (string | null | undefined)[], always = false): (SVGSVGElement | null)[] {
+  const shown = always || declared.some(name => typeof name === "string");
+  return declared.map(name => shown ? menuIcon(typeof name === "string" ? menuIconValue(name as IconName) : null) : null);
+}

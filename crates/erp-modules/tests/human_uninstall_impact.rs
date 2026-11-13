@@ -2295,7 +2295,7 @@ async fn configured_signal_preflight_rejects_preexisting_temporary_store_on_same
         ),
         (
             "SET search_path=pg_catalog,pg_temp,public",
-            "Native lifecycle opening requires a persistent signal store",
+            "Native lifecycle opening requires a persistent ordinary signal store table without row-level security, partitioning or inheritance",
         ),
     ] {
         let client = pool.get().await.unwrap();
@@ -2388,8 +2388,7 @@ async fn configured_signal_preflight_rejects_callback_aggregate_on_text_weight()
         .build()
         .unwrap();
     let authorizer = allowed();
-    let diagnostic =
-        "Native lifecycle opening with configured Signal is unsupported until a later release";
+    let diagnostic = "Native lifecycle opening requires native signal storage types and built-in aggregate resolution";
     assert_error(
         system
             .preview_uninstall_authorized(&[n("note")], &authorizer)
@@ -2439,9 +2438,34 @@ async fn configured_signal_preflight_rejects_callback_aggregate_on_text_weight()
     db.cleanup().await.unwrap();
 }
 
+struct KeepServing;
+
+impl erp_orm::Refresh for KeepServing {
+    fn refresh<'a>(
+        &'a self,
+        _changes: &'a erp_orm::Changes,
+    ) -> erp_orm::BoxFuture<'a, erp_fields::Result<erp_orm::Refreshed>> {
+        Box::pin(async { Ok(erp_orm::Refreshed::InPlace) })
+    }
+}
+
+/// The committed uninstall bumped the configured Signal: other workers see a newer generation.
+async fn assert_generation_advanced(
+    pool: &deadpool_postgres::Pool,
+    baseline: &erp_orm::Generations,
+) {
+    let total = |g: &erp_orm::Generations| g.iter().map(|(_, generation)| generation).sum::<u64>();
+    let client = pool.get().await.unwrap();
+    let after = erp_orm::Signal::read(&client).await.unwrap();
+    assert!(
+        total(&after) > total(baseline),
+        "uninstall did not advance the Signal generation: {baseline:?} -> {after:?}"
+    );
+}
+
 #[tokio::test]
-async fn configured_signal_with_native_storage_refuses_before_begin() {
-    let (db, addons, _original_system, installed) = installed_note().await;
+async fn configured_signal_with_native_storage_admits_preview_and_uninstall() {
+    let (db, addons, _original_system, _installed) = installed_note().await;
     let pool = erp_orm::pool::create_pool(db.config(), 1).unwrap();
     let client = pool.get().await.unwrap();
     let baseline = erp_orm::Signal::read(&client).await.unwrap();
@@ -2452,12 +2476,54 @@ async fn configured_signal_with_native_storage_refuses_before_begin() {
         .native_artifact_identities(identities)
         .code([&NOTE])
         .decls([model("note", "test.note")])
-        .signal(erp_orm::Signal::new(baseline.clone()))
+        .signal(erp_orm::Signal::new(baseline.clone()).with_refresh(KeepServing))
         .build()
         .unwrap();
     let authorizer = allowed();
-    let diagnostic =
-        "Native lifecycle opening with configured Signal is unsupported until a later release";
+    let impact = system
+        .preview_uninstall_authorized(&[n("note")], &authorizer)
+        .await
+        .unwrap();
+    assert_eq!(impact.resolved(), &[n("note")]);
+    assert_eq!(impact.dropped_models()[0].model(), "test.note");
+    assert_eq!(impact.dropped_models()[0].table(), "test_note");
+    let removed = system
+        .uninstall_authorized(&[n("note")], impact.fingerprint().as_str(), &authorizer)
+        .await
+        .unwrap();
+    assert_eq!(state(&removed.orm, "note").await, "uninstalled");
+    assert!(!table_exists(&removed.orm, "test_note").await);
+    committed(removed);
+    assert_generation_advanced(&pool, &baseline).await;
+    drop(system);
+    pool.close();
+    db.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn configured_signal_preflight_rejects_varchar_key() {
+    let (db, addons, _original_system, installed) = installed_note().await;
+    let pool = erp_orm::pool::create_pool(db.config(), 1).unwrap();
+    let client = pool.get().await.unwrap();
+    client
+        .batch_execute(
+            "ALTER TABLE erp_signal_generation ALTER COLUMN key TYPE varchar(64) USING key::varchar(64)",
+        )
+        .await
+        .unwrap();
+    let baseline = erp_orm::Signal::read(&client).await.unwrap();
+    drop(client);
+    let identities = native_fixture_identities(&addons);
+    let system = ModuleSystem::builder(pool.clone(), addons.index())
+        .linked_hooks(false)
+        .native_artifact_identities(identities)
+        .code([&NOTE])
+        .decls([model("note", "test.note")])
+        .signal(erp_orm::Signal::new(baseline.clone()).with_refresh(KeepServing))
+        .build()
+        .unwrap();
+    let authorizer = allowed();
+    let diagnostic = "Native lifecycle opening requires native signal storage types and built-in aggregate resolution";
     assert_error(
         system
             .preview_uninstall_authorized(&[n("note")], &authorizer)
@@ -2479,13 +2545,301 @@ async fn configured_signal_with_native_storage_refuses_before_begin() {
         diagnostic,
     );
     assert_eq!(authorizer.calls.load(Ordering::SeqCst), 0);
-    let client = pool.get().await.unwrap();
-    assert_eq!(erp_orm::Signal::read(&client).await.unwrap(), baseline);
-    drop(client);
     assert_note_intact(&installed.orm).await;
     drop(system);
     pool.close();
     db.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn configured_signal_preflight_rejects_user_trigger() {
+    let (db, addons, _original_system, installed) = installed_note().await;
+    let pool = erp_orm::pool::create_pool(db.config(), 1).unwrap();
+    let client = pool.get().await.unwrap();
+    let baseline = erp_orm::Signal::read(&client).await.unwrap();
+    client
+        .batch_execute(
+            "CREATE FUNCTION fixture_sig_trig() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$; \
+             CREATE TRIGGER trg_test BEFORE INSERT ON erp_signal_generation FOR EACH ROW EXECUTE FUNCTION fixture_sig_trig()",
+        )
+        .await
+        .unwrap();
+    drop(client);
+    let identities = native_fixture_identities(&addons);
+    let system = ModuleSystem::builder(pool.clone(), addons.index())
+        .linked_hooks(false)
+        .native_artifact_identities(identities)
+        .code([&NOTE])
+        .decls([model("note", "test.note")])
+        .signal(erp_orm::Signal::new(baseline.clone()))
+        .build()
+        .unwrap();
+    let authorizer = allowed();
+    let diagnostic = "Native lifecycle opening requires native signal storage types and built-in aggregate resolution";
+    assert_error(
+        system
+            .preview_uninstall_authorized(&[n("note")], &authorizer)
+            .await
+            .unwrap_err(),
+        ErrorKind::Validation,
+        diagnostic,
+    );
+    assert_error(
+        system
+            .uninstall_authorized(
+                &[n("note")],
+                &format!("uninstall-v1:{}", "0".repeat(64)),
+                &authorizer,
+            )
+            .await
+            .unwrap_err(),
+        ErrorKind::Validation,
+        diagnostic,
+    );
+    assert_eq!(authorizer.calls.load(Ordering::SeqCst), 0);
+    assert_note_intact(&installed.orm).await;
+    drop(system);
+    pool.close();
+    db.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn configured_signal_preflight_rejects_rewrite_rule() {
+    let (db, addons, _original_system, installed) = installed_note().await;
+    let pool = erp_orm::pool::create_pool(db.config(), 1).unwrap();
+    let client = pool.get().await.unwrap();
+    let baseline = erp_orm::Signal::read(&client).await.unwrap();
+    client
+        .batch_execute(
+            "CREATE RULE notify_rule AS ON UPDATE TO erp_signal_generation DO ALSO NOTHING",
+        )
+        .await
+        .unwrap();
+    drop(client);
+    let identities = native_fixture_identities(&addons);
+    let system = ModuleSystem::builder(pool.clone(), addons.index())
+        .linked_hooks(false)
+        .native_artifact_identities(identities)
+        .code([&NOTE])
+        .decls([model("note", "test.note")])
+        .signal(erp_orm::Signal::new(baseline.clone()))
+        .build()
+        .unwrap();
+    let authorizer = allowed();
+    let diagnostic = "Native lifecycle opening requires native signal storage types and built-in aggregate resolution";
+    assert_error(
+        system
+            .preview_uninstall_authorized(&[n("note")], &authorizer)
+            .await
+            .unwrap_err(),
+        ErrorKind::Validation,
+        diagnostic,
+    );
+    assert_error(
+        system
+            .uninstall_authorized(
+                &[n("note")],
+                &format!("uninstall-v1:{}", "0".repeat(64)),
+                &authorizer,
+            )
+            .await
+            .unwrap_err(),
+        ErrorKind::Validation,
+        diagnostic,
+    );
+    assert_eq!(authorizer.calls.load(Ordering::SeqCst), 0);
+    assert_note_intact(&installed.orm).await;
+    drop(system);
+    pool.close();
+    db.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn configured_signal_preflight_rejects_generated_column() {
+    let (db, addons, _original_system, installed) = installed_note().await;
+    let pool = erp_orm::pool::create_pool(db.config(), 1).unwrap();
+    let client = pool.get().await.unwrap();
+    let baseline = erp_orm::Signal::read(&client).await.unwrap();
+    client
+        .batch_execute(
+            "ALTER TABLE erp_signal_generation DROP COLUMN weight; \
+             ALTER TABLE erp_signal_generation ADD COLUMN weight bigint GENERATED ALWAYS AS (1) STORED",
+        )
+        .await
+        .unwrap();
+    drop(client);
+    let identities = native_fixture_identities(&addons);
+    let system = ModuleSystem::builder(pool.clone(), addons.index())
+        .linked_hooks(false)
+        .native_artifact_identities(identities)
+        .code([&NOTE])
+        .decls([model("note", "test.note")])
+        .signal(erp_orm::Signal::new(baseline.clone()))
+        .build()
+        .unwrap();
+    let authorizer = allowed();
+    let diagnostic = "Native lifecycle opening requires native signal storage types and built-in aggregate resolution";
+    assert_error(
+        system
+            .preview_uninstall_authorized(&[n("note")], &authorizer)
+            .await
+            .unwrap_err(),
+        ErrorKind::Validation,
+        diagnostic,
+    );
+    assert_error(
+        system
+            .uninstall_authorized(
+                &[n("note")],
+                &format!("uninstall-v1:{}", "0".repeat(64)),
+                &authorizer,
+            )
+            .await
+            .unwrap_err(),
+        ErrorKind::Validation,
+        diagnostic,
+    );
+    assert_eq!(authorizer.calls.load(Ordering::SeqCst), 0);
+    assert_note_intact(&installed.orm).await;
+    drop(system);
+    pool.close();
+    db.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn configured_signal_preflight_rejects_non_catalog_sum_int8() {
+    let (db, addons, _original_system, installed) = installed_note().await;
+    let pool = erp_orm::pool::create_pool(db.config(), 1).unwrap();
+    let client = pool.get().await.unwrap();
+    let baseline = erp_orm::Signal::read(&client).await.unwrap();
+    client
+        .batch_execute(
+            "CREATE FUNCTION fixture_sum_int8(acc bigint, val bigint) RETURNS bigint LANGUAGE plpgsql AS $$ \
+             BEGIN RAISE EXCEPTION 'custom sum ran'; END $$; \
+             CREATE AGGREGATE public.sum(bigint)(SFUNC=fixture_sum_int8, STYPE=bigint, INITCOND='0')",
+        )
+        .await
+        .unwrap();
+    drop(client);
+    let identities = native_fixture_identities(&addons);
+    let system = ModuleSystem::builder(pool.clone(), addons.index())
+        .linked_hooks(false)
+        .native_artifact_identities(identities)
+        .code([&NOTE])
+        .decls([model("note", "test.note")])
+        .signal(erp_orm::Signal::new(baseline.clone()))
+        .build()
+        .unwrap();
+    let authorizer = allowed();
+    let diagnostic = "Native lifecycle opening requires native signal storage types and built-in aggregate resolution";
+    assert_error(
+        system
+            .preview_uninstall_authorized(&[n("note")], &authorizer)
+            .await
+            .unwrap_err(),
+        ErrorKind::Validation,
+        diagnostic,
+    );
+    assert_error(
+        system
+            .uninstall_authorized(
+                &[n("note")],
+                &format!("uninstall-v1:{}", "0".repeat(64)),
+                &authorizer,
+            )
+            .await
+            .unwrap_err(),
+        ErrorKind::Validation,
+        diagnostic,
+    );
+    assert_eq!(authorizer.calls.load(Ordering::SeqCst), 0);
+    assert_note_intact(&installed.orm).await;
+    drop(system);
+    pool.close();
+    db.cleanup().await.unwrap();
+}
+
+/// Plant `setup` on the configured signal store and require the idle opening to refuse it
+/// before authority, BEGIN or any generation read.
+async fn assert_signal_store_shape_refused(setup: &str) {
+    let (db, addons, _original_system, installed) = installed_note().await;
+    let pool = erp_orm::pool::create_pool(db.config(), 1).unwrap();
+    let client = pool.get().await.unwrap();
+    let baseline = erp_orm::Signal::read(&client).await.unwrap();
+    client.batch_execute(setup).await.unwrap();
+    drop(client);
+    let system = ModuleSystem::builder(pool.clone(), addons.index())
+        .linked_hooks(false)
+        .native_artifact_identities(native_fixture_identities(&addons))
+        .code([&NOTE])
+        .decls([model("note", "test.note")])
+        .signal(erp_orm::Signal::new(baseline).with_refresh(KeepServing))
+        .build()
+        .unwrap();
+    let authorizer = allowed();
+    let diagnostic = "Native lifecycle opening requires a persistent ordinary signal store table without row-level security, partitioning or inheritance";
+    assert_error(
+        system
+            .preview_uninstall_authorized(&[n("note")], &authorizer)
+            .await
+            .unwrap_err(),
+        ErrorKind::Validation,
+        diagnostic,
+    );
+    assert_error(
+        system
+            .uninstall_authorized(
+                &[n("note")],
+                &format!("uninstall-v1:{}", "0".repeat(64)),
+                &authorizer,
+            )
+            .await
+            .unwrap_err(),
+        ErrorKind::Validation,
+        diagnostic,
+    );
+    assert_eq!(authorizer.calls.load(Ordering::SeqCst), 0);
+    assert_note_intact(&installed.orm).await;
+    drop(system);
+    pool.close();
+    db.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn configured_signal_preflight_rejects_row_level_security() {
+    assert_signal_store_shape_refused(
+        "CREATE FUNCTION fixture_signal_policy() RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'signal policy callback ran'; END $$; \
+         ALTER TABLE erp_signal_generation ENABLE ROW LEVEL SECURITY; \
+         ALTER TABLE erp_signal_generation FORCE ROW LEVEL SECURITY; \
+         CREATE POLICY fixture_signal_policy ON erp_signal_generation USING (fixture_signal_policy())",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn configured_signal_preflight_rejects_inheritance_child() {
+    assert_signal_store_shape_refused(
+        "CREATE TABLE fixture_signal_child() INHERITS (erp_signal_generation)",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn configured_signal_preflight_rejects_inheritance_parent() {
+    assert_signal_store_shape_refused(
+        "CREATE TABLE fixture_signal_parent(key text, weight int8); \
+         ALTER TABLE erp_signal_generation INHERIT fixture_signal_parent",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn configured_signal_preflight_rejects_partition() {
+    assert_signal_store_shape_refused(
+        "CREATE TABLE fixture_signal_parts(id uuid NOT NULL, key text NOT NULL, weight int8 NOT NULL, created_at timestamptz NOT NULL) PARTITION BY HASH (id); \
+         ALTER TABLE fixture_signal_parts ATTACH PARTITION erp_signal_generation FOR VALUES WITH (MODULUS 1, REMAINDER 0)",
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -2912,37 +3266,43 @@ async fn composition_blockers_are_negative_only_and_deterministic() {
     for (flags, expected, message) in [
         (
             (true, true, true, true),
-            B::ConfiguredSignal,
-            "Native lifecycle opening with configured Signal is unsupported until a later release",
+            Some(B::PackageRuntime),
+            Some(
+                "Uninstall impact cannot describe package runtime lifecycle callbacks; unsupported until a later release",
+            ),
         ),
-        (
-            (true, false, false, false),
-            B::ConfiguredSignal,
-            "Native lifecycle opening with configured Signal is unsupported until a later release",
-        ),
+        ((true, false, false, false), None, None),
         (
             (false, true, true, true),
-            B::PackageRuntime,
-            "Uninstall impact cannot describe package runtime lifecycle callbacks; unsupported until a later release",
+            Some(B::PackageRuntime),
+            Some(
+                "Uninstall impact cannot describe package runtime lifecycle callbacks; unsupported until a later release",
+            ),
         ),
         (
             (false, false, true, true),
-            B::CustomDataLoader,
-            "Uninstall impact cannot describe custom data loader purge callbacks; unsupported until a later release",
+            Some(B::CustomDataLoader),
+            Some(
+                "Uninstall impact cannot describe custom data loader purge callbacks; unsupported until a later release",
+            ),
         ),
         (
             (false, false, false, true),
-            B::LifecycleServices,
-            "Uninstall impact cannot describe registered lifecycle services; unsupported until a later release",
+            Some(B::LifecycleServices),
+            Some(
+                "Uninstall impact cannot describe registered lifecycle services; unsupported until a later release",
+            ),
         ),
     ] {
         let system = make(flags.0, flags.1, flags.2, flags.3);
-        assert_eq!(system.uninstall_composition_blocker(), Some(expected));
-        assert_eq!(
-            system.uninstall_composition_blocker().unwrap().message(),
-            message
-        );
-        assert_eq!(system.uninstall_composition_blocker(), Some(expected));
+        assert_eq!(system.uninstall_composition_blocker(), expected);
+        if let Some(msg) = message {
+            assert_eq!(
+                system.uninstall_composition_blocker().unwrap().message(),
+                msg
+            );
+        }
+        assert_eq!(system.uninstall_composition_blocker(), expected);
     }
     let plain = make(false, false, false, false);
     assert_eq!(plain.uninstall_composition_blocker(), None);

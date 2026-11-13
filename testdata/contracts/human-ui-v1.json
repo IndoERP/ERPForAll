@@ -69,7 +69,8 @@
           ],
           "label": "Notes",
           "icon": null,
-          "action_id": 20
+          "action_id": 20,
+          "module": "acceptance_notes"
         },
         {
           "id": 11,
@@ -77,7 +78,8 @@
           "children": [],
           "label": "All notes",
           "icon": null,
-          "action_id": 20
+          "action_id": 20,
+          "module": "acceptance_notes"
         }
       ]
     }
@@ -239,7 +241,70 @@
           "kind": "boolean",
           "default": false,
           "choices": null,
-          "writable": true
+          "writable": true,
+          "app": "acceptance_notes",
+          "block": "General",
+          "sequence": 100
+        }
+      ],
+      "items": [
+        {
+          "kind": "info",
+          "key": "base.active_users",
+          "label": "Active Users",
+          "app": "base",
+          "block": "Users",
+          "sequence": 10,
+          "value": 3,
+          "detail": null
+        },
+        {
+          "kind": "info",
+          "key": "base.company_info",
+          "label": "Company",
+          "app": "base",
+          "block": "Companies",
+          "sequence": 50,
+          "value": "Example Company",
+          "detail": "1 Example Street\n1000 - Example City\nVAT: EX123"
+        },
+        {
+          "kind": "link",
+          "key": "base.company_update",
+          "label": "Update Info",
+          "app": "base",
+          "block": "Companies",
+          "sequence": 60,
+          "target": {
+            "kind": "action",
+            "id": 12,
+            "res_id": 1
+          }
+        },
+        {
+          "kind": "link",
+          "key": "base.manage_users",
+          "label": "Manage Users",
+          "app": "base",
+          "block": "Users",
+          "sequence": 20,
+          "target": {
+            "kind": "action",
+            "id": 11,
+            "res_id": null
+          }
+        },
+        {
+          "kind": "link",
+          "key": "example.users_menu",
+          "label": "Users menu",
+          "app": "base",
+          "block": "Users",
+          "sequence": 30,
+          "target": {
+            "kind": "menu",
+            "id": 21
+          }
         }
       ]
     }

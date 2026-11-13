@@ -5,9 +5,9 @@ use std::pin::Pin;
 
 use tokio::io::AsyncRead;
 
-use crate::BlobError;
 use crate::key::{ContentKey, StagingKey};
 use crate::stage::{StageLimits, StagedBlob};
+use crate::{BlobError, ContestState, Namespace, OwnerMarker, OwnerState, OwnerVersion};
 
 /// A boxed future, so the trait is object safe.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -104,6 +104,14 @@ pub trait AttachmentStore: Send + Sync + 'static {
     /// A fingerprint that identifies this store's backing directory or bucket, written in the
     /// database's store row and checked before use, or `None` when the kind has none.
     fn fingerprint(&self) -> Option<String>;
+    /// Current local root/mount identity, read without a fingerprint cache.
+    /// # Errors
+    /// Explicitly unsupported for stores without a shared-local peer protocol.
+    fn peer_binding(&self) -> Result<String, BlobError> {
+        Err(BlobError::OwnerCapabilityMissing {
+            capability: "shared-local peer binding",
+        })
+    }
 
     /// Check that the store still is the one the database registered.
     ///
@@ -112,11 +120,109 @@ pub trait AttachmentStore: Send + Sync + 'static {
     /// `Unavailable` (not retryable) when it is another store.
     fn verify_fingerprint<'a>(&'a self, expected: &'a str) -> BoxFuture<'a, Result<(), BlobError>>;
 
+    /// Probe real owner create/CAS/conditional-check semantics using private temporary markers.
+    /// Callers must run this before admitting destructive maintenance; flags alone are insufficient.
+    ///
+    /// # Errors
+    /// Typed unsupported/missing-capability, marker, backend or probe-cleanup failure.
+    fn probe_owner(&self) -> BoxFuture<'_, Result<(), BlobError>> {
+        Box::pin(async { Err(BlobError::UnsupportedOwnerFence) })
+    }
+
+    /// Read the owner and its concurrency token atomically; absence is explicit.
+    ///
+    /// # Errors
+    /// Unsupported capability, malformed marker/token or backend failure.
+    fn owner<'a>(
+        &'a self,
+        _ns: &'a Namespace,
+    ) -> BoxFuture<'a, Result<Option<OwnerState>, BlobError>> {
+        Box::pin(async { Err(BlobError::UnsupportedOwnerFence) })
+    }
+
+    /// Create the owner when `expected` is absent; otherwise compare-and-swap its exact version.
+    /// The caller must durably record the intended operation before issuing this put.
+    ///
+    /// # Errors
+    /// `OwnerConflict` for a failed precondition, or unsupported/marker/backend failure.
+    fn put_owner<'a>(
+        &'a self,
+        _ns: &'a Namespace,
+        _marker: &'a OwnerMarker,
+        _expected: Option<&'a OwnerVersion>,
+    ) -> BoxFuture<'a, Result<OwnerVersion, BlobError>> {
+        Box::pin(async { Err(BlobError::UnsupportedOwnerFence) })
+    }
+
+    /// Check the current owner version, without selecting a historical object version.
+    /// This checks neither contest absence nor observation delay: the coordinator checks those too.
+    ///
+    /// # Errors
+    /// `OwnerConflict` for absent/changed ownership; unsupported/marker/backend failure otherwise.
+    fn check_owner<'a>(
+        &'a self,
+        _ns: &'a Namespace,
+        _expected: &'a OwnerVersion,
+    ) -> BoxFuture<'a, Result<(), BlobError>> {
+        Box::pin(async { Err(BlobError::UnsupportedOwnerFence) })
+    }
+
+    /// Read the losing operation in an active `_contested` record; an active contest prohibits deletion.
+    /// A validated operator resolution receipt is returned as no active contest.
+    ///
+    /// # Errors
+    /// Unsupported capability, malformed record or backend failure; none is contest absence.
+    fn contested<'a>(
+        &'a self,
+        _ns: &'a Namespace,
+    ) -> BoxFuture<'a, Result<Option<OwnerMarker>, BlobError>> {
+        Box::pin(async { Err(BlobError::UnsupportedOwnerFence) })
+    }
+
+    /// Create an active contest without overwriting an earlier loser; an active marker is success.
+    /// A prior resolution receipt is conditionally replaced with a fresh active contest.
+    /// Only audited operator recovery may clear it; resolution requires the audited recovery port.
+    ///
+    /// # Errors
+    /// Unsupported capability or backend failure.
+    fn create_contested<'a>(
+        &'a self,
+        _ns: &'a Namespace,
+        _loser: &'a OwnerMarker,
+    ) -> BoxFuture<'a, Result<(), BlobError>> {
+        Box::pin(async { Err(BlobError::UnsupportedOwnerFence) })
+    }
+
+    /// Atomically read contest content and its exact version, including resolution receipts.
+    /// # Errors
+    /// Unsupported capability, malformed marker or backend failure.
+    fn contest_state<'a>(
+        &'a self,
+        _ns: &'a Namespace,
+    ) -> BoxFuture<'a, Result<Option<ContestState>, BlobError>> {
+        Box::pin(async { Err(BlobError::UnsupportedOwnerFence) })
+    }
+    /// CAS a contest to a resolution receipt only after the exact chosen owner is established.
+    /// Only the audited owner-side recovery coordinator may invoke this low-level port.
+    /// Replaying this exact resolved operation is idempotent; another contest/version refuses.
+    /// # Errors
+    /// OwnerConflict, unsupported capability, malformed marker or backend failure. An error
+    /// after publication may be ambiguous: inspect the persisted exact operation on retry.
+    fn resolve_contested<'a>(
+        &'a self,
+        _ns: &'a Namespace,
+        _owner: &'a OwnerState,
+        _expected: Option<&'a ContestState>,
+    ) -> BoxFuture<'a, Result<ContestState, BlobError>> {
+        Box::pin(async { Err(BlobError::UnsupportedOwnerFence) })
+    }
+
     /// Stream `body` into a staging object, hashing it on the way.
     ///
     /// # Errors
     ///
-    /// `LimitExceeded` as soon as the stream passes `limits.max_bytes` (nothing is kept);
+    /// `LimitExceeded` as soon as the stream passes `limits.max_bytes`; a partial staging object
+    /// may remain, owned by the caller's durable intent until fenced cleanup;
     /// `Unavailable` or `PermissionDenied` for store failures.
     fn stage<'a>(
         &'a self,
@@ -125,8 +231,9 @@ pub trait AttachmentStore: Send + Sync + 'static {
         limits: StageLimits,
     ) -> BoxFuture<'a, Result<StagedBlob, BlobError>>;
 
-    /// Move staged bytes to their content key, create-only. An existing key is accepted: the
-    /// bytes under a key are identical by construction.
+    /// Publish staged bytes at their content key, create-only, retaining the staging source.
+    /// An existing key is accepted after its size is checked. The caller retains its durable
+    /// upload intent; only fenced maintenance calls `delete_staged` after consume/expiry.
     ///
     /// # Errors
     ///

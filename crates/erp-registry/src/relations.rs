@@ -202,8 +202,8 @@ fn signal_trigger_rules(models: &[ModelSpec]) -> Result<()> {
     Ok(())
 }
 
-/// `ondelete` defaults and checks (/010), many2one towards a transient model
-/// , `delegate` outside `_inherits`.
+/// `ondelete` defaults and checks (/010), many2one towards a transient model,
+/// `delegate` outside `_inherits`.
 fn many2one_rules(
     models: &mut [ModelSpec],
     by_name: &FxHashMap<&'static str, ModelId>,
@@ -294,8 +294,8 @@ fn many2one_rules(
     Ok(())
 }
 
-/// `_inherits` entries need a required many2one with an explicit `cascade`/`restrict`
-/// ; that field becomes `delegate` and bypasses search access.
+/// `_inherits` entries need a required many2one with an explicit `cascade`/`restrict`;
+/// that field becomes `delegate` and bypasses search access.
 fn inherits_rules(
     models: &mut [ModelSpec],
     by_name: &FxHashMap<&'static str, ModelId>,
@@ -611,6 +611,8 @@ fn add_inherited_fields(models: &mut [ModelSpec]) -> Result<()> {
                     let mut field = pf.clone();
                     field.id = id;
                     field.store = false;
+                    // the column, and so its database default, is the parent's
+                    field.db_default = false;
                     field.index = None;
                     field.prefetch = false;
                     field.default = None;

@@ -58,7 +58,7 @@ test("malformed form layout cannot silently flatten or ignore semantic attribute
   const wrongChild=structured();Object.assign(wrongChild.views[0]!.nodes[3]!,{children:[5]});
   expect(()=>describeViews(wrongChild,"test.note","r1")).toThrow("Invalid form layout hierarchy.");
   const odd=structured();Object.assign(odd.views[0]!.nodes[2]!,{columns:3});
-  expect(()=>describeViews(odd,"test.note","r1")).toThrow("Unsupported group columns or colspan (a later release).");
+  expect(()=>describeViews(odd,"test.note","r1")).toThrow("Unsupported group columns or colspan.");
   const unknown=structured();Object.assign(unknown.views[0]!.nodes[2]!,{magic:true});
   expect(()=>describeViews(unknown,"test.note","r1")).toThrow("Unknown view node member: magic.");
 });
@@ -247,8 +247,8 @@ test("search field operator contract is explicit", () => {
     ] });
     const decode = () => describeViews(data, "test.note", "r1");
     if (operator === "unknown_operator") {
-      expect(decode).toThrow("Unsupported search field operator 'unknown_operator' for 'test.note.name'. Additional operators require a later release.");
-      try { decode(); } catch (error) { expect(error).toMatchObject({ kind: "unsupported", message: "Unsupported search field operator 'unknown_operator' for 'test.note.name'. Additional operators require a later release." }); }
+      expect(decode).toThrow("Unsupported search field operator 'unknown_operator' for 'test.note.name'.");
+      try { decode(); } catch (error) { expect(error).toMatchObject({ kind: "unsupported", message: "Unsupported search field operator 'unknown_operator' for 'test.note.name'." }); }
     }
     else expect(decode().views.get("search")!.nodes[0]).toMatchObject({ children: [{ operator }] });
   }

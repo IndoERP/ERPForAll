@@ -32,8 +32,7 @@ fn text(v: &Option<Arc<str>>) -> &str {
     v.as_deref().unwrap_or("")
 }
 
-/// `test_orm.cascade`: `bar` (non-stored) depends on `foo`; `baz` (stored) depends on `bar`
-/// .
+/// `test_orm.cascade`: `bar` (non-stored) depends on `foo`; `baz` (stored) depends on `bar`.
 #[model(
     name = "test_orm.cascade",
     description = "Test ORM Cascade",
@@ -237,8 +236,7 @@ impl MultiComputeInverse {
     }
 }
 
-/// `test_orm.compute.unassigned`: computes that assign only when `foo == "assign"`
-/// .
+/// `test_orm.compute.unassigned`: computes that assign only when `foo == "assign"`.
 #[model(
     name = "test_orm.compute.unassigned",
     description = "Model with computed fields left unassigned",
@@ -488,8 +486,7 @@ impl Created {
     }
 }
 
-/// `test_orm.precompute` (scalar part): `lower`/`upper` share a compute, `lowup` reads them
-/// .
+/// `test_orm.precompute` (scalar part): `lower`/`upper` share a compute, `lowup` reads them.
 #[model(
     name = "test_orm.precompute",
     description = "model with precomputed fields",

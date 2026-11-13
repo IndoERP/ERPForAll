@@ -4,7 +4,7 @@
 //!   `key != 'database.secret'` to every operation of every other binding, and the typed API
 //!   refuses the key, so no RPC call, export, search or read returns it (
 //!   stricter than its "system group", design note §14.6).
-//! - Renaming or deleting a default key is refused; `init` creates the missing
+//! - Renaming or deleting a default key is refused; `init()` creates the missing
 //!   defaults, `database.secret` from the OS CSPRNG.
 //! - Every create, write and delete invalidates the `config_parameter` cache, which tells the
 //!   authentication settings cache of every process to reload (`cache:config_parameter`).

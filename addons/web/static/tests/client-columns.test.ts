@@ -95,3 +95,35 @@ test("settle after attaching sizes the columns in the same task, so the content 
  // A second call (or the pending frame) changes nothing.
  widths.set("name",250); settle(); expect(widths.get("name")).toBe(250);
 });
+test("a table wider than its list is flagged so it can scroll sideways; a fitted one is not", () => {
+ const host=document.createElement("div");document.body.append(host);
+ Object.defineProperty(host,"clientWidth",{configurable:true,value:500});
+ const t=document.createElement("table");t.innerHTML='<thead><tr><th></th><th>Name</th><th>Login</th></tr></thead><tbody></tbody>';host.append(t);
+ const widths=new Map<string,number>([["name",300],["login",300]]);
+ Object.defineProperty(t,"offsetWidth",{configurable:true,value:640});
+ resizeColumns(t,[{name:"name",label:"Name"},{name:"login",label:"Login"}],widths)();
+ expect(host.hasAttribute("data-wide")).toBe(true);
+ Object.defineProperty(t,"offsetWidth",{configurable:true,value:500});
+ t.querySelector<HTMLElement>('[aria-label="Resize Name column"]')!.dispatchEvent(new KeyboardEvent("keydown",{key:"ArrowLeft",bubbles:true}));
+ expect(host.hasAttribute("data-wide")).toBe(false);
+});
+// Review M1: the last column draws the spare width, so a resize starts from the drawn width and then fixes the column.
+test("resizing the last column starts from its drawn width, fixes it, and hands the spare room to the previous column",()=>{
+ const widths=new Map<string,number>([["name",300],["login",500]]),t=table(widths),cols=t.querySelectorAll("col");
+ const handle=t.querySelector<HTMLElement>('[aria-label="Resize Login column"]')!;
+ expect(cols[2]!.style.width).toBe("");expect(handle.getAttribute("aria-valuenow")).toBe("200");
+ handle.dispatchEvent(new KeyboardEvent("keydown",{key:"ArrowLeft",bubbles:true}));
+ expect(widths.get("login")).toBe(190);expect(cols[2]!.style.width).toBe("190px");expect(handle.getAttribute("aria-valuenow")).toBe("190");
+ expect(cols[1]!.style.width).toBe("");expect(t.style.minWidth).toContain("var(--list-table-min-width");
+ const next=table(widths);expect(next.querySelectorAll("col")[2]!.style.width).toBe("190px");
+});
+test("a one-column list resized by keyboard changes its width and no longer stretches to the surface",()=>{
+ const widths=new Map<string,number>([["name",500]]),t=document.createElement("table");
+ t.innerHTML='<thead><tr><th></th><th>Name</th></tr></thead><tbody></tbody>';document.body.append(t);
+ for(const th of t.querySelectorAll("th"))vi.spyOn(th,"getBoundingClientRect").mockReturnValue({width:600} as DOMRect);
+ resizeColumns(t,[{name:"name",label:"Name"}],widths);
+ const handle=t.querySelector<HTMLElement>('[aria-label="Resize Name column"]')!;
+ expect(handle.getAttribute("aria-valuenow")).toBe("600");
+ handle.dispatchEvent(new KeyboardEvent("keydown",{key:"ArrowLeft",bubbles:true}));
+ expect(widths.get("name")).toBe(590);expect(t.querySelectorAll("col")[1]!.style.width).toBe("590px");expect(t.style.minWidth).toBe("120px");expect(t.style.width).toBe("630px");
+});

@@ -119,7 +119,7 @@ pub enum Condition {
     /// [`ErrorKind::Programming`]. Consumers check the marker before the kind so an incorrectly
     /// wrapped error still cannot be absorbed as a data failure.
     InvariantViolation,
-    /// A bounded queue's wait expired (the hashing pool,; kind
+    /// A bounded queue's wait expired (the hashing pool; kind
     /// [`ErrorKind::ResourceExhausted`]): the server answers 503 with `Retry-After` and the frozen
     /// overload body; a retry later may succeed.
     Overloaded,

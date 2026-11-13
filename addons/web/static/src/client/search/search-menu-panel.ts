@@ -15,7 +15,7 @@ export function createSearchMenuPanel(model: SearchModel, onUpdate: () => void, 
   const panel = document.createElement("div");
   panel.className = "erp-search-menu-panel";
   panel.setAttribute("role", "dialog");
-  panel.setAttribute("aria-label", "Search Filters, Group By, and Favorites");
+  panel.setAttribute("aria-label", "Search filters");
   panel.tabIndex = -1;
   panel.id = `search-menu-${++menuSequence}`;
   if (trigger) {
@@ -80,7 +80,7 @@ export function createSearchMenuPanel(model: SearchModel, onUpdate: () => void, 
 
           const check = document.createElement("span");
           check.className = "erp-check-icon";
-          check.textContent = opt.isActive ? "✓" : "";
+          check.classList.toggle("is-on", opt.isActive);
 
           const label = document.createElement("span");
           label.className = "erp-item-label";
@@ -102,7 +102,7 @@ export function createSearchMenuPanel(model: SearchModel, onUpdate: () => void, 
 
         const check = document.createElement("span");
         check.className = "erp-check-icon";
-        check.textContent = filter.isActive ? "✓" : "";
+        check.classList.toggle("is-on", filter.isActive);
 
         const label = document.createElement("span");
         label.className = "erp-item-label";
@@ -169,7 +169,7 @@ export function createSearchMenuPanel(model: SearchModel, onUpdate: () => void, 
 
       const note = document.createElement("p");
       note.className = "erp-custom-filter-note muted";
-      note.textContent = "Visual multi-condition editing is not available until a later release.";
+      note.hidden = true;
 
       customForm.append(fieldSelect, opSelect, valInput, applyBtn, note);
       customForm.addEventListener("submit", e => {
@@ -186,6 +186,7 @@ export function createSearchMenuPanel(model: SearchModel, onUpdate: () => void, 
             onUpdate();
           } catch (error) {
             note.setAttribute("role", "alert");
+            note.hidden = false;
             note.textContent = error instanceof Error ? error.message : "Unable to apply this filter.";
           }
         }
@@ -195,19 +196,84 @@ export function createSearchMenuPanel(model: SearchModel, onUpdate: () => void, 
 
     filtersSection.append(filterList);
     container.append(filtersSection);
-
-    for (const [title, css, message] of [
-      ["Group By", "erp-groupby-section", "Grouped lists are not available until a later release and a later release."],
-      ["Favorites", "erp-favorites-section", "Server favorites are not available until a later release."]
-    ]) {
-      const section = document.createElement("section");
-      section.className = `erp-search-section ${css}`;
-      const heading = document.createElement("h3"); heading.textContent = title!;
-      const note = document.createElement("p"); note.textContent = message!;
-      section.append(heading, note); container.append(section);
-    }
+    if (model.hasGroupBy()) container.append(groupBySection());
 
     panel.append(container, errorNotice);
+  };
+
+  // The Group By section: the search view's declared items, then "Add Custom Group". The catalogue is loaded
+  // the first time the menu opens, so a list that is never grouped costs no request.
+  let groupByLoading = false;
+  const groupBySection = (): HTMLElement => {
+    const section = document.createElement("div");
+    section.className = "erp-search-section erp-groupby-section";
+    const header = document.createElement("div");
+    header.className = "erp-search-section-header";
+    header.innerHTML = `
+      <svg class="erp-section-icon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+        <path fill="currentColor" d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/>
+      </svg>
+      <span>Group By</span>
+    `;
+    section.append(header);
+    const list = document.createElement("div");
+    list.className = "erp-search-section-list";
+    section.append(list);
+    if (!model.groupByReady()) {
+      const status = document.createElement("p");
+      status.className = "erp-search-section-status muted";
+      status.setAttribute("role", "status");
+      status.textContent = groupByLoading ? "Loading group-by choices…" : "Group-by choices are unavailable.";
+      list.append(status);
+      return section;
+    }
+    for (const item of model.getGroupBys()) {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = `erp-search-menu-item ${item.isActive ? "active" : ""}`;
+      row.setAttribute("role", "checkbox");
+      row.setAttribute("aria-checked", String(item.isActive));
+      const check = document.createElement("span");
+      check.className = "erp-check-icon";
+      check.classList.toggle("is-on", item.isActive);
+      const label = document.createElement("span");
+      label.className = "erp-item-label";
+      label.textContent = item.description;
+      row.append(check, label);
+      row.addEventListener("click", () => apply(() => model.toggleGroupBy(item.id)));
+      list.append(row);
+    }
+    const fields = model.getGroupableFields();
+    if (fields.length) {
+      const select = document.createElement("select");
+      select.className = "erp-custom-group-select";
+      select.setAttribute("aria-label", "Add custom group");
+      select.append(new Option("Add Custom Group", ""));
+      for (const field of fields) select.append(new Option(field.label, field.name));
+      select.addEventListener("change", () => {
+        const chosen = select.value;
+        select.value = "";
+        if (chosen) apply(() => model.addCustomGroupBy(chosen));
+      });
+      list.append(select);
+    }
+    const skipped = model.getSkippedGroupBys();
+    if (skipped.length) {
+      const note = document.createElement("p");
+      note.className = "erp-search-section-status muted";
+      note.textContent = `Not offered here: ${skipped.map(item => `${item.description} (${item.reason})`).join("; ")}.`;
+      list.append(note);
+    }
+    return section;
+  };
+  const loadGroupBy = (): void => {
+    if (!model.hasGroupBy() || model.groupByReady() || groupByLoading) return;
+    groupByLoading = true;
+    errorNotice.hidden = true;
+    model.loadGroupByCatalogue().then(() => undefined, error => {
+      errorNotice.hidden = false;
+      errorNotice.textContent = error instanceof Error ? error.message : "Unable to load the group-by choices.";
+    }).finally(() => { groupByLoading = false; if (isOpen()) render(); });
   };
 
   const handleDocumentClick = (e: MouseEvent): void => {
@@ -243,6 +309,7 @@ export function createSearchMenuPanel(model: SearchModel, onUpdate: () => void, 
   }) : undefined;
   const open = (): void => {
     hotkeys?.dispose(); hotkeys = undefined;
+    loadGroupBy();
     render();
     panel.style.display = "block";
     trigger?.setAttribute("aria-expanded", "true");
@@ -257,6 +324,8 @@ export function createSearchMenuPanel(model: SearchModel, onUpdate: () => void, 
 
   };
 
+  // A chip removed (or the search cleared) while the menu is open must uncheck its item.
+  const unsubscribe = model.subscribe(() => { if (isOpen()) render(); });
   const close = (): void => {
     panel.style.display = "none";
     trigger?.setAttribute("aria-expanded", "false");
@@ -275,6 +344,7 @@ export function createSearchMenuPanel(model: SearchModel, onUpdate: () => void, 
   };
 
   const dispose = (): void => {
+    unsubscribe();
     close();
     panel.remove();
   };

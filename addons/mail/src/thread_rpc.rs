@@ -1,5 +1,5 @@
-//! The thread API a client calls over RPC (design note
-//! , guide "Call the thread from the
+//! The thread API a client calls over RPC (
+//! guide "Call the thread from the
 //! client (JSON-2)").
 //!
 //! Six methods of the `mail.thread` mixin, `thread_post`, `thread_follow`, `thread_unfollow`,
@@ -19,7 +19,7 @@
 use std::collections::BTreeSet;
 
 use erp_sdk::prelude::*;
-use erp_sdk::rpc::{ArgError, FromRpc, json_type};
+use erp_sdk::rpc::{ArgError, ArgShape, FromRpc, json_type};
 use erp_sdk::{Load, Operation, ValueMap};
 
 use crate::MailThread;
@@ -32,7 +32,7 @@ use crate::post::{
 use crate::store::{self, Row, StoreFields};
 
 /// The keys of the `post` object, in the order the error message lists them.
-const POST_KEYS: [&str; 10] = [
+const POST_KEYS: [&str; 11] = [
     "body",
     "subject",
     "message_type",
@@ -43,6 +43,7 @@ const POST_KEYS: [&str; 10] = [
     "silent",
     "client_uid",
     "attachment_ids",
+    "staged_uploads",
 ];
 
 /// The `post` argument of `thread_post`: a validated [`PostRequest`] parsed from a closed JSON
@@ -81,6 +82,7 @@ impl PostWire {
 
 impl FromRpc for PostWire {
     const EXPECTED: &'static str = "an object";
+    const SHAPE: ArgShape = ArgShape::Open("a post request");
 
     fn from_rpc(value: Option<Value>) -> std::result::Result<Self, ArgError> {
         match value {
@@ -90,6 +92,74 @@ impl FromRpc for PostWire {
                 got: json_type(&other),
             }),
         }
+    }
+}
+
+fn parse_staged_uploads(value: &Value) -> Result<Vec<crate::post::StagedAttachment>> {
+    let Value::List(files) = value else {
+        return Err(validation(
+            "The staged_uploads are a list of file descriptors.",
+        ));
+    };
+    if files.len() > crate::post::MAX_ATTACHMENTS {
+        return Err(validation(
+            "At most 100 staged uploads are posted with one message.",
+        ));
+    }
+    files
+        .iter()
+        .map(|value| {
+            let Value::Map(file) = value else {
+                return Err(validation("Each staged upload is a file descriptor."));
+            };
+            if let Some(key) = file
+                .keys()
+                .find(|k| !["name", "upload_id", "mimetype"].contains(&k.as_str()))
+            {
+                return Err(validation(format!(
+                    "A staged upload has no key '{key}'; its keys are name, upload_id, mimetype."
+                )));
+            }
+            let text = |key: &str| -> Result<String> {
+                match present(file, key) {
+                    Some(Value::Str(text)) => {
+                        let bound = if key == "name" { 255 } else { 36 };
+                        if text.len() > bound {
+                            return Err(validation(format!(
+                                "A staged upload '{key}' is at most {bound} bytes."
+                            )));
+                        }
+                        Ok(text.to_string())
+                    }
+                    _ => Err(validation(format!("A staged upload needs text '{key}'."))),
+                }
+            };
+            let mime = match present(file, "mimetype") {
+                None => None,
+                Some(Value::Str(text)) if text.len() <= 127 => Some(text.to_string()),
+                Some(Value::Str(_)) => {
+                    return Err(validation(
+                        "A staged upload media type is at most 127 bytes.",
+                    ));
+                }
+                Some(_) => return Err(validation("A staged upload mimetype is text.")),
+            };
+            crate::post::StagedAttachment::new(text("name")?, &text("upload_id")?, mime)
+        })
+        .collect()
+}
+
+fn upload_content(
+    data: Option<String>,
+    upload_id: Option<String>,
+) -> Result<erp_addon_base::attachments::AttachmentContent> {
+    use erp_addon_base::attachments::{AttachmentContent, UploadId};
+    match (data, upload_id) {
+        (Some(data), None) => Ok(AttachmentContent::Base64(data)),
+        (None, Some(id)) => Ok(AttachmentContent::Upload(UploadId::parse(&id)?)),
+        _ => Err(validation(
+            "Give exactly one of data or upload_id for an attachment.",
+        )),
     }
 }
 
@@ -180,6 +250,9 @@ fn parse_post(map: &ValueMap) -> Result<PostRequest> {
     }
     if let Some(value) = present(map, "attachment_ids") {
         request.attachment_ids = int_list("attachment_ids", value)?;
+    }
+    if let Some(value) = present(map, "staged_uploads") {
+        request.staged_uploads = parse_staged_uploads(value)?;
     }
     if let Some(value) = present(map, "mentions") {
         request.mentions = mentions(value)?;
@@ -356,14 +429,28 @@ async fn require_readable_partners(
     env: &Env,
     request: &PostRequest,
 ) -> Result<()> {
-    let mut wanted: BTreeSet<i64> = request.partner_ids.iter().copied().collect();
+    // a malformed or oversize list is refused here, not left to the post path
+    let mut wanted: BTreeSet<i64> = crate::post::checked_partner_ids(&request.partner_ids)?
+        .into_iter()
+        .collect();
     for mention in &request.mentions {
         if let MentionTarget::Partner(id) = mention.target {
+            if id <= 0 {
+                return Err(Error::validation(format!(
+                    "A partner id must be a positive integer, not {id}."
+                )));
+            }
             wanted.insert(id);
         }
     }
-    // a malformed or oversize list is refused with its own message by the post path
-    if wanted.is_empty() || wanted.len() > MAX_IDS_PER_CALL || wanted.iter().any(|id| *id <= 0) {
+    if wanted.len() > MAX_IDS_PER_CALL {
+        return Err(Error::validation(format!(
+            "At most {MAX_IDS_PER_CALL} partners may be addressed or mentioned per post, not {}.",
+            wanted.len()
+        )));
+    }
+    // an empty list is legitimate: nobody is addressed
+    if wanted.is_empty() {
         return Ok(());
     }
     let ids: Vec<i64> = wanted.iter().copied().collect();
@@ -556,7 +643,7 @@ pub struct MailThreadRpc {}
 
 #[methods(MailThread, addon = "mail")]
 impl MailThreadRpc {
-    /// Post a message on the record as the caller and answer with it (spec). `post`
+    /// Post a message on the record as the caller and answer with it. `post`
     /// is the closed object of [`PostWire`]. The caller needs the access `_mail_post_access`
     /// names; the author is the caller's partner; an author who may not write the record is not
     /// subscribed by the post. Answers `{message_id, replayed, notified_partner_ids, store}`:
@@ -588,7 +675,7 @@ impl MailThreadRpc {
         if !record.has_access(tx, Operation::Write).await? {
             request.options.skip_author_subscribe = true;
         }
-        let files_named = !request.attachment_ids.is_empty();
+        let files_named = !request.attachment_ids.is_empty() || !request.staged_uploads.is_empty();
         let posted: Posted = record.call(tx, "message_post", (request,)).await?;
         let message = env
             .records("mail.message")?
@@ -635,7 +722,7 @@ impl MailThreadRpc {
         Ok(answer_map(entries))
     }
 
-    /// Upload one file for the composer of this record (`data` is base64, `mimetype` an optional
+    /// Upload one file for the composer of this record (exactly one of base64 `data` or `upload_id`; `mimetype` an optional
     /// hint): the file waits, its creator's alone, until `thread_post` names its id in
     /// `attachment_ids`. Answers `{attachment_id, name, mimetype, file_size, checksum}`.
     ///
@@ -649,14 +736,23 @@ impl MailThreadRpc {
         this: &RecordSet<MailThread>,
         tx: &mut Transaction,
         name: String,
-        data: String,
+        data: Option<String>,
         mimetype: Option<String>,
+        upload_id: Option<String>,
     ) -> Result<Value> {
         let record = this.as_records().ensure_one()?;
-        message_attachments::upload(tx, record, name, mimetype, data, true).await
+        message_attachments::upload(
+            tx,
+            record,
+            name,
+            mimetype,
+            upload_content(data, upload_id)?,
+            true,
+        )
+        .await
     }
 
-    /// Attach one file (`data` is base64) to the record itself, for its attachments panel. Same
+    /// Attach one file (exactly one of base64 `data` or `upload_id`) to the record itself, for its attachments panel. Same
     /// answer and limits as `thread_upload`; the caller needs write access to the record.
     ///
     /// # Errors
@@ -667,14 +763,23 @@ impl MailThreadRpc {
         this: &RecordSet<MailThread>,
         tx: &mut Transaction,
         name: String,
-        data: String,
+        data: Option<String>,
         mimetype: Option<String>,
+        upload_id: Option<String>,
     ) -> Result<Value> {
         let record = this.as_records().ensure_one()?;
-        message_attachments::upload(tx, record, name, mimetype, data, false).await
+        message_attachments::upload(
+            tx,
+            record,
+            name,
+            mimetype,
+            upload_content(data, upload_id)?,
+            false,
+        )
+        .await
     }
 
-    /// Make `partner_ids` follow the record (spec): `follow` with its access rules
+    /// Make `partner_ids` follow the record: `follow` with its access rules
     /// (read for one's own partner, write for others), and for a portal caller only its
     /// own partner and only subtypes it can see. Answers `{store}` with the follower records of
     /// the named partners.
@@ -722,7 +827,7 @@ impl MailThreadRpc {
         follower_answer(tx, &env, rows, Vec::new()).await
     }
 
-    /// Stop `partner_ids` following the record (spec): `unfollow` with its access
+    /// Stop `partner_ids` following the record: `unfollow` with its access
     /// rules; a portal caller may name only its own partner. Answers `{store}` with a delete
     /// marker for each follower record removed.
     ///
@@ -753,7 +858,7 @@ impl MailThreadRpc {
         follower_answer(tx, &env, Vec::new(), found.followers).await
     }
 
-    /// Replace the subtypes `partner_id` receives from the record (spec):
+    /// Replace the subtypes `partner_id` receives from the record:
     /// `set_subtypes` with its access rules; a portal caller may name only its own partner and
     /// only subtypes it can see. Answers `{store}` with the follower record.
     ///
@@ -791,7 +896,7 @@ impl MailThreadRpc {
         follower_answer(tx, &env, rows, Vec::new()).await
     }
 
-    /// One keyset page of the record's followers, oldest first (spec): at most
+    /// One keyset page of the record's followers, oldest first: at most
     /// `limit` (1 to 100, default 100) after the follower id `after`. Internal callers only. Answers
     /// `{store, follower_ids, next_after}`: the follower records, their ids in order, and the id to
     /// pass as `after` for the next page (`null` on the last page).
@@ -974,7 +1079,8 @@ mod tests {
             (
                 erp_sdk::serde_json::json!({"body": "x", "author_id": 1}),
                 "The post has no key 'author_id'; its keys are body, subject, message_type, \
-                 subtype, parent_id, partner_ids, mentions, silent, client_uid, attachment_ids.",
+                 subtype, parent_id, partner_ids, mentions, silent, client_uid, attachment_ids, \
+                 staged_uploads.",
             ),
             (erp_sdk::serde_json::json!({}), "A post needs a body."),
             (

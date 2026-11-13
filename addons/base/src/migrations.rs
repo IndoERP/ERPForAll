@@ -426,3 +426,271 @@ pub async fn prepare_rate_types(tx: &mut Transaction) -> Result<()> {
         .await?;
     Ok(())
 }
+
+/// Recompute `res.users.share` and `res.partner.partner_share` for every user and contact after
+/// base 1.9 made them the escapes of the company restrictions of users and contacts.
+/// Before 1.9 `partner_share` was a placeholder (true unless the contact's id was
+/// the superuser id), so every stored value is rewritten with the rule.
+///
+/// No pre stage: both fields are required with the static default `true`, and the schema step
+/// that makes a column required fills its NULLs with that default before it sets NOT NULL (on a
+/// large table as a post-commit step; this recompute also rewrites a NULL it still finds). Fresh
+/// installs compute both fields on create and do not run this.
+///
+/// # Errors
+///
+/// `Programming` when the registry has no `ir.model.data` model (the internal groups are named by
+/// external id); `Database` for a failed statement. A later lifecycle failure rolls the rewrite
+/// back with the schema, data and module-version changes.
+#[erp_sdk::migration(addon = "base", version = "1.9", stage = post)]
+async fn recompute_shares_base_1_9(tx: &mut Transaction, _from: &SemverVersion) -> Result<()> {
+    recompute_shares(tx).await
+}
+
+/// The body of [`recompute_shares_base_1_9`], callable on its own (the upgrade test runs it
+/// against a database whose schema it first sets back to the old shape): the set-based recompute
+/// of every user and every contact ([`crate::group_graph::recompute_user_share`]).
+///
+/// # Errors
+///
+/// As [`crate::group_graph::recompute_user_share`].
+pub async fn recompute_shares(tx: &mut Transaction) -> Result<()> {
+    crate::group_graph::recompute_user_share(tx, None).await
+}
+
+/// Give every existing user a default company before base 1.10 enforces the rule that an active
+/// user's default company is one of its allowed companies.
+///
+/// A post step: nothing becomes NOT NULL, and by now `base.main_company` and the new registry
+/// exist. Fresh installs create no users before the first administrator and do not run this.
+#[erp_sdk::migration(addon = "base", version = "1.10", stage = post)]
+async fn assign_user_companies_base_1_10(
+    tx: &mut Transaction,
+    _from: &SemverVersion,
+) -> Result<()> {
+    assign_user_companies(tx).await
+}
+
+/// How many user ids a refusal lists before it says how many more there are.
+const REFUSAL_IDS_SHOWN: usize = 50;
+
+fn collect_ids<E: std::fmt::Display>(
+    ids: impl Iterator<Item = std::result::Result<i64, E>>,
+    what: &str,
+) -> Result<Vec<i64>> {
+    ids.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| Error::db(format!("{what}: {e}")))
+}
+
+/// The body of [`assign_user_companies_base_1_10`], callable on its own (the upgrade test runs it
+/// against rows it inserts in the old shape). The superuser is skipped: it keeps no company.
+/// Set-based, under the company lifecycle fence and a table lock, and without
+/// reading `Main Company` into any rule: a grant the operator never chose would widen access.
+///
+/// 1. **R1.** A user whose `company_id` is not among its `company_ids` is never given the
+///    membership: a migration does not widen access (lead decision 2026-11-12, decision
+///    7). **R1a:** when the user still has an active allowed company, `company_id` becomes the
+///    lowest-id one among them and no row is inserted. The principal resolver builds the company
+///    set from the relation rows alone and refuses a default company outside it (`erp-security`
+///    `resolver.rs` `SubjectRow::resolution`, `erp-orm` `Resolution::with_default_order`), so such
+///    a user could not sign in before; now it can, in a company an administrator allowed. **R1b:**
+///    a user with no active allowed company at all (no row, or only archived companies) keeps the
+///    earlier handling: its default company is added to its allowed ones, as nothing else can be
+///    chosen without guessing. The warning logs name the user ids.
+/// 2. **R2.** A user without `company_id` and with `company_ids` takes the lowest-id active
+///    company among them.
+/// 3. **R3a.** A user with neither, in a database with exactly one company that is active, takes
+///    that company for both fields (active and inactive users alike).
+/// 4. **R3b.** Any active user that still has no default company refuses the upgrade before a row
+///    is written: there is no company that can be chosen without guessing. Inactive users are
+///    never a reason to refuse (R1, R2 and R3a fill them like active ones); an inactive user that
+///    stays without a default company is refused later, when someone reactivates it.
+///
+/// A database without any company has nothing to assign and is left alone (the default company
+/// rule does not apply to it). Each rule that changed rows logs one warning on the target
+/// `erp::migration` with the user ids.
+///
+/// # Errors
+///
+/// `Validation` (R3b, naming the user ids and the number of companies); `Database` for a failed
+/// statement. A later lifecycle failure rolls the changes back with the schema, data and
+/// module-version changes.
+pub async fn assign_user_companies(tx: &mut Transaction) -> Result<()> {
+    crate::company_lifecycle::fence(tx).await?;
+    tx.execute(
+        "LOCK TABLE res_users, res_company_users_rel IN SHARE ROW EXCLUSIVE MODE",
+        &[],
+    )
+    .await?;
+    tx.flush().await?;
+    let superuser = erp_sdk::SUPERUSER_ID.get();
+
+    let companies = tx
+        .query(
+            "SELECT count(*), count(*) FILTER (WHERE active IS TRUE), \
+                    min(id::int8) FILTER (WHERE active IS TRUE) FROM res_company",
+            &[],
+        )
+        .await?;
+    let [companies] = companies.as_slice() else {
+        return Err(Error::programming(
+            "base 1.10 company count expected one summary row",
+        ));
+    };
+    let decode = |e| Error::db(format!("base 1.10 company count decode: {e}"));
+    let total: i64 = companies.try_get(0).map_err(decode)?;
+    let active: i64 = companies.try_get(1).map_err(decode)?;
+    let lowest_active: Option<i64> = companies.try_get(2).map_err(decode)?;
+    if total == 0 {
+        return Ok(());
+    }
+    // the only company, when there is exactly one and it is active
+    let only = if total == 1 && active == 1 {
+        lowest_active
+    } else {
+        None
+    };
+
+    // R3b first, read-only: nothing is written when the upgrade refuses
+    let unassignable = tx
+        .query(
+            "SELECT u.id::int8 FROM res_users u \
+              WHERE u.id <> $1 AND u.active IS TRUE AND u.company_id IS NULL \
+                AND NOT $2::bool \
+                AND NOT EXISTS ( \
+                      SELECT 1 FROM res_company_users_rel r \
+                        JOIN res_company c ON c.id = r.cid \
+                       WHERE r.user_id = u.id AND c.active IS TRUE) \
+              ORDER BY u.id",
+            &[&superuser, &only.is_some()],
+        )
+        .await?;
+    if !unassignable.is_empty() {
+        let ids = collect_ids(
+            unassignable.iter().map(|row| row.try_get(0)),
+            "base 1.10 refusal ids",
+        )?;
+        let mut listed: Vec<String> = ids
+            .iter()
+            .take(REFUSAL_IDS_SHOWN)
+            .map(i64::to_string)
+            .collect();
+        if ids.len() > REFUSAL_IDS_SHOWN {
+            listed.push(format!("and {} more", ids.len() - REFUSAL_IDS_SHOWN));
+        }
+        return Err(Error::validation(format!(
+            "base 1.10 refused: active users {} have no default company and none can be chosen \
+             ({total} companies). Set each user's default and allowed companies in Settings > \
+             Users with the current release, then upgrade again.",
+            listed.join(", ")
+        )));
+    }
+
+    // R1a: a default company outside the user's allowed companies is never added to them (a
+    // migration does not widen access); the user takes the lowest-id active
+    // allowed company instead
+    let rows = tx
+        .query(
+            "UPDATE res_users u SET company_id = m.cid \
+               FROM (SELECT r.user_id, min(r.cid) AS cid \
+                       FROM res_company_users_rel r \
+                       JOIN res_company c ON c.id = r.cid \
+                      WHERE c.active IS TRUE GROUP BY r.user_id) m \
+              WHERE u.id = m.user_id AND u.id <> $1 AND u.company_id IS NOT NULL \
+                AND NOT EXISTS ( \
+                      SELECT 1 FROM res_company_users_rel r \
+                       WHERE r.user_id = u.id AND r.cid = u.company_id) \
+             RETURNING u.id::int8",
+            &[&superuser],
+        )
+        .await?;
+    if !rows.is_empty() {
+        let ids = collect_ids(rows.iter().map(|row| row.try_get(0)), "base 1.10 R1a ids")?;
+        tracing::warn!(
+            target: "erp::migration",
+            user_ids = ?ids,
+            "base 1.10: the default company of these users was not one of their allowed companies; they took their lowest-id active allowed company"
+        );
+    }
+
+    // R1b: what is left has no active allowed company at all, so the default company is added to
+    // the allowed ones as before
+    let rows = tx
+        .query(
+            "INSERT INTO res_company_users_rel (user_id, cid) \
+             SELECT u.id, u.company_id FROM res_users u \
+              WHERE u.id <> $1 AND u.company_id IS NOT NULL \
+                AND NOT EXISTS ( \
+                      SELECT 1 FROM res_company_users_rel r \
+                       WHERE r.user_id = u.id AND r.cid = u.company_id) \
+              ORDER BY u.id \
+             RETURNING user_id::int8",
+            &[&superuser],
+        )
+        .await?;
+    if !rows.is_empty() {
+        let ids = collect_ids(rows.iter().map(|row| row.try_get(0)), "base 1.10 R1b ids")?;
+        tracing::warn!(
+            target: "erp::migration",
+            user_ids = ?ids,
+            "base 1.10: the default company of these users was added to their allowed companies"
+        );
+    }
+
+    // R2
+    let rows = tx
+        .query(
+            "UPDATE res_users u SET company_id = m.cid \
+               FROM (SELECT r.user_id, min(r.cid) AS cid \
+                       FROM res_company_users_rel r \
+                       JOIN res_company c ON c.id = r.cid \
+                      WHERE c.active IS TRUE GROUP BY r.user_id) m \
+              WHERE u.id = m.user_id AND u.id <> $1 AND u.company_id IS NULL \
+             RETURNING u.id::int8",
+            &[&superuser],
+        )
+        .await?;
+    if !rows.is_empty() {
+        let ids = collect_ids(rows.iter().map(|row| row.try_get(0)), "base 1.10 R2 ids")?;
+        tracing::warn!(
+            target: "erp::migration",
+            user_ids = ?ids,
+            "base 1.10: these users had no default company and took their lowest-id active allowed company"
+        );
+    }
+
+    // R3a
+    if let Some(company) = only {
+        let rows = tx
+            .query(
+                "UPDATE res_users SET company_id = $1 \
+                  WHERE id <> $2 AND company_id IS NULL \
+                 RETURNING id::int8",
+                &[&company, &superuser],
+            )
+            .await?;
+        if !rows.is_empty() {
+            let ids = collect_ids(rows.iter().map(|row| row.try_get(0)), "base 1.10 R3a ids")?;
+            tx.execute(
+                "INSERT INTO res_company_users_rel (user_id, cid) \
+                 SELECT u.id, $1 FROM res_users u \
+                  WHERE u.id = ANY($2::int8[]) \
+                    AND NOT EXISTS ( \
+                          SELECT 1 FROM res_company_users_rel r \
+                           WHERE r.user_id = u.id AND r.cid = $1)",
+                &[&company, &ids],
+            )
+            .await?;
+            tracing::warn!(
+                target: "erp::migration",
+                user_ids = ?ids,
+                company,
+                "base 1.10: these users had no company and took the only company of the database"
+            );
+        }
+    }
+
+    tx.invalidate_model("res.users", Some(&["company_id", "company_ids"]))
+        .await?;
+    Ok(())
+}

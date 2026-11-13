@@ -47,10 +47,28 @@ pub(crate) fn decode<R: CellSource + ?Sized>(row: &R, idx: usize, ty: ColumnType
             .cell::<Option<bool>>(idx)
             .map_err(map)?
             .map_or(Cell::Null, Cell::Bool),
-        ColumnType::Int4 => row
-            .cell::<Option<i32>>(idx)
-            .map_err(map)?
-            .map_or(Cell::Null, Cell::Int),
+        ColumnType::Int4 => match row.column_type(idx) {
+            Some(&tokio_postgres::types::Type::INT8) => row
+                .cell::<Option<i64>>(idx)
+                .map_err(map)?
+                .map(|v| {
+                    i32::try_from(v).map_err(|e| {
+                        Error::new(erp_fields::ErrorKind::Database, "int8 out of int4 range")
+                            .with_source(e)
+                    })
+                })
+                .transpose()?
+                .map_or(Cell::Null, Cell::Int),
+            Some(&tokio_postgres::types::Type::INT2) => row
+                .cell::<Option<i16>>(idx)
+                .map_err(map)?
+                .map(i32::from)
+                .map_or(Cell::Null, Cell::Int),
+            _ => row
+                .cell::<Option<i32>>(idx)
+                .map_err(map)?
+                .map_or(Cell::Null, Cell::Int),
+        },
         ColumnType::Int8 => row
             .cell::<Option<i64>>(idx)
             .map_err(map)?
@@ -71,10 +89,17 @@ pub(crate) fn decode<R: CellSource + ?Sized>(row: &R, idx: usize, ty: ColumnType
             .cell::<Option<Date>>(idx)
             .map_err(map)?
             .map_or(Cell::Null, Cell::Date),
-        ColumnType::Timestamp => row
-            .cell::<Option<DateTime>>(idx)
-            .map_err(map)?
-            .map_or(Cell::Null, Cell::DateTime),
+        ColumnType::Timestamp => match row.column_type(idx) {
+            Some(&tokio_postgres::types::Type::TIMESTAMPTZ) => row
+                .cell::<Option<erp_fields::TimestampTz>>(idx)
+                .map_err(map)?
+                .map(|tz| DateTime::from_micros(tz.unix_micros()))
+                .map_or(Cell::Null, Cell::DateTime),
+            _ => row
+                .cell::<Option<DateTime>>(idx)
+                .map_err(map)?
+                .map_or(Cell::Null, Cell::DateTime),
+        },
         ColumnType::Uuid => row
             .cell::<Option<erp_fields::Uuid>>(idx)
             .map_err(map)?
@@ -133,8 +158,8 @@ pub enum Load {
     Raw,
 }
 
-/// The dynamic value of a cell as reads return it: NULL reads as the type's null value
-/// ; a many2one_reference reads `0` (REL §4.11), an x2many a list
+/// The dynamic value of a cell as reads return it: NULL reads as the type's null value;
+/// a many2one_reference reads `0` (REL §4.11), an x2many a list
 /// of ids.
 pub fn read_value(ty: &FieldType, cell: &Cell) -> Value {
     match (ty, cell) {
@@ -229,7 +254,7 @@ impl Transaction {
         if field.column().is_none() {
             return Ok(());
         }
-        self.check_records(records)?;
+        self.admit_records(records).await?;
         let model = records.model_id();
         let lacks = |cache: &crate::cache::Cache, id: RecId| {
             !cache.contains(model, fid, id) || keyed.iter().any(|f| !cache.contains(model, *f, id))
@@ -518,7 +543,7 @@ impl Transaction {
             return Ok(vec![None; cells.len()]);
         }
         let co = Records::from_parts(
-            records.env().sudo(true),
+            records.env().engine_sudo(),
             comodel.id,
             Arc::from(targets.clone()),
             Arc::from(targets.clone()),
@@ -588,13 +613,13 @@ impl Transaction {
 
     /// The access steps every read of a field's value passes before it touches the cache
     /// ([`Self::field_cells`], and the column builder of [`Records::read_rows`], which must never
-    /// skip them: design note step 5, §13).
+    /// skip them: step 5, §13).
     pub(crate) async fn field_read_checks(
         &mut self,
         records: &Records,
         fid: FieldId,
     ) -> Result<()> {
-        self.check_records(records)?;
+        self.admit_records(records).await?;
         if !records.env().su() {
             // a read served from the cache still decides on the field and record checks, so bring
             // the policy up to date and resolve the subject before them, whether or not a change is
@@ -720,6 +745,7 @@ impl Transaction {
                 .is_builtin_display_name(field.id)
             || field.inherited.is_some()
             || field.translate
+            || field.company_dependent
             || (field.ty.is_x2many() && field.compute.is_none() && field.related.is_none())
     }
 
@@ -767,7 +793,7 @@ impl Records {
     /// The cell of a field on a singleton; NULL on an empty set (no query); the singleton error on
     /// several records (/010).
     pub async fn cell(&self, tx: &mut Transaction, field: &str) -> Result<Cell> {
-        tx.check_records(self)?;
+        tx.admit_records(self).await?;
         let fid = field_of(self.spec(), field)?.id;
         match self.len() {
             0 => Ok(Cell::Null),
@@ -828,8 +854,7 @@ impl Records {
     /// (every field when `fields` is empty). The stored columns are fetched in one query; records
     /// that no longer exist are left out, not an error. Many2one values read as
     /// `[id, display_name]` (display names computed as superuser, `False` for a target that no
-    /// longer exists), x2many values as the list of visible ids, references as `"model,id"`
-    /// .
+    /// longer exists), x2many values as the list of visible ids, references as `"model,id"`.
     pub async fn read(
         &self,
         tx: &mut Transaction,
@@ -1136,8 +1161,8 @@ impl Transaction {
     }
 }
 
-/// `Programming`: `bench.order.line(7,).qty has no cached value after fetch` (design note
-/// ; the read path never substitutes `False` for it).
+/// `Programming`: `bench.order.line(7,).qty has no cached value after fetch` (
+/// the read path never substitutes `False` for it).
 fn not_cached(records: &Records, id: RecId, field: &FieldSpec) -> Error {
     Error::programming(format!(
         "{}({id},).{} has no cached value after fetch",

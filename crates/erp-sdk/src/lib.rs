@@ -4,11 +4,11 @@
 //!   runs inside the server process.
 //! - **Guest** (`target_family = "wasm"`, i.e. `wasm32-wasip2`): a small facade over `erp-fields` and
 //!   the guest bindings `erp-guest`. It pulls in no ORM, registry or database crate, and the addon
-//!   runs as a sandboxed component..
+//!   runs as a sandboxed component.
 //!
 //! The same addon source compiles in both. The macros register a backend-neutral description of
 //! every model, extension, method, override and compute; [`describe`] returns it as JSON, and a
-//! component exports the same text through `describe`.
+//! component exports the same text through `describe()`.
 //!
 //! ```
 //! erp_sdk::addon!(name = "test_inherit_base", depends = ["base"]);

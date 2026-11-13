@@ -34,12 +34,14 @@
 }
 
 .erp-mail-day { font-size: 0.85em; font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--line); margin: -2px 0 6px; padding-bottom: 2px; }
+.erp-mail-message-row { display: grid; grid-template-columns: var(--chatter-avatar, 36px) minmax(0, 1fr); column-gap: var(--chatter-gap, 8px); }
+.erp-mail-message-main { grid-column: 2; min-width: 0; }
 .erp-mail-message-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .erp-mail-author { font-weight: 600; }
 .erp-mail-time, .erp-mail-edited { font-size: 0.85em; color: var(--muted); }
 .erp-mail-message.is-own .erp-mail-time, .erp-mail-message.is-own .erp-mail-edited { color: var(--selected-text); }
 .erp-mail-message.is-note .erp-mail-time, .erp-mail-message.is-note .erp-mail-edited { color: var(--warning); }
-.erp-mail-badge { font-size: 0.75em; text-transform: uppercase; letter-spacing: 0.04em; border: 1px solid currentColor; border-radius: 4px; padding: 0 4px; }
+.erp-mail-badge { font-size: 0.75em; text-transform: uppercase; letter-spacing: 0.04em; border: 1px solid currentColor; border-radius: var(--radius-control); padding: 0 4px; }
 .erp-mail-subject { font-weight: 600; margin-top: 2px; }
 .erp-mail-body { overflow-wrap: anywhere; }
 .erp-mail-body > :first-child { margin-top: 0; }
@@ -51,6 +53,7 @@
 .erp-mail-tracking { list-style: none; margin: 0; padding: 0; }
 .erp-mail-tracking-field { font-weight: 600; }
 .erp-mail-tracking-old { text-decoration: line-through; }
+.erp-mail-tracking-arrow { display: inline-flex; align-items: center; vertical-align: middle; margin: 0 4px; color: var(--muted); }
 .erp-mail-body-failed, .erp-mail-message-error, .erp-mail-composer-error, .erp-mail-pending-error { color: var(--danger); }
 .erp-mail-message-error { margin-top: 4px; }
 
@@ -58,7 +61,7 @@
 .erp-mail-attachment { border: 1px solid var(--line); border-radius: var(--radius-control); padding: 4px 8px; background: var(--surface); color: var(--text); display: inline-flex; align-items: center; gap: 6px; }
 .erp-mail-attachment-link { color: var(--accent); text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
 .erp-mail-attachment-link:hover { text-decoration: underline; }
-.erp-mail-attachment-thumbnail { max-width: 48px; max-height: 48px; object-fit: cover; border-radius: 2px; }
+.erp-mail-attachment-thumbnail { max-width: 48px; max-height: 48px; object-fit: cover; border-radius: var(--radius-control); }
 .erp-mail-attachment-size { color: var(--muted); font-size: 0.85em; }
 .erp-mail-attachment-type { color: var(--muted); }
 

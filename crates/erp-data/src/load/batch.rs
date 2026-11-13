@@ -626,8 +626,8 @@ fn decide(
 ) -> Decision {
     let module = key.file.module();
     let Some(xid) = &item.xid else {
-        // no external id: created in init mode; `load_records` refuses it in update mode
-        // ; the `noupdate` skip of such a record happened before the push
+        // no external id: created in init mode; `load_records` refuses it in update mode;
+        // the `noupdate` skip of such a record happened before the push
         return if key.update {
             Decision::Fail(LoadErrorKind::Orm(Error::validation(
                 "Cannot update a record without specifying its id or xml_id",

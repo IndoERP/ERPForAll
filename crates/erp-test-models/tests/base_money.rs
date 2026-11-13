@@ -1,5 +1,5 @@
-//! Money and currency services (H41) and dated parameters (H35) of the base addon
-//! . The exact primitives are tested in `crates/erp-fields/tests/money.rs`.
+//! Money and currency services (H41) and dated parameters (H35) of the base addon.
+//! The exact primitives are tested in `crates/erp-fields/tests/money.rs`.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -812,7 +812,7 @@ async fn rate_lookup_is_access_checked() {
     let own = company(&mut setup, "Own", usd, None).await;
     setup
         .batch(
-            "INSERT INTO res_users (id, name, login, active) VALUES (42, 'Rater', 'rater', true)",
+            "INSERT INTO res_users (id, name, login, active, share) VALUES (42, 'Rater', 'rater', true, false)",
         )
         .await
         .unwrap();
@@ -850,7 +850,7 @@ async fn rate_lookup_is_access_checked() {
     let foreign_company = company(&mut setup, "Foreign", usd, None).await;
     setup
         .batch(
-            "INSERT INTO res_users (id, name, login, active) VALUES (42, 'Rater', 'rater', true)",
+            "INSERT INTO res_users (id, name, login, active, share) VALUES (42, 'Rater', 'rater', true, false)",
         )
         .await
         .unwrap();
@@ -941,7 +941,7 @@ async fn precision_lookup_works_for_ordinary_users() {
     precision_row(&mut setup, "Product Price", 4).await.unwrap();
     setup
         .batch(
-            "INSERT INTO res_users (id, name, login, active) VALUES (42, 'Clerk', 'clerk', true)",
+            "INSERT INTO res_users (id, name, login, active, share) VALUES (42, 'Clerk', 'clerk', true, false)",
         )
         .await
         .unwrap();
@@ -1504,7 +1504,7 @@ async fn dated_parameter_reader_is_access_checked() {
     .unwrap();
     setup
         .batch(
-            "INSERT INTO res_users (id, name, login, active) VALUES (42, 'Reader', 'reader', true)",
+            "INSERT INTO res_users (id, name, login, active, share) VALUES (42, 'Reader', 'reader', true, false)",
         )
         .await
         .unwrap();
@@ -1827,5 +1827,312 @@ async fn rate_type_code_is_unique_and_a_used_type_cannot_be_deleted() {
         .unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Validation, "{}", error.message());
     tx.rollback().await.unwrap();
+    h.cleanup().await.unwrap();
+}
+
+// Default-type lifecycle protection.
+async fn rate_type_state(tx: &mut Transaction) -> Vec<(i64, String, String, Option<bool>, i32)> {
+    tx.flush().await.unwrap();
+    tx.query(
+        "SELECT id, code, name, active, sequence FROM res_currency_rate_type ORDER BY id",
+        &[],
+    )
+    .await
+    .unwrap()
+    .iter()
+    .map(|row| (row.get(0), row.get(1), row.get(2), row.get(3), row.get(4)))
+    .collect()
+}
+
+#[tokio::test]
+async fn spot_protection_refuses_code_changes_and_archive() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    let spot = type_id(&mut tx, "spot").await;
+    let records = tx
+        .env()
+        .records("res.currency.rate.type")
+        .unwrap()
+        .browse([spot.get()])
+        .unwrap();
+    let before = rate_type_state(&mut tx).await;
+    for code in [text_cell("renamed"), Cell::Null] {
+        let error = records
+            .write(
+                &mut tx,
+                RawVals::new()
+                    .set_cell("code", code)
+                    .set_cell("active", Cell::Bool(false))
+                    .set_cell("name", text_cell("Changed")),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::UserError);
+        assert_eq!(
+            error.message(),
+            "The code of the default currency rate type 'spot' cannot be changed."
+        );
+        assert_eq!(rate_type_state(&mut tx).await, before);
+    }
+    for active in [Cell::Bool(false), Cell::Null] {
+        let error = records
+            .write(
+                &mut tx,
+                RawVals::new()
+                    .set_cell("active", active)
+                    .set_cell("name", text_cell("Changed")),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::UserError);
+        assert_eq!(
+            error.message(),
+            "The default currency rate type 'spot' cannot be archived."
+        );
+        assert_eq!(rate_type_state(&mut tx).await, before);
+    }
+    tx.rollback().await.unwrap();
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn spot_protection_refuses_delete_without_rates() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    let spot = type_id(&mut tx, "spot").await;
+    let before = rate_type_state(&mut tx).await;
+    let error = tx
+        .env()
+        .records("res.currency.rate.type")
+        .unwrap()
+        .browse([spot.get()])
+        .unwrap()
+        .unlink(&mut tx)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::UserError);
+    assert_eq!(
+        error.message(),
+        "The default currency rate type 'spot' cannot be deleted."
+    );
+    assert_eq!(rate_type_state(&mut tx).await, before);
+    tx.rollback().await.unwrap();
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn spot_protection_preflights_the_entire_batch() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    let spot = type_id(&mut tx, "spot").await;
+    let tax = type_id(&mut tx, "tax").await;
+    let types = tx.env().records("res.currency.rate.type").unwrap();
+    let before = rate_type_state(&mut tx).await;
+    for ids in [
+        vec![tax.get(), spot.get()],
+        vec![spot.get(), tax.get()],
+        vec![tax.get(), spot.get(), tax.get()],
+    ] {
+        let records = types.browse(ids).unwrap();
+        for (field, value, message) in [
+            (
+                "code",
+                text_cell("renamed"),
+                "The code of the default currency rate type 'spot' cannot be changed.",
+            ),
+            (
+                "active",
+                Cell::Bool(false),
+                "The default currency rate type 'spot' cannot be archived.",
+            ),
+        ] {
+            let error = records
+                .write(
+                    &mut tx,
+                    RawVals::new()
+                        .set_cell(field, value)
+                        .set_cell("name", text_cell("Changed")),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::UserError);
+            assert_eq!(error.message(), message);
+            assert_eq!(rate_type_state(&mut tx).await, before);
+        }
+        let error = records.unlink(&mut tx).await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::UserError);
+        assert_eq!(
+            error.message(),
+            "The default currency rate type 'spot' cannot be deleted."
+        );
+        assert_eq!(rate_type_state(&mut tx).await, before);
+    }
+    tx.rollback().await.unwrap();
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn spot_protection_preserves_allowed_operations_and_defaults() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    let types = tx.env().records("res.currency.rate.type").unwrap();
+    let spot = type_id(&mut tx, "spot").await;
+    let records = types.browse([spot.get()]).unwrap();
+    records
+        .write(
+            &mut tx,
+            RawVals::new()
+                .set_cell("code", text_cell("spot"))
+                .set_cell("active", Cell::Bool(true))
+                .set_cell("name", text_cell("Default Spot"))
+                .set_cell("sequence", Cell::Int(5)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        records.value(&mut tx, "name").await.unwrap(),
+        Value::str("Default Spot")
+    );
+    assert_eq!(
+        records.value(&mut tx, "sequence").await.unwrap(),
+        Value::Int(5)
+    );
+    let empty = types.browse([]).unwrap();
+    empty
+        .write(
+            &mut tx,
+            RawVals::new()
+                .set_cell("code", text_cell("renamed"))
+                .set_cell("active", Cell::Bool(false)),
+        )
+        .await
+        .unwrap();
+    empty.unlink(&mut tx).await.unwrap();
+
+    let custom = types
+        .create(
+            &mut tx,
+            vec![
+                RawVals::new()
+                    .set_cell("code", text_cell("custom"))
+                    .set_cell("name", text_cell("Custom")),
+            ],
+        )
+        .await
+        .unwrap();
+    custom
+        .write(
+            &mut tx,
+            RawVals::new()
+                .set_cell("code", text_cell("custom_renamed"))
+                .set_cell("active", Cell::Bool(false)),
+        )
+        .await
+        .unwrap();
+    let archived = money::RateTypeRef::by_code(&mut tx, "custom_renamed")
+        .await
+        .unwrap();
+    assert_eq!(archived.id(), custom.ids()[0]);
+    custom
+        .write(&mut tx, RawVals::new().set_cell("active", Cell::Bool(true)))
+        .await
+        .unwrap();
+    custom.unlink(&mut tx).await.unwrap();
+    assert!(custom.exists(&mut tx).await.unwrap().is_empty());
+
+    let error = records
+        .write(&mut tx, RawVals::new().set_cell("code", text_cell("gone")))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::UserError);
+    assert_eq!(
+        error.message(),
+        "The code of the default currency rate type 'spot' cannot be changed."
+    );
+    let usd = currency(&mut tx, "USD", "0.01").await;
+    let eur = currency(&mut tx, "EUR", "0.01").await;
+    let root = company(&mut tx, "RootCorp", usd, None).await;
+    let plain = rate(&mut tx, eur, Some(root), "2026-01-01", "2.0").await;
+    typed_rate(&mut tx, "tax", eur, Some(root), "2026-01-01", "20.0")
+        .await
+        .unwrap();
+    let rates = tx
+        .env()
+        .records("res.currency.rate")
+        .unwrap()
+        .browse([plain.get()])
+        .unwrap();
+    assert_eq!(
+        rates.value(&mut tx, "rate_type_id").await.unwrap(),
+        Value::Int(spot.get())
+    );
+    let loaded = book(
+        &mut tx,
+        root,
+        "2026-01-02",
+        RateDateRule::StrictlyBefore,
+        &[usd, eur],
+    )
+    .await
+    .unwrap();
+    assert_eq!(loaded.rate_type().id(), spot.get());
+    assert_eq!(
+        loaded.snapshot(usd, eur).unwrap().rates().unwrap().1.rate(),
+        dec("2.0")
+    );
+    tx.rollback().await.unwrap();
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn spot_protection_preserves_access_checks() {
+    let denied = DomainPolicy::builder(Otherwise::Allow)
+        .rule("res.currency.rate.type", Operation::Write, Domain::FALSE)
+        .rule("res.currency.rate.type", Operation::Unlink, Domain::FALSE)
+        .build()
+        .unwrap();
+    let h = Harness::builder([&base_users::ADDON, &erp_addon_base::ADDON])
+        .policy(denied)
+        .build()
+        .await
+        .unwrap();
+    rate_type_fixture::seed_rate_types(&h).await;
+    let mut setup = h.begin().await.unwrap();
+    let spot = type_id(&mut setup, "spot").await;
+    setup.batch("INSERT INTO res_users (id, name, login, active, share) VALUES (42, 'Reader', 'reader', true, false)")
+        .await.unwrap();
+    setup.commit().await.unwrap();
+    drop(setup);
+    let mut tx = begin_user(&h, 42, &[]).await;
+    let records = tx
+        .env()
+        .records("res.currency.rate.type")
+        .unwrap()
+        .browse([spot.get()])
+        .unwrap();
+    let error = records
+        .write(
+            &mut tx,
+            RawVals::new().set_cell("active", Cell::Bool(false)),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Access);
+    assert_eq!(
+        error.message(),
+        "You are not allowed to write 'Currency Rate Type' (res.currency.rate.type) records."
+    );
+    let error = records.unlink(&mut tx).await.unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Access);
+    assert_eq!(
+        error.message(),
+        "You are not allowed to unlink 'Currency Rate Type' (res.currency.rate.type) records."
+    );
+    tx.rollback().await.unwrap();
+    drop(tx);
     h.cleanup().await.unwrap();
 }

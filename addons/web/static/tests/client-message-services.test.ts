@@ -63,3 +63,41 @@ test('editable relation fields open the owned readonly picker and dispose its sc
  await vi.waitFor(()=>expect(document.querySelector('.select-create-results')?.textContent).toContain('Chosen record'));
  handle.dispose();expect(document.querySelector('dialog')).toBeNull();expect(change).not.toHaveBeenCalled();
 });
+
+/// (partial: with records found the Search more suggestion opens the picker with the typed text; the below-threshold branch is not tested)
+test('many2one autocomplete dropdown provides Search more option that opens picker',async()=>{
+ const {root,service}=setup(),change=vi.fn();
+ const rpc=new RpcClient(async()=>new Response('[{"id":8,"display_name":"Chosen record"}]',{headers:{'Content-Type':'application/json'}}),()=>{});
+ const handle=fieldWidgets.get('many2one').render({field:{name:'partner_id',kind:'many2one',label:'Partner',readonly:false,required:false,selection:null,relation:'res.partner',relationField:null},value:false,rpc,context:{},messages:service,change,run:job=>{void job();},report:()=>{}});
+ root.append(handle.node);
+ const input=handle.node.querySelector<HTMLInputElement>('.many2one-input')!;
+ input.value='Cho';input.dispatchEvent(new Event('input',{bubbles:true}));
+ await vi.waitFor(()=>{
+  const options=document.querySelectorAll('.editor-autocomplete-option');
+  expect(options.length).toBeGreaterThan(0);
+  const labels=[...options].map(opt=>opt.textContent);
+  expect(labels).toContain('Search more…');
+ });
+ const searchMoreOption=[...document.querySelectorAll('.editor-autocomplete-option')].find(opt=>opt.textContent==='Search more…');
+ expect(searchMoreOption).toBeDefined();
+ searchMoreOption!.dispatchEvent(new MouseEvent('click',{bubbles:true}));
+ await vi.waitFor(()=>expect(document.querySelector('.select-create-results')?.textContent).toContain('Chosen record'));
+ expect(document.querySelector<HTMLInputElement>('.select-create-search')?.value).toBe('Cho');
+ handle.dispose();
+});
+
+/// (partial: no Search more suggestion when the search found nothing)
+test('many2one autocomplete omits Search more when nothing was found',async()=>{
+ const {root,service}=setup();
+ const transport=vi.fn(async()=>new Response('[]',{headers:{'Content-Type':'application/json'}}));
+ const rpc=new RpcClient(transport,()=>{});
+ const handle=fieldWidgets.get('many2one').render({field:{name:'partner_id',kind:'many2one',label:'Partner',readonly:false,required:false,selection:null,relation:'res.partner',relationField:null,options:{no_create:true}},value:false,rpc,context:{},messages:service,change:vi.fn(),run:job=>{void job();},report:()=>{}});
+ root.append(handle.node);
+ const input=handle.node.querySelector<HTMLInputElement>('.many2one-input')!;
+ input.value='zzz';input.dispatchEvent(new Event('input',{bubbles:true}));
+ await vi.waitFor(()=>expect(transport).toHaveBeenCalled(),{timeout:2000});
+ await new Promise(r=>setTimeout(r,100)); // the answer is rendered a task after the search returns
+ expect([...document.querySelectorAll('.editor-autocomplete-option')].map(o=>o.textContent)).not.toContain('Search more…');
+ handle.dispose();
+});
+

@@ -257,3 +257,35 @@ fn the_stream_bound_is_configured_per_node_within_its_bounds() {
         "attachment store configuration: attachments.stream_permits_per_node = 0 is outside 1 to 1024"
     );
 }
+
+#[test]
+fn quota_settings_have_safe_defaults_and_reject_invalid_bounds() {
+    let config = AttachmentConfig::from_toml(GOOD).unwrap();
+    assert_eq!(config.limits.quota_bytes, None);
+    assert_eq!(config.limits.staging_max_bytes, 4 * 1024 * 1024 * 1024);
+    let with = |setting: &str| GOOD.replace("inline_max_bytes = 4096", setting);
+    let config =
+        AttachmentConfig::from_toml(&with("quota_bytes = 1048576\nstaging_max_bytes = 2097152"))
+            .unwrap();
+    assert_eq!(config.limits.quota_bytes, Some(1_048_576));
+    assert_eq!(config.limits.staging_max_bytes, 2_097_152);
+    // TOML parser wording varies by input type/version; pin Configuration and the setting
+    // identity here, while the deterministic budget refusals have full-message assertions.
+    for (setting, key) in [
+        ("quota_bytes = 0", "quota_bytes"),
+        ("quota_bytes = 1048575", "quota_bytes"),
+        ("staging_max_bytes = 0", "staging_max_bytes"),
+        ("staging_max_bytes = 1048575", "staging_max_bytes"),
+        (
+            "pending_uploads_per_subject = 101",
+            "pending_uploads_per_subject",
+        ),
+        ("quota_bytes = -1", "quota_bytes"),
+        ("staging_max_bytes = 'huge'", "staging_max_bytes"),
+        ("quota_bytes = 18446744073709551616", "quota_bytes"),
+    ] {
+        let err = AttachmentConfig::from_toml(&with(setting)).unwrap_err();
+        assert!(matches!(err, erp_blob::BlobError::Configuration { .. }));
+        assert!(err.to_string().contains(key), "{setting}: {err}");
+    }
+}

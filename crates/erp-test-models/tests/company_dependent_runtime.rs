@@ -1,0 +1,1450 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//! Runtime property storage; SQL query parity remains with QUERY.
+#![allow(clippy::unwrap_used, clippy::expect_used, reason = "tests")]
+
+use erp_fields::{Cell, Decimal, Error, ErrorKind, Value};
+use erp_orm::{Env, ReadGroup, Records, RecordsAs, SearchOptions, Transaction, ir_default};
+use erp_test_models::base_users;
+use erp_testkit::Harness;
+use serde_json::json;
+
+mod fixture {
+    use erp_sdk::prelude::*;
+    erp_sdk::addon!(name = "property_runtime", depends = ["base"]);
+    #[model(
+        name = "property.runtime",
+        addon = "property_runtime",
+        row_version = true
+    )]
+    pub struct Property {
+        #[field(char)]
+        pub name: Option<Arc<str>>,
+        #[field(char, company_dependent = true)]
+        pub note: Option<Arc<str>>,
+        #[field(boolean, company_dependent = true)]
+        pub truth: bool,
+        #[field(integer, company_dependent = true)]
+        pub count: i32,
+        #[field(float, company_dependent = true)]
+        pub ratio: f64,
+        #[field(float, digits = (0, 3), company_dependent = true)]
+        pub exact: Decimal,
+        #[field(float, digits = "Property Precision", company_dependent = true)]
+        pub named: Decimal,
+        #[field(text, company_dependent = true)]
+        pub text: Option<Arc<str>>,
+        #[field(selection, selection = [("a", "First"), ("b", "Second")], company_dependent = true)]
+        pub choice: Option<Arc<str>>,
+        #[field(date, company_dependent = true)]
+        pub day: Option<Date>,
+        #[field(datetime, company_dependent = true)]
+        pub moment: Option<DateTime>,
+        #[field(many2one, comodel = "property.runtime", company_dependent = true)]
+        pub tag_id: Option<RecId>,
+        #[field(
+            many2one,
+            comodel = "property.runtime",
+            company_dependent = true,
+            ondelete = "restrict"
+        )]
+        pub restricted_id: Option<RecId>,
+        #[field(html, company_dependent = true)]
+        pub html: Option<Arc<str>>,
+        #[field(many2one, comodel = "res.currency")]
+        pub currency_id: Option<RecId>,
+        #[field(monetary, currency_field = "currency_id", company_dependent = true)]
+        pub amount: Decimal,
+    }
+    #[model(name = "property.required", addon = "property_runtime")]
+    pub struct RequiredProperty {
+        #[field(char, company_dependent = true, required)]
+        pub note: Option<Arc<str>>,
+    }
+}
+
+async fn harness() -> Harness {
+    Harness::builder([&base_users::ADDON, &erp_addon_base::ADDON, &fixture::ADDON])
+        .build()
+        .await
+        .unwrap()
+}
+fn company(env: &Env, id: i64) -> Env {
+    env.with_context([("allowed_company_ids", Value::list([Value::Int(id)]))])
+}
+fn vals(items: &[(&str, Value)]) -> std::collections::BTreeMap<String, Value> {
+    items
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), v.clone()))
+        .collect()
+}
+async fn create(tx: &mut Transaction, env: &Env, items: &[(&str, Value)]) -> Records {
+    env.records("property.runtime")
+        .unwrap()
+        .create_values(tx, &[vals(items)])
+        .await
+        .unwrap()
+}
+async fn default(
+    tx: &mut Transaction,
+    env: &Env,
+    value: &str,
+    company: Option<i64>,
+    user: Option<i64>,
+) {
+    ir_default::set(
+        tx,
+        env,
+        "property.runtime",
+        "note",
+        &Value::str(value),
+        user.map(|id| erp_fields::RecId::from_real(id).unwrap()),
+        company.map(|id| erp_fields::RecId::from_real(id).unwrap()),
+        None,
+    )
+    .await
+    .unwrap();
+}
+async fn seed(tx: &mut Transaction) -> i64 {
+    let currency = erp_testkit::fixtures::seed_currency_in(tx).await.unwrap();
+    tx.execute("INSERT INTO res_company (id, name, currency_id) VALUES (1, 'One', $1), (2, 'Two', $1), (3, 'Three', $1) ON CONFLICT DO NOTHING", &[&currency]).await.unwrap();
+    currency
+}
+fn error(error: Error, kind: ErrorKind, message: &str) {
+    assert_eq!(error.kind(), kind);
+    assert_eq!(error.message(), message);
+}
+
+#[tokio::test]
+async fn scalar_crud_projects_every_public_read_and_keeps_company_deltas() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let env = tx.env();
+    let one = company(&env, 1);
+    let rec = create(
+        &mut tx,
+        &one,
+        &[("name", Value::str("Record")), ("note", Value::str("one"))],
+    )
+    .await;
+    let two = rec.with_env(company(&env, 2));
+    let three = rec.with_env(company(&env, 3));
+    assert_eq!(two.value(&mut tx, "note").await.unwrap(), Value::False);
+    two.write_values(&mut tx, &vals(&[("note", Value::str("two"))]))
+        .await
+        .unwrap();
+    rec.write_values(&mut tx, &vals(&[("note", Value::str("one updated"))]))
+        .await
+        .unwrap();
+    assert_eq!(
+        rec.value(&mut tx, "note").await.unwrap(),
+        Value::str("one updated")
+    );
+    assert_eq!(two.value(&mut tx, "note").await.unwrap(), Value::str("two"));
+    assert_eq!(three.value(&mut tx, "note").await.unwrap(), Value::False);
+    let read = two.read(&mut tx, &["name", "note"]).await.unwrap();
+    assert_eq!(read[0].get("note"), Some(&Value::str("two")));
+    tx.flush().await.unwrap();
+    let stored = tx
+        .query(
+            "SELECT note FROM property_runtime WHERE id=$1",
+            &[&rec.ids()[0]],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        stored[0].get::<_, serde_json::Value>(0),
+        json!({"1":"one updated", "2":"two"})
+    );
+    let typed = one
+        .model::<fixture::Property>()
+        .unwrap()
+        .browse(rec.ids())
+        .unwrap();
+    assert_eq!(
+        typed.get(&mut tx, fixture::Property::NOTE).await.unwrap(),
+        Some("one updated".into())
+    );
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn omitted_and_falsy_numeric_values_leave_null_columns() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let env = company(&tx.env(), 1);
+    let rec = create(&mut tx, &env, &[("name", Value::str("Falsy"))]).await;
+    for phase in 0..2 {
+        if phase == 1 {
+            rec.write_values(
+                &mut tx,
+                &vals(&[
+                    ("truth", Value::Bool(false)),
+                    ("count", Value::Int(0)),
+                    ("ratio", Value::Float(0.0)),
+                ]),
+            )
+            .await
+            .unwrap();
+            tx.flush().await.unwrap();
+        }
+        let row = tx.query("SELECT truth IS NULL, count IS NULL, ratio IS NULL FROM property_runtime WHERE id=$1", &[&rec.ids()[0]]).await.unwrap();
+        assert!(row[0].get::<_, bool>(0));
+        assert!(row[0].get::<_, bool>(1));
+        assert!(row[0].get::<_, bool>(2));
+        for cid in [1, 2, 3] {
+            let r = rec.with_env(company(&env, cid));
+            assert_eq!(r.cell(&mut tx, "truth").await.unwrap(), Cell::Bool(false));
+            assert_eq!(r.cell(&mut tx, "count").await.unwrap(), Cell::Int(0));
+            assert_eq!(r.cell(&mut tx, "ratio").await.unwrap(), Cell::Float(0.0));
+        }
+    }
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn runtime_defaults_are_not_caller_defaults_and_rollback_reprepares() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    tx.execute("INSERT INTO res_users (id, login, name, active, share) VALUES (2, 'property-user', 'Reader', true, false) ON CONFLICT DO NOTHING", &[]).await.unwrap();
+    let env = company(&tx.env(), 1);
+    let rec = create(&mut tx, &env, &[("name", Value::str("Inherited"))]).await;
+    default(&mut tx, &env, "global", None, None).await;
+    default(&mut tx, &env, "caller", Some(1), Some(2)).await;
+    let reader = rec.with_env(env.with_user(2));
+    assert_eq!(
+        reader.value(&mut tx, "note").await.unwrap(),
+        Value::str("global")
+    );
+    assert_eq!(
+        reader
+            .default_get(&mut tx, &["note"])
+            .await
+            .unwrap()
+            .get("note"),
+        Some(&Value::str("caller"))
+    );
+    default(&mut tx, &env, "company", Some(1), None).await;
+    assert_eq!(
+        reader.value(&mut tx, "note").await.unwrap(),
+        Value::str("company")
+    );
+    reader
+        .write_values(&mut tx, &vals(&[("note", Value::False)]))
+        .await
+        .unwrap();
+    tx.flush().await.unwrap();
+    assert_eq!(reader.value(&mut tx, "note").await.unwrap(), Value::False);
+    let null = tx
+        .query(
+            "SELECT note FROM property_runtime WHERE id=$1",
+            &[&rec.ids()[0]],
+        )
+        .await
+        .unwrap();
+    assert_eq!(null[0].get::<_, serde_json::Value>(0), json!({"1":null}));
+    rec.write_values(&mut tx, &vals(&[("note", Value::str("company"))]))
+        .await
+        .unwrap();
+    tx.flush().await.unwrap();
+    let result: erp_fields::Result<()> = tx
+        .savepoint(async |tx| {
+            default(tx, &env, "temporary", Some(1), None).await;
+            assert_eq!(
+                rec.value(tx, "note").await.unwrap(),
+                Value::str("temporary")
+            );
+            Err(Error::validation("rollback property default"))
+        })
+        .await;
+    error(
+        result.unwrap_err(),
+        ErrorKind::Validation,
+        "rollback property default",
+    );
+    assert_eq!(
+        rec.value(&mut tx, "note").await.unwrap(),
+        Value::str("company")
+    );
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn exact_and_monetary_values_remain_exact_and_html_is_admitted() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    let currency = seed(&mut tx).await;
+    let env = company(&tx.env(), 1);
+    let exact: Decimal = "9007199254740993.125".parse().unwrap();
+    let rec = create(
+        &mut tx,
+        &env,
+        &[
+            ("name", Value::str("Exact")),
+            ("currency_id", Value::Int(currency)),
+            ("exact", Value::Decimal(exact)),
+            ("amount", Value::Decimal("12.345".parse().unwrap())),
+            ("html", Value::str("<p>safe<script>alert(1)</script></p>")),
+        ],
+    )
+    .await;
+    assert_eq!(
+        rec.cell(&mut tx, "exact").await.unwrap(),
+        Cell::Decimal(exact)
+    );
+    assert_eq!(
+        rec.cell(&mut tx, "amount").await.unwrap(),
+        Cell::Decimal("12.35".parse().unwrap())
+    );
+    let html = rec.value(&mut tx, "html").await.unwrap();
+    assert_eq!(html, Value::str("<p>safe</p>"));
+    let row = tx
+        .query(
+            "SELECT exact FROM property_runtime WHERE id=$1",
+            &[&rec.ids()[0]],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        row[0].get::<_, serde_json::Value>(0),
+        json!({"1":"9007199254740993.125"})
+    );
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn rollback_discards_pending_company_mutations() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let env = company(&tx.env(), 1);
+    let rec = create(
+        &mut tx,
+        &env,
+        &[
+            ("name", Value::str("Rollback")),
+            ("note", Value::str("kept")),
+        ],
+    )
+    .await;
+    let result: erp_fields::Result<()> = tx
+        .savepoint(async |tx| {
+            rec.with_env(company(&env, 2))
+                .write_values(tx, &vals(&[("note", Value::str("discarded"))]))
+                .await?;
+            Err(Error::validation("rollback company write"))
+        })
+        .await;
+    error(
+        result.unwrap_err(),
+        ErrorKind::Validation,
+        "rollback company write",
+    );
+    rec.write_values(&mut tx, &vals(&[("note", Value::str("final"))]))
+        .await
+        .unwrap();
+    tx.flush().await.unwrap();
+    let row = tx
+        .query(
+            "SELECT note FROM property_runtime WHERE id=$1",
+            &[&rec.ids()[0]],
+        )
+        .await
+        .unwrap();
+    assert_eq!(row[0].get::<_, serde_json::Value>(0), json!({"1":"final"}));
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn queries_project_properties_and_new_records_still_refuse() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let env = company(&tx.env(), 1);
+    let rec = create(
+        &mut tx,
+        &env,
+        &[
+            ("name", Value::str("Query guard")),
+            ("note", Value::str("hidden")),
+        ],
+    )
+    .await;
+    let other = create(&mut tx, &env, &[("name", Value::str("Other"))]).await;
+    // Company 2 gives the second record the same value; company 1 still has none for it.
+    other
+        .with_env(company(&env, 2))
+        .write_values(&mut tx, &vals(&[("note", Value::str("hidden"))]))
+        .await
+        .unwrap();
+    let domain = erp_sdk::Domain::condition("note", erp_sdk::Operator::Eq, "hidden").unwrap();
+    assert_eq!(rec.search(&mut tx, &domain).await.unwrap().ids(), rec.ids());
+    assert_eq!(
+        rec.with_env(company(&env, 2))
+            .search(&mut tx, &domain)
+            .await
+            .unwrap()
+            .ids(),
+        other.ids()
+    );
+    error(
+        tx.new_record(&rec, erp_orm::RawVals::new(), None, None)
+            .await
+            .unwrap_err(),
+        ErrorKind::Programming,
+        "property.runtime.note: company-dependent new-record construction is not supported until a later release",
+    );
+    assert_eq!(
+        rec.search(&mut tx, &erp_sdk::Domain::TRUE)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn malformed_maps_fail_without_disclosing_other_company_values() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let env = company(&tx.env(), 1);
+    let rec = create(&mut tx, &env, &[("name", Value::str("Corrupt"))]).await;
+    tx.execute(
+        "UPDATE property_runtime SET note = $1 WHERE id=$2",
+        &[&json!({"2":{"secret":"value"}}), &rec.ids()[0]],
+    )
+    .await
+    .unwrap();
+    tx.invalidate_all().await.unwrap();
+    error(
+        rec.value(&mut tx, "note").await.unwrap_err(),
+        ErrorKind::Programming,
+        "company-dependent map contains a non-scalar value",
+    );
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn independent_orms_retry_stale_company_writes_without_losing_siblings() {
+    let h = harness().await;
+    let peer = h.orm().rebuild(h.registry().clone()).build().unwrap();
+    let mut setup = h.begin().await.unwrap();
+    seed(&mut setup).await;
+    let env = company(&setup.env(), 1);
+    let rec = create(&mut setup, &env, &[("name", Value::str("Concurrent"))]).await;
+    let id = rec.ids()[0];
+    setup.commit().await.unwrap();
+    let mut one = h.begin().await.unwrap();
+    let mut two = peer.begin(erp_orm::SUPERUSER_ID).await.unwrap();
+    let a = company(&one.env(), 1)
+        .records("property.runtime")
+        .unwrap()
+        .browse([id])
+        .unwrap();
+    let b = company(&two.env(), 2)
+        .records("property.runtime")
+        .unwrap()
+        .browse([id])
+        .unwrap();
+    assert_eq!(b.value(&mut two, "note").await.unwrap(), Value::False);
+    a.write_values(&mut one, &vals(&[("note", Value::str("one"))]))
+        .await
+        .unwrap();
+    one.commit().await.unwrap();
+    b.write_values(&mut two, &vals(&[("note", Value::str("two"))]))
+        .await
+        .unwrap();
+    let stale = two.commit().await.unwrap_err();
+    assert_eq!(stale.kind(), ErrorKind::Concurrency);
+    assert_eq!(stale.sqlstate(), Some("40001"));
+    assert_eq!(
+        stale.message(),
+        "could not serialize access due to concurrent update"
+    );
+    two.rollback().await.unwrap();
+    let b = company(&two.env(), 2)
+        .records("property.runtime")
+        .unwrap()
+        .browse([id])
+        .unwrap();
+    b.write_values(&mut two, &vals(&[("note", Value::str("two"))]))
+        .await
+        .unwrap();
+    two.commit().await.unwrap();
+    let mut check = h.begin().await.unwrap();
+    let rows = check
+        .query("SELECT note FROM property_runtime WHERE id=$1", &[&id])
+        .await
+        .unwrap();
+    assert_eq!(
+        rows[0].get::<_, serde_json::Value>(0),
+        json!({"1":"one", "2":"two"})
+    );
+    drop(check);
+    drop(one);
+    drop(two);
+    drop(setup);
+    drop(peer);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn defaults_respect_existing_snapshots_and_refresh_on_independent_nodes() {
+    let h = harness().await;
+    let peer = h.orm().rebuild(h.registry().clone()).build().unwrap();
+    let mut setup = h.begin().await.unwrap();
+    seed(&mut setup).await;
+    let env = company(&setup.env(), 1);
+    let rec = create(&mut setup, &env, &[("name", Value::str("Snapshot"))]).await;
+    let id = rec.ids()[0];
+    default(&mut setup, &env, "old", Some(1), None).await;
+    setup.commit().await.unwrap();
+    let mut old = peer.begin(erp_orm::SUPERUSER_ID).await.unwrap();
+    let r = company(&old.env(), 1)
+        .records("property.runtime")
+        .unwrap()
+        .browse([id])
+        .unwrap();
+    assert_eq!(r.value(&mut old, "note").await.unwrap(), Value::str("old"));
+    let mut writer = h.begin().await.unwrap();
+    let writer_env = company(&writer.env(), 1);
+    default(&mut writer, &writer_env, "new", Some(1), None).await;
+    writer.commit().await.unwrap();
+    assert_eq!(r.value(&mut old, "note").await.unwrap(), Value::str("old"));
+    old.commit().await.unwrap();
+    let r = company(&old.env(), 1)
+        .records("property.runtime")
+        .unwrap()
+        .browse([id])
+        .unwrap();
+    assert_eq!(r.value(&mut old, "note").await.unwrap(), Value::str("new"));
+    drop(old);
+    drop(writer);
+    drop(setup);
+    drop(peer);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn ordering_and_grouping_work_while_upsert_still_refuses() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let env = company(&tx.env(), 1);
+    default(&mut tx, &env, "middle", None, None).await;
+    let model = env.records("property.runtime").unwrap();
+    let rows = [
+        vals(&[("note", Value::str("zulu"))]),
+        vals(&[("note", Value::str("alpha"))]),
+        vals(&[]),
+    ];
+    let rec = model.create_values(&mut tx, &rows).await.unwrap();
+    let ids = rec.ids().to_vec();
+    // Company 2 overrides the first record and the third; the second falls back to the default.
+    let two = model.with_env(company(&env, 2));
+    two.browse([ids[0]])
+        .unwrap()
+        .write_values(&mut tx, &vals(&[("note", Value::str("aaa"))]))
+        .await
+        .unwrap();
+    two.browse([ids[2]])
+        .unwrap()
+        .write_values(&mut tx, &vals(&[("note", Value::str("bravo"))]))
+        .await
+        .unwrap();
+    let order = SearchOptions::new().order("note");
+    let got = model
+        .search_with(&mut tx, &erp_sdk::Domain::TRUE, &order)
+        .await
+        .unwrap();
+    assert_eq!(got.ids(), &[ids[1], ids[2], ids[0]]);
+    let got = two
+        .search_with(&mut tx, &erp_sdk::Domain::TRUE, &order)
+        .await
+        .unwrap();
+    assert_eq!(got.ids(), &[ids[0], ids[2], ids[1]]);
+    for (scope, expected) in [
+        (&model, ["alpha", "middle", "zulu"]),
+        (&two, ["aaa", "bravo", "middle"]),
+    ] {
+        let groups = scope
+            ._read_group(
+                &mut tx,
+                ReadGroup::new(erp_sdk::Domain::TRUE)
+                    .groupby(["note"])
+                    .aggregates(["__count"])
+                    .order("note"),
+            )
+            .await
+            .unwrap();
+        let got: Vec<Vec<Value>> = groups
+            .rows()
+            .iter()
+            .map(|r| r.iter().map(|v| v.to_value(RecordsAs::Id)).collect())
+            .collect();
+        let want: Vec<Vec<Value>> = expected
+            .iter()
+            .map(|n| vec![Value::str(n), Value::Int(1)])
+            .collect();
+        assert_eq!(got, want);
+    }
+    error(
+        model
+            .upsert(&mut tx, erp_orm::UpsertCall::new("unused"))
+            .await
+            .unwrap_err(),
+        ErrorKind::Programming,
+        "property.runtime.note: company-dependent upsert is not supported until a later release",
+    );
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn required_properties_validate_effective_values_and_missing_company_refuses() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let env = company(&tx.env(), 1);
+    let model = env.records("property.required").unwrap();
+    let fail: erp_fields::Result<()> = tx
+        .savepoint(async |tx| model.create_values(tx, &[vals(&[])]).await.map(|_| ()))
+        .await;
+    error(
+        fail.unwrap_err(),
+        ErrorKind::Validation,
+        "property.required.note: required company-dependent value is missing",
+    );
+    let record = model
+        .create_values(&mut tx, &[vals(&[("note", Value::str("present"))])])
+        .await
+        .unwrap();
+    assert_eq!(
+        record.value(&mut tx, "note").await.unwrap(),
+        Value::str("present")
+    );
+    let row = tx.query("SELECT is_nullable FROM information_schema.columns WHERE table_name='property_required' AND column_name='note'", &[]).await.unwrap();
+    assert_eq!(row[0].get::<_, String>(0), "YES");
+    // A fresh context with no companies is an error, never an implicit company 1.
+    let no_company = record.with_env(env.with_context([("allowed_company_ids", Value::list([]))]));
+    error(
+        no_company.value(&mut tx, "note").await.unwrap_err(),
+        ErrorKind::Validation,
+        "company-dependent fields require a current company",
+    );
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn warm_cache_does_not_bypass_company_authority_under_sudo() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let env = company(&tx.env(), 1);
+    let rec = create(
+        &mut tx,
+        &env,
+        &[
+            ("name", Value::str("Authority")),
+            ("note", Value::str("private")),
+        ],
+    )
+    .await;
+    let id = rec.ids()[0];
+    tx.commit().await.unwrap();
+    let resolution = erp_orm::Resolution::in_id_order(
+        erp_orm::GroupSet::default(),
+        [erp_orm::CompanyId::new(1).unwrap()],
+        std::num::NonZeroU64::MIN,
+    )
+    .unwrap();
+    let principal = erp_orm::PrincipalBuilder::user(erp_orm::UserId::new(2).unwrap())
+        .resolution(resolution)
+        .companies(vec![erp_orm::CompanyId::new(1).unwrap()])
+        .build()
+        .unwrap();
+    let mut reader = h
+        .orm()
+        .begin_opts(erp_orm::BeginOptions::for_principal(principal))
+        .await
+        .unwrap();
+    let visible = reader
+        .env()
+        .records("property.runtime")
+        .unwrap()
+        .browse([id])
+        .unwrap();
+    assert_eq!(
+        visible.value(&mut reader, "note").await.unwrap(),
+        Value::str("private")
+    );
+    let forbidden = visible.with_env(company(&visible.env().sudo(true), 2));
+    error(
+        forbidden.value(&mut reader, "note").await.unwrap_err(),
+        ErrorKind::Access,
+        "Access to unauthorized or invalid companies.",
+    );
+    drop(reader);
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[test]
+fn unsupported_company_declarations_refuse_during_composition() {
+    static INVALID: erp_registry::ModelDecl =
+        erp_registry::ModelDecl::new("property_runtime", "property.invalid")
+            .fields(&[erp_registry::FieldDecl::json("value").company_dependent(true)]);
+    let err = erp_registry::RegistryBuilder::new([
+        &base_users::ADDON,
+        &erp_addon_base::ADDON,
+        &fixture::ADDON,
+    ])
+    .with_decls([&INVALID])
+    .build()
+    .unwrap_err();
+    error(
+        err,
+        ErrorKind::Programming,
+        "field 'property.invalid.value': this company-dependent declaration is not supported until a later release",
+    );
+}
+
+#[tokio::test]
+async fn text_selection_dates_and_relations_keep_scalar_types_across_flush() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let env = company(&tx.env(), 1);
+    let tag = create(&mut tx, &env, &[("name", Value::str("Target"))]).await;
+    let rec = create(
+        &mut tx,
+        &env,
+        &[
+            ("name", Value::str("Types")),
+            ("text", Value::str("日本語\r\ntext")),
+            ("choice", Value::str("b")),
+            ("day", Value::str("2026-11-11")),
+            ("moment", Value::str("2026-11-11 12:34:56")),
+            ("tag_id", Value::Int(tag.ids()[0])),
+            ("count", Value::Int(42)),
+            ("truth", Value::Bool(true)),
+            ("ratio", Value::Float(1.5)),
+        ],
+    )
+    .await;
+    tx.flush().await.unwrap();
+    tx.invalidate_all().await.unwrap();
+    assert_eq!(
+        rec.value(&mut tx, "text").await.unwrap(),
+        Value::str("日本語\r\ntext")
+    );
+    assert_eq!(rec.value(&mut tx, "choice").await.unwrap(), Value::str("b"));
+    assert_eq!(
+        rec.cell(&mut tx, "day").await.unwrap(),
+        Cell::Date(erp_fields::Date::parse_odoo("2026-11-11").unwrap())
+    );
+    assert_eq!(
+        rec.cell(&mut tx, "moment").await.unwrap(),
+        Cell::DateTime(erp_fields::DateTime::parse_odoo("2026-11-11 12:34:56").unwrap())
+    );
+    assert_eq!(
+        rec.cell(&mut tx, "tag_id").await.unwrap(),
+        Cell::Id(tag.ids()[0])
+    );
+    assert_eq!(rec.cell(&mut tx, "count").await.unwrap(), Cell::Int(42));
+    let two = rec.with_env(company(&env, 2));
+    assert_eq!(two.cell(&mut tx, "tag_id").await.unwrap(), Cell::Null);
+    assert_eq!(two.value(&mut tx, "text").await.unwrap(), Value::False);
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn deletion_cannot_miss_a_reference_after_an_unrelated_first_row() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let env = company(&tx.env(), 1);
+    let first = create(&mut tx, &env, &[("name", Value::str("Other target"))]).await;
+    let target = create(&mut tx, &env, &[("name", Value::str("Restricted target"))]).await;
+    create(
+        &mut tx,
+        &env,
+        &[
+            ("name", Value::str("Unrelated first")),
+            ("restricted_id", Value::Int(first.ids()[0])),
+        ],
+    )
+    .await;
+    create(
+        &mut tx,
+        &env,
+        &[
+            ("name", Value::str("Matching later")),
+            ("restricted_id", Value::Int(target.ids()[0])),
+        ],
+    )
+    .await;
+    error(
+        target.unlink(&mut tx).await.unwrap_err(),
+        ErrorKind::UserError,
+        "You cannot delete a record used by a company-dependent field",
+    );
+    assert_eq!(
+        target.value(&mut tx, "name").await.unwrap(),
+        Value::str("Restricted target")
+    );
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn default_removal_preserves_pending_overrides_and_empty_reads_stay_empty() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let env = company(&tx.env(), 1);
+    let rec = create(&mut tx, &env, &[("name", Value::str("Removal"))]).await;
+    default(&mut tx, &env, "global", None, None).await;
+    rec.write_values(&mut tx, &vals(&[("note", Value::str("pending"))]))
+        .await
+        .unwrap();
+    ir_default::discard_values(
+        &mut tx,
+        &env,
+        "property.runtime",
+        "note",
+        &[Value::str("global")],
+    )
+    .await
+    .unwrap();
+    tx.flush().await.unwrap();
+    assert_eq!(
+        rec.value(&mut tx, "note").await.unwrap(),
+        Value::str("pending")
+    );
+    assert_eq!(
+        rec.with_env(company(&env, 2))
+            .value(&mut tx, "note")
+            .await
+            .unwrap(),
+        Value::False
+    );
+    assert!(
+        rec.browse_ids([])
+            .cells(&mut tx, "note")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn privileged_warm_maps_do_not_bypass_field_access() {
+    let h = Harness::builder([&base_users::ADDON, &erp_addon_base::ADDON, &fixture::ADDON])
+        .policy(erp_testkit::FieldPolicy::new().deny(
+            "property.runtime",
+            "note",
+            erp_orm::FieldOp::Read,
+        ))
+        .build()
+        .await
+        .unwrap();
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let env = company(&tx.env(), 1);
+    let rec = create(
+        &mut tx,
+        &env,
+        &[
+            ("name", Value::str("Field rights")),
+            ("note", Value::str("private")),
+        ],
+    )
+    .await;
+    assert_eq!(
+        rec.value(&mut tx, "note").await.unwrap(),
+        Value::str("private")
+    );
+    let reader = rec.with_env(env.with_user(2));
+    let message = format!(
+        "You do not have enough rights to access the field \"note\" on {} (property.runtime). Please contact your system administrator.\n\nOperation: read",
+        rec.spec().description
+    );
+    error(
+        reader.value(&mut tx, "note").await.unwrap_err(),
+        ErrorKind::Access,
+        &message,
+    );
+    error(
+        reader.read(&mut tx, &["note"]).await.unwrap_err(),
+        ErrorKind::Access,
+        &message,
+    );
+    assert_eq!(
+        rec.value(&mut tx, "note").await.unwrap(),
+        Value::str("private")
+    );
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn stored_property_consumers_refuse_at_runtime_assembly() {
+    static CONSUMER: erp_registry::AddonDescriptor = erp_registry::AddonDescriptor {
+        name: "property_consumer",
+        depends: &["property_runtime"],
+        exact_only: false,
+    };
+    static STORED: erp_registry::ModelDecl =
+        erp_registry::ModelDecl::new("property_consumer", "property.runtime")
+            .inherit(&["property.runtime"])
+            .fields(&[erp_registry::FieldDecl::char("note_copy")
+                .related("note")
+                .store(true)]);
+    let err = Harness::builder([
+        &base_users::ADDON,
+        &erp_addon_base::ADDON,
+        &fixture::ADDON,
+        &CONSUMER,
+    ])
+    .with_static_decls([&STORED])
+    .check()
+    .unwrap_err();
+    assert!(matches!(err, erp_testkit::HarnessError::Orm(_)));
+    if let erp_testkit::HarnessError::Orm(err) = err {
+        error(
+            err,
+            ErrorKind::Programming,
+            "property.runtime.note_copy: company-dependent compute dependencies without nonstored company context is not supported until a later release",
+        );
+    }
+}
+
+fn unused_property_hook<'a>(
+    _: &'a mut Transaction,
+    _: &'a erp_orm::WriteBatch,
+) -> erp_orm::BoxFuture<'a, erp_fields::Result<()>> {
+    Box::pin(async { Ok(()) })
+}
+
+#[tokio::test]
+async fn property_hooks_refuse_before_any_connection_or_callback() {
+    let err = Harness::builder([&base_users::ADDON, &erp_addon_base::ADDON, &fixture::ADDON])
+        .write_hook(erp_orm::WriteHook::new(
+            "property.runtime",
+            &["note"],
+            unused_property_hook,
+        ))
+        .check()
+        .unwrap_err();
+    assert!(matches!(err, erp_testkit::HarnessError::Orm(_)));
+    if let erp_testkit::HarnessError::Orm(err) = err {
+        error(
+            err,
+            ErrorKind::Programming,
+            "property.runtime.note: company-dependent write-hook registration is not supported until a later release",
+        );
+    }
+}
+
+#[tokio::test]
+async fn scalar_schema_adoption_refuses_and_savepoint_restores_the_old_shape() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let env = company(&tx.env(), 1);
+    let rec = create(
+        &mut tx,
+        &env,
+        &[
+            ("name", Value::str("Migration")),
+            ("note", Value::str("kept")),
+        ],
+    )
+    .await;
+    let result = tx
+        .savepoint(async |tx| {
+            tx.execute(
+                "ALTER TABLE property_runtime ALTER COLUMN note TYPE text USING note::text",
+                &[],
+            )
+            .await?;
+            tx.init_models(&[rec.model_id()]).await
+        })
+        .await;
+    error(
+        result.unwrap_err(),
+        ErrorKind::Programming,
+        "property.runtime.note: populated scalar conversion requires an explicit company migration policy",
+    );
+    assert_eq!(
+        rec.value(&mut tx, "note").await.unwrap(),
+        Value::str("kept")
+    );
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn invalid_hidden_fallback_never_discloses_its_value() {
+    let h = Harness::builder([&base_users::ADDON, &erp_addon_base::ADDON, &fixture::ADDON])
+        .policy(erp_testkit::FieldPolicy::new().deny(
+            "property.runtime",
+            "exact",
+            erp_orm::FieldOp::Read,
+        ))
+        .build()
+        .await
+        .unwrap();
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let env = company(&tx.env(), 1);
+    let rec = create(&mut tx, &env, &[("name", Value::str("Invalid fallback"))]).await;
+    ir_default::set(
+        &mut tx,
+        &env,
+        "property.runtime",
+        "exact",
+        &Value::Decimal(Decimal::ZERO),
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(rec.spec().field("exact").unwrap().company_dependent);
+    assert_eq!(tx.execute("UPDATE ir_default SET json_value=$1 WHERE field_id IN (SELECT id FROM ir_model_fields WHERE model='property.runtime' AND name='exact')", &[&"\"private fallback value\""]).await.unwrap(), 1);
+    let defaults = ir_default::get_model_defaults(&mut tx, &env, "property.runtime", None)
+        .await
+        .unwrap();
+    assert_eq!(
+        defaults.get("exact"),
+        Some(&Value::str("private fallback value"))
+    );
+    error(
+        rec.with_env(env.with_user(2))
+            .value(&mut tx, "note")
+            .await
+            .unwrap_err(),
+        ErrorKind::Validation,
+        "property.runtime.exact: invalid company-dependent fallback",
+    );
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn grouping_through_a_property_link_uses_effective_values() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let env = company(&tx.env(), 1);
+    let model = env.records("property.runtime").unwrap();
+    let t1 = create(&mut tx, &env, &[("name", Value::str("t1"))]).await;
+    let t2 = create(&mut tx, &env, &[("name", Value::str("t2"))]).await;
+    let link = |t: &Records| ("tag_id", Value::Int(t.ids()[0]));
+    let o1 = create(&mut tx, &env, &[link(&t1)]).await;
+    let o2 = create(&mut tx, &env, &[link(&t1)]).await;
+    let o3 = create(&mut tx, &env, &[]).await;
+    // Company 2 re-points o2 at t2; o1 and o3 have no company 2 value.
+    o2.with_env(company(&env, 2))
+        .write_values(&mut tx, &vals(&[link(&t2)]))
+        .await
+        .unwrap();
+    let scope = erp_sdk::Domain::condition(
+        "id",
+        erp_sdk::Operator::In,
+        erp_domain::Value::list([o1.ids()[0], o2.ids()[0], o3.ids()[0]]),
+    )
+    .unwrap();
+    for (scoped, expected) in [
+        (&model, [("t1", 2), ("", 1)]),
+        (&model.with_env(company(&env, 2)), [("t2", 1), ("", 2)]),
+    ] {
+        let groups = scoped
+            ._read_group(
+                &mut tx,
+                ReadGroup::new(scope.clone())
+                    .groupby(["tag_id.name"])
+                    .aggregates(["__count"])
+                    .order("tag_id.name"),
+            )
+            .await
+            .unwrap();
+        let mut got: Vec<(Value, Value)> = groups
+            .rows()
+            .iter()
+            .map(|r| (r[0].to_value(RecordsAs::Id), r[1].to_value(RecordsAs::Id)))
+            .collect();
+        got.sort_by_key(|(k, _)| format!("{k:?}"));
+        let mut want: Vec<(Value, Value)> = expected
+            .iter()
+            .map(|(n, c)| {
+                let key = if n.is_empty() {
+                    Value::False
+                } else {
+                    Value::str(n)
+                };
+                (key, Value::Int(*c))
+            })
+            .collect();
+        want.sort_by_key(|(k, _)| format!("{k:?}"));
+        assert_eq!(got, want);
+    }
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn company_context_compute_refreshes_after_defaults_change() {
+    let h = Harness::builder([
+        &base_users::ADDON,
+        &erp_addon_base::ADDON,
+        &native_consumer::ADDON,
+    ])
+    .build()
+    .await
+    .unwrap();
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let env = company(&tx.env(), 1);
+    let rec = env
+        .records("property.computed")
+        .unwrap()
+        .create_values(&mut tx, &[vals(&[("note", Value::str("one"))])])
+        .await
+        .unwrap();
+    ir_default::set(
+        &mut tx,
+        &env,
+        "property.computed",
+        "note",
+        &Value::str("first"),
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let two = rec.with_env(company(&env, 2));
+    assert_eq!(
+        rec.value(&mut tx, "note_copy").await.unwrap(),
+        Value::str("one")
+    );
+    assert_eq!(
+        two.value(&mut tx, "note_copy").await.unwrap(),
+        Value::str("first")
+    );
+    ir_default::set(
+        &mut tx,
+        &env,
+        "property.computed",
+        "note",
+        &Value::str("second"),
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        two.value(&mut tx, "note_copy").await.unwrap(),
+        Value::str("second")
+    );
+    assert_eq!(
+        rec.value(&mut tx, "note_copy").await.unwrap(),
+        Value::str("one")
+    );
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+mod native_consumer {
+    use erp_sdk::prelude::*;
+    erp_sdk::addon!(name = "property_native_consumer", depends = ["base"]);
+    #[model(name = "property.computed", addon = "property_native_consumer")]
+    pub struct Computed {
+        #[field(char, company_dependent = true)]
+        pub note: Option<Arc<str>>,
+        #[field(char, compute = "_copy_note")]
+        pub note_copy: Option<Arc<str>>,
+    }
+    #[methods(Computed, addon = "property_native_consumer")]
+    impl Computed {
+        #[compute(depends = ["note"], depends_context = ["company"])]
+        fn _copy_note(batch: &mut Batch<'_, Computed>) -> Result<()> {
+            for i in batch.indices() {
+                let note = batch.get(i, Computed::NOTE)?;
+                batch.set(i, Computed::NOTE_COPY, note)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+#[tokio::test]
+async fn named_precision_flush_uses_the_mutation_company() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let env = company(&tx.env(), 1);
+    env.records("decimal.precision")
+        .unwrap()
+        .create_values(
+            &mut tx,
+            &[vals(&[
+                ("name", Value::str("Property Precision")),
+                ("digits", Value::Int(4)),
+            ])],
+        )
+        .await
+        .unwrap();
+    let rec = create(
+        &mut tx,
+        &env,
+        &[
+            ("name", Value::str("Named precision")),
+            ("named", Value::Decimal("1.1234".parse().unwrap())),
+        ],
+    )
+    .await;
+    let two = rec.with_env(company(&env, 2));
+    two.write_values(
+        &mut tx,
+        &vals(&[("named", Value::Decimal("2.1234".parse().unwrap()))]),
+    )
+    .await
+    .unwrap();
+    tx.flush().await.unwrap();
+    assert_eq!(
+        rec.cell(&mut tx, "named").await.unwrap(),
+        Cell::Decimal("1.1234".parse().unwrap())
+    );
+    assert_eq!(
+        two.cell(&mut tx, "named").await.unwrap(),
+        Cell::Decimal("2.1234".parse().unwrap())
+    );
+    let rows = tx
+        .query(
+            "SELECT named FROM property_runtime WHERE id=$1",
+            &[&rec.ids()[0]],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        rows[0].get::<_, serde_json::Value>(0),
+        json!({"1":"1.1234", "2":"2.1234"})
+    );
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn direct_default_crud_invalidates_property_consumers() {
+    let h = Harness::builder([
+        &base_users::ADDON,
+        &erp_addon_base::ADDON,
+        &native_consumer::ADDON,
+    ])
+    .build()
+    .await
+    .unwrap();
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let env = company(&tx.env(), 1);
+    let rec = env
+        .records("property.computed")
+        .unwrap()
+        .create_values(&mut tx, &[vals(&[("note", Value::str("one"))])])
+        .await
+        .unwrap();
+    ir_default::set(
+        &mut tx,
+        &env,
+        "property.computed",
+        "note",
+        &Value::str("first"),
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let two = rec.with_env(company(&env, 2));
+    assert_eq!(
+        two.value(&mut tx, "note_copy").await.unwrap(),
+        Value::str("first")
+    );
+    let rows = tx.query("SELECT d.id, d.field_id FROM ir_default d JOIN ir_model_fields f ON f.id=d.field_id WHERE f.model='property.computed' AND f.name='note'", &[]).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    let id: i64 = rows[0].get(0);
+    let field_id: i64 = rows[0].get(1);
+    let defaults = env.records("ir.default").unwrap();
+    let row = defaults.browse([id]).unwrap();
+    row.write_values(&mut tx, &vals(&[("json_value", Value::str("\"second\""))]))
+        .await
+        .unwrap();
+    assert_eq!(
+        two.value(&mut tx, "note_copy").await.unwrap(),
+        Value::str("second")
+    );
+    row.unlink(&mut tx).await.unwrap();
+    assert_eq!(two.value(&mut tx, "note_copy").await.unwrap(), Value::False);
+    defaults
+        .create_values(
+            &mut tx,
+            &[vals(&[
+                ("field_id", Value::Int(field_id)),
+                ("json_value", Value::str("\"third\"")),
+            ])],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        two.value(&mut tx, "note_copy").await.unwrap(),
+        Value::str("third")
+    );
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn no_company_omitted_properties_create_sql_null() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let env = tx.env();
+    let model = env.records("property.runtime").unwrap();
+    let records = model
+        .create_values(
+            &mut tx,
+            &[
+                vals(&[("name", Value::str("first"))]),
+                vals(&[("name", Value::str("second"))]),
+            ],
+        )
+        .await
+        .unwrap();
+    let typed = env
+        .model::<fixture::Property>()
+        .unwrap()
+        .create(
+            &mut tx,
+            vec![erp_orm::Vals::new().set(
+                fixture::Property::NAME,
+                Some(std::sync::Arc::<str>::from("typed")),
+            )],
+        )
+        .await
+        .unwrap();
+    tx.flush().await.unwrap();
+    let rows = tx.query("SELECT note IS NULL AND truth IS NULL AND count IS NULL AND ratio IS NULL AND exact IS NULL AND tag_id IS NULL AND amount IS NULL FROM property_runtime ORDER BY id", &[]).await.unwrap();
+    assert_eq!(rows.len(), 3);
+    assert!(rows.iter().all(|row| row.get::<_, bool>(0)));
+    assert_eq!(
+        typed.get(&mut tx, fixture::Property::NAME).await.unwrap(),
+        Some("typed".into())
+    );
+    let record = model.browse_ids([erp_fields::RecId::from_real(records.ids()[0]).unwrap()]);
+    error(
+        record.value(&mut tx, "note").await.unwrap_err(),
+        ErrorKind::Validation,
+        "company-dependent fields require a current company",
+    );
+    let one = record.with_env(company(&env, 1));
+    let two = record.with_env(company(&env, 2));
+    assert_eq!(one.value(&mut tx, "note").await.unwrap(), Value::False);
+    one.set_value(&mut tx, "note", Value::str("one"))
+        .await
+        .unwrap();
+    tx.flush().await.unwrap();
+    assert_eq!(two.value(&mut tx, "note").await.unwrap(), Value::False);
+    assert_eq!(one.value(&mut tx, "note").await.unwrap(), Value::str("one"));
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn no_company_supplied_properties_refuse_without_partial_create() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let env = tx.env();
+    let model = env.records("property.runtime").unwrap();
+    for (field, value) in [
+        ("note", Value::str("value")),
+        ("note", Value::False),
+        ("truth", Value::False),
+        ("count", Value::Int(0)),
+        ("ratio", Value::Float(0.0)),
+        ("tag_id", Value::Int(1)),
+    ] {
+        let result = tx
+            .savepoint(async |tx| {
+                model
+                    .create_values(
+                        tx,
+                        &[
+                            vals(&[("name", Value::str("must roll back"))]),
+                            vals(&[(field, value.clone())]),
+                        ],
+                    )
+                    .await
+                    .map(|_| ())
+            })
+            .await;
+        error(
+            result.unwrap_err(),
+            ErrorKind::Validation,
+            "company-dependent fields require a current company",
+        );
+        let rows = tx
+            .query("SELECT count(*) FROM property_runtime", &[])
+            .await
+            .unwrap();
+        assert_eq!(rows[0].get::<_, i64>(0), 0);
+    }
+    let defaults = model.with_env(env.with_context([("default_note", Value::str("default"))]));
+    let result = tx
+        .savepoint(async |tx| defaults.create_values(tx, &[vals(&[])]).await.map(|_| ()))
+        .await;
+    error(
+        result.unwrap_err(),
+        ErrorKind::Validation,
+        "company-dependent fields require a current company",
+    );
+    let record = create(
+        &mut tx,
+        &company(&env, 1),
+        &[("name", Value::str("existing"))],
+    )
+    .await
+    .with_env(env);
+    for value in [Value::str("value"), Value::False] {
+        let result = tx
+            .savepoint(async |tx| record.set_value(tx, "note", value.clone()).await)
+            .await;
+        error(
+            result.unwrap_err(),
+            ErrorKind::Validation,
+            "company-dependent fields require a current company",
+        );
+    }
+    drop(tx);
+    h.cleanup().await.unwrap();
+}

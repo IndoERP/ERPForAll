@@ -734,6 +734,114 @@ async fn test_two_connection_delta_merge() {
 }
 
 #[tokio::test]
+async fn test_merge_json_isolated_from_version_check() {
+    let h = test_harness().await;
+    let mut tx = h.begin().await.unwrap();
+    setup_langs(&mut tx, true, true, false).await;
+
+    let model = tx.env().records("test.translated.record").unwrap();
+    let mut values = ValueMap::new();
+    values.insert("name".to_string(), Value::str("Initial EN"));
+    let raw = model.vals_from_values(&values).unwrap();
+    let created = model.create(&mut tx, vec![raw]).await.unwrap();
+    let id = created.rec_ids()[0];
+    tx.commit().await.unwrap();
+    drop(tx);
+
+    // 1. Transaction 1 writes French in fr_FR and commits.
+    let mut tx1 = h.begin().await.unwrap();
+    let rec1 = tx1
+        .env()
+        .records("test.translated.record")
+        .unwrap()
+        .with_context([("lang", Value::str("fr_FR"))])
+        .browse([id.get()])
+        .unwrap();
+    let mut w1 = ValueMap::new();
+    w1.insert("name".to_string(), Value::str("French"));
+    let r1 = rec1.vals_from_values(&w1).unwrap();
+    rec1.write(&mut tx1, r1).await.unwrap();
+    tx1.commit().await.unwrap();
+    drop(tx1);
+
+    // 2. Transaction 2 writes Spanish in es_ES in a completely separate, non-conflicting
+    // transaction. The version check cannot fire (no concurrent writer / conflict).
+    // The ORM flush sends only the Spanish delta to PostgreSQL, which merge_json
+    // merges into the existing JSONB map preserving en_US and fr_FR.
+    let mut tx2 = h.begin().await.unwrap();
+    let rec2 = tx2
+        .env()
+        .records("test.translated.record")
+        .unwrap()
+        .with_context([("lang", Value::str("es_ES"))])
+        .browse([id.get()])
+        .unwrap();
+    let mut w2 = ValueMap::new();
+    w2.insert("name".to_string(), Value::str("Spanish"));
+    let r2 = rec2.vals_from_values(&w2).unwrap();
+    rec2.write(&mut tx2, r2).await.unwrap();
+    tx2.commit().await.unwrap();
+    drop(tx2);
+
+    // 3. Raw SQL assertion: verify that merge_json merged per-language keys in PostgreSQL.
+    // If merge_json was replaced by a whole-cell overwrite, en_US and fr_FR would be lost.
+    let mut tx3 = h.begin().await.unwrap();
+    let rows = tx3
+        .query(
+            "SELECT name FROM test_translated_record WHERE id = $1",
+            &[&id.get()],
+        )
+        .await
+        .unwrap();
+    let db_val: serde_json::Value = rows[0].get(0);
+    assert_eq!(
+        db_val["en_US"], "Initial EN",
+        "merge_json must preserve en_US when updating es_ES"
+    );
+    assert_eq!(
+        db_val["fr_FR"], "French",
+        "merge_json must preserve fr_FR when updating es_ES"
+    );
+    assert_eq!(
+        db_val["es_ES"], "Spanish",
+        "merge_json must apply the new es_ES value"
+    );
+
+    // 4. Test explicit null removal: clearing a key via update_field_translations
+    // removes only that key via jsonb_strip_nulls, leaving remaining languages intact.
+    let rec3 = tx3
+        .env()
+        .records("test.translated.record")
+        .unwrap()
+        .browse([id.get()])
+        .unwrap();
+    let updated = rec3
+        .update_field_translations(&mut tx3, "name", [("fr_FR", Value::False)])
+        .await
+        .unwrap();
+    assert!(updated);
+    tx3.commit().await.unwrap();
+    drop(tx3);
+
+    let mut tx4 = h.begin().await.unwrap();
+    let rows = tx4
+        .query(
+            "SELECT name FROM test_translated_record WHERE id = $1",
+            &[&id.get()],
+        )
+        .await
+        .unwrap();
+    let db_val: serde_json::Value = rows[0].get(0);
+    assert_eq!(db_val["en_US"], "Initial EN");
+    assert!(db_val.get("fr_FR").is_none());
+    assert_eq!(db_val["es_ES"], "Spanish");
+    tx4.rollback().await.unwrap();
+    drop(tx4);
+
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
 async fn test_same_tx_language_switch_hits_cache() {
     let h = test_harness().await;
     let mut tx = h.begin().await.unwrap();

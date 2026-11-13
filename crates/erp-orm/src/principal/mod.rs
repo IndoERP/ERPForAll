@@ -1,4 +1,4 @@
-//! Principals (design note): the only
+//! Principals: the only
 //! identity the ORM knows. Every [`crate::Env`] carries one.
 //!
 //! A principal names its **subject** (the `res.users` row whose groups and record rules apply), the
@@ -9,16 +9,18 @@
 //! lands the values and the environments that carry them. A uid becomes a principal
 //! without database I/O, exactly as today's `(uid, su)` pair: [`crate::SUPERUSER_ID`] is the
 //! `System` principal (superuser mode), any other uid an *unresolved* user principal (no groups,
-//! no companies; [`Resolution::is_resolved`] is false). Resolution against the database comes with
-//! , agent and service principals with, public and link principals and scoped
+//! no companies; [`Resolution::is_resolved`] is false). Resolution against the database comes with,
+//! agent and service principals with, public and link principals and scoped
 //! elevation blocks with.
 
 mod binding;
+pub(crate) mod block;
 mod capability;
 mod elevation;
 mod error;
 mod ids;
 mod scope;
+pub(crate) mod switch;
 
 use std::num::NonZeroU64;
 use std::sync::Arc;
@@ -41,6 +43,23 @@ pub use scope::{
     MAX_KEY_NAME_LEN, MAX_SCOPE_ENTRIES, MAX_SCOPE_NAME_LEN, MethodAllow, ModelAllow, Scope,
     ScopeBuilder,
 };
+
+/// The answer for an unknown, and equally for a refused, password reset target (
+/// Amendment 1: a refused target is not told apart from a missing one). Every site that refuses a
+/// reset target uses this one constructor (Auth's checks and the reset line model of `base`), so
+/// the answers cannot drift.
+///
+/// ```
+/// let error = erp_orm::missing_reset_target();
+/// assert_eq!(error.kind(), erp_fields::ErrorKind::Missing);
+/// ```
+#[must_use]
+pub fn missing_reset_target() -> erp_fields::Error {
+    erp_fields::Error::new(
+        erp_fields::ErrorKind::Missing,
+        "A selected password reset user no longer exists.",
+    )
+}
 
 /// What kind of principal acts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -381,7 +400,7 @@ pub enum GrantBinding {
     None,
 }
 
-/// Who an environment acts for. Built by [`PrincipalBuilder`] (validated)
+/// Who an environment acts. Built by [`PrincipalBuilder`] (validated)
 /// or by the core; compared and hashed by value.
 ///
 /// ```
@@ -907,6 +926,28 @@ impl PrincipalHint {
     /// The user `subject` (the superuser is `System`).
     pub fn user(subject: UserId) -> Self {
         Self { subject }
+    }
+
+    /// The hint addon code opens a transaction or an environment with for a caller (
+    /// A4): always a `User` principal, never `System`. Uid 0 cannot reach it
+    /// ([`UserId::new`] refuses it).
+    ///
+    /// ```
+    /// use erp_orm::{PrincipalHint, PrincipalKind, SUPERUSER_ID, UserId};
+    /// assert_eq!(PrincipalHint::caller(UserId::new(5)?)?.kind(), PrincipalKind::User);
+    /// let refused = PrincipalHint::caller(SUPERUSER_ID).unwrap_err();
+    /// assert_eq!(refused.kind(), erp_fields::ErrorKind::Access);
+    /// # Ok::<(), erp_orm::PrincipalError>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`PrincipalError::SuperuserAsCaller`] (kind `Access`) for [`SUPERUSER_ID`].
+    pub fn caller(subject: UserId) -> Result<Self, PrincipalError> {
+        if subject == SUPERUSER_ID {
+            return Err(PrincipalError::SuperuserAsCaller);
+        }
+        Ok(Self { subject })
     }
 
     /// The kind of principal this hint gives.

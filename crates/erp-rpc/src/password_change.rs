@@ -24,6 +24,15 @@ pub enum PasswordOperation {
     ResetLine,
 }
 impl PasswordOperation {
+    /// Whether the operation can change a stored password. Only these report an unknown
+    /// commit when the deadline cancels them; the open and identity-confirmation operations
+    /// never touch a credential, so a timeout there is a plain deadline error.
+    pub(crate) const fn changes_password(self) -> bool {
+        matches!(
+            self,
+            Self::LegacyChange | Self::ChangeOwn | Self::ResetWizard | Self::ResetLine
+        )
+    }
     pub(crate) fn lookup(model: &str, method: &str) -> Option<Self> {
         Some(match (model, method) {
             ("res.users", "action_change_password_wizard") => Self::OpenReset,
@@ -175,5 +184,24 @@ fn valid_id(id: i64) -> Result<()> {
         Err(Error::validation(
             "Password wizard identifier is outside the supported range.",
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PasswordOperation as Op;
+
+    /// unknown commit)
+    #[test]
+    fn only_password_mutators_report_an_unknown_commit_on_timeout() {
+        let mutating = [
+            Op::LegacyChange,
+            Op::ChangeOwn,
+            Op::ResetWizard,
+            Op::ResetLine,
+        ];
+        let reading = [Op::OpenReset, Op::OpenOwn, Op::ConfirmIdentity];
+        assert!(mutating.iter().all(|op| op.changes_password()));
+        assert!(reading.iter().all(|op| !op.changes_password()));
     }
 }

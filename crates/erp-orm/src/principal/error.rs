@@ -71,6 +71,8 @@ pub enum PrincipalError {
     },
     /// The superuser id was given to a builder that makes a non-system principal.
     SuperuserAsUser,
+    /// The superuser id was given to the caller entry (`PrincipalHint::caller`, A4,
+    SuperuserAsCaller,
     /// A principal kind or feature that a later slice adds.
     Unsupported {
         /// What was asked for ("agent principals").
@@ -119,7 +121,7 @@ pub enum PrincipalError {
 impl PrincipalError {
     pub fn kind(&self) -> ErrorKind {
         match self {
-            Self::UnauthorizedCompanies => ErrorKind::Access,
+            Self::UnauthorizedCompanies | Self::SuperuserAsCaller => ErrorKind::Access,
             Self::DuplicateContextCompany { .. } => ErrorKind::Validation,
             Self::SnapshotIdsExhausted => ErrorKind::ResourceExhausted,
             Self::InvalidId { .. }
@@ -164,6 +166,10 @@ impl fmt::Display for PrincipalError {
             Self::SuperuserAsUser => f.write_str(
                 "user 1 is the superuser: use the System principal (PrincipalHint::system), \
                  not a user principal",
+            ),
+            Self::SuperuserAsCaller => f.write_str(
+                "the superuser cannot be opened as a caller: core code opens the system principal \
+                 itself",
             ),
             Self::Unsupported { feature, task } => {
                 write!(f, "{feature} are not supported until {task}")

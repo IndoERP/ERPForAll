@@ -1,7 +1,7 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import type { Field } from "../metadata.js";
 import { ClientError } from "../transport.js";
-import type { AutocompleteItem, FavoriteItem, FilterItem, GroupByItem, SearchFacet, SearchModelOptions } from "./types.js";
+import type { AutocompleteItem, FavoriteItem, FilterItem, GroupableField, GroupByCatalogue, GroupByItem, GroupByState, SearchFacet, SearchModelOptions } from "./types.js";
 
 const MAX_PARAM = 2048;
 const MAX_ITEMS = 32;
@@ -11,8 +11,10 @@ const searchableKinds: readonly string[] = ["char", "text", "integer", "selectio
 function defaultOperator(field: Field | undefined): string {
   return field?.kind === "integer" || field?.kind === "selection" ? "=" : "ilike";
 }
-const groupingUnavailable = (): never => { throw new ClientError("unsupported", "Grouped lists are not available until a later release and a later release."); };
-const favoritesUnavailable = (): never => { throw new ClientError("unsupported", "Server favorites are not available until a later release."); };
+const groupingUnavailable = (): never => { throw new ClientError("unsupported", "Grouped lists are not available yet."); };
+const groupingFromAddress = (): never => { throw new ClientError("unsupported", "Restoring a grouping from the address is not available yet."); };
+const GROUP_BY_FACET = "groupby";
+const favoritesUnavailable = (): never => { throw new ClientError("unsupported", "Saved favorites are not available yet."); };
 const invalid = (label: string): never => { throw new ClientError("validation", `Invalid ${label}.`); };
 function record(raw: unknown, keys: string[], label: string): Record<string, unknown> {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return invalid(label);
@@ -40,7 +42,8 @@ function orDomains(domains: unknown[][]): unknown[] {
 }
 
 /** Bounded state for the human client's currently supported search subset.
- * Grouped reads, favorites and search-arch interpretation remain milestone work.
+ * Grouping by one field (declared item or custom field) is supported; nested grouping, a grouping kept in the
+ * address, favorites and general search-arch interpretation remain milestone work.
  */
 export class SearchModel {
   readonly model: string;
@@ -56,6 +59,11 @@ export class SearchModel {
   private mutating = false;
   private deferredNotification = false;
   private readonly nameSearch: SearchModelOptions["nameSearch"];
+  private readonly groupByLoader: SearchModelOptions["groupBy"];
+  private catalogue: GroupByCatalogue | undefined;
+  private catalogueLoad: Promise<void> | undefined;
+  /** The field of a grouping restored from memory, known before the catalogue is loaded. */
+  private restoredField: GroupableField | undefined;
   /** Names of the related records picked from suggestions, keyed `field:id`, for their facets. */
   private readonly recordNames = new Map<string, string>();
 
@@ -67,6 +75,7 @@ export class SearchModel {
     this.companyId = options.companyId ?? 0;
     this.initialDomain = options.initialDomain ?? [];
     this.nameSearch = options.nameSearch;
+    this.groupByLoader = options.groupBy;
     if (this.fields.get("active")?.kind === "boolean") {
       this.filters.push(
         { id: "filter_active", description: "Active", domain: [["active", "=", true]], isActive: false, groupNumber: 1 },
@@ -116,21 +125,96 @@ export class SearchModel {
   }
   getFacets(): SearchFacet[] { return structuredClone(this.facets); }
   getFilters(): FilterItem[] { this.refreshDates(); return structuredClone(this.filters); }
-  getGroupBys(): GroupByItem[] { return []; }
+  /** True when this list can be grouped (the owner supplied a catalogue loader). */
+  hasGroupBy(): boolean { return this.groupByLoader !== undefined; }
+  /** True once the Group By catalogue is loaded; `getGroupBys` lists the declared items only from then on. */
+  groupByReady(): boolean { return this.catalogue !== undefined; }
+  /** Load the Group By catalogue once; a failure is returned to the caller and the next call tries again. */
+  loadGroupByCatalogue(): Promise<void> {
+    const loader = this.groupByLoader;
+    if (!loader) return Promise.reject(new ClientError("unsupported", "Grouped lists are not available yet."));
+    this.catalogueLoad ??= loader.load().then(catalogue => {
+      const names = new Set(catalogue.fields.map(field => field.name));
+      if (catalogue.items.some(item => !names.has(item.fieldName))) invalid("group by catalogue");
+      this.catalogue = catalogue;
+    }, error => { this.catalogueLoad = undefined; throw error; });
+    return this.catalogueLoad;
+  }
+  private activeGroupBy(): SearchFacet | undefined { return this.facets.find(f => f.type === "groupBy"); }
+  /** The search view's declared group-by items, then the active custom one, each with its active state. */
+  getGroupBys(): GroupByItem[] {
+    const active = this.activeGroupBy();
+    const result: GroupByItem[] = (this.catalogue?.items ?? []).map(item => ({ ...item, isActive: active?.groupById === item.id }));
+    if (active?.groupById?.startsWith("custom:")) result.push({ id: active.groupById, description: active.values[0]!, fieldName: active.groupByField!, isActive: true, custom: true });
+    return result;
+  }
+  /** The fields "Add Custom Group" offers: the ones the server reports as groupable. */
+  getGroupableFields(): GroupableField[] { return structuredClone(this.catalogue?.fields ?? []); }
+  /** One groupable field by name, once the catalogue is loaded. */
+  getGroupableField(name: string): GroupableField | undefined {
+    const found = this.catalogue?.fields.find(field => field.name === name) ?? (this.restoredField?.name === name ? this.restoredField : undefined);
+    return found && structuredClone(found);
+  }
+  /** The active grouping, to keep while a record is open. */
+  exportGroupBy(): GroupByState | undefined {
+    const active = this.activeGroupBy(), field = active?.groupByField === undefined ? undefined : this.getGroupableField(active.groupByField);
+    return active && field ? { id: active.groupById!, label: active.values[0]!, field } : undefined;
+  }
+  /** Turn a kept grouping back on (no catalogue needed). */
+  restoreGroupBy(state: GroupByState): void {
+    if (!this.groupByLoader) return groupingUnavailable();
+    this.commitMutation(() => { this.restoredField = state.field; this.activateGroupBy(state.id, state.field.name, state.label); });
+  }
+  /** Declared group-by items the menu leaves out, each with its reason. */
+  getSkippedGroupBys(): { description: string; reason: string }[] { return structuredClone(this.catalogue?.skipped ?? []); }
   getFavorites(): FavoriteItem[] { return []; }
-  getGroupBy(): string[] { return []; }
-  toggleGroupBy(_fieldName: string): void { groupingUnavailable(); }
-  addCustomGroupBy(_fieldName: string): void { groupingUnavailable(); }
+  /** The fields the list is grouped by, outermost first. One at most until nested groups (slice 2). */
+  getGroupBy(): string[] { const active = this.activeGroupBy(); return active ? [active.groupByField!] : []; }
+  private activateGroupBy(id: string, fieldName: string, label: string): void {
+    if (this.activeGroupBy()) throw new ClientError("unsupported", "Grouping by more than one field (nested groups) is not available yet. Remove the current grouping first.");
+    this.checkCapacity();
+    this.facets.push({ id: GROUP_BY_FACET, type: "groupBy", title: "Group By", values: [label], separator: ">", groupByField: fieldName, groupById: id });
+    this.notify();
+  }
+  /** Turn a declared item on or off. */
+  toggleGroupBy(id: string): void {
+    if (!this.groupByLoader) return groupingUnavailable();
+    this.commitMutation(() => {
+      const active = this.activeGroupBy();
+      if (active?.groupById === id) { this.removeFacet(active.id); return; }
+      const item = this.catalogue?.items.find(candidate => candidate.id === id);
+      if (!item) return invalid("group by item");
+      this.activateGroupBy(item.id, item.fieldName, item.description);
+    });
+  }
+  /** Group by one groupable field chosen from the field list. */
+  addCustomGroupBy(fieldName: string): void {
+    if (!this.groupByLoader) return groupingUnavailable();
+    this.commitMutation(() => {
+      const field = this.catalogue?.fields.find(candidate => candidate.name === fieldName);
+      if (!field) return invalid("group by field");
+      if (this.activeGroupBy()?.groupByField === fieldName) return;
+      this.activateGroupBy(`custom:${fieldName}`, fieldName, field.label);
+    });
+  }
   saveFavorite(_name: string, _isDefault: boolean, _isShared: boolean): FavoriteItem { return favoritesUnavailable(); }
   toggleFavorite(_id: string): void { favoritesUnavailable(); }
   deleteFavorite(_id: string): void { favoritesUnavailable(); }
 
   getSearchableFields(): Field[] {
     const seen = new Set<string>();
-    return [...this.viewFields, ...this.fields.values()].filter(f => {
+    const pick = (list: Iterable<Field>): Field[] => [...list].filter(f => {
       if (seen.has(f.name) || !searchableKinds.includes(f.kind)) return false;
       seen.add(f.name); return true;
     });
+    // The view's own fields in its order; a view that declares none searchable falls back to the model's.
+    const declared = pick(this.viewFields);
+    return declared.length ? declared : pick(this.fields.values());
+  }
+  /** One label per field for the selector, the suggestions and the chip: the view's wording wins. */
+  fieldLabel(name: string): string {
+    const field = this.viewFields.find(f => f.name === name) ?? this.fields.get(name);
+    return field?.label || name;
   }
   /**
     A
@@ -142,15 +226,15 @@ export class SearchModel {
     const value = term(searchTerm, "search value"), lower = value.toLowerCase();
     const result: AutocompleteItem[] = [];
     for (const field of this.getSearchableFields()) {
-      const base = { fieldName: field.name, fieldLabel: field.label };
+      const base = { fieldName: field.name, fieldLabel: this.fieldLabel(field.name) };
       if (field.kind === "integer") {
-        if (/^-?\d+$/.test(value) && Number.isSafeInteger(Number(value))) result.push({ ...base, id: `auto_${field.name}`, label: `Search ${field.label} for: "${value}"`, searchTerm: value, operator: "=" });
+        if (/^-?\d+$/.test(value) && Number.isSafeInteger(Number(value))) result.push({ ...base, id: `auto_${field.name}`, label: `Search ${base.fieldLabel} for: "${value}"`, searchTerm: value, operator: "=" });
       } else if (field.kind === "selection") {
         for (const [key, label] of field.selection ?? []) {
-          if (label.toLowerCase().includes(lower)) result.push({ ...base, id: `auto_${field.name}_${key}`, label: `Search ${field.label} for: "${label}"`, searchTerm: key, operator: "=", display: label });
+          if (label.toLowerCase().includes(lower)) result.push({ ...base, id: `auto_${field.name}_${key}`, label: `Search ${base.fieldLabel} for: "${label}"`, searchTerm: key, operator: "=", display: label });
         }
       } else {
-        result.push({ ...base, id: `auto_${field.name}`, label: `Search ${field.label} for: "${value}"`, searchTerm: value, operator: "ilike",
+        result.push({ ...base, id: `auto_${field.name}`, label: `Search ${base.fieldLabel} for: "${value}"`, searchTerm: value, operator: "ilike",
           ...(field.kind === "many2one" && this.nameSearch ? { isParent: true } : {}) });
       }
     }
@@ -161,7 +245,7 @@ export class SearchModel {
     const field = this.fields.get(item.fieldName);
     if (!item.isParent || !this.nameSearch || field?.kind !== "many2one" || !field.relation) return invalid("expandable search row");
     const records = await this.nameSearch(field.relation, item.searchTerm);
-    return records.map(found => ({ id: `${item.id}_${found.id}`, label: found.display_name, fieldName: field.name, fieldLabel: field.label,
+    return records.map(found => ({ id: `${item.id}_${found.id}`, label: found.display_name, fieldName: field.name, fieldLabel: this.fieldLabel(field.name),
       searchTerm: String(found.id), operator: "=", display: found.display_name, isChild: true, parentId: item.id }));
   }
   /** How a facet value reads: a selection's label, a picked record's name. */
@@ -194,7 +278,7 @@ export class SearchModel {
       return value;
     }
     if (!["char", "text", "selection", "date", "datetime"].includes(field.kind)) {
-      throw new ClientError("unsupported", `Searching ${field.kind} fields requires a later release.`);
+      throw new ClientError("unsupported", `Searching ${field.kind} fields is not supported.`);
     }
     const value = term(raw, `value for ${field.label}`);
     if (field.kind === "selection" && !field.selection?.some(([key]) => key === value)) return invalid(`selection for ${field.label}`);
@@ -242,7 +326,7 @@ export class SearchModel {
         existing.domain = this.fieldDomain(fieldName, values, operator); existing.values = values;
       } else {
         this.checkCapacity();
-        this.facets.push({ id: `field_${++this.sequence}`, type: "field", title: this.fields.get(fieldName)!.label, values: [trimmed], separator: "or", fieldName, operator, domain: this.fieldDomain(fieldName, [trimmed], operator) });
+        this.facets.push({ id: `field_${++this.sequence}`, type: "field", title: this.fieldLabel(fieldName), values: [trimmed], separator: "or", fieldName, operator, domain: this.fieldDomain(fieldName, [trimmed], operator) });
       }
       this.notify();
     });
@@ -354,7 +438,7 @@ export class SearchModel {
       try { data = JSON.parse(raw); } catch { return invalid(key); }
       try {
         const values = items(data, key);
-        if (key === "search_groupby") { if (values.length) groupingUnavailable(); continue; }
+        if (key === "search_groupby") { if (values.length) groupingFromAddress(); continue; }
         const seen = new Set<string>();
         for (const item of values) {
           const identity = JSON.stringify(item);

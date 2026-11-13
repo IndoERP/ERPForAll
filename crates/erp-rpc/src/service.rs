@@ -12,13 +12,15 @@ use erp_orm::audit::{
 use erp_orm::rpc::{Effect, Exposed, Exposure, Receiver};
 use erp_orm::{
     ApiKeyId, BeginOptions, Capability, CommitError, CompanyId, FinalStatement, KeyKind,
-    OperationIdentity, Orm, Principal, PrincipalError, PrincipalKind, SignalKey, Transaction,
+    OperationIdentity, Orm, Principal, PrincipalError, PrincipalKind, ReadAuditOwner, SignalKey,
+    Transaction,
 };
 use tokio_postgres::types::{ToSql, Type};
 
 use crate::binding::{self, Bound, CarriedContext};
 use crate::config::RpcConfig;
 use crate::error::{DebugInfo, IdempotencyRefusal, InfraError, ProtocolError, RpcFailure};
+use crate::hook::{AttemptHook, HookCall, HookRefusal, RefusalKind};
 use crate::idempotency::{self, Claim, CorrelationId, Existing, IdempotencyKey};
 use crate::json::{self, Json};
 use crate::output::{self, WriteError};
@@ -220,6 +222,7 @@ pub struct RpcCall {
     correlation: Option<CorrelationId>,
     capture: bool,
     credential: Option<Arc<dyn RpcCredential>>,
+    attempt_hook: Option<Arc<dyn AttemptHook>>,
 }
 
 impl std::fmt::Debug for RpcCall {
@@ -243,6 +246,7 @@ impl RpcCall {
             correlation: None,
             capture: false,
             credential: None,
+            attempt_hook: None,
         }
     }
 
@@ -266,6 +270,16 @@ impl RpcCall {
     #[must_use]
     pub fn credential(mut self, credential: Arc<dyn RpcCredential>) -> Self {
         self.credential = Some(credential);
+        self
+    }
+
+    /// Run `hook` inside every execution attempt of this call ([`AttemptHook`]).
+    /// Only server-side Rust code sets it; no body field, context key or header reaches it. The
+    /// call must have a write effect and an [`idempotency_key`](Self::idempotency_key), or it is
+    /// refused before any transaction.
+    #[must_use]
+    pub fn attempt_hook(mut self, hook: Arc<dyn AttemptHook>) -> Self {
+        self.attempt_hook = Some(hook);
         self
     }
 
@@ -311,6 +325,7 @@ pub struct RpcResponse {
     attempts: u32,
     statements: u64,
     captured: Option<Vec<String>>,
+    hook_refusal: Option<HookRefusal>,
 }
 
 impl RpcResponse {
@@ -359,6 +374,15 @@ impl RpcResponse {
     /// answers without one). Managed password operations refuse capture explicitly.
     pub fn captured(&self) -> Option<&[String]> {
         self.captured.as_deref()
+    }
+
+    /// The refusal of the call's [`AttemptHook`] when that refusal is the answer; `None` for
+    /// every other outcome (success, replay, a method-body or ORM error, a transport refusal).
+    /// Server-side only: the body bytes are unchanged, so a [`RefusalKind::Concealed`] refusal
+    /// still renders as the access error. This is how a confirm route tells its own hook's
+    /// refusal apart from an access error raised by the method body.
+    pub fn hook_refusal(&self) -> Option<&HookRefusal> {
+        self.hook_refusal.as_ref()
     }
 }
 
@@ -412,6 +436,8 @@ struct Plan<'a> {
     /// [`RpcCall::capture_statements`].
     capture: bool,
     credential: Option<&'a dyn RpcCredential>,
+    /// [`RpcCall::attempt_hook`]: only on a keyed call with a write effect.
+    hook: Option<&'a dyn AttemptHook>,
     /// The execution identity shared by every attempt of the call (correlation and operation
     /// ids); retried attempts keep it, a new call gets a fresh one.
     identity: OperationIdentity,
@@ -510,6 +536,7 @@ impl RpcService {
             attempts: 0,
             statements: 0,
             captured: None,
+            hook_refusal: None,
         }
     }
 
@@ -576,6 +603,11 @@ impl RpcService {
                     attempts,
                     statements: 0,
                     captured: None,
+                    // filled only from the hook's own refusal, never from a domain error
+                    hook_refusal: match failure {
+                        RpcFailure::Hook(refusal) => Some(refusal),
+                        _ => None,
+                    },
                 }
             }
         }
@@ -771,7 +803,23 @@ impl RpcService {
                 "Idempotency-Key is not accepted for API key generation: credentials are returned only once.".to_owned()
             ).into()));
         }
-        // 4. idempotency key on a read
+        // 4. an attempt hook needs a keyed write, then no idempotency key on a read
+        if call.attempt_hook.is_some() && (effect == Effect::Read || call.idempotency_key.is_none())
+        {
+            return Err(plain(
+                Error::programming(format!(
+                    "An attempt hook needs a call with a write effect and an Idempotency-Key; \
+                     {} has effect '{effect}' and the call {}.",
+                    route.entry(),
+                    if call.idempotency_key.is_some() {
+                        "has a key"
+                    } else {
+                        "has no key"
+                    }
+                ))
+                .into(),
+            ));
+        }
         if call.idempotency_key.is_some() && effect == Effect::Read {
             return Err(plain(
                 InfraError::IdempotencyNotAllowed(IdempotencyRefusal::ReadEffect {
@@ -819,6 +867,11 @@ impl RpcService {
                 return Err(plain(
                     Error::validation("Password operations do not accept statement capture.")
                         .into(),
+                ));
+            }
+            if call.attempt_hook.is_some() {
+                return Err(plain(
+                    Error::programming("Password operations do not accept an attempt hook.").into(),
                 ));
             }
             if call.idempotency_key.is_some() {
@@ -886,11 +939,19 @@ impl RpcService {
             }
             let reply = match reply {
                 Ok(value) => value.map_err(plain)?,
-                Err(_) => {
+                Err(_) if operation.changes_password() => {
                     return Err(plain(
                         InfraError::CommitUnknown {
                             entry: route.entry(),
                             keyed: false,
+                        }
+                        .into(),
+                    ));
+                }
+                Err(_) => {
+                    return Err(plain(
+                        InfraError::DeadlineExceeded {
+                            secs: deadline.as_secs(),
                         }
                         .into(),
                     ));
@@ -909,6 +970,7 @@ impl RpcService {
                 attempts: 1,
                 statements: 0,
                 captured: None,
+                hook_refusal: None,
             });
         }
         let request_digest = call.idempotency_key.as_ref().map(|_| {
@@ -936,6 +998,7 @@ impl RpcService {
             deadline_secs: deadline.as_secs(),
             capture: call.capture,
             credential: call.credential.as_deref(),
+            hook: call.attempt_hook.as_deref(),
             identity: match call.correlation.as_ref() {
                 Some(correlation) => OperationIdentity::new(correlation.clone()),
                 None => OperationIdentity::generate(),
@@ -1106,7 +1169,13 @@ impl RpcService {
             .context(plan.bound.context.context.clone())
             .operation_identity(plan.identity.clone());
         if exposed.effect() == Effect::Read {
-            options = options.read_only(plan.entry.as_str());
+            // the service is the read-audit owner of every read-effect call: it writes the attempt
+            // evidence as one `read_ok` row before the body is released (A2)
+            let owner = match ReadAuditOwner::new(READ_AUDIT_OWNER) {
+                Ok(owner) => owner,
+                Err(error) => return classify(error, debug),
+            };
+            options = options.read_only_audited(plan.entry.as_str(), owner);
             if exposed.primary_read() {
                 options = options.on_primary();
             }
@@ -1119,7 +1188,10 @@ impl RpcService {
                         .context(plan.bound.context.context.clone())
                         .operation_identity(plan.identity.clone());
                     if exposed.effect() == Effect::Read {
-                        options = options.read_only(plan.entry.as_str());
+                        options = options.read_only_audited(
+                            plan.entry.as_str(),
+                            ReadAuditOwner::new(READ_AUDIT_OWNER)?,
+                        );
                     }
                     let tx = credential.begin(orm, options).await.inspect_err(|_| {
                         credential_failed = true;
@@ -1129,7 +1201,7 @@ impl RpcService {
                             "RPC credential ignored the requested context",
                         ));
                     }
-                    let intent_matches = match (tx.intent(), exposed.effect()) {
+                    let intent_ok = match (tx.intent(), exposed.effect()) {
                         (
                             erp_orm::TxIntent::Write,
                             Effect::Write | Effect::Destructive | Effect::External,
@@ -1139,6 +1211,10 @@ impl RpcService {
                         }
                         _ => false,
                     };
+                    // only a read-effect call carries a read-audit owner
+                    let owner_matches =
+                        tx.read_audit_owner().is_some() == (exposed.effect() == Effect::Read);
+                    let intent_matches = intent_ok && owner_matches;
                     if !intent_matches {
                         return Err(Error::programming(
                             "RPC credential ignored the requested transaction intent",
@@ -1218,33 +1294,61 @@ impl RpcService {
             };
             if let Err(error) = tx
                 .audit_call(summary)
-                .and_then(|()| tx.audit_origin(AuditOrigin::Rpc))
+                .and_then(|()| tx.audit_origin(attempt_origin(plan)))
             {
                 tx.rollback().await.ok();
                 return classify(error, debug);
             }
         }
-        let work = self.work(&mut tx, orm, exposed, plan);
+        let work = async {
+            // resolve user widening against the refreshed transaction binding,
+            // within the deadline, before business work. Do not short-circuit group validation.
+            let read_selected = if writes {
+                false
+            } else {
+                let widening = self
+                    .config
+                    .read_audit_policy()
+                    .selects_user(&mut tx)
+                    .await?;
+                let model = orm.registry().model(plan.route.model()).ok_or_else(|| {
+                    Error::programming("read audit selection lost the invoked model metadata")
+                })?;
+                widening
+                    || model.audit_reads
+                    || matches!(
+                        plan.principal.kind(),
+                        PrincipalKind::Agent | PrincipalKind::Service
+                    )
+            };
+            self.work(&mut tx, orm, exposed, plan, attempt_no)
+                .await
+                .map(|work| (read_selected, work))
+        };
         let worked = tokio::time::timeout_at(plan.deadline.into(), work).await;
-        let done = match worked {
+        let (read_selected, done) = match worked {
             Err(_) => {
                 // the work future is dropped, its statements ran inside `tx` and are discarded
                 // with it; the failure still leaves its attempt row like every other failure
+                reapply_hook_origin(&mut tx, plan);
                 trail.evidence = Some(evidence_of(&mut tx, build_call().ok()));
                 return deadline_exceeded(plan, debug);
             }
             Ok(Err(failure)) => {
                 debug.statement = tx.failed_statement().map(str::to_owned);
+                // the method body may have changed the origin before it or the hook failed
+                reapply_hook_origin(&mut tx, plan);
                 trail.evidence = Some(evidence_of(&mut tx, build_call().ok()));
                 // `Transaction::rollback` never returns `Err`: a failed ROLLBACK detaches the
                 // connection, which rolls back on the server (erp-orm transaction.rs, `discard`)
                 tx.rollback().await.ok();
+                // a hook refusal (`RpcFailure::Hook`) is the call's answer, never retried
                 return match failure {
                     RpcFailure::Domain(error) => classify(error, debug),
                     other => Attempt::Fail(other, debug),
                 };
             }
-            Ok(Ok(Work::Replay(row, policy_now))) => {
+            Ok(Ok((_, Work::Replay(row, policy_now)))) => {
                 let statements = tx.query_count();
                 let captured = plan.capture.then(|| tx.captured().to_vec());
                 trail.evidence = Some(evidence_of(&mut tx, build_call().ok()));
@@ -1261,7 +1365,7 @@ impl RpcService {
                     other => other,
                 };
             }
-            Ok(Ok(Work::Done(done))) => done,
+            Ok(Ok((selected, Work::Done(done)))) => (selected, done),
         };
         #[cfg(feature = "test-faults")]
         if let Some(fault) = self
@@ -1293,14 +1397,10 @@ impl RpcService {
         match committed {
             Ok(Ok(())) => {
                 if !writes {
-                    // a read is audited when its principal is an agent or a service, or when it
-                    // elevated; the row is written before the body is released
+                    // Mandatory selection and operator widening are additive; elevation can
+                    // also be observed during the work. Persist before releasing the body.
                     let evidence = evidence_of(&mut tx, build_call().ok());
-                    if matches!(
-                        plan.principal.kind(),
-                        PrincipalKind::Agent | PrincipalKind::Service
-                    ) || evidence.has_elevation()
-                    {
+                    if read_selected || evidence.has_elevation() {
                         trail.read_ok = Some(evidence);
                     }
                 }
@@ -1312,6 +1412,7 @@ impl RpcService {
                     attempts: 0,
                     statements: tx.query_count(),
                     captured: plan.capture.then(|| tx.captured().to_vec()),
+                    hook_refusal: None,
                 })
             }
             Ok(Err(CommitError::RolledBack(error))) => {
@@ -1470,6 +1571,10 @@ impl RpcService {
             RpcFailure::Infra(_) | RpcFailure::Protocol(_) => {
                 (AuditOutcome::Failed, Some(ErrorClass::Validation))
             }
+            RpcFailure::Hook(refusal) => match refusal.kind() {
+                RefusalKind::Concealed => (AuditOutcome::Denied, Some(ErrorClass::Access)),
+                RefusalKind::Refused => (AuditOutcome::Failed, Some(ErrorClass::Validation)),
+            },
         };
         let number = u16::try_from(attempt_no).unwrap_or(u16::MAX);
         let mut row = AuditAttempt::new(evidence, outcome, number);
@@ -1501,14 +1606,45 @@ impl RpcService {
         orm: &Orm,
         exposed: &Exposed,
         plan: &Plan<'_>,
+        attempt_no: u32,
     ) -> std::result::Result<Work, RpcFailure> {
         let claim = match (plan.key, plan.request_digest) {
             (Some(key), Some(digest)) => match self.claim(tx, orm, plan, key, &digest).await? {
                 (Claim::Claimed { id }, _) => Some(id),
+                // a replay answers from the store: the hook does not run
                 (Claim::Existing(row), policy_now) => return Ok(Work::Replay(row, policy_now)),
             },
             _ => None,
         };
+        // refused before any transaction otherwise: a hooked call is keyed and claimed here
+        let hook = match plan.hook {
+            Some(hook) => {
+                let key = match (claim, plan.key) {
+                    (Some(_), Some(key)) => key,
+                    _ => {
+                        return Err(Error::programming(
+                            "an attempt hook reached execution without a new idempotency claim",
+                        )
+                        .into());
+                    }
+                };
+                Some((
+                    hook,
+                    HookCall {
+                        model: plan.route.model(),
+                        method: plan.route.method(),
+                        effect: exposed.effect(),
+                        idempotency_key: key,
+                        attempt: attempt_no,
+                        correlation: plan.correlation,
+                    },
+                ))
+            }
+            None => None,
+        };
+        if let Some((hook, call)) = &hook {
+            hook.before_body(tx, call).await?;
+        }
         let model = tx.env().records(plan.route.model())?;
         let records = match exposed.receiver() {
             Receiver::Records => model.browse(plan.bound.ids.iter().copied())?,
@@ -1572,6 +1708,13 @@ impl RpcService {
                 .into());
             }
         };
+        if let Some((hook, call)) = &hook {
+            hook.after_body(tx, call, &body).await?;
+            // a write of the hook fails inside the attempt, not in the commit preamble
+            tx.flush().await?;
+            // the method body may have set another origin: core's is the one recorded
+            tx.audit_origin(hook.origin().audit_origin())?;
+        }
         Ok(Work::Done(Done { body, claim }))
     }
 
@@ -1712,6 +1855,7 @@ impl RpcService {
             attempts: 0,
             statements: 0,
             captured: None,
+            hook_refusal: None,
         })
     }
 
@@ -1934,6 +2078,31 @@ fn evidence_of(tx: &mut Transaction, call: Option<AuditCall>) -> AttemptEvidence
     evidence
 }
 
+/// The audit origin of a write attempt: the hook's mapped origin when one is attached.
+fn attempt_origin(plan: &Plan<'_>) -> AuditOrigin {
+    match plan.hook {
+        Some(hook) => hook.origin().audit_origin(),
+        None => AuditOrigin::Rpc,
+    }
+}
+
+/// Before a failed hooked attempt's evidence is taken: the method body may have set another
+/// origin, and the failed-attempt row must carry the hook's. `audit_origin` refuses only a frozen
+/// buffer (after the commit preamble), which a failure before `COMMIT` never has; if it ever does,
+/// the call's own failure stands and the row keeps the buffer's origin, logged.
+fn reapply_hook_origin(tx: &mut Transaction, plan: &Plan<'_>) {
+    if let Some(hook) = plan.hook
+        && let Err(error) = tx.audit_origin(hook.origin().audit_origin())
+    {
+        tracing::error!(
+            target: "erp::rpc",
+            entry = %plan.entry,
+            error = %error,
+            "the hook's audit origin could not be applied to a failed attempt"
+        );
+    }
+}
+
 fn deadline_exceeded(plan: &Plan<'_>, debug: DebugInfo) -> Attempt {
     Attempt::Fail(
         InfraError::DeadlineExceeded {
@@ -1951,6 +2120,7 @@ fn clone_failure(failure: &RpcFailure) -> RpcFailure {
         RpcFailure::Protocol(p) => RpcFailure::Protocol(p.clone()),
         RpcFailure::Infra(i) => RpcFailure::Infra(i.clone()),
         RpcFailure::Domain(e) => RpcFailure::Domain(Error::new(e.kind(), e.message())),
+        RpcFailure::Hook(r) => RpcFailure::Hook(r.clone()),
     }
 }
 
@@ -1966,6 +2136,9 @@ struct FailureLog<'a> {
     addon: Option<&'a str>,
 }
 
+/// The name of the read-audit owner the service declares on its read-effect transactions.
+const READ_AUDIT_OWNER: &str = "erp-rpc";
+
 /// Longest failure message written to a log line, in characters.
 const LOG_MESSAGE_CHARS: usize = 300;
 
@@ -1974,6 +2147,27 @@ const LOG_MESSAGE_CHARS: usize = 300;
 /// failed call; a successful call is not logged. The message is the one the client already
 /// received (database errors concealed), cut and written escaped so it cannot split the line.
 fn log_failure(failure: &RpcFailure, call: &FailureLog<'_>) {
+    // the hook's code and kind are for the operator; its message may name proposal details and
+    // a concealed refusal's body says nothing of it, so the message is never logged
+    if let RpcFailure::Hook(refusal) = failure {
+        let kind = match refusal.kind() {
+            RefusalKind::Concealed => "concealed",
+            RefusalKind::Refused => "refused",
+        };
+        tracing::warn!(
+            target: "erp::rpc",
+            status = failure.status(),
+            hook_code = refusal.code(),
+            hook_kind = kind,
+            model = call.model,
+            method = call.method,
+            uid = call.uid,
+            addon = call.addon,
+            request_id = call.request_id,
+            "rpc call refused by its attempt hook"
+        );
+        return;
+    }
     let message: String = failure.message().chars().take(LOG_MESSAGE_CHARS).collect();
     if failure.status() >= 500 {
         let detail = failure

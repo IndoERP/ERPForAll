@@ -18,6 +18,23 @@ use super::{
 };
 use crate::{Env, OperationId, OperationIdentity, Orm, Transaction, TxIntent};
 
+/// [`Transaction::audit_attachment_claim`] from a session whose role does not own the claim table.
+const CLAIM_UNREADABLE: &str =
+    "Attachment claim audit requires the connection that owns ir_blob_owner_claim.";
+/// [`Transaction::audit_attachment_claim`] for an id that has no claim row.
+const CLAIM_UNKNOWN: &str = "Attachment claim audit names no recorded claim.";
+
+/// The single boolean of a precondition query of the claim audit.
+fn claim_flag(rows: &[tokio_postgres::Row]) -> Result<bool> {
+    rows.first()
+        .ok_or_else(|| Error::db("Attachment claim audit precondition returned no row"))?
+        .try_get(0)
+        .map_err(|error| {
+            Error::db("Attachment claim audit precondition returned an invalid value")
+                .with_source(error)
+        })
+}
+
 /// The supplied columns, in the order of the parameters. The generated four (`id`, `entry_id`,
 /// `create_date`, `xid`) are database defaults the runtime role cannot set.
 pub(crate) const INSERT: &str = "INSERT INTO \"erp_event\".\"ir_audit_entry\" \
@@ -291,8 +308,10 @@ pub(crate) fn insertion_error(error: Error) -> Error {
         return error;
     }
     let hint = match state.as_str() {
-        "23514" if is_partition_miss(&error) => {
-            "; no partition covers the row's date, run `erp audit maintain` as the owner role"
+        "23514" if crate::event_schema::is_partition_miss(&error, super::AUDIT_TABLE.table) => {
+            "; no partition of erp_event.ir_audit_entry covers the transaction's day; the event \
+             partition upkeep has not run (it runs at server start and hourly; `erp audit \
+             maintain` refreshes both event tables)"
         }
         "23514" => "; a check constraint of the audit table refused the row",
         "42501" => "; the runtime role lacks the INSERT right, republish the runtime grants",
@@ -305,10 +324,14 @@ pub(crate) fn insertion_error(error: Error) -> Error {
     .into()
 }
 
-/// PostgreSQL's partition routing failure: `23514` with no constraint name, and a message that
-/// says no partition was found for the row.
-fn is_partition_miss(error: &Error) -> bool {
-    error.constraint().is_none() && error.message().contains("no partition of relation")
+/// A `Full` elevation from an environment of a scoped elevation block is a widening (
+/// D2): refused before any evidence is recorded, so the trail never shows an elevation that the
+/// returned environment would refuse to use.
+fn refuse_in_block(env: &Env) -> Result<()> {
+    match env.block() {
+        Some(life) => Err(life.widened_error()),
+        None => Ok(()),
+    }
 }
 
 impl Transaction {
@@ -318,6 +341,32 @@ impl Transaction {
             Ok(())
         } else {
             Err(AuditError::Unavailable(state.describe()).into())
+        }
+    }
+
+    /// The state of the audit store as this transaction's ORM last checked it
+    /// ([`Orm::check_audit_store`]); [`Unchecked`](super::AuditStoreState::Unchecked) until a
+    /// check ran. A caller that must refuse before any statement of its own reads this, because
+    /// [`audit_auth`](Self::audit_auth) only refuses at the first event it records.
+    pub fn audit_store_state(&self) -> super::AuditStoreState {
+        self.shared.audit_store().state()
+    }
+
+    /// Admission of an elevation: a write transaction passes (its audit row is written at commit),
+    /// a read-only transaction passes only with a declared read-audit owner
+    /// ([`ReadAuditOwner`](crate::ReadAuditOwner)), which writes the attempt evidence as a
+    /// `read_ok` row before releasing a result (A2).
+    ///
+    /// # Errors
+    ///
+    /// `Programming` for a read-only transaction without an owner.
+    pub(crate) fn audited_read_admission(&self) -> Result<()> {
+        match (self.intent(), self.read_audit_owner()) {
+            (TxIntent::Write, _) | (TxIntent::Read { .. }, Some(_)) => Ok(()),
+            (TxIntent::Read { .. }, None) => Err(Error::programming(
+                "scoped elevation requires an audited transaction: this read-only transaction has \
+                 no read-audit owner",
+            )),
         }
     }
 
@@ -361,6 +410,66 @@ impl Transaction {
         self.audit.set_call(call, &env)
     }
 
+    /// Record this transaction as one phase of an attachment ownership recovery claim:
+    /// origin CLI, method `attachments.claim.<phase>`, the claim row as the only target. Addons
+    /// get this fixed summary instead of the general call and origin writers.
+    ///
+    /// Only the owner connection that drives the recovery may call it. The phase is validated
+    /// first (no statement), then, before the origin is set: the session's role must own
+    /// `ir_blob_owner_claim` (checked through the catalog, so a request-role transaction is refused
+    /// without a raw permission error aborting it, even when some role was granted SELECT on it),
+    /// and the claim row must exist. The call summary is set before the origin, so a refused call
+    /// (including a second summary) leaves the transaction's audit origin unchanged.
+    ///
+    /// # Errors
+    ///
+    /// `Programming` for a phase other than `decision`, `owner`, `resolution` or `completed`;
+    /// `Access` when the claim table is missing or not owned by this session's role; `Programming`
+    /// when no claim row has the id; database errors; as [`audit_call`](Self::audit_call) and
+    /// [`audit_origin`](Self::audit_origin).
+    #[doc(hidden)]
+    pub async fn audit_attachment_claim(&mut self, phase: &str, claim: i64) -> Result<()> {
+        let method = match phase {
+            "decision" => "attachments.claim.decision",
+            "owner" => "attachments.claim.owner",
+            "resolution" => "attachments.claim.resolution",
+            "completed" => "attachments.claim.completed",
+            _ => {
+                return Err(Error::programming(format!(
+                    "Unknown attachment claim phase {phase:?}"
+                )));
+            }
+        };
+        let readable = self
+            .query(
+                "SELECT COALESCE(bool_or(pg_get_userbyid(p.relowner) = current_user), false) \
+                 FROM pg_class p WHERE p.oid = to_regclass('public.ir_blob_owner_claim')",
+                &[],
+            )
+            .await?;
+        if !claim_flag(&readable)? {
+            return Err(Error::access(CLAIM_UNREADABLE));
+        }
+        let known = self
+            .query(
+                "SELECT EXISTS(SELECT 1 FROM public.ir_blob_owner_claim WHERE id = $1)",
+                &[&claim],
+            )
+            .await?;
+        if !claim_flag(&known)? {
+            return Err(Error::programming(CLAIM_UNKNOWN));
+        }
+        // The call summary first: a second summary fails before the origin is relabelled.
+        self.audit_call(AuditCall::new(
+            None,
+            method.into(),
+            crate::rpc::Effect::Write,
+            super::TargetIds::from_ids(&[claim])?,
+            None,
+        )?)?;
+        self.audit_origin(AuditOrigin::Cli)
+    }
+
     /// Set the origin of the row of a non-RPC transaction (default [`AuditOrigin::Internal`]).
     ///
     /// # Errors
@@ -376,15 +485,21 @@ impl Transaction {
         self.audit.take_attempt()
     }
 
-    /// The environment a flagged server action runs with: records the
+    /// The environment a flagged server action runs: records the
     /// elevation, then returns `env` with superuser mode (an ordinary `Full` environment,
     /// D4). The observation is buffered here and written with the transaction's audit row.
     ///
     /// # Errors
     ///
     /// As [`audit_auth`](Self::audit_auth); `Programming` ([`AuditError::Elevation`]) when the
-    /// action names no group.
+    /// action names no group; `Programming` for an environment of a scoped elevation block,
+    /// which never reaches superuser mode, before anything is recorded; the
+    /// admission refusals of `env` (a `with_user` switch its switcher may not make, A4),
+    /// before anything is recorded.
     pub fn audited_superuser_env(&mut self, env: &Env, action: &SuperuserAction) -> Result<Env> {
+        refuse_in_block(env)?;
+        // the admission check of every engine entry, before anything is recorded (A4)
+        self.check_env_block(env)?;
         self.audit_ready()?;
         self.audit_writable()?;
         if action.group_ids.is_empty() {
@@ -405,14 +520,25 @@ impl Transaction {
     }
 
     /// Record a use of `sudo` outside a server action (the unscoped escape hatch of the SDK),
-    /// once per call (decision of the lead on, design question 4).
+    /// once per call (decision of the lead on, design question 4). In a read-only
+    /// transaction it is admitted only when the opener declared a read-audit owner
+    /// ([`ReadAuditOwner`](crate::ReadAuditOwner)): the evidence then reaches the attempt row
+    /// (`read_ok`), not a change row.
     ///
     /// # Errors
     ///
-    /// As [`audit_auth`](Self::audit_auth).
+    /// As [`audit_auth`](Self::audit_auth), except that a read-only transaction with an owner is
+    /// admitted and one without gives `Programming` ("no read-audit owner"); `Programming` for an environment of a scoped
+    /// elevation block, which never reaches superuser mode, before anything is
+    /// recorded; the admission refusals of `env` (a `with_user` switch its switcher may not
+    /// make, A4), before anything is recorded.
     pub fn audited_unscoped_sudo(&mut self, env: &Env, addon: &'static str) -> Result<Env> {
+        refuse_in_block(env)?;
+        // the admission check of every engine entry, before anything is recorded (A4)
+        self.check_env_block(env)?;
+        // the programming refusal (no owner) does not depend on the store's state
+        self.audited_read_admission()?;
         self.audit_ready()?;
-        self.audit_writable()?;
         let reason = ElevationReason::new("core.sudo.unscoped")?;
         self.record_elevation_in(
             env,
@@ -422,6 +548,23 @@ impl Transaction {
             },
         )?;
         Ok(env.sudo(true))
+    }
+
+    /// Record the opening of scoped elevation block `block` of `scope` from `env` (the base
+    /// environment of the block: its principal without elevation), before the block's body runs
+    /// (D4). `Transaction::elevated` calls it after admission.
+    ///
+    /// # Errors
+    ///
+    /// As [`record_elevation`](Self::record_elevation): `Internal` when the store is not ready.
+    pub(crate) fn record_scoped_elevation(
+        &mut self,
+        env: &Env,
+        reason: ElevationReason,
+        scope: Arc<crate::ElevationScope>,
+        block: crate::BlockId,
+    ) -> Result<()> {
+        self.record_elevation_in(env, reason, ElevationGrant::Scoped { scope, block })
     }
 
     fn record_elevation_in(

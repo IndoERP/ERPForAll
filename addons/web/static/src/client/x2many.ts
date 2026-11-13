@@ -202,11 +202,12 @@ async function openLine(environment: WidgetEnvironment, items: readonly Line[], 
   let values: Line = {};
   let changed = new Set<string>();
 
-  const effective = relationQuery(field, environment.values ?? {}, context, environment.fields ?? []);
-  const lineContext = effective.context;
+  // Every line's widgets get the field's context (default_*, lang, company keys); the domain is never evaluated here.
+  let lineContext = context;
 
   const load = async (): Promise<void> => {
     changed = new Set();
+    lineContext = relationQuery(field, environment.values ?? {}, context, environment.fields ?? [], "context").context;
     if (current !== null) { values = { ...working[current]! }; return; }
     const defaults = object(await rpc.call(subview.model, "default_get", { fields: formFields.map(candidate => candidate.name), context: lineContext }), "line defaults");
     values = {};
@@ -216,14 +217,21 @@ async function openLine(environment: WidgetEnvironment, items: readonly Line[], 
   if (signal?.aborted) return;
 
   const prior = document.activeElement;
-  const dialog = el("dialog", undefined, "choice-dialog x2many-dialog");
+  const dialog = el("dialog", undefined, "choice-dialog message-dialog x2many-dialog");
+  dialog.dataset["size"] = "lg";
   const heading = el("h2", undefined, "x2many-dialog-title");
   heading.id = `x2many-dialog-${field.name}`;
   dialog.setAttribute("aria-labelledby", heading.id);
   const body = el("form", undefined, "record-form x2many-form");
   body.noValidate = true;
   const actions = el("div", undefined, "actions");
-  dialog.append(heading, body, actions);
+  // The shared dialog anatomy (dialog-service.ts): header with the title and a close button, body, footer.
+  const header = el("header", undefined, "message-dialog-header");
+  const headerClose = button("×", () => close(), "message-dialog-close"); headerClose.setAttribute("aria-label", "Close");
+  header.append(heading, headerClose);
+  const bodyWrap = el("div", undefined, "message-dialog-body"); bodyWrap.append(body);
+  const footer = el("footer", undefined, "message-dialog-footer"); footer.append(actions);
+  dialog.append(header, bodyWrap, footer);
   let disposers: (() => void)[] = [];
   let widgetHandles: { name: string; represented: unknown; handle: WidgetHandle }[] = [];
   const disposeWidgets = (): void => { for (const stop of disposers) stop(); disposers = []; widgetHandles = []; };
@@ -308,13 +316,13 @@ async function openLine(environment: WidgetEnvironment, items: readonly Line[], 
   const buttons = (): void => {
     actions.replaceChildren();
     if (readonly) { actions.append(button("Close", () => close(), "primary")); return; }
-    actions.append(button("Save & Close", () => act(() => { commit(); close(); }), "primary"));
-    if (current === null) actions.append(button("Save & New", () => act(async () => { commit(); current = null; await load(); render(); body.querySelector<HTMLElement>("input,select,textarea")?.focus(); })));
-    actions.append(actionButton("Discard", () => close()));
+    // Destructive first (pushed left), the primary action last.
     if (current !== null) {
-      const remove = actionButton("Delete", () => { const at = current!; working = working.filter((_, i) => i !== at); committed = true; close(); }, "danger");
-      actions.append(remove);
+      actions.append(actionButton("Delete", () => { const at = current!; working = working.filter((_, i) => i !== at); committed = true; close(); }, "danger"));
     }
+    actions.append(actionButton("Discard", () => close()));
+    if (current === null) actions.append(button("Save & New", () => act(async () => { commit(); current = null; await load(); render(); body.querySelector<HTMLElement>("input,select,textarea")?.focus(); })));
+    actions.append(button("Save & Close", () => act(() => { commit(); close(); }), "primary"));
   };
   render();
   buttons();

@@ -270,6 +270,55 @@ async fn installed_admin_reset_uses_actor_identity_and_never_target_old_password
     f.cleanup().await;
 }
 
+/// administrator created by `erp db init` creates a user from only a name, a login and a
+/// password; the new user is internal, has the main company as default and only allowed company,
+/// and the administrator reads it back)
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn installed_admin_creates_an_internal_user_of_the_main_company() {
+    let f = NativeFixture::start().await;
+    let created = ok(call(
+        &f,
+        "res.users",
+        "create",
+        json!({"vals_list":[{"name":"Plain User","login":"plain-user","password":"plain-user-password"}]}),
+    ));
+    let uid = created.as_array().unwrap()[0].as_i64().unwrap();
+    let main: i64 = f
+        .client
+        .query_one(
+            "SELECT res_id::bigint FROM ir_model_data \
+              WHERE module = 'base' AND name = 'main_company' AND model = 'res.company'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let row = f
+        .client
+        .query_one(
+            "SELECT share, company_id::bigint, \
+                    ARRAY(SELECT cid::bigint FROM res_company_users_rel \
+                           WHERE user_id = u.id ORDER BY cid) \
+               FROM res_users u WHERE id = $1",
+            &[&uid],
+        )
+        .await
+        .unwrap();
+    let (share, company, companies): (bool, Option<i64>, Vec<i64>) =
+        (row.get(0), row.get(1), row.get(2));
+    assert!(!share);
+    assert_eq!(company, Some(main));
+    assert_eq!(companies, [main]);
+    let read = ok(call(
+        &f,
+        "res.users",
+        "read",
+        json!({"ids":[uid],"fields":["login"]}),
+    ));
+    assert_eq!(read[0]["login"], "plain-user");
+    f.cleanup().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn installed_own_change_checks_confirmation_and_keeps_the_existing_cookie() {
     let f = NativeFixture::start().await;
@@ -367,13 +416,233 @@ async fn a_manager_cannot_attach_a_line_to_someone_elses_wizard() {
         &json!({"vals_list":[{"wizard_id":wizard,"user_id":other,"user_login":"spoofed"}]})
             .to_string(),
     );
-    assert_eq!(refused.status, 403, "{}", refused.body);
+    // lines are created by opening the wizard only: a generic create answers as an unknown user
+    assert_ne!(refused.status, 200, "{}", refused.body);
     let value: Value = serde_json::from_str(&refused.body).unwrap();
-    assert_eq!(value["name"], "erp.exceptions.AccessError");
+    assert_eq!(value["name"], "erp.exceptions.MissingError");
     assert_eq!(
         value["message"],
-        "Password reset lines must belong to the current user's wizard."
+        "A selected password reset user no longer exists."
     );
+    let lines: i64 = f
+        .client
+        .query_one(
+            "SELECT count(*) FROM change_password_user WHERE wizard_id = $1",
+            &[&wizard],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(lines, 1, "only the line the open created");
+    f.cleanup().await;
+}
+
+/// A second company "Other company", in the main company's currency.
+async fn other_company(f: &NativeFixture) -> i64 {
+    let main = base_xid(f, "main_company").await;
+    let currency: i64 = f
+        .client
+        .query_one(
+            "SELECT currency_id::bigint FROM res_company WHERE id = $1",
+            &[&main],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    ok(call(
+        f,
+        "res.company",
+        "create",
+        json!({"vals_list":[{"name":"Other company","currency_id":currency}]}),
+    ))[0]
+        .as_i64()
+        .unwrap()
+}
+
+/// refused for an access manager of the main company only, identical to an unknown user)
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn access_manager_cannot_reset_an_internal_user_of_another_company() {
+    let f = NativeFixture::start().await;
+    let manager_group = base_xid(&f, "group_erp_manager").await;
+    let internal_group = base_xid(&f, "group_user").await;
+    let other = other_company(&f).await;
+    let created = ok(call(
+        &f,
+        "res.users",
+        "create",
+        json!({"vals_list":[
+            {"name":"Main manager","login":"main-manager","password":"manager-before","group_ids":[[6,0,[manager_group]]]},
+            {"name":"Far internal","login":"far-internal","password":"far-before","group_ids":[[6,0,[internal_group]]]},
+            {"name":"Near internal","login":"near-internal","password":"near-before","group_ids":[[6,0,[internal_group]]]}
+        ]}),
+    ));
+    let (far, near) = (created[1].as_i64().unwrap(), created[2].as_i64().unwrap());
+    move_to_company(&f, far, other).await;
+    for uid in [far, near] {
+        let share: bool = f
+            .client
+            .query_one("SELECT share FROM res_users WHERE id = $1", &[&uid])
+            .await
+            .unwrap()
+            .get(0);
+        assert!(!share, "user {uid} is internal");
+    }
+    let signed = login(&f, "main-manager", "manager-before");
+    assert_eq!(signed.status, 303);
+    let manager_cookie = cookie(&signed, "session_id");
+    let as_manager = |model: &str, method: &str, body: Value| {
+        json_post(
+            f.port,
+            &manager_cookie,
+            &format!("/erp/json/2/{model}/{method}"),
+            &body.to_string(),
+        )
+    };
+    ok(as_manager(
+        "res.users.identitycheck",
+        "run_check",
+        json!({"password":"manager-before"}),
+    ));
+    let never: i64 = f
+        .client
+        .query_one(
+            "SELECT COALESCE(max(id), 0)::bigint + 1000 FROM res_users",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let unknown = answer(&as_manager(
+        "res.users",
+        "action_change_password_wizard",
+        json!({"ids":[never]}),
+    ));
+    assert_ne!(unknown.0, 200, "an unknown user is refused: {unknown:?}");
+    let hidden = answer(&as_manager(
+        "res.users",
+        "action_change_password_wizard",
+        json!({"ids":[far]}),
+    ));
+    assert_eq!(hidden, unknown, "an internal user of another company");
+    // submitting: the near user leaves the manager's companies after the wizard opened
+    let wizard = ok(as_manager(
+        "res.users",
+        "action_change_password_wizard",
+        json!({"ids":[near]}),
+    ))["res_id"]
+        .as_i64()
+        .unwrap();
+    let line: i64 = f
+        .client
+        .query_one(
+            "SELECT id::bigint FROM change_password_user WHERE wizard_id = $1",
+            &[&wizard],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    move_to_company(&f, near, other).await;
+    let by_line = answer(&as_manager(
+        "change.password.user",
+        "change_password_button",
+        json!({"ids":[line],"new_passwd":"near-after"}),
+    ));
+    assert_eq!(by_line, unknown, "submit by line");
+    let lines: i64 = f
+        .client
+        .query_one(
+            "SELECT count(*) FROM change_password_user WHERE user_id = $1",
+            &[&far],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(lines, 0, "no wizard line names a refused target");
+    assert_eq!(login(&f, "near-internal", "near-before").status, 303);
+    assert_ne!(login(&f, "near-internal", "near-after").status, 303);
+    f.cleanup().await;
+}
+
+/// answers as an unknown user and creates no line: lines are created by opening the wizard)
+/// user of another company)
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generic_create_of_a_reset_line_answers_as_an_unknown_user() {
+    let f = NativeFixture::start().await;
+    let manager_group = base_xid(&f, "group_erp_manager").await;
+    let portal_group = base_xid(&f, "group_portal").await;
+    let other = other_company(&f).await;
+    let created = ok(call(
+        &f,
+        "res.users",
+        "create",
+        json!({"vals_list":[
+            {"name":"Main manager","login":"main-manager","password":"manager-before","group_ids":[[6,0,[manager_group]]]},
+            {"name":"Far portal","login":"far-portal","password":"far-before","group_ids":[[6,0,[portal_group]]]}
+        ]}),
+    ));
+    let far = created[1].as_i64().unwrap();
+    move_to_company(&f, far, other).await;
+    let signed = login(&f, "main-manager", "manager-before");
+    assert_eq!(signed.status, 303);
+    let manager_cookie = cookie(&signed, "session_id");
+    let as_manager = |model: &str, method: &str, body: Value| {
+        json_post(
+            f.port,
+            &manager_cookie,
+            &format!("/erp/json/2/{model}/{method}"),
+            &body.to_string(),
+        )
+    };
+    ok(as_manager(
+        "res.users.identitycheck",
+        "run_check",
+        json!({"password":"manager-before"}),
+    ));
+    let never: i64 = f
+        .client
+        .query_one(
+            "SELECT COALESCE(max(id), 0)::bigint + 1000 FROM res_users",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let unknown = answer(&as_manager(
+        "res.users",
+        "action_change_password_wizard",
+        json!({"ids":[never]}),
+    ));
+    assert_ne!(unknown.0, 200, "an unknown user is refused: {unknown:?}");
+    let wizard = ok(as_manager(
+        "change.password.wizard",
+        "create",
+        json!({"vals_list":[{}]}),
+    ))[0]
+        .as_i64()
+        .unwrap();
+    for (name, user) in [("far", far), ("never", never)] {
+        let reply = as_manager(
+            "change.password.user",
+            "create",
+            json!({"vals_list":[{"wizard_id":wizard,"user_id":user}]}),
+        );
+        assert!(!reply.body.contains("far-portal"), "{name}: {}", reply.body);
+        assert_eq!(answer(&reply), unknown, "{name}: {}", reply.body);
+    }
+    let by_wizard = as_manager(
+        "change.password.wizard",
+        "create",
+        json!({"vals_list":[{"user_ids":[[0,0,{"user_id":far}]]}]}),
+    );
+    assert!(!by_wizard.body.contains("far-portal"), "{}", by_wizard.body);
+    assert_eq!(answer(&by_wizard), unknown, "{}", by_wizard.body);
+    let lines: i64 = f
+        .client
+        .query_one("SELECT count(*) FROM change_password_user", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(lines, 0, "no generic create made a line");
     f.cleanup().await;
 }
 
@@ -592,5 +861,372 @@ async fn access_manager_without_settings_authority_can_reset_another_user() {
     assert_eq!(closed["type"], "ir.actions.act_window_close");
     assert_eq!(login(&f, "narrow-target", "target-after").status, 303);
     assert_ne!(login(&f, "narrow-target", "target-before").status, 303);
+    f.cleanup().await;
+}
+
+/// The `ir_model_data` record id of `base.<name>`.
+async fn base_xid(f: &NativeFixture, name: &str) -> i64 {
+    f.client
+        .query_one(
+            "SELECT res_id::bigint FROM ir_model_data WHERE module = 'base' AND name = $1",
+            &[&name],
+        )
+        .await
+        .unwrap()
+        .get(0)
+}
+
+/// Move `user` to `company` alone (setup only: the user form keeps company_ids admin-only).
+async fn move_to_company(f: &NativeFixture, user: i64, company: i64) {
+    f.client
+        .batch_execute(&format!(
+            "UPDATE res_users SET company_id = {company} WHERE id = {user};
+             DELETE FROM res_company_users_rel WHERE user_id = {user};
+             INSERT INTO res_company_users_rel (cid, user_id) VALUES ({company}, {user});"
+        ))
+        .await
+        .unwrap();
+}
+
+/// The status, error `name` and message of an error reply.
+fn answer(reply: &Reply) -> (u16, Value, Value) {
+    let value: Value = serde_json::from_str(&reply.body).unwrap();
+    (
+        reply.status,
+        value["name"].clone(),
+        value["message"].clone(),
+    )
+}
+
+/// The text of the Settings administrator refusal (Amendment 1).
+const SETTINGS_ONLY: &str =
+    "Only a Settings administrator can reset the password of a Settings administrator.";
+
+/// wizard open and in Auth at submit; a refused reset changes no password and writes no audit)
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn access_manager_cannot_reset_a_settings_administrator() {
+    let f = NativeFixture::start().await;
+    let manager_group = base_xid(&f, "group_erp_manager").await;
+    let system_group = base_xid(&f, "group_system").await;
+    let admin: i64 = f
+        .client
+        .query_one(
+            "SELECT id::bigint FROM res_users WHERE login = 'fixture-admin'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let created = ok(call(
+        &f,
+        "res.users",
+        "create",
+        json!({"vals_list":[
+            {"name":"Rights manager","login":"rights-manager","password":"manager-before","group_ids":[[6,0,[manager_group]]]},
+            {"name":"Promoted later","login":"promoted-later","password":"promoted-before"}
+        ]}),
+    ));
+    let promoted = created[1].as_i64().unwrap();
+    let signed = login(&f, "rights-manager", "manager-before");
+    assert_eq!(signed.status, 303);
+    let cookie_value = cookie(&signed, "session_id");
+    let as_manager = |model: &str, method: &str, body: Value| {
+        json_post(
+            f.port,
+            &cookie_value,
+            &format!("/erp/json/2/{model}/{method}"),
+            &body.to_string(),
+        )
+    };
+    ok(as_manager(
+        "res.users.identitycheck",
+        "run_check",
+        json!({"password":"manager-before"}),
+    ));
+    // opening: the administrator holds base.group_system
+    error(
+        as_manager(
+            "res.users",
+            "action_change_password_wizard",
+            json!({"ids":[admin]}),
+        ),
+        "erp.exceptions.AccessError",
+        SETTINGS_ONLY,
+    );
+    let lines: i64 = f
+        .client
+        .query_one(
+            "SELECT count(*) FROM change_password_user WHERE user_id = $1",
+            &[&admin],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(lines, 0, "no wizard line names a refused target");
+    // submitting: the target becomes a Settings administrator after the wizard opened
+    let action = ok(as_manager(
+        "res.users",
+        "action_change_password_wizard",
+        json!({"ids":[promoted]}),
+    ));
+    let wizard = action["res_id"].as_i64().unwrap();
+    let line: i64 = f
+        .client
+        .query_one(
+            "SELECT id::bigint FROM change_password_user WHERE wizard_id = $1",
+            &[&wizard],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    f.client
+        .execute(
+            "INSERT INTO res_groups_users_rel (gid, uid) VALUES ($1, $2)",
+            &[&system_group, &promoted],
+        )
+        .await
+        .unwrap();
+    error(
+        as_manager(
+            "change.password.user",
+            "change_password_button",
+            json!({"ids":[line],"new_passwd":"promoted-after"}),
+        ),
+        "erp.exceptions.AccessError",
+        SETTINGS_ONLY,
+    );
+    error(
+        as_manager(
+            "change.password.wizard",
+            "change_password_button",
+            json!({"ids":[wizard],"changes":[{"line_id":line,"new_passwd":"promoted-after"}]}),
+        ),
+        "erp.exceptions.AccessError",
+        SETTINGS_ONLY,
+    );
+    assert_eq!(
+        login(&f, "fixture-admin", "fixture-administrator-password").status,
+        303
+    );
+    assert_eq!(login(&f, "promoted-later", "promoted-before").status, 303);
+    assert_ne!(login(&f, "promoted-later", "promoted-after").status, 303);
+    let stderr = std::fs::read_to_string(&f.stderr_path).unwrap();
+    assert!(
+        !stderr.contains("password_changed"),
+        "a refused reset wrote an audit event:\n{stderr}"
+    );
+    f.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn access_manager_resets_a_user_with_a_unicode_password_and_it_is_audited() {
+    let f = NativeFixture::start().await;
+    let group = base_xid(&f, "group_erp_manager").await;
+    let created = ok(call(
+        &f,
+        "res.users",
+        "create",
+        json!({"vals_list":[
+            {"name":"Rights manager","login":"rights-manager","password":"manager-before","group_ids":[[6,0,[group]]]},
+            {"name":"Unicode target","login":"unicode-target","password":"target-before"}
+        ]}),
+    ));
+    let manager_uid = created[0].as_i64().unwrap();
+    let target = created[1].as_i64().unwrap();
+    let signed = login(&f, "rights-manager", "manager-before");
+    assert_eq!(signed.status, 303);
+    let cookie_value = cookie(&signed, "session_id");
+    let as_manager = |model: &str, method: &str, body: Value| {
+        json_post(
+            f.port,
+            &cookie_value,
+            &format!("/erp/json/2/{model}/{method}"),
+            &body.to_string(),
+        )
+    };
+    ok(as_manager(
+        "res.users.identitycheck",
+        "run_check",
+        json!({"password":"manager-before"}),
+    ));
+    let action = ok(as_manager(
+        "res.users",
+        "action_change_password_wizard",
+        json!({"ids":[target]}),
+    ));
+    let wizard = action["res_id"].as_i64().unwrap();
+    let line: i64 = f
+        .client
+        .query_one(
+            "SELECT id::bigint FROM change_password_user WHERE wizard_id=$1",
+            &[&wizard],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let unicode = "pässwörd-日本語-🔑";
+    let closed = ok(as_manager(
+        "change.password.user",
+        "change_password_button",
+        json!({"ids":[line],"new_passwd":unicode}),
+    ));
+    assert_eq!(closed["type"], "ir.actions.act_window_close");
+    assert_eq!(login(&f, "unicode-target", unicode).status, 303);
+    assert_ne!(login(&f, "unicode-target", "target-before").status, 303);
+    let stderr = std::fs::read_to_string(&f.stderr_path).unwrap();
+    let event = stderr
+        .lines()
+        .find(|l| l.contains("password_changed"))
+        .unwrap_or_else(|| panic!("no audit event in server stderr:\n{stderr}"));
+    let tokens: Vec<&str> = event.split_whitespace().collect();
+    for want in [
+        format!("actor={manager_uid}"),
+        format!("target_user={target}"),
+        "event=password_changed".to_owned(),
+    ] {
+        assert!(tokens.contains(&want.as_str()), "{want} not in {event}");
+    }
+    assert!(
+        tokens.iter().any(|t| t.starts_with("operation=")),
+        "{event}"
+    );
+    assert!(tokens.iter().any(|t| t.starts_with("client=")), "{event}");
+    assert_eq!(
+        stderr
+            .lines()
+            .filter(|l| l.contains("password_changed"))
+            .count(),
+        1,
+        "exactly one target was changed"
+    );
+    assert!(
+        !stderr.contains("manager-before"),
+        "a password reached stderr"
+    );
+    assert!(!stderr.contains(unicode), "the password reached stderr");
+    f.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn access_manager_cannot_reset_a_portal_user_of_another_company() {
+    let f = NativeFixture::start().await;
+    let manager_group = base_xid(&f, "group_erp_manager").await;
+    let portal_group = base_xid(&f, "group_portal").await;
+    let main = base_xid(&f, "main_company").await;
+    let currency: i64 = f
+        .client
+        .query_one(
+            "SELECT currency_id::bigint FROM res_company WHERE id = $1",
+            &[&main],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let other = ok(call(
+        &f,
+        "res.company",
+        "create",
+        json!({"vals_list":[{"name":"Other company","currency_id":currency}]}),
+    ))[0]
+        .as_i64()
+        .unwrap();
+    let created = ok(call(
+        &f,
+        "res.users",
+        "create",
+        json!({"vals_list":[
+            {"name":"Main manager","login":"main-manager","password":"manager-before","group_ids":[[6,0,[manager_group]]]},
+            {"name":"Far portal","login":"far-portal","password":"far-before","group_ids":[[6,0,[portal_group]]]},
+            {"name":"Near portal","login":"near-portal","password":"near-before","group_ids":[[6,0,[portal_group]]]}
+        ]}),
+    ));
+    let (far, near) = (created[1].as_i64().unwrap(), created[2].as_i64().unwrap());
+    move_to_company(&f, far, other).await;
+    let signed = login(&f, "main-manager", "manager-before");
+    assert_eq!(signed.status, 303);
+    let manager_cookie = cookie(&signed, "session_id");
+    let as_manager = |model: &str, method: &str, body: Value| {
+        json_post(
+            f.port,
+            &manager_cookie,
+            &format!("/erp/json/2/{model}/{method}"),
+            &body.to_string(),
+        )
+    };
+    ok(as_manager(
+        "res.users.identitycheck",
+        "run_check",
+        json!({"password":"manager-before"}),
+    ));
+    // the reference: a user id that never existed
+    let never: i64 = f
+        .client
+        .query_one(
+            "SELECT COALESCE(max(id), 0)::bigint + 1000 FROM res_users",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let unknown = answer(&as_manager(
+        "res.users",
+        "action_change_password_wizard",
+        json!({"ids":[never]}),
+    ));
+    assert_ne!(unknown.0, 200, "an unknown user is refused: {unknown:?}");
+    // opening: the far user is outside the manager's companies
+    let hidden = answer(&as_manager(
+        "res.users",
+        "action_change_password_wizard",
+        json!({"ids":[far]}),
+    ));
+    assert_eq!(hidden, unknown, "a hidden user answers as an unknown one");
+    let lines: i64 = f
+        .client
+        .query_one(
+            "SELECT count(*) FROM change_password_user WHERE user_id = $1",
+            &[&far],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(lines, 0, "no wizard line names a refused target");
+    // submitting: the near user leaves the manager's companies after the wizard opened
+    let action = ok(as_manager(
+        "res.users",
+        "action_change_password_wizard",
+        json!({"ids":[near]}),
+    ));
+    let wizard = action["res_id"].as_i64().unwrap();
+    let line: i64 = f
+        .client
+        .query_one(
+            "SELECT id::bigint FROM change_password_user WHERE wizard_id = $1",
+            &[&wizard],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    move_to_company(&f, near, other).await;
+    let by_line = answer(&as_manager(
+        "change.password.user",
+        "change_password_button",
+        json!({"ids":[line],"new_passwd":"near-after"}),
+    ));
+    assert_eq!(by_line, unknown, "submit by line");
+    let by_wizard = answer(&as_manager(
+        "change.password.wizard",
+        "change_password_button",
+        json!({"ids":[wizard],"changes":[{"line_id":line,"new_passwd":"near-after"}]}),
+    ));
+    assert_eq!(by_wizard, unknown, "submit by wizard");
+    assert_eq!(login(&f, "near-portal", "near-before").status, 303);
+    assert_eq!(login(&f, "far-portal", "far-before").status, 303);
+    assert_ne!(login(&f, "near-portal", "near-after").status, 303);
+    let stderr = std::fs::read_to_string(&f.stderr_path).unwrap();
+    assert!(
+        !stderr.contains("password_changed"),
+        "a refused reset wrote an audit event:\n{stderr}"
+    );
     f.cleanup().await;
 }

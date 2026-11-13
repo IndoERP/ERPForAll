@@ -1,4 +1,4 @@
-//! Columnar result batches (design note).
+//! Columnar result batches.
 //!
 //! Every row-shaped result is a [`Rows`] batch: one shared [`Layout`] (the keys, held once, never
 //! per row), one typed [`Column`] per key, and a row count. Relational keys with a

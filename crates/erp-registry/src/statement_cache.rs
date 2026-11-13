@@ -40,6 +40,7 @@ pub struct UpdateShape<'a> {
     returning_old: &'a [&'a str],
     returning_changed: &'a [&'a str],
     merge_json: &'a [&'a str],
+    merge_company: &'a [&'a str],
 }
 
 impl<'a> UpdateShape<'a> {
@@ -73,6 +74,13 @@ impl<'a> UpdateShape<'a> {
     #[must_use]
     pub fn returning_changed(mut self, value: &'a [&'a str]) -> Self {
         self.returning_changed = value;
+        self
+    }
+
+    /// Columns updated with null-preserving company patches.
+    #[must_use]
+    pub fn merge_company(mut self, value: &'a [&'a str]) -> Self {
+        self.merge_company = value;
         self
     }
 
@@ -130,6 +138,7 @@ struct UpdateEntry {
     returning_old: Box<[Box<str>]>,
     returning_changed: Box<[Box<str>]>,
     merge_json: Box<[Box<str>]>,
+    merge_company: Box<[Box<str>]>,
     sql: Arc<str>,
 }
 
@@ -308,6 +317,7 @@ impl ModelStatementCache {
             returning_old,
             returning_changed,
             merge_json,
+            merge_company,
         } = shape;
         {
             let entries = self
@@ -321,6 +331,12 @@ impl ModelStatementCache {
                     && entry.columns.len() == columns.len()
                     && entry.returning_old.len() == returning_old.len()
                     && entry.returning_changed.len() == returning_changed.len()
+                    && entry.merge_company.len() == merge_company.len()
+                    && entry
+                        .merge_company
+                        .iter()
+                        .zip(merge_company)
+                        .all(|(a, b)| a.as_ref() == *b)
                     && entry.merge_json.len() == merge_json.len()
                     && entry
                         .columns
@@ -364,6 +380,12 @@ impl ModelStatementCache {
                 && entry.columns.len() == columns.len()
                 && entry.returning_old.len() == returning_old.len()
                 && entry.returning_changed.len() == returning_changed.len()
+                && entry.merge_company.len() == merge_company.len()
+                && entry
+                    .merge_company
+                    .iter()
+                    .zip(merge_company)
+                    .all(|(a, b)| a.as_ref() == *b)
                 && entry.merge_json.len() == merge_json.len()
                 && entry
                     .columns
@@ -417,6 +439,11 @@ impl ModelStatementCache {
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
             returning_changed: returning_changed
+                .iter()
+                .map(|c| Box::from(*c))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+            merge_company: merge_company
                 .iter()
                 .map(|c| Box::from(*c))
                 .collect::<Vec<_>>()

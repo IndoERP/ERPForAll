@@ -1,5 +1,5 @@
-// filter takes the concrete GuardEvaluation; a type of the caller's own cannot stand in for it
-// .
+// filter takes the concrete GuardEvaluation; a type of the caller's own cannot stand in for it.
+//
 #![allow(unused)]
 
 use erp_orm::Env;

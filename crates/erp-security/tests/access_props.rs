@@ -10,9 +10,15 @@
 //! - P4: adding a group to a principal never hides a record; adding a restriction never shows one.
 //! - P7: an `_inherits` child is visible exactly when its own rules and its parent's full
 //!   predicate allow it, and its predicate holds `delegate any! <parent predicate>`.
+//! - P8: inside a real scoped elevation block, a (model, operation) the scope names
+//!   shows what the AND of its restrictions shows (no permission filter), every other one what
+//!   P1b's combination shows, both from the raw rule definitions; an `_inherits` child named by
+//!   the scope also needs its parent visible under the parent's own (named or base) predicate, an
+//!   unnamed child is decided as outside the block. A block never shows a row a restriction
+//!   excludes.
 //!
-//! Each property runs a fixed-seed batch in CI; the `#[ignore]`d `*_full` variants run the design
-//! note's sizes with more cases (`cargo test -p erp-security --test access_props -- --ignored`).
+//! Each property runs a fixed-seed batch in CI; the `#[ignore]`d `*_full` variants of P1-P4 and P7
+//! run the design note's sizes with more cases (`cargo test -p erp-security --test access_props -- --ignored`).
 //! Committed seeds under `tests/seeds/` are read-only fixtures. Generated failures are saved
 //! under workspace `target/proptest-regressions/erp-security/`; both are replayed first.
 #![allow(
@@ -29,7 +35,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use erp_domain::{Domain, DomainKind, Operator, Value};
-use erp_orm::{AccessPolicy, BeginOptions, Operation, Principal, Transaction};
+use erp_fields::ErrorKind;
+use erp_orm::audit::ElevationReason;
+use erp_orm::{
+    AccessPolicy, BeginOptions, ElevationScope, Operation, OperationIdentity, OperationSet,
+    Principal, ScopeItem, Transaction,
+};
 use erp_security::snapshot::PolicySnapshot;
 use erp_testkit::Harness;
 use props::generate::{self, Case, On, PRINCIPAL_GROUPS, RuleSpec, Sizes};
@@ -634,7 +645,7 @@ async fn p3(h: &Harness, swap: &SwapPolicy, case: Case) -> Result<(), TestCaseEr
     Ok(())
 }
 
-/// P3 (c): `check(id)` ⇔ `id ∈ search`, for every id and operation.
+/// P3 (c): `check(id)` ⇔ `id ∈ search()`, for every id and operation.
 #[test]
 fn p3_point_checks_agree_with_the_list() {
     check(
@@ -1031,3 +1042,391 @@ fn p7_full() {
         p7,
     );
 }
+
+// ----- P8 ----------------------------------------------------------------------------------------
+
+/// A generated scope: per model of [`MODELS`], the operations it names as bits (read, write,
+/// create, unlink), `None` for a model it does not name. At least one model is named.
+#[derive(Debug, Clone)]
+struct ScopeSpec([Option<u8>; 3]);
+
+impl ScopeSpec {
+    fn ops(&self, model: &str) -> Option<OperationSet> {
+        let index = MODELS.iter().position(|m| *m == model).unwrap();
+        self.0[index].map(|bits| {
+            OperationSet::of(
+                Operation::ALL
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(i, _)| bits & (1 << i) != 0)
+                    .map(|(_, op)| op),
+            )
+        })
+    }
+
+    fn names(&self, model: &str, op: Operation) -> bool {
+        self.ops(model).is_some_and(|ops| ops.contains(op))
+    }
+
+    /// The scope, nothing lifted.
+    fn scope(&self, tx: &Transaction) -> ElevationScope {
+        let items = MODELS.iter().filter_map(|model| {
+            self.ops(model)
+                .map(|ops| ScopeItem::new(tx.registry().model_id(model).unwrap(), ops).unwrap())
+        });
+        ElevationScope::new(items).unwrap()
+    }
+}
+
+fn scope_spec() -> impl Strategy<Value = ScopeSpec> {
+    [
+        prop::option::of(1u8..16),
+        prop::option::of(1u8..16),
+        prop::option::of(1u8..16),
+    ]
+    .prop_map(|mut named| {
+        if named.iter().all(Option::is_none) {
+            named[0] = Some(1);
+        }
+        ScopeSpec(named)
+    })
+}
+
+/// The AND of the restrictions written for `on` that cover `op`, from the raw definitions (a
+/// named operation: the permissions count as granted); `None` when a rule that applies does not
+/// compile.
+fn restricted(
+    rules: &[RuleSpec],
+    domains: &[Option<Domain>],
+    on: On,
+    op: Operation,
+) -> Option<Domain> {
+    let mut restrictions = Vec::new();
+    for (rule, domain) in rules.iter().zip(domains) {
+        if rule.on != on || !rule.operation().contains(op_letter(op)) {
+            continue;
+        }
+        let domain = domain.clone()?;
+        if rule.group_id().is_none() {
+            restrictions.push(domain);
+        }
+    }
+    Some(Domain::and(restrictions))
+}
+
+/// The rows of `ids` that `domain` (bound with the oracle's principal values) selects, evaluated
+/// in memory as the superuser of the transaction's base environment.
+async fn selects(
+    tx: &mut Transaction,
+    oracle: &Oracle,
+    model: &str,
+    ids: &[i64],
+    domain: &Domain,
+) -> IdSet {
+    let bound = domain.bind_params(&|p| oracle.value(p)).unwrap();
+    tx.env()
+        .sudo(true)
+        .records(model)
+        .unwrap()
+        .browse(ids.iter().copied())
+        .unwrap()
+        .filtered_domain(tx, &bound)
+        .await
+        .unwrap_or_else(|e| panic!("the oracle failed on {bound:?} ({model}): {e}"))
+        .ids()
+        .into_iter()
+        .collect()
+}
+
+/// Pairs compared inside blocks: named, unnamed, named that split the rows, named children with
+/// a named parent and with an unnamed one.
+static P8_NAMED: AtomicUsize = AtomicUsize::new(0);
+static P8_UNNAMED: AtomicUsize = AtomicUsize::new(0);
+static P8_NAMED_SPLIT: AtomicUsize = AtomicUsize::new(0);
+static P8_CHILD_NAMED_PARENT: AtomicUsize = AtomicUsize::new(0);
+static P8_CHILD_UNNAMED_PARENT: AtomicUsize = AtomicUsize::new(0);
+/// Blocks refused at entry because a named pair's company confinement is only in permissions.
+static P8_REFUSED: AtomicUsize = AtomicUsize::new(0);
+
+/// The entry refusal the raw definitions give for `scope` (A6, the fail-closed rule of
+/// ): the first named (model, operation), in the scope's model order and the
+/// operations' order, with a permission whose domain names the company or holds an `access`
+/// condition and no generated company restriction for that operation. Only the generated company restriction keeps a company
+/// confinement (review r2 S-A); these leaf tables generate no such row (no rule is marked
+/// generated and every leaf model declares `company_access` unrestricted, `props/mod.rs`), so every
+/// named pair with a company-bearing permission is refused, whatever its handwritten
+/// restrictions say. In these tables every condition that reaches the company spells `company`
+/// and no field reaches it under another name, so the text decides which permission bears it;
+/// the leaf tables only produce rules that compile.
+fn confinement_refusal(tx: &Transaction, rules: &[RuleSpec], scope: &ScopeSpec) -> Option<String> {
+    let mut named: Vec<(erp_registry::ModelId, &str)> = MODELS
+        .iter()
+        .filter(|model| scope.ops(model).is_some())
+        .map(|model| (tx.registry().model_id(model).unwrap(), *model))
+        .collect();
+    named.sort_by_key(|(id, _)| *id);
+    // an `access` condition brings in the target's whole predicate, company restriction
+    // included, so it bears the company as well (review cycle 10 M1)
+    let bears = |rule: &RuleSpec| {
+        rule.text()
+            .is_some_and(|t| t.contains("company") || t.contains("'access'"))
+    };
+    for (_, model) in named {
+        for op in Operation::ALL
+            .into_iter()
+            .filter(|op| scope.names(model, *op))
+        {
+            let applies = |rule: &&RuleSpec| {
+                rule.on.model() == model && rule.operation().contains(op_letter(op))
+            };
+            // the only kept confinement is a generated company restriction, and these tables
+            // have none
+            let kept = false;
+            let permissions: Vec<String> = rules
+                .iter()
+                .zip(1..)
+                .filter(|(r, _)| applies(r) && r.group_id().is_some() && bears(r))
+                .map(|(_, id)| format!("rule {id}"))
+                .collect();
+            if !kept && !permissions.is_empty() {
+                return Some(format!(
+                    "the scope names {} on '{model}', which keeps no generated company \
+                     restriction and whose permission rules ({}) may bear the company: scoped \
+                     elevation cannot open it",
+                    op.as_str(),
+                    permissions.join(", ")
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// Ids of each model checked one at a time (`check_access`) besides the list forms.
+const P8_POINT_IDS: usize = 4;
+
+async fn p8(
+    h: &Harness,
+    swap: &SwapPolicy,
+    (case, scope): (Case, ScopeSpec),
+) -> Result<(), TestCaseError> {
+    // rules the compiler accepts, without `access` conditions: the oracle evaluates in memory
+    let rules: Vec<RuleSpec> = case
+        .rules
+        .iter()
+        .map(|r| strip_access(&r.without_errors()))
+        .collect();
+    let ids = props::seed(h, &case).await;
+    let snapshot = install(h, swap, &rules);
+    let domains = domains_of(h, &rules);
+    for spec in &case.principals {
+        let principal = props::principal(&*snapshot, spec);
+        let mut tx = h
+            .orm()
+            .begin_opts(
+                BeginOptions::for_principal(principal.clone())
+                    .operation_identity(OperationIdentity::generate().unwrap()),
+            )
+            .await
+            .unwrap();
+        // a named pair whose company confinement is only in permissions refuses the whole block
+        // at entry, for every principal alike (A6)
+        if let Some(message) = confinement_refusal(&tx, &rules, &scope) {
+            let mut ran = false;
+            let base = tx.env();
+            let reason = ElevationReason::new("x_props.p8.block").unwrap();
+            let refused = tx
+                .elevated(&base, reason, scope.scope(&tx), async |_tx, _env| {
+                    ran = true;
+                    Ok(())
+                })
+                .await;
+            match refused {
+                Err(error) if error.kind() == ErrorKind::Programming => {
+                    if error.message() != message {
+                        return Err(fail(format!(
+                            "{scope:?}: the refusal is {:?}, the definitions give {message:?}",
+                            error.message()
+                        )));
+                    }
+                }
+                other => {
+                    return Err(fail(format!(
+                        "{scope:?} for {spec:?}: the definitions refuse the scope ({message}), the \
+                         block answered {other:?}"
+                    )));
+                }
+            }
+            if ran {
+                return Err(fail(format!("{scope:?}: the refused body ran")));
+            }
+            P8_REFUSED.fetch_add(1, Ordering::Relaxed);
+            drop(tx);
+            continue;
+        }
+        let oracle = Oracle::load(&mut tx, &principal).await;
+        let groups = implied_groups(&spec.direct_groups());
+        let parent_of: BTreeMap<i64, i64> = tx
+            .query("SELECT id, obj_id FROM x_child", &[])
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| (row.get::<_, i64>(0), row.get::<_, i64>(1)))
+            .collect();
+        // the expected sets, from the raw definitions, outside the block
+        let mut expected: BTreeMap<(&str, Operation), IdSet> = BTreeMap::new();
+        for on in [On::Obj, On::Child, On::Categ] {
+            let model = on.model();
+            for op in Operation::ALL {
+                let at = format!("{model} {op} for {spec:?} in {scope:?}");
+                let named = scope.names(model, op);
+                let own = if named {
+                    restricted(&rules, &domains, on, op)
+                } else {
+                    combined(&rules, &domains, &groups, on, op)
+                };
+                let Some(own) = own else {
+                    return Err(fail(format!("{at}: a cleaned rule does not compile")));
+                };
+                let mut set = selects(&mut tx, &oracle, model, ids.of(model), &own).await;
+                if on == On::Child {
+                    // a named child's parent is decided by the parent's own entry in the scope;
+                    // an unnamed child is decided as outside the block, its parent too
+                    let parent_named = named && scope.names(OBJ, op);
+                    let parent = if parent_named {
+                        restricted(&rules, &domains, On::Obj, op)
+                    } else {
+                        combined(&rules, &domains, &groups, On::Obj, op)
+                    };
+                    let Some(parent) = parent else {
+                        return Err(fail(format!(
+                            "{at}: a cleaned parent rule does not compile"
+                        )));
+                    };
+                    let parents = selects(&mut tx, &oracle, OBJ, &ids.objs, &parent).await;
+                    set.retain(|c| parents.contains(&parent_of[c]));
+                    if named {
+                        if parent_named {
+                            P8_CHILD_NAMED_PARENT.fetch_add(1, Ordering::Relaxed);
+                        } else {
+                            P8_CHILD_UNNAMED_PARENT.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                }
+                if named {
+                    P8_NAMED.fetch_add(1, Ordering::Relaxed);
+                    if !set.is_empty() && set.len() < ids.of(model).len() {
+                        P8_NAMED_SPLIT.fetch_add(1, Ordering::Relaxed);
+                    }
+                } else {
+                    P8_UNNAMED.fetch_add(1, Ordering::Relaxed);
+                }
+                expected.insert((model, op), set);
+            }
+        }
+        // the engine's answers inside one real block: list forms, and point checks of a few ids
+        let base = tx.env();
+        let reason = ElevationReason::new("x_props.p8.block").unwrap();
+        let block_scope = scope.scope(&tx);
+        let actual = tx
+            .elevated(&base, reason, block_scope, async |tx, env| {
+                let mut out: BTreeMap<(&str, Operation), (IdSet, IdSet)> = BTreeMap::new();
+                for model in MODELS {
+                    for op in Operation::ALL {
+                        let listed = visible(tx, &env, model, ids.of(model), op).await;
+                        let mut pointed = IdSet::new();
+                        for id in ids.of(model).iter().take(P8_POINT_IDS) {
+                            let one = env.records(model)?.browse([*id])?;
+                            match one.check_access(tx, op).await {
+                                Ok(()) => {
+                                    pointed.insert(*id);
+                                }
+                                Err(error) if is_access(&error) => {}
+                                Err(error) => return Err(error),
+                            }
+                        }
+                        out.insert((model, op), (listed, pointed));
+                    }
+                }
+                Ok(out)
+            })
+            .await
+            .unwrap_or_else(|e| panic!("the block failed for {spec:?} in {scope:?}: {e}"));
+        for ((model, op), want) in &expected {
+            let at = format!("{model} {op} for {spec:?} in {scope:?}");
+            let (listed, pointed) = &actual[&(*model, *op)];
+            if listed != want {
+                return Err(fail(format!(
+                    "{at}: the block shows what the rules from their definitions do not: {}",
+                    diff(listed, want)
+                )));
+            }
+            let want_points: IdSet = ids
+                .of(model)
+                .iter()
+                .take(P8_POINT_IDS)
+                .filter(|id| want.contains(id))
+                .copied()
+                .collect();
+            if *pointed != want_points {
+                return Err(fail(format!(
+                    "{at}: the record check disagrees with the definitions: {}",
+                    diff(pointed, &want_points)
+                )));
+            }
+        }
+        drop(tx);
+    }
+    Ok(())
+}
+
+fn p8_case(sizes: &Sizes) -> impl Strategy<Value = (Case, ScopeSpec)> + use<> {
+    (inherits_case(sizes), scope_spec())
+}
+
+/// P8 (and 003 for generated rules and rows): what a scoped block
+/// shows equals the rules combined from their raw definitions: named pairs by their restrictions
+/// alone, unnamed pairs as outside the block, children through their parent's own entry.
+///
+/// A scope naming a pair whose company confinement is only in permissions (a permission naming
+/// the company or holding an `access` condition, no generated company restriction of that operation; these tables have none) is
+/// refused at entry with the message the definitions give, before the body (A6,
+/// fail-closed rule of this slice).
+///
+/// shows a row a restriction excludes, in search, `filtered_access` and the record check, for
+/// read and write; named and unnamed `_inherits` parents; the refusal of a named pair with a
+/// company-bearing permission; the generated company restriction is not in these tables, so a
+/// pair it keeps nameable is not exercised here; lifts are the case's own tests)
+#[test]
+fn p8_scoped_blocks_keep_every_restriction() {
+    check(
+        props::runner(
+            P8_CASES,
+            0x5038_0001,
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/seeds/p8-scope.txt"),
+        ),
+        p8_case(&Sizes::ci()),
+        p8,
+    );
+    let counts = [
+        P8_NAMED.load(Ordering::Relaxed),
+        P8_UNNAMED.load(Ordering::Relaxed),
+        P8_NAMED_SPLIT.load(Ordering::Relaxed),
+        P8_CHILD_NAMED_PARENT.load(Ordering::Relaxed),
+        P8_CHILD_UNNAMED_PARENT.load(Ordering::Relaxed),
+        P8_REFUSED.load(Ordering::Relaxed),
+    ];
+    eprintln!(
+        "p8: {} named pairs ({} split the rows), {} unnamed, named children: {} with a named \
+         parent, {} with an unnamed one; {} blocks refused for a company confinement only in \
+         permissions",
+        counts[0], counts[2], counts[1], counts[3], counts[4], counts[5]
+    );
+    assert!(
+        counts.iter().all(|c| *c > 0),
+        "the generated scopes leave a shape untested: {counts:?}"
+    );
+}
+
+/// Cases of the CI run of P8.
+const P8_CASES: u32 = 24;

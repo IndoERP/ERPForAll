@@ -13,8 +13,10 @@ fn linked_addon_receipts_are_per_addon_and_versioned() {
         [
             "acceptance_notes",
             "base",
+            "barcodes",
             "mail",
             "product",
+            "product_mail",
             "theme_office_blue",
             "uom",
             "web"

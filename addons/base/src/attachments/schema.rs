@@ -10,7 +10,7 @@
 use erp_sdk::__private::{CoreTableRequirement, core_ddl};
 
 /// The tables created before the models.
-pub const BLOB_DDL: &str = "\
+pub const BLOB_DDL: &str = concat!("\
 CREATE TABLE IF NOT EXISTS ir_blob_store (
     id int2 GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     store_key text NOT NULL CHECK (octet_length(store_key) BETWEEN 1 AND 64),
@@ -77,10 +77,17 @@ CREATE TABLE IF NOT EXISTS ir_blob_gc_hold (
     reason text NOT NULL CHECK (octet_length(reason) BETWEEN 1 AND 500),
     created_at timestamptz NOT NULL DEFAULT now()
 );
-REVOKE ALL ON ir_blob_store, ir_blob, ir_blob_inline, ir_blob_upload, ir_blob_gc_candidate, ir_blob_gc_hold FROM PUBLIC;";
+REVOKE ALL ON ir_blob_store, ir_blob, ir_blob_inline, ir_blob_upload, ir_blob_gc_candidate, ir_blob_gc_hold FROM PUBLIC;", include_str!("quota.sql"), include_str!("ownership.sql"), include_str!("ownership_recovery.sql"), include_str!("peer_probe.sql"));
 
 /// The part that refers to `ir_attachment`, run after the models' tables.
 pub const ATTACHMENT_LINK_DDL: &str = "\
+CREATE TABLE IF NOT EXISTS ir_attachment_pending_guard (
+    subject_user int8 NOT NULL REFERENCES res_users(id) ON DELETE CASCADE,
+    placeholder_model text NOT NULL CHECK (octet_length(placeholder_model) BETWEEN 1 AND 128),
+    generation boolean NOT NULL DEFAULT false,
+    PRIMARY KEY(subject_user, placeholder_model)
+);
+REVOKE ALL ON ir_attachment_pending_guard FROM PUBLIC;
 ALTER TABLE ir_attachment ADD COLUMN IF NOT EXISTS blob_id int8 REFERENCES ir_blob (id) ON DELETE RESTRICT;
 CREATE INDEX IF NOT EXISTS ir_attachment_blob_id ON ir_attachment (blob_id) WHERE blob_id IS NOT NULL;
 
@@ -128,7 +135,15 @@ core_ddl!(
         "ir_blob_inline",
         "ir_blob_upload",
         "ir_blob_gc_candidate",
-        "ir_blob_gc_hold"
+        "ir_blob_gc_hold",
+        "ir_blob_usage_base",
+        "ir_blob_usage_delta",
+        "ir_blob_owner_identity",
+        "ir_blob_owner_state",
+        "ir_blob_peer_probe",
+        "ir_blob_owner_claim",
+        "ir_blob_owner_recovery",
+        "ir_attachment_pending_guard"
     ],
     sql = BLOB_DDL,
     after_models = { needs_table = "ir_attachment", sql = ATTACHMENT_LINK_DDL }

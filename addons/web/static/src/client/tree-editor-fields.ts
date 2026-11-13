@@ -33,7 +33,7 @@ const numeric = (field: Field): boolean =>
 const stringKind = (field: Field): boolean =>
   ["char", "text", "date", "datetime", "selection"].includes(field.kind);
 const unsupportedMessage =
-  "Binary and collection condition values require a custom tree editor provider (a later release advanced controls).";
+  "Binary and collection condition values require a custom tree editor provider.";
 /** Default policies are conservative; relation identities stay checked integer literals. */
 export function defaultTreeEditorProvider(
   mode: "domain" | "expression",
@@ -172,7 +172,7 @@ export function treeFieldMap(
         "unsupported",
         `Unsupported tree field kind: ${
           String(field.kind)
-        } (a later release advanced controls).`,
+        }.`,
       );
     }
     if (

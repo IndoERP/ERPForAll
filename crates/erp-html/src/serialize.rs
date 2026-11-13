@@ -3,8 +3,7 @@
 //! * Void elements are written `<br>` in HTML and `<br/>` in XML; every other element always has
 //!   an end tag, so an empty `<div></div>` is never shortened.
 //! * Text escapes `&`, `<` and `>`; attribute values also escape `"` and are always double-quoted.
-//!   U+00A0 is written `&nbsp;` in HTML and `&#160;` in XML, where `&nbsp;` is not defined
-//!   .
+//!   U+00A0 is written `&nbsp;` in HTML and `&#160;` in XML, where `&nbsp;` is not defined.
 //! * A text that starts with a newline right after `<pre>` or `<listing>` gets one extra newline,
 //!   because the parser drops the first one and the output must read back the same.
 //! * Every byte written is checked against the per-serialisation output limit first, then charged

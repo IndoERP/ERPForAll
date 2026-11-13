@@ -42,6 +42,18 @@ enum Denial {
 
 struct Rules(Denial);
 impl TestRules for Rules {
+    /// The impersonation case switches user 7 to user 9: user 7 holds `principal.impersonate`
+    /// here (A4); no other capability is mapped.
+    fn has_capability(&self, b: &PrincipalBinding<'_>, cap: &erp_orm::Capability) -> Result<bool> {
+        if cap.name() == "principal.impersonate" {
+            return Ok(b.principal().subject().get() == 7);
+        }
+        Err(Error::programming(format!(
+            "the delegated fixture maps no capability '{}'",
+            cap.name()
+        )))
+    }
+
     fn check_model(
         &self,
         _: &PrincipalBinding<'_>,
@@ -156,7 +168,9 @@ async fn harness(denial: Denial) -> Harness {
                 ),
         ])
         .with_impls([&CONSTRAINT_METHOD])
-        .with_constraints([&CONSTRAINT]);
+        .with_constraints([&CONSTRAINT])
+        // the impersonation case: the ORM names the capability the rules answer (A4)
+        .impersonate_capability(&erp_security::principal::PRINCIPAL_IMPERSONATE);
     let builder = match denial {
         Denial::ChildField => {
             builder.policy(FieldPolicy::new().deny(CHILD, "note", FieldOp::Write))

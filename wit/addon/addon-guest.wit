@@ -5,8 +5,8 @@ interface addon-guest {
     use types.{model-name, field-name, record-id, column-vector, record-batch, call-context, onchange-result, scalar-value, boundary-error};
 
     /// The addon's contributions as JSON text: models, fields, computes, constraints, onchanges and
-    /// method overrides with their signatures. Feeds the registry and the AI tool registry
-    /// . Called once per loaded component, outside any transaction.
+    /// method overrides with their signatures. Feeds the registry and the AI tool registry.
+    /// Called once per loaded component, outside any transaction.
     describe: func() -> string;
 
     /// Run a business method or an override the addon contributes. Arguments and result are JSON

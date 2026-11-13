@@ -1,5 +1,5 @@
 //! Parity tests for `ir.default` and company-dependent field handling.
-//! Specs:.
+//! Specs.
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "tests")]
 
 use support::currency_fixture;
@@ -45,7 +45,7 @@ async fn init_db(tx: &mut erp_orm::Transaction) -> i64 {
     .await
     .unwrap();
     tx.execute(
-        "INSERT INTO res_users (id, name, login, active) VALUES (2, 'User 2', 'u2', true) ON CONFLICT DO NOTHING",
+        "INSERT INTO res_users (id, name, login, active, share) VALUES (2, 'User 2', 'u2', true, false) ON CONFLICT DO NOTHING",
         &[],
     )
     .await
@@ -524,7 +524,7 @@ async fn access_harness() -> Harness {
     h.run(async |tx| {
         let currency = init_db(tx).await;
         tx.execute(
-            "INSERT INTO res_users (id, name, login, active) VALUES (3, 'User 3', 'u3', true), (4, 'User 4', 'u4', true) ON CONFLICT DO NOTHING",
+            "INSERT INTO res_users (id, name, login, active, share) VALUES (3, 'User 3', 'u3', true, false), (4, 'User 4', 'u4', true, false) ON CONFLICT DO NOTHING",
             &[],
         )
         .await?;
@@ -1277,7 +1277,12 @@ async fn spec_field_076_fallback_equal_company_values() {
     let h = defaults_harness().await;
     let mut tx = h.begin().await.unwrap();
 
-    let items = tx.env().records("test_defaults.item").unwrap();
+    init_db(&mut tx).await;
+    let items = tx
+        .env()
+        .with_context([("allowed_company_ids", Value::list([Value::Int(1)]))])
+        .records("test_defaults.item")
+        .unwrap();
     let item = items
         .create_values(&mut tx, &[map(&[("name", Value::str("ItemUnset"))])])
         .await

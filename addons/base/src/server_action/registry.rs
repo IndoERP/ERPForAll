@@ -179,8 +179,7 @@ impl<'a> RunnerCtx<'a> {
     }
 
     /// Run the action's children in order, each through the full run (its own access check,
-    /// warnings, runner, as the caller); the last result that is not empty
-    /// .
+    /// warnings, runner, as the caller); the last result that is not empty.
     pub(crate) async fn run_children(&mut self) -> Result<Option<ActionResult>> {
         let frame = self.frame;
         let mut last = None;

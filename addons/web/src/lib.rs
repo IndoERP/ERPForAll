@@ -1,4 +1,4 @@
-//! The `web` addon (layer L11): the web client's server side and, under
+//! The `web` addon (layer L11): the web client's server side, under
 //! `static/`, its client code.
 //!
 //! The crate exposes native menus, window actions and list/form descriptions through ordinary
@@ -15,6 +15,40 @@
 
 erp_sdk::addon!(name = "web", depends = ["base"]);
 
+/// The pivot view's bounds, set in Settings (database-wide): the most groups one grouping may return, the most headers a
+/// user may keep expanded and the most cells the table holds. Each has a default, a floor and a hard bound; the web client
+/// reads them when it opens a pivot.
+fn settings() -> erp_sdk::Result<Vec<erp_sdk::settings::SettingDecl>> {
+    use erp_sdk::settings::{ScopeKind, SettingDecl};
+    Ok(vec![
+        SettingDecl::integer(
+            "web.pivot_max_groups",
+            "Pivot view: most groups one grouping may return",
+            ScopeKind::Global,
+            2000,
+            (100, 50_000),
+        )?
+        .access(&["base.group_user"], &["base.group_system"])?,
+        SettingDecl::integer(
+            "web.pivot_max_open_headers",
+            "Pivot view: most headers that may stay expanded",
+            ScopeKind::Global,
+            200,
+            (10, 2_000),
+        )?
+        .access(&["base.group_user"], &["base.group_system"])?,
+        SettingDecl::integer(
+            "web.pivot_max_cells",
+            "Pivot view: most cells the table may hold",
+            ScopeKind::Global,
+            20_000,
+            (1_000, 1_000_000),
+        )?
+        .access(&["base.group_user"], &["base.group_system"])?,
+    ])
+}
+erp_sdk::setting_declarations!(settings);
+
 pub mod assets;
 
 mod action_result;
@@ -27,6 +61,8 @@ mod h18_transport;
 #[cfg(test)]
 mod h18_transport_unit;
 mod metadata;
+pub mod pivot_export;
+mod pivot_xlsx;
 mod view_types;
 
 /// `web.menu_icon`: the client's icon picker for a menu's `web_icon` text (`lucide:<name>`).
@@ -196,6 +232,11 @@ static TAGS_DOT_WIDGET: erp_sdk::views::WidgetDecl =
 #[linkme(crate = erp_sdk::__private::linkme)]
 static CODE_WIDGET: erp_sdk::views::WidgetDecl = erp_sdk::views::WidgetDecl::new("code", &["text"]);
 
+/// `html`: rich text editor with server sanitization authority (W-29).
+#[erp_sdk::__private::linkme::distributed_slice(erp_sdk::views::FIELD_WIDGETS)]
+#[linkme(crate = erp_sdk::__private::linkme)]
+static HTML_WIDGET: erp_sdk::views::WidgetDecl = erp_sdk::views::WidgetDecl::new("html", &["html"]);
+
 /// `list` view type (H18).
 #[erp_sdk::__private::linkme::distributed_slice(erp_sdk::views::VIEW_TYPES)]
 #[linkme(crate = erp_sdk::__private::linkme)]
@@ -211,6 +252,11 @@ pub static FORM_VIEW_TYPE: erp_sdk::views::ViewTypeDeclFn = view_types::form_vie
 #[linkme(crate = erp_sdk::__private::linkme)]
 pub static SEARCH_VIEW_TYPE: erp_sdk::views::ViewTypeDeclFn = view_types::search_view_type;
 
+/// `pivot` view type (H18).
+#[erp_sdk::__private::linkme::distributed_slice(erp_sdk::views::VIEW_TYPES)]
+#[linkme(crate = erp_sdk::__private::linkme)]
+pub static PIVOT_VIEW_TYPE: erp_sdk::views::ViewTypeDeclFn = view_types::pivot_view_type;
+
 /// The native H18 declarations owned by this exact web addon descriptor.
 ///
 /// Composition roots pass these contributions to `ModuleSystemBuilder::view_types` along with
@@ -222,10 +268,11 @@ pub static SEARCH_VIEW_TYPE: erp_sdk::views::ViewTypeDeclFn = view_types::search
 /// assert!(std::ptr::eq(contributions[0].owner(), &erp_addon_web::ADDON));
 /// ```
 pub fn view_type_contributions() -> [erp_sdk::views::ViewTypeContribution; 1] {
-    static DECLARATIONS: [erp_sdk::views::ViewTypeDeclFn; 3] = [
+    static DECLARATIONS: [erp_sdk::views::ViewTypeDeclFn; 4] = [
         view_types::list_view_type,
         view_types::form_view_type,
         view_types::search_view_type,
+        view_types::pivot_view_type,
     ];
     [erp_sdk::views::ViewTypeContribution::new(
         &ADDON,
@@ -240,4 +287,30 @@ pub mod metadata_test_support {
         test_get_views, test_load_action, test_load_action_probed, test_load_action_views,
         test_load_menus, test_load_menus_probed,
     };
+}
+
+#[cfg(test)]
+mod pivot_settings_tests {
+    /// The pivot bounds are declared settings with a default, a floor and a hard bound, readable by internal users and written by administrators.
+    #[test]
+    fn pivot_bounds_are_declared_with_default_floor_and_hard_bound() {
+        use erp_sdk::settings::SettingKind;
+        let declarations = super::settings().unwrap();
+        let expected = [
+            ("web.pivot_max_groups", 2000, 100, 50_000),
+            ("web.pivot_max_open_headers", 200, 10, 2_000),
+            ("web.pivot_max_cells", 20_000, 1_000, 1_000_000),
+        ];
+        assert_eq!(declarations.len(), expected.len());
+        for (setting, (key, default, floor, bound)) in declarations.iter().zip(expected) {
+            assert_eq!(setting.key(), key);
+            assert_eq!(setting.read_groups(), &["base.group_user"]);
+            assert_eq!(setting.write_groups(), &["base.group_system"]);
+            assert_eq!(setting.default_value(), &erp_sdk::Value::Int(default));
+            let SettingKind::Integer { min, max } = setting.kind() else {
+                panic!("integer required")
+            };
+            assert_eq!((*min, *max), (floor, bound));
+        }
+    }
 }

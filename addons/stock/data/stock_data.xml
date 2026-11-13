@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<!--
+Default stock topology records that need no behaviour. The default warehouse
+     and everything it generates come with the warehouse model slice. 
+-->
+<odoo>
+  <data>
+    <!-- The four removal strategies of the reservation code. -->
+    <record id="removal_fifo" model="product.removal">
+      <field name="name">First In First Out (FIFO)</field>
+      <field name="method">fifo</field>
+    </record>
+    <record id="removal_lifo" model="product.removal">
+      <field name="name">Last In First Out (LIFO)</field>
+      <field name="method">lifo</field>
+    </record>
+    <record id="removal_closest" model="product.removal">
+      <field name="name">Closest Location</field>
+      <field name="method">closest</field>
+    </record>
+    <record id="removal_least_packages" model="product.removal">
+      <field name="name">Least Packages</field>
+      <field name="method">least_packages</field>
+    </record>
+  </data>
+  <data noupdate="1">
+    <!-- Partner locations shared by every company. -->
+    <record id="stock_location_suppliers" model="stock.location">
+      <field name="name">Vendors</field>
+      <field name="usage">supplier</field>
+    </record>
+    <record id="stock_location_customers" model="stock.location">
+      <field name="name">Customers</field>
+      <field name="usage">customer</field>
+    </record>
+    <!-- Transit between companies; archived until inter-company moves are used. -->
+    <record id="stock_location_inter_company" model="stock.location">
+      <field name="name">Inter-company transit</field>
+      <field name="usage">transit</field>
+      <field name="active" eval="False"/>
+    </record>
+    <!-- Make-to-order route, archived; its sequence keeps it ahead of resupply routes. -->
+    <record id="route_warehouse0_mto" model="stock.route">
+      <field name="name">Replenish on Order (MTO)</field>
+      <field name="active" eval="False"/>
+      <field name="sequence">5</field>
+      <field name="product_categ_selectable" eval="True"/>
+    </record>
+    <!-- The topology generation of this database (topology ADR D1). -->
+    <record id="stock_topology_version" model="stock.topology.version">
+      <field name="generation">0</field>
+    </record>
+  </data>
+</odoo>

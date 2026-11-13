@@ -134,6 +134,11 @@ fn node(domain: &Domain, model: &ModelSpec) -> Result<String, String> {
             let field = model
                 .field(name)
                 .ok_or_else(|| format!("field '{name}' does not exist on '{}'", model.name))?;
+            if field.company_dependent {
+                return Err(format!(
+                    "field '{name}' is company-dependent and requires a prepared company context"
+                ));
+            }
             if !field.has_column() {
                 return Err(format!("field '{name}' is not stored"));
             }

@@ -140,7 +140,7 @@ impl Base {
     /// `create_date` (models with log access).
     pub const CREATE_DATE: Field<Base, Option<erp_fields::DateTime>> =
         Field::new("create_date", Token::__macro());
-    /// `row_version` (models declared `row_version = true`,; others report an invalid
+    /// `row_version` (models declared `row_version = true`; others report an invalid
     /// field). Read-only: writing it is a `Programming` error.
     pub const ROW_VERSION: Field<Base, i64> = Field::new("row_version", Token::__macro());
 }
@@ -220,8 +220,7 @@ impl Records {
         self.spec().name
     }
 
-    /// `browse(ids)`: a recordset of these database ids, order and duplicates kept, no SQL
-    /// .
+    /// `browse(ids)`: a recordset of these database ids, order and duplicates kept, no SQL.
     pub fn browse(&self, ids: impl IntoIterator<Item = i64>) -> Result<Self> {
         let ids: Vec<RecId> = ids
             .into_iter()
@@ -304,7 +303,7 @@ impl Records {
         Error::programming(format!("Expected singleton: {self}"))
     }
 
-    /// `ensure_one`.
+    /// `ensure_one()`.
     pub fn ensure_one(&self) -> Result<&Self> {
         if self.ids.len() == 1 {
             Ok(self)
@@ -313,8 +312,7 @@ impl Records {
         }
     }
 
-    /// `record.id`: `None` on an empty set, the id of a singleton, the singleton error otherwise
-    /// .
+    /// `record.id`: `None` on an empty set, the id of a singleton, the singleton error otherwise.
     pub fn id(&self) -> Result<Option<RecId>> {
         match self.ids.len() {
             0 => Ok(None),
@@ -523,10 +521,18 @@ impl Records {
         }
     }
 
-    /// `sudo(flag)`.
+    /// `sudo(flag)`. On records of an elevation block, turning superuser mode on
+    /// gives records whose every use is refused ([`Env::sudo`]).
     #[must_use]
     pub fn sudo(&self, flag: bool) -> Self {
         self.with_env(self.env.sudo(flag))
+    }
+
+    /// The engine's own superuser mode ([`Env::engine_sudo`]): keeps an elevation block's
+    /// lifetime instead of being refused.
+    #[must_use]
+    pub(crate) fn engine_sudo(&self) -> Self {
+        self.with_env(self.env.engine_sudo())
     }
 
     /// `with_user(uid)`.
@@ -557,8 +563,7 @@ impl Records {
 }
 
 impl PartialEq for Records {
-    /// Same model and same *set* of ids; order, duplicates and environment are ignored
-    /// .
+    /// Same model and same *set* of ids; order, duplicates and environment are ignored.
     fn eq(&self, other: &Self) -> bool {
         self.same_model(other) && self.id_set() == other.id_set()
     }
@@ -576,7 +581,7 @@ impl Hash for Records {
 }
 
 impl fmt::Display for Records {
-    /// `model(1, 2)`, `model(1)`, `model`.
+    /// `model(1, 2)`, `model(1,)`, `model()`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}(", self.model_name())?;
         for (i, id) in self.ids.iter().enumerate() {
@@ -650,8 +655,7 @@ impl<M: Model> RecordSet<M> {
 
     /// `fields.Date.context_today(record)`: today's date in the time zone of this recordset's
     /// environment (its context `tz`, else UTC). Takes the transaction only so that the same call
-    /// compiles in a WebAssembly component, where the zone comes from the call context
-    /// .
+    /// compiles in a WebAssembly component, where the zone comes from the call context.
     ///
     /// # Errors
     ///
@@ -1042,7 +1046,9 @@ mod tests {
         assert!(!su.context().contains("default_name"));
         assert_eq!(su.sudo(true), su);
         assert_eq!(e.with_user(0), e);
-        assert!(e.with_user(1).su());
+        // a user switching to the superuser is refused, never superuser mode (A4)
+        assert!(!e.with_user(1).su());
+        assert!(e.sudo(true).with_user(2).sudo(true).su());
         let c2 = e.with_company(3).unwrap().with_company(4).unwrap();
         assert_eq!(
             c2.context().allowed_company_ids().unwrap(),

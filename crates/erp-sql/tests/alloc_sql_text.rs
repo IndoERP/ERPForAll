@@ -3,7 +3,7 @@
 //! Hot path statements (`select_by_ids`, `select`, `select_ids_where`, `update_from_arrays`)
 //! are cached per registry generation and shape. On a cache hit, statement text retrieval
 //! is meant to cost 0 heap allocations (by construction; the measuring test is
-//! DEFERRED_PERFORMANCE,, and has not been run).
+//! DEFERRED_PERFORMANCE, and has not been run).
 
 #![allow(
     clippy::unwrap_used,

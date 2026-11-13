@@ -1,4 +1,4 @@
-//! `erp cluster` and `erp dev -d` (SCALE.NODES; spec).
+//! `erp cluster` and `erp dev -d` (SCALE.NODES).
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

@@ -12,7 +12,7 @@ use crate::{Env, Transaction};
 
 impl Transaction {
     /// The active companies of `env`, current first, checked against the newest resolution of the
-    /// subject they belong to in this transaction, also under `sudo` and for
+    /// subject they belong to in this transaction, also under `sudo()` and for
     /// an environment from `with_user`: a membership change made in this transaction is seen
     /// (the policy and the resolutions are brought up to date first), and a subject not resolved
     /// yet is read through the principal resolver (one statement, once per subject).
@@ -32,9 +32,14 @@ impl Transaction {
     /// # Errors
     ///
     /// `Access` ("Access to unauthorized or invalid companies.") when a company is not one of the
-    /// subject's; `Validation` for a malformed or duplicated list; the resolver's and the policy
+    /// subject's; `Validation` for a malformed or duplicated list; `Programming` for an environment
+    /// outside its elevation block or widened; the resolver's and the policy
     /// refresh's errors.
     pub async fn companies(&mut self, env: &Env) -> Result<Vec<CompanyId>> {
+        // an environment outside its elevation block decides nothing; the switchers
+        // of its with_user switches are resolved first (A4)
+        self.prepare_switch(env).await?;
+        self.check_env_block(env)?;
         env.companies()?;
         self.prepare_access(env).await?;
         Ok(self.companies_now(env)?.to_vec())

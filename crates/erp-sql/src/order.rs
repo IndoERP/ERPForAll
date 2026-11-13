@@ -221,6 +221,7 @@ struct OrderCompiler<'a> {
     fields: Vec<(ModelId, FieldId)>,
     joins: Vec<(String, String)>,
     lang: Option<&'a str>,
+    company_slot: Option<usize>,
 }
 
 fn reversed(direction: Direction, nulls: Nulls, reverse: bool) -> (Direction, Nulls) {
@@ -335,6 +336,10 @@ impl<'a> OrderCompiler<'a> {
                 term.field, model.name
             ))
         })?;
+        if field.company_dependent && self.company_slot.is_none() {
+            return Err(crate::company::missing(model, field));
+        }
+
         if let Some(inherited) = field.inherited {
             // Preserve the generated exposure for caller-side target authorization, including
             // when this term comes from a comodel's implicit order.
@@ -374,7 +379,18 @@ impl<'a> OrderCompiler<'a> {
             };
             return self.term(&parent_table, &parent_term, reverse, seen, parts);
         }
-        let col = format!("{}.{}", quote(&table.alias), quote(field.name));
+        let col = if field.company_dependent {
+            crate::company::expression(
+                self.registry,
+                model,
+                field,
+                &table.alias,
+                self.company_slot
+                    .ok_or_else(|| crate::company::missing(model, field))?,
+            )?
+        } else {
+            format!("{}.{}", quote(&table.alias), quote(field.name))
+        };
         let (direction, nulls) = reversed(term.direction, term.nulls, reverse);
         let entry = (model.id, field.id);
         let read = |c: &mut Self| {
@@ -419,7 +435,17 @@ impl<'a> OrderCompiler<'a> {
                         Nulls::Default => {}
                     }
                     let inner = table.inner && !can_be_null(field);
-                    let alias = shorten_identifier(&format!("{}__{}", table.alias, field.name));
+                    let link = if field.company_dependent {
+                        format!(
+                            "{}__p{}",
+                            field.name,
+                            self.company_slot
+                                .ok_or_else(|| crate::company::missing(model, field))?
+                        )
+                    } else {
+                        field.name.to_owned()
+                    };
+                    let alias = shorten_identifier(&format!("{}__{link}", table.alias));
                     let kind = if inner { "JOIN" } else { "LEFT JOIN" };
                     self.add_join(
                         &alias,
@@ -509,8 +535,8 @@ impl<'a> OrderCompiler<'a> {
 ///
 /// Many2one terms order by the comodel's own `_order` through a join (`DESC` reverses every inner
 /// term and swaps its NULLS clause; an explicit NULLS clause on the many2one becomes a leading
-/// `f IS [NOT] NULL` term); `f.id`, or a comodel ordered by `id`, orders by the raw column
-/// . A many2one already being ordered in the chain is skipped, so self-referencing
+/// `f IS [NOT] NULL` term); `f.id`, or a comodel ordered by `id`, orders by the raw column.
+/// A many2one already being ordered in the chain is skipped, so self-referencing
 /// orders terminate.
 ///
 /// Unless the order already contains `id`, `id` is appended as the last term, so rows that tie on
@@ -520,6 +546,44 @@ pub fn compile_order(
     model: &ModelSpec,
     spec: &str,
     lang: Option<&str>,
+) -> Result<OrderBy> {
+    compile_order_inner(registry, model, spec, lang, None)
+}
+
+/// Physical order dependencies, including implicit comodel order fields.
+/// # Errors
+/// As [`compile_order`], except preparation is not required for discovery.
+pub fn order_fields(
+    registry: &Registry,
+    model: &ModelSpec,
+    spec: &str,
+    lang: Option<&str>,
+) -> Result<Vec<(ModelId, FieldId)>> {
+    Ok(compile_order_inner(registry, model, spec, lang, Some(1))?.fields)
+}
+
+/// Compile with the prepared-company document bound at `slot` by the caller.
+/// # Errors
+/// As [`compile_order`], plus a missing prepared fallback or invalid slot.
+pub fn compile_order_with_company(
+    registry: &Registry,
+    model: &ModelSpec,
+    spec: &str,
+    lang: Option<&str>,
+    values: &crate::company::CompanyValues,
+    slot: usize,
+) -> Result<OrderBy> {
+    let order = compile_order_inner(registry, model, spec, lang, Some(slot))?;
+    values.validate(registry, &order.fields)?;
+    Ok(order)
+}
+
+fn compile_order_inner(
+    registry: &Registry,
+    model: &ModelSpec,
+    spec: &str,
+    lang: Option<&str>,
+    company_slot: Option<usize>,
 ) -> Result<OrderBy> {
     crate::validate_language(lang)?;
     let spec = if spec.trim().is_empty() {
@@ -540,6 +604,7 @@ pub fn compile_order(
         fields: Vec::new(),
         joins: Vec::new(),
         lang,
+        company_slot,
     };
     let table = Table {
         model,
@@ -608,6 +673,90 @@ pub fn compile_comodel_order(
     nulls: Nulls,
     lang: Option<&str>,
 ) -> Result<OrderTerms> {
+    compile_comodel_order_inner(
+        registry,
+        comodel,
+        fk,
+        ComodelOrderOptions::new(alias)
+            .descending(descending)
+            .nulls(nulls)
+            .with_lang(lang),
+        None,
+    )
+}
+
+/// Presentation options for a comodel's order around grouped records.
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub struct ComodelOrderOptions<'a> {
+    alias: &'a str,
+    descending: bool,
+    nulls: Nulls,
+    lang: Option<&'a str>,
+}
+impl<'a> ComodelOrderOptions<'a> {
+    /// Default ascending order at a quoted table alias.
+    pub fn new(alias: &'a str) -> Self {
+        Self {
+            alias,
+            descending: false,
+            nulls: Nulls::Default,
+            lang: None,
+        }
+    }
+    /// Reverse every term of the comodel's order.
+    pub fn descending(mut self, descending: bool) -> Self {
+        self.descending = descending;
+        self
+    }
+    /// Place empty relation groups first or last.
+    pub fn nulls(mut self, nulls: Nulls) -> Self {
+        self.nulls = nulls;
+        self
+    }
+    /// Select the language of translated order fields.
+    pub fn with_lang(mut self, lang: Option<&'a str>) -> Self {
+        self.lang = lang;
+        self
+    }
+}
+
+/// Comodel order with a previously prepared company document.
+/// # Errors
+/// As [`compile_comodel_order`], plus missing property preparation.
+pub fn compile_comodel_order_with_company(
+    registry: &Registry,
+    comodel: &ModelSpec,
+    fk: &str,
+    options: ComodelOrderOptions<'_>,
+    company: Option<(&crate::company::CompanyValues, usize)>,
+) -> Result<OrderTerms> {
+    let terms = compile_comodel_order_inner(
+        registry,
+        comodel,
+        fk,
+        options,
+        company.map(|(_, slot)| slot),
+    )?;
+    if let Some((values, _)) = company {
+        values.validate(registry, &terms.fields)?;
+    }
+    Ok(terms)
+}
+
+fn compile_comodel_order_inner(
+    registry: &Registry,
+    comodel: &ModelSpec,
+    fk: &str,
+    options: ComodelOrderOptions<'_>,
+    company_slot: Option<usize>,
+) -> Result<OrderTerms> {
+    let ComodelOrderOptions {
+        alias,
+        descending,
+        nulls,
+        lang,
+    } = options;
     crate::validate_language(lang)?;
     let coorder = comodel.order.trim();
     let coterms = match parse_order(coorder) {
@@ -649,6 +798,7 @@ pub fn compile_comodel_order(
             ),
         )],
         lang,
+        company_slot,
     };
     let table = Table {
         model: comodel,

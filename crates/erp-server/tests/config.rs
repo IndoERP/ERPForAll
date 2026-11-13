@@ -436,3 +436,270 @@ fn startup_limits_charge_each_configured_allowance_against_exact_soft_cap() {
         );
     }
 }
+#[test]
+fn attachments_default_to_a_local_store_next_to_the_configuration() {
+    let (dir, text) = fixture();
+    let path = dir.path().join("server.toml");
+    fs::write(&path, &text).unwrap();
+    let config = ServerConfig::load(&path).unwrap();
+    let parsed: toml::Value = toml::from_str(config.attachments_toml()).unwrap();
+    let store = &parsed["attachments"]["stores"]["main"];
+    assert_eq!(parsed["attachments"]["write_store"].as_str(), Some("main"));
+    assert_eq!(store["kind"].as_str(), Some("local"));
+    assert_eq!(
+        store["path"].as_str().map(std::path::Path::new),
+        Some(dir.path().join("attachments").as_path())
+    );
+    // a table the operator wrote is used as it is, and its keys are the blob crate's to judge
+    let own = format!(
+        "{text}[attachments]\nwrite_store='disk'\n[attachments.stores.disk]\nkind='local'\npath='/srv/erp-files'\n"
+    );
+    fs::write(&path, &own).unwrap();
+    let config = ServerConfig::load(&path).unwrap();
+    assert_eq!(config.attachments_toml(), own);
+}
+
+#[test]
+fn audit_reader_configuration_accepts_only_a_distinct_protected_endpoint() {
+    let (dir, text) = fixture();
+    let path = dir.path().join("server.toml");
+    fs::write(&path, &text).unwrap();
+    let initial = ServerConfig::load(&path).unwrap();
+    assert!(initial.configured_audit_reader_connection().is_none());
+    assert_eq!(initial.request_pool_size(), 8);
+    let digest = erp_orm::node::SectionDigest::of(&initial).unwrap();
+    let reader = dir.path().join("reader-url");
+    fs::write(
+        &reader,
+        "postgresql://audit_reader:reader-canary@127.0.0.1:5548/erpforall_human\n",
+    )
+    .unwrap();
+    fs::set_permissions(&reader, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::write(
+        &path,
+        format!("{text}audit_reader_database_url_file='reader-url'\n"),
+    )
+    .unwrap();
+    let config = ServerConfig::load(&path).unwrap();
+    assert_eq!(
+        config
+            .configured_audit_reader_connection()
+            .unwrap()
+            .get_user(),
+        Some("audit_reader")
+    );
+    assert_eq!(config.request_pool_size(), 7);
+    assert!(!format!("{config:?}").contains("reader-canary"));
+    assert_eq!(
+        digest.digest(),
+        erp_orm::node::SectionDigest::of(&config).unwrap().digest()
+    );
+    for url in [
+        "postgresql://runtime:reader-canary@127.0.0.1:5548/erpforall_human",
+        "postgresql://owner:reader-canary@127.0.0.1:5548/erpforall_human",
+        "postgresql://audit_reader:reader-canary@127.0.0.1:5549/erpforall_human",
+        "postgresql://audit_reader:reader-canary@localhost:5548/erpforall_human",
+        "postgresql://audit_reader:reader-canary@127.0.0.1:5548/other",
+        "reader-canary",
+        "",
+    ] {
+        fs::write(&reader, url).unwrap();
+        let error = ServerConfig::load(&path).unwrap_err();
+        assert!(matches!(
+            error,
+            erp_server::config::ConfigError::AuditReaderConnection
+        ));
+        assert!(!format!("{error:?}").contains("reader-canary"));
+        assert_eq!(
+            error.to_string(),
+            "audit reader requires a protected connection to the same database with a distinct role"
+        );
+    }
+}
+
+#[test]
+fn audit_reader_configuration_refuses_unprotected_or_mistyped_input() {
+    let (dir, text) = fixture();
+    let path = dir.path().join("server.toml");
+    let reader = dir.path().join("reader-url");
+    fs::write(
+        &reader,
+        "postgresql://audit_reader:reader-canary@127.0.0.1:5548/erpforall_human",
+    )
+    .unwrap();
+    fs::set_permissions(&reader, fs::Permissions::from_mode(0o644)).unwrap();
+    fs::write(
+        &path,
+        format!("{text}audit_reader_database_url_file='reader-url'\n"),
+    )
+    .unwrap();
+    let error = ServerConfig::load(&path).unwrap_err();
+    assert!(matches!(
+        error,
+        erp_server::config::ConfigError::AuditReaderConnection
+    ));
+    assert_eq!(
+        error.to_string(),
+        "audit reader requires a protected connection to the same database with a distinct role"
+    );
+    fs::set_permissions(&reader, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::rename(&reader, dir.path().join("actual-reader-url")).unwrap();
+    symlink("actual-reader-url", &reader).unwrap();
+    let error = ServerConfig::load(&path).unwrap_err();
+    assert!(matches!(
+        error,
+        erp_server::config::ConfigError::AuditReaderConnection
+    ));
+    assert_eq!(
+        error.to_string(),
+        "audit reader requires a protected connection to the same database with a distinct role"
+    );
+    for bytes in [vec![b'x'; 4097], vec![0xff], Vec::new()] {
+        fs::write(dir.path().join("actual-reader-url"), bytes).unwrap();
+        // Keep testing the protected-file reader through a regular path, not the symlink.
+        fs::write(
+            &path,
+            format!("{text}audit_reader_database_url_file='actual-reader-url'\n"),
+        )
+        .unwrap();
+        let error = ServerConfig::load(&path).unwrap_err();
+        assert!(matches!(
+            error,
+            erp_server::config::ConfigError::AuditReaderConnection
+        ));
+        assert_eq!(
+            error.to_string(),
+            "audit reader requires a protected connection to the same database with a distinct role"
+        );
+    }
+    fs::write(&path, format!("{text}audit_reader_database_url_file=3\n")).unwrap();
+    let error = ServerConfig::load(&path).unwrap_err();
+    assert!(matches!(error, erp_server::config::ConfigError::Invalid));
+    assert_eq!(
+        error.to_string(),
+        "server configuration or protected secret file is invalid"
+    );
+}
+
+#[test]
+fn audit_reader_configuration_refuses_heartbeat_role_reuse() {
+    let (dir, text) = fixture();
+    let path = dir.path().join("server.toml");
+    for name in ["node-url", "reader-url"] {
+        let secret = dir.path().join(name);
+        fs::write(
+            &secret,
+            "postgresql://node:reader-canary@127.0.0.1:5548/erpforall_human",
+        )
+        .unwrap();
+        fs::set_permissions(&secret, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    fs::write(
+        &path,
+        format!(
+            "{text}node_database_url_file='node-url'\naudit_reader_database_url_file='reader-url'\n"
+        ),
+    )
+    .unwrap();
+    let error = ServerConfig::load(&path).unwrap_err();
+    assert!(matches!(
+        error,
+        erp_server::config::ConfigError::AuditReaderConnection
+    ));
+    assert_eq!(
+        error.to_string(),
+        "audit reader requires a protected connection to the same database with a distinct role"
+    );
+}
+
+#[test]
+fn read_audit_policy_configuration_is_strict_and_additive() {
+    use erp_rpc::ReadAuditPolicy;
+    let (dir, text) = fixture();
+    let path = dir.path().join("server.toml");
+    fs::write(&path, format!("{text}audit_read_policy=true\n")).unwrap();
+    let error = ServerConfig::load(&path).unwrap_err();
+    assert!(matches!(
+        error,
+        erp_server::config::ConfigError::AuditReadPolicy(_)
+    ));
+    assert_eq!(error.to_string(), "audit_read_policy must be a table");
+    for (suffix, want) in [
+        ("", ReadAuditPolicy::default()),
+        (
+            "[audit_read_policy]\nall_users=false\n",
+            ReadAuditPolicy::default(),
+        ),
+        (
+            "[audit_read_policy]\nuser_groups=[]\n",
+            ReadAuditPolicy::default(),
+        ),
+        (
+            "[audit_read_policy]\nall_users=true\n",
+            ReadAuditPolicy::all_users(),
+        ),
+        (
+            "[audit_read_policy]\nuser_groups=['base.group_user']\n",
+            ReadAuditPolicy::user_groups(&["base.group_user"]).unwrap(),
+        ),
+    ] {
+        fs::write(&path, format!("{text}{suffix}")).unwrap();
+        assert_eq!(
+            ServerConfig::load(&path).unwrap().read_audit_policy(),
+            &want
+        );
+    }
+    for suffix in [
+        "all_users=false\nuser_groups=[]\n",
+        "all_users=true\nuser_groups=['base.group_user']\n",
+        "",
+    ] {
+        fs::write(&path, format!("{text}[audit_read_policy]\n{suffix}")).unwrap();
+        let error = ServerConfig::load(&path).unwrap_err();
+        assert!(matches!(
+            error,
+            erp_server::config::ConfigError::AuditReadPolicy(_)
+        ));
+        assert_eq!(
+            error.to_string(),
+            "audit_read_policy requires exactly one of all_users or user_groups"
+        );
+    }
+    for (suffix, message) in [
+        ("unknown=true\n", "audit_read_policy contains unknown keys"),
+        (
+            "all_users='true'\n",
+            "audit_read_policy.all_users must be a boolean",
+        ),
+        (
+            "user_groups='base.group_user'\n",
+            "audit_read_policy.user_groups must be a list of positive group XML IDs",
+        ),
+        (
+            "user_groups=[1]\n",
+            "audit_read_policy.user_groups must be a list of positive group XML IDs",
+        ),
+    ] {
+        fs::write(&path, format!("{text}[audit_read_policy]\n{suffix}")).unwrap();
+        let error = ServerConfig::load(&path).unwrap_err();
+        assert!(matches!(
+            error,
+            erp_server::config::ConfigError::AuditReadPolicy(_)
+        ));
+        assert_eq!(error.to_string(), message);
+    }
+    fs::write(
+        &path,
+        format!("{text}[audit_read_policy]\nuser_groups=['!base.group_user']\n"),
+    )
+    .unwrap();
+    let error = ServerConfig::load(&path).unwrap_err();
+    assert!(matches!(
+        error,
+        erp_server::config::ConfigError::AuditReadPolicy(_)
+    ));
+    assert_eq!(
+        error.to_string(),
+        "audit_read_policy.user_groups must contain positive qualified group XML IDs without expression syntax (maximum 256 UTF-8 bytes each)"
+    );
+}

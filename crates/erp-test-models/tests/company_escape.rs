@@ -18,7 +18,7 @@ use erp_orm::{
     PrincipalBuilder, QualifiedXmlId, Resolution, Transaction, UpsertCall, UserId,
 };
 use erp_registry::{Registry, RegistryBuilder};
-use erp_sdk::{Cell, Domain, RawVals};
+use erp_sdk::{Cell, Command, Domain, RawVals, RecId};
 use erp_security::company_access::generate;
 use erp_security::rows::{GroupRow, Implication, PolicyRows, RuleId, RuleRow};
 use erp_security::snapshot::Compiler;
@@ -27,6 +27,7 @@ use erp_testkit::Harness;
 
 const DOC: &str = "test_company_escape.doc";
 const PLAIN: &str = "test_company_escape.plain";
+const MEMBER: &str = "test_company_escape.member";
 const B: i64 = 2;
 const F: i64 = 4;
 const GROUP: i64 = 1;
@@ -90,6 +91,12 @@ fn rows(registry: &Registry) -> PolicyRows {
             );
         id += 2;
     }
+    // companies are read by the many2many writes of `test_company_escape.member`
+    builder = builder.rule(
+        RuleRow::new(RuleId::new(id).unwrap(), "perm company", "res.company", "r")
+            .unwrap()
+            .with_group(gid(GROUP)),
+    );
     builder.build().unwrap()
 }
 
@@ -572,5 +579,70 @@ async fn escape_write_checks_keep_allowed_updates_and_direct_escape_controls() {
         "Uh-oh! Looks like you have stumbled upon some top-secret records.\n\nSorry, demo (id=2) doesn't have 'write' access to:\n- Escape over a plain boolean (test_company_escape.plain)\n\nIf you really, really need access, perhaps you can win over your friendly administrator with a batch of freshly baked cookies.\n\nThis seems to be a multi-company issue, you might be able to access the record by switching to the company: F."
     );
     assert!(tx.is_poisoned());
+    tx.rollback().await.unwrap();
+}
+
+fn member(name: &str, note: &str, company: i64) -> RawVals {
+    RawVals::new()
+        .set_cell("name", Cell::Str(name.into()))
+        .set_cell("note", Cell::Str(note.into()))
+        .set_commands(
+            "company_ids",
+            [Command::set([RecId::from_real(company).unwrap()])],
+        )
+}
+
+/// A record created in a company that is not active is
+/// still refused, by that read.
+#[tokio::test]
+async fn an_inverse_reads_the_new_record_after_its_many2many_values() {
+    let (h, policy) = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed_companies(&mut tx).await;
+    tx.commit().await.unwrap();
+
+    let mut tx = h
+        .orm()
+        .begin_opts(BeginOptions::for_principal(principal(&*policy, &[B])))
+        .await
+        .unwrap();
+    let created = tx
+        .env()
+        .records(MEMBER)
+        .unwrap()
+        .create(&mut tx, vec![member("in B", "kept", B)])
+        .await
+        .unwrap();
+    let read = created
+        .read(&mut tx, &["stored_note", "company_ids"])
+        .await
+        .unwrap();
+    assert_eq!(
+        read[0].get("stored_note"),
+        Some(&erp_fields::Value::Str("kept".into()))
+    );
+    assert_eq!(
+        read[0].get("company_ids"),
+        Some(&erp_fields::Value::list([erp_fields::Value::Int(B)]))
+    );
+    tx.commit().await.unwrap();
+
+    let mut tx = h
+        .orm()
+        .begin_opts(BeginOptions::for_principal(principal(&*policy, &[B])))
+        .await
+        .unwrap();
+    let err = tx
+        .env()
+        .records(MEMBER)
+        .unwrap()
+        .create(&mut tx, vec![member("in F", "lost", F)])
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), erp_fields::ErrorKind::Access);
+    assert_eq!(
+        err.message(),
+        "Uh-oh! Looks like you have stumbled upon some top-secret records.\n\nSorry, demo (id=2) doesn't have 'read' access to:\n- Member restricted through its companies (test_company_escape.member)\n\nIf you really, really need access, perhaps you can win over your friendly administrator with a batch of freshly baked cookies.\n\nThis seems to be a multi-company issue, you might be able to access the record by switching to the company: F."
+    );
     tx.rollback().await.unwrap();
 }

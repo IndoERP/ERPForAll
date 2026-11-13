@@ -386,7 +386,7 @@ async fn resolve_condition(
             .filter_map(|i| erp_fields::RecId::from_real(*i))
             .collect();
         let su = env
-            .sudo(true)
+            .engine_sudo()
             .with_context([("active_test", erp_fields::Value::Bool(false))]);
         let paths: Vec<String> = tx
             .peek_cells(&su, comodel.id, path, &ids)
@@ -494,7 +494,7 @@ async fn expand(
     start: Vec<i64>,
 ) -> Result<Vec<i64>> {
     let su = Records::empty(
-        env.sudo(true)
+        env.engine_sudo()
             .with_context([("active_test", erp_fields::Value::Bool(false))]),
         comodel.id,
     );

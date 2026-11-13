@@ -472,7 +472,7 @@ async fn genuine_base_1_1_category_upgrade_preserves_data_and_rolls_back_late_fa
             .await
             .unwrap()
             .get::<_, String>(0),
-        "1.8.0"
+        "1.9.0"
     );
     succeeded(
         run(current_bin, &args, &db),

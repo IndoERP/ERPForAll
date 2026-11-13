@@ -94,7 +94,7 @@ fn record_values_are_redacted_by_field_and_x2many_recurses() {
     let kwargs = json(
         r#"{"vals":{"name":"visible","restricted_note":"CANARY-1","nope":"CANARY-2",
             "lines":[[0,0,{"label":"l","only_admin":"CANARY-3","ghost":1}],
-                     [1,7,{"only_admin":"CANARY-4"}],[4,9],[6,0,[1,2]]]}}"#,
+                     [1,7,{"only_admin":"CANARY-4"}],[4,9],[5],[6,0,[1,2]]]}}"#,
     );
     let projected = projection(&r, "audit_digest.order", "write", &[1], &kwargs);
     let shown = text(&projected);
@@ -118,7 +118,7 @@ fn record_values_are_redacted_by_field_and_x2many_recurses() {
         "{shown}"
     );
     assert!(
-        shown.contains("[4,9]") && shown.contains("[6,0,[1,2]]"),
+        shown.contains("[4,9]") && shown.contains("[5]") && shown.contains("[6,0,[1,2]]"),
         "{shown}"
     );
 }

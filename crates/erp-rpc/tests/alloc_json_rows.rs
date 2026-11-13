@@ -1,4 +1,4 @@
-//! Allocation budget of writing a result batch as JSON (design note,
+//! Allocation budget of writing a result batch as JSON (
 //! §10): orders with 10 lines each, integers, text, floats, decimals, dates, datetimes, raw bytes,
 //! id lists, many2one labels, many2one sub-rows and indexed x2many children, written with no
 //! allocation per order, line or value; only the output buffer grows. One test in its own binary,

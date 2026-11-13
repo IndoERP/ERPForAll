@@ -13,4 +13,5 @@ data = [
     "security/ir.access.csv",
     "data/uom_guard_data.xml",
     "data/uom_data.xml",
+    "views/uom_views.xml",
 ]

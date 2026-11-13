@@ -20,4 +20,7 @@ fn declared_note_requires_name_company_and_owner() {
         note.field("internal_memo").unwrap().groups,
         Some("base.group_system")
     );
+    let rich_body = note.field("rich_body").expect("rich_body declared field");
+    assert_eq!(rich_body.ty.type_name(), "html");
+    assert!(!rich_body.required);
 }

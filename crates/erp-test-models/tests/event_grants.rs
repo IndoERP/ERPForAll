@@ -583,7 +583,8 @@ async fn publication_check_flags_every_deviation() {
             "{what}: repair must pass again"
         );
     }
-    // a default ACL reaches a partition the upkeep makes later
+    // upkeep removes default ACLs from new event partitions. The
+    // publication predicate must still detect a direct PUBLIC grant applied afterwards.
     owner
         .batch_execute(
             "ALTER DEFAULT PRIVILEGES IN SCHEMA erp_event GRANT SELECT ON TABLES TO PUBLIC",
@@ -595,11 +596,30 @@ async fn publication_check_flags_every_deviation() {
     tx.batch(&format!("DROP TABLE erp_event.{last}"))
         .await
         .unwrap();
-    assert_eq!(tx.ensure_event_partitions().await.unwrap(), vec![last]);
+    assert_eq!(
+        tx.ensure_event_partitions().await.unwrap(),
+        vec![last.clone()]
+    );
     tx.commit().await.unwrap();
     assert!(
+        !event_term_flags(&f.runtime).await,
+        "new partition must discard default ACLs"
+    );
+    owner
+        .batch_execute(&format!("GRANT SELECT ON erp_event.{last} TO PUBLIC"))
+        .await
+        .unwrap();
+    assert!(
         event_term_flags(&f.runtime).await,
-        "default ACL on a new partition"
+        "later direct PUBLIC grant must still be flagged"
+    );
+    owner
+        .batch_execute(&format!("REVOKE SELECT ON erp_event.{last} FROM PUBLIC"))
+        .await
+        .unwrap();
+    assert!(
+        !event_term_flags(&f.runtime).await,
+        "repair must pass again"
     );
     f.h.cleanup().await.unwrap();
 }

@@ -59,13 +59,13 @@ test("confirmation serializes callbacks, retains false, and dismisses through Es
   const confirm = vi.fn(() => new Promise<boolean>(resolve => { finish = resolve; }));
   const cancel = vi.fn(); const dismiss = vi.fn();
   const handle = dialogs.confirm({ message: "Proceed?", confirm, cancel, dismiss });
-  const controls = handle.dialog.querySelectorAll<HTMLButtonElement>(".message-dialog-footer button");
-  controls[0]!.click(); controls[0]!.click();
+  const controls = [...handle.dialog.querySelectorAll<HTMLButtonElement>(".message-dialog-footer button")];
+  controls.at(-1)!.click(); controls.at(-1)!.click();
   expect(confirm).toHaveBeenCalledTimes(1);
   expect([...controls].every(control => control.disabled)).toBe(true);
   handle.dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
   expect(dismiss).not.toHaveBeenCalled();
-  finish(false); await vi.waitFor(() => expect(controls[0]!.disabled).toBe(false));
+  finish(false); await vi.waitFor(() => expect(controls.at(-1)!.disabled).toBe(false));
   expect(handle.dialog.isConnected).toBe(true);
   handle.dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
   await expect(handle.result).resolves.toBe("dismiss");
@@ -78,7 +78,7 @@ test("confirmation serializes callbacks, retains false, and dismisses through Es
 test("confirmation rejection closes, rejects to the caller and reports once", async () => {
   const error = new Error("No access");
   const handle = dialogs.confirm({ message: "Proceed?", confirm: async () => { throw error; } });
-  handle.dialog.querySelector<HTMLButtonElement>(".message-dialog-footer button")!.click();
+  handle.dialog.querySelector<HTMLButtonElement>(".message-dialog-footer [data-default-action]")!.click();
   await expect(handle.result).rejects.toBe(error);
   expect(handle.dialog.isConnected).toBe(false); expect(reported).toEqual([error]);
 });

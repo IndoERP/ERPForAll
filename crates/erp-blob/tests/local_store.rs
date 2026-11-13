@@ -65,7 +65,7 @@ async fn directories_are_0700_and_files_0440() {
 }
 
 #[tokio::test]
-async fn promote_leaves_one_name_and_no_part_files() {
+async fn promote_retains_staging_until_explicit_cleanup() {
     let dir = tempfile::tempdir().unwrap();
     let store = LocalStore::open(dir.path().join("s")).await.unwrap();
     let ns = Namespace::random().unwrap();
@@ -76,7 +76,9 @@ async fn promote_leaves_one_name_and_no_part_files() {
         .list(&format!("{}/staging", ns.as_str()), None, 10)
         .await
         .unwrap();
-    assert!(staging.is_empty(), "{staging:?}");
+    assert_eq!(staging, vec![staged.key().path()]);
+    store.delete_staged(staged.key()).await.unwrap();
+    assert!(store.root().join(key.path()).exists());
 }
 
 #[tokio::test]
@@ -86,4 +88,42 @@ async fn a_listing_prefix_cannot_leave_the_root() {
     for prefix in ["", "../x", "a/../b", "/etc"] {
         assert!(store.list(prefix, None, 10).await.is_err(), "{prefix:?}");
     }
+}
+
+#[tokio::test]
+async fn failed_receive_leaves_a_partial_for_fenced_cleanup() {
+    use erp_blob::{BlobError, StageLimits, StagingKey};
+    let dir = tempfile::tempdir().unwrap();
+    let store = LocalStore::open(dir.path().join("s")).await.unwrap();
+    let ns = Namespace::random().unwrap();
+    let key = StagingKey::new(ns.clone(), &upload_id(61)).unwrap();
+    let mut bytes: &[u8] = b"too much";
+    let error = store
+        .stage(&key, &mut bytes, StageLimits::new(2))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, BlobError::LimitExceeded { .. }));
+    assert_eq!(
+        error.to_string(),
+        "object size in bytes exceeds the limit of 2"
+    );
+    let files = store
+        .list(&format!("{}/staging", ns.as_str()), None, 10)
+        .await
+        .unwrap();
+    assert_eq!(
+        files.len(),
+        1,
+        "a recoverable partial must remain: {files:?}"
+    );
+    assert!(files[0].ends_with(".part"));
+    store.delete_staged(&key).await.unwrap();
+    store.delete_staged(&key).await.unwrap();
+    assert!(
+        store
+            .list(&format!("{}/staging", ns.as_str()), None, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }

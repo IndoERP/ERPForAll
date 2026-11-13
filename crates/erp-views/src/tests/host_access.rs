@@ -1,5 +1,5 @@
 //! Tests for the `host-access` bridge: `plan_of`, the decision step of `filter` and
-//! `FilteredArch` (GA-2 WP-B,, §5.3, §21.2).
+//! `FilteredArch` (GA-2 WP-B, §5.3, §21.2).
 //!
 //! `filter` itself needs a `GuardEvaluation`, which only a transaction can mint, so the checks
 //! after the principal check are exercised through the private `decide` step with a stand-in

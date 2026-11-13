@@ -334,19 +334,37 @@ fn a_terminal_ids_is_a_set_of_the_records_reached() {
     assert_eq!(p, [slot(PrincipalParam::Uid, false)]);
 }
 
-/// A company-dependent many2one stores a per-company jsonb: it cannot be a user-path hop yet.
+/// User paths read the current company's scalar relation, with one shared context binding.
 #[test]
-fn user_paths_refuse_company_dependent_many2ones() {
+fn user_paths_require_company_preparation_and_use_effective_ids() {
     let r = registry();
+    let users = r.model("res.users").unwrap();
+    let mut values = erp_sql::company::CompanyValues::new(1).unwrap();
+    values
+        .insert(
+            users,
+            users.field("cd_company_id").unwrap(),
+            &erp_fields::Cell::Id(77),
+        )
+        .unwrap();
     for p in ["cd_company_id", "cd_company_id.id"] {
-        let err = sql_err(&r, &cond("company_id", Operator::In, set([param(path(p))])));
-        assert_eq!(err.kind(), ErrorKind::Programming, "{err}");
+        let domain = cond("company_id", Operator::In, set([param(path(p))]));
+        let err = sql_err(&r, &domain);
+        assert_eq!(err.kind(), ErrorKind::Programming);
         assert_eq!(
             err.message(),
-            "The company-dependent many2one res.users.cd_company_id on the user path \
-             user.{p} is not supported until a later milestone"
-                .replace("{p}", p),
+            "res.users.cd_company_id: company-dependent SQL requires prepared company values"
         );
+        let compiled = erp_sql::filter::compile_where_with_company(
+            &domain,
+            &WhereContext::new(&r, r.model("t.doc").unwrap(), Unaccent::Off),
+            &values,
+        )
+        .unwrap();
+        assert!(compiled.sql.contains("$1::text::jsonb"));
+        assert!(compiled.sql.contains("$2::int8"));
+        assert_eq!(compiled.params.len(), 2);
+        assert!(!compiled.sql.contains("77"));
     }
 }
 

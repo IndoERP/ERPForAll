@@ -2,11 +2,11 @@
 import { editorEnvironment, editorOptions, editorText, type EditorEnvironment } from "./editor-types.js";
 import { ClientError } from "./transport.js";
 export type EditorCloseReason = "select" | "cancel" | "dispose";
-export interface EditorOverlayOptions { anchor: HTMLElement; content: HTMLElement; environment: EditorEnvironment; title: string; touch?: boolean; onClose?: (reason: EditorCloseReason) => void }
+export interface EditorOverlayOptions { anchor: HTMLElement; content: HTMLElement; environment: EditorEnvironment; title: string; touch?: boolean; alignTo?: HTMLElement; onClose?: (reason: EditorCloseReason) => void }
 export interface EditorOverlay { node: HTMLElement; mode: "popover" | "sheet"; close(reason?: EditorCloseReason, restoreFocus?: boolean): void; dispose(): void }
 /** Open caller-owned trusted content through the application's shared overlay services. */
 export function openEditorOverlay(options: EditorOverlayOptions): EditorOverlay {
-  editorOptions(options, ["anchor", "content", "environment", "title", "touch", "onClose"], "Editor overlay");
+  editorOptions(options, ["anchor", "content", "environment", "title", "touch", "alignTo", "onClose"], "Editor overlay");
   editorEnvironment(options.environment); editorText(options.title, "Editor overlay title");
   if (!(options.anchor instanceof HTMLElement) || !options.anchor.isConnected || !(options.content instanceof HTMLElement) || options.content.ownerDocument !== options.anchor.ownerDocument) throw new ClientError("validation", "Editor overlay requires a connected anchor and content in the same document.");
   if (options.touch !== undefined && typeof options.touch !== "boolean") throw new ClientError("validation", "Editor overlay touch must be a boolean.");
@@ -39,7 +39,7 @@ export function openEditorOverlay(options: EditorOverlayOptions): EditorOverlay 
     const dialog = options.environment.messages.dialogs.open({ title: options.title, body: options.content, size: "md", onClose: finish });
     node = dialog.dialog; node.classList.add("editor-sheet"); inner = dialog;
   } else {
-    const popover = options.environment.messages.popovers.open(options.anchor, options.content, { role: "dialog", restoreFocus: false, onClose: finish });
+    const popover = options.environment.messages.popovers.open(options.anchor, options.content, { role: "dialog", restoreFocus: false, ...(options.alignTo ? { alignTo: options.alignTo } : {}), onClose: finish });
     node = popover.node; node.classList.add("editor-popover"); node.setAttribute("aria-label", options.title); inner = popover;
   }
   removed.observe(options.anchor.ownerDocument.documentElement, { subtree: true, childList: true });

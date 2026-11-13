@@ -533,6 +533,94 @@ test("reload_on_post triggers parent form reload after message post", async () =
   chatter.dispose();
 });
 
+/// (partial: a successful thread load does not wipe an error shown by reloadForm)
+test("a successful thread load does not clear an error shown by reloadForm", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const reloadForm = vi.fn(async () => {
+    throw new Error("Form reload failed: access denied");
+  });
+  let storeFetchCount = 0;
+  const rpc = new RpcClient(async (path) => {
+    if (String(path).endsWith("/mail.store/store_fetch")) {
+      storeFetchCount++;
+      if (storeFetchCount > 1) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      return new Response(
+        JSON.stringify({
+          store: answerPayload(10, {
+            "res.partner": [],
+            "mail.message": [],
+          }),
+          topics: [
+            { topic: "schema", ok: true, data: JSON.parse(TEST_SCHEMA) },
+            {
+              topic: "thread",
+              ok: true,
+              data: {
+                thread: { model: "res.partner", id: 42, can_post: true },
+                messages: { model: "res.partner", id: 42, message_ids: [], has_more_before: false, has_more_after: false },
+              },
+            },
+          ],
+        }),
+        { headers: { "Content-Type": "application/json" } }
+      );
+    }
+    if (String(path).endsWith("/res.partner/thread_post")) {
+      return new Response(
+        JSON.stringify({
+          message_id: 402,
+          replayed: false,
+          notified_partner_ids: [],
+          store: answerPayload(20, {
+            "res.partner": [{ id: 1, name: "Alice" }],
+            "mail.message": [
+              {
+                id: 402,
+                body: "<p>Message</p>",
+                message_type: "comment",
+                date: "2026-11-10 13:00:00",
+                author_id: 1,
+              },
+            ],
+          }),
+        }),
+        { headers: { "Content-Type": "application/json" } }
+      );
+    }
+    throw new Error(`Unexpected path: ${path}`);
+  }, () => {});
+
+  const chatter = new Chatter({
+    host,
+    model: "res.partner",
+    recordId: 42,
+    rpc,
+    reloadOnPost: true,
+    reloadForm,
+  });
+
+  await flushAsync();
+
+  const draft = host.querySelector<HTMLTextAreaElement>("textarea.erp-mail-draft");
+  draft!.value = "Message";
+  draft!.dispatchEvent(new Event("input", { bubbles: true }));
+
+  const sendBtn = host.querySelector<HTMLButtonElement>("button.erp-mail-send");
+  sendBtn?.click();
+
+  await flushAsync();
+  await new Promise((r) => setTimeout(r, 50));
+
+  const errorEl = host.querySelector(".erp-mail-chatter-error .erp-mail-error-message");
+  expect(errorEl).not.toBeNull();
+  expect(errorEl?.textContent).toContain("Form reload failed: access denied");
+
+  chatter.dispose();
+});
+
 /// (partial: post error renders failed pending message row with retry and discard)
 test("post error renders failed pending message row with retry and discard", async () => {
   const rpc = new RpcClient(async (path) => {
@@ -840,6 +928,7 @@ test("AT-02 and AT-03: files panel lists grouped attachments with duplicate coun
     model: "res.partner",
     recordId: 42,
     rpc,
+    confirm: async () => true,
   });
 
   await flushAsync();
@@ -862,7 +951,7 @@ test("AT-02 and AT-03: files panel lists grouped attachments with duplicate coun
   // Group 2: photo has thumbnail
   const thumb = fileGroups[1]?.querySelector<HTMLImageElement>(".erp-mail-chatter-file-thumbnail");
   expect(thumb).not.toBeNull();
-  expect(thumb?.getAttribute("src")).toBe("/web/content/503");
+  expect(thumb?.getAttribute("src")).toBe("/erp/content/503");
 
   // "Attach files" button triggers record file input
   const attachFilesBtn = filesPanel.querySelector<HTMLButtonElement>(".erp-mail-chatter-attach-files-btn")!;
@@ -1022,7 +1111,8 @@ test("composer paperclip uploads through thread_upload and the post carries the 
   const mockFile = new File(["file content"], "my_upload.txt", { type: "text/plain" });
   Object.defineProperty(fileInput, "files", { value: [mockFile], configurable: true });
   fileInput.dispatchEvent(new Event("change"));
-  await flushAsync();
+  // The file is read by a FileReader on its own timer: wait for the effect, not for a fixed delay.
+  await vi.waitFor(() => expect(composerEl.querySelectorAll(".erp-mail-attachment-chip")).toHaveLength(1));
 
   const uploadCall = calls.find((c) => c.path.endsWith("/res.partner/thread_upload"));
   expect(uploadCall?.body).toEqual({
@@ -1078,8 +1168,9 @@ test("a refused composer upload shows the server message inline and adds no chip
   const fileInput = composerEl.querySelector<HTMLInputElement>(".erp-mail-file-input")!;
   Object.defineProperty(fileInput, "files", { value: [new File(["x"], "big.bin")], configurable: true });
   fileInput.dispatchEvent(new Event("change"));
-  await flushAsync();
-  expect(composerEl.textContent).toContain(refusal);
+  // the file is read on its own timer: wait for the visible effect, not for a fixed time (a slower host
+  // had not finished the read after 20 ms)
+  await vi.waitFor(() => expect(composerEl.textContent).toContain(refusal));
   expect(composerEl.querySelectorAll(".erp-mail-attachment-chip")).toHaveLength(0);
   chatter.dispose();
 });
@@ -1122,7 +1213,7 @@ test("the attachments panel uploads through thread_attach and shows the new file
   const input = host.querySelector<HTMLInputElement>(".erp-mail-chatter-file-input")!;
   Object.defineProperty(input, "files", { value: [new File(["hello world"], "hello.txt", { type: "text/plain" })], configurable: true });
   input.dispatchEvent(new Event("change"));
-  await flushAsync();
+  await vi.waitFor(() => expect(host.querySelector(".erp-mail-chatter-attachment-count")?.textContent).toBe("1"));
   const attachCall = calls.find((c) => c.path.endsWith("/res.partner/thread_attach"));
   expect(attachCall?.body).toEqual({ ids: [42], name: "hello.txt", mimetype: "text/plain", data: "aGVsbG8gd29ybGQ=" });
   expectNoGenericCreate(calls);
@@ -1288,3 +1379,123 @@ test("followers and thread failures render inline and never call the global erro
   expect(reported).toEqual([]);
   second.dispose();
 });
+
+/// (partial: follower count must be a safe integer; an invalid count fails loudly without displaying NaN)
+test("follower count must be a safe integer and fails loudly without showing NaN", async () => {
+  const fx = followerServer({ self: false });
+  const originalCall = fx.rpc.call.bind(fx.rpc);
+  fx.rpc.call = async (model, method, args, opts) => {
+    if (model === "mail.store" && method === "store_fetch") {
+      const res = (await originalCall(model, method, args, opts)) as Record<string, unknown>;
+      const topics = (res["topics"] as { topic: string; data?: { followers?: Record<string, unknown> } }[]).map((t) => {
+        if (t.topic === "thread" && t.data?.followers) {
+          const { count, ...rest } = t.data.followers as { count?: unknown };
+          return { ...t, data: { ...t.data, followers: rest } };
+        }
+        return t;
+      });
+      return { ...res, topics };
+    }
+    return originalCall(model, method, args, opts);
+  };
+  const chatter = new Chatter({ host, model: "res.partner", recordId: 42, rpc: fx.rpc, store: newStore(), uid: 5 });
+  await flushAsync();
+  const button = host.querySelector<HTMLButtonElement>(".erp-mail-followers-button")!;
+  expect(button.textContent).not.toContain("NaN");
+  expect(button.getAttribute("aria-label")).not.toContain("NaN");
+  button.click();
+  await flushAsync();
+  const alert = host.querySelector<HTMLElement>(".erp-mail-followers-error")!;
+  expect(alert.getAttribute("role")).toBe("alert");
+  expect(alert.textContent).toContain("invalid follower count");
+  chatter.dispose();
+});
+
+/// (partial: follower change preserves focus in the popover and falls back when removed)
+test("follower change preserves focus in popover and falls back to toggle when follower removed", async () => {
+  const fx = followerServer({ self: true });
+  const chatter = new Chatter({ host, model: "res.partner", recordId: 42, rpc: fx.rpc, store: newStore(), uid: 5 });
+  await flushAsync();
+  const button = host.querySelector<HTMLButtonElement>(".erp-mail-followers-button")!;
+  button.click();
+  await flushAsync();
+  const popover = host.querySelector<HTMLElement>(".erp-mail-followers-popover")!;
+  const toggle = popover.querySelector<HTMLButtonElement>(".erp-mail-followers-toggle")!;
+  toggle.focus();
+  expect(document.activeElement).toBe(toggle);
+  toggle.click();
+  await flushAsync();
+  expect(document.activeElement).toBe(popover.querySelector(".erp-mail-followers-toggle"));
+
+  const remove = popover.querySelector<HTMLButtonElement>('[aria-label="Remove follower Bob Brown"]')!;
+  remove.focus();
+  expect(document.activeElement).toBe(remove);
+  remove.click();
+  await flushAsync();
+  expect(document.activeElement).not.toBe(document.body);
+  expect(popover.contains(document.activeElement)).toBe(true);
+
+  popover.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  expect(popover.hidden).toBe(true);
+  chatter.dispose();
+});
+
+/// (partial: chatters without explicit store scope default store per host element)
+test("chatters without explicit store scope default store per host element", async () => {
+  const host1 = document.createElement("div");
+  const host2 = document.createElement("div");
+  document.body.append(host1, host2);
+  const errs1: unknown[] = [];
+  const errs2: unknown[] = [];
+  const fx1 = followerServer({ self: false });
+  const fx2 = followerServer({ self: false });
+
+  const chatter1 = new Chatter({ host: host1, model: "res.partner", recordId: 42, rpc: fx1.rpc, reportError: (e) => errs1.push(e) });
+  const chatter2 = new Chatter({ host: host2, model: "res.partner", recordId: 43, rpc: fx2.rpc, reportError: (e) => errs2.push(e) });
+  await flushAsync();
+
+  expect(chatter1.store).not.toBe(chatter2.store);
+  chatter2.store?.applyAnswer(JSON.stringify({ xmax: 99, records: { "unknown.model": [{ id: 1 }] } }));
+  expect(errs2.length).toBe(1);
+  expect(errs1.length).toBe(0);
+
+  chatter1.dispose();
+  chatter2.dispose();
+  host1.remove();
+  host2.remove();
+});
+
+/// (partial: inline chatter error is cleared after a subsequent successful action)
+test("inline chatter error is cleared after a subsequent successful action", async () => {
+  let failFirst = true;
+  const calls: Record<string, unknown>[] = [];
+  const rpc = new RpcClient(async (path, init) => {
+    const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+    const p = String(path);
+    calls.push(body);
+    if (p.endsWith("/mail.store/store_fetch")) {
+      if (failFirst) {
+        throw new Error("Temporary network glitch");
+      }
+      return new Response(JSON.stringify({
+        store: followerPayload(10, {}),
+        topics: [
+          { topic: "schema", ok: true, data: FOLLOWER_SCHEMA },
+          { topic: "thread", ok: true, data: { messages: { message_ids: [], has_more_before: false } } },
+        ],
+      }), { headers: { "Content-Type": "application/json" } });
+    }
+    return new Response(JSON.stringify({}), { headers: { "Content-Type": "application/json" } });
+  }, () => {});
+
+  const chatter = new Chatter({ host, model: "res.partner", recordId: 42, rpc, store: newStore() });
+  await flushAsync();
+  expect(host.querySelector(".erp-mail-chatter-error")).not.toBeNull();
+
+  failFirst = false;
+  await chatter.refresh();
+  await flushAsync();
+  expect(host.querySelector(".erp-mail-chatter-error")).toBeNull();
+  chatter.dispose();
+});
+
