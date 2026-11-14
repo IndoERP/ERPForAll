@@ -18,7 +18,9 @@
 //!
 //! Not seen: a `SELECT` calling a function that writes, and a trigger writing another table (the
 //! same limit as the isolated scopes' classifier, `needs_isolation`). Code that installs such a
-//! trigger or calls such a function invalidates what it changed (`Transaction::invalidate_model`).
+//! trigger or calls such a function notifies changed scalar columns with `Records::modified_external` after settling prior ORM work,
+//! or invalidates what it changed (`Transaction::invalidate_model`) when no dependency propagation
+//! is needed.
 
 use erp_fields::FieldType;
 use erp_registry::{ModelId, Registry};

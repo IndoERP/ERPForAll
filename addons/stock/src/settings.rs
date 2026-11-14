@@ -9,6 +9,42 @@ const READ: &[&str] = &["stock.group_stock_manager", ADMIN];
 const MONTH: &str = "stock.annual_inventory_month";
 const DAY: &str = "stock.annual_inventory_day";
 
+/// One native policy snapshot uses exactly these declared, global keys.
+pub(super) const QUANT_KEYS: [&str; 8] = [
+    "stock.quant_lock_timeout_ms",
+    "stock.quant_max_attempts",
+    "stock.quant_retry_base_ms",
+    "stock.quant_retry_cap_ms",
+    "stock.quant_idle_transaction_timeout_ms",
+    "stock.quant_tcp_keepalives_idle_s",
+    "stock.quant_tcp_keepalives_interval_s",
+    "stock.quant_tcp_keepalives_count",
+];
+
+fn quant_declarations() -> Result<Vec<SettingDecl>> {
+    // 4/D9: operational defaults, not milestone-end calibration measurements.
+    [
+        (QUANT_KEYS[0], "Stock lock wait (milliseconds)", 1000, (10, 10000)),
+        (QUANT_KEYS[1], "Stock operation attempts", 5, (1, 5)),
+        (QUANT_KEYS[2], "Stock retry base delay (milliseconds)", 50, (1, 2000)),
+        (QUANT_KEYS[3], "Stock retry delay cap (milliseconds)", 2000, (1, 10000)),
+        (QUANT_KEYS[4], "Stock idle transaction limit (milliseconds)", 60000, (1000, 600000)),
+        (QUANT_KEYS[5], "Stock TCP keepalive idle (seconds)", 30, (1, 300)),
+        (QUANT_KEYS[6], "Stock TCP keepalive interval (seconds)", 10, (1, 60)),
+        (QUANT_KEYS[7], "Stock TCP keepalive probes", 3, (1, 10)),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(sequence, (key, label, default, bounds))| {
+        SettingDecl::integer(key, label, ScopeKind::Global, default, bounds)?
+            .block("Stock operations")?
+            .sequence(u32::try_from(sequence).map_err(|_| Error::programming("Stock policy sequence overflow."))? + 60)
+            .help(&format!("Default: {default}. Allowed: {} to {}. Shared by all companies; each native stock operation snapshots these limits before it begins.", bounds.0, bounds.1))?
+            .access(&["stock.group_stock_user", ADMIN], &[ADMIN])
+    })
+    .collect()
+}
+
 fn company(decl: SettingDecl, block: &str, sequence: u32, help: &str) -> Result<SettingDecl> {
     decl.block(block)?
         .sequence(sequence)
@@ -17,7 +53,7 @@ fn company(decl: SettingDecl, block: &str, sequence: u32, help: &str) -> Result<
 }
 fn declarations() -> Result<Vec<SettingDecl>> {
     use ScopeKind::{Company, Global};
-    Ok(vec![
+    let mut declarations = vec![
         company(SettingDecl::selection("stock.picking_policy", "Delivery policy", Company, "direct",
             &[("direct", "Send available items"), ("one", "Wait for the complete order")])?,
             "Shipping", 10, "Saved for this company. Operation types do not use this value yet.")?,
@@ -40,7 +76,9 @@ fn declarations() -> Result<Vec<SettingDecl>> {
             .validator(separator)?.block("Barcode")?.sequence(50)
             .help("Default: comma. Allowed: 1 to 16 UTF-8 bytes without control characters. Shared by all companies. Saved only; barcode aggregation does not use this value yet.")?
             .access(&[ADMIN], &[ADMIN])?,
-    ])
+    ];
+    declarations.extend(quant_declarations()?);
+    Ok(declarations)
 }
 fn separator(value: &Value) -> Result<()> {
     match value {
@@ -78,11 +116,23 @@ fn annual_date(values: &BTreeMap<String, Value>) -> Result<()> {
     }
 }
 fn groups() -> Result<Vec<SettingGroupDecl>> {
-    Ok(vec![SettingGroupDecl::new(
-        "stock.annual_inventory_date",
-        &[MONTH, DAY],
-        annual_date,
-    )?])
+    Ok(vec![
+        SettingGroupDecl::new("stock.annual_inventory_date", &[MONTH, DAY], annual_date)?,
+        SettingGroupDecl::new(
+            "stock.quant_retry_backoff",
+            &[QUANT_KEYS[2], QUANT_KEYS[3]],
+            quant_backoff,
+        )?,
+    ])
+}
+
+fn quant_backoff(values: &BTreeMap<String, Value>) -> Result<()> {
+    match (values.get(QUANT_KEYS[2]), values.get(QUANT_KEYS[3])) {
+        (Some(Value::Int(base)), Some(Value::Int(cap))) if base <= cap => Ok(()),
+        _ => Err(Error::validation(
+            "stock.quant_retry_base_ms cannot exceed stock.quant_retry_cap_ms.",
+        )),
+    }
 }
 erp_sdk::setting_declarations!(declarations);
 erp_sdk::setting_groups!(groups);
@@ -114,6 +164,7 @@ impl StockSettings {
             "stock.barcode_separator",
         ]
         .into_iter()
+        .chain(QUANT_KEYS)
         .map(str::to_owned)
         .collect();
         let mut keys = std::collections::BTreeSet::new();
@@ -130,14 +181,15 @@ impl StockSettings {
             .filter(|entry| entry.addon.name == "stock")
             .map(|entry| (entry.declarations)())
             .collect::<Result<Vec<_>>>()?;
-        let date_groups = groups
-            .iter()
-            .flatten()
-            .filter(|group| group.key() == "stock.annual_inventory_date")
-            .count();
-        if keys != expected || date_groups != 1 {
+        let group_keys: std::collections::BTreeSet<_> =
+            groups.iter().flatten().map(|group| group.key()).collect();
+        let expected_groups = std::collections::BTreeSet::from([
+            "stock.annual_inventory_date",
+            "stock.quant_retry_backoff",
+        ]);
+        if keys != expected || group_keys != expected_groups {
             return Err(Error::programming(
-                "Inventory settings declarations or the annual-date group are missing from erp-addon-stock.",
+                "Inventory settings declarations or validation groups are missing from erp-addon-stock.",
             ));
         }
         crate::settings_panel::require_linked()?;

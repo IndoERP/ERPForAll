@@ -29,6 +29,7 @@
               <field name="code"/>
               <field name="account_type"/>
               <field name="reconcile"/>
+              <field name="tax_ids" widget="many2many_tags"/>
               <field name="non_trade"/>
               <field name="currency_id"/>
             </group>
@@ -205,5 +206,15 @@ Fiscal periods: read-only; rows come from ensure_periods and change only
     <field name="view_mode">list,form</field>
     <field name="view_id" ref="view_account_fiscal_period_list"/>
     <field name="search_view_id" ref="view_account_fiscal_period_search"/>
+  </record>
+  <record id="view_account_code_mapping_list" model="ir.ui.view">
+    <field name="name">account.code.mapping.list</field>
+    <field name="model">account.code.mapping</field>
+    <field name="arch" type="xml"><list><field name="company_id"/><field name="code"/></list></field>
+  </record>
+  <record id="view_account_code_mapping_form" model="ir.ui.view">
+    <field name="name">account.code.mapping.form</field>
+    <field name="model">account.code.mapping</field>
+    <field name="arch" type="xml"><form><group><field name="account_id"/><field name="company_id"/><field name="code"/></group></form></field>
   </record>
 </erp>

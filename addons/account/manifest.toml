@@ -13,9 +13,11 @@ exact_only = true
 data = [
     "security/account_security.xml",
     "data/account_data.xml",
+    "views/product_tax_views.xml",
     "views/account_views.xml",
     "views/account_journal_views.xml",
     "views/account_tax_views.xml",
+    "views/res_company_views.xml",
     "views/account_menus.xml",
     "security/ir.access.csv",
 ]

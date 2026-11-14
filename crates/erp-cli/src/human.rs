@@ -493,7 +493,11 @@ fn database_job_source(
 }
 
 /// Fixed native attachment handlers use this minimal owner ORM. Package/Wasm methods,
-/// constraints, computes, unlink hooks and request policy are deliberately not installed.
+/// constraints, unlink hooks and request policy are deliberately not installed: no package code
+/// runs with the owner role. The served ORM's computes are registered only because the registry
+/// holds the packages' computed fields and cannot be built without them; they never run here,
+/// since a package compute calls its WebAssembly method, which this ORM does not have, and that
+/// call fails with a programming error instead.
 pub(crate) async fn attachment_maintenance_orm(config: &ServerConfig, source: &Orm) -> Result<Orm> {
     let mut tx = source.begin(SUPERUSER_ID).await?;
     let attachments = tx
@@ -514,7 +518,8 @@ pub(crate) async fn attachment_maintenance_orm(config: &ServerConfig, source: &O
         Arc::clone(source.registry()),
         attachments,
     ))
-    .job_settings(source.job_node_settings().clone());
+    .job_settings(source.job_node_settings().clone())
+    .computes(source.runtime_computes().iter().copied());
     let authority = source
         .job_settings_source()
         .ok_or_else(|| failed("Attachment maintenance requires database job policy authority."))?;
@@ -1711,6 +1716,13 @@ impl NativeLifecycle {
             }
             // before the audit admission below, which then judges the window this run left
             maintain_event_partitions_at_start(&loaded.orm).await?;
+            let owner =
+                pool_with_size(self.config.owner_connection(), 1).map_err(cli_field_error)?;
+            crate::partition_upkeep::policy(&loaded.orm, &owner).await?;
+            crate::partition_upkeep::maintain(&loaded.orm, &owner).await.map(|_report| ()).map_err(|error| {
+                tracing::error!(%error, "generic partition upkeep failed at startup; the node does not start");
+                erp_fields::Error::new(error.kind(), format!("Generic partition upkeep failed at startup: {}", crate::server_runtime::sanitized_cause(&error))).with_source(error)
+            })?;
         }
         let asset_admission = if !loaded
             .orm

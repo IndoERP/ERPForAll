@@ -24,6 +24,10 @@ pub const PARTITION_ADR: &str = "see the documentation";
 /// Largest `premake` and `retain` a declaration may give, in intervals.
 pub const MAX_PARTITION_INTERVALS: u32 = 1_000;
 
+/// Smallest `premake` of an hourly partition: upkeep runs may be up to one hour apart (the bound of
+/// `base.partition_upkeep_interval_secs`), so one hour ahead can run out before the next run.
+pub const MIN_HOURLY_PREMAKE: u32 = 2;
+
 /// Longest table name of a partitioned model in bytes: its partition names append `_p` and up to
 /// ten digits (`_p2026101603` for an hour), and PostgreSQL identifiers end at 63 bytes.
 pub const MAX_PARTITIONED_TABLE_LEN: usize = 51;
@@ -338,7 +342,8 @@ pub(crate) struct Subject<'a> {
 /// # Errors
 ///
 /// `Programming` naming the model: an extension sets `partition`, a policy-source model, an
-/// abstract or transient model, `premake`/`retain` outside 1–1000, a fill factor, a table name
+/// abstract or transient model, `premake`/`retain` outside 1–1000, an hourly `premake` below
+/// [`MIN_HOURLY_PREMAKE`], a fill factor, a table name
 /// too long for its partition names, or a key that is neither `create_date` nor a stored,
 /// required `datetime` field declared `server_set`.
 pub(crate) fn resolve(subject: &Subject<'_>) -> Result<Option<Partition>> {
@@ -393,6 +398,13 @@ pub(crate) fn resolve(subject: &Subject<'_>) -> Result<Option<Partition>> {
         return Err(Error::programming(format!(
             "partition of '{name}': premake must be 1 to {MAX_PARTITION_INTERVALS} intervals (got \
              {})",
+            decl.premake
+        )));
+    }
+    if decl.interval == PartitionInterval::Hour && decl.premake < MIN_HOURLY_PREMAKE {
+        return Err(Error::programming(format!(
+            "partition of '{name}': an hourly partition needs premake of at least \
+             {MIN_HOURLY_PREMAKE} intervals, because upkeep may run up to one hour apart (got {})",
             decl.premake
         )));
     }

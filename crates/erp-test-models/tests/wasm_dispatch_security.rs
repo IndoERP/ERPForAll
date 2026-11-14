@@ -650,3 +650,27 @@ async fn only_the_system_principal_runs_without_a_company() {
     );
     tx.rollback().await.unwrap();
 }
+
+/// X5: the real WASM request adapter refuses the native notification by name.
+/// This uses the established adapter probe; no guest component executes in this binary.
+#[tokio::test]
+async fn external_notification_is_not_callable_from_wasm() {
+    let w = world(|orm| callable_methods(orm, ADDON_B.name, &describe(&[])).unwrap()).await;
+    let mut tx = begin(&w).await;
+    let id = make(&mut tx, "visible").await;
+    let records = tx.env().records(MODEL).unwrap().browse([id]).unwrap();
+    let answer = probe(
+        &w,
+        &mut tx,
+        &records,
+        call(MODEL, "modified_external", &[id]),
+    )
+    .await;
+    assert_eq!(
+        denied(&answer),
+        "method `modified_external` is not exposed on `test.wasm.dual`"
+    );
+    tx.rollback().await.unwrap();
+    drop(tx);
+    w.h.cleanup().await.unwrap();
+}

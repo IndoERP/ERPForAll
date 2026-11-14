@@ -597,7 +597,7 @@
   <record id="technical_config_param_form" model="ir.ui.view">
     <field name="name">ir.config_parameter.technical.form</field>
     <field name="model">ir.config_parameter</field>
-    <field name="arch" type="xml"><form record_mode="record"><field name="key"/><field name="value"/></form></field>
+    <field name="arch" type="xml"><form record_mode="record"><field name="key"/><field name="value" help="For base.partition_upkeep_interval_secs: 60 to 3600 whole seconds; default 3600."/></form></field>
   </record>
   <record id="technical_config_param_search" model="ir.ui.view">
     <field name="name">ir.config_parameter.technical.search</field>

@@ -869,8 +869,9 @@ impl Orm {
     /// union of both reports for every model, in registry order. A model whose upkeep cannot start
     /// (its lock is held past the timeout, `now` lies ahead of the database's clock by more than
     /// the retention) is a `failed` entry with step [`PartitionStep::Prepare`] naming its table,
-    /// and the other models are maintained all the same. Called at server start, once
-    /// lands, by its maintenance job.
+    /// and the other models are maintained all the same. The native server calls this at startup
+    /// and periodically on an owner pool, using the current installed registry and database UTC
+    /// time. Addons declare their partition policy without registering an upkeep job.
     ///
     /// # Errors
     ///

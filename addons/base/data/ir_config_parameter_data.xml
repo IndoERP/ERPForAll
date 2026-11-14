@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <erp noupdate="1">
+  <record id="partition_upkeep_interval_secs" model="ir.config_parameter">
+    <field name="key">base.partition_upkeep_interval_secs</field>
+    <field name="value">3600</field>
+  </record>
   <record id="attachment_max_bytes" model="ir.config_parameter">
     <field name="key">base.attachment_max_bytes</field>
     <field name="value">134217728</field>

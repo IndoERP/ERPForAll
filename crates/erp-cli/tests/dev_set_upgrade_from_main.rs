@@ -1,34 +1,35 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! The upgrade the dev/testing deployment runs (`base,acceptance_notes`, which marks every installed
-//! native addon for upgrade), on a database with base, web, uom, product, barcodes, the GS1
-//! nomenclature, analytic, account, stock, contacts and acceptance_notes installed, after
-//! the parts this revision added over main revision 1c93ac1c64 are taken back out:
-//! - account: the tax, tax group and repartition-line tables, the tag relation table, their
-//!   reflection rows, identities and access rows, the tax views, actions and menus, and the five
-//!   company columns of the tax and lock slices with their field rows;
-//! - stock: the columns it adds to `res_company`, `res_partner` and `res_users` with their field
-//!   rows and the two partner location defaults (`ir.default` rows and identities) it seeds; all
-//!   of its security data (the thirteen groups, their privilege and implication links, the access
-//!   rows; main's stock shipped none) and its Settings views, actions and menus;
-//!   version 1.0.0, so its 1.1 `pre` step is selected and those base tables wait for stock's
-//!   step while account and barcodes load (database review r6, S2);
-//! - product: version 1.1.0 only;
-//! - base: the `base.attachment_max_bytes` parameter and its identity;
-//! - the main company's barcode nomenclature is cleared, so the barcodes data function writes a
-//!   company while those tables wait.
+//! The upgrade the dev/testing deployment runs, on a database with base, web, uom, product,
+//! barcodes, the GS1 nomenclature, analytic, account, stock, contacts and acceptance_notes
+//! installed, after the parts this revision adds over main revision 264d3b4a96 are taken back out
+//! (the release live runs is 22e2056fcb, which changed only scripts over 264d3b4a96, so the schema
+//! is the same):
+//! - account: the 24 `res_company` columns of the company accounting fields and the company tax
+//!   defaults (with their field rows, selection rows and identities; their indexes and foreign keys
+//!   go with the columns), the relation tables `product_taxes_rel`, `product_supplier_taxes_rel` and
+//!   `account_account_tax_default_rel` with their field and relation rows, the company accounting
+//!   form and its action `account.company_accounting_action` (which the account Settings panel links
+//!   to), the product tax view and the two code mapping views; the fields this revision adds to the
+//!   account form and the company tax view are cut out of their stored `arch_db`;
+//! - base: the `base.partition_upkeep_interval_secs` parameter and its identity.
 //!
-//! Each upgrade follows the load `erp module upgrade` runs first
-//! (`load_before_operation`, no `_register_hook`); a plain load of the rewound database (a server
-//! start before the upgrade) still refuses at the settings hook, and one after the upgrades passes.
+//! A parent company with a sales and a purchase tax and a branch company without a choice of its own
+//! exist before the upgrade. The chain's sequence runs three times: `load_before_operation` (no
+//! `_register_hook`), then the upgrade of `base` plus the modules the chain names for this revision.
+//! Run 0 starts from the rewound shape, where every effective default comes out empty because the
+//! company's own choice is new too. Before run 1 the parent gets its own choice and the two stored
+//! effective columns are dropped again, so the fill on existing rows has an input; runs 1 and 2 must
+//! give the branch the parent's taxes. A plain load before the upgrades refuses at the Settings hook
+//! (the panel link has no action); one after them passes.
 //!
 //! It does NOT prove: the `erp module upgrade` command itself (`live.rs` is not run here, only the
-//! module-system calls it makes); product's new privilege, which stays in place here; an upgrade
-//! from a database the previous binary built (this one is built by
-//! today's code and only partly rewound; today's metadata elsewhere stays); the stock 1.0.0 shape
-//! of its own tables and SQL objects (`stock_install/upgrade_from_main.rs`) or the product 1.1.0
-//! shape (`product_install/upgrade_from_main.rs`); rows other than default data; the
-//! mail, sample_library and theme_office_blue, which are not installed here (with mail, installing
-//! product auto-installs product_mail, which the dev/testing database does not have).
+//! module-system calls it makes); an upgrade while a server holds locks on `res_company` (no
+//! concurrent session runs here; the deployment chain retries a deadlock instead); an upgrade from
+//! a database the previous binary built (this one is built by today's code and only partly
+//! rewound: the stock Settings declarations, today's other metadata and every data row stay); the
+//! effective-default fill on a table above the large-table threshold (it then runs after the
+//! commit); rows other than the companies and taxes seeded here; the mail, sample_library and
+//! theme_office_blue addons, which are not installed here.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -38,60 +39,70 @@
 
 use erp_modules::{AddonIndex, InitOptions, ModuleName, ModuleSystem};
 use erp_orm::{Context, SUPERUSER_ID};
+use erp_sdk::{Cell, RawVals};
 use erp_testkit::TestDb;
 use erp_testkit::tokio_postgres::Client;
 use std::path::Path;
 
-const TAX_MODELS: [&str; 3] = [
-    "account.tax",
-    "account.tax.group",
-    "account.tax.repartition.line",
+/// The columns this revision's account adds to `res_company`.
+const COMPANY_COLUMNS: [&str; 24] = [
+    "transfer_account_id",
+    "default_cash_difference_income_account_id",
+    "default_cash_difference_expense_account_id",
+    "account_journal_suspense_account_id",
+    "account_journal_early_pay_discount_gain_account_id",
+    "account_journal_early_pay_discount_loss_account_id",
+    "income_currency_exchange_account_id",
+    "expense_currency_exchange_account_id",
+    "account_default_pos_receivable_account_id",
+    "expense_accrual_account_id",
+    "revenue_accrual_account_id",
+    "currency_exchange_journal_id",
+    "automatic_entry_default_journal_id",
+    "bank_account_code_prefix",
+    "cash_account_code_prefix",
+    "transfer_account_code_prefix",
+    "tax_calculation_rounding_method",
+    "anglo_saxon_accounting",
+    "expects_chart_of_accounts",
+    "chart_template",
+    "account_sale_tax_id",
+    "account_purchase_tax_id",
+    "effective_account_sale_tax_id",
+    "effective_account_purchase_tax_id",
 ];
-/// Children before parents: menus, the inheriting company view, the views, then the actions.
-const TAX_RECORDS: [&str; 11] = [
-    "menu_taxes",
-    "menu_tax_groups",
-    "view_company_tax_settings",
-    "view_tax_group_list",
-    "view_tax_group_form",
-    "view_tax_list",
-    "view_tax_form",
-    "view_tax_repartition_list",
-    "view_tax_repartition_form",
-    "action_taxes",
-    "action_tax_groups",
+const EFFECTIVE_COLUMNS: [&str; 2] = [
+    "effective_account_sale_tax_id",
+    "effective_account_purchase_tax_id",
 ];
-/// Stock's Settings entry (`views/settings_views.xml`), children before parents.
-const STOCK_SETTINGS_RECORDS: [&str; 7] = [
-    "menu_stock_settings",
-    "menu_stock_config_settings",
-    "menu_stock_root",
-    "inventory_settings_action",
-    "inventory_addons_action",
-    "inventory_settings_form",
-    "inventory_addons_form",
+const RELATION_TABLES: [&str; 3] = [
+    "product_taxes_rel",
+    "product_supplier_taxes_rel",
+    "account_account_tax_default_rel",
 ];
-const ACCOUNT_COMPANY_COLUMNS: [&str; 5] = [
-    "account_fiscal_country_id",
-    "account_price_include",
-    "tax_lock_date",
-    "sale_lock_date",
-    "purchase_lock_date",
+/// The view and action records this revision adds, children before parents.
+const NEW_RECORDS: [&str; 5] = [
+    "company_accounting_action",
+    "company_accounting_form",
+    "view_product_tax_choices",
+    "view_account_code_mapping_list",
+    "view_account_code_mapping_form",
 ];
-const STOCK_COLUMNS: [(&str, &str); 4] = [
-    ("res_company", "internal_transit_location_id"),
-    ("res_partner", "property_stock_customer"),
-    ("res_partner", "property_stock_supplier"),
-    ("res_users", "property_warehouse_id"),
+/// The field elements this revision adds to views main already ships: (view, pattern).
+const ADDED_ARCH: [(&str, &str); 3] = [
+    ("view_account_form", r#"<field name="tax_ids"[^>]*/>"#),
+    (
+        "view_company_tax_settings",
+        r#"<field name="account_sale_tax_id"[^>]*/>"#,
+    ),
+    (
+        "view_company_tax_settings",
+        r#"<field name="account_purchase_tax_id"[^>]*/>"#,
+    ),
 ];
-const STOCK_FIELDS: [(&str, &str); 6] = [
-    ("res.company", "internal_transit_location_id"),
-    ("res.company", "scrap_location_id"),
-    ("res.company", "default_stock_location_id"),
-    ("res.partner", "property_stock_customer"),
-    ("res.partner", "property_stock_supplier"),
-    ("res.users", "property_warehouse_id"),
-];
+const PARAMETER_ID: &str = "partition_upkeep_interval_secs";
+/// The modules the deployment chain names for this revision (changed since main and installed).
+const CHAIN_MODULES: [&str; 4] = ["base", "uom", "account", "stock"];
 
 fn system(db: &TestDb) -> ModuleSystem {
     let mut index = AddonIndex::new(true);
@@ -178,6 +189,16 @@ async fn column_exists(client: &Client, table: &str, column: &str) -> bool {
         == 1
 }
 
+async fn table_exists(client: &Client, table: &str) -> bool {
+    count(
+        client,
+        "SELECT count(*) FROM pg_tables WHERE schemaname = current_schema() AND tablename = $1",
+        &[&table],
+    )
+    .await
+        == 1
+}
+
 async fn version(client: &Client, addon: &str) -> String {
     client
         .query_one(
@@ -189,7 +210,126 @@ async fn version(client: &Client, addon: &str) -> String {
         .get(0)
 }
 
-/// Take views, actions and menus out through the ORM, so their tables stay consistent.
+/// What a fresh installation of this revision has, so the upgraded shape is compared with our code.
+struct Shape {
+    relation_fields: i64,
+    company_foreign_keys: i64,
+    company_indexes: i64,
+}
+
+async fn shape(client: &Client) -> Shape {
+    Shape {
+        relation_fields: count(
+            client,
+            "SELECT count(*) FROM ir_model_fields WHERE relation_table = ANY($1)",
+            &[&RELATION_TABLES.to_vec()],
+        )
+        .await,
+        company_foreign_keys: count(
+            client,
+            "SELECT count(*) FROM pg_constraint
+             WHERE conrelid = 'res_company'::regclass AND contype = 'f'",
+            &[],
+        )
+        .await,
+        company_indexes: count(
+            client,
+            "SELECT count(*) FROM pg_indexes
+             WHERE schemaname = current_schema() AND tablename = 'res_company'",
+            &[],
+        )
+        .await,
+    }
+}
+
+struct Seed {
+    parent: i64,
+    branch: i64,
+    sale: i64,
+    purchase: i64,
+}
+
+/// A parent company with a sales and a purchase tax, and a branch company below it.
+async fn seed(orm: &erp_orm::Orm) -> Seed {
+    let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+    let parent: i64 = tx
+        .query(
+            "SELECT res_id::int8 FROM ir_model_data WHERE module = 'base' AND name = 'main_company'",
+            &[],
+        )
+        .await
+        .unwrap()[0]
+        .get(0);
+    let country: i64 = tx
+        .query("SELECT id::int8 FROM res_country WHERE code = 'US'", &[])
+        .await
+        .unwrap()[0]
+        .get(0);
+    let env = tx.env().with_company(parent).unwrap();
+    let companies = env.records("res.company").unwrap();
+    companies
+        .browse([parent])
+        .unwrap()
+        .write(
+            &mut tx,
+            RawVals::new().set_cell("account_fiscal_country_id", Cell::Id(country)),
+        )
+        .await
+        .unwrap();
+    env.records("account.tax.group")
+        .unwrap()
+        .create(
+            &mut tx,
+            vec![RawVals::new().set_cell("name", Cell::Str("Upgrade group".into()))],
+        )
+        .await
+        .unwrap();
+    let mut taxes = Vec::new();
+    for (name, role) in [("Upgrade sales", "sale"), ("Upgrade purchase", "purchase")] {
+        let created = env
+            .records("account.tax")
+            .unwrap()
+            .create(
+                &mut tx,
+                vec![
+                    RawVals::new()
+                        .set_cell("name", Cell::Str(name.into()))
+                        .set_cell("type_tax_use", Cell::Str(role.into())),
+                ],
+            )
+            .await
+            .unwrap();
+        taxes.push(created.ids()[0]);
+    }
+    let currency = companies
+        .browse([parent])
+        .unwrap()
+        .cell(&mut tx, "currency_id")
+        .await
+        .unwrap();
+    let branch = companies
+        .create(
+            &mut tx,
+            vec![
+                RawVals::new()
+                    .set_cell("name", Cell::Str("Upgrade branch".into()))
+                    .set_cell("currency_id", currency)
+                    .set_cell("parent_id", Cell::Id(parent)),
+            ],
+        )
+        .await
+        .unwrap()
+        .ids()[0];
+    tx.commit().await.unwrap();
+    Seed {
+        parent,
+        branch,
+        sale: taxes[0],
+        purchase: taxes[1],
+    }
+}
+
+/// Take views and actions out through the ORM, so their tables stay consistent.
 async fn remove_records(orm: &erp_orm::Orm, module: &str, names: &[&str]) {
     let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
     for name in names {
@@ -215,141 +355,145 @@ async fn remove_records(orm: &erp_orm::Orm, module: &str, names: &[&str]) {
     tx.commit().await.unwrap();
 }
 
-async fn rewind_to_main(client: &Client) {
-    let tax_records: Vec<&str> = TAX_RECORDS.to_vec();
-    let tax_models: Vec<&str> = TAX_MODELS.to_vec();
-    let account_columns: Vec<&str> = ACCOUNT_COMPANY_COLUMNS.to_vec();
-    let stock_settings: Vec<&str> = STOCK_SETTINGS_RECORDS.to_vec();
-    client.batch_execute("BEGIN").await.unwrap();
+/// Drop `res_company` columns with their field rows, selection rows and identities, inside the
+/// caller's transaction; `extra` adds more field rows (by id) to remove with them.
+async fn drop_company_fields(client: &Client, columns: &[&str], extra: &str) {
     client
         .execute(
-            "DELETE FROM ir_model_data WHERE module = 'account' AND name = ANY($1)",
-            &[&tax_records],
+            &format!(
+                "CREATE TEMP TABLE later_fields ON COMMIT DROP AS
+                 SELECT id FROM ir_model_fields WHERE (model = 'res.company' AND name = ANY($1)){extra}"
+            ),
+            &[&columns.to_vec()],
         )
         .await
         .unwrap();
-    client
-        .execute(
-            "DELETE FROM ir_model_data WHERE module = 'stock' AND name = ANY($1)",
-            &[&stock_settings],
-        )
-        .await
-        .unwrap();
-    // Main's stock shipped no security data: its groups, privilege and access rows go, with the
-    // implication links (as `stock_install/upgrade_from_main.rs` does).
-    client
-        .batch_execute(
-            "CREATE TEMP TABLE later_stock_security ON COMMIT DROP AS
-                SELECT id, model, res_id FROM ir_model_data WHERE module = 'stock'
-                AND model IN ('ir.access', 'res.groups', 'res.groups.privilege');
-            DELETE FROM ir_access WHERE id IN
-                (SELECT res_id FROM later_stock_security WHERE model = 'ir.access');
-            DELETE FROM res_groups_implied_rel WHERE gid IN
-                (SELECT res_id FROM later_stock_security WHERE model = 'res.groups') OR hid IN
-                (SELECT res_id FROM later_stock_security WHERE model = 'res.groups');
-            DELETE FROM res_groups WHERE id IN
-                (SELECT res_id FROM later_stock_security WHERE model = 'res.groups');
-            DELETE FROM res_groups_privilege WHERE id IN
-                (SELECT res_id FROM later_stock_security WHERE model = 'res.groups.privilege');
-            DELETE FROM ir_model_data WHERE id IN (SELECT id FROM later_stock_security);",
-        )
-        .await
-        .unwrap();
-    client
-        .execute(
-            "CREATE TEMP TABLE later_models ON COMMIT DROP AS
-             SELECT id, model FROM ir_model WHERE model = ANY($1)",
-            &[&tax_models],
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        count(client, "SELECT count(*) FROM later_models", &[]).await,
-        3
+    let mut ddl = String::new();
+    for column in columns {
+        ddl.push_str(&format!("ALTER TABLE res_company DROP COLUMN {column};"));
+    }
+    ddl.push_str(
+        "DELETE FROM ir_model_data WHERE (model = 'ir.model.fields'
+                AND res_id IN (SELECT id FROM later_fields))
+            OR (model = 'ir.model.fields.selection' AND res_id IN
+                (SELECT id FROM ir_model_fields_selection
+                 WHERE field_id IN (SELECT id FROM later_fields)));
+        DELETE FROM ir_model_data WHERE model = 'ir.default' AND res_id IN
+            (SELECT id FROM ir_default WHERE field_id IN (SELECT id FROM later_fields));
+        DELETE FROM ir_default WHERE field_id IN (SELECT id FROM later_fields);
+        DELETE FROM ir_model_fields_selection WHERE field_id IN (SELECT id FROM later_fields);
+        DELETE FROM ir_model_fields WHERE id IN (SELECT id FROM later_fields);",
     );
-    client
-        .execute(
-            "CREATE TEMP TABLE later_fields ON COMMIT DROP AS
-             SELECT id FROM ir_model_fields WHERE model_id IN (SELECT id FROM later_models)
-             OR (model = 'res.company' AND name = ANY($1))",
-            &[&account_columns],
-        )
-        .await
-        .unwrap();
-    for (model, name) in STOCK_FIELDS {
-        client
+    client.batch_execute(&ddl).await.unwrap();
+}
+
+async fn rewind_to_main(client: &Client) {
+    client.batch_execute("BEGIN").await.unwrap();
+    for (view, pattern) in ADDED_ARCH {
+        let changed = client
             .execute(
-                "INSERT INTO later_fields SELECT id FROM ir_model_fields WHERE model = $1 AND name = $2",
-                &[&model, &name],
+                "UPDATE ir_ui_view SET arch_db = regexp_replace(arch_db, $2, '', 'g')
+                 WHERE arch_db ~ $2 AND id =
+                     (SELECT res_id FROM ir_model_data WHERE module = 'account' AND name = $1)",
+                &[&view, &pattern],
             )
             .await
             .unwrap();
+        assert_eq!(changed, 1, "{view} carries {pattern}");
     }
-    let relations: Vec<String> = client
-        .query(
-            "SELECT DISTINCT relation_table FROM ir_model_fields
-             WHERE ttype = 'many2many' AND relation_table IS NOT NULL
-             AND model_id IN (SELECT id FROM later_models)",
-            &[],
-        )
-        .await
-        .unwrap()
-        .iter()
-        .map(|row| row.get(0))
-        .collect();
-    assert!(
-        !relations.is_empty(),
-        "the repartition line has a tag relation"
-    );
     let mut ddl = String::new();
-    for table in &relations {
-        ddl.push_str(&format!("DROP TABLE \"{table}\";"));
-    }
-    ddl.push_str("DROP TABLE account_tax_repartition_line, account_tax, account_tax_group;");
-    for column in ACCOUNT_COMPANY_COLUMNS {
-        ddl.push_str(&format!("ALTER TABLE res_company DROP COLUMN {column};"));
-    }
-    for (table, column) in STOCK_COLUMNS {
-        ddl.push_str(&format!("ALTER TABLE {table} DROP COLUMN {column};"));
+    for table in RELATION_TABLES {
+        ddl.push_str(&format!("DROP TABLE {table};"));
     }
     client.batch_execute(&ddl).await.unwrap();
     client
         .execute(
             "DELETE FROM ir_model_relation WHERE name = ANY($1)",
-            &[&relations],
+            &[&RELATION_TABLES.to_vec()],
+        )
+        .await
+        .unwrap();
+    drop_company_fields(
+        client,
+        &COMPANY_COLUMNS,
+        &format!(
+            " OR relation_table IN ({})",
+            RELATION_TABLES.map(|t| format!("'{t}'")).join(", ")
+        ),
+    )
+    .await;
+    client
+        .execute(
+            "DELETE FROM ir_config_parameter WHERE key = $1",
+            &[&erp_addon_base::partition_upkeep_settings::KEY],
         )
         .await
         .unwrap();
     client
-        .batch_execute(
-            "DELETE FROM ir_model_data d WHERE (d.model = 'ir.model'
-                    AND d.res_id IN (SELECT id FROM later_models))
-                OR (d.model = 'ir.model.fields' AND d.res_id IN (SELECT id FROM later_fields))
-                OR (d.model = 'ir.access' AND d.res_id IN (SELECT a.id FROM ir_access a
-                    WHERE a.model_id IN (SELECT id FROM later_models)));
-            DELETE FROM ir_access WHERE model_id IN (SELECT id FROM later_models);
-            DELETE FROM ir_model_data WHERE model = 'ir.default' AND res_id IN
-                (SELECT id FROM ir_default WHERE field_id IN (SELECT id FROM later_fields));
-            DELETE FROM ir_default WHERE field_id IN (SELECT id FROM later_fields);
-            DELETE FROM ir_model_fields_selection WHERE field_id IN (SELECT id FROM later_fields);
-            DELETE FROM ir_model_fields WHERE id IN (SELECT id FROM later_fields);
-            DELETE FROM ir_model WHERE id IN (SELECT id FROM later_models);
-            DELETE FROM ir_config_parameter WHERE key = 'base.attachment_max_bytes';
-            DELETE FROM ir_model_data WHERE module = 'base' AND name = 'attachment_max_bytes';
-            UPDATE res_company SET nomenclature_id = NULL WHERE id =
-                (SELECT res_id FROM ir_model_data WHERE module = 'base' AND name = 'main_company');
-            UPDATE ir_module_module SET latest_version = '1.0.0' WHERE name = 'stock';
-            UPDATE ir_module_module SET latest_version = '1.1.0' WHERE name = 'product';
-            COMMIT;",
+        .execute(
+            "DELETE FROM ir_model_data WHERE module = 'base' AND name = $1",
+            &[&PARAMETER_ID],
         )
         .await
         .unwrap();
+    client.batch_execute("COMMIT").await.unwrap();
+}
+
+/// Before run 1: the parent's own choice exists and the stored effective columns are new.
+async fn rewind_effective(client: &Client, seed: &Seed) {
+    client.batch_execute("BEGIN").await.unwrap();
+    let updated = client
+        .execute(
+            "UPDATE res_company SET account_sale_tax_id = $1::int8,
+                 account_purchase_tax_id = $2::int8
+             WHERE id = $3::int8",
+            &[&seed.sale, &seed.purchase, &seed.parent],
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated, 1);
+    drop_company_fields(client, &EFFECTIVE_COLUMNS, "").await;
+    client.batch_execute("COMMIT").await.unwrap();
+}
+
+async fn effective(client: &Client, company: i64) -> (Option<i64>, Option<i64>) {
+    let row = client
+        .query_one(
+            "SELECT effective_account_sale_tax_id::int8, effective_account_purchase_tax_id::int8
+             FROM res_company WHERE id = $1::int8",
+            &[&company],
+        )
+        .await
+        .unwrap();
+    (row.get(0), row.get(1))
+}
+
+/// The settings hook refusal of a load on the rewound database.
+fn assert_unavailable_link(result: Result<erp_modules::LoadOutcome, erp_modules::Error>) {
+    match result {
+        Ok(_) => panic!("a plain load published a Settings link whose action is missing"),
+        Err(erp_modules::Error::StepFailed {
+            step: erp_modules::ModuleStep::RegisterHook { model },
+            source,
+            ..
+        }) => {
+            assert_eq!(model, "ir.config.setting");
+            match *source {
+                erp_modules::Error::Orm(error) => assert_eq!(
+                    error.message(),
+                    "Setting item references an unavailable action or menu."
+                ),
+                other => panic!("unexpected source: {other:?}"),
+            }
+        }
+        Err(other) => panic!("unexpected error: {other:?}"),
+    }
 }
 
 /// No `SPEC-` tag: no spec case states the deployment's module set; this is upgrade-path evidence
-/// for the cycle 13 deployment (database review r6, S1 and S2).
+/// for the cycle 14 deployment (database review c14 r1, S1).
 #[test]
-fn dev_set_upgrades_twice_from_the_main_shape() {
+fn dev_set_upgrades_from_the_main_shape() {
     run(async {
         let db = TestDb::create().await.unwrap();
         let sys = system(&db);
@@ -369,91 +513,57 @@ fn dev_set_upgrades_twice_from_the_main_shape() {
             "{:?}",
             installed.post_commit
         );
-        remove_records(&installed.orm, "account", &TAX_RECORDS).await;
-        remove_records(&installed.orm, "stock", &STOCK_SETTINGS_RECORDS).await;
+        let seed = seed(&installed.orm).await;
+        let client = db.client().await.unwrap();
+        let fresh = shape(&client).await;
+        assert!(fresh.relation_fields >= 3, "the three tax relation fields");
+        remove_records(&installed.orm, "account", &NEW_RECORDS).await;
         drop(installed);
         drop(init);
         drop(sys);
-        let client = db.client().await.unwrap();
         rewind_to_main(&client).await;
 
         // the rewound shape
-        for table in [
-            "account_tax",
-            "account_tax_group",
-            "account_tax_repartition_line",
-        ] {
-            assert_eq!(
-                count(&client, "SELECT count(*) FROM pg_tables WHERE schemaname = current_schema() AND tablename = $1", &[&table]).await,
-                0,
-                "{table}"
-            );
-        }
-        for column in ACCOUNT_COMPANY_COLUMNS {
+        for column in COMPANY_COLUMNS {
             assert!(
                 !column_exists(&client, "res_company", column).await,
                 "{column}"
             );
         }
-        for (table, column) in STOCK_COLUMNS {
-            assert!(
-                !column_exists(&client, table, column).await,
-                "{table}.{column}"
+        for table in RELATION_TABLES {
+            assert!(!table_exists(&client, table).await, "{table}");
+        }
+        let rewound = shape(&client).await;
+        assert_eq!(rewound.relation_fields, 0);
+        assert!(rewound.company_foreign_keys < fresh.company_foreign_keys);
+        assert!(rewound.company_indexes < fresh.company_indexes);
+        for (view, pattern) in ADDED_ARCH {
+            assert_eq!(
+                count(
+                    &client,
+                    "SELECT count(*) FROM ir_ui_view v JOIN ir_model_data d ON d.res_id = v.id
+                     AND d.model = 'ir.ui.view' AND d.module = 'account' AND d.name = $1
+                     WHERE v.arch_db ~ $2",
+                    &[&view, &pattern],
+                )
+                .await,
+                0,
+                "{view} without {pattern}"
             );
         }
-        assert_eq!(version(&client, "stock").await, "1.0.0");
-        assert_eq!(version(&client, "product").await, "1.1.0");
-        assert_eq!(
-            version(&client, "account").await,
-            manifest_version("account")
-        );
-        assert_eq!(
-            count(
-                &client,
-                "SELECT count(*) FROM res_company WHERE nomenclature_id IS NULL",
-                &[]
-            )
-            .await,
-            1
-        );
 
-        let access_csv = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../addons/account/security/ir.access.csv"),
-        )
-        .unwrap();
-        let tax_access = i64::try_from(
-            access_csv
-                .lines()
-                .filter(|line| line.contains(",model_account_tax"))
-                .count(),
-        )
-        .unwrap();
-        assert!(tax_access > 0);
-
-        let modules = ["base", "acceptance_notes"].map(|name| ModuleName::new(name).unwrap());
+        let modules = CHAIN_MODULES.map(|name| ModuleName::new(name).unwrap());
         let sys = system(&db);
-        // A server start on the rewound database: this binary's stock settings name groups that
-        // only stock's upgrade creates, so the plain load still refuses.
-        match sys.load().await {
-            Ok(_) => panic!("a plain load published settings whose groups are missing"),
-            Err(erp_modules::Error::StepFailed {
-                step: erp_modules::ModuleStep::RegisterHook { model },
-                source,
-                ..
-            }) => {
-                assert_eq!(model, "ir.config.setting");
-                match *source {
-                    erp_modules::Error::Orm(error) => assert_eq!(
-                        error.message(),
-                        "Setting policy references an unavailable group."
-                    ),
-                    other => panic!("unexpected source: {other:?}"),
+        // A server start on the rewound database: the account Settings panel links to an action
+        // only the upgrade creates, so the plain load refuses.
+        assert_unavailable_link(sys.load().await);
+        for run in 0..3 {
+            if run == 1 {
+                rewind_effective(&client, &seed).await;
+                for column in EFFECTIVE_COLUMNS {
+                    assert!(!column_exists(&client, "res_company", column).await);
                 }
             }
-            Err(other) => panic!("unexpected error: {other:?}"),
-        }
-        for run in 0..2 {
             // `erp module upgrade` loads the installed set first and runs the operation as the
             // caller of that load (`crates/erp-cli/src/live.rs`).
             if let Err(error) = sys.load_before_operation().await {
@@ -472,102 +582,119 @@ fn dev_set_upgrades_twice_from_the_main_shape() {
                 "{:?}",
                 upgraded.post_commit
             );
+            // the Settings panel link resolves on the upgraded database
+            let mut tx = upgraded.orm.begin(SUPERUSER_ID).await.unwrap();
+            let env = tx.env().clone();
+            if let Err(error) =
+                erp_addon_base::ir_config_setting::validate_declarations(&env, &mut tx).await
+            {
+                panic!("run {run}: Settings declarations refused: {error:?}");
+            }
+            tx.rollback().await.unwrap();
             drop(upgraded);
 
-            for table in [
-                "account_tax",
-                "account_tax_group",
-                "account_tax_repartition_line",
-            ] {
-                assert_eq!(
-                    count(&client, "SELECT count(*) FROM pg_tables WHERE schemaname = current_schema() AND tablename = $1", &[&table]).await,
-                    1,
-                    "run {run}: {table}"
-                );
-            }
-            assert_eq!(
-                count(
-                    &client,
-                    "SELECT count(*) FROM ir_access a JOIN ir_model m ON m.id = a.model_id
-                     JOIN ir_model_data d ON d.model = 'ir.access' AND d.res_id = a.id
-                         AND d.module = 'account'
-                     WHERE m.model = ANY($1)",
-                    &[&TAX_MODELS.to_vec()],
-                )
-                .await,
-                tax_access,
-                "run {run}: tax access rows"
-            );
-            assert_eq!(
-                count(
-                    &client,
-                    "SELECT count(*) FROM information_schema.columns
-                     WHERE table_schema = current_schema() AND table_name = 'res_company'
-                     AND column_name = 'account_price_include' AND is_nullable = 'NO'",
-                    &[],
-                )
-                .await,
-                1,
-                "run {run}: account_price_include is required"
-            );
-            assert_eq!(
-                count(
-                    &client,
-                    "SELECT count(*) FROM res_company WHERE account_price_include IS NULL",
-                    &[]
-                )
-                .await,
-                0
-            );
-            for column in ACCOUNT_COMPANY_COLUMNS {
+            for column in COMPANY_COLUMNS {
                 assert!(
                     column_exists(&client, "res_company", column).await,
                     "run {run}: {column}"
                 );
             }
-            for (table, column) in STOCK_COLUMNS {
-                assert!(
-                    column_exists(&client, table, column).await,
-                    "run {run}: {table}.{column}"
+            for table in RELATION_TABLES {
+                assert!(table_exists(&client, table).await, "run {run}: {table}");
+            }
+            let now = shape(&client).await;
+            assert_eq!(
+                now.relation_fields, fresh.relation_fields,
+                "run {run}: relation fields"
+            );
+            assert_eq!(
+                now.company_foreign_keys, fresh.company_foreign_keys,
+                "run {run}: res_company foreign keys"
+            );
+            assert_eq!(
+                now.company_indexes, fresh.company_indexes,
+                "run {run}: res_company indexes"
+            );
+            assert_eq!(
+                count(
+                    &client,
+                    "SELECT count(*) FROM ir_model_fields f JOIN ir_model_data d
+                         ON d.model = 'ir.model.fields' AND d.res_id = f.id
+                     WHERE f.model = 'res.company' AND f.name = ANY($1)",
+                    &[&COMPANY_COLUMNS.to_vec()],
+                )
+                .await,
+                i64::try_from(COMPANY_COLUMNS.len()).unwrap(),
+                "run {run}: company field rows with identities"
+            );
+            assert_eq!(
+                count(
+                    &client,
+                    "SELECT count(*) FROM ir_model_data WHERE module = 'account' AND name = ANY($1)",
+                    &[&NEW_RECORDS.to_vec()],
+                )
+                .await,
+                i64::try_from(NEW_RECORDS.len()).unwrap(),
+                "run {run}: views and action"
+            );
+            assert_eq!(
+                count(
+                    &client,
+                    "SELECT count(*) FROM ir_model_data WHERE module = 'account'
+                     AND name = 'company_accounting_action' AND model = 'ir.actions.act_window'",
+                    &[],
+                )
+                .await,
+                1,
+                "run {run}: the action the Settings panel links to"
+            );
+            for (view, pattern) in ADDED_ARCH {
+                assert_eq!(
+                    count(
+                        &client,
+                        "SELECT count(*) FROM ir_ui_view v JOIN ir_model_data d ON d.res_id = v.id
+                         AND d.model = 'ir.ui.view' AND d.module = 'account' AND d.name = $1
+                         WHERE v.arch_db ~ $2",
+                        &[&view, &pattern],
+                    )
+                    .await,
+                    1,
+                    "run {run}: {view} with {pattern}"
                 );
             }
             assert_eq!(
                 count(
                     &client,
-                    "SELECT count(*) FROM res_company WHERE nomenclature_id IS NULL",
-                    &[]
+                    "SELECT count(*) FROM ir_config_parameter p JOIN ir_model_data d
+                         ON d.model = 'ir.config_parameter' AND d.res_id = p.id
+                         AND d.module = 'base' AND d.name = $2
+                     WHERE p.key = $1",
+                    &[
+                        &erp_addon_base::partition_upkeep_settings::KEY,
+                        &PARAMETER_ID
+                    ],
                 )
                 .await,
-                0,
-                "run {run}: every company has its barcode nomenclature"
+                1,
+                "run {run}: the partition upkeep parameter and its identity"
             );
-            let tax_records: Vec<&str> = TAX_RECORDS.to_vec();
+            let expected = if run == 0 {
+                (None, None)
+            } else {
+                (Some(seed.sale), Some(seed.purchase))
+            };
             assert_eq!(
-                count(
-                    &client,
-                    "SELECT count(*) FROM ir_model_data WHERE module = 'account' AND name = ANY($1)",
-                    &[&tax_records],
-                )
-                .await,
-                i64::try_from(TAX_RECORDS.len()).unwrap(),
-                "run {run}: tax views, actions and menus"
-            );
-            assert_eq!(
-                count(&client, "SELECT count(*) FROM ir_config_parameter WHERE key = 'base.attachment_max_bytes'", &[]).await,
-                1
+                effective(&client, seed.parent).await,
+                expected,
+                "run {run}: parent"
             );
             assert_eq!(
-                count(
-                    &client,
-                    "SELECT count(*) FROM ir_model_data d JOIN ir_default v ON v.id = d.res_id
-                     WHERE d.module = 'stock' AND d.model = 'ir.default'",
-                    &[],
-                )
-                .await,
-                2,
-                "run {run}: stock seeds both partner location defaults once"
+                effective(&client, seed.branch).await,
+                expected,
+                "run {run}: the branch takes the parent's defaults"
             );
-            for addon in ["stock", "product", "account"] {
+            // base stores its two-part manifest version normalized; its data is checked above
+            for addon in ["uom", "product", "account", "stock"] {
                 assert_eq!(
                     version(&client, addon).await,
                     manifest_version(addon),
@@ -575,25 +702,6 @@ fn dev_set_upgrades_twice_from_the_main_shape() {
                 );
             }
         }
-        assert_eq!(version(&client, "stock").await, "1.4.0");
-        assert_eq!(version(&client, "product").await, "1.5.0");
-        let security = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../addons/stock/security/stock_security.xml"),
-        )
-        .unwrap();
-        let shipped = i64::try_from(security.matches("model=\"res.groups\"").count()).unwrap();
-        assert_eq!(
-            count(
-                &client,
-                "SELECT count(*) FROM ir_model_data d JOIN res_groups g ON g.id = d.res_id
-                 WHERE d.module = 'stock' AND d.model = 'res.groups'",
-                &[],
-            )
-            .await,
-            shipped,
-            "stock's groups exist again"
-        );
         // the server start after the upgrades
         if let Err(error) = sys.load().await {
             panic!("load after the upgrades refused: {error} ({error:?})");

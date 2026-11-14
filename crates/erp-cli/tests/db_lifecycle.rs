@@ -1078,3 +1078,256 @@ async fn demo_and_neutralize() {
     drop(client);
     db.cleanup().await.unwrap();
 }
+
+fn python311() -> PathBuf {
+    let mut candidates: Vec<PathBuf> = [
+        "python3",
+        "python3.14",
+        "python3.13",
+        "python3.12",
+        "python3.11",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .collect();
+    if let Some(home) = std::env::var_os("HOME") {
+        let uv = Path::new(&home).join(".local/share/uv/python");
+        if let Ok(entries) = std::fs::read_dir(uv) {
+            candidates.extend(
+                entries
+                    .flatten()
+                    .map(|entry| entry.path().join("bin/python3")),
+            );
+        }
+    }
+    candidates
+        .into_iter()
+        .find(|python| {
+            Command::new(python)
+                .args([
+                    "-I",
+                    "-c",
+                    "import sys; raise SystemExit(sys.version_info < (3, 11))",
+                ])
+                .output()
+                .is_ok_and(|output| output.status.success())
+        })
+        .expect("no Python 3.11+ on this host for the upgrade gate script")
+}
+
+/// The upgrade gate (`scripts/upgrade-snapshot-gate.py`, design TOOL.DB-LIFECYCLE §3) on real
+/// snapshots made with `erp db dump | restore | neutralize`: a neutralized snapshot is restored,
+/// upgraded twice with the previous release's identity and passes; a snapshot whose upgrade the
+/// candidate refuses fails with the upgrade's own message, printed once with the modules and no
+/// credential; a dump without the neutralize marker is refused before any upgrade. Tooling only:
+/// no product behaviour, no spec case.
+#[test]
+fn upgrade_gate_passes_a_neutralized_snapshot_and_refuses_a_failing_one() {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(upgrade_gate());
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+async fn upgrade_gate() {
+    let db = TestDb::create().await.unwrap();
+    let role = format!("{}_web", db.name());
+    let client = db.client().await.unwrap();
+    let dir = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let staged = dir.path().join("runtime-addons");
+    runtime_addons::stage_runtime_addons(&addons_source(), &staged).unwrap();
+    let config = native_http::config(dir.path(), &db, 1, &role, &staged.canonicalize().unwrap());
+    let config = config.to_str().unwrap();
+    client
+        .batch_execute(&format!(
+            "CREATE ROLE {} LOGIN PASSWORD 'fixture-runtime-password'; CREATE ROLE {} LOGIN PASSWORD 'fixture-runtime-password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION",
+            erp_sql::quote(&role),
+            erp_sql::quote(&format!("{role}_node"))
+        ))
+        .await
+        .unwrap();
+    let owner_password = String::from_utf8(db.config().get_password().unwrap().to_vec()).unwrap();
+    let secrets = [owner_password.as_str()];
+    let admin = dir.path().join("admin");
+    native_http::private(&admin, "fixture-administrator-password");
+    let throwaway = dir.path().join("throwaway");
+    native_http::private(&throwaway, "fixture-throwaway-password");
+    let path = |name: &str| dir.path().join(name).to_str().unwrap().to_owned();
+    let (admin, throwaway) = (path("admin"), throwaway.to_str().unwrap().to_owned());
+    ok(
+        &erp(
+            &os(&[
+                "db",
+                "init",
+                "--config",
+                config,
+                "--admin-login",
+                "fixture-admin",
+                "--admin-password-file",
+                &admin,
+            ]),
+            &[],
+        ),
+        &secrets,
+    );
+    // what the dev/testing host does before a snapshot leaves it: a copy, neutralized, dumped
+    let copy = format!("{}_g", db.name());
+    let dump = |database: &str, file: &str| {
+        ok(
+            &erp(
+                &os(&[
+                    "db", "dump", "--config", config, "-d", database, "--file", file,
+                ]),
+                &[],
+            ),
+            &secrets,
+        );
+    };
+    let original = path("original.dump");
+    dump(db.name(), &original);
+    ok(
+        &erp(
+            &os(&[
+                "db", "restore", "--config", config, "-d", &copy, "--file", &original,
+            ]),
+            &[],
+        ),
+        &secrets,
+    );
+    ok(
+        &erp(
+            &os(&[
+                "db",
+                "neutralize",
+                "--config",
+                config,
+                "-d",
+                &copy,
+                "--password-file",
+                &throwaway,
+                // a copy restored just above: `erp db init` records no identity
+                "--unrecorded-identity",
+            ]),
+            &[],
+        ),
+        &secrets,
+    );
+    let neutralized = path("neutralized.dump");
+    dump(&copy, &neutralized);
+
+    let snapshots = dir.path().join("snapshots");
+    let gate_script = addons_source()
+        .parent()
+        .unwrap()
+        .join("scripts/upgrade-snapshot-gate.py");
+    let digest = erp_modules::package::sha256_hex(db.name().as_bytes());
+    let (release, revision) = (&digest[..40], &digest[24..64]);
+    let owner_url = native_http::url(&db.config(), None);
+    let python = python311();
+    let gate = |args: &[&str]| {
+        Command::new(&python)
+            .arg("-I")
+            .arg(&gate_script)
+            .args(args)
+            .env("ERP_SNAPSHOT_DIR", &snapshots)
+            .env("ERP_PG_BIN", pg_bin())
+            .env("DATABASE_URL", &owner_url)
+            .output()
+            .unwrap()
+    };
+    let addons = addons_source();
+    let addons = addons.to_str().unwrap();
+    let run = || {
+        gate(&[
+            "run",
+            "--erp",
+            env!("CARGO_BIN_EXE_erp"),
+            "--addons",
+            addons,
+            "--previous-addons",
+            addons,
+            "--revision",
+            revision,
+        ])
+    };
+    let store = |file: &str| {
+        ok(
+            &gate(&["store", "--dump", file, "--release", release]),
+            &secrets,
+        );
+        // a snapshot's directory is named by the second it was stored in
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+    };
+
+    store(&neutralized);
+    let passed = ok(&run(), &secrets);
+    assert!(
+        passed.contains("\"status\": \"PASS\"") && passed.contains("\"upgrades\": 2"),
+        "{passed}"
+    );
+
+    // a snapshot the candidate's upgrade refuses: the gate fails with the upgrade's own message
+    let refusing = connect(&db, &copy).await;
+    refusing
+        .batch_execute(
+            "CREATE FUNCTION gate_fixture_refuse() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN \
+             RAISE EXCEPTION 'fixture: this snapshot refuses the upgrade'; END $$; \
+             CREATE TRIGGER gate_fixture_refuse BEFORE UPDATE ON ir_module_module \
+             FOR EACH ROW EXECUTE FUNCTION gate_fixture_refuse()",
+        )
+        .await
+        .unwrap();
+    drop(refusing);
+    let failing = path("failing.dump");
+    dump(&copy, &failing);
+    store(&failing);
+    let output = run();
+    failed_with(
+        &output,
+        1,
+        &secrets,
+        &[
+            "the upgrade of snapshot",
+            "failed with exit",
+            "Modules: base, web",
+        ],
+    );
+    let text = String::from_utf8_lossy(&output.stderr);
+    // the upgrade's standard error (whose one line names the message twice) is printed once
+    for once in [
+        "upgrade-snapshot-gate: REFUSED",
+        "Error: fixture: this snapshot refuses the upgrade",
+    ] {
+        assert_eq!(text.matches(once).count(), 1, "{once}: {text}");
+    }
+
+    // a dump that was never neutralized is refused before any upgrade
+    store(&original);
+    failed_with(
+        &run(),
+        1,
+        &secrets,
+        &["is not neutralized (database.neutralized is absent)"],
+    );
+
+    let gate_database = format!("erpforall_erpcheck_{}", &revision[..8]);
+    assert!(
+        !database_exists(&client, &gate_database).await,
+        "the gate left {gate_database}"
+    );
+    ok(
+        &erp(&os(&["db", "drop", "--config", config, "-d", &copy]), &[]),
+        &secrets,
+    );
+    drop(client);
+    db.cleanup().await.unwrap();
+}

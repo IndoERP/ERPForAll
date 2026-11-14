@@ -3573,3 +3573,23 @@ async fn test_rpc_x2many_short_commands_res_users() {
 
     h.cleanup().await.unwrap();
 }
+
+/// X5: the native notification is absent from the JSON-2 method surface.
+#[tokio::test]
+async fn external_notification_is_not_callable_over_rpc() {
+    let h = harness().await;
+    let response = call(
+        &h,
+        "/json/2/res.users/modified_external",
+        r#"{"ids": [1], "fields": ["name"]}"#,
+        alice(),
+    )
+    .await;
+    assert_error(
+        &response,
+        404,
+        "werkzeug.exceptions.NotFound",
+        "The method 'res.users.modified_external' does not exist",
+    );
+    h.cleanup().await.unwrap();
+}

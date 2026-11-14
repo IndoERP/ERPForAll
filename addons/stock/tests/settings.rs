@@ -31,7 +31,7 @@ fn registry() -> SettingsRegistry {
         .iter()
         .filter(|c| c.addon.name == erp_addon_stock::ADDON.name)
         .collect();
-    assert_eq!(groups.len(), 1, "stock annual-date group must be linked");
+    assert_eq!(groups.len(), 1, "stock group contribution must be linked");
     SettingsRegistry::build(vec![("stock".into(), declarations())], &installed, |_| true)
         .unwrap()
         .with_groups(
@@ -44,7 +44,7 @@ fn registry() -> SettingsRegistry {
 #[test]
 fn scalar_domains_are_typed_bounded_and_named() {
     let declarations = declarations();
-    assert_eq!(declarations.len(), 8);
+    assert_eq!(declarations.len(), 16);
     let cases = [
         (
             "stock.horizon_days",
@@ -123,6 +123,77 @@ fn scalar_domains_are_typed_bounded_and_named() {
             .filter(|d| d.scope() == ScopeKind::Company)
             .count(),
         7
+    );
+}
+
+#[test]
+fn quant_unit_settings_are_global_bounded_and_readable_by_stock_users() {
+    let declarations = declarations();
+    for (suffix, default, floor, bound) in [
+        ("lock_timeout_ms", 1000, 10, 10000),
+        ("max_attempts", 5, 1, 5),
+        ("retry_base_ms", 50, 1, 2000),
+        ("retry_cap_ms", 2000, 1, 10000),
+        ("idle_transaction_timeout_ms", 60000, 1000, 600000),
+        ("tcp_keepalives_idle_s", 30, 1, 300),
+        ("tcp_keepalives_interval_s", 10, 1, 60),
+        ("tcp_keepalives_count", 3, 1, 10),
+    ] {
+        let key = format!("stock.quant_{suffix}");
+        let declaration = declarations
+            .iter()
+            .find(|d| d.key() == key)
+            .expect("quant unit setting declared");
+        assert_eq!(declaration.scope(), ScopeKind::Global);
+        assert_eq!(declaration.default_value(), &Value::Int(default));
+        assert!(
+            declaration
+                .read_groups()
+                .iter()
+                .any(|group| group == "stock.group_stock_user")
+        );
+        assert_eq!(declaration.write_groups(), &["base.group_system"]);
+        for value in [
+            Value::Int(floor - 1),
+            Value::Int(bound + 1),
+            Value::Int(0),
+            Value::Bool(true),
+            Value::Int(i64::MAX),
+        ] {
+            let error = declaration.validate(&value).unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::Validation);
+            assert_eq!(
+                error.message(),
+                format!("{key} takes a whole number from {floor} to {bound}.")
+            );
+        }
+        for value in [floor, default, bound] {
+            declaration.validate(&Value::Int(value)).unwrap();
+        }
+    }
+}
+
+#[test]
+fn quant_backoff_base_cannot_exceed_cap() {
+    let registry = registry();
+    let keys = registry
+        .expanded_keys(&["stock.quant_retry_base_ms".into()])
+        .unwrap();
+    assert_eq!(
+        keys,
+        vec!["stock.quant_retry_base_ms", "stock.quant_retry_cap_ms"]
+    );
+    let mut values = BTreeMap::from([
+        ("stock.quant_retry_base_ms".into(), Value::Int(50)),
+        ("stock.quant_retry_cap_ms".into(), Value::Int(50)),
+    ]);
+    registry.validate_groups(&values).unwrap();
+    values.insert("stock.quant_retry_cap_ms".into(), Value::Int(49));
+    let error = registry.validate_groups(&values).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Validation);
+    assert_eq!(
+        error.message(),
+        "stock.quant_retry_base_ms cannot exceed stock.quant_retry_cap_ms."
     );
 }
 

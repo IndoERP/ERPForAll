@@ -108,6 +108,8 @@ pub use erp_orm::{
 /// Named capabilities: declare one with [`capability!`]; the
 /// `ir.capability` table maps it to groups.
 pub use erp_orm::{Capability, capability};
+/// Explicit native whole-unit retry policy and failure metadata.
+pub use erp_orm::{RetryPolicy, RunFailure, RunOptions, require_top_level_unit};
 
 /// Leaf partitioning: the upkeep calls' arguments and report, and the declaration
 /// parts a runtime `ModelDecl` uses.

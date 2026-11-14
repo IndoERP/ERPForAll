@@ -68,6 +68,7 @@ pub use putaway::StockPutawayRule;
 pub use quant::{StockQuant, StockSerialPosition};
 pub use reference::StockReference;
 pub use route::{StockRoute, StockRule, StockTopologyVersion};
+pub use route_behavior::set_generated_identity;
 pub use stock_move::StockMove;
 pub use stock_move_line::{
     LOGICAL_ID_SEQUENCE, StockMoveLine, StockMoveLineCorrection, StockMoveLineSerial,
@@ -78,6 +79,8 @@ pub use warehouse::{StockPickingType, StockWarehouse};
 // The quant engine and its guards: the one write path of `stock.quant` balances,
 // the availability reads, and the location usage and archive guards over stock.
 pub mod quant_engine;
+mod quant_unit;
+pub use quant_unit::{QuantRetryExhausted, QuantUnit, run_quant_unit};
 mod quant_guards;
 // Engine-owned move and line columns (done time, membership, correction counter), lead ruling L6'.
 mod move_guards;

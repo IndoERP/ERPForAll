@@ -160,6 +160,7 @@ const LOCK_COLUMNS: [&str; 7] = [
     "fiscal_period_serial",
 ];
 fn patch_from(vals: &RawVals) -> Result<LockPatch> {
+    crate::tax::reject_effective_company_defaults(vals)?;
     for field in ["stock_lock_date", "fiscal_period_serial"] {
         if vals.contains(field) {
             return Err(Error::validation(if field == "stock_lock_date" {
@@ -200,8 +201,16 @@ impl AccountLockPolicy {
     ) -> Result<()> {
         this.as_records().check_access(tx, Operation::Write).await?;
         erp_sdk::__private::base_check_write_fields(tx, this.as_records(), &vals)?;
+        let configuration =
+            crate::company::validation::prepare_write(this.as_records(), tx, &vals).await?;
         let patch = patch_from(&vals)?;
         if patch.empty() {
+            if configuration {
+                // Roll back even when a native caller catches a later company/field constraint.
+                return tx
+                    .savepoint(async move |tx| sup.call(tx, this.as_records(), (vals,)).await)
+                    .await;
+            }
             return sup.call(tx, this.as_records(), (vals,)).await;
         }
         let ids = this.ids();
@@ -244,6 +253,7 @@ impl AccountLockPolicy {
         }
         for vals in &mut vals_list {
             erp_sdk::__private::base_check_write_fields(tx, this.as_records(), vals)?;
+            crate::company::validation::prepare_create(this.as_records(), tx, vals).await?;
             let patch = patch_from(vals)?;
             if patch.dates.iter().any(|d| matches!(d, Some(Some(_)))) {
                 return Err(Error::validation(
@@ -255,6 +265,7 @@ impl AccountLockPolicy {
                 vals.insert(field.into(), Cell::Null);
             }
         }
-        sup.call(tx, this.as_records(), (vals_list,)).await
+        tx.savepoint(async move |tx| sup.call(tx, this.as_records(), (vals_list,)).await)
+            .await
     }
 }

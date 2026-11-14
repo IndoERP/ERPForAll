@@ -176,10 +176,13 @@ impl StockLocation {
         vals_list: Vec<RawVals>,
         sup: Super,
     ) -> Result<Records> {
-        // a `default_<field>` context key would be filled in by the base create after this check
-        let defaulted = OWNERSHIP
-            .iter()
-            .any(|f| this.env().context().contains(&format!("default_{f}")));
+        // a `default_<field>` context key or a stored `ir.default` would be filled in by the base
+        // create after this check; `default_get` reports both
+        let defaulted = !this
+            .as_records()
+            .default_get(tx, &OWNERSHIP)
+            .await?
+            .is_empty();
         if defaulted || vals_list.iter().any(has_ownership_assignment) {
             this.as_records()
                 .check_access(tx, erp_sdk::Operation::Create)
@@ -368,9 +371,9 @@ pub struct StockLocationPolicy {
 
 #[methods(StockLocationPolicy, addon = "stock")]
 impl StockLocationPolicy {
-    /// Refuse an explicitly enabled guard before the policy unique key can mask the typed
-    /// unavailable-feature error. Ordinary defaults and malformed values remain the base
-    /// create path's responsibility; the constraint below also checks its normalized result.
+    /// Refuse a guard enabled explicitly or by default (a context key or a stored default) before
+    /// the policy unique key can mask the typed unavailable-feature error. Malformed values remain
+    /// the base create path's responsibility; the constraint below also checks its normalized result.
     #[method(override)]
     async fn create(
         this: &RecordSet<StockLocationPolicy>,
@@ -381,8 +384,20 @@ impl StockLocationPolicy {
         this.as_records()
             .check_access(tx, erp_sdk::Operation::Create)
             .await?;
+        // a row without the flag takes its default (context key, stored default or false)
+        let defaulted = matches!(
+            this.as_records()
+                .default_get(tx, &["forbid_negative"])
+                .await?
+                .get("forbid_negative"),
+            Some(Value::Bool(true))
+        );
         for vals in &vals_list {
-            if matches!(vals.get("forbid_negative"), Some(Cell::Bool(true)))
+            let enabled = match vals.get("forbid_negative") {
+                Some(cell) => matches!(cell, Cell::Bool(true)),
+                None => defaulted,
+            };
+            if enabled
                 && let Some(Cell::Id(location_id)) = vals.get("location_id")
                 && *location_id > 0
             {

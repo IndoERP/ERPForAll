@@ -294,9 +294,14 @@ impl Uom {
         this.as_records()
             .check_access(tx, Operation::Create)
             .await?;
-        // a `default_factor` context key would be filled in by the base create after this check
+        // a `default_factor` context key or a stored `ir.default` would be filled in by the base
+        // create after this check; `default_get` reports both
         if vals_list.iter().any(|vals| vals.contains("factor"))
-            || this.env().context().contains("default_factor")
+            || !this
+                .as_records()
+                .default_get(tx, &["factor"])
+                .await?
+                .is_empty()
         {
             return Err(factor_assignment_error());
         }

@@ -8,6 +8,7 @@ erp_sdk::addon!(
     exact_only = true
 );
 
+pub mod company;
 pub mod fiscal;
 pub mod journal;
 pub mod ledger;

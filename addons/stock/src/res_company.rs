@@ -138,10 +138,13 @@ impl StockCompany {
         vals_list: Vec<RawVals>,
         sup: Super,
     ) -> Result<Records> {
-        // a `default_<field>` context key would be filled in by the base create after this check
-        let defaulted = DERIVED
-            .iter()
-            .any(|f| this.env().context().contains(&format!("default_{f}")));
+        // a `default_<field>` context key or a stored `ir.default` would be filled in by the base
+        // create after this check; `default_get` reports both
+        let defaulted = !this
+            .as_records()
+            .default_get(tx, &DERIVED)
+            .await?
+            .is_empty();
         if defaulted || vals_list.iter().any(has_derived_assignment) {
             this.as_records()
                 .check_access(tx, Operation::Create)

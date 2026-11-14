@@ -768,6 +768,25 @@ fn stock_security_route_changes_never_skip_records_of_hidden_companies() {
             error.message(),
             "These values link records of different companies:\n- “Route security shared” is in company “”, and “Warehouses” (warehouse_ids: 'Route security A', 'Route security B') points to a record of another company.\nChoose records of the same company, or records shared by all companies."
         );
+        // The warehouse side of the same relation table: a warehouse of company B selecting the
+        // shared route: admitted, unlike the route side above (an open lead decision).
+        let linked = setup
+            .savepoint(async |tx| {
+                tx.env()
+                    .records("stock.warehouse")?
+                    .browse([warehouses[1]])?
+                    .write(
+                        tx,
+                        RawVals::new().set_commands(
+                            "route_ids",
+                            [Command::Link(RecId::from_real(route).unwrap())],
+                        ),
+                    )
+                    .await
+            })
+            .await
+            .map_err(|e| (e.kind(), e.message().to_owned()));
+        assert_eq!(linked, Ok(()), "warehouse-side link of a shared route");
         setup.commit().await.unwrap();
         drop(setup);
         let orm = secure(&db, &installed).await;
@@ -817,6 +836,57 @@ fn stock_security_route_changes_never_skip_records_of_hidden_companies() {
                 (true, vec![true, true])
             )
         );
+        let links = async |tx: &mut erp_orm::Transaction| {
+            tx.query(
+                "SELECT count(*)::bigint FROM stock_route_warehouse WHERE route_id = $1",
+                &[&route],
+            )
+            .await
+            .unwrap()[0]
+                .get::<_, i64>(0)
+        };
+        // Today's behaviour, pending the lead's decision: switching selection off as a manager
+        // of A only leaves company B's link after the clear, so company consistency refuses the
+        // write (naming the hidden warehouse by id only) and the link stays.
+        let result = tx
+            .savepoint(async |tx| {
+                shared
+                    .write(
+                        tx,
+                        RawVals::new().set_cell("warehouse_selectable", Cell::Bool(false)),
+                    )
+                    .await
+            })
+            .await
+            .map_err(|e| (e.kind(), e.message().to_owned()));
+        assert_eq!(
+            (result, links(&mut tx).await),
+            (
+                Err((
+                    ErrorKind::UserError,
+                    format!(
+                        "These values link records of different companies:\n- “Route security shared” is in company “”, and “Warehouses” (warehouse_ids: stock.warehouse({},)) points to a record of another company.\nChoose records of the same company, or records shared by all companies.",
+                        warehouses[1]
+                    )
+                )),
+                1
+            )
+        );
+        // Delete as a manager of A only: refused by name, the route and both rules stay.
+        let result = tx
+            .savepoint(async |tx| shared.unlink(tx).await)
+            .await
+            .map_err(|e| (e.kind(), e.message().to_owned()));
+        assert_eq!(
+            (result, state(&mut tx).await),
+            (
+                Err((
+                    ErrorKind::Access,
+                    "This route has rules of companies you cannot access, so it cannot be deleted here. Ask a user with access to all of its companies to do it.".to_owned()
+                )),
+                (true, vec![true, true])
+            )
+        );
         tx.rollback().await.unwrap();
         drop(tx);
         // A manager of both companies: the archive and restore reach every rule.
@@ -841,6 +911,25 @@ fn stock_security_route_changes_never_skip_records_of_hidden_companies() {
                 .unwrap();
             assert_eq!(state(&mut tx).await, (active, vec![active, active]));
         }
+        // ... and the delete removes the route with both rules and its warehouse link.
+        shared.unlink(&mut tx).await.unwrap();
+        let left = tx
+            .query(
+                "SELECT (SELECT count(*) FROM stock_route WHERE id = $1)::bigint, \
+                 (SELECT count(*) FROM stock_rule WHERE id = ANY($2))::bigint, \
+                 (SELECT count(*) FROM stock_route_warehouse WHERE route_id = $1)::bigint",
+                &[&route, &rules],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            (
+                left[0].get::<_, i64>(0),
+                left[0].get::<_, i64>(1),
+                left[0].get::<_, i64>(2)
+            ),
+            (0, 0, 0)
+        );
         tx.rollback().await.unwrap();
         drop(tx);
         db.cleanup().await.unwrap();
@@ -1635,8 +1724,8 @@ fn stock_security_derived_assignments_refuse_context_defaults() {
             !rows[0].get::<_, bool>(0),
             "the context default reached the row"
         );
-        // A direct policy create with the same context default: the location already has its
-        // row, so the unique key refuses it before the negative-stock guard is reached.
+        // A direct policy create with the same context default gets the typed refusal before the
+        // unique key (the location already has its row) can mask it.
         let error = tx
             .savepoint(async |tx| {
                 tx.env()
@@ -1652,12 +1741,199 @@ fn stock_security_derived_assignments_refuse_context_defaults() {
             .await
             .unwrap_err();
         assert_eq!(
-            (error.kind(), error.message()),
+            (error.kind(), error.message().to_owned()),
             (
                 ErrorKind::Validation,
-                "The database refused the change: A location has one stock policy."
+                erp_addon_stock::StockError::ForbidNegativeUnavailable { location_id: root }
+                    .to_string()
             ),
             "policy forbid_negative: {error:?}"
+        );
+        tx.rollback().await.unwrap();
+        drop(tx);
+        db.cleanup().await.unwrap();
+    });
+}
+
+/// ownership or a company's derived locations)
+#[test]
+fn stock_security_stored_defaults_never_fill_derived_or_generated_fields() {
+    run(async {
+        let db = TestDb::builder().pool_size(8).create().await.unwrap();
+        let installed = install(&db).await;
+        let company = xid(&installed, "base", "main_company").await;
+        let mut tx = installed.begin(SUPERUSER_ID).await.unwrap();
+        let root = create(
+            &mut tx,
+            "stock.location",
+            RawVals::new()
+                .set_cell("name", Cell::Str("Stored default root".into()))
+                .set_cell("usage", Cell::Str("view".into())),
+        )
+        .await;
+        let warehouse = create(
+            &mut tx,
+            "stock.warehouse",
+            RawVals::new()
+                .set_cell("name", Cell::Str("Stored default warehouse".into()))
+                .set_cell("code", Cell::Str("SDW".into()))
+                .set_cell("company_id", Cell::Id(company))
+                .set_cell("view_location_id", Cell::Id(root))
+                .set_cell("lot_stock_id", Cell::Id(root)),
+        )
+        .await;
+        let currency = tx
+            .env()
+            .records("res.company")
+            .unwrap()
+            .browse([company])
+            .unwrap()
+            .cell(&mut tx, "currency_id")
+            .await
+            .unwrap();
+        // Stored defaults as an administrator would set them.
+        let env = tx.env();
+        for (model, field, value) in [
+            (
+                "res.company",
+                "scrap_location_id",
+                erp_fields::Value::Int(root),
+            ),
+            (
+                "stock.location",
+                "warehouse_id",
+                erp_fields::Value::Int(warehouse),
+            ),
+            ("uom.uom", "factor", erp_fields::Value::Int(999)),
+            (
+                "stock.route",
+                "generated_role",
+                erp_fields::Value::str("mto"),
+            ),
+            (
+                "stock.location.policy",
+                "forbid_negative",
+                erp_fields::Value::Bool(true),
+            ),
+        ] {
+            erp_orm::ir_default::set(&mut tx, &env, model, field, &value, None, None, None)
+                .await
+                .unwrap();
+        }
+        let refusal = |e: erp_sdk::Error| (e.kind(), e.message().to_owned());
+        let created = tx
+            .savepoint(async |tx| {
+                tx.env()
+                    .with_company(company)?
+                    .records("res.company")?
+                    .create(
+                        tx,
+                        vec![
+                            RawVals::new()
+                                .set_cell("name", Cell::Str("Stored default company".into()))
+                                .set_cell("currency_id", currency.clone()),
+                        ],
+                    )
+                    .await
+            })
+            .await
+            .map(|r| r.ids());
+        assert_eq!(
+            created.map_err(refusal),
+            Err((
+                ErrorKind::UserError,
+                erp_addon_stock::StockError::CompanyLocationsDerived.to_string()
+            )),
+            "company scrap_location_id"
+        );
+        let created = tx
+            .savepoint(async |tx| {
+                tx.env()
+                    .records("stock.location")?
+                    .create(
+                        tx,
+                        vec![
+                            RawVals::new()
+                                .set_cell("name", Cell::Str("Stored default child".into()))
+                                .set_cell("location_id", Cell::Id(root)),
+                        ],
+                    )
+                    .await
+            })
+            .await
+            .map(|r| r.ids());
+        assert_eq!(
+            created.map_err(refusal),
+            Err((
+                ErrorKind::UserError,
+                erp_addon_stock::StockError::LocationOwnershipDerived.to_string()
+            )),
+            "location warehouse_id"
+        );
+        let created = tx
+            .savepoint(async |tx| {
+                let unit = tx
+                    .env()
+                    .records("uom.uom")?
+                    .create(
+                        tx,
+                        vec![
+                            RawVals::new()
+                                .set_cell("name", Cell::Str("Stored default unit".into())),
+                        ],
+                    )
+                    .await?;
+                unit.cell(tx, "factor").await
+            })
+            .await;
+        assert_eq!(
+            created.map_err(refusal),
+            Err((
+                ErrorKind::Validation,
+                "Field uom.uom.factor is maintained by the unit hierarchy and cannot be assigned."
+                    .to_owned()
+            )),
+            "uom factor"
+        );
+        // A route's generated identity is not refused here: the guard starts every row without one.
+        let route = create(
+            &mut tx,
+            "stock.route",
+            RawVals::new().set_cell("name", Cell::Str("Stored default route".into())),
+        )
+        .await;
+        let rows = tx
+            .query(
+                "SELECT generated_role FROM stock_route WHERE id = $1",
+                &[&route],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            rows[0].get::<_, Option<String>>(0),
+            None,
+            "route generated_role"
+        );
+        let created = tx
+            .savepoint(async |tx| {
+                tx.env()
+                    .records("stock.location.policy")?
+                    .create(
+                        tx,
+                        vec![RawVals::new().set_cell("location_id", Cell::Id(root))],
+                    )
+                    .await
+            })
+            .await
+            .map(|r| r.ids());
+        assert_eq!(
+            created.map_err(refusal),
+            Err((
+                ErrorKind::Validation,
+                erp_addon_stock::StockError::ForbidNegativeUnavailable { location_id: root }
+                    .to_string()
+            )),
+            "policy forbid_negative"
         );
         tx.rollback().await.unwrap();
         drop(tx);

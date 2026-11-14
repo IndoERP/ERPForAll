@@ -225,6 +225,96 @@ async fn only_core_system_gets_the_empty_intersection_fallback() {
 }
 
 #[tokio::test]
+async fn selected_sibling_branches_follow_the_company_order() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    let root = company(&mut tx, "Order root", None).await;
+    let later = company(&mut tx, "Order branch Zulu", Some(root)).await;
+    let first = company(&mut tx, "Order branch Alpha", Some(root)).await;
+    assert!(
+        first > later,
+        "the branch first in company order has the higher id"
+    );
+    let source = tx
+        .env()
+        .records("res.company")
+        .unwrap()
+        .browse([root])
+        .unwrap()
+        .with_context([(
+            "allowed_company_ids",
+            Value::list([Value::Int(later), Value::Int(first)]),
+        )]);
+    assert_eq!(branches(&mut tx, &source).await, [first, later]);
+    tx.rollback().await.unwrap();
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+/// A draft under a saved parent the caller cannot read does not show that parent's root.
+#[tokio::test]
+async fn draft_root_of_an_unreadable_saved_parent_is_refused() {
+    use erp_addon_base::ResCompany;
+    let policy = DomainPolicy::builder(Otherwise::Allow)
+        .rule(
+            "res.company",
+            Operation::Read,
+            Domain::condition("name", Operator::Ne, "Hidden draft parent").unwrap(),
+        )
+        .build()
+        .unwrap();
+    let h = Harness::builder([&erp_addon_base::ADDON])
+        .policy(policy)
+        .build()
+        .await
+        .unwrap();
+    let mut setup = h.begin().await.unwrap();
+    let hidden = company(&mut setup, "Hidden draft parent", None).await;
+    let visible = company(&mut setup, "Visible draft parent", None).await;
+    setup.execute("INSERT INTO res_users (id,name,login,active,share,company_id) VALUES (2,'Draft reader','draft-reader',true,false,$1)", &[&visible]).await.unwrap();
+    setup.commit().await.unwrap();
+    drop(setup);
+    let mut tx = h
+        .orm()
+        .begin_opts(BeginOptions::for_principal(principal(
+            &[hidden, visible],
+            &[hidden, visible],
+        )))
+        .await
+        .unwrap();
+    let model = tx.env().model::<ResCompany>().unwrap();
+    let readable = model
+        .new_record(
+            &mut tx,
+            model
+                .vals()
+                .set(ResCompany::NAME, "Draft under a visible parent")
+                .set(ResCompany::PARENT_ID, erp_sdk::RecId::from_real(visible)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        readable.get(&mut tx, ResCompany::ROOT_ID).await.unwrap(),
+        erp_sdk::RecId::from_real(visible)
+    );
+    let draft = model
+        .new_record(
+            &mut tx,
+            model
+                .vals()
+                .set(ResCompany::NAME, "Draft under a hidden parent")
+                .set(ResCompany::PARENT_ID, erp_sdk::RecId::from_real(hidden)),
+        )
+        .await
+        .unwrap();
+    let error = draft.get(&mut tx, ResCompany::ROOT_ID).await.unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Access, "{}", error.message());
+    tx.rollback().await.unwrap();
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
 async fn draft_roots_use_the_live_parent_chain_without_saving_it() {
     use erp_addon_base::ResCompany;
     let h = harness().await;

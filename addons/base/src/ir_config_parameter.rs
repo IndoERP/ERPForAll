@@ -339,6 +339,7 @@ async fn check_created_settings(tx: &mut Transaction, vals_list: &[RawVals]) -> 
             refuse_attachment_location(key)?;
             validate_setting_in(&env, key, written(vals, "value")?.flatten())?;
             crate::attachments::settings::validate(key, written(vals, "value")?.flatten())?;
+            crate::partition_upkeep_settings::validate(key, written(vals, "value")?.flatten())?;
             if keys::SESSION_POLICY.contains(&key) {
                 changes.push((
                     key.to_owned(),
@@ -376,12 +377,16 @@ async fn check_written_settings(
             continue;
         };
         refuse_attachment_location(key)?;
-        if !keys::ALL.contains(&key) && !crate::attachments::settings::contains(key) {
+        if !keys::ALL.contains(&key)
+            && !crate::attachments::settings::contains(key)
+            && key != crate::partition_upkeep_settings::KEY
+        {
             continue;
         }
         let value = new_value.unwrap_or(stored_value.as_deref());
         validate_setting_in(&tx.env(), key, value)?;
         crate::attachments::settings::validate(key, value)?;
+        crate::partition_upkeep_settings::validate(key, value)?;
         if keys::SESSION_POLICY.contains(&key) {
             changes.push((key.to_owned(), value.map(str::to_owned)));
         }

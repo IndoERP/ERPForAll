@@ -317,6 +317,16 @@ async fn serve_member(
     app.set_login_available(false);
     let schedule = GcSchedule::new(pool_with_size(config.runtime_connection(), 1)?);
     let event_owner = crate::human::owner_maintenance_orm(config)?;
+    let generic_owner = pool_with_size(config.owner_connection(), 1)?;
+    let initial_upkeep_period =
+        crate::partition_upkeep::policy(app.current_auth().await.orm(), &generic_owner)
+            .await
+            .map_err(|error| {
+                failed_with(
+                    "could not read generic partition upkeep policy at startup",
+                    &error,
+                )
+            })?;
     membership.request_ready().await?;
     let (stop, mut stopped) = tokio::sync::watch::channel(false);
     let job_stop = stopped.clone();
@@ -337,6 +347,10 @@ async fn serve_member(
             result = &mut jobs => { jobs_finished=true; result },
             result = gc_maintenance(app, &schedule) => result,
             result = event_upkeep_maintenance(app, &event_owner) => result,
+            result = crate::partition_upkeep::supervise(initial_upkeep_period,
+                async || crate::partition_upkeep::policy(app.current_auth().await.orm(), &generic_owner).await,
+                async || crate::partition_upkeep::maintain(app.current_auth().await.orm(), &generic_owner).await.map(|_report| ()),
+            ) => result,
         }
     };
     let drain = async { membership.drain().await.map_err(std::io::Error::other) };

@@ -28,6 +28,8 @@ pub(crate) mod cursors;
 mod lifecycle_open;
 mod pipelined;
 pub(crate) mod raw_row;
+mod run_options;
+pub use run_options::{RetryPolicy, RunFailure, RunOptions, require_top_level_unit};
 pub(crate) mod scoped_ids;
 mod sql_words;
 mod start;
@@ -1254,6 +1256,13 @@ impl Orm {
         self.shared.signal.as_deref()
     }
 
+    /// The compute implementations given to this ORM's builder ([`OrmBuilder::computes`]), for
+    /// another ORM over the same registry: a computed field of the registry cannot be built
+    /// without its compute.
+    pub fn runtime_computes(&self) -> &[&'static ComputeImpl] {
+        &self.shared.extras.computes
+    }
+
     /// The core tables this ORM requires ([`OrmBuilder::require_core_tables`]).
     pub fn required_core_tables(&self) -> &[&'static crate::CoreTableRequirement] {
         &self.shared.extras.required_core_tables
@@ -1645,42 +1654,92 @@ impl Orm {
     where
         F: AsyncFnMut(&mut Transaction) -> Result<T>,
     {
-        crate::route::unit_of_work(self.run_attempts(principal.into(), context, &mut work)).await
+        let options = RunOptions::legacy(
+            BeginOptions::new(principal).context(context),
+            RetryPolicy::legacy(&self.shared.config),
+        );
+        crate::route::unit_of_work(self.run_attempts(options, &mut work))
+            .await
+            .map_err(RunFailure::into_error)
+    }
+
+    /// Run a repeatable native unit with explicit transaction and retry options.
+    /// Each retry gets a fresh transaction, cache and snapshot; the supplied operation identity
+    /// remains stable. External effects and manual commits do not belong in the callback.
+    /// A failed attempt's after-commit hooks are discarded. A connection loss with an uncertain
+    /// commit outcome is not retried.
+    /// # Errors
+    /// [`RunFailure`] retains the original error and actual attempt/exhaustion metadata.
+    /// Invalid options or a refused top-level boundary fail before opening an attempt.
+    pub async fn run_with_options<T, F>(
+        &self,
+        options: RunOptions,
+        mut work: F,
+    ) -> std::result::Result<T, RunFailure>
+    where
+        F: AsyncFnMut(&mut Transaction) -> Result<T>,
+    {
+        let options = options
+            .prepare(self.shared.config.timeouts)
+            .map_err(|error| RunFailure::new(error, 0, false))?;
+        crate::route::unit_of_work(self.run_attempts(options, &mut work)).await
     }
 
     async fn run_attempts<T, F>(
         &self,
-        principal: PrincipalHint,
-        context: Context,
+        options: RunOptions,
         work: &mut F,
-    ) -> Result<T>
+    ) -> std::result::Result<T, RunFailure>
     where
         F: AsyncFnMut(&mut Transaction) -> Result<T>,
     {
-        let config = &self.shared.config;
         let mut attempt: u32 = 0;
         loop {
             attempt += 1;
-            let mut tx = self.begin_with(principal, context.clone()).await?;
+            let mut tx = self
+                .begin_opts(options.begin.clone())
+                .await
+                .map_err(|error| RunFailure::new(error, attempt, false))?;
             let outcome = match work(&mut tx).await {
-                Ok(value) => match tx.commit().await {
-                    Ok(()) => Ok(value),
-                    // a refused commit (poisoned transaction) leaves it open: roll it back
-                    Err(error) => Err(tx.discard_after(error).await),
-                },
+                Ok(value) => {
+                    let committed = if options.classified_commit {
+                        tx.commit_pipelined(None)
+                            .await
+                            .map_err(|failure| match failure {
+                                CommitError::RolledBack(error) => (error, true),
+                                // An uncertain commit must never re-enter the body, even if a
+                                // later driver happens to attach a contention-looking cause.
+                                CommitError::Unknown(error) => (error, false),
+                            })
+                    } else {
+                        tx.commit().await.map_err(|error| (error, true))
+                    };
+                    match committed {
+                        Ok(()) => Ok(value),
+                        // A refused commit can leave it open: roll it back.
+                        Err((error, retry_allowed)) => {
+                            Err((tx.discard_after(error).await, retry_allowed))
+                        }
+                    }
+                }
                 // A failed rollback detached the connection and is added to the work's error,
                 // which stays the primary one.
-                Err(error) => Err(tx.discard_after(error).await),
+                Err(error) => Err((tx.discard_after(error).await, true)),
             };
+            // A completed transaction still owns its pool slot. Release it before sleeping or
+            // opening another attempt; a one-connection pool must be sufficient.
+            drop(tx);
             match outcome {
-                Err(error) if is_retryable(&error) && attempt < config.max_attempts => {
-                    let exp = config
-                        .retry_base
-                        .saturating_mul(1u32 << (attempt - 1).min(16));
-                    let bound = exp.min(config.retry_cap).as_millis() as u64;
-                    tokio::time::sleep(Duration::from_millis(jitter(bound))).await;
+                Err((error, true))
+                    if options.accepts(&error) && attempt < options.retry.attempts =>
+                {
+                    tokio::time::sleep(options.retry.delay(attempt)).await;
                 }
-                other => return other,
+                Err((error, retry_allowed)) => {
+                    let exhausted = retry_allowed && options.accepts(&error);
+                    return Err(RunFailure::new(error, attempt, exhausted));
+                }
+                Ok(value) => return Ok(value),
             }
         }
     }
@@ -3091,10 +3150,9 @@ impl Transaction {
     }
 
     pub(crate) fn refuse_adapter_read(&self, model: ModelId, field: FieldId) -> Result<()> {
-        if let Some(state) = self.adapter_state() {
-            let MethodEffectPolicy::GeneratedInput { model: adapter } = state.policy else {
-                unreachable!("adapter_state selects only the generated-input policy")
-            };
+        if let Some(state) = self.adapter_state()
+            && let MethodEffectPolicy::GeneratedInput { model: adapter } = state.policy
+        {
             let model = self.registry().model_by_id(model);
             return Err(state.refuse(format!(
                 "Generated input adapter on '{adapter}': read of '{}.{}' requires a flush or recompute",

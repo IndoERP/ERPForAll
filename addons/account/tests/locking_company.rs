@@ -448,9 +448,12 @@ async fn company_creation_takes_no_lock_column_from_defaults() {
         ("stock_lock_date", Value::str("2024-01-01")),
         ("fiscal_period_serial", Value::Int(41)),
     ] {
-        let error = companies
-            .with_context([(format!("default_{field}"), value)])
-            .create(&mut tx, vec![values.clone()])
+        let model = companies.with_context([(format!("default_{field}"), value)]);
+        let row = values.clone();
+        // Validation poisons the transaction by contract; isolate each expected refusal so
+        // the following successful-create assertion exercises a usable transaction.
+        let error = tx
+            .savepoint(async move |tx| model.create(tx, vec![row]).await)
             .await
             .unwrap_err();
         assert_eq!(error.kind(), ErrorKind::Validation, "{field}");

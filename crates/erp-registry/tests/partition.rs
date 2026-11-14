@@ -327,6 +327,25 @@ fn partition_parameters_are_validated() {
         )),
         "partition of 'scale.other': premake must be 1 to 1000 intervals (got 0)",
     );
+    // upkeep may run up to one hour apart: an hourly window keeps two hours ahead
+    refused(
+        with(PartitionDecl::new(
+            PartitionInterval::Hour,
+            1,
+            PartitionRetain::All,
+        )),
+        "partition of 'scale.other': an hourly partition needs premake of at least 2 intervals, \
+         because upkeep may run up to one hour apart (got 1)",
+    );
+    build(
+        &[&PART],
+        with(PartitionDecl::new(
+            PartitionInterval::Hour,
+            2,
+            PartitionRetain::All,
+        )),
+    )
+    .expect("an hourly partition with premake 2 is accepted");
     refused(
         with(PartitionDecl::new(
             PartitionInterval::Hour,

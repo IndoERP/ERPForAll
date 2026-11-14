@@ -561,3 +561,127 @@ async fn disabling_selectability_does_not_swallow_a_malformed_relation_cell() {
     drop(tx);
     h.cleanup().await.unwrap();
 }
+
+/// Review cycle 13 S2 (topology ADR D9): the generated identity of a route or rule is refused by
+/// name on create (explicit value or context default) and on write, and only the native entry
+/// sets it.
+#[tokio::test]
+async fn generated_identity_is_refused_by_name_and_set_only_natively() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    let c = company(&mut tx, "A").await;
+    let pt = picking_type(&mut tx, c, "Type").await;
+    let dest = location(&mut tx, "Dest", "internal", None).await;
+    let wh = warehouse(&mut tx, c, "Generated", "GEN").await;
+    let r = route(&mut tx, "R", None).await;
+    let rl = rule(&mut tx, &r, &dest, &pt, c, "Rule").await.unwrap();
+    let refusal = |tx: &Transaction, model: &str, field: &str| {
+        let what = if model == "stock.route" {
+            "route"
+        } else {
+            "rule"
+        };
+        let field = tx
+            .registry()
+            .model(model)
+            .unwrap()
+            .field(field)
+            .unwrap()
+            .string
+            .clone();
+        erp_addon_stock::StockError::GeneratedIdentity { what, field }.to_string()
+    };
+    let base = |model: &str| {
+        if model == "stock.route" {
+            RawVals::new().set_cell("name", text("Hand-made"))
+        } else {
+            RawVals::new()
+                .set_cell("name", text("Hand-made"))
+                .set_cell("company_id", Cell::Id(c))
+                .set_cell("route_id", Cell::Id(r.ids()[0]))
+                .set_cell("location_dest_id", Cell::Id(dest.ids()[0]))
+                .set_cell("picking_type_id", Cell::Id(pt.ids()[0]))
+        }
+    };
+    for (model, record) in [("stock.route", &r), ("stock.rule", &rl)] {
+        for (field, value) in [
+            ("generated_warehouse_id", Cell::Id(wh.ids()[0])),
+            ("generated_addon", text("stock")),
+            ("generated_role", text("mto")),
+        ] {
+            let expected = refusal(&tx, model, field);
+            let explicit = create(&mut tx, model, base(model).set_cell(field, value.clone()))
+                .await
+                .unwrap_err();
+            assert_eq!(
+                (explicit.kind(), explicit.message()),
+                (ErrorKind::UserError, expected.as_str()),
+                "{model}.{field} explicit"
+            );
+            let default = tx
+                .savepoint(async |tx| {
+                    tx.env()
+                        .records(model)?
+                        .with_context([(format!("default_{field}"), Value::from_cell(&value))])
+                        .create(tx, vec![base(model)])
+                        .await
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(
+                (default.kind(), default.message()),
+                (ErrorKind::UserError, expected.as_str()),
+                "{model}.{field} context default"
+            );
+            let written = write(&mut tx, record, RawVals::new().set_cell(field, value))
+                .await
+                .unwrap_err();
+            assert_eq!(
+                (written.kind(), written.message()),
+                (ErrorKind::UserError, expected.as_str()),
+                "{model}.{field} write"
+            );
+        }
+        // The native entry the warehouse setup uses.
+        erp_addon_stock::set_generated_identity(&mut tx, record, wh.ids()[0], "stock", "mto")
+            .await
+            .unwrap();
+        assert_eq!(
+            (
+                record
+                    .cell(&mut tx, "generated_warehouse_id")
+                    .await
+                    .unwrap(),
+                record.cell(&mut tx, "generated_addon").await.unwrap(),
+                record.cell(&mut tx, "generated_role").await.unwrap(),
+            ),
+            (Cell::Id(wh.ids()[0]), text("stock"), text("mto")),
+            "{model} identity"
+        );
+        // An ordinary write of another field keeps the identity.
+        write(
+            &mut tx,
+            record,
+            RawVals::new().set_cell("name", text("Renamed")),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            record.cell(&mut tx, "generated_role").await.unwrap(),
+            text("mto")
+        );
+    }
+    let wrong = erp_addon_stock::set_generated_identity(&mut tx, &dest, wh.ids()[0], "stock", "x")
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (wrong.kind(), wrong.message()),
+        (
+            ErrorKind::Programming,
+            "stock.location has no generated route identity."
+        )
+    );
+    tx.rollback().await.unwrap();
+    drop(tx);
+    h.cleanup().await.unwrap();
+}

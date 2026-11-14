@@ -682,6 +682,12 @@ const ENTRY_POINTS: &[(&str, Class)] = &[
     ("Transaction::invalidate_model", Unchecked(TX_CONTROL)),
     ("Transaction::invalidate_records", Unchecked(TX_CONTROL)),
     (
+        "Records::modified_external",
+        Unchecked(
+            "trusted native notification after caller-owned SQL: no authorization by design, no source write or right granted; registry/provenance admission and unchanged-relation dependency traversal only",
+        ),
+    ),
+    (
         "Transaction::protecting",
         Unchecked(
             "protects fields from recomputation while `work` runs; `work`'s own calls are rows here",

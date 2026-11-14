@@ -149,6 +149,7 @@ async fn walk() {
     let orm = &runtime_orm;
     let admin = erp_orm::UserId::new(user_ids[0]).unwrap();
     let internal = erp_orm::UserId::new(user_ids[1]).unwrap();
+    partition_upkeep_default_and_technical_help(&installed.orm, orm, admin).await;
     let mut denied_tx = orm.begin(internal).await.unwrap();
     let denied_env = denied_tx.env();
     let error = read_values(
@@ -591,9 +592,125 @@ async fn walk() {
     drop(second_init);
     drop(second_system);
     second_db.cleanup().await.unwrap();
+    // The new system parameter is noupdate data: ordinary upgrades preserve operator edits.
+    let mut edit = installed.orm.begin(SUPERUSER_ID).await.unwrap();
+    let _: String = edit
+        .env()
+        .records("ir.config_parameter")
+        .unwrap()
+        .call(
+            &mut edit,
+            "set_str",
+            (
+                "base.partition_upkeep_interval_secs".to_owned(),
+                Some("60".to_owned()),
+            ),
+        )
+        .await
+        .unwrap();
+    edit.commit().await.unwrap();
+    drop(edit);
+    let upgraded = system
+        .button_immediate_upgrade(
+            &system.system_env(erp_orm::Context::new()),
+            &[erp_modules::ModuleName::new("base").unwrap()],
+        )
+        .await
+        .unwrap();
+    let mut verify = upgraded.orm.begin(SUPERUSER_ID).await.unwrap();
+    let rows = verify
+        .query(
+            "SELECT value FROM ir_config_parameter WHERE key='base.partition_upkeep_interval_secs'",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(rows[0].get::<_, String>(0), "60");
+    verify.rollback().await.unwrap();
+    drop(verify);
+    drop(upgraded);
     drop(runtime_orm);
     drop(installed);
     drop(initialized);
     drop(system);
     db.cleanup().await.unwrap();
+}
+
+/// Installed default data and owner-served Technical range; upgrade preservation is checked by the caller.
+async fn partition_upkeep_default_and_technical_help(
+    owner: &erp_orm::Orm,
+    request: &erp_orm::Orm,
+    admin: erp_orm::UserId,
+) {
+    use erp_orm::rpc::{Exposure, RpcArgs};
+    // Existing parameter access is deliberately still closed. The separate security task owns
+    // its opening; this slice must not add a broad read grant to secret-bearing rows.
+    let mut denied = request.begin(admin).await.unwrap();
+    let error = denied
+        .env()
+        .records("ir.config_parameter")
+        .unwrap()
+        .check_access(&mut denied, erp_orm::Operation::Read)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Access);
+    assert_eq!(
+        error.message(),
+        "Your access rights do not let you access 'System Parameter' (ir.config_parameter) records.\n\nNo group may do this.\n\nAsk an administrator if you need this access."
+    );
+    denied.rollback().await.unwrap();
+    drop(denied);
+    let mut tx = owner.begin(SUPERUSER_ID).await.unwrap();
+    let rows = tx
+        .query(
+            "SELECT value FROM ir_config_parameter WHERE key='base.partition_upkeep_interval_secs'",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get::<_, String>(0), "3600");
+    let view: i64 = tx.query("SELECT res_id::int8 FROM ir_model_data WHERE module='base' AND name='technical_config_param_form' AND model='ir.ui.view'", &[]).await.unwrap()[0].get(0);
+    let records = tx.env().records("ir.config_parameter").unwrap();
+    let Exposure::Exposed(method) = tx
+        .exposure()
+        .get(records.model_id(), "get_views")
+        .unwrap()
+        .clone()
+    else {
+        panic!("get_views must be exposed");
+    };
+    for mobile in [false, true] {
+        let args = erp_fields::ValueMap::from_iter([
+            (
+                "views".into(),
+                Value::List(
+                    vec![Value::List(
+                        vec![Value::Int(view), Value::str("form")].into(),
+                    )]
+                    .into(),
+                ),
+            ),
+            ("wire_major".into(), Value::Int(1)),
+            (
+                "options".into(),
+                Value::Map(Arc::new(erp_fields::ValueMap::from_iter([(
+                    "mobile".into(),
+                    Value::Bool(mobile),
+                )]))),
+            ),
+        ]);
+        let served = method
+            .call(&mut tx, records.clone(), RpcArgs::new(args))
+            .await
+            .unwrap();
+        let served = erp_fields::convert::value_to_json(&served).unwrap();
+        assert!(
+            served.to_string().contains(
+                "For base.partition_upkeep_interval_secs: 60 to 3600 whole seconds; default 3600."
+            ),
+            "{served}"
+        );
+    }
+    tx.rollback().await.unwrap();
 }

@@ -51,6 +51,7 @@ mod jobs_settings;
 pub mod jobs_settings_source;
 pub mod migrations;
 pub mod money;
+pub mod partition_upkeep_settings;
 mod partner_address;
 mod partner_address_budget;
 mod partner_address_sync;

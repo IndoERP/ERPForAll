@@ -92,6 +92,11 @@ pub(crate) async fn draft_root(
             return Err(invalid_tree());
         }
         if let Some(real) = current.as_real() {
+            // a saved parent's root is shown only to a caller who may read that parent
+            records
+                .browse_ids([current])
+                .check_access(tx, Operation::Read)
+                .await?;
             let root = roots(tx, &[real.get()])
                 .await?
                 .get(&real.get())
@@ -117,12 +122,17 @@ pub(crate) async fn accessible(tx: &mut Transaction, source: &Records) -> Result
     crate::company_lifecycle::flush(tx, "res.company", &["active"]).await?;
     // Internal identity traversal must see unselected intermediate parents. The final identities
     // are intersected with the validated selection before records leave this helper.
+    // Level by level as the reference walks child_ids: a level keeps its parents' order, siblings
+    // follow the company order (point 2), so callers that take the first branch agree.
     let rows = tx
         .query(
-            "WITH RECURSIVE tree(id,depth) AS (\
-        SELECT id,0 FROM res_company WHERE id=$1 UNION ALL \
-        SELECT c.id,t.depth+1 FROM res_company c JOIN tree t ON c.parent_id=t.id WHERE c.active\
-        ) SELECT id::int8 FROM tree ORDER BY depth,id",
+            "WITH RECURSIVE ranked AS (\
+        SELECT id,parent_id,row_number() OVER (PARTITION BY parent_id ORDER BY name,id) AS rank \
+        FROM res_company WHERE active AND parent_id IS NOT NULL\
+        ), tree(id,path) AS (\
+        SELECT id,ARRAY[]::int8[] FROM res_company WHERE id=$1 UNION ALL \
+        SELECT r.id,t.path||r.rank FROM ranked r JOIN tree t ON r.parent_id=t.id\
+        ) SELECT id::int8 FROM tree ORDER BY cardinality(path),path",
             &[&id],
         )
         .await?;

@@ -78,6 +78,7 @@ pub use generation::{
     GenerationAttachment, GenerationAttachmentFactory, GenerationCompose, GenerationComposition,
 };
 mod exclusion;
+mod external_modified;
 mod field_access;
 pub mod field_chain;
 mod field_check;
@@ -281,8 +282,8 @@ pub use transaction::raw_row::{SqlRow, SqlValue};
 pub use transaction::{
     BaseInstallGrant, BaseInstallGuard, BeginOptions, CommitError, CredentialOptions,
     FinalStatement, HookScope, Isolation, OperationControl, OperationKey, Orm, OrmBuilder,
-    OrmConfig, PureMethods, RawStatements, ReadAuditOwner, SavepointOutcome, Transaction, TxIntent,
-    WriteOp,
+    OrmConfig, PureMethods, RawStatements, ReadAuditOwner, RetryPolicy, RunFailure, RunOptions,
+    SavepointOutcome, Transaction, TxIntent, WriteOp, require_top_level_unit,
 };
 pub use typed_rel::{Cmd, Many2one, TypedRelation, X2many, X2manyValue};
 pub use upsert::{

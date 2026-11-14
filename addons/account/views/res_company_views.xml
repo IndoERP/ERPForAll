@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<erp>
+  <record id="company_accounting_form" model="ir.ui.view">
+    <field name="name">res.company.accounting.configuration</field>
+    <field name="model">res.company</field>
+    <!-- This action-specific form must not replace the general company form and its extensions. -->
+    <field name="priority">32</field>
+    <field name="arch" type="xml">
+      <form record_mode="record" create="false" delete="false">
+        <sheet>
+          <field name="name" readonly="1"/>
+          <group string="Liquidity and transfers">
+            <field name="transfer_account_id" domain="[('company_ids', 'parent_of', id)]"/>
+            <field name="account_journal_suspense_account_id" domain="[('company_ids', 'parent_of', id)]"/>
+            <field name="default_cash_difference_income_account_id" domain="[('company_ids', 'parent_of', id)]"/>
+            <field name="default_cash_difference_expense_account_id" domain="[('company_ids', 'parent_of', id)]"/>
+            <field name="bank_account_code_prefix"/>
+            <field name="cash_account_code_prefix"/>
+            <field name="transfer_account_code_prefix"/>
+          </group>
+          <group string="Discounts and exchange differences">
+            <field name="account_journal_early_pay_discount_gain_account_id" domain="[('company_ids', 'parent_of', id)]"/>
+            <field name="account_journal_early_pay_discount_loss_account_id" domain="[('company_ids', 'parent_of', id)]"/>
+            <field name="income_currency_exchange_account_id" domain="[('company_ids', 'parent_of', id)]"/>
+            <field name="expense_currency_exchange_account_id" domain="[('company_ids', 'parent_of', id)]"/>
+            <field name="currency_exchange_journal_id" domain="[('company_id', 'parent_of', id), ('type', '=', 'general')]"/>
+          </group>
+          <group string="Accruals and point of sale">
+            <field name="expense_accrual_account_id" domain="[('company_ids', 'parent_of', id)]"/>
+            <field name="revenue_accrual_account_id" domain="[('company_ids', 'parent_of', id)]"/>
+            <field name="automatic_entry_default_journal_id" domain="[('company_id', 'parent_of', id), ('type', '=', 'general')]"/>
+            <field name="account_default_pos_receivable_account_id" domain="[('company_ids', 'parent_of', id)]"/>
+          </group>
+          <group string="Accounting options">
+            <field name="tax_calculation_rounding_method"/>
+            <field name="anglo_saxon_accounting"/>
+            <field name="expects_chart_of_accounts"/>
+            <field name="chart_template" readonly="1"/>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="company_accounting_action" model="ir.actions.act_window">
+    <field name="name">Company accounting</field>
+    <field name="res_model">res.company</field>
+    <field name="view_mode">form</field>
+    <field name="view_id" ref="company_accounting_form"/>
+  </record>
+</erp>

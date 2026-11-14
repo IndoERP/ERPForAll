@@ -396,6 +396,15 @@ impl AccountJournal {
         Ok(())
     }
 
+    /// A configured journal remains compatible with each company that selected it.
+    #[constrains("company_id")]
+    async fn _check_company_configuration_links(
+        this: &RecordSet<AccountJournal>,
+        tx: &mut Transaction,
+    ) -> Result<()> {
+        crate::company::validation::check_journals(tx, &this.ids()).await
+    }
+
     /// The code is one to [`CODE_MAX_LENGTH`] characters, without a space at its start or end.
     #[constrains("code")]
     async fn _check_code(this: &RecordSet<AccountJournal>, tx: &mut Transaction) -> Result<()> {

@@ -104,6 +104,13 @@ impl Line {
         if let Some(Value::Str(mode)) = this.env().context().get("adapter_mode") {
             match mode.as_ref() {
                 "fail" => return Err(Error::programming("adapter was invoked")),
+                "notify_external" => {
+                    this.modified_external(tx, &["source"]).await?;
+                }
+                "caught_notify_external" => {
+                    // Catch the direct error to prove the enclosing adapter refusal stays sticky.
+                    let _caught = this.modified_external(tx, &["source"]).await;
+                }
                 "caught_read" => {
                     let _caught = this.as_records().cell(tx, "other").await;
                     for row in &mut rows {
@@ -111,6 +118,25 @@ impl Line {
                         row.insert("source".into(), Cell::Int(1));
                     }
                     return Ok(rows);
+                }
+                "sudo_read" => {
+                    this.as_records().sudo(true).cell(tx, "other").await?;
+                }
+                "user_read" => {
+                    this.as_records().with_user(3).cell(tx, "other").await?;
+                }
+                "company_read" => {
+                    let records = this.as_records();
+                    records
+                        .with_env(records.env().with_company(7)?)
+                        .cell(tx, "other")
+                        .await?;
+                }
+                "nested_create" => {
+                    this.as_records().create(tx, vec![total(1)]).await?;
+                }
+                "nested_write" => {
+                    this.as_records().write(tx, total(1)).await?;
                 }
                 "read_generated" => {
                     this.as_records().cell(tx, "total").await?;
@@ -488,6 +514,67 @@ async fn adapter_effect_attempts_are_sticky_and_scope_restores() {
             .unwrap();
         assert_eq!(created.cell(&mut tx, "source").await.unwrap(), Cell::Int(8));
         tx.commit().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn adapter_environment_changes_and_nested_entry_are_refused() {
+    for mode in [
+        "sudo_read",
+        "user_read",
+        "company_read",
+        "nested_create",
+        "nested_write",
+    ] {
+        let h = harness().await;
+        let mut setup = h.begin().await.unwrap();
+        setup
+            .batch(
+                "INSERT INTO res_users (id, name, login, active) VALUES \
+                 (2, 'adapter user', 'adapter_user', true), (3, 'other', 'other', true); \
+                 SELECT setval(pg_get_serial_sequence('res_users', 'id'), 3)",
+            )
+            .await
+            .unwrap();
+        setup.commit().await.unwrap();
+        let mut tx = h.begin_as(2).await.unwrap();
+        let lines = tx.env().records("input_fixture.line").unwrap();
+        let ids = lines
+            .create(
+                &mut tx,
+                vec![RawVals::new().set_cell("source", Cell::Int(8))],
+            )
+            .await
+            .unwrap()
+            .ids();
+        tx.commit().await.unwrap();
+        let mut tx = h.begin_as(2).await.unwrap();
+        let adapted = tx
+            .env()
+            .records("input_fixture.line")
+            .unwrap()
+            .with_context([("adapter_mode", Value::str(mode))]);
+        error(
+            adapted.create(&mut tx, vec![total(3)]).await.unwrap_err(),
+            ErrorKind::Programming,
+            "Generated input adapter on 'input_fixture.line' may read but cannot mutate, flush or change execution context",
+        );
+        tx.rollback().await.unwrap();
+        let mut tx = h.begin_as(2).await.unwrap();
+        let record = tx
+            .env()
+            .records("input_fixture.line")
+            .unwrap()
+            .with_context([("adapter_mode", Value::str(mode))])
+            .browse(ids)
+            .unwrap();
+        error(
+            record.write(&mut tx, total(5)).await.unwrap_err(),
+            ErrorKind::Programming,
+            "Generated input adapter on 'input_fixture.line' may read but cannot mutate, flush or change execution context",
+        );
+        tx.rollback().await.unwrap();
+        h.cleanup().await.unwrap();
     }
 }
 
@@ -1512,4 +1599,43 @@ async fn audit_rule_refuses_dirty_model() {
         ErrorKind::Programming,
         "Generated input adapter on 'input_fixture.line': read of 'input_fixture.line.write_uid' requires a flush or recompute",
     );
+}
+
+#[tokio::test]
+async fn external_notification_is_forbidden_in_generated_input_adapter() {
+    for mode in ["notify_external", "caught_notify_external"] {
+        let h = harness().await;
+        let mut tx = h.begin().await.unwrap();
+        let lines = tx.env().records("input_fixture.line").unwrap();
+        let rec = lines
+            .create(
+                &mut tx,
+                vec![RawVals::new().set_cell("source", Cell::Int(8))],
+            )
+            .await
+            .unwrap();
+        tx.flush().await.unwrap();
+        assert_eq!(rec.cell(&mut tx, "source").await.unwrap(), Cell::Int(8));
+        let adapted = rec.with_context([("adapter_mode", Value::str(mode))]);
+        error(
+            adapted.write(&mut tx, total(3)).await.unwrap_err(),
+            ErrorKind::Programming,
+            "Generated input adapter on 'input_fixture.line' may read but cannot mutate, flush or change execution context",
+        );
+        assert!(tx.is_cached(&rec, "source").unwrap());
+        assert_eq!(rec.cell(&mut tx, "source").await.unwrap(), Cell::Int(8));
+        let empty = lines.with_context([("adapter_mode", Value::str(mode))]);
+        error(
+            empty.create(&mut tx, vec![total(3)]).await.unwrap_err(),
+            ErrorKind::Programming,
+            "Generated input adapter on 'input_fixture.line' may read but cannot mutate, flush or change execution context",
+        );
+        rec.write(&mut tx, RawVals::new().set_cell("source", Cell::Int(9)))
+            .await
+            .unwrap();
+        assert_eq!(rec.cell(&mut tx, "source").await.unwrap(), Cell::Int(9));
+        tx.commit().await.unwrap();
+        drop(tx);
+        h.cleanup().await.unwrap();
+    }
 }

@@ -24,6 +24,9 @@ mod live;
 pub mod module;
 pub mod native_addons;
 pub mod node;
+mod partition_upkeep;
+#[cfg(test)]
+mod partition_upkeep_tests;
 mod pivot_export;
 pub mod scaffold;
 mod server_runtime;

@@ -48,6 +48,15 @@ pub enum StockError {
         /// The label of the field the key names.
         field: String,
     },
+    /// A create or write named the generated identity of a route or rule (warehouse, addon, role),
+    /// or a create carried a `default_<field>` context key for it. Only the warehouse setup that
+    /// generates the record sets it, through [`crate::set_generated_identity`].
+    GeneratedIdentity {
+        /// `route` or `rule`.
+        what: &'static str,
+        /// The label of the field named.
+        field: String,
+    },
 }
 
 impl fmt::Display for StockError {
@@ -81,6 +90,11 @@ impl fmt::Display for StockError {
                 "{field} of a {what} is recorded by the stock engine; a new {what} cannot take \
                  it from a default in the context."
             ),
+            Self::GeneratedIdentity { what, field } => write!(
+                f,
+                "{field} of a stock {what} is filled in only when a warehouse generates the \
+                 {what}; it cannot be set directly or from a default."
+            ),
         }
     }
 }
@@ -94,7 +108,8 @@ impl From<StockError> for erp_sdk::Error {
             | StockError::CompanyChangeForbidden
             | StockError::LocationOwnershipDerived
             | StockError::EngineOnlyField { .. }
-            | StockError::EngineOnlyDefault { .. } => Self::user(error.to_string()),
+            | StockError::EngineOnlyDefault { .. }
+            | StockError::GeneratedIdentity { .. } => Self::user(error.to_string()),
             StockError::ForbidNegativeUnavailable { .. }
             | StockError::TrackingChangeBlocked { .. } => Self::validation(error.to_string()),
         };

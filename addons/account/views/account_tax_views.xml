@@ -47,6 +47,6 @@
   <record id="view_company_tax_settings" model="ir.ui.view">
     <field name="name">res.company.tax.settings</field><field name="model">res.company</field>
     <field name="inherit_id" ref="base.settings_companies_form"/>
-    <field name="arch" type="xml"><xpath expr="//notebook" position="inside"><page name="tax_settings" string="Taxes"><group><field name="account_fiscal_country_id"/><field name="account_price_include"/></group></page></xpath></field>
+    <field name="arch" type="xml"><xpath expr="//notebook" position="inside"><page name="tax_settings" string="Taxes"><group><field name="account_fiscal_country_id"/><field name="account_price_include"/><field name="account_sale_tax_id" domain="[('type_tax_use', '=', 'sale')]"/><field name="account_purchase_tax_id" domain="[('type_tax_use', '=', 'purchase')]"/></group></page></xpath></field>
   </record>
 </erp>

@@ -1,8 +1,116 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Route lifecycle uses caller rights and one savepoint for dependent writes.
+use crate::error::StockError;
 use crate::route::{StockRoute, StockRule};
 use erp_sdk::prelude::*;
 use erp_sdk::{Command, Operation};
+
+/// The generated identity of a route or rule (topology ADR D9). Only the warehouse setup that
+/// generates the record fills it in, through [`set_generated_identity`].
+const GENERATED: [&str; 3] = [
+    "generated_warehouse_id",
+    "generated_addon",
+    "generated_role",
+];
+
+fn generated_refusal(records: &Records, field: &str) -> Result<Error> {
+    let spec = records.spec();
+    let what = if spec.name == "stock.route" {
+        "route"
+    } else {
+        "rule"
+    };
+    let field = spec
+        .field(field)
+        .map(|f| f.string.clone())
+        .ok_or_else(|| Error::internal(format!("{} has no field '{field}'", spec.name)))?;
+    Ok(StockError::GeneratedIdentity { what, field }.into())
+}
+
+/// Explicit values and `default_<field>` context keys are refused by name after the create
+/// access check; every row then starts without an identity, so no stored default supplies one
+/// (the pattern of `move_guards`).
+async fn guard_generated_create(
+    records: &Records,
+    tx: &mut Transaction,
+    vals_list: &mut [RawVals],
+) -> Result<()> {
+    let context = records.env().context();
+    let named = GENERATED.iter().copied().find(|f| {
+        context.contains(&format!("default_{f}")) || vals_list.iter().any(|v| v.contains(f))
+    });
+    if let Some(field) = named {
+        records.check_access(tx, Operation::Create).await?;
+        return Err(generated_refusal(records, field)?);
+    }
+    for vals in vals_list {
+        for field in GENERATED {
+            vals.insert(field.into(), Cell::Null);
+        }
+    }
+    Ok(())
+}
+
+async fn guard_generated_write(
+    records: &Records,
+    tx: &mut Transaction,
+    vals: &RawVals,
+) -> Result<()> {
+    if let Some(field) = GENERATED.iter().find(|f| vals.contains(f)) {
+        records.check_access(tx, Operation::Write).await?;
+        return Err(generated_refusal(records, field)?);
+    }
+    Ok(())
+}
+
+/// Records the warehouse, addon and role a generated `stock.route` or `stock.rule` fills (topology
+/// ADR D9). This is the one way to set them: the ORM `create` and `write` refuse these fields for
+/// every caller, so a warehouse generator creates the record first and then calls this native
+/// function, which no RPC call, script or WebAssembly package can reach. The database keeps the
+/// three values complete and unique per warehouse, addon and role.
+///
+/// # Errors
+///
+/// `Programming` when `record` is not exactly one existing route or rule; the database's
+/// refusal when the warehouse already has a record for that addon and role.
+pub async fn set_generated_identity(
+    tx: &mut Transaction,
+    record: &Records,
+    warehouse_id: i64,
+    addon: &str,
+    role: &str,
+) -> Result<()> {
+    let model = record.spec().name;
+    let table = match model {
+        "stock.route" => "stock_route",
+        "stock.rule" => "stock_rule",
+        other => {
+            return Err(Error::programming(format!(
+                "{other} has no generated route identity."
+            )));
+        }
+    };
+    let [id] = record.ids()[..] else {
+        return Err(Error::programming(
+            "A generated identity is set on exactly one route or rule.",
+        ));
+    };
+    tx.flush().await?;
+    let sql = format!(
+        "UPDATE public.{table} SET generated_warehouse_id = $1, generated_addon = $2, \
+         generated_role = $3 WHERE id = $4"
+    );
+    if tx
+        .execute(&sql, &[&warehouse_id, &addon, &role, &id])
+        .await?
+        != 1
+    {
+        return Err(Error::programming(format!(
+            "{model} {id} does not exist, so it cannot take a generated identity."
+        )));
+    }
+    tx.invalidate_model(model, Some(&GENERATED)).await
+}
 
 // Native constraints use the ORM's integrity environment. Diagnostics retain the outer
 // mutation reader. An owned guard also restores the stack if an awaited call is cancelled.
@@ -123,9 +231,10 @@ impl StockRoute {
     async fn create(
         this: &RecordSet<StockRoute>,
         tx: &mut Transaction,
-        vals_list: Vec<RawVals>,
+        mut vals_list: Vec<RawVals>,
         sup: Super,
     ) -> Result<Records> {
+        guard_generated_create(this.as_records(), tx, &mut vals_list).await?;
         with_caller(this.as_records(), tx, async |tx| {
             sup.call(tx, this.as_records(), (vals_list,)).await
         })
@@ -145,6 +254,7 @@ impl StockRoute {
         let records = this.as_records().clone();
         tx.savepoint(async move |tx| {
             authorize(&records, tx, &vals).await?;
+            guard_generated_write(&records, tx, &vals).await?;
             for name in ["active", "warehouse_selectable"] {
                 if !matches!(vals.get(name), None | Some(Cell::Bool(_))) {
                     return Err(Error::programming(format!(
@@ -253,6 +363,55 @@ impl StockRoute {
     ) -> Result<erp_sdk::UpsertResult> {
         refuse_upsert(this.as_records(), tx).await
     }
+
+    /// Deleting a route deletes its rules through the database cascade, where no constraint
+    /// runs. So, after the delete access check, the routes are locked (a concurrent rule insert
+    /// waits) and their rules are listed by SQL, every company included, the way the tracking
+    /// guard reads stock rows; the caller must be able to read them all.
+    #[method(override)]
+    async fn unlink(this: &RecordSet<StockRoute>, tx: &mut Transaction, sup: Super) -> Result<()> {
+        let records = this.as_records();
+        if records.is_empty() {
+            return sup.call(tx, records, ()).await;
+        }
+        records.check_access(tx, Operation::Unlink).await?;
+        let ids = records.ids();
+        tx.flush().await?;
+        crate::quant_guards::lock_guarded(
+            tx,
+            "SELECT FROM public.stock_route WHERE id = ANY($1) ORDER BY id FOR UPDATE NOWAIT",
+            &ids,
+            "routes",
+        )
+        .await?;
+        let mut rule_ids = Vec::new();
+        for row in tx
+            .query(
+                "SELECT id FROM public.stock_rule WHERE route_id = ANY($1)",
+                &[&ids],
+            )
+            .await?
+        {
+            rule_ids.push(
+                row.try_get::<_, i64>(0)
+                    .map_err(|e| Error::internal(format!("route rule read: {e}")))?,
+            );
+        }
+        if !rule_ids.is_empty()
+            && !records
+                .env()
+                .records("stock.rule")?
+                .browse(rule_ids)?
+                .has_access(tx, Operation::Read)
+                .await?
+        {
+            return Err(Error::access(
+                "This route has rules of companies you cannot access, so it cannot be deleted \
+                 here. Ask a user with access to all of its companies to do it.",
+            ));
+        }
+        sup.call(tx, records, ()).await
+    }
 }
 
 #[methods(StockRule, addon = "stock")]
@@ -261,9 +420,10 @@ impl StockRule {
     async fn create(
         this: &RecordSet<StockRule>,
         tx: &mut Transaction,
-        vals_list: Vec<RawVals>,
+        mut vals_list: Vec<RawVals>,
         sup: Super,
     ) -> Result<Records> {
+        guard_generated_create(this.as_records(), tx, &mut vals_list).await?;
         with_caller(this.as_records(), tx, async |tx| {
             sup.call(tx, this.as_records(), (vals_list,)).await
         })
@@ -277,6 +437,7 @@ impl StockRule {
         vals: RawVals,
         sup: Super,
     ) -> Result<()> {
+        guard_generated_write(this.as_records(), tx, &vals).await?;
         with_caller(this.as_records(), tx, async |tx| {
             sup.call(tx, this.as_records(), (vals,)).await
         })

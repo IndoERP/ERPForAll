@@ -7,8 +7,8 @@
 
 use std::collections::BTreeMap;
 
-use erp_sdk::Command;
 use erp_sdk::prelude::*;
+use erp_sdk::{Command, Operation};
 
 use super::code::{active_root_company, codes_by_account};
 use super::root::root_name;
@@ -142,6 +142,17 @@ pub struct AccountAccount {
         string = "Companies"
     )]
     pub company_ids: Vec<RecId>,
+    /// Default taxes when a document has no product tax choice.
+    #[field(
+        many2many,
+        comodel = "account.tax",
+        relation = "account_account_tax_default_rel",
+        column1 = "account_id",
+        column2 = "tax_id",
+        check_company = true,
+        string = "Default taxes"
+    )]
+    pub tax_ids: Vec<RecId>,
     /// The codes of the account, one per root company. Declared after `company_ids` on purpose:
     /// x2many values of a create are written in field order, and the company check of a code row
     /// reads the account's companies, which must be written first.
@@ -446,8 +457,7 @@ impl AccountAccount {
         Ok(())
     }
 
-    /// Off-balance accounts are not reconcilable. Taxes on them are refused by
-    /// the tax slice, which adds `tax_ids`.
+    /// Off-balance accounts carry neither reconciliation nor default taxes.
     #[constrains("account_type", "reconcile")]
     async fn _check_off_balance(
         this: &RecordSet<AccountAccount>,
@@ -464,6 +474,67 @@ impl AccountAccount {
             }
         }
         Ok(())
+    }
+
+    /// Separate from reconciliation so its stored recompute cannot validate taxes before
+    /// pending relation commands (for example clear plus type change) are applied.
+    #[constrains("account_type", "tax_ids")]
+    async fn _check_off_balance_taxes(
+        this: &RecordSet<AccountAccount>,
+        tx: &mut Transaction,
+    ) -> Result<()> {
+        for account in this.iter() {
+            if account
+                .get(tx, AccountAccount::ACCOUNT_TYPE)
+                .await?
+                .as_deref()
+                == Some("off_balance")
+                && !account
+                    .as_records()
+                    .related(tx, "tax_ids")
+                    .await?
+                    .is_empty()
+            {
+                return Err(Error::validation(
+                    "Off-balance accounts cannot carry default taxes: clear the taxes before changing the account type.",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// A distribution account stays until its assignments are removed. The restrictive FK also
+    /// protects against concurrent inserts.
+    #[method(override)]
+    async fn unlink(
+        this: &RecordSet<AccountAccount>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<()> {
+        let records = this.as_records();
+        records.check_access(tx, Operation::Unlink).await?;
+        if !this.is_empty() {
+            tx.flush().await?;
+            let ids = this.ids();
+            // Integrity check, not a tax-data read: only existence for admitted account ids is
+            // inspected. Hidden and archived distribution owners must still protect their FK.
+            if !tx.query("SELECT 1 FROM account_tax_repartition_line WHERE account_id = ANY($1::int8[]) LIMIT 1", &[&ids]).await?.is_empty() {
+                if records.has_access(tx, Operation::Read).await?
+                    && tx.has_field_access(this.env(), "account.account", "name", FieldOp::Read).await?
+                    && tx.has_field_access(this.env(), "account.account", "code", FieldOp::Read).await?
+                {
+                    let mut labels=Vec::new();
+                    for account in this.iter() {
+                        let name=account.get(tx,AccountAccount::NAME).await?.ok_or_else(||Error::programming("An account label is missing."))?;
+                        let code=if this.env().company_id()?.is_some() {Some(code_label(tx,&account).await?)} else {None};
+                        labels.push(if let Some(code)=code && !code.is_empty() {format!("{code}: {name}")} else {name.to_string()});
+                    }
+                    return Err(Error::user(format!("Tax distributions still use these accounts: {}. Remove their assignments before deleting the accounts.",labels.join(", "))));
+                }
+                return Err(Error::user(format!("{} account(s) cannot be deleted because tax distributions still refer to them.", ids.len())));
+            }
+        }
+        sup.call(tx, records, ()).await
     }
 
     /// An account has a company, and a bank or cash account only one; the journals
@@ -514,7 +585,8 @@ impl AccountAccount {
                 lines.join("\n")
             )));
         }
-        crate::journal::check_journal_companies(tx, this.env(), &ids).await
+        crate::journal::check_journal_companies(tx, this.env(), &ids).await?;
+        crate::company::validation::check_accounts(tx, &ids).await
     }
 
     /// The foreign currency of a journal and of its default account agree.

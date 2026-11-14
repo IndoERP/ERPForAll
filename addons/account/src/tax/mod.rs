@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Tax definition foundation. Calculation, children and reference probes are separate slices.
 mod company;
+pub(crate) use company::reject_effective as reject_effective_company_defaults;
 mod defaults;
 mod group;
 mod lifecycle;
+mod product;
 mod repartition;
 pub mod settings;
 mod uniqueness;

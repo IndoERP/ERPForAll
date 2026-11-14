@@ -1626,6 +1626,7 @@ fn native_startup_catalogue_includes_installed_packages() {
     big_stack(async {
         clone_start_probe().await;
         native_catalogue_roundtrip(CatalogueChange::Upgrade).await;
+        attachment_maintenance_with_package_computes().await;
     });
 }
 
@@ -1639,6 +1640,81 @@ fn native_startup_catalogue_refuses_added_package() {
 #[ignore = "required by CI stage wasm-startup-catalogue"]
 fn native_startup_catalogue_refuses_removed_package() {
     big_stack(native_catalogue_roundtrip(CatalogueChange::Uninstall));
+}
+
+/// The in-app attachment maintenance ORM is built from the served registry, which holds the
+/// installed package's computed fields: the server starts with it enabled and the runner claims
+/// a maintenance job (it used to stop the server at startup: compute method not found).
+async fn attachment_maintenance_with_package_computes() {
+    let db = TestDb::create().await.unwrap();
+    let role = format!("{}_web", db.name());
+    create_role(&db, &role).await;
+    let dir = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let addons = dir.path().join("addons");
+    runtime_addons::stage_runtime_addons(&root.join("addons"), &addons).unwrap();
+    let port = free_port();
+    let config_path = config(dir.path(), &db, port, &role, &addons);
+    initialize(&config_path, dir.path());
+    let node = open_node(&db, &addons).await;
+    let env = node.system().system_env(Context::new());
+    let installed = node
+        .system()
+        .button_immediate_install(&env, &[ModuleName::new("sample_library").unwrap()])
+        .await
+        .unwrap();
+    assert!(installed.post_commit.is_clean());
+    drop(installed);
+    drop(node);
+    // sample_library_wasm declares two computed fields of sample_library.book
+    let installed = result_of(&operator(
+        "install",
+        &config_path,
+        db.name(),
+        &package("sample_library_wasm"),
+        &["--approve", "none"],
+    ));
+    assert_eq!(installed["addon"], "sample_library_wasm", "{installed}");
+    let mut text = fs::read_to_string(&config_path).unwrap();
+    text.push_str("attachment_maintenance_run_in_app=true\n");
+    private(&config_path, &text);
+    let client = db.client().await.unwrap();
+    let stderr = dir.path().join("maintenance.stderr");
+    let mut server = start_server(&config_path, port, &stderr);
+    client
+            .batch_execute("INSERT INTO ir_blob_usage_delta(bytes) SELECT 0 FROM generate_series(1,7); UPDATE erp_job SET run_after=clock_timestamp() WHERE kind='base.attachment_usage_compact'")
+            .await
+            .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        if let Some(status) = server.0.try_wait().unwrap() {
+            panic!(
+                "server with attachment maintenance exited {status}: {}",
+                fs::read_to_string(&stderr).unwrap()
+            );
+        }
+        let ran: i64 = client
+                .query_one("SELECT count(*) FROM erp_job WHERE kind='base.attachment_usage_compact' AND state='ready' AND started_at IS NOT NULL AND last_error_code IS NULL AND run_after>clock_timestamp()", &[])
+                .await
+                .unwrap()
+                .get(0);
+        if ran > 0 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "attachment maintenance did not run: {}",
+            fs::read_to_string(&stderr).unwrap()
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    stop_catalogue_server(server);
+    drop(client);
+    drop_role(db, &role).await;
 }
 
 async fn clone_start_probe() {
