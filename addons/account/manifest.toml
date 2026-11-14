@@ -3,16 +3,18 @@ summary = "Journals, ledgers, taxes, invoices and payments"
 category = "Accounting"
 author = "Arkana"
 license = "MIT OR Apache-2.0"
-version = "1.0.0"
+version = "1.1.0"
 depends = ["base", "product", "analytic"]
 application = true
 exact_only = true
 # Data order: security/account_security.xml first, then the default data of each
 # model (data/*.xml), then views and report actions, then menus after the actions they point to, and
-# security/ir.access.csv last. No demo files until the onboarding slice. Tests/manifest_order.rs holds it.
+# security/ir.access.csv last. Demo files (loaded only with demo data, after every data file) are our own
+# small generic ledger and its journals, one file per model family; tests/manifest_order.rs holds both lists.
 data = [
     "security/account_security.xml",
     "data/account_data.xml",
+    "data/fiscal_country_groups.xml",
     "views/product_tax_views.xml",
     "views/account_views.xml",
     "views/account_journal_views.xml",
@@ -21,4 +23,7 @@ data = [
     "views/account_menus.xml",
     "security/ir.access.csv",
 ]
-demo = []
+demo = [
+    "demo/account_account_demo.xml",
+    "demo/account_journal_demo.xml",
+]

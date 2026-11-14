@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<!-- Demo journals of the main company, one per journal type except credit card, on the demo ledger
+     accounts, and one extra ledger with its own adjustment journal. Invented records. -->
+<erp>
+  <record id="journal_group_demo_management" model="account.journal.group">
+    <field name="name">Management Reporting</field>
+    <field name="sequence">20</field>
+  </record>
+
+  <record id="journal_demo_sale" model="account.journal">
+    <field name="name">Customer Invoices</field>
+    <field name="code">INV</field>
+    <field name="type">sale</field>
+    <field name="company_id" ref="base.main_company"/>
+    <field name="default_account_id" ref="account_demo_product_sales"/>
+    <field name="sequence">5</field>
+    <field name="color">11</field>
+  </record>
+  <record id="journal_demo_purchase" model="account.journal">
+    <field name="name">Vendor Bills</field>
+    <field name="code">BILL</field>
+    <field name="type">purchase</field>
+    <field name="company_id" ref="base.main_company"/>
+    <field name="default_account_id" ref="account_demo_purchases"/>
+    <field name="sequence">6</field>
+    <field name="color">3</field>
+  </record>
+  <record id="journal_demo_bank" model="account.journal">
+    <field name="name">Main Bank</field>
+    <field name="code">BNK1</field>
+    <field name="type">bank</field>
+    <field name="company_id" ref="base.main_company"/>
+    <field name="default_account_id" ref="account_demo_bank"/>
+    <field name="sequence">7</field>
+  </record>
+  <record id="journal_demo_cash" model="account.journal">
+    <field name="name">Petty Cash Box</field>
+    <field name="code">CSH1</field>
+    <field name="type">cash</field>
+    <field name="company_id" ref="base.main_company"/>
+    <field name="default_account_id" ref="account_demo_cash"/>
+    <field name="sequence">8</field>
+  </record>
+  <record id="journal_demo_general" model="account.journal">
+    <field name="name">General Journal</field>
+    <field name="code">GEN</field>
+    <field name="type">general</field>
+    <field name="company_id" ref="base.main_company"/>
+    <field name="sequence">9</field>
+    <field name="show_on_dashboard" eval="False"/>
+  </record>
+  <record id="journal_demo_management" model="account.journal">
+    <field name="name">Management Adjustments</field>
+    <field name="code">MGMT</field>
+    <field name="type">general</field>
+    <field name="company_id" ref="base.main_company"/>
+    <field name="journal_group_id" ref="journal_group_demo_management"/>
+    <field name="sequence">10</field>
+    <field name="show_on_dashboard" eval="False"/>
+  </record>
+</erp>

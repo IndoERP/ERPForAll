@@ -42,9 +42,9 @@ async fn company(tx: &mut Transaction, name: &str, parent: Option<i64>) -> i64 {
     };
     tx.query(
         "WITH n AS (SELECT nextval(pg_get_serial_sequence('res_company', 'id')) AS id) \
-         INSERT INTO res_company (id, name, active, currency_id, parent_id, parent_path, account_price_include, tax_calculation_rounding_method, anglo_saxon_accounting, expects_chart_of_accounts) \
+         INSERT INTO res_company (id, name, active, currency_id, parent_id, parent_path, account_price_include, tax_calculation_rounding_method, anglo_saxon_accounting, expects_chart_of_accounts, fpos_revision) \
          SELECT id, $1, true, $2, $3::int8, \
-                COALESCE((SELECT parent_path FROM res_company WHERE id = $3::int8), '') || id::text || '/', 'tax_excluded','round_globally',false,true \
+                COALESCE((SELECT parent_path FROM res_company WHERE id = $3::int8), '') || id::text || '/', 'tax_excluded','round_globally',false,true,0 \
          FROM n RETURNING id::int8",
         &[&name, &currency, &parent],
     )

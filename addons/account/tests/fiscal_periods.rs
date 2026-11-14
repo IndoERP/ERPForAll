@@ -80,9 +80,9 @@ async fn company(h: &Harness, name: &str, parent: Option<i64>) -> i64 {
     client
         .query_one(
             "WITH n AS (SELECT nextval(pg_get_serial_sequence('res_company', 'id')) AS id) \
-             INSERT INTO res_company (id, name, active, currency_id, parent_id, parent_path, account_price_include, tax_calculation_rounding_method, anglo_saxon_accounting, expects_chart_of_accounts) \
+             INSERT INTO res_company (id, name, active, currency_id, parent_id, parent_path, account_price_include, tax_calculation_rounding_method, anglo_saxon_accounting, expects_chart_of_accounts, fpos_revision) \
              SELECT id, $1, true, $2, $3::int8, \
-                    COALESCE((SELECT parent_path FROM res_company WHERE id = $3::int8), '') || id::text || '/', 'tax_excluded','round_globally',false,true \
+                    COALESCE((SELECT parent_path FROM res_company WHERE id = $3::int8), '') || id::text || '/', 'tax_excluded','round_globally',false,true,0 \
              FROM n RETURNING id::int8",
             &[&name, &currency, &parent],
         )
@@ -1036,8 +1036,8 @@ async fn a_company_without_a_valid_parent_path_is_refused_and_is_no_ancestor() {
     for (name, path) in [("No path", None), ("Empty path", Some(""))] {
         let id: i64 = client
             .query_one(
-                "INSERT INTO res_company (name, active, currency_id, parent_path, hard_lock_date, account_price_include, tax_calculation_rounding_method, anglo_saxon_accounting, expects_chart_of_accounts) \
-                 VALUES ($1, true, $2, $3, '2030-12-31', 'tax_excluded','round_globally',false,true) RETURNING id::int8",
+                "INSERT INTO res_company (name, active, currency_id, parent_path, hard_lock_date, account_price_include, tax_calculation_rounding_method, anglo_saxon_accounting, expects_chart_of_accounts, fpos_revision) \
+                 VALUES ($1, true, $2, $3, '2030-12-31', 'tax_excluded','round_globally',false,true,0) RETURNING id::int8",
                 &[&name, &currency, &path],
             )
             .await

@@ -161,6 +161,37 @@ pub struct AccountTax {
     /// Internal row-version fence for concurrent distribution edits; not operator configuration.
     #[field(integer, readonly = true)]
     pub repartition_serial: i32,
+    /// Positions in which this tax is available.
+    #[field(
+        many2many,
+        comodel = "account.fiscal.position",
+        relation = "account_fiscal_position_account_tax_rel",
+        column1 = "account_tax_id",
+        column2 = "account_fiscal_position_id"
+    )]
+    pub fiscal_position_ids: Vec<RecId>,
+    /// Source taxes replaced by this tax.
+    #[field(
+        many2many,
+        comodel = "account.tax",
+        relation = "account_tax_alternatives",
+        column1 = "dest_tax_id",
+        column2 = "src_tax_id"
+    )]
+    pub original_tax_ids: Vec<RecId>,
+    /// Inverse replacement relation, derived from the same relation table.
+    #[field(
+        many2many,
+        comodel = "account.tax",
+        relation = "account_tax_alternatives",
+        column1 = "src_tax_id",
+        column2 = "dest_tax_id",
+        readonly = true
+    )]
+    pub replacing_tax_ids: Vec<RecId>,
+    /// A global tax or a tax belonging to its company's domestic position.
+    #[field(boolean, compute = "_compute_fpos_domestic")]
+    pub is_domestic: bool,
 }
 
 #[methods(AccountTax, addon = "account")]

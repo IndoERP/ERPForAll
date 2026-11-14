@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<!-- Demo ledger of the main company: three reporting tags and a small generic chart of twenty accounts,
+     one or more per account type group, so the chart, the tag filters and the journal defaults have
+     something to show. Invented records; a localized chart arrives with the chart templates. -->
+<erp>
+  <record id="account_tag_demo_liquidity" model="account.account.tag">
+    <field name="name">Liquidity Review</field>
+    <field name="applicability">accounts</field>
+    <field name="color">4</field>
+  </record>
+  <record id="account_tag_demo_payroll" model="account.account.tag">
+    <field name="name">Payroll Costs</field>
+    <field name="applicability">accounts</field>
+    <field name="color">2</field>
+  </record>
+  <record id="account_tag_demo_premises" model="account.account.tag">
+    <field name="name">Premises Costs</field>
+    <field name="applicability">accounts</field>
+    <field name="color">7</field>
+  </record>
+
+  <!-- Assets -->
+  <record id="account_demo_bank" model="account.account">
+    <field name="name">Main Bank Account</field>
+    <field name="code">101100</field>
+    <field name="account_type">asset_cash</field>
+    <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
+    <field name="tag_ids" eval="[(6, 0, [ref('account_tag_demo_liquidity')])]"/>
+  </record>
+  <record id="account_demo_cash" model="account.account">
+    <field name="name">Petty Cash</field>
+    <field name="code">101200</field>
+    <field name="account_type">asset_cash</field>
+    <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
+    <field name="tag_ids" eval="[(6, 0, [ref('account_tag_demo_liquidity')])]"/>
+  </record>
+  <record id="account_demo_receivable" model="account.account">
+    <field name="name">Trade Receivables</field>
+    <field name="code">121000</field>
+    <field name="account_type">asset_receivable</field>
+    <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
+    <field name="tag_ids" eval="[(6, 0, [ref('account_tag_operating')])]"/>
+  </record>
+  <record id="account_demo_goods" model="account.account">
+    <field name="name">Goods for Resale</field>
+    <field name="code">131000</field>
+    <field name="account_type">asset_current</field>
+    <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
+  </record>
+  <record id="account_demo_prepaid_rent" model="account.account">
+    <field name="name">Prepaid Rent</field>
+    <field name="code">141000</field>
+    <field name="account_type">asset_prepayments</field>
+    <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
+    <field name="tag_ids" eval="[(6, 0, [ref('account_tag_demo_premises')])]"/>
+  </record>
+  <record id="account_demo_equipment" model="account.account">
+    <field name="name">Office Equipment</field>
+    <field name="code">151000</field>
+    <field name="account_type">asset_fixed</field>
+    <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
+    <field name="tag_ids" eval="[(6, 0, [ref('account_tag_investing')])]"/>
+  </record>
+
+  <!-- Liabilities -->
+  <record id="account_demo_payable" model="account.account">
+    <field name="name">Trade Payables</field>
+    <field name="code">211000</field>
+    <field name="account_type">liability_payable</field>
+    <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
+    <field name="tag_ids" eval="[(6, 0, [ref('account_tag_operating')])]"/>
+  </record>
+  <record id="account_demo_tax_payable" model="account.account">
+    <field name="name">Sales Tax Payable</field>
+    <field name="code">221000</field>
+    <field name="account_type">liability_current</field>
+    <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
+  </record>
+  <record id="account_demo_loan" model="account.account">
+    <field name="name">Long-term Bank Loan</field>
+    <field name="code">251000</field>
+    <field name="account_type">liability_non_current</field>
+    <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
+    <field name="tag_ids" eval="[(6, 0, [ref('account_tag_financing')])]"/>
+  </record>
+
+  <!-- Equity -->
+  <record id="account_demo_capital" model="account.account">
+    <field name="name">Owner Capital</field>
+    <field name="code">301000</field>
+    <field name="account_type">equity</field>
+    <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
+    <field name="tag_ids" eval="[(6, 0, [ref('account_tag_financing')])]"/>
+  </record>
+  <record id="account_demo_year_earnings" model="account.account">
+    <field name="name">Profit of the Year</field>
+    <field name="code">399000</field>
+    <field name="account_type">equity_unaffected</field>
+    <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
+  </record>
+
+  <!-- Income -->
+  <record id="account_demo_product_sales" model="account.account">
+    <field name="name">Product Sales</field>
+    <field name="code">401000</field>
+    <field name="account_type">income</field>
+    <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
+  </record>
+  <record id="account_demo_service_revenue" model="account.account">
+    <field name="name">Service Revenue</field>
+    <field name="code">402000</field>
+    <field name="account_type">income</field>
+    <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
+  </record>
+  <record id="account_demo_interest_received" model="account.account">
+    <field name="name">Interest Received</field>
+    <field name="code">481000</field>
+    <field name="account_type">income_other</field>
+    <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
+  </record>
+
+  <!-- Expenses -->
+  <record id="account_demo_cost_of_sales" model="account.account">
+    <field name="name">Cost of Goods Sold</field>
+    <field name="code">501000</field>
+    <field name="account_type">expense_direct_cost</field>
+    <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
+  </record>
+  <record id="account_demo_purchases" model="account.account">
+    <field name="name">Purchased Supplies</field>
+    <field name="code">511000</field>
+    <field name="account_type">expense</field>
+    <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
+  </record>
+  <record id="account_demo_office_rent" model="account.account">
+    <field name="name">Office Rent</field>
+    <field name="code">611000</field>
+    <field name="account_type">expense</field>
+    <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
+    <field name="tag_ids" eval="[(6, 0, [ref('account_tag_demo_premises')])]"/>
+  </record>
+  <record id="account_demo_salaries" model="account.account">
+    <field name="name">Salaries and Wages</field>
+    <field name="code">621000</field>
+    <field name="account_type">expense</field>
+    <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
+    <field name="tag_ids" eval="[(6, 0, [ref('account_tag_demo_payroll')])]"/>
+  </record>
+  <record id="account_demo_depreciation" model="account.account">
+    <field name="name">Depreciation of Equipment</field>
+    <field name="code">681000</field>
+    <field name="account_type">expense_depreciation</field>
+    <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
+  </record>
+  <record id="account_demo_bank_charges" model="account.account">
+    <field name="name">Bank Charges</field>
+    <field name="code">691000</field>
+    <field name="account_type">expense_other</field>
+    <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
+  </record>
+</erp>

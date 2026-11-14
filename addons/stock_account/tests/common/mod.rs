@@ -37,7 +37,7 @@ pub async fn harness() -> Harness {
 /// Raw fixtures deliberately avoid future valuation writers and unrelated product create hooks.
 pub async fn seed(tx: &mut Transaction) {
     let currency = erp_testkit::fixtures::seed_currency_in(tx).await.unwrap();
-    tx.execute("INSERT INTO res_company (id,name,currency_id,parent_path,account_price_include,tax_calculation_rounding_method,anglo_saxon_accounting,expects_chart_of_accounts) VALUES (101,'C1',$1,'101/','tax_excluded','round_globally',false,true),(102,'C2',$1,'102/','tax_excluded','round_globally',false,true)", &[&currency]).await.unwrap();
+    tx.execute("INSERT INTO res_company (id,name,currency_id,parent_path,account_price_include,tax_calculation_rounding_method,anglo_saxon_accounting,expects_chart_of_accounts,fpos_revision) VALUES (101,'C1',$1,'101/','tax_excluded','round_globally',false,true,0),(102,'C2',$1,'102/','tax_excluded','round_globally',false,true,0)", &[&currency]).await.unwrap();
     tx.batch("INSERT INTO uom_uom(id,name,relative_factor) VALUES (101,'{\"en_US\":\"Unit\"}',1);
         INSERT INTO product_category(id,name) VALUES (101,'{\"en_US\":\"Category\"}');
         INSERT INTO product_template(id,name,uom_id,type) VALUES (101,'{\"en_US\":\"P1\"}',101,'consu'),(102,'{\"en_US\":\"P2\"}',101,'consu');

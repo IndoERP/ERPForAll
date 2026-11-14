@@ -180,6 +180,20 @@ async fn defaults() {
             panic!("commands");
         };
         assert_eq!(commands.len(), 2);
+        // the form validates required fields of each proposed line, so the percentage must be in the proposal
+        for command in commands.iter() {
+            let Value::List(triple) = command else {
+                panic!("command triple");
+            };
+            let Value::Map(line) = &triple[2] else {
+                panic!("line values");
+            };
+            assert_eq!(
+                line.get("factor_percent"),
+                Some(&Value::from_cell(&Cell::Decimal(Decimal::from(100)))),
+                "{field}: a proposed distribution line carries its percentage"
+            );
+        }
     }
     let tax = taxes
         .create(

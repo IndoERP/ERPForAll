@@ -44,9 +44,9 @@ pub async fn company(h: &Harness, parent: Option<i64>) -> i64 {
         None => erp_testkit::fixtures::seed_currency(&client).await.unwrap(),
     };
     client.query_one("WITH n AS (SELECT nextval(pg_get_serial_sequence('res_company','id')) AS id) \
-        INSERT INTO res_company(id,name,active,currency_id,parent_id,parent_path,account_price_include,tax_calculation_rounding_method,anglo_saxon_accounting,expects_chart_of_accounts) \
+        INSERT INTO res_company(id,name,active,currency_id,parent_id,parent_path,account_price_include,tax_calculation_rounding_method,anglo_saxon_accounting,expects_chart_of_accounts,fpos_revision) \
         SELECT id,'Lock test',true,$1,$2::int8,COALESCE((SELECT parent_path FROM res_company \
-        WHERE id=$2::int8),'') || id::text || '/','tax_excluded','round_globally',false,true FROM n RETURNING id::int8",
+        WHERE id=$2::int8),'') || id::text || '/','tax_excluded','round_globally',false,true,0 FROM n RETURNING id::int8",
         &[&currency,&parent]).await.unwrap().get(0)
 }
 pub async fn periods(h: &Harness, company: i64) {

@@ -67,7 +67,9 @@ pub(super) async fn complete(
                         Command::create(
                             RawVals::new()
                                 .set_cell("document_type", Cell::Str(document.into()))
-                                .set_cell("repartition_type", Cell::Str(kind.into())),
+                                .set_cell("repartition_type", Cell::Str(kind.into()))
+                                // the field default, proposed explicitly: the form checks required line fields
+                                .set_cell("factor_percent", Cell::Decimal(Decimal::from(100))),
                         )
                         .to_value()
                     })),

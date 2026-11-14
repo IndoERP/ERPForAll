@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! The data list of the `account` manifest keeps the order.
+//! The data and demo lists of the `account` manifest keep the order.
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "tests")]
 
 #[test]
@@ -27,4 +27,30 @@ fn data_list_order_security_first_access_last() {
             "security/ir.access.csv must be last: {data:?}"
         );
     }
+}
+
+/// Demo files sit under `demo/`, are listed only in `demo` (never in `data`) and exist on disk.
+#[test]
+fn demo_files_are_listed_apart_from_data() {
+    let manifest: toml::Table = include_str!("../manifest.toml").parse().unwrap();
+    let list = |key: &str| -> Vec<String> {
+        manifest[key]
+            .as_array()
+            .unwrap_or_else(|| panic!("{key} is a list"))
+            .iter()
+            .map(|v| v.as_str().expect("entries are strings").to_owned())
+            .collect()
+    };
+    let (data, demo) = (list("data"), list("demo"));
+    assert!(!demo.is_empty(), "account ships demo files");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for file in &demo {
+        assert!(file.starts_with("demo/"), "{file} is not under demo/");
+        assert!(!data.contains(file), "{file} is listed in data too");
+        assert!(root.join(file).is_file(), "{file} does not exist");
+    }
+    assert!(
+        data.iter().all(|f| !f.starts_with("demo/")),
+        "a demo file is listed in data: {data:?}"
+    );
 }
