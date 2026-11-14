@@ -2365,6 +2365,18 @@ impl WasmLifecycle {
         self.system.load().await
     }
 
+    /// [`Self::load`] for the caller of a module operation that runs next: the packages, then
+    /// [`ModuleSystem::load_before_operation`] (no `_register_hook` pass; the operation runs it on
+    /// its final registry).
+    ///
+    /// # Errors
+    /// The errors of [`Self::load`] other than those of `_register_hook`.
+    pub async fn load_before_operation(&self) -> Result<LoadOutcome> {
+        let _gate = self.gate.lock().await;
+        self.admit_installed_packages_locked().await?;
+        self.system.load_before_operation().await
+    }
+
     /// Verify and register stored packages for explicit owner administration without loading
     /// the registry or recovering pending module work. This changes only the rebuildable
     /// process-local package index; it grants no lifecycle authority and writes no database rows.

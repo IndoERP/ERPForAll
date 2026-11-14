@@ -7,7 +7,9 @@
 //!   reflection rows, identities and access rows, the tax views, actions and menus, and the five
 //!   company columns of the tax and lock slices with their field rows;
 //! - stock: the columns it adds to `res_company`, `res_partner` and `res_users` with their field
-//!   rows and the two partner location defaults (`ir.default` rows and identities) it seeds;
+//!   rows and the two partner location defaults (`ir.default` rows and identities) it seeds; all
+//!   of its security data (the thirteen groups, their privilege and implication links, the access
+//!   rows; main's stock shipped none) and its Settings views, actions and menus;
 //!   version 1.0.0, so its 1.1 `pre` step is selected and those base tables wait for stock's
 //!   step while account and barcodes load (database review r6, S2);
 //! - product: version 1.1.0 only;
@@ -15,7 +17,13 @@
 //! - the main company's barcode nomenclature is cleared, so the barcodes data function writes a
 //!   company while those tables wait.
 //!
-//! It does NOT prove: an upgrade from a database the previous binary built (this one is built by
+//! Each upgrade follows the load `erp module upgrade` runs first
+//! (`load_before_operation`, no `_register_hook`); a plain load of the rewound database (a server
+//! start before the upgrade) still refuses at the settings hook, and one after the upgrades passes.
+//!
+//! It does NOT prove: the `erp module upgrade` command itself (`live.rs` is not run here, only the
+//! module-system calls it makes); product's new privilege, which stays in place here; an upgrade
+//! from a database the previous binary built (this one is built by
 //! today's code and only partly rewound; today's metadata elsewhere stays); the stock 1.0.0 shape
 //! of its own tables and SQL objects (`stock_install/upgrade_from_main.rs`) or the product 1.1.0
 //! shape (`product_install/upgrade_from_main.rs`); rows other than default data; the
@@ -52,6 +60,16 @@ const TAX_RECORDS: [&str; 11] = [
     "view_tax_repartition_form",
     "action_taxes",
     "action_tax_groups",
+];
+/// Stock's Settings entry (`views/settings_views.xml`), children before parents.
+const STOCK_SETTINGS_RECORDS: [&str; 7] = [
+    "menu_stock_settings",
+    "menu_stock_config_settings",
+    "menu_stock_root",
+    "inventory_settings_action",
+    "inventory_addons_action",
+    "inventory_settings_form",
+    "inventory_addons_form",
 ];
 const ACCOUNT_COMPANY_COLUMNS: [&str; 5] = [
     "account_fiscal_country_id",
@@ -171,18 +189,18 @@ async fn version(client: &Client, addon: &str) -> String {
         .get(0)
 }
 
-/// Take the tax views, actions and menus out through the ORM, so their tables stay consistent.
-async fn remove_tax_records(orm: &erp_orm::Orm) {
+/// Take views, actions and menus out through the ORM, so their tables stay consistent.
+async fn remove_records(orm: &erp_orm::Orm, module: &str, names: &[&str]) {
     let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
-    for name in TAX_RECORDS {
+    for name in names {
         let row = tx
             .query(
-                "SELECT model, res_id FROM ir_model_data WHERE module = 'account' AND name = $1",
-                &[&name],
+                "SELECT model, res_id FROM ir_model_data WHERE module = $1 AND name = $2",
+                &[&module, name],
             )
             .await
             .unwrap();
-        assert_eq!(row.len(), 1, "account.{name} is installed");
+        assert_eq!(row.len(), 1, "{module}.{name} is installed");
         let model: String = row[0].get(0);
         let id: i64 = row[0].get(1);
         tx.env()
@@ -201,11 +219,39 @@ async fn rewind_to_main(client: &Client) {
     let tax_records: Vec<&str> = TAX_RECORDS.to_vec();
     let tax_models: Vec<&str> = TAX_MODELS.to_vec();
     let account_columns: Vec<&str> = ACCOUNT_COMPANY_COLUMNS.to_vec();
+    let stock_settings: Vec<&str> = STOCK_SETTINGS_RECORDS.to_vec();
     client.batch_execute("BEGIN").await.unwrap();
     client
         .execute(
             "DELETE FROM ir_model_data WHERE module = 'account' AND name = ANY($1)",
             &[&tax_records],
+        )
+        .await
+        .unwrap();
+    client
+        .execute(
+            "DELETE FROM ir_model_data WHERE module = 'stock' AND name = ANY($1)",
+            &[&stock_settings],
+        )
+        .await
+        .unwrap();
+    // Main's stock shipped no security data: its groups, privilege and access rows go, with the
+    // implication links (as `stock_install/upgrade_from_main.rs` does).
+    client
+        .batch_execute(
+            "CREATE TEMP TABLE later_stock_security ON COMMIT DROP AS
+                SELECT id, model, res_id FROM ir_model_data WHERE module = 'stock'
+                AND model IN ('ir.access', 'res.groups', 'res.groups.privilege');
+            DELETE FROM ir_access WHERE id IN
+                (SELECT res_id FROM later_stock_security WHERE model = 'ir.access');
+            DELETE FROM res_groups_implied_rel WHERE gid IN
+                (SELECT res_id FROM later_stock_security WHERE model = 'res.groups') OR hid IN
+                (SELECT res_id FROM later_stock_security WHERE model = 'res.groups');
+            DELETE FROM res_groups WHERE id IN
+                (SELECT res_id FROM later_stock_security WHERE model = 'res.groups');
+            DELETE FROM res_groups_privilege WHERE id IN
+                (SELECT res_id FROM later_stock_security WHERE model = 'res.groups.privilege');
+            DELETE FROM ir_model_data WHERE id IN (SELECT id FROM later_stock_security);",
         )
         .await
         .unwrap();
@@ -323,7 +369,8 @@ fn dev_set_upgrades_twice_from_the_main_shape() {
             "{:?}",
             installed.post_commit
         );
-        remove_tax_records(&installed.orm).await;
+        remove_records(&installed.orm, "account", &TAX_RECORDS).await;
+        remove_records(&installed.orm, "stock", &STOCK_SETTINGS_RECORDS).await;
         drop(installed);
         drop(init);
         drop(sys);
@@ -386,7 +433,32 @@ fn dev_set_upgrades_twice_from_the_main_shape() {
 
         let modules = ["base", "acceptance_notes"].map(|name| ModuleName::new(name).unwrap());
         let sys = system(&db);
+        // A server start on the rewound database: this binary's stock settings name groups that
+        // only stock's upgrade creates, so the plain load still refuses.
+        match sys.load().await {
+            Ok(_) => panic!("a plain load published settings whose groups are missing"),
+            Err(erp_modules::Error::StepFailed {
+                step: erp_modules::ModuleStep::RegisterHook { model },
+                source,
+                ..
+            }) => {
+                assert_eq!(model, "ir.config.setting");
+                match *source {
+                    erp_modules::Error::Orm(error) => assert_eq!(
+                        error.message(),
+                        "Setting policy references an unavailable group."
+                    ),
+                    other => panic!("unexpected source: {other:?}"),
+                }
+            }
+            Err(other) => panic!("unexpected error: {other:?}"),
+        }
         for run in 0..2 {
+            // `erp module upgrade` loads the installed set first and runs the operation as the
+            // caller of that load (`crates/erp-cli/src/live.rs`).
+            if let Err(error) = sys.load_before_operation().await {
+                panic!("load before upgrade run {run} refused: {error} ({error:?})");
+            }
             let upgraded = match Box::pin(
                 sys.button_immediate_upgrade(&sys.system_env(Context::new()), &modules),
             )
@@ -505,6 +577,27 @@ fn dev_set_upgrades_twice_from_the_main_shape() {
         }
         assert_eq!(version(&client, "stock").await, "1.4.0");
         assert_eq!(version(&client, "product").await, "1.5.0");
+        let security = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../addons/stock/security/stock_security.xml"),
+        )
+        .unwrap();
+        let shipped = i64::try_from(security.matches("model=\"res.groups\"").count()).unwrap();
+        assert_eq!(
+            count(
+                &client,
+                "SELECT count(*) FROM ir_model_data d JOIN res_groups g ON g.id = d.res_id
+                 WHERE d.module = 'stock' AND d.model = 'res.groups'",
+                &[],
+            )
+            .await,
+            shipped,
+            "stock's groups exist again"
+        );
+        // the server start after the upgrades
+        if let Err(error) = sys.load().await {
+            panic!("load after the upgrades refused: {error} ({error:?})");
+        }
         drop(sys);
         drop(client);
         db.cleanup().await.unwrap();

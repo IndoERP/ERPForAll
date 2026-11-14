@@ -121,9 +121,10 @@ async fn run(
     let system = Arc::new(builder.build().map_err(operation_error)?);
     // A load of the stored packages and the installed set first: it refuses an uninitialized
     // database and finishes operations a crashed run left pending; its ORM is the
-    // caller of the operation.
+    // caller of the operation. It runs no `_register_hook`: the operation runs them on its final
+    // registry, after its addons loaded their data (a group an upgraded addon creates).
     let loaded = WasmLifecycle::new(Arc::clone(&system), packages)
-        .load()
+        .load_before_operation()
         .await
         .map_err(operation_error)?;
     let mut caller = loaded.orm.env(SUPERUSER_ID, Context::new());

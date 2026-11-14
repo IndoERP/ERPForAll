@@ -3209,10 +3209,23 @@ impl ModuleSystem {
     /// installed module depends on a module that is not installed (nothing is loaded);
     /// [`Error::OperationWaitTimeout`]; the errors of the forced update; registry errors.
     pub async fn load(&self) -> Result<LoadOutcome> {
-        self.load_inner().await
+        self.load_inner(true).await
     }
 
-    async fn load_inner(&self) -> Result<LoadOutcome> {
+    /// [`Self::load`] without the `_register_hook` pass, for the caller of a module operation
+    /// that runs next (`erp module install | upgrade | uninstall`).
+    /// Run here, they would check this binary's
+    /// declarations against data the operation has not loaded yet, such as a group that an
+    /// upgraded addon's data file creates. Its ORM is the operation's caller only, never a
+    /// serving registry; a pending operation it finishes still runs the hooks.
+    ///
+    /// # Errors
+    /// The errors of [`Self::load`] other than those of `_register_hook`.
+    pub async fn load_before_operation(&self) -> Result<LoadOutcome> {
+        self.load_inner(false).await
+    }
+
+    async fn load_inner(&self, register_hooks_now: bool) -> Result<LoadOutcome> {
         // Retain immutable source bytes without adding lifecycle receipt matching to plain
         // loads. Native source attestation remains part of discovery admission.
         let (entries, _hashes) = self.discover_admitted().await?;
@@ -3284,10 +3297,12 @@ impl ModuleSystem {
         let loaded = graph.plain_load_names();
         let admitted_addons = ordered_addon_entries(&loaded, &entries)?;
         let orm = self.orm_for(&loaded, &entries)?;
-        let mut optx = OperationTx::plain(&orm).await?;
-        let hooked = register_hooks(&mut optx.tx, &optx.guard).await;
-        end_transaction(&mut optx, hooked).await?;
-        drop(optx);
+        if register_hooks_now {
+            let mut optx = OperationTx::plain(&orm).await?;
+            let hooked = register_hooks(&mut optx.tx, &optx.guard).await;
+            end_transaction(&mut optx, hooked).await?;
+            drop(optx);
+        }
         warn_pending_after_load(&post_commit_pending);
         Ok(LoadOutcome {
             admitted_addons,
