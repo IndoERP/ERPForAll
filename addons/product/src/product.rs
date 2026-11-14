@@ -1,7 +1,7 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Product Variant model (`product.product`).
 
 use crate::attribute::{ProductAttribute, ProductAttributeValue};
-use crate::defaults::opt_id;
 use crate::template_attribute::{ProductTemplateAttributeLine, ProductTemplateAttributeValue};
 use erp_sdk::prelude::*;
 use std::collections::{BTreeSet, HashMap};
@@ -87,6 +87,17 @@ pub struct ProductProduct {
         string = "Unit Barcode"
     )]
     pub product_uom_ids: Vec<RecId>,
+
+    /// Variant-specific packaging units, in addition to the template's units.
+    #[field(
+        many2many,
+        comodel = "uom.uom",
+        relation = "product_variant_extra_uom_rel",
+        column1 = "product_id",
+        column2 = "uom_id",
+        string = "Extra Packagings"
+    )]
+    pub extra_uom_ids: Vec<RecId>,
 
     /// Active flag.
     #[field(boolean, default = true)]
@@ -426,34 +437,52 @@ impl ProductProduct {
         vals_list: Vec<RawVals>,
         sup: Super,
     ) -> Result<Records> {
-        let tmpl_model = this.env().sudo(true).records("product.template")?;
-        let mut barcode_tuples = Vec::new();
-        for vals in &vals_list {
-            if let Some(Cell::Str(bc)) = vals.get("barcode") {
-                let tmpl_id = vals.get("product_tmpl_id").and_then(|c| match c {
-                    Cell::Id(id) => Some(*id),
+        tx.savepoint(async |tx| {
+            // Pre-lock only already-resolved parent IDs. Super validates/defaults the full values;
+            // final reconciliation uses every actual stored parent, including delegated creation.
+            let families: Vec<i64> = vals_list
+                .iter()
+                .filter_map(|v| match v.get("product_tmpl_id") {
+                    Some(Cell::Id(id)) => Some(*id),
                     _ => None,
-                });
-                // the company of the variant is the company of its template
-                let comp_id = match vals.get("company_id") {
-                    Some(c) => opt_id(c.clone(), "company_id")?,
-                    None => match tmpl_id {
-                        Some(tid) => opt_id(
-                            tmpl_model.browse(vec![tid])?.cell(tx, "company_id").await?,
-                            "company_id",
-                        )?,
-                        None => None,
-                    },
-                };
-                barcode_tuples.push((0, tmpl_id, comp_id, bc.to_string()));
-            }
-        }
+                })
+                .collect();
+            let keys = crate::barcode::prepare(tx, this.env(), &families, &[], &vals_list).await?;
+            let mirrored = crate::barcode::single_mirrors(tx, &families).await?;
+            let records: Records = sup.call(tx, this.as_records(), (vals_list,)).await?;
+            crate::barcode::drop_stale_mirrors(tx, &mirrored).await?;
+            crate::packaging_lifecycle::register_units(
+                &records,
+                tx,
+                &["uom_id", "uom_ids", "extra_uom_ids"],
+            )
+            .await?;
+            let ids: Vec<i64> = records.rec_ids().iter().map(|id| id.get()).collect();
+            let families = crate::barcode::variant_families(tx, &ids).await?;
+            crate::barcode::reconcile(tx, this.env(), &families, &[], keys).await?;
+            Ok(records)
+        })
+        .await
+    }
 
-        if !barcode_tuples.is_empty() {
-            crate::barcode::check_barcode_uniqueness(tx, this.env(), &barcode_tuples).await?;
-        }
-
-        sup.call(tx, this.as_records(), (vals_list,)).await
+    /// Release or reclassify claims even when deleting the last mirrored variant.
+    #[method(override)]
+    async fn unlink(
+        this: &RecordSet<ProductProduct>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<()> {
+        crate::barcode::refuse_bypass(this.env())?;
+        let ids: Vec<i64> = this
+            .as_records()
+            .rec_ids()
+            .iter()
+            .map(|id| id.get())
+            .collect();
+        let families = crate::barcode::variant_families(tx, &ids).await?;
+        let keys = crate::barcode::prepare(tx, this.env(), &families, &[], &[]).await?;
+        sup.call(tx, this.as_records(), ()).await?;
+        crate::barcode::reconcile(tx, this.env(), &families, &[], keys).await
     }
 
     #[method(override)]
@@ -463,38 +492,60 @@ impl ProductProduct {
         vals: RawVals,
         sup: Super,
     ) -> Result<()> {
-        if let Some(Cell::Str(bc)) = vals.get("barcode") {
-            let mut barcode_tuples = Vec::new();
-            for rec_id in this.as_records().rec_ids() {
-                let rec = this.browse(vec![rec_id.get()])?;
-                let comp_id = match vals.get("company_id") {
-                    Some(c) => opt_id(c.clone(), "company_id")?,
-                    None => opt_id(rec.cell(tx, "company_id").await?, "company_id")?,
-                };
-                let tmpl_id = opt_id(rec.cell(tx, "product_tmpl_id").await?, "product_tmpl_id")?;
-                barcode_tuples.push((rec_id.get(), tmpl_id, comp_id, bc.to_string()));
-            }
-            if !barcode_tuples.is_empty() {
-                crate::barcode::check_barcode_uniqueness(tx, this.env(), &barcode_tuples).await?;
-            }
-        }
-        if let Some(Cell::Bool(false)) = vals.get("active") {
-            let combo_item_model = this.env().sudo(true).records("product.combo.item")?;
+        tx.savepoint(async |tx| {
+            crate::barcode::refuse_bypass(this.env())?;
             let ids: Vec<i64> = this
                 .as_records()
                 .rec_ids()
                 .iter()
                 .map(|id| id.get())
                 .collect();
-            let d = Domain::condition("product_id", Operator::In, ids)?;
-            if combo_item_model.search_count(tx, &d, None).await? > 0 {
-                return Err(Error::validation(
-                    "You cannot archive a product that is part of a combo. Please remove it from the following combos first.",
-                ));
+            let mut families = crate::barcode::variant_families(tx, &ids).await?;
+            if let Some(Cell::Id(id)) = vals.get("product_tmpl_id") {
+                families.push(*id);
             }
-        }
+            let relevant = vals.contains("barcode")
+                || vals.contains("company_id")
+                || vals.contains("product_tmpl_id");
+            let keys = if relevant {
+                crate::barcode::prepare(tx, this.env(), &families, &[], std::slice::from_ref(&vals))
+                    .await?
+            } else {
+                Vec::new()
+            };
+            if let Some(Cell::Bool(false)) = vals.get("active") {
+                let combo_item_model = this.env().sudo(true).records("product.combo.item")?;
+                let ids: Vec<i64> = this
+                    .as_records()
+                    .rec_ids()
+                    .iter()
+                    .map(|id| id.get())
+                    .collect();
+                let d = Domain::condition("product_id", Operator::In, ids)?;
+                if combo_item_model.search_count(tx, &d, None).await? > 0 {
+                    return Err(Error::validation(
+                        "This product belongs to a combo, so it cannot be archived. Remove it from its combos first.",
+                    ));
+                }
+            }
 
-        sup.call(tx, this.as_records(), (vals,)).await
+            let units_changed = vals.contains("uom_id") || vals.contains("uom_ids") || vals.commands("uom_ids").is_some() || vals.contains("extra_uom_ids") || vals.commands("extra_uom_ids").is_some() || vals.contains("product_tmpl_id");
+            // A variant moved into a single-variant family ends that family's mirror.
+            let mirrored = match vals.get("product_tmpl_id") {
+                Some(Cell::Id(id)) => crate::barcode::single_mirrors(tx, &[*id]).await?,
+                _ => Vec::new(),
+            };
+            sup.call(tx, this.as_records(), (vals,)).await?;
+            crate::barcode::drop_stale_mirrors(tx, &mirrored).await?;
+            if units_changed {
+                crate::packaging_lifecycle::register_units(this.as_records(), tx, &["uom_id", "uom_ids", "extra_uom_ids"]).await?;
+            }
+            if relevant {
+                crate::barcode::reconcile(tx, this.env(), &families, &[], keys).await?;
+            }
+            Ok(())
+        })
+        .await
     }
 }
 

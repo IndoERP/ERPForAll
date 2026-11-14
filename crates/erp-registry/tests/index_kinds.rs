@@ -53,7 +53,7 @@ fn spec_ormx_023_wrong_field_kinds_are_registry_errors() {
         ])]),
         (
             ErrorKind::Programming,
-            "field 'scale.x.code': index = \"brin\" is for date, datetime and integer fields \
+            "field 'scale.x.code': index = \"brin\" is for date, datetime, integer and bigint fields \
              (this field is char)"
                 .to_owned()
         )
@@ -78,7 +78,7 @@ fn spec_ormx_023_wrong_field_kinds_are_registry_errors() {
         ]),
         (
             ErrorKind::Programming,
-            "field 'scale.x.qty': index = \"brin\" is for date, datetime and integer fields \
+            "field 'scale.x.qty': index = \"brin\" is for date, datetime, integer and bigint fields \
              (this field is float)"
                 .to_owned()
         )
@@ -87,25 +87,38 @@ fn spec_ormx_023_wrong_field_kinds_are_registry_errors() {
 
 #[test]
 fn brin_and_gin_on_their_types() {
-    let registry = build(vec![model(vec![
-        FieldDecl::date("day").index(Some(IndexKind::Brin)),
-        FieldDecl::datetime("at").index(Some(IndexKind::Brin)),
-        FieldDecl::integer("seq").index(Some(IndexKind::Brin)),
-        FieldDecl::json("payload").index(Some(IndexKind::Gin)),
-        FieldDecl::char("label")
-            .store(false)
-            .compute("_compute_label")
-            .index(Some(IndexKind::Btree)),
-    ])])
+    let registry = build(vec![
+        model(vec![
+            FieldDecl::date("day").index(Some(IndexKind::Brin)),
+            FieldDecl::datetime("at").index(Some(IndexKind::Brin)),
+            FieldDecl::integer("seq").index(Some(IndexKind::Brin)),
+            FieldDecl::bigint("wide_seq").index(Some(IndexKind::Brin)),
+            FieldDecl::json("payload").index(Some(IndexKind::Gin)),
+            FieldDecl::char("label")
+                .store(false)
+                .compute("_compute_label")
+                .index(Some(IndexKind::Btree)),
+        ])
+        .table_objects(leak(vec![TableObjectDecl::index(
+            "_wide_brin",
+            IndexDecl::new(&["wide_seq"]).method(IndexMethod::Brin),
+        )])),
+    ])
     .unwrap();
     let x = registry.model("scale.x").unwrap();
-    let kinds: Vec<_> = ["day", "at", "seq", "payload", "label"]
+    assert!(x.table_objects.iter().any(|object| matches!(
+        &object.kind,
+        TableObjectKind::TypedIndex(index)
+            if index.method == IndexMethod::Brin && index.fields == ["wide_seq"].as_slice()
+    )));
+    let kinds: Vec<_> = ["day", "at", "seq", "wide_seq", "payload", "label"]
         .iter()
         .map(|f| x.field(f).unwrap().index)
         .collect();
     assert_eq!(
         kinds,
         [
+            Some(IndexKind::Brin),
             Some(IndexKind::Brin),
             Some(IndexKind::Brin),
             Some(IndexKind::Brin),
@@ -159,7 +172,7 @@ fn spec_ormx_023_typed_index_refusals() {
         ),
         (
             IndexDecl::new(&["state"]).method(IndexMethod::Brin),
-            "index '_idx' of 'scale.x': method = \"brin\" is for date, datetime and integer \
+            "index '_idx' of 'scale.x': method = \"brin\" is for date, datetime, integer and bigint \
              fields ('state' is char)"
                 .to_owned(),
         ),
@@ -495,7 +508,7 @@ fn company_dependent_fields_are_jsonb_for_index_rules() {
         ])]),
         (
             ErrorKind::Programming,
-            "field 'scale.x.rank': index = \"brin\" is for date, datetime and integer fields \
+            "field 'scale.x.rank': index = \"brin\" is for date, datetime, integer and bigint fields \
              (this field is integer, company_dependent: a jsonb column)"
                 .to_owned()
         )

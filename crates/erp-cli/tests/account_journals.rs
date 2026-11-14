@@ -11,7 +11,7 @@
 use std::path::{Path, PathBuf};
 
 use erp_addon_account::journal::settings::{
-    ACCOUNT_TYPES, CODE_MAX_LENGTH, account_types_key, prefix_key,
+    ACCOUNT_TYPES, CODE_MAX_LENGTH, JOURNAL_TYPES, account_types_key, prefix_key,
 };
 use erp_addon_account::journal::{AccountJournal, DEFAULT_ACCOUNT_TASK, JournalSequence};
 use erp_addon_base::ir_config_setting::{read_values, write_values};
@@ -248,7 +248,19 @@ async fn codes_are_unique_per_company_and_proposed_per_type_body() {
         vec![journal_vals("Other", "sale").set_cell("code", text("INV1"))],
     )
     .await;
-    assert_refused(duplicate, "Journal codes must be unique per company.");
+    assert_refused(duplicate, "Each journal code can be used once per company.");
+    // with a proposed code in the same batch the typed duplicate is still the reason: saving
+    // again would never help
+    let mixed = create(
+        &journals,
+        &mut tx,
+        vec![
+            journal_vals("Proposed", "sale"),
+            journal_vals("Typed", "sale").set_cell("code", text("INV1")),
+        ],
+    )
+    .await;
+    assert_refused(mixed, "Each journal code can be used once per company.");
 
     let usd = currency(&mut tx, "USD").await;
     let other = records(&tx, main, "res.company");
@@ -292,7 +304,9 @@ async fn codes_are_unique_per_company_and_proposed_per_type_body() {
     let error = foreign.unwrap_err();
     assert_eq!(error.kind(), ErrorKind::UserError, "{error:?}");
     assert!(
-        error.message().contains("no company crossover is allowed")
+        error
+            .message()
+            .contains("Choose records of the same company")
             && error.message().contains("Default Account")
             && error.message().contains("Second Company"),
         "a cross-company default account is refused naming the field and the company: {error:?}"
@@ -450,7 +464,7 @@ async fn default_account_types_follow_the_journal_type_body() {
     .await;
     assert_refused(
         refused,
-        "The type of the journal's default credit/debit account shouldn't be 'receivable' or 'payable'.",
+        "A sale or purchase journal cannot take a receivable or payable account as its default account.",
     );
     let sales = create(
         &journals,
@@ -469,7 +483,7 @@ async fn default_account_types_follow_the_journal_type_body() {
     .await;
     assert_refused(
         changed,
-        "The account is already in use in a 'sale' or 'purchase' journal.",
+        "This account is the default account of a sale or purchase journal, so its type cannot be receivable or payable.",
     );
 
     let key = account_types_key("sale");
@@ -623,7 +637,7 @@ async fn journal_and_default_account_agree_on_the_foreign_currency_body() {
     .await;
     assert_refused(
         changed,
-        "The foreign currency set on the journal 'Bank' and the account 'Account 101000' must be the same.",
+        "Journal 'Bank' and account 'Account 101000' must use the same foreign currency.",
     );
 
     let pounds = account(&mut tx, main, "110000", "asset_current", Some(gbp)).await;
@@ -637,7 +651,7 @@ async fn journal_and_default_account_agree_on_the_foreign_currency_body() {
         ],
     )
     .await;
-    assert_refused(created, "must be the same");
+    assert_refused(created, "must use the same foreign currency");
     let misc = create(
         &journals,
         &mut tx,
@@ -651,7 +665,7 @@ async fn journal_and_default_account_agree_on_the_foreign_currency_body() {
         RawVals::new().set_cell("default_account_id", Cell::Id(pounds)),
     )
     .await;
-    assert_refused(moved, "must be the same");
+    assert_refused(moved, "must use the same foreign currency");
     tx.rollback().await.unwrap();
     db.cleanup().await.unwrap();
 }
@@ -680,7 +694,7 @@ async fn journal_groups_have_unique_names_and_list_their_journals_body() {
         vec![RawVals::new().set_cell("name", text("IFRS"))],
     )
     .await;
-    assert_refused(twice, "A Ledger group name must be unique.");
+    assert_refused(twice, "Another ledger already has this name.");
     let journals = records(&tx, main, "account.journal");
     let adjustments = create(
         &journals,
@@ -714,8 +728,8 @@ async fn journal_groups_have_unique_names_and_list_their_journals_body() {
         .await;
     assert_refused(
         deleted,
-        "Another model is using the record you are trying to delete.\n\n\
-         The troublemaker is: 'Journal' (account.journal)",
+        "Other records still point to the record you want to delete.\n\n\
+         Referring model: 'Journal' (account.journal)",
     );
     assert_eq!(
         adjustments.cell(&mut tx, "journal_group_id").await.unwrap(),
@@ -951,7 +965,7 @@ async fn an_account_keeps_the_companies_of_the_journals_using_it_body() {
         // and the account cannot be deleted while the journal uses it
         let used = account.clone();
         let deleted = tx.savepoint(async move |tx| used.unlink(tx).await).await;
-        assert_refused(deleted, "The troublemaker is: 'Journal' (account.journal)");
+        assert_refused(deleted, "Referring model: 'Journal' (account.journal)");
     }
 
     // a journal of a branch may use an account of its parent company only
@@ -973,6 +987,32 @@ async fn an_account_keeps_the_companies_of_the_journals_using_it_body() {
     assert_refused(
         refused,
         "is the Default Account of the journal 'Branch Sales'",
+    );
+
+    // an archived journal keeps its company on the account too
+    let account = shared_account(&mut tx, main, "420000", "income", &[main, second]).await;
+    let archived = create(
+        &journals,
+        &mut tx,
+        vec![
+            journal_vals("Old Second Sales", "sale")
+                .set_cell("company_id", Cell::Id(second))
+                .set_cell("default_account_id", Cell::Id(account.ids()[0])),
+        ],
+    )
+    .await
+    .unwrap();
+    write(
+        &archived,
+        &mut tx,
+        RawVals::new().set_cell("active", Cell::Bool(false)),
+    )
+    .await
+    .unwrap();
+    let refused = write(&account, &mut tx, only(&[main])).await;
+    assert_refused(
+        refused,
+        "is the Default Account of the journal 'Old Second Sales'",
     );
     tx.rollback().await.unwrap();
     db.cleanup().await.unwrap();
@@ -1027,16 +1067,29 @@ async fn accountant(tx: &mut Transaction, main: i64, login: &str, company: i64) 
 
 /// An internal user of `company` only, also in `extra`.
 async fn user(tx: &mut Transaction, main: i64, login: &str, company: i64, extra: i64) -> i64 {
+    user_of(tx, main, login, &[company], extra).await
+}
+
+/// An internal user of `companies` (the first is its company), also in `extra`.
+async fn user_of(
+    tx: &mut Transaction,
+    main: i64,
+    login: &str,
+    companies: &[i64],
+    extra: i64,
+) -> i64 {
     let internal = group(tx, "base", "group_user").await;
     let users = records(tx, main, "res.users");
     let vals = RawVals::new()
         .set_cell("name", text(login))
         .set_cell("login", text(login))
         .set_cell("password", text("journal-fixture-password"))
-        .set_cell("company_id", Cell::Id(company))
+        .set_cell("company_id", Cell::Id(companies[0]))
         .set_commands(
             "company_ids",
-            vec![Command::set([RecId::from_real(company).unwrap()])],
+            vec![Command::set(
+                companies.iter().map(|id| RecId::from_real(*id).unwrap()),
+            )],
         )
         .set_commands(
             "group_ids",
@@ -1194,6 +1247,322 @@ async fn journals_follow_the_company_rule_of_real_users_body() {
     db.cleanup().await.unwrap();
 }
 
+/// An `ir.access` row on `model`: a permission of `group`, or a restriction for every user.
+async fn access_row(
+    tx: &mut Transaction,
+    main: i64,
+    model: &str,
+    group: Option<i64>,
+    operation: &str,
+    domain: Option<&str>,
+) {
+    let model_id = id_of(
+        tx,
+        &format!("SELECT id::int8 FROM ir_model WHERE model = '{model}'"),
+    )
+    .await;
+    let mut vals = RawVals::new()
+        .set_cell("name", text(&format!("fixture {model} {operation}")))
+        .set_cell("model_id", Cell::Id(model_id))
+        .set_cell("operation", text(operation));
+    if let Some(group) = group {
+        vals = vals.set_cell("group_id", Cell::Id(group));
+    }
+    if let Some(domain) = domain {
+        vals = vals.set_cell("domain", text(domain));
+    }
+    let rows = records(tx, main, "ir.access");
+    create(&rows, tx, vec![vals]).await.unwrap();
+}
+
+#[test]
+fn refusals_name_only_records_the_caller_may_read() {
+    big_stack(refusals_name_only_records_the_caller_may_read_body);
+}
+
+async fn refusals_name_only_records_the_caller_may_read_body() {
+    let (db, orm) = install().await;
+    let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+    let main = main_company(&mut tx).await;
+    let second = company(&mut tx, main, "Second Company", None).await;
+    let (eur, gbp) = (
+        currency(&mut tx, "EUR").await,
+        currency(&mut tx, "GBP").await,
+    );
+    let journals = records(&tx, main, "account.journal");
+    let main_sales = create(&journals, &mut tx, vec![journal_vals("Main Sales", "sale")])
+        .await
+        .unwrap();
+    let second_sales = create(
+        &journals,
+        &mut tx,
+        vec![journal_vals("Second Sales", "sale").set_cell("company_id", Cell::Id(second))],
+    )
+    .await
+    .unwrap();
+    // an expense account no user may read, and one of the main company only
+    let hidden = account(&mut tx, main, "499000", "expense", None).await;
+    access_row(
+        &mut tx,
+        main,
+        "account.account",
+        None,
+        "r",
+        Some(&format!("[('id', '!=', {hidden})]")),
+    )
+    .await;
+    let main_expense = account(&mut tx, main, "498000", "expense", None).await;
+    // a journal in euros of the second company, on an account shared with the main company
+    let shared = shared_account(&mut tx, main, "401000", "income", &[main, second]).await;
+    write(
+        &shared,
+        &mut tx,
+        RawVals::new().set_cell("currency_id", Cell::Id(eur)),
+    )
+    .await
+    .unwrap();
+    let second_euros = create(
+        &journals,
+        &mut tx,
+        vec![
+            journal_vals("Second Euro Sales", "sale")
+                .set_cell("company_id", Cell::Id(second))
+                .set_cell("currency_id", Cell::Id(eur))
+                .set_cell("default_account_id", Cell::Id(shared.ids()[0])),
+        ],
+    )
+    .await
+    .unwrap()
+    .ids()[0];
+    // a group that writes accounts and may not read journals
+    let groups = records(&tx, main, "res.groups");
+    let writers = create(
+        &groups,
+        &mut tx,
+        vec![RawVals::new().set_cell("name", text("Account Writers"))],
+    )
+    .await
+    .unwrap()
+    .ids()[0];
+    access_row(
+        &mut tx,
+        main,
+        "account.account",
+        Some(writers),
+        "crud",
+        None,
+    )
+    .await;
+    let narrowed = shared_account(&mut tx, main, "402000", "income", &[main, second]).await;
+    let second_income = create(
+        &journals,
+        &mut tx,
+        vec![
+            journal_vals("Second Income", "sale")
+                .set_cell("company_id", Cell::Id(second))
+                .set_cell("default_account_id", Cell::Id(narrowed.ids()[0])),
+        ],
+    )
+    .await
+    .unwrap()
+    .ids()[0];
+    // every code the miscellaneous prefix allows in five characters is taken in the main company
+    set(&mut tx, CODE_MAX_LENGTH, Value::Int(5)).await;
+    let full: Vec<RawVals> = (1..=9)
+        .map(|n| {
+            journal_vals(&format!("Misc {n}"), "general")
+                .set_cell("code", text(&format!("MISC{n}")))
+        })
+        .collect();
+    create(&journals, &mut tx, full).await.unwrap();
+    let system = group(&mut tx, "base", "group_system").await;
+    user(&mut tx, main, "journal-admin", main, system).await;
+    let main_user = accountant(&mut tx, main, "main-accountant", main).await;
+    let second_user = accountant(&mut tx, main, "second-accountant", second).await;
+    let writer = user_of(&mut tx, main, "account-writer", &[main, second], writers).await;
+    tx.commit().await.unwrap();
+    let orm = policy_orm(&db, &orm).await;
+
+    let mut tx = orm
+        .begin(erp_orm::UserId::new(main_user).unwrap())
+        .await
+        .unwrap();
+    // the type of a default account the caller may not read stays out of the refusal
+    let journal = records(&tx, main, "account.journal")
+        .browse(main_sales.ids())
+        .unwrap();
+    let error = write(
+        &journal,
+        &mut tx,
+        RawVals::new().set_cell("default_account_id", Cell::Id(hidden)),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Validation, "{error:?}");
+    assert!(error.message().contains(&format!("#{hidden}")), "{error:?}");
+    assert!(!error.message().contains("expense"), "{error:?}");
+    // a journal of a company the caller lacks is named by its id
+    let account = records(&tx, main, "account.account")
+        .browse(shared.ids())
+        .unwrap();
+    let error = write(
+        &account,
+        &mut tx,
+        RawVals::new().set_cell("currency_id", Cell::Id(gbp)),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Validation, "{error:?}");
+    assert!(
+        error.message().contains(&format!(
+            "Journal '#{second_euros}' and account 'Account 401000' must use the same foreign currency"
+        )),
+        "{error:?}"
+    );
+    assert!(!error.message().contains("Second Euro Sales"), "{error:?}");
+    tx.rollback().await.unwrap();
+
+    let mut tx = orm
+        .begin(erp_orm::UserId::new(second_user).unwrap())
+        .await
+        .unwrap();
+    let own = records(&tx, second, "account.journal");
+    // an account of another company: the type rule refuses before the company check of the
+    // field, and names the account the caller cannot read by its id only
+    let journal = own.browse(second_sales.ids()).unwrap();
+    let error = write(
+        &journal,
+        &mut tx,
+        RawVals::new().set_cell("default_account_id", Cell::Id(main_expense)),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Validation, "{error:?}");
+    assert!(
+        error.message().contains(&format!("#{main_expense}")),
+        "{error:?}"
+    );
+    assert!(!error.message().contains("expense"), "{error:?}");
+    // no code is proposed in a company the caller may not create journals in
+    let error = create(
+        &own,
+        &mut tx,
+        vec![journal_vals("Into Main", "general").set_cell("company_id", Cell::Id(main))],
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Access, "{error:?}");
+    assert!(
+        !error.message().contains("No free journal code"),
+        "{error:?}"
+    );
+    tx.rollback().await.unwrap();
+
+    // a caller who may not read journals at all gets the refusal, naming the journal by its id
+    let mut tx = orm
+        .begin(erp_orm::UserId::new(writer).unwrap())
+        .await
+        .unwrap();
+    let both = tx.env().with_context([(
+        "allowed_company_ids",
+        Value::list([Value::Int(main), Value::Int(second)]),
+    )]);
+    let account = both
+        .records("account.account")
+        .unwrap()
+        .browse(narrowed.ids())
+        .unwrap();
+    let error = write(&account, &mut tx, only(&[main])).await.unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Validation, "{error:?}");
+    assert!(
+        error.message().contains(&format!(
+            "The account 'Account 402000' is the Default Account of the journal '#{second_income}'"
+        )),
+        "{error:?}"
+    );
+    assert!(!error.message().contains("Second Income"), "{error:?}");
+    tx.rollback().await.unwrap();
+    db.cleanup().await.unwrap();
+}
+
+#[test]
+fn an_unreadable_default_account_gets_one_refusal_on_every_journal_type() {
+    big_stack(an_unreadable_default_account_gets_one_refusal_on_every_journal_type_body);
+}
+
+async fn an_unreadable_default_account_gets_one_refusal_on_every_journal_type_body() {
+    let (db, orm) = install().await;
+    let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+    let main = main_company(&mut tx).await;
+    let second = company(&mut tx, main, "Second Company", None).await;
+    // accounts of the main company, one per type a journal type allows or refuses
+    let mut hidden = Vec::new();
+    for (code, account_type) in [
+        ("121000", "asset_receivable"),
+        ("211000", "liability_payable"),
+        ("400000", "income"),
+        ("600000", "expense"),
+        ("101000", "asset_cash"),
+        ("201000", "liability_credit_card"),
+        ("110000", "asset_current"),
+    ] {
+        hidden.push(account(&mut tx, main, code, account_type, None).await);
+    }
+    // a journal of each type in the second company
+    let cash = account(&mut tx, second, "101100", "asset_cash", None).await;
+    let card = account(&mut tx, second, "201100", "liability_credit_card", None).await;
+    let journals = records(&tx, second, "account.journal");
+    let mut own = Vec::new();
+    for journal_type in JOURNAL_TYPES {
+        let mut vals = journal_vals(&format!("Second {journal_type}"), journal_type)
+            .set_cell("company_id", Cell::Id(second));
+        match journal_type {
+            "cash" | "bank" => vals = vals.set_cell("default_account_id", Cell::Id(cash)),
+            "credit" => vals = vals.set_cell("default_account_id", Cell::Id(card)),
+            _ => {}
+        }
+        let journal = create(&journals, &mut tx, vec![vals]).await.unwrap();
+        own.push((journal_type, journal.ids()[0]));
+    }
+    let system = group(&mut tx, "base", "group_system").await;
+    user(&mut tx, main, "journal-admin", main, system).await;
+    let second_user = accountant(&mut tx, main, "second-only-accountant", second).await;
+    tx.commit().await.unwrap();
+    let orm = policy_orm(&db, &orm).await;
+
+    let mut tx = orm
+        .begin(erp_orm::UserId::new(second_user).unwrap())
+        .await
+        .unwrap();
+    let journals = records(&tx, second, "account.journal");
+    for (journal_type, journal) in &own {
+        let journal = journals.browse(vec![*journal]).unwrap();
+        for account in &hidden {
+            let error = write(
+                &journal,
+                &mut tx,
+                RawVals::new().set_cell("default_account_id", Cell::Id(*account)),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(
+                error.kind(),
+                ErrorKind::Validation,
+                "{journal_type} journal, account #{account}: {error:?}"
+            );
+            assert_eq!(
+                error.message(),
+                format!(
+                    "The account #{account} cannot be the default account of a {journal_type} journal."
+                ),
+                "{journal_type} journal, account #{account}"
+            );
+        }
+    }
+    tx.rollback().await.unwrap();
+    db.cleanup().await.unwrap();
+}
+
 #[test]
 fn concurrent_proposals_of_one_code_end_in_a_named_conflict() {
     big_stack(concurrent_proposals_of_one_code_end_in_a_named_conflict_body);
@@ -1243,5 +1612,101 @@ async fn concurrent_proposals_of_one_code_end_in_a_named_conflict_body() {
         "{error:?}"
     );
     drop(second);
+    db.cleanup().await.unwrap();
+}
+
+#[test]
+fn multi_company_branch_journal_checks_ancestor_and_archived_foreign_accounts() {
+    big_stack(multi_company_branch_journal_checks_ancestor_and_archived_foreign_accounts_body);
+}
+async fn multi_company_branch_journal_checks_ancestor_and_archived_foreign_accounts_body() {
+    let (db, orm) = install().await;
+    let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+    let root = main_company(&mut tx).await;
+    let companies = tx.env().records("res.company").unwrap();
+    let branch = companies
+        .create(
+            &mut tx,
+            vec![
+                RawVals::new()
+                    .set_cell("name", text("MC Branch"))
+                    .set_cell("parent_id", Cell::Id(root)),
+            ],
+        )
+        .await
+        .unwrap()
+        .ids()[0];
+    let root_currency = companies
+        .browse([root])
+        .unwrap()
+        .cell(&mut tx, "currency_id")
+        .await
+        .unwrap();
+    let other = companies
+        .create(
+            &mut tx,
+            vec![
+                RawVals::new()
+                    .set_cell("name", text("MC Other"))
+                    .set_cell("currency_id", root_currency),
+            ],
+        )
+        .await
+        .unwrap()
+        .ids()[0];
+    let parent_account = account(&mut tx, root, "MC1300", "asset_current", None).await;
+    let foreign = account(&mut tx, other, "MC2300", "asset_current", None).await;
+    records(&tx, other, "account.account")
+        .browse([foreign])
+        .unwrap()
+        .write(
+            &mut tx,
+            RawVals::new().set_cell("active", Cell::Bool(false)),
+        )
+        .await
+        .unwrap();
+    let journal = create(
+        &records(&tx, branch, "account.journal"),
+        &mut tx,
+        vec![
+            journal_vals("MC Branch journal", "general")
+                .set_cell("code", text("MC"))
+                .set_cell("company_id", Cell::Id(branch))
+                .set_cell("default_account_id", Cell::Id(parent_account)),
+        ],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        journal.cell(&mut tx, "default_account_id").await.unwrap(),
+        Cell::Id(parent_account)
+    );
+    let error = write(
+        &journal,
+        &mut tx,
+        RawVals::new().set_cell("default_account_id", Cell::Id(foreign)),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::UserError);
+    let source = std::error::Error::source(&error)
+        .unwrap()
+        .downcast_ref::<erp_sdk::CompanyError>()
+        .unwrap();
+    let erp_sdk::CompanyError::Inconsistent { items, total } = source else {
+        panic!("{source:?}")
+    };
+    assert_eq!(*total, 1);
+    assert_eq!(items[0].field, "default_account_id");
+    assert_eq!(items[0].companies, ["MC Branch"]);
+    // Assert full error propagation from its typed source without copying the legacy text;
+    // the independently asserted field/company values above establish the actual refusal.
+    assert_eq!(error.message(), source.to_string());
+    assert_eq!(
+        journal.cell(&mut tx, "default_account_id").await.unwrap(),
+        Cell::Id(parent_account)
+    );
+    tx.rollback().await.unwrap();
+    drop(tx);
     db.cleanup().await.unwrap();
 }

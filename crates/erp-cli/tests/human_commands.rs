@@ -51,7 +51,7 @@ fn runtime_grant_contract_needs_no_config_database_or_async_runtime() {
     let contract: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
         contract,
-        serde_json::json!({"version": 13, "ui_assets": "read-only", "node_features": "execute-only", "event_outbox": "insert-only", "uom_references": "guarded-monotone", "job_queue": "column-grants", "audit_trail": "insert-only", "attachment_usage": "append-only", "audit_reader": "select-only", "attachment_owner": "read-only", "attachment_pending": "guarded-create", "attachment_peer": "read-only", "attachment_recovery": "owner-write, progress-read"})
+        serde_json::json!({"version": 15, "ui_assets": "read-only", "node_features": "execute-only", "event_outbox": "insert-only", "uom_references": "guarded-monotone", "job_queue": "column-grants", "audit_trail": "insert-only", "attachment_usage": "append-only", "audit_reader": "select-only", "attachment_owner": "read-only", "attachment_pending": "guarded-create", "attachment_peer": "read-only", "attachment_recovery": "owner-write, progress-read", "sql_objects": "declared-bindings"})
     );
     assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
 }

@@ -277,6 +277,11 @@ pub struct NativePeer {
 
 impl NativeFixture {
     pub fn peer(&self) -> NativePeer {
+        self.peer_with_config("")
+    }
+
+    /// A real peer with explicitly selected node-local execution settings.
+    pub fn peer_with_config(&self, extra: &str) -> NativePeer {
         let temporary = std::env::temp_dir().canonicalize().unwrap();
         let dir = tempfile::tempdir_in(temporary).unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -300,6 +305,8 @@ impl NativeFixture {
             &format!("public_origin='http://127.0.0.1:{}'", self.port),
         );
         text.push_str("node_name='panel-peer'\n");
+        text.push_str(extra);
+        text.push('\n');
         fs::write(&config_path, text).unwrap();
         let stderr_path = dir.path().join("server.stderr");
         let mut server = Server(

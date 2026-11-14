@@ -819,3 +819,60 @@ fn overlapping_groups_require_complete_bounded_snapshots() {
     assert_eq!(error.kind(), erp_fields::ErrorKind::Validation);
     assert_eq!(error.message(), "invalid declared setting group");
 }
+
+#[test]
+fn every_kind_refuses_by_name_with_its_bounds() {
+    let selection = SettingDecl::selection(
+        "base.test_mode",
+        "Mode",
+        ScopeKind::Global,
+        "a",
+        &[("a", "A"), ("b", "B")],
+    )
+    .unwrap();
+    let cases = [
+        (
+            SettingDecl::boolean("base.test_flag", "Flag", ScopeKind::Global, true).unwrap(),
+            Value::Int(1),
+            "base.test_flag takes true or false.",
+        ),
+        (
+            SettingDecl::string("base.test_text", "Text", ScopeKind::Global, "ok", 4).unwrap(),
+            Value::str("12345"),
+            "base.test_text takes a text of at most 4 bytes.",
+        ),
+        (
+            SettingDecl::integer("base.test_count", "Count", ScopeKind::Global, 4, (1, 8)).unwrap(),
+            Value::Int(0),
+            "base.test_count takes a whole number from 1 to 8.",
+        ),
+        (
+            SettingDecl::integer("base.test_count", "Count", ScopeKind::Global, 4, (1, 8)).unwrap(),
+            Value::Int(9),
+            "base.test_count takes a whole number from 1 to 8.",
+        ),
+        (
+            SettingDecl::float(
+                "base.test_ratio",
+                "Ratio",
+                ScopeKind::Global,
+                0.5,
+                (0.25, 2.0),
+            )
+            .unwrap(),
+            Value::Float(3.0),
+            "base.test_ratio takes a number from 0.25 to 2.",
+        ),
+        (
+            selection,
+            Value::str("c"),
+            "base.test_mode takes one of a, b.",
+        ),
+    ];
+    for (decl, given, expected) in cases {
+        let error = decl.validate(&given).unwrap_err();
+        assert_eq!(error.kind(), erp_fields::ErrorKind::Validation);
+        assert_eq!(error.message(), expected);
+        assert!(!decl.kind().fits(&given));
+    }
+}

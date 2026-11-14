@@ -13,6 +13,7 @@ use erp_registry::{
 };
 
 use crate::quote;
+use erp_registry::{SqlForeignKey, SqlForeignKeyAction, SqlObjectKind as Kind};
 
 /// Version of the canonical payload format; a changed format needs a versioned migration.
 pub const FORMAT_VERSION: i32 = 1;
@@ -308,6 +309,12 @@ pub fn physical_identity(object: &SqlObject) -> String {
             quote(t.name()),
             quote(t.model().table())
         ),
+        Kind::ForeignKey(f) => format!(
+            "constraint {} on {}",
+            quote(f.name()),
+            quote(f.model().table())
+        ),
+        Kind::TableOptions(o) => format!("table {}", quote(o.model().table())),
         SqlObjectKind::Condition(c) => {
             format!("condition {} {}", c.sqlstate(), quote(c.identifier()))
         }
@@ -362,6 +369,50 @@ fn shape(object: &SqlObject) -> Vec<(&'static str, Option<String>)> {
                 ("trigger function", s(&t.function().to_string())),
             ]
         }
+        Kind::ForeignKey(f) => vec![
+            ("kind", s("foreign_key")),
+            ("constraint table", s(f.model().table())),
+            ("constraint name", s(f.name())),
+            ("local columns", s(&f.columns().join(","))),
+            ("target table", s(f.target().table())),
+            ("target columns", s(&f.target_columns().join(","))),
+            (
+                "column types",
+                s(&f.column_shapes()
+                    .iter()
+                    .map(|c| c.ty().sql())
+                    .collect::<Vec<_>>()
+                    .join(",")),
+            ),
+            (
+                "column nullability",
+                s(&payload(
+                    &f.column_shapes()
+                        .iter()
+                        .flat_map(|c| {
+                            [
+                                Some(c.local_required().to_string()),
+                                Some(c.target_required().to_string()),
+                            ]
+                        })
+                        .collect::<Vec<_>>(),
+                )),
+            ),
+            (
+                "target key",
+                s(&match f.target_key() {
+                    erp_registry::SqlForeignKeyTarget::PrimaryKey => "primary_key:id".to_owned(),
+                    erp_registry::SqlForeignKeyTarget::Key(name) => format!("key:{name}"),
+                }),
+            ),
+            ("delete action", s(&delete_action(f.on_delete()))),
+            ("deferral", s(deferral_sql(f.deferral()))),
+        ],
+        Kind::TableOptions(o) => vec![
+            ("kind", s("table_options")),
+            ("table", s(o.model().table())),
+            ("table persistence", s(o.persistence().catalog())),
+        ],
         SqlObjectKind::Condition(_) => vec![("kind", s("condition"))],
         _ => vec![("kind", s(&format!("unsupported {}", object.id())))],
     }
@@ -384,7 +435,7 @@ pub fn shape_payload(object: &SqlObject) -> String {
 /// language, volatility, the A1 search path of `schemas` and `body` (exact bytes; for a
 /// catalog-derived function the model, allow-list and the body rendered for no columns, so a
 /// changed renderer is a changed declaration), for a condition its SQLSTATE, identifier and
-/// message.
+/// message and explicit classification.
 pub fn declaration_payload(object: &SqlObject, body: &str, schemas: &[String]) -> String {
     let mut values: Vec<Option<String>> = shape(object).into_iter().map(|(_, v)| v).collect();
     match object.kind() {
@@ -408,6 +459,7 @@ pub fn declaration_payload(object: &SqlObject, body: &str, schemas: &[String]) -
             values.push(Some(c.sqlstate().to_owned()));
             values.push(Some(c.identifier().to_owned()));
             values.push(Some(c.message().to_owned()));
+            values.push(Some(c.kind().name().to_owned()));
         }
         _ => {}
     }
@@ -471,4 +523,59 @@ pub fn shape_change(object: &SqlObject, recorded: &str) -> Result<Option<&'stati
         .zip(&values)
         .find(|((_, now), was)| now != *was)
         .map(|((label, _), _)| *label))
+}
+
+/// Quoted foreign-key DDL, optionally not validated until the existing validation phase.
+pub fn create_foreign_key(f: &SqlForeignKey, not_valid: bool) -> String {
+    format!(
+        "ALTER TABLE {} ADD CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({}) ON DELETE {} {}{}",
+        quote(f.model().table()),
+        quote(f.name()),
+        quoted_columns(f.columns()),
+        quote(f.target().table()),
+        quoted_columns(f.target_columns()),
+        delete_action(f.on_delete()),
+        deferral_sql(f.deferral()),
+        if not_valid { " NOT VALID" } else { "" }
+    )
+}
+fn quoted_columns(columns: &[&str]) -> String {
+    columns
+        .iter()
+        .map(|c| quote(c))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+fn delete_action(action: SqlForeignKeyAction) -> String {
+    match action {
+        SqlForeignKeyAction::NoAction => "NO ACTION".to_owned(),
+        SqlForeignKeyAction::Restrict => "RESTRICT".to_owned(),
+        SqlForeignKeyAction::Cascade => "CASCADE".to_owned(),
+        SqlForeignKeyAction::SetNull(columns) => format!("SET NULL ({})", quoted_columns(columns)),
+    }
+}
+
+/// Restrictive removal of a validated native SQL object. Metadata-only kinds have no DDL.
+/// # Errors
+/// Programming for a kind introduced by a later vocabulary.
+pub fn drop_object(object: &SqlObject, schema: &str) -> Result<Option<String>> {
+    Ok(match object.kind() {
+        SqlObjectKind::Function(f) => Some(format!("DROP FUNCTION {} RESTRICT", signature(f))),
+        SqlObjectKind::Trigger(t) => Some(format!(
+            "DROP TRIGGER {} ON {}.{} RESTRICT",
+            quote(t.name()),
+            quote(schema),
+            quote(t.model().table())
+        )),
+        SqlObjectKind::ForeignKey(f) => Some(format!(
+            "ALTER TABLE {}.{} DROP CONSTRAINT {} RESTRICT",
+            quote(schema),
+            quote(f.model().table()),
+            quote(f.name())
+        )),
+        SqlObjectKind::Condition(_)
+        | SqlObjectKind::TableGrant(_)
+        | SqlObjectKind::TableOptions(_) => None,
+        _ => return Err(Error::programming("SQL object removal kind is unsupported")),
+    })
 }

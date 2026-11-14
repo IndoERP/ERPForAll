@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! The stock operations tables (`stock.reference`, `stock.picking`, `stock.move`)
-//! and the move line tables (`stock.move.line`, `stock.move.line.serial`,
-//! `stock.move.line.correction`) ship no access rows yet (adds them): on a real `stock`
-//! install with the compiled policy, an ordinary internal user is refused on each of them, for reading
-//! and for creating.
+//! Installed stock operational permissions: an employee can maintain reference rows,
+//! but reading and creating moves, transfers and move lines requires an operational role.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -41,6 +38,7 @@ fn system(db: &TestDb) -> ModuleSystem {
         })
         .collect();
     ModuleSystem::builder(db.pool().clone(), index)
+        .require_sql_objects([&erp_addon_stock::schema_guards::MANIFEST])
         .native_artifact_identities(identities)
         .view_types(erp_addon_web::view_type_contributions())
         .require_core_tables(erp_security::auth::core_tables())
@@ -75,15 +73,12 @@ fn run(body: impl std::future::Future<Output = ()> + Send + 'static) {
         .unwrap();
 }
 
-fn refusal(verb: &str, description: &str, model: &str) -> String {
-    format!(
-        "You are not allowed to {verb} '{description}' ({model}) records.\n\nNo group currently \
-         allows this operation.\n\nContact your administrator to request access if necessary."
-    )
-}
+#[path = "support/stock_access.rs"]
+mod stock_access;
+use stock_access::refusal;
 
 #[test]
-fn internal_user_is_refused_on_operations_tables_until_access_rows_ship() {
+fn internal_user_can_maintain_references_but_not_operational_rows() {
     run(async {
         let db = TestDb::builder().pool_size(8).create().await.unwrap();
         let system = system(&db);
@@ -173,8 +168,30 @@ fn internal_user_is_refused_on_operations_tables_until_access_rows_ship() {
         tx.commit().await.unwrap();
         drop(tx);
         let mut tx = orm.begin(UserId::new(user).unwrap()).await.unwrap();
+        let references = tx.env().records("stock.reference").unwrap();
+        let created = references
+            .create(
+                &mut tx,
+                vec![RawVals::new().set_cell("name", Cell::Str("EMPLOYEE-REF".into()))],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            created.cell(&mut tx, "name").await.unwrap(),
+            Cell::Str("EMPLOYEE-REF".into())
+        );
+        created
+            .write(
+                &mut tx,
+                RawVals::new().set_cell("name", Cell::Str("EDITED-REF".into())),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            created.cell(&mut tx, "name").await.unwrap(),
+            Cell::Str("EDITED-REF".into())
+        );
         for model in [
-            "stock.reference",
             "stock.picking",
             "stock.move",
             "stock.move.line",
@@ -195,13 +212,19 @@ fn internal_user_is_refused_on_operations_tables_until_access_rows_ship() {
                 .await
                 .unwrap_err();
             assert_eq!(error.kind(), erp_fields::ErrorKind::Access, "{model}");
-            assert_eq!(error.message(), refusal("access", description, model));
+            assert_eq!(
+                error.message(),
+                refusal(&orm, "access", "r", description, model).await
+            );
             let error = records
                 .create(&mut tx, vec![RawVals::new()])
                 .await
                 .unwrap_err();
             assert_eq!(error.kind(), erp_fields::ErrorKind::Access, "{model}");
-            assert_eq!(error.message(), refusal("create", description, model));
+            assert_eq!(
+                error.message(),
+                refusal(&orm, "create", "c", description, model).await
+            );
         }
         tx.rollback().await.unwrap();
         drop(tx);

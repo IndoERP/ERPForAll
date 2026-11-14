@@ -238,9 +238,8 @@ fn model_refused(op: Operation) -> String {
         Operation::Unlink => "delete",
     };
     format!(
-        "You are not allowed to {verb} 'Object For Test Access Right' (test_access.some_obj) \
-         records.\n\nNo group currently allows this operation.\n\nContact your administrator to \
-         request access if necessary."
+        "Your access rights do not let you {verb} 'Object For Test Access Right' (test_access.some_obj) \
+         records.\n\nNo group may do this.\n\nAsk an administrator if you need this access."
     )
 }
 
@@ -256,10 +255,8 @@ fn op_name(op: Operation) -> &'static str {
 /// The record-level refusal ('s normal-mode text) of `operation`.
 fn record_refused(w: &World, operation: &str) -> String {
     format!(
-        "Uh-oh! Looks like you have stumbled upon some top-secret records.\n\nSorry, Bob Bobman \
-         (id={}) doesn't have '{operation}' access to:\n- Object For Test Access Right \
-         (test_access.some_obj)\n\nIf you really, really need access, perhaps you can win over \
-         your friendly administrator with a batch of freshly baked cookies.",
+        "Access rules protect some of these records.\n\nBob Bobman (id={}) has no '{operation}' access to:\n- Object For Test Access Right \
+         (test_access.some_obj)\n\nAsk an administrator if you need access to these records.",
         w.bob
     )
 }

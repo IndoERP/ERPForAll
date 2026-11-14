@@ -25,6 +25,7 @@ use tokio_postgres::types::ToSql;
 
 pub(crate) mod batches;
 pub(crate) mod cursors;
+mod lifecycle_open;
 mod pipelined;
 pub(crate) mod raw_row;
 pub(crate) mod scoped_ids;
@@ -180,6 +181,8 @@ pub(crate) struct Shared {
     pub(crate) selection_callbacks: Vec<crate::version::SelectionCallback>,
     /// The job queue's settings.
     pub(crate) job_settings: Arc<crate::jobs::JobSettings>,
+    pub(crate) job_settings_source: Option<Arc<dyn crate::jobs::JobSettingsSource>>,
+    job_settings_compatibility: Option<crate::jobs::JobSettingsCompatibility>,
     /// The capability that authorizes job administration (`jobs.admin`).
     pub(crate) job_admin: Option<&'static crate::Capability>,
     /// The capability that lets a principal that is not `System` act as another user
@@ -269,6 +272,18 @@ impl Shared {
     /// (the schema changed in another process).
     pub(crate) fn bump_schema_epoch(&self) {
         self.database.bump_schema_epoch();
+    }
+}
+
+impl Shared {
+    pub(crate) async fn job_snapshot(&self) -> Result<Arc<crate::jobs::JobSettingsSnapshot>> {
+        match &self.job_settings_source {
+            Some(source) => tokio::time::timeout(self.config.timeouts.transaction(), source.read())
+                .await.map_err(|_| Error::new(erp_fields::ErrorKind::Database,
+                    "Job policy read exceeded the node transaction timeout; new admission stopped."))??
+                .on_node(&self.job_settings),
+            None => Ok(crate::jobs::JobSettingsSnapshot::static_policy((*self.job_settings).clone())),
+        }
     }
 }
 
@@ -429,6 +444,7 @@ pub struct OrmBuilder {
     required_core_tables: Vec<&'static crate::CoreTableRequirement>,
     required_job_kinds: Vec<&'static crate::jobs::JobKindRequirement>,
     job_settings: Option<Arc<crate::jobs::JobSettings>>,
+    job_settings_source: Option<Arc<dyn crate::jobs::JobSettingsSource>>,
     job_admin: Option<&'static crate::Capability>,
     impersonate: Option<&'static crate::Capability>,
     read_pool: Option<Pool>,
@@ -609,12 +625,20 @@ impl OrmBuilder {
         self
     }
 
-    /// The job queue's settings (`jobs.*`): enqueue checks payload and attempt
-    /// bounds against them and the runner takes its limits from them. Without this call every
-    /// default applies. Also allowed on a builder made by [`Orm::rebuild`].
+    /// Explicit static job policy for isolated core fixtures, or local capacity in database mode.
+    /// Without a source, absent settings use catalogue defaults. With a source, explicit Shared
+    /// process overrides are refused. Also allowed on a builder made by [`Orm::rebuild`].
     #[must_use]
     pub fn job_settings(mut self, settings: crate::jobs::JobSettings) -> Self {
         self.job_settings = Some(Arc::new(settings));
+        self
+    }
+
+    /// Use committed database authority for Shared job settings.
+    /// Local capacity comes from `job_settings`; explicit Shared process overrides are refused.
+    #[must_use]
+    pub fn job_settings_source(mut self, source: Arc<dyn crate::jobs::JobSettingsSource>) -> Self {
+        self.job_settings_source = Some(source);
         self
     }
 
@@ -921,6 +945,7 @@ impl OrmBuilder {
         crate::core_ddl::validate(&self.registry, &self.required_core_tables)?;
         crate::jobs::validate_kinds(&crate::jobs::linked_kinds(), &self.required_job_kinds)?;
         let dispatch = Dispatch::build_with(&self.registry, &self.impls, &self.wasm_methods)?;
+        crate::generated_input::validate_chains(&self.registry, &dispatch)?;
         let exposure =
             crate::rpc::ExposureTable::build(&self.registry, &dispatch, &self.rpc_impls)?;
         let computes: Vec<&'static ComputeImpl> = COMPUTE_IMPLS
@@ -1004,6 +1029,9 @@ impl OrmBuilder {
              pool defaults)"
         );
         let job_settings = self.job_settings.take().unwrap_or_default();
+        if self.job_settings_source.is_some() {
+            job_settings.refuse_shared_overrides()?;
+        }
         Ok(Orm {
             shared: Arc::new(Shared {
                 generation_attachments: Arc::new(self.generation_attachments),
@@ -1058,6 +1086,11 @@ impl OrmBuilder {
                     required_job_kinds: self.required_job_kinds,
                 },
                 job_settings,
+                job_settings_compatibility: self
+                    .job_settings_source
+                    .as_ref()
+                    .map(|s| s.compatibility()),
+                job_settings_source: self.job_settings_source,
                 job_admin: self.job_admin,
                 impersonate: self.impersonate,
             }),
@@ -1132,6 +1165,7 @@ impl Orm {
             required_core_tables: Vec::new(),
             required_job_kinds: Vec::new(),
             job_settings: None,
+            job_settings_source: None,
             job_admin: None,
             impersonate: None,
             read_pool: None,
@@ -1181,6 +1215,7 @@ impl Orm {
             required_core_tables: self.shared.extras.required_core_tables.clone(),
             required_job_kinds: self.shared.extras.required_job_kinds.clone(),
             job_settings: Some(Arc::clone(&self.shared.job_settings)),
+            job_settings_source: self.shared.job_settings_source.clone(),
             job_admin: self.shared.job_admin,
             impersonate: self.shared.impersonate,
             // the read routing of the ORM it came from: a stage registry of a module operation
@@ -1224,9 +1259,29 @@ impl Orm {
         &self.shared.extras.required_core_tables
     }
 
-    /// The job queue's settings this ORM was built with.
-    pub fn job_settings(&self) -> &crate::jobs::JobSettings {
+    /// Local job capacity and static-source settings. Shared values here are not live policy.
+    pub fn job_node_settings(&self) -> &crate::jobs::JobSettings {
         &self.shared.job_settings
+    }
+
+    /// Read the current committed job policy for a new admission.
+    /// # Errors
+    /// Source errors refuse admission; database mode never falls back to static defaults.
+    pub async fn job_settings_snapshot(&self) -> Result<Arc<crate::jobs::JobSettingsSnapshot>> {
+        self.shared.job_snapshot().await
+    }
+
+    /// Native composition can share authority with a separately pooled minimal owner ORM.
+    pub fn job_settings_source(&self) -> Option<Arc<dyn crate::jobs::JobSettingsSource>> {
+        self.shared.job_settings_source.clone()
+    }
+
+    /// Node identity checks provider compatibility in database mode, or static values otherwise.
+    pub fn job_settings_identity(&self) -> &dyn crate::node::SharedSettings {
+        match &self.shared.job_settings_compatibility {
+            Some(identity) => identity,
+            None => self.shared.job_settings.as_ref(),
+        }
     }
 
     /// The job kinds this ORM was built to require
@@ -1497,9 +1552,9 @@ impl Orm {
             read_audit_owner,
             isolation,
             raw_statements_only: false,
-            pure_methods: None,
+            method_effects: None,
             hook_scope: None,
-            pure_scratch: FxHashMap::default(),
+            effect_scratch: FxHashMap::default(),
             timeouts: timeouts.unwrap_or(self.shared.config.timeouts),
             watch: crate::timeouts::LimitWatch::default(),
             route,
@@ -1554,6 +1609,7 @@ impl Orm {
             tracking: crate::tracking::TrackBuffer::default(),
             base_installing: false,
             connection_tainted: false,
+            initial_locks: None,
             strings_unsure: false,
             operation: None,
             orm_id: self.id(),
@@ -2420,10 +2476,10 @@ pub struct Transaction {
     isolation: Isolation,
     /// Scoped refusal of record operations, independent of database isolation.
     raw_statements_only: bool,
-    pure_methods: Option<Arc<PureMethodState>>,
+    method_effects: Option<Arc<MethodEffectState>>,
     /// The live [`HookScope`]'s hook and first refusal.
     hook_scope: Option<HookScopeState>,
-    pure_scratch: FxHashMap<std::any::TypeId, Box<dyn std::any::Any + Send + Sync>>,
+    effect_scratch: FxHashMap<std::any::TypeId, Box<dyn std::any::Any + Send + Sync>>,
     /// The limits set with `BEGIN`; the errors of statements that hit them name them.
     timeouts: crate::timeouts::Timeouts,
     /// When the transaction began and its last statement was sent, and whether a limit was
@@ -2522,6 +2578,8 @@ pub struct Transaction {
     /// ([`Transaction::taint_connection`]): the connection is closed instead of going back to the
     /// pool.
     connection_tainted: bool,
+    /// Internal lifecycle opening statement, consumed before all signal/snapshot reads.
+    initial_locks: Option<String>,
     /// The server reported a new `standard_conforming_strings` or `client_encoding` on this
     /// transaction object's connection ([`Transaction::note_string_reading`], review round 5, M3):
     /// from then on every raw statement is unknown to the classifiers, and a read-intent
@@ -2631,11 +2689,58 @@ static NEXT_CONTROL_ID: AtomicU64 = AtomicU64::new(1);
 
 const PURE_EFFECT_ERROR: &str = "ForbiddenEffect: pure method scope refuses database, record, transaction or environment effects";
 
-struct PureMethodState {
-    model: &'static str,
-    methods: &'static [&'static str],
+// The same lifetime and sticky-error mechanism serves both callback policies (I4).
+// Pure nesting retains the first pure allowlist; a pure scope inside an adapter adds restrictions.
+#[derive(Clone, Copy)]
+enum MethodEffectPolicy {
+    Pure {
+        model: &'static str,
+        methods: &'static [&'static str],
+    },
+    GeneratedInput {
+        model: &'static str,
+    },
+}
+struct MethodEffectState {
+    policy: MethodEffectPolicy,
     env: Env,
-    refused: AtomicBool,
+    parent: Option<Arc<MethodEffectState>>,
+    refused: Mutex<Option<String>>,
+}
+impl MethodEffectState {
+    fn message(&self) -> String {
+        match self.policy {
+            MethodEffectPolicy::Pure { .. } => PURE_EFFECT_ERROR.to_owned(),
+            MethodEffectPolicy::GeneratedInput { model } => format!(
+                "Generated input adapter on '{model}' may read but cannot mutate, flush or change execution context"
+            ),
+        }
+    }
+    fn refusal(&self) -> Option<String> {
+        self.refused
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+    fn refuse(&self, message: String) -> Error {
+        let message = self
+            .refused
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_or_insert(message)
+            .clone();
+        // A nested callback cannot hide its refusal by dropping its guard without finish().
+        let mut parent = self.parent.as_deref();
+        while let Some(state) = parent {
+            state
+                .refused
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get_or_insert_with(|| message.clone());
+            parent = state.parent.as_deref();
+        }
+        Error::programming(message)
+    }
 }
 
 /// A borrowing scope for deterministic native metadata methods only.
@@ -2648,7 +2753,7 @@ struct PureMethodState {
 #[non_exhaustive]
 pub struct PureMethods<'a> {
     transaction: &'a mut Transaction,
-    previous: Option<Arc<PureMethodState>>,
+    previous: Option<Arc<MethodEffectState>>,
 }
 
 impl std::ops::Deref for PureMethods<'_> {
@@ -2665,19 +2770,22 @@ impl std::ops::DerefMut for PureMethods<'_> {
 impl PureMethods<'_> {
     /// Finish the method chain. A caught forbidden operation still fails this scope.
     pub fn finish(self) -> Result<()> {
-        match &self.transaction.pure_methods {
-            Some(state) if state.refused.load(Ordering::Acquire) => {
-                Err(Error::programming(PURE_EFFECT_ERROR))
-            }
-            _ => Ok(()),
+        match self
+            .transaction
+            .method_effects
+            .as_ref()
+            .and_then(|state| state.refusal())
+        {
+            Some(message) => Err(Error::programming(message)),
+            None => Ok(()),
         }
     }
 }
 impl Drop for PureMethods<'_> {
     fn drop(&mut self) {
-        self.transaction.pure_methods = self.previous.take();
-        if self.transaction.pure_methods.is_none() {
-            self.transaction.pure_scratch.clear();
+        self.transaction.method_effects = self.previous.take();
+        if self.transaction.method_effects.is_none() {
+            self.transaction.effect_scratch.clear();
         }
     }
 }
@@ -2915,13 +3023,13 @@ impl Transaction {
         model: &'static str,
         methods: &'static [&'static str],
     ) -> PureMethods<'_> {
-        let previous = self.pure_methods.clone();
-        if previous.is_none() {
-            self.pure_methods = Some(Arc::new(PureMethodState {
-                model,
-                methods,
+        let previous = self.method_effects.clone();
+        if self.pure_method_state().is_none() {
+            self.method_effects = Some(Arc::new(MethodEffectState {
+                policy: MethodEffectPolicy::Pure { model, methods },
                 env: self.env.clone(),
-                refused: AtomicBool::new(false),
+                parent: previous.clone(),
+                refused: Mutex::new(None),
             }));
         }
         PureMethods {
@@ -2930,12 +3038,84 @@ impl Transaction {
         }
     }
 
-    fn refuse_pure_effect(&self) -> Result<()> {
-        if let Some(state) = &self.pure_methods {
-            state.refused.store(true, Ordering::Release);
-            return Err(Error::programming(PURE_EFFECT_ERROR));
+    fn effect_state(
+        &self,
+        matches: impl Fn(&MethodEffectPolicy) -> bool,
+    ) -> Option<&MethodEffectState> {
+        let mut current = self.method_effects.as_deref();
+        while let Some(state) = current {
+            if matches(&state.policy) {
+                return Some(state);
+            }
+            current = state.parent.as_deref();
+        }
+        None
+    }
+
+    fn pure_method_state(&self) -> Option<&MethodEffectState> {
+        self.effect_state(|policy| matches!(policy, MethodEffectPolicy::Pure { .. }))
+    }
+
+    fn adapter_state(&self) -> Option<&MethodEffectState> {
+        self.effect_state(|policy| matches!(policy, MethodEffectPolicy::GeneratedInput { .. }))
+    }
+
+    pub(crate) fn in_generated_input(&self) -> bool {
+        self.adapter_state().is_some()
+    }
+
+    pub(crate) fn generated_input_scope(&mut self, records: &Records) -> Result<PureMethods<'_>> {
+        // An adapter never overrides a pure scope or recursively enters another adapter.
+        self.refuse_effect()?;
+        let previous = self.method_effects.clone();
+        self.method_effects = Some(Arc::new(MethodEffectState {
+            policy: MethodEffectPolicy::GeneratedInput {
+                model: records.model_name(),
+            },
+            env: records.env().clone(),
+            parent: previous.clone(),
+            refused: Mutex::new(None),
+        }));
+        Ok(PureMethods {
+            transaction: self,
+            previous,
+        })
+    }
+
+    pub(crate) fn refuse_adapter_effect(&self) -> Result<()> {
+        if self.in_generated_input() {
+            self.refuse_effect()
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(crate) fn refuse_adapter_read(&self, model: ModelId, field: FieldId) -> Result<()> {
+        if let Some(state) = self.adapter_state() {
+            let MethodEffectPolicy::GeneratedInput { model: adapter } = state.policy else {
+                unreachable!("adapter_state selects only the generated-input policy")
+            };
+            let model = self.registry().model_by_id(model);
+            return Err(state.refuse(format!(
+                "Generated input adapter on '{adapter}': read of '{}.{}' requires a flush or recompute",
+                model.name, model.field_by_id(field).name
+            )));
         }
         Ok(())
+    }
+
+    fn refuse_effect(&self) -> Result<()> {
+        match &self.method_effects {
+            Some(state) => Err(state.refuse(state.message())),
+            None => Ok(()),
+        }
+    }
+
+    fn refuse_pure_effect(&self) -> Result<()> {
+        match self.pure_method_state() {
+            Some(state) => Err(state.refuse(state.message())),
+            None => Ok(()),
+        }
     }
 
     /// [`Transaction::check_method_records`] for an async method call: inside a pure-methods
@@ -2950,24 +3130,25 @@ impl Transaction {
         records: &'a Records,
         method: &str,
     ) -> Admit<'a> {
-        if self.pure_methods.is_some() {
+        if self.pure_method_state().is_some() {
             return Admit::Ready(Some(self.check_method_records(records, method)));
         }
         self.admit_records(records)
     }
 
     pub(crate) fn check_method_records(&self, records: &Records, method: &str) -> Result<()> {
-        if let Some(state) = &self.pure_methods {
+        if let Some(state) = self.pure_method_state() {
             self.check_not_cancelled()?;
-            if records.model_name() != state.model
-                || !state.methods.contains(&method)
-                || records.env() != &state.env
-                || !records.is_empty()
-                || state.refused.load(Ordering::Acquire)
+            if let MethodEffectPolicy::Pure { model, methods } = state.policy
+                && (records.model_name() != model
+                    || !methods.contains(&method)
+                    || records.env() != &state.env
+                    || !records.is_empty()
+                    || state.refusal().is_some())
             {
-                state.refused.store(true, Ordering::Release);
-                return Err(Error::programming(PURE_EFFECT_ERROR));
+                return Err(state.refuse(state.message()));
             }
+            self.check_adapter_environment(records)?;
             return Ok(());
         }
         self.check_records(records)
@@ -3107,7 +3288,7 @@ impl Transaction {
     /// ```
     #[inline]
     pub fn mark_scoped_id<K: 'static>(&mut self, id: i64) {
-        if self.refuse_pure_effect().is_err() {
+        if self.refuse_effect().is_err() {
             return;
         }
         let depth = self.savepoint_depth();
@@ -3222,7 +3403,7 @@ impl Transaction {
     ///
     /// `Programming` for 0.
     pub fn set_cursor_limit(&mut self, limit: usize) -> Result<()> {
-        self.refuse_pure_effect()?;
+        self.refuse_effect()?;
         self.cursors.set_limit(limit)
     }
 
@@ -3491,6 +3672,7 @@ impl Transaction {
     /// `Programming` "'<entry>' is declared effect = read but tried to <op> '<model>'; declare
     /// effect = write (or wider)." when the intent is [`TxIntent::Read`].
     pub fn require_writable(&self, op: WriteOp, model: &str) -> Result<()> {
+        self.refuse_adapter_effect()?;
         match &self.intent {
             TxIntent::Write => Ok(()),
             TxIntent::Read { entry } => Err(Error::programming(format!(
@@ -3541,6 +3723,9 @@ impl Transaction {
     /// first, whatever the intent; `call` is the public entry point named in that refusal.
     fn require_writable_sql(&mut self, call: &'static str, sql: &str) -> Result<()> {
         self.refuse_pure_effect()?;
+        if self.in_generated_input() && self.require_select_only(sql).is_err() {
+            return self.refuse_adapter_effect();
+        }
         self.note_string_reading();
         if self.hook_scope.is_some() {
             self.refuse_hook_control_sql(call, sql)?;
@@ -3730,8 +3915,8 @@ impl Transaction {
     pub fn extension<T: std::any::Any + Send + Sync + Default>(&mut self) -> &mut T {
         // The legacy API returns a borrow rather than Result. A pure callback gets
         // isolated scratch, never the real extension state; finish fails loudly.
-        let extensions = if self.refuse_pure_effect().is_err() {
-            &mut self.pure_scratch
+        let extensions = if self.refuse_effect().is_err() {
+            &mut self.effect_scratch
         } else {
             &mut self.extensions
         };
@@ -3779,6 +3964,7 @@ impl Transaction {
     /// would resolve its model and field ids against the wrong metadata.
     pub(crate) fn check_records(&self, records: &Records) -> Result<()> {
         self.check_not_cancelled()?;
+        self.check_adapter_environment(records)?;
         // an environment of an elevation block is admitted only while its block is open here,
         // before anything reads the cache
         self.check_env_block(records.env())?;
@@ -3790,6 +3976,16 @@ impl Transaction {
                 "{records} belongs to another registry than this transaction's"
             )))
         }
+    }
+
+    fn check_adapter_environment(&self, records: &Records) -> Result<()> {
+        if let Some(state) = self.adapter_state()
+            && (records.env().principal() != state.env.principal()
+                || records.env().companies()? != state.env.companies()?)
+        {
+            return Err(state.refuse(state.message()));
+        }
+        Ok(())
     }
 
     /// A [`Transaction::batch`] counts as one statement however many
@@ -3805,7 +4001,7 @@ impl Transaction {
 
     /// Reset the `default_get` dispatch counter and return the count before reset.
     pub fn reset_default_get_count(&mut self) -> u64 {
-        if self.refuse_pure_effect().is_err() {
+        if self.refuse_effect().is_err() {
             return self.default_gets;
         }
         let prev = self.default_gets;
@@ -3838,7 +4034,7 @@ impl Transaction {
 
     /// Start or stop recording statement texts.
     pub fn capture_statements(&mut self, on: bool) {
-        if self.refuse_pure_effect().is_err() {
+        if self.refuse_effect().is_err() {
             return;
         }
         self.capture = on.then(Vec::new);
@@ -3860,7 +4056,7 @@ impl Transaction {
     /// `Orm::run`, call [`take_notices`](Self::take_notices) inside the closure, before the
     /// commit; a retried attempt starts empty.
     pub fn post_notice(&mut self, notice: Notice) {
-        if self.refuse_pure_effect().is_err() {
+        if self.refuse_effect().is_err() {
             return;
         }
         if self.notices.len() >= MAX_NOTICES_PER_TRANSACTION {
@@ -3900,7 +4096,7 @@ impl Transaction {
     /// With `Orm::run`, call this inside the closure, before the commit, which clears the
     /// notices; a retried attempt starts empty.
     pub fn take_notices(&mut self) -> Vec<Notice> {
-        if self.refuse_pure_effect().is_err() {
+        if self.refuse_effect().is_err() {
             return Vec::new();
         }
         self.savepoint_notices.iter_mut().for_each(|n| *n = 0);
@@ -3911,7 +4107,7 @@ impl Transaction {
     /// Clear all notices posted on this transaction attempt and reset the overflow counter.
     /// Commit, rollback and `reset()` do the same.
     pub fn clear_notices(&mut self) {
-        if self.refuse_pure_effect().is_err() {
+        if self.refuse_effect().is_err() {
             return;
         }
         self.savepoint_notices.iter_mut().for_each(|n| *n = 0);
@@ -3926,7 +4122,7 @@ impl Transaction {
 
     /// Run `hook` after this transaction commits successfully; dropped on rollback.
     pub fn after_commit(&mut self, hook: impl FnOnce() + Send + 'static) {
-        if self.refuse_pure_effect().is_err() {
+        if self.refuse_effect().is_err() {
             return;
         }
         self.after_commit.push(Box::new(hook));
@@ -3953,7 +4149,7 @@ impl Transaction {
     /// Database when the metadata query fails. No second pool connection is acquired.
     #[doc(hidden)]
     pub async fn preflight_native_catalog_sources(&mut self) -> Result<()> {
-        self.refuse_pure_effect()?;
+        self.refuse_effect()?;
         self.require_system_full("Transaction::preflight_native_catalog_sources")?;
         if self.state != State::Idle {
             return Err(Error::programming(
@@ -4009,7 +4205,7 @@ impl Transaction {
     /// transaction is dropped its connection is closed instead of going back to the pool, so no
     /// later user of the pool sees that state.
     pub fn taint_connection(&mut self) {
-        if self.refuse_pure_effect().is_err() {
+        if self.refuse_effect().is_err() {
             return;
         }
         self.connection_tainted = true;
@@ -4485,6 +4681,7 @@ impl Transaction {
     /// ([`Transaction::manage_operation`]): the operation commits it itself; and inside a
     /// [`HookScope`] (nothing is sent; the framework ends the transaction after the hook).
     pub async fn commit(&mut self) -> Result<()> {
+        self.refuse_adapter_effect()?;
         self.refuse_in_hook_scope("Transaction::commit")?;
         self.refuse_when_managed("Transaction::commit")?;
         self.commit_inner().await
@@ -4972,6 +5169,7 @@ impl Transaction {
     /// ([`Transaction::manage_operation`]), and inside a [`HookScope`] (nothing is sent; the
     /// framework ends the transaction after the hook).
     pub async fn rollback(&mut self) -> Result<()> {
+        self.refuse_adapter_effect()?;
         self.refuse_in_hook_scope("Transaction::rollback")?;
         self.refuse_when_managed("Transaction::rollback")?;
         self.rollback_inner().await
@@ -5022,7 +5220,7 @@ impl Transaction {
     /// inside a [`HookScope`].
     pub fn manage_operation(&mut self, _key: &OperationKey) -> Result<OperationControl> {
         self.refuse_in_hook_scope("Transaction::manage_operation")?;
-        self.refuse_pure_effect()?;
+        self.refuse_effect()?;
         if self.operation.is_some() {
             return Err(Error::programming(
                 "Transaction::manage_operation: this transaction is managed by a module operation \
@@ -5053,7 +5251,7 @@ impl Transaction {
     }
 
     fn refuse_when_managed(&self, call: &str) -> Result<()> {
-        self.refuse_pure_effect()?;
+        self.refuse_effect()?;
         if self.operation.is_some() {
             return Err(Error::programming(format!(
                 "{call}: this transaction belongs to a module operation, which commits or rolls it \
@@ -5070,8 +5268,8 @@ impl Transaction {
         self.operation.is_some()
     }
 
-    fn check_control(&self, control: &OperationControl, call: &str) -> Result<()> {
-        self.refuse_pure_effect()?;
+    pub(crate) fn check_control(&self, control: &OperationControl, call: &str) -> Result<()> {
+        self.refuse_effect()?;
         if self.operation == Some(control.id) {
             Ok(())
         } else {
@@ -5357,7 +5555,7 @@ impl Transaction {
     /// reached the transaction (the WASM host: a guest trapped, ran out of time or broke a limit
     /// after calling the ORM). The first reason is kept; a rollback clears it.
     pub fn poison(&mut self, error: &Error) {
-        if self.refuse_pure_effect().is_err() {
+        if self.refuse_effect().is_err() {
             return;
         }
         self.poison_with(error);
@@ -5382,6 +5580,7 @@ impl Transaction {
     /// Drop every cached value after flushing (`env.invalidate_all()`), and every memoized
     /// record-access check (data changed outside the ORM may change their outcome).
     pub async fn invalidate_all(&mut self) -> Result<()> {
+        self.refuse_adapter_effect()?;
         self.flush().await?;
         self.engine.readable.clear();
         self.clear_values();
@@ -5412,6 +5611,7 @@ impl Transaction {
     /// Drop cached values of a model (`invalidate_model(fnames)`), after flushing, and the
     /// memoized record-access checks whose predicates read them.
     pub async fn invalidate_model(&mut self, model: &str, fields: Option<&[&str]>) -> Result<()> {
+        self.refuse_adapter_effect()?;
         let registry = Arc::clone(&self.shared.registry);
         let spec = registry.model(model).ok_or_else(|| {
             Error::programming(format!("Model '{model}' does not exist in registry."))
@@ -5870,7 +6070,7 @@ impl Transaction {
     /// `Access` when the grant belongs to another ORM, or the transaction was not opened as the
     /// superuser; the flag then stays as it was.
     pub fn begin_base_install(&mut self, grant: &BaseInstallGrant) -> Result<()> {
-        self.refuse_pure_effect()?;
+        self.refuse_effect()?;
         if grant.orm_id != self.orm_id {
             return Err(Error::access(
                 "the base-install grant belongs to another Orm than the one that opened this \
@@ -5891,7 +6091,7 @@ impl Transaction {
 
     /// Unmark this transaction as loading the base module's data (always allowed).
     pub fn end_base_install(&mut self) {
-        if self.refuse_pure_effect().is_err() {
+        if self.refuse_effect().is_err() {
             return;
         }
         self.base_installing = false;
@@ -5917,7 +6117,7 @@ impl Transaction {
     /// `fields_get` validates the 0..28 range before use. Precision-row changes and rollback
     /// discard overrides along with stored metadata; prefer configuring `decimal.precision`.
     pub fn set_precision(&mut self, name: &str, digits: u32) {
-        if self.refuse_pure_effect().is_err() {
+        if self.refuse_effect().is_err() {
             return;
         }
         self.engine.precisions.insert(name.to_owned(), digits);
@@ -5936,7 +6136,7 @@ impl Transaction {
         model: &str,
         ids: &[erp_fields::RecId],
     ) -> Result<()> {
-        self.refuse_pure_effect()?;
+        self.refuse_effect()?;
         self.require_system_full("Transaction::call_selection_callback")?;
         self.dispatch_selection_callback(name, model, ids, None)
             .await
@@ -5956,7 +6156,7 @@ impl Transaction {
         ids: &[erp_fields::RecId],
         company: Option<i64>,
     ) -> Result<()> {
-        self.refuse_pure_effect()?;
+        self.refuse_effect()?;
         self.require_system_full("Transaction::call_selection_callback_in_company")?;
         self.dispatch_selection_callback(name, model, ids, company)
             .await

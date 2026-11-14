@@ -655,7 +655,7 @@ async fn unique_login_and_activation_rules() {
         (e.kind(), e.message()),
         (
             ErrorKind::Validation,
-            "The operation cannot be completed: You can not have two users with the same login!"
+            "The database refused the change: You can not have two users with the same login!"
         )
     );
     tx.rollback().await.unwrap();

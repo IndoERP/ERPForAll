@@ -24,11 +24,18 @@ export interface Route {
   pivot_open?: string;
   pivot_sort?: string;
 }
-const fail = (key: string): never => {
+// Refusals that mean "this state is too large for an address" (one value or the whole address past 2,048, an expanded
+// pivot header deeper or longer than its bound), as opposed to a malformed parameter. (1,024 expanded pivot headers
+// never fit in 2,048 characters, so that count is reached as length.) A caller that words its own message asks `isAddressSizeRefusal`, never the text.
+const sizeRefusals = new WeakSet<object>();
+export const isAddressSizeRefusal = (error: unknown): boolean => typeof error === "object" && error !== null && sizeRefusals.has(error);
+const fail = (key: string, size = false): never => {
   // A caller may supply an unknown query/property name or decimalId label.
   // Only closed contract labels may enter a displayed diagnostic.
   const label = diagnosticKeys.has(key) ? key : "url";
-  throw new ClientError("validation", `Invalid navigation parameter: ${label}.`);
+  const error = new ClientError("validation", `Invalid navigation parameter: ${label}.`);
+  if (size) sizeRefusals.add(error);
+  throw error;
 };
 export function decimalId(value: string, key = "id"): string {
   if (typeof value !== "string" || !/^[1-9][0-9]{0,18}$/.test(value) || BigInt(value) > 9223372036854775807n) return fail(key);
@@ -51,6 +58,7 @@ function decode(value: string, key: string): string {
   catch { return fail(key); }
 }
 function transportString(value: unknown, key: string): asserts value is string {
+  if (typeof value === "string" && value.length > 2048) return fail(key, true);
   if (typeof value !== "string" || !value.length || value.length > 2048
       || /[\u0000-\u001f\u007f-\u009f\\]/u.test(value) || value.includes("//")) return fail(key);
   // encodeURIComponent refuses unpaired surrogates instead of replacing them with U+FFFD.
@@ -76,6 +84,18 @@ function pivotOpen(value: string): boolean {
   let paths = 0;
   return Object.entries(parsed).every(([axis, list]) => (axis === "r" || axis === "c") && Array.isArray(list) && (paths += list.length) <= 1024 && list.every(pivotPath));
 }
+/** A `pivot_open` value past a bound of its paths (depth 16, a header key of 256 characters): that state is too large for an address, not malformed. */
+const pathOversize = (path: unknown): boolean => Array.isArray(path) && (path.length > 16 || path.some(key => typeof key === "string" && key.length > 256));
+function pivotOpenOversize(value: string): boolean {
+  const parsed = pivotJson(value);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return false;
+  return Object.values(parsed).some(list => Array.isArray(list) && list.some(pathOversize));
+}
+/** The same bound for the column a sort names (`pivot_sort` is `[measure, direction, path]`). */
+function pivotSortOversize(value: string): boolean {
+  const parsed = pivotJson(value);
+  return Array.isArray(parsed) && pathOversize(parsed[2]);
+}
 function pivotSort(value: string): boolean {
   const parsed = pivotJson(value);
   return Array.isArray(parsed) && (parsed.length === 0 || parsed.length === 3 && typeof parsed[0] === "string" && (parsed[0] === "__count" || pivotField(parsed[0]))
@@ -98,8 +118,8 @@ function validate(route: Route): void {
       case "view_type": if (value !== "list" && value !== "form" && value !== "pivot") return fail(key); break;
       case "pivot_rows": case "pivot_cols": if (!pivotSpecs(value, false)) return fail(key); break;
       case "pivot_measures": if (!pivotSpecs(value, true)) return fail(key); break;
-      case "pivot_open": if (!pivotOpen(value)) return fail(key); break;
-      case "pivot_sort": if (!pivotSort(value)) return fail(key); break;
+      case "pivot_open": if (!pivotOpen(value)) return fail(key, pivotOpenOversize(value)); break;
+      case "pivot_sort": if (!pivotSort(value)) return fail(key, pivotSortOversize(value)); break;
       case "method_action": {
         const match = /^([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}):([1-9][0-9]{0,15})$/.exec(value);
         if (!match || BigInt(match[2]!) > BigInt(Number.MAX_SAFE_INTEGER)) return fail(key);
@@ -154,6 +174,6 @@ export function routeUrl(route: Route): string {
   for (const key of queryKeys) if (route[key] !== undefined) query.set(key, route[key]!);
   if (route.cids !== undefined) query.set("cids", route.cids.join(","));
   const result = (route.action !== undefined ? `/erp/action-${route.action}` : "/erp") + (query.size ? `?${query}` : "");
-  if (byteLength(result) > 2048) return fail("url");
+  if (byteLength(result) > 2048) return fail("url", true);
   return result;
 }

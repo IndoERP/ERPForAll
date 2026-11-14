@@ -195,6 +195,7 @@ pub fn value_to_json(value: &Value) -> Result<serde_json::Value> {
         Value::Date(d) => J::String(d.to_string()),
         Value::DateTime(d) => J::String(d.to_string()),
         Value::Uuid(value) => J::String(value.to_string()),
+        Value::BigInt(value) => J::String(value.to_string()),
         Value::Xid8(value) => J::String(value.to_string()),
         Value::TimestampTz(value) => J::String(value.to_string()),
         Value::Json(j) => serde_json::Value::clone(j),
@@ -379,7 +380,7 @@ pub fn validate_cell(field: FieldRef<'_>, ty: &FieldType, cell: Cell) -> Result<
 /// range fields never store empty ranges, which would overlap nothing and escape every rule.
 fn empty_range(field: FieldRef<'_>, bounds: RangeBounds) -> Error {
     Error::validation(format!(
-        "The operation cannot be completed: '{}' ({}.{}) is an empty range: its lower end must \
+        "The database refused the change: '{}' ({}.{}) is an empty range: its lower end must \
          {} its upper end",
         field.label,
         field.model,
@@ -561,6 +562,24 @@ fn coerce(field: FieldRef<'_>, ty: &FieldType, value: &Value) -> Result<Cell> {
                 .map_err(|error| field.native_error(error)),
             _ => Err(field.expected_native("native uuid or canonical lowercase UUID text")),
         },
+        FieldType::BigInt => {
+            let invalid = || {
+                field.expected_native(
+                    "native bigint, a safe integer or canonical signed 64-bit decimal text",
+                )
+            };
+            match value {
+                Value::False | Value::Bool(false) => Ok(Cell::BigInt(crate::BigInt::from_i64(0))),
+                Value::BigInt(value) => Ok(Cell::BigInt(*value)),
+                Value::Int(value) if value.unsigned_abs() < F64_EXACT_INT => {
+                    Ok(Cell::BigInt(crate::BigInt::from_i64(*value)))
+                }
+                Value::Str(text) => crate::BigInt::parse(text)
+                    .map(Cell::BigInt)
+                    .map_err(|_| invalid()),
+                _ => Err(invalid()),
+            }
+        }
         FieldType::Xid8 => match value {
             Value::False => Ok(Cell::Null),
             Value::Xid8(value) => Ok(Cell::Xid8(*value)),
@@ -1244,7 +1263,7 @@ mod tests {
             assert_eq!(
                 err.message(),
                 format!(
-                    "The operation cannot be completed: 'F' (test_orm.mixed.f) is an empty range: \
+                    "The database refused the change: 'F' (test_orm.mixed.f) is an empty range: \
                      its lower end must {words} its upper end"
                 )
             );

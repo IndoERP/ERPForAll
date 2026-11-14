@@ -22,6 +22,10 @@
 //! writers holding the shared lock of [`super::period_admission`]; the wait is bounded by the
 //! transaction's `lock_timeout` (`OrmConfig::timeouts`, or `BeginOptions::timeouts` for the unit;
 //! the lock operations' own `SET LOCAL lock_timeout` is's).
+//!
+//! Lock order, the same on every path so none waits for another in a cycle: the target company
+//! row (a setter's write, or `FOR UPDATE` in a lock run's second step), then the root company row
+//! (`fiscal_period_serial`), then the period advisory locks in id order.
 
 use erp_sdk::prelude::*;
 
@@ -29,6 +33,9 @@ use super::PERIOD_LOCK_CLASS;
 use super::ensure::{
     ANCESTOR_OF_C, MAX_PERIODS_PER_CALL, NOT_ALLOWED, company_tree, require_company_access,
 };
+
+/// The row lock a lock run's second step takes on a company before its advisory locks.
+const ROW_LOCK: &str = "SELECT 1 FROM res_company WHERE id = $1 FOR UPDATE";
 
 /// The group that may change period statuses.
 pub const MANAGER_GROUP: &str = "account.group_account_manager";
@@ -55,7 +62,8 @@ async fn authorize(tx: &mut Transaction, company_id: i64) -> Result<()> {
 
 /// Bring the period rows of `company_id` and its branches in line with the company lock dates
 /// after a setter wrote them (R2: "their setters update period rows"). Call it in the
-/// setter's transaction, after the company write.
+/// setter's transaction, after the company write; it flushes the transaction's pending writes
+/// first, so a date written through the record API is the one it reads.
 ///
 /// It first takes the exclusive advisory lock of every period it may change, in id order, before
 /// its refusal checks and its updates: a writer admitted for a period it closes
@@ -75,7 +83,7 @@ async fn authorize(tx: &mut Transaction, company_id: i64) -> Result<()> {
 ///
 /// `Access` without [`MANAGER_GROUP`], or ([`NOT_ALLOWED`]) for a company the caller does not hold
 /// or one that does not exist; `Validation` when it would change more than
-/// [`MAX_PERIODS_PER_CALL`] periods; `Validation`, before anything is written, naming the first
+/// [`MAX_PERIODS_PER_CALL`] periods per company of the tree; `Validation`, before anything is written, naming the first
 /// period that refuses: lowering the fiscal-year lock date across a `hard_locking` or `hard_locked`
 /// period, or across a `stock_locked` period (lower the stock lock date first); a hard lock date
 /// that covers a period not `hard_locked` or no longer covers a `hard_locked` one, and a stock lock
@@ -83,8 +91,10 @@ async fn authorize(tx: &mut Transaction, company_id: i64) -> Result<()> {
 /// A concurrent [`super::ensure_periods`] for the same tree makes the statement fail with a
 /// serialization failure, which `Orm::run` retries.
 pub async fn sync_lock_dates(tx: &mut Transaction, company_id: i64) -> Result<SyncedPeriods> {
+    tx.flush().await?;
     authorize(tx, company_id).await?;
-    let (root, _) = company_tree(tx, company_id).await?;
+    let (root, tree) = company_tree(tx, company_id).await?;
+    bump_serial(tx, root).await?;
     // the target's path was checked by company_tree; the ancestors are read from each path's ids
     let scope = format!(
         "WITH c AS ( \
@@ -111,19 +121,17 @@ pub async fn sync_lock_dates(tx: &mut Transaction, company_id: i64) -> Result<Sy
         .iter()
         .map(|r| r.try_get(0).map_err(db))
         .collect::<Result<Vec<i64>>>()?;
-    if changing.len() > MAX_PERIODS_PER_CALL {
+    let bound = MAX_PERIODS_PER_CALL.saturating_mul(tree.len());
+    if changing.len() > bound {
         return Err(Error::validation(format!(
             "the lock dates would change {} fiscal periods at once; at most {MAX_PERIODS_PER_CALL} \
-             change in one call: move the lock date in smaller steps",
-            changing.len()
+             per company ({bound} for this tree of {} companies) change in one call: move the lock \
+             date in smaller steps",
+            changing.len(),
+            tree.len()
         )));
     }
     lock_keys(tx, &changing).await?;
-    tx.execute(
-        "UPDATE res_company SET fiscal_period_serial = COALESCE(fiscal_period_serial, 0) + 1 WHERE id = $1",
-        &[&root],
-    )
-    .await?;
     let refusals: [(&str, &str); 5] = [
         (
             "p.status IN ('hard_locking', 'hard_locked') AND (c.fiscal IS NULL OR p.date_to > c.fiscal)",
@@ -141,7 +149,7 @@ pub async fn sync_lock_dates(tx: &mut Transaction, company_id: i64) -> Result<Sy
         ),
         (
             "p.status = 'hard_locked' AND (c.hard IS NULL OR p.date_to > c.hard)",
-            "the hard lock date cannot be removed or decreased below the hard-locked period",
+            "the hard lock date must stay on or after the end of the hard-locked period",
         ),
         (
             "p.stock_lock_status <> 'stock_locked' AND p.date_to <= c.stock",
@@ -170,7 +178,7 @@ pub async fn sync_lock_dates(tx: &mut Transaction, company_id: i64) -> Result<Sy
     let closed = tx
         .execute(
             &update(
-                "status = 'closed', closed_at = now()",
+                "status = 'closed', closed_at = (now() AT TIME ZONE 'UTC')",
                 "p.status = 'open' AND p.date_to <= c.fiscal",
             ),
             &[&company_id, &changing],
@@ -200,6 +208,18 @@ pub async fn sync_lock_dates(tx: &mut Transaction, company_id: i64) -> Result<Sy
         reopened,
         stock_reopened,
     })
+}
+
+/// Bump the root company's `fiscal_period_serial` (it serializes period creation with the
+/// synchronisation and the lock dates, see [`super::ensure_periods`]) and drop its cached value.
+async fn bump_serial(tx: &mut Transaction, root: i64) -> Result<()> {
+    tx.execute(
+        "UPDATE res_company SET fiscal_period_serial = COALESCE(fiscal_period_serial, 0) + 1 WHERE id = $1",
+        &[&root],
+    )
+    .await?;
+    tx.invalidate_model("res.company", Some(&["fiscal_period_serial"]))
+        .await
 }
 
 /// What [`sync_lock_dates`] changed.
@@ -437,21 +457,31 @@ async fn begin(
     refusal: fn(&PeriodState) -> String,
 ) -> Result<LockRun> {
     authorize(tx, set.company_id).await?;
-    if matches!(lock, Lock::Stock) {
-        // the stock lock date never passes an open period
-        let earlier = tx
-            .query(
+    // a lock date never passes a period its lock has not reached (lead note 2026-11-13)
+    let (unlocked, out_of_order) = match lock {
+        Lock::Stock => (
+            "stock_lock_status <> 'stock_locked'",
+            "is not stock-locked; stock-lock periods in order",
+        ),
+        Lock::Hard => (
+            "status <> 'hard_locked'",
+            "is not hard-locked; hard-lock periods in order",
+        ),
+    };
+    let earlier = tx
+        .query(
+            &format!(
                 "SELECT name FROM account_fiscal_period WHERE company_id = $1 AND kind = 'regular' \
-                 AND date_to < $2 AND stock_lock_status <> 'stock_locked' ORDER BY date_from LIMIT 1",
-                &[&set.company_id, &set.date_from],
-            )
-            .await?;
-        if let Some(row) = earlier.first() {
-            let name: String = row.try_get(0).map_err(db)?;
-            return Err(Error::validation(format!(
-                "The earlier fiscal period {name} is not stock-locked; stock-lock periods in order."
-            )));
-        }
+                 AND date_to < $2 AND {unlocked} ORDER BY date_from LIMIT 1"
+            ),
+            &[&set.company_id, &set.date_from],
+        )
+        .await?;
+    if let Some(row) = earlier.first() {
+        let name: String = row.try_get(0).map_err(db)?;
+        return Err(Error::validation(format!(
+            "The earlier fiscal period {name} {out_of_order}."
+        )));
     }
     lock_keys(tx, &set.ids).await?;
     let all = states(tx, set).await?;
@@ -494,6 +524,9 @@ fn can_begin(lock: Lock, s: &PeriodState) -> bool {
 
 /// Run a T2 write or a cancel: applied to every row of the run, or to none (the states are then
 /// reported and nothing is written); a set where only part matches is refused before any write.
+/// It runs at `READ COMMITTED` (D8), so a conditional update re-checks its row after a
+/// lock wait, and takes the company and root company rows `FOR UPDATE` before the advisory locks
+/// (the module's lock order).
 async fn finish(
     tx: &mut Transaction,
     run: &LockRun,
@@ -501,7 +534,28 @@ async fn finish(
     assign: &str,
     guard: &str,
 ) -> Result<LockOutcome> {
-    authorize(tx, run.set.company_id).await?;
+    let company = run.set.company_id;
+    authorize(tx, company).await?;
+    let isolation = tx
+        .query("SELECT current_setting('transaction_isolation')", &[])
+        .await?;
+    let isolation: String = isolation
+        .first()
+        .ok_or_else(|| Error::internal("current_setting returned no row"))?
+        .try_get(0)
+        .map_err(db)?;
+    if isolation != "read committed" {
+        return Err(Error::programming(format!(
+            "the second step of a lock run needs a READ COMMITTED transaction; this \
+             one is {isolation}: open it with BeginOptions::isolation(ReadCommitted)"
+        )));
+    }
+    let (root, _) = company_tree(tx, company).await?;
+    // the company row, then the root's: the order a setter takes them in
+    tx.query(ROW_LOCK, &[&company]).await?;
+    if root != company {
+        tx.query(ROW_LOCK, &[&root]).await?;
+    }
     lock_keys(tx, &run.set.ids).await?;
     let filter = format!("p.id = v.id AND p.{} = v.g AND {guard}", lock.generation());
     let source = "unnest($1::int8[], $2::int4[]) AS v(id, g)";
@@ -549,7 +603,8 @@ async fn finish(
 /// # Errors
 ///
 /// `Access` without [`MANAGER_GROUP`] or for a company the caller does not hold
-/// ([`NOT_ALLOWED`]); `Validation` naming the first period that is still `open`
+/// ([`NOT_ALLOWED`]); `Validation` naming the earlier regular period of the company that is not
+/// `hard_locked` (the hard lock is in order), or the first period of the set that is still `open`
 /// (the fiscal-year lock must close it first) or already `hard_locked`.
 pub async fn hard_lock_begin(tx: &mut Transaction, set: &PeriodSet) -> Result<LockRun> {
     begin(
@@ -559,7 +614,7 @@ pub async fn hard_lock_begin(tx: &mut Transaction, set: &PeriodSet) -> Result<Lo
         "UPDATE account_fiscal_period SET status = 'hard_locking', \
            hard_lock_started_by = CASE WHEN status = 'hard_locking' THEN hard_lock_started_by ELSE $2 END, \
            hard_lock_started_at = CASE WHEN status = 'hard_locking' THEN hard_lock_started_at \
-             ELSE now() END, \
+             ELSE (now() AT TIME ZONE 'UTC') END, \
            hard_lock_generation = CASE WHEN status = 'hard_locking' THEN hard_lock_generation \
              ELSE hard_lock_generation + 1 END \
          WHERE id = ANY($1::int8[]) AND status IN ('closed', 'hard_locking') \
@@ -589,7 +644,7 @@ pub async fn hard_lock_complete(tx: &mut Transaction, run: &LockRun) -> Result<L
         tx,
         run,
         Lock::Hard,
-        "status = 'hard_locked', hard_locked_at = now(), stock_lock_status = 'stock_locked', \
+        "status = 'hard_locked', hard_locked_at = (now() AT TIME ZONE 'UTC'), stock_lock_status = 'stock_locked', \
          hard_lock_started_by = NULL, hard_lock_started_at = NULL, \
          stock_lock_started_by = NULL, stock_lock_started_at = NULL",
         "p.status = 'hard_locking'",
@@ -635,7 +690,7 @@ pub async fn stock_lock_begin(tx: &mut Transaction, set: &PeriodSet) -> Result<L
            stock_lock_started_by = CASE WHEN stock_lock_status = 'stock_locking' \
              THEN stock_lock_started_by ELSE $2 END, \
            stock_lock_started_at = CASE WHEN stock_lock_status = 'stock_locking' \
-             THEN stock_lock_started_at ELSE now() END, \
+             THEN stock_lock_started_at ELSE (now() AT TIME ZONE 'UTC') END, \
            stock_lock_generation = CASE WHEN stock_lock_status = 'stock_locking' \
              THEN stock_lock_generation ELSE stock_lock_generation + 1 END \
          WHERE id = ANY($1::int8[]) AND stock_lock_status IN ('open', 'stock_locking') \
@@ -695,10 +750,13 @@ pub async fn stock_lock_reset(tx: &mut Transaction, run: &LockRun) -> Result<Loc
     .await
 }
 
+/// The company date of a completed run, and the root's serial, so a concurrent
+/// [`super::ensure_periods`] serializes with it and derives its statuses from the new date.
 async fn write_company_date(tx: &mut Transaction, run: &LockRun, column: &str) -> Result<()> {
     let sql = format!("UPDATE res_company SET {column} = GREATEST({column}, $2) WHERE id = $1");
     tx.execute(&sql, &[&run.set.company_id, &run.set.date_to])
         .await?;
     tx.invalidate_model("res.company", Some(&[column])).await?;
-    Ok(())
+    let (root, _) = company_tree(tx, run.set.company_id).await?;
+    bump_serial(tx, root).await
 }

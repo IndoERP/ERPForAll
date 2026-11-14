@@ -156,13 +156,8 @@ const GENERATED_DOC: &str = "prin_policy.generated_doc";
 
 /// The record-level refusal of user 2's write moving a document to company 2 (SEC-009 text with
 /// the multi-company hint of the generated company restriction: user 2 is not in company 2).
-const MOVED_TO_COMPANY_2: &str = "Uh-oh! Looks like you have stumbled upon some top-secret \
-                                  records.\n\nSorry, u2 (id=2) doesn't have 'write' access \
-                                  to:\n- Policy Doc (prin.policy.doc)\n\nIf you really, really \
-                                  need access, perhaps you can win over your friendly \
-                                  administrator with a batch of freshly baked cookies.\n\nThis \
-                                  seems to be a multi-company issue, but you do not have access \
-                                  to the proper company to access the record anyhow.";
+const MOVED_TO_COMPANY_2: &str = "Access rules protect some of these records.\n\nu2 (id=2) has no 'write' access \
+                                  to:\n- Policy Doc (prin.policy.doc)\n\nAsk an administrator if you need access to these records.\n\nThe record belongs to a company outside your allowed companies.";
 
 /// The shared policy, and the policy a private rebuild returns (`None`: the rebuild is refused).
 struct Swap(
@@ -888,10 +883,7 @@ async fn restrictions_and_parents_remain_authoritative() {
     assert_error(
         &write_denied,
         ErrorKind::Access,
-        "Uh-oh! Looks like you have stumbled upon some top-secret records.\n\nSorry, u2 (id=2) \
-         doesn't have 'write' access to:\n- Policy Doc (prin.policy.doc)\n\nIf you really, really \
-         need access, perhaps you can win over your friendly administrator with a batch of \
-         freshly baked cookies.",
+        "Access rules protect some of these records.\n\nu2 (id=2) has no 'write' access to:\n- Policy Doc (prin.policy.doc)\n\nAsk an administrator if you need access to these records.",
     );
 
     // a child whose parent is not named keeps the base decision (the parent denies everything)

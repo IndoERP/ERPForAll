@@ -974,7 +974,7 @@ async fn a_key_added_over_duplicate_rows_fails_the_sync_naming_object_model_and_
         (err.kind(), err.message()),
         (
             ErrorKind::Validation,
-            "The operation cannot be completed: A lot with this name exists already."
+            "The database refused the change: A lot with this name exists already."
         )
     );
     drop(tx);

@@ -72,13 +72,13 @@ pub use post_commit::{
     CreateIndex, IndexColumn, IndexMethod, IndexName, PostCommitAction, SchemaStepRef, TableName,
 };
 pub use system::{
-    ClientAction, DatabaseName, ForcedUpdate, HumanCatalog, InitOptions, InvalidPostCommitRow,
-    LoadOutcome, MAX_DATA_FILES, MAX_OPERATION_DATA_BYTES, MAX_POST_COMMIT_ATTEMPTS,
-    MAX_POST_COMMIT_PASSES, MAX_REPORTED_ROWS, ModuleSystem, ModuleSystemBuilder, OPERATION_LOCK,
-    OperationOutcome, POST_COMMIT_LOCK, PendingPostCommit, PendingState, PostCommitFailure,
-    PostCommitKey, PostCommitReport, PostCommitStep, PostCommitStop, SchemaStepDone,
-    SchemaStepOutcome, create_database, revoke_post_commit_access, schedule_post_commit,
-    validate_database_name,
+    ClientAction, DATABASE_CREATE_OPTIONS, DatabaseName, ForcedUpdate, HumanCatalog, InitOptions,
+    InvalidPostCommitRow, LoadOutcome, MAX_DATA_FILES, MAX_OPERATION_DATA_BYTES,
+    MAX_POST_COMMIT_ATTEMPTS, MAX_POST_COMMIT_PASSES, MAX_REPORTED_ROWS, ModuleSystem,
+    ModuleSystemBuilder, OPERATION_LOCK, OperationOutcome, POST_COMMIT_LOCK, PendingPostCommit,
+    PendingState, PostCommitFailure, PostCommitKey, PostCommitReport, PostCommitStep,
+    PostCommitStop, SchemaStepDone, SchemaStepOutcome, create_database, revoke_post_commit_access,
+    schedule_post_commit, validate_database_name,
 };
 pub use version::{ERP_SERIES, ModuleVersion, ODOO_SERIES, ODOO_SERIES_PREFIX, SemverVersion};
 pub use view_types::{ViewTypeInputs, view_type_factory};
@@ -88,3 +88,6 @@ pub use system::{
     MAX_UNINSTALL_IMPACT_BYTES, MAX_UNINSTALL_TARGETS, MetadataImpact,
     UNINSTALL_STATEMENT_DEADLINE_MS, UninstallCompositionBlocker, UninstallImpact,
 };
+
+/// Typed count-only native uninstall guards (A7).
+pub mod sql_uninstall;

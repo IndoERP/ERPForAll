@@ -600,7 +600,7 @@ async fn direct_sync_hook_failure_after_an_earlier_group_cannot_commit() {
         .await
         .unwrap_err();
     let expected = format!(
-        "You are not allowed to modify 'Contact' (res.partner) records.\n\nRecords: res.partner({},), User: 2",
+        "Your access rights do not let you modify 'Contact' (res.partner) records.\n\nRecords: res.partner({},), User: 2",
         denied.ids()[0]
     );
     assert_eq!(error.kind(), erp_sdk::ErrorKind::Access);

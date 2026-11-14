@@ -13,7 +13,7 @@ use erp_sdk::prelude::*;
     constraints = [(
         "_positive_max_weight",
         "CHECK (max_weight >= 0)",
-        "Max weight should be a positive number."
+        "Maximum weight cannot be negative."
     )],
 )]
 pub struct StockStorageCategory {
@@ -35,8 +35,8 @@ pub struct StockStorageCategory {
     #[field(
         selection,
         selection = [
-            ("empty", "If the location is empty"),
-            ("same", "If all products are same"),
+            ("empty", "Only when the location is empty"),
+            ("same", "Only when all products are the same"),
             ("mixed", "Allow mixed products")
         ],
         default = "mixed",
@@ -66,17 +66,17 @@ pub struct StockStorageCategory {
         (
             "_positive_quantity",
             "CHECK (quantity > 0)",
-            "Quantity should be a positive number."
+            "A capacity quantity must be greater than zero."
         ),
         (
             "_unique_product",
             "UNIQUE (product_id, storage_category_id)",
-            "Multiple capacity rules for one product."
+            "A storage category takes one capacity rule per product."
         ),
         (
             "_unique_package_type",
             "UNIQUE (package_type_id, storage_category_id)",
-            "Multiple capacity rules for one package type."
+            "A storage category takes one capacity rule per package type."
         ),
     ],
 )]
@@ -138,7 +138,7 @@ pub struct StockStorageCategoryCapacity {
         (
             "_barcode_uniq",
             "UNIQUE (barcode)",
-            "A barcode can only be assigned to one package type!"
+            "This barcode already belongs to another package type."
         ),
         ("_positive_height", "CHECK (height >= 0.0)", "Height must be positive"),
         ("_positive_width", "CHECK (width >= 0.0)", "Width must be positive"),
@@ -150,7 +150,7 @@ pub struct StockStorageCategoryCapacity {
         (
             "_positive_max_weight",
             "CHECK (max_weight >= 0.0)",
-            "Max Weight must be positive"
+            "The maximum weight of a package type cannot be negative."
         ),
     ],
 )]

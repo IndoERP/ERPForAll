@@ -156,7 +156,7 @@ async fn new_partner_onchange_keeps_create_permission_checks() {
         &response,
         403,
         "erp.exceptions.AccessError",
-        "You are not allowed to create 'Contact' (res.partner) records.",
+        "Your access rights do not let you create 'Contact' (res.partner) records.",
     );
     assert_eq!(count(&h, "res_partner").await, before);
     h.cleanup().await.unwrap();

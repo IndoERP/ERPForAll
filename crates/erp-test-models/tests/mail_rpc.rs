@@ -763,7 +763,7 @@ fn assert_error(response: &RpcResponse, status: u16, name: &str, message: &str) 
 }
 
 /// The access engine's refusal of a write on `test_rpc_mail.doc_r`.
-const DOC_R_WRITE_DENIED: &str = "You are not allowed to modify 'RPC Doc R' (test_rpc_mail.doc_r) records.\n\nNo group currently allows this operation.\n\nContact your administrator to request access if necessary.";
+const DOC_R_WRITE_DENIED: &str = "Your access rights do not let you modify 'RPC Doc R' (test_rpc_mail.doc_r) records.\n\nNo group may do this.\n\nAsk an administrator if you need this access.";
 const ACCESS: &str = "erp.exceptions.AccessError";
 const VALIDATION: &str = "erp.exceptions.ValidationError";
 
@@ -1248,10 +1248,7 @@ async fn portal_users_post_comments_only() {
         403,
         ACCESS,
         &format!(
-            "Uh-oh! Looks like you have stumbled upon some top-secret records.\n\nSorry, pat \
-             (id={}) doesn't have 'write' access to:\n- RPC Doc A (test_rpc_mail.doc_a)\n\nIf \
-             you really, really need access, perhaps you can win over your friendly administrator \
-             with a batch of freshly baked cookies.",
+            "Access rules protect some of these records.\n\npat (id={}) has no 'write' access to:\n- RPC Doc A (test_rpc_mail.doc_a)\n\nAsk an administrator if you need access to these records.",
             w.pat.uid
         ),
     );

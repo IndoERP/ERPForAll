@@ -144,7 +144,7 @@ async fn zero_relative_factor_is_rejected_by_constraint() {
     assert_eq!(error.kind(), ErrorKind::Validation);
     assert_eq!(
         error.message(),
-        "The operation cannot be completed: The conversion ratio for a unit of measure cannot be 0!"
+        "The database refused the change: A unit of measure needs a conversion ratio other than 0."
     );
     assert_eq!(factor(&mut tx, &root).await, Decimal::ONE);
     tx.rollback().await.unwrap();
@@ -271,7 +271,7 @@ async fn negative_factor_is_preserved_and_cycle_keeps_old_paths() {
     assert_eq!(error.kind(), ErrorKind::UserError);
     assert_eq!(
         error.message(),
-        "You are creating a loop in your 'Unit of Measure' records. A record cannot be a child of itself or one of its own sub-items. Please select a different parent."
+        "This parent would make a loop in the 'Unit of Measure' records: a record cannot sit under itself or under one of its own children. Choose another parent."
     );
     assert_eq!(
         root.cell(&mut tx, "parent_path").await.unwrap(),
@@ -784,6 +784,36 @@ async fn factor_assignment_create_is_rejected_before_inserting_any_batch_row() {
         tx.rollback().await.unwrap();
         drop(tx);
     }
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn factor_context_default_is_rejected_before_inserting() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    let error = tx
+        .env()
+        .records("uom.uom")
+        .unwrap()
+        .with_context([("default_factor", Value::Decimal(dec("999")))])
+        .create(
+            &mut tx,
+            vec![RawVals::new().set_cell("name", Cell::Str("Defaulted root".into()))],
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Validation);
+    assert_eq!(
+        error.message(),
+        "Field uom.uom.factor is maintained by the unit hierarchy and cannot be assigned."
+    );
+    let rows = tx
+        .query("SELECT count(*)::bigint FROM uom_uom", &[])
+        .await
+        .unwrap();
+    assert_eq!(rows[0].get::<_, i64>(0), 0);
+    tx.rollback().await.unwrap();
+    drop(tx);
     h.cleanup().await.unwrap();
 }
 

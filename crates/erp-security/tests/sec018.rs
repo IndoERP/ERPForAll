@@ -363,7 +363,7 @@ async fn a_company_removal_is_seen_by_an_older_environment() {
     assert_eq!(err.kind(), ErrorKind::Access);
     assert_eq!(
         err.message(),
-        "Access to unauthorized or invalid companies."
+        "One of the selected companies does not exist or is not one of yours."
     );
     drop(tx);
     drop(client);
@@ -505,7 +505,7 @@ async fn spec_sec_018_access_changes_take_effect_immediately() {
         (err.kind(), err.message()),
         (
             ErrorKind::Access,
-            "Access to unauthorized or invalid companies."
+            "One of the selected companies does not exist or is not one of yours."
         ),
         "company removed"
     );
@@ -602,7 +602,7 @@ async fn a_forged_resolution_grants_nothing() {
         (err.kind(), err.message()),
         (
             ErrorKind::Access,
-            "Access to unauthorized or invalid companies."
+            "One of the selected companies does not exist or is not one of yours."
         )
     );
     drop(tx);

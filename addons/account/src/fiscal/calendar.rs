@@ -80,7 +80,7 @@ impl FiscalYearEnd {
     pub fn new(day: i64, month: i64) -> Result<Self> {
         let invalid = || {
             Error::validation(format!(
-                "Invalid fiscal year last day: day {day} of month {month} (settings {} and {})",
+                "Day {day} of month {month} cannot end the fiscal year (settings {} and {})",
                 super::settings::LAST_DAY_SETTING,
                 super::settings::LAST_MONTH_SETTING
             ))

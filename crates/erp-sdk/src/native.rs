@@ -1,6 +1,29 @@
 //! The native backend of the addon API: the ORM, registry and database crates behind one surface.
 //! Selected for every target except `wasm32-*` (`cfg(not(target_family = "wasm"))`); see `lib.rs`.
 
+/// Trusted native SQL-object declarations and their linked registration collector.
+/// Addons use this facade instead of depending on framework crates. The registry still requires
+/// an independently supplied manifest; these declarations do not authorize request-time DDL.
+/// This module is absent from the WebAssembly guest backend.
+///
+/// ```
+/// use erp_sdk::sql_objects::{SqlConditionDecl, SqlConditionKind, SqlObjectDecl};
+/// #[erp_sdk::sql_objects::linkme::distributed_slice(erp_sdk::sql_objects::SQL_OBJECT_DECLS)]
+/// #[linkme(crate = erp_sdk::sql_objects::linkme)]
+/// static GUARD: SqlObjectDecl = SqlObjectDecl::condition("inventory", "immutable",
+///     SqlConditionDecl::new("ERP01", "inventory_immutable", "This value cannot be changed.")
+///         .kind(SqlConditionKind::Validation));
+/// ```
+pub mod sql_objects {
+    pub use erp_registry::{
+        SQL_OBJECT_DECLS, SqlBinding, SqlBodyRender, SqlColumnSet, SqlCompareColumn,
+        SqlConditionDecl, SqlConditionKind, SqlDeferral, SqlDep, SqlEvent, SqlFunctionDecl,
+        SqlLanguage, SqlLevel, SqlObjectDecl, SqlObjectManifest, SqlResult, SqlScalar, SqlSecurity,
+        SqlTableGrantDecl, SqlTableOp, SqlTiming, SqlTriggerDecl, SqlType, SqlVolatility,
+    };
+    pub use linkme;
+}
+
 /// Typed native settings declarations; lifecycle composition binds addon ownership.
 pub mod settings;
 
@@ -12,9 +35,9 @@ pub mod jobs {
     pub use erp_orm::jobs::{
         Backoff, CancelToken, ChunkReport, ChunkResult, EnqueueOutcome, EnqueueRequest, HandlerRef,
         HistoryPolicy, ItemKey, ItemsChunk, JobContext, JobError, JobHandler, JobKey, JobKindDecl,
-        JobKindRequirement, JobRef, JobSettings, KindIsolation, MAX_CANCEL_KEYS, OnDuplicate,
-        PrincipalPolicy, Priority, RecurringSpec, RunAs, RunOutcome, Setting, StepArgs,
-        StepOutcome, TimeoutClass, When,
+        JobKindRequirement, JobRef, JobSettings, JobSettingsCompatibility, JobSettingsSnapshot,
+        JobSettingsSource, KindIsolation, MAX_CANCEL_KEYS, OnDuplicate, PrincipalPolicy, Priority,
+        RecurringSpec, RunAs, RunOutcome, Setting, StepArgs, StepOutcome, TimeoutClass, When,
     };
     pub use erp_orm::register_job_kind;
 }
@@ -34,13 +57,14 @@ pub mod delta {
 /// content detection and the configuration product the composition root attaches to the ORM.
 pub use erp_blob as blob;
 pub use erp_domain::{Domain, DomainError, Operator, OptimizationLevel};
+pub use erp_fields::TextCollation;
 /// Exact money primitives (hook H41): `ExactRatio`, `Increment`, `RoundingMode`,
 /// `FxSnapshot` and the strict decimal text. Pure; also built for the WASM guest.
 pub use erp_fields::money;
 pub use erp_fields::{
-    Cell, ColumnType, Condition, Date, DateRange, DateTime, DatetimeRange, Decimal, Digits, Error,
-    ErrorKind, FieldType, FieldValue, IndexKind, OnDelete, Range, RangeBounds, RangeValue, RealId,
-    RecId, Result, TimestampTz, Uuid, Value, ValueMap, Xid8, serde_json,
+    BigInt, Cell, ColumnType, Condition, Date, DateRange, DateTime, DatetimeRange, Decimal, Digits,
+    Error, ErrorKind, FieldType, FieldValue, IndexKind, OnDelete, Range, RangeBounds, RangeValue,
+    RealId, RecId, Result, TimestampTz, Uuid, Value, ValueMap, Xid8, serde_json,
 };
 /// The kind of a principal (user, agent, service, public, link, system).
 pub use erp_orm::PrincipalKind;
@@ -60,15 +84,15 @@ pub use erp_orm::{
     AccessPolicy, Actor, Assign, AsyncComputeSuper, Base, Batch, BeginOptions, BoxFuture, Cmd,
     Command, CompanyError, ComputeSuper, Context, Cursor, Env, Fetch, Field, FieldAccessCtx,
     FieldAccessSuper, FieldDenialDetail, FieldMask, FieldOp, FieldSearchContext,
-    FieldSearchRequest, FieldSearchSuper, Granularity, GroupValue, Groups, Inherits, Isolation,
-    Load, MAX_NOTICE_MESSAGE_BYTES, MAX_NOTICES_PER_TRANSACTION, Many2one, Mapped, MemoStats,
-    Model, NAME_SEARCH_LIMIT, NameSearch, Notice, NoticeKind, OnchangeResult, OnchangeWarning,
-    Operation, OperationIdentity, Orm, OrmBuilder, OrmCacheKey, OrmConfig, Page, RawVals,
-    ReadGroup, ReadGroupingSets, ReadTx, RecordSet, Records, RecordsAs, ResCompany, ResUsers, Row,
-    RowsStream, SUPERUSER_ID, SavepointOutcome, SearchOptions, SearchQuery, SelectionContext,
-    SelectionLimits, SelectionSuper, SqlRow, SqlValue, StaticPolicy, StreamOptions, Super,
-    Transaction, TypedRelation, UnlinkHook, UserId, Vals, X2many, X2manyValue,
-    missing_reset_target,
+    FieldSearchRequest, FieldSearchSuper, GeneratedInput, Granularity, GroupValue, Groups,
+    Inherits, Isolation, Load, MAX_NOTICE_MESSAGE_BYTES, MAX_NOTICES_PER_TRANSACTION, Many2one,
+    Mapped, MemoStats, Model, NAME_SEARCH_LIMIT, NameSearch, Notice, NoticeKind, OnchangeResult,
+    OnchangeWarning, Operation, OperationIdentity, Orm, OrmBuilder, OrmCacheKey, OrmConfig, Page,
+    RawVals, ReadGroup, ReadGroupingSets, ReadTx, RecordSet, Records, RecordsAs, ResCompany,
+    ResUsers, Row, RowsStream, SUPERUSER_ID, SavepointOutcome, SearchOptions, SearchQuery,
+    SelectionContext, SelectionLimits, SelectionSuper, SqlRow, SqlValue, StaticPolicy,
+    StreamOptions, Super, Transaction, TypedRelation, UnlinkHook, UserId, Vals, X2many,
+    X2manyValue, missing_reset_target,
 };
 /// Business keys, upsert and row versions (addon guide "Keys, upsert and row
 /// versions").
@@ -104,10 +128,11 @@ pub use erp_registry::{Partition, PartitionDecl, PartitionInterval, PartitionRet
 /// There is no free-text event API.
 pub mod audit {
     pub use erp_orm::audit::{
-        ApiKeyIssued, ApiKeyRevoked, ApiKeysCollected, AttachmentProbeRecorded, AuditError,
-        AuditStoreState, AuthEvent, ElevationReason, EmergencyReason, EmergencyRevocation,
-        IdentityLink, KeyRouteScope, LinkedBy, PasswordChanged, ProbeOutcome, RevokeCause,
-        SecretRotated, SessionCause, SessionRevoked, SuperuserAction, UserSessionsRevoked,
+        AccountLockDateChanged, AccountLockField, ApiKeyIssued, ApiKeyRevoked, ApiKeysCollected,
+        AttachmentProbeRecorded, AuditError, AuditStoreState, AuthEvent, ElevationReason,
+        EmergencyReason, EmergencyRevocation, IdentityLink, KeyRouteScope, LinkedBy,
+        PasswordChanged, ProbeOutcome, RevokeCause, SecretRotated, SessionCause, SessionRevoked,
+        SuperuserAction, UserSessionsRevoked,
     };
 }
 
@@ -151,8 +176,8 @@ pub mod expr {
     pub use erp_expr::ExprError;
     pub use erp_expr::wire;
     pub use erp_expr::{
-        EvalLimits, Expr, Literal, SourceParsePreflight, SubscriptKind, parse, parse_with_limits,
-        source_preflight,
+        EvalLimits, Expr, Literal, SourceParsePreflight, SubscriptKind, UnaryOp, parse,
+        parse_with_limits, source_preflight,
     };
 }
 
@@ -244,7 +269,7 @@ pub mod views {
         Arch, CombinedView, ExpressionKind, GuardLookup, GuardedArch, Inheritance, LimitKind,
         NodeIdx, NodeOrigin, NodeRef, ViewCatalogue, ViewDescriptor, ViewError, ViewLimits,
         ViewResult, XpathErrorKind, check_xml_nesting, expression_references,
-        panel_domain_references, root_tag, validate_panel_domain,
+        panel_domain_references, root_tag, validate_dashboard, validate_panel_domain,
     };
 
     /// The checked bridge between a [`GuardedArch`] and the ORM's guard plan: the only way to
@@ -385,7 +410,7 @@ pub mod auth {
         IssueRequest, IssuedApiKey, IssuedSecret, KeyKind, KeyScope, issue,
     };
     pub use erp_security::auth::secret::{DatabaseSecret, random_uuid_text};
-    pub use erp_security::auth::settings::{CACHE_NAME, keys};
+    pub use erp_security::auth::settings::{CACHE_NAME, SessionPolicy, keys};
     pub use erp_security::auth::{
         ACCESS_DENIED, AuthInfo, AuthMethod, CheckEnv, Credential, EndReason, EndedSession,
         HashParams, HashPool, LoginCooldownContext, LoginCooldownPolicy, LoginDomain, LoginLookup,
@@ -431,13 +456,14 @@ pub mod prelude {
     pub use std::sync::Arc;
 
     pub use crate::{
-        Assign, Base, Batch, Cell, Cmd, Command, ComputeSuper, Cursor, Date, DateRange, DateTime,
-        DatetimeRange, Decimal, Domain, Env, Error, Field, FieldAccessCtx, FieldAccessSuper,
-        FieldMask, FieldOp, FieldSearchContext, FieldSearchRequest, FieldSearchSuper, GroupValue,
-        Groups, Many2one, NameSearch, Notice, NoticeKind, OnchangeResult, Operator, Page, RawVals,
-        ReadGroup, ReadTx, RecId, RecordSet, Records, ResCompany, ResUsers, Result, SearchOptions,
-        Super, TimestampTz, Transaction, Upsert, UpsertCall, UpsertOutcome, UpsertResult, Uuid,
-        Vals, Value, X2many, Xid8, extend, methods, model,
+        Assign, Base, Batch, BigInt, Cell, Cmd, Command, ComputeSuper, Cursor, Date, DateRange,
+        DateTime, DatetimeRange, Decimal, Domain, Env, Error, Field, FieldAccessCtx,
+        FieldAccessSuper, FieldMask, FieldOp, FieldSearchContext, FieldSearchRequest,
+        FieldSearchSuper, GroupValue, Groups, Many2one, NameSearch, Notice, NoticeKind,
+        OnchangeResult, Operator, Page, RawVals, ReadGroup, ReadTx, RecId, RecordSet, Records,
+        ResCompany, ResUsers, Result, SearchOptions, Super, TimestampTz, Transaction, Upsert,
+        UpsertCall, UpsertOutcome, UpsertResult, Uuid, Vals, Value, X2many, Xid8, extend, methods,
+        model,
     };
 }
 
@@ -471,10 +497,10 @@ pub mod __private {
     pub use erp_orm::{CoreTableRequirement, base_check_write_fields, core_ddl};
     pub use erp_registry::{
         AddonDescriptor, CompanyAccessDecl, CompanyBranch, CompanyMatch, DEFAULT_TRACKING_SEQUENCE,
-        EmptyCompany, ExclusionDecl, FieldDecl, GeneratedStorage, IndexDecl, IndexMethod, KeyDecl,
-        KindDecl, MODEL_DECLS, ModelDecl, ModelKind, PgExtension, SelectionOnDeleteDecl,
-        SignalTriggerDecl, StaticValue, TableObjectDecl, TableObjectKind, TemporalKeyDecl,
-        TriggerSignal,
+        EmptyCompany, ExclusionDecl, FieldDecl, GENERATED_INPUT_ADAPTER_DECLS,
+        GeneratedInputAdapterDecl, GeneratedStorage, IndexDecl, IndexMethod, KeyDecl, KindDecl,
+        MODEL_DECLS, ModelDecl, ModelKind, PgExtension, SelectionOnDeleteDecl, SignalTriggerDecl,
+        StaticValue, TableObjectDecl, TableObjectKind, TemporalKeyDecl, TriggerSignal,
     };
     pub use erp_registry::{PartitionDecl, PartitionInterval, PartitionRetain};
     pub use linkme;

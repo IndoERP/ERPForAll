@@ -77,6 +77,8 @@ async fn fixture() -> Fixture {
         &erp_addon_stock::ADDON,
         &ADDON,
     ])
+    .require_sql_objects([&erp_addon_stock::schema_guards::MANIFEST])
+    .schema_sync_options(erp_testkit::SchemaSyncOptions::inline().lifecycle(true))
     .build()
     .await
     .unwrap();
@@ -250,7 +252,7 @@ fn assert_violation(error: &Error, sqlstate: &str, constraint: &str, message: &s
     assert_eq!(error.kind(), ErrorKind::Validation, "{error:?}");
     assert_eq!(
         error.message(),
-        format!("The operation cannot be completed: {message}")
+        format!("The database refused the change: {message}")
     );
 }
 
@@ -594,7 +596,7 @@ async fn serial_position_has_no_lower_bound() {
     f.h.cleanup().await.unwrap();
 }
 
-const LOT_MESSAGE: &str = "The combination of lot/serial number and product must be unique within a company including when no company is defined.";
+const LOT_MESSAGE: &str = "This lot or serial number already exists for the product in this company. Records without a company share one namespace.";
 
 /// the shared/company pairs need the scope-row statement, and the message does not list the
 /// product and name yet)
@@ -723,10 +725,10 @@ async fn restricted_product(tx: &mut Transaction, company: i64, name: &str) -> i
 
 fn crossover(lot: &str, product: &str) -> String {
     format!(
-        "Uh-oh! You’ve got some company inconsistencies here:\n\
-         - “{lot}” belongs to company “Main Company” while “Product” (product_id: '{product}') \
-         belongs to another company.\n\
-         To avoid a mess, no company crossover is allowed!"
+        "These values link records of different companies:\n\
+         - “{lot}” is in company “Main Company”, and “Product” (product_id: '{product}') \
+         points to a record of another company.\n\
+         Choose records of the same company, or records shared by all companies."
     )
 }
 
@@ -841,18 +843,18 @@ fn assert_crossover(error: &Error, field: &str, label: &str, value: &str) {
     assert_eq!(error.kind(), ErrorKind::UserError, "{field}: {error:?}");
     let message = error.message();
     assert!(
-        message.starts_with("Uh-oh! You’ve got some company inconsistencies here:\n- “"),
+        message.starts_with("These values link records of different companies:\n- “"),
         "{field}: {message}"
     );
     assert!(
         message.contains(&format!(
-            "belongs to company “Main Company” while “{label}” ({field}: '{value}') belongs to \
-             another company.\n"
+            "is in company “Main Company”, and “{label}” ({field}: '{value}') points to a record of another company.\n"
         )),
         "{field}: {message}"
     );
     assert!(
-        message.ends_with("To avoid a mess, no company crossover is allowed!"),
+        message
+            .ends_with("Choose records of the same company, or records shared by all companies."),
         "{field}: {message}"
     );
 }
@@ -1088,9 +1090,7 @@ async fn package_keeps_explicit_name_and_numeric_weight() {
 /// `FOREIGN_KEY_VIOLATION` branch).
 fn foreign_key_message(description: &str, model: &str, constraint: &str) -> String {
     format!(
-        "The operation cannot be completed: Another model is using the record you are trying to \
-         delete.\n\nThe troublemaker is: '{description}' ({model})\nThanks to the following \
-         constraint: '{constraint}'\nHow about archiving the record instead?"
+        "The database refused the change: Other records still point to the record you want to delete.\n\nReferring model: '{description}' ({model})\nConstraint: '{constraint}'\nArchive the record instead of deleting it."
     )
 }
 

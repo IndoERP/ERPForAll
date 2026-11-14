@@ -130,6 +130,13 @@ pub(crate) async fn link(
     env: &Env,
     sources: &[Source],
 ) -> Result<Vec<Linked>> {
+    // Size policy can refuse after authorized upload consumption. Keep that refusal atomic even
+    // when a native caller catches it and commits its outer transaction.
+    tx.savepoint(async |tx| link_checked(tx, env, sources).await)
+        .await
+}
+
+async fn link_checked(tx: &mut Transaction, env: &Env, sources: &[Source]) -> Result<Vec<Linked>> {
     if sources.len() > MAX_BATCH {
         return Err(Error::validation(format!(
             "At most {MAX_BATCH} attachments are linked in one call."
@@ -147,6 +154,9 @@ pub(crate) async fn link(
             .collect());
     }
     let rt = runtime(env)?;
+    let file_limit = super::settings::max_file_bytes(tx)
+        .await?
+        .min(rt.limits().max_file_bytes);
 
     // 1. consume the uploads
     let mut upload_ids: Vec<String> = Vec::new();
@@ -179,6 +189,10 @@ pub(crate) async fn link(
             return Err(upload_not_usable());
         }
         for row in &rows {
+            let size: i64 = col!(row, 4);
+            let size = u64::try_from(size)
+                .map_err(|_| Error::invariant("Negative staged attachment size."))?;
+            super::settings::check_size(size, file_limit)?;
             let id: String = col!(row, 0);
             let sha256: Vec<u8> = col!(row, 2);
             let sha1: Vec<u8> = col!(row, 3);
@@ -208,6 +222,7 @@ pub(crate) async fn link(
                 mimetype,
                 ..
             } => {
+                super::settings::check_size(bytes.len() as u64, file_limit)?;
                 needs.entry(*sha256).or_insert_with(|| Need {
                     size: i64::try_from(bytes.len()).unwrap_or(i64::MAX),
                     quota_admitted: false,
@@ -282,6 +297,11 @@ pub(crate) async fn link(
             .await?;
         for row in &rows {
             let parsed = blob_row(row)?;
+            super::settings::check_size(
+                u64::try_from(parsed.size)
+                    .map_err(|_| Error::invariant("Negative copied attachment size."))?,
+                file_limit,
+            )?;
             found_by_id.insert(parsed.id, parsed);
         }
         if found_by_id.len() != ids.len() {

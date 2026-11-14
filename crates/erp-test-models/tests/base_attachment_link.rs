@@ -268,7 +268,7 @@ async fn create_unique_refuses_malformed_base64() {
     .await
     .unwrap_err();
     assert_eq!(err.kind(), ErrorKind::UserError);
-    assert_eq!(err.message(), "Attachment is not encoded in base64.");
+    assert_eq!(err.message(), "The attachment data is not valid base64.");
 }
 
 #[tokio::test]

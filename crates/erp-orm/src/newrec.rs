@@ -120,6 +120,7 @@ impl Transaction {
         origin: Option<RecId>,
         reference: Option<&str>,
     ) -> Result<Records> {
+        self.refuse_adapter_effect()?;
         self.admit_records(model).await?;
         let spec = model.spec();
         crate::database_generated::check_write_names(self, spec, vals.names())?;

@@ -391,13 +391,20 @@ fn the_addon_lock_classes_are_registered_and_distinct() {
         erp_addon_account::fiscal::PERIOD_LOCK_CLASS,
         erp_sql::locks::ACCOUNT_FISCAL_PERIOD_LOCK_CLASS
     );
+    assert_eq!(
+        erp_addon_base::attachments::SUBJECT_BUDGET_LOCK_CLASS,
+        erp_sql::locks::ATTACHMENT_SUBJECT_BUDGET_LOCK_CLASS
+    );
+    // every class of the `erp_sql::locks` module doc, by constant
     let all = [
-        1701,
-        1702,
+        erp_sql::partition::PARTITION_LOCK_SPACE,
+        erp_sql::partition::STEP_LOCK_SPACE,
         erp_sql::locks::JOBS_LOCK_CLASS,
         erp_sql::locks::MAIL_SCHEDULED_THREAD_LOCK_CLASS,
         erp_sql::locks::MAIL_PENDING_UPLOAD_LOCK_CLASS,
         erp_sql::locks::ACCOUNT_FISCAL_PERIOD_LOCK_CLASS,
+        erp_orm::node::LOCK_CLASS,
+        erp_sql::locks::ATTACHMENT_SUBJECT_BUDGET_LOCK_CLASS,
     ];
     let unique: std::collections::BTreeSet<_> = all.iter().collect();
     assert_eq!(unique.len(), all.len());

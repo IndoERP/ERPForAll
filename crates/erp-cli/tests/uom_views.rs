@@ -366,7 +366,7 @@ async fn uom_016_body() {
     assert!(
         create_err
             .to_string()
-            .contains("You are not allowed to create 'Unit of Measure' (uom.uom)"),
+            .contains("Your access rights do not let you create 'Unit of Measure' (uom.uom)"),
         "create denied: {create_err}"
     );
 
@@ -380,7 +380,7 @@ async fn uom_016_body() {
     assert!(
         write_err
             .to_string()
-            .contains("You are not allowed to modify 'Unit of Measure' (uom.uom)"),
+            .contains("Your access rights do not let you modify 'Unit of Measure' (uom.uom)"),
         "modify denied: {write_err}"
     );
 
@@ -389,7 +389,7 @@ async fn uom_016_body() {
     assert!(
         unlink_err
             .to_string()
-            .contains("You are not allowed to delete 'Unit of Measure' (uom.uom)"),
+            .contains("Your access rights do not let you delete 'Unit of Measure' (uom.uom)"),
         "delete denied: {unlink_err}"
     );
     reader_tx.rollback().await.unwrap();

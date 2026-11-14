@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<erp>
+  <!-- Rebalance after the feature group identities have been published. -->
+  <function model="res.groups" name="_product_reclassify_light_groups"/>
+</erp>

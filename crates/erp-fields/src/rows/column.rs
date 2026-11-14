@@ -297,6 +297,8 @@ pub enum ColumnData {
     DateTime(Vec<DateTime>),
     /// Native UUIDs, with NULL represented by the column's falsy bitmap.
     Uuid(Vec<crate::Uuid>),
+    /// Exact signed bigint values.
+    BigInt(Vec<crate::BigInt>),
     /// Unsigned full-width transaction ids.
     Xid8(Vec<crate::Xid8>),
     /// Timezone-aware microsecond instants.
@@ -335,6 +337,7 @@ impl ColumnData {
             Self::Date(_) => "dates",
             Self::DateTime(_) => "datetimes",
             Self::Uuid(_) => "UUIDs",
+            Self::BigInt(_) => "signed bigint values",
             Self::Xid8(_) => "full transaction ids",
             Self::TimestampTz(_) => "timezone-aware instants",
             Self::Json(_) => "JSON documents",
@@ -358,6 +361,7 @@ impl ColumnData {
                 | Self::Date(_)
                 | Self::DateTime(_)
                 | Self::Uuid(_)
+                | Self::BigInt(_)
                 | Self::Xid8(_)
                 | Self::TimestampTz(_)
                 | Self::Label { .. }
@@ -376,6 +380,7 @@ impl ColumnData {
             Self::Date(v) => v.len() == len,
             Self::DateTime(v) => v.len() == len,
             Self::Uuid(v) => v.len() == len,
+            Self::BigInt(v) => v.len() == len,
             Self::Xid8(v) => v.len() == len,
             Self::TimestampTz(v) => v.len() == len,
             Self::Json(v) => v.len() == len,
@@ -448,6 +453,7 @@ impl Column {
             ColumnData::Date(v) => v.clear(),
             ColumnData::DateTime(v) => v.clear(),
             ColumnData::Uuid(v) => v.clear(),
+            ColumnData::BigInt(v) => v.clear(),
             ColumnData::Xid8(v) => v.clear(),
             ColumnData::TimestampTz(v) => v.clear(),
             ColumnData::Json(v) => v.clear(),
@@ -508,6 +514,7 @@ impl Column {
             ColumnData::Date(v) => CellRef::Date(*v.get(row)?),
             ColumnData::DateTime(v) => CellRef::DateTime(*v.get(row)?),
             ColumnData::Uuid(v) => CellRef::Uuid(*v.get(row)?),
+            ColumnData::BigInt(v) => CellRef::BigInt(*v.get(row)?),
             ColumnData::Xid8(v) => CellRef::Xid8(*v.get(row)?),
             ColumnData::TimestampTz(v) => CellRef::TimestampTz(*v.get(row)?),
             ColumnData::Json(v) => v.get(row)?.as_deref().map_or(CellRef::False, CellRef::Json),
@@ -595,6 +602,7 @@ impl Column {
             ColumnData::Date(v) => Value::Date(*v.get(row)?),
             ColumnData::DateTime(v) => Value::DateTime(*v.get(row)?),
             ColumnData::Uuid(v) => Value::Uuid(*v.get(row)?),
+            ColumnData::BigInt(v) => Value::BigInt(*v.get(row)?),
             ColumnData::Xid8(v) => Value::Xid8(*v.get(row)?),
             ColumnData::TimestampTz(v) => Value::TimestampTz(*v.get(row)?),
             ColumnData::Json(v) => v
@@ -662,6 +670,10 @@ impl Column {
                 falsy.put(row, false);
             }
             (ColumnData::Uuid(v), Value::Uuid(value)) => {
+                *v.get_mut(row).ok_or_else(missing)? = value;
+                falsy.put(row, false);
+            }
+            (ColumnData::BigInt(v), Value::BigInt(value)) => {
                 *v.get_mut(row).ok_or_else(missing)? = value;
                 falsy.put(row, false);
             }
@@ -787,6 +799,8 @@ pub enum CellRef<'a> {
     DateTime(DateTime),
     /// A native UUID (not ordinary text).
     Uuid(crate::Uuid),
+    /// Exact signed bigint cell.
+    BigInt(crate::BigInt),
     /// A native unsigned full-width transaction id.
     Xid8(crate::Xid8),
     /// A timezone-aware microsecond instant.

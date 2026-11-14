@@ -25,7 +25,7 @@ const TICKET: &str = "test_mail.ticket";
 const CHAT: &str = "test_mail.chat";
 /// The engine's refusal of the write-denying test policy (text of the access engine).
 const WRITE_DENIED: &str =
-    "You are not allowed to write 'Mail Test Ticket' (test_mail.ticket) records.";
+    "Your access rights do not let you write 'Mail Test Ticket' (test_mail.ticket) records.";
 /// Statement ceiling of the post scenario of `post_statements_do_not_grow_with_followers`, a
 /// RATCHET (DEFERRED_PERFORMANCE): may only go down.
 const POST_CEILING: u64 = 5;
@@ -1104,7 +1104,7 @@ async fn a_concurrent_duplicate_client_uid_fails_on_the_key() {
     let error = post_on(&mut b, TICKET, t, request).await.unwrap_err();
     assert_validation(
         &error,
-        "The operation cannot be completed: A message with this client_uid exists already.",
+        "The database refused the change: A message with this client_uid exists already.",
     );
     b.rollback().await.unwrap();
     drop((a, b));

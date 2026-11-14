@@ -471,7 +471,7 @@ test("jobs settings retain nested keys and expose catalogue help and default res
     if (String(path).endsWith("erp_describe")) response = {
       wire_major: 1, registry_version: "r1", scope: args["scope"],
       declarations: [{ key, label: "Poll interval (seconds)", kind: "integer", default: 5, choices: null, writable: true, app: "base", block: "Background Jobs", sequence: 100, help: "Default: 5 seconds. Allowed: 1 to 300 seconds." }],
-      items: [{ kind: "info", key: "base.jobs_configuration_status", label: "Configuration status", app: "base", block: "Background Jobs", sequence: 0, value: "Stored configuration", detail: "Running jobs use process configuration until live settings integration is delivered." }]
+      items: [{ kind: "info", key: "base.jobs_configuration_status", label: "Configuration status", app: "base", block: "Background Jobs", sequence: 0, value: "Live configuration", detail: "Saved limits apply to new job admissions without restart. Running jobs keep their admitted limits." }]
     };
     else if (String(path).endsWith("erp_write_values")) {
       writes.push(args); response = { wire_major: 1, scope: args["scope"], revision: "8", values: [{ key, value: 5, source: "stored" }] };
@@ -484,7 +484,7 @@ test("jobs settings retain nested keys and expose catalogue help and default res
   const helpId = input.getAttribute("aria-describedby");
   expect(helpId).toBeTruthy();
   expect(document.getElementById(helpId!)?.textContent).toBe("Default: 5 seconds. Allowed: 1 to 300 seconds.");
-  expect(host.textContent).toContain("Running jobs use process configuration until live settings integration is delivered.");
+  expect(host.textContent).toContain("Saved limits apply to new job admissions without restart. Running jobs keep their admitted limits.");
   const reset = host.querySelector<HTMLButtonElement>(`button[data-setting-default="${key}"]`)!;
   expect(reset).not.toBeNull(); reset.click();
   expect(input.value).toBe("5");

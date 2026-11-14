@@ -15,6 +15,8 @@ mod drop;
 mod event;
 mod exclusion;
 pub mod generated;
+mod generated_input;
+pub use generated_input::{GENERATED_INPUT_ADAPTER_DECLS, GeneratedInputAdapterDecl};
 pub mod ident;
 mod keys;
 mod order;
@@ -84,10 +86,10 @@ pub use spec::{
 };
 pub use sqlobj::SqlObjectLimits;
 pub use sqlobj::decl::{
-    SqlBinding, SqlBodyRender, SqlColumnSet, SqlCompareColumn, SqlConditionDecl, SqlDeferral,
-    SqlDep, SqlEvent, SqlFunctionDecl, SqlLanguage, SqlLevel, SqlObjectDecl, SqlObjectManifest,
-    SqlResult, SqlScalar, SqlSecurity, SqlTableGrantDecl, SqlTableOp, SqlTiming, SqlTriggerDecl,
-    SqlType, SqlVolatility,
+    SqlBinding, SqlBodyRender, SqlColumnSet, SqlCompareColumn, SqlConditionDecl, SqlConditionKind,
+    SqlDeferral, SqlDep, SqlEvent, SqlFunctionDecl, SqlLanguage, SqlLevel, SqlObjectDecl,
+    SqlObjectManifest, SqlResult, SqlScalar, SqlSecurity, SqlTableGrantDecl, SqlTableOp, SqlTiming,
+    SqlTriggerDecl, SqlType, SqlVolatility,
 };
 pub use sqlobj::graph::{
     SqlCondition, SqlFunction, SqlModelRef, SqlObject, SqlObjectGraph, SqlObjectId, SqlObjectKind,
@@ -137,3 +139,8 @@ fn linked_sql_objects() -> &'static [SqlObjectDecl] {
 #[cfg(not(target_family = "wasm"))]
 #[doc(hidden)]
 pub use linkme;
+
+pub use sqlobj::integrity::{
+    SqlForeignKey, SqlForeignKeyAction, SqlForeignKeyColumn, SqlForeignKeyDecl,
+    SqlForeignKeyTarget, SqlTableOptions, SqlTableOptionsDecl, SqlTablePersistence,
+};

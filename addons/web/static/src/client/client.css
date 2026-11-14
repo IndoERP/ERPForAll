@@ -487,7 +487,6 @@ button.pager-count:focus-visible {
 /* Prominent Top Title Field */
 .form-title-field { grid-column: 1 / -1; margin-bottom: 12px; }
 .form-title-field .field-label { display: flex !important; flex-direction: column !important; gap: 4px !important; }
-.form-title-field .field-label > span { font-size: 11px !important; text-transform: uppercase !important; letter-spacing: 0.5px !important; color: var(--muted) !important; }
 
 /* Boolean Toggle Switch */
 input[type=checkbox].boolean-toggle { appearance: none; width: 38px; height: 22px; background: var(--input-line); border-radius: 22px; position: relative; cursor: pointer; outline: none; transition: background 0.2s ease; vertical-align: middle; flex-shrink: 0; margin: 0; }
@@ -1862,9 +1861,6 @@ span.field-color-toggler {
 .record-form:not(.settings-form) .field-invalid.field-shell > input, .record-form:not(.settings-form) .field-invalid.field-shell > select, .record-form:not(.settings-form) .field-label.field-invalid .many2one-control { border-bottom-color: var(--danger); box-shadow: inset 0 -1px 0 var(--danger); }
 /* Labels support the values instead of competing with them (finding 4). */
 .record-form:not(.settings-form) .field-label > span { font-weight: 500; }
-/* One title treatment for every form: large, borderless, a rule under it (finding 3). */
-/* !important matches the existing title-field rules: the title must win over the quiet field rule above. */
-.record-form .form-title-heading .field-label > span, .record-form .form-title-field .field-label > span { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
 /* The many2one picker is an icon control inside the field (finding 8). */
 .many2one-buttons .relation-search-more { border: 0; background: transparent; color: var(--muted); }
 .many2one-buttons .relation-search-more:hover { background: var(--hover); color: var(--text); }
@@ -1927,7 +1923,7 @@ span.field-color-toggler {
 }
 /* The form title is the record's name: no visible caption above it; the caption stays for assistive technology and
    becomes the empty title's placeholder (form-layout.ts). */
-.record-form .form-title-heading .field-label > span, .record-form .form-title-field .field-label > span { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.record-form .form-title-heading .field-label > span:first-child, .record-form .form-title-field .field-label > span:first-child { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 .record-form .form-title-heading input:not([type=checkbox])::placeholder, .record-form .form-title-field input::placeholder { color: var(--muted); font-weight: 500; }
 /* One2many lines: list widgets sit on the row's baseline, booleans centered. */
 .x2many-table td { vertical-align: middle; }
@@ -2957,7 +2953,7 @@ button.statusbar-step.is-passed:hover, button.statusbar-step:not(.is-current):ho
 .record-form .form-title-block { display: flex; align-items: flex-start; gap: 8px; }
 .record-form .form-title-block > .form-title-heading, .record-form .form-title-block > .form-title-field { flex: 1 1 auto; min-width: 0; }
 .record-form .form-title-block > .field-label:not(.form-title-field) { flex: 0 0 auto; display: inline-flex; flex-direction: row; align-items: center; justify-content: center; width: auto; height: 48px; min-height: 0; }
-.record-form .form-title-block > .field-label:not(.form-title-field) > span { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.record-form .form-title-block > .field-label:not(.form-title-field) > span:first-child { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 /* The tab row never wraps: tabs that do not fit are in the More menu. */
 .record-form:not(.settings-form) .form-tabs { position: relative; flex-wrap: nowrap; overflow: visible; }
 .form-tabs > .form-tab[hidden] { display: none; }
@@ -3151,7 +3147,7 @@ button.statusbar-step.is-passed:hover, button.statusbar-step:not(.is-current):ho
 .form-title-row .field-link-action { display: none; }
 .form-title-row .field-shell:has(> .field-link-action) > input { padding-inline-end: 0; }
 /* The placeholder carries the caption; the caption stays for assistive technology. */
-.form-title-row .field-label > span:not(.field-error):not(.field-help) { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.form-title-row .field-label > span:first-child:not(.field-error):not(.field-help) { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 .form-title-row input { width: 100%; min-height: 32px; font-size: 14px; color: var(--text); }
 @media (max-width: 640px) { .record-form .form-title-block.form-title-profile { column-gap: 12px; } .form-title-profile .form-title-avatar { width: 44px; height: 44px; font-size: 18px; } }
 /* Pivot view. Same density as the list: 36px rows, 12px cell padding, tabular figures right-aligned. */
@@ -3191,6 +3187,8 @@ button.statusbar-step.is-passed:hover, button.statusbar-step:not(.is-current):ho
 .pivot-field-menu { position: fixed; z-index: 60; min-width: 220px; max-width: calc(100vw - 16px); overflow-y: auto; padding: 4px; border-radius: var(--radius-panel); box-shadow: var(--shadow-menu); }
 .pivot-menu-heading { padding: 8px 12px 2px; color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: 0.02em; }
 .pivot-menu-separator { margin: 4px 8px; border-top: 1px solid var(--line); }
+/* "No other field": an entry that takes the focus so Escape closes the menu, but chooses nothing; it must not look like a choice. */
+.pivot-field-none, .pivot-field-none:hover, .pivot-field-none:focus-visible { color: var(--muted); background: transparent; cursor: default; }
 .pivot-field-menu .pivot-field-parent { justify-content: space-between; }
 .pivot-field-parent svg { margin-inline-start: auto; width: 16px; height: 16px; color: var(--muted); transition: transform var(--motion-fast) ease-out; }
 .pivot-field-parent[aria-expanded=true] svg { transform: rotate(180deg); }
@@ -3213,3 +3211,25 @@ button.statusbar-step.is-passed:hover, button.statusbar-step:not(.is-current):ho
 
 .list-group-page-count { margin-inline: var(--list-cell-x); font-variant-numeric: tabular-nums; }
 .list-table tbody tr.list-group-row > td.list-number { padding: 0 var(--list-cell-x); }
+
+/* Declarative list dashboard: compact controls and values on the existing office surface. */
+.dashboard-strip { margin: 0 var(--list-page-gutter) 12px; padding: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-panel); }
+.dashboard-controls { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+.dashboard-controls select { max-width: 100%; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-control); padding: 4px 8px; }
+.dashboard-items { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); gap: 8px; }
+.dashboard-count, .dashboard-kpi { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 8px 12px; text-align: left; color: var(--text); background: var(--surface-subtle); border: 1px solid var(--line); border-radius: var(--radius-control); min-width: 0; }
+.dashboard-count { white-space: normal; } /* a long translated label wraps inside its card */
+.dashboard-count:hover { background: var(--hover); }
+.dashboard-count:active, .dashboard-count[aria-pressed="true"] { background: var(--selected); border-color: var(--accent); }
+.dashboard-count:disabled { opacity: .65; cursor: default; }
+.dashboard-value { font-size: 20px; line-height: 1.4; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.dashboard-label { font-weight: 500; overflow-wrap: anywhere; }
+.dashboard-change, .dashboard-status { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.dashboard-count[data-role="info"] .dashboard-label { color: var(--accent); }
+.dashboard-count[data-role="success"] .dashboard-label { color: var(--success); }
+.dashboard-count[data-role="warning"] .dashboard-label { color: var(--warning); }
+.dashboard-count[data-role="danger"] .dashboard-label { color: var(--danger); }
+.dashboard-status[role="alert"] { color: var(--danger); display: flex; gap: 8px; align-items: center; }
+
+.dashboard-count[aria-pressed="true"] .dashboard-label { text-decoration: underline; font-weight: 600; }
+@media (max-width: 700px) { .dashboard-controls select, .dashboard-status button { min-height: 44px; } }

@@ -15,7 +15,7 @@ async function mount(items: unknown, declarations: unknown[] = [], initialApp: s
     const args = JSON.parse(String(init?.body)) as Record<string, unknown>, method = String(path).split("/").at(-1)!;
     calls.push({ method, args });
     const response = method === "erp_describe" ? { wire_major: 1, registry_version: "r1", scope: args["scope"], declarations, ...(items === undefined ? {} : { items }) }
-      : { wire_major: 1, scope: args["scope"], revision: "revision-one", values: declarations.map(() => ({ key: "notes.enabled", value: false, source: "stored" })) };
+      : { wire_major: 1, scope: args["scope"], revision: "revision-one", values: declarations.map(declaration => ({ key: (declaration as { key: string }).key, value: false, source: "stored" })) };
     return new Response(JSON.stringify(response), { headers: { "Content-Type": "application/json" } });
   }, () => {});
   const host = document.createElement("div"), panel = document.createElement("div"); panel.innerHTML = '<div data-control-search></div>'; document.body.append(host, panel);
@@ -139,4 +139,29 @@ test("a text info value is bounded and refuses control characters; an empty one 
   await expect(mount([{ ...info, value: "a\u0007b" }])).rejects.toThrow("Invalid setting item value.");
   const { host } = await mount([{ ...info, value: "" }]);
   expect(host.querySelector('[data-setting-key="base.users"]')).not.toBeNull();
+});
+
+
+/// (partial: unavailable information is visible and excluded from client scalar requests)
+/// (partial: inactive-consumer help is rendered beside the editable value)
+test("Inventory keeps deferred features visible and outside scalar saves", async () => {
+  const stockInfo: SettingsItem = { kind: "info", key: "stock.group_stock_multi_locations", label: "Multiple locations", app: "stock", block: "Warehouse", sequence: 100, value: "Multiple locations (unavailable)", detail: "Unavailable until a later release supplies feature-group changes." };
+  const stockLink: SettingsItem = { kind: "link", key: "stock.module_delivery", label: "Set up carriers in Addons", app: "stock", block: "Shipping", sequence: 200, target: { kind: "action", id: 77, res_id: null } };
+  const stockSetting = { ...setting, key: "stock.stock_move_email_validation", app: "stock", block: "Shipping", default: false, help: "Saved only; delivery email is not sent by this setting yet." };
+  const { host, controller, calls, openTarget } = await mount([stockInfo, stockLink], [stockSetting], "stock");
+  const unavailable = host.querySelector('[data-setting-key="stock.group_stock_multi_locations"]')!;
+  expect(unavailable.querySelector(".settings-info-value")?.textContent).toBe("Multiple locations (unavailable)");
+  expect(unavailable.textContent).toContain("a later release");
+  expect(unavailable.querySelector("input, select")).toBeNull();
+  expect(host.textContent).toContain(stockSetting.help);
+  expect(calls.find(call => call.method === "erp_read_values")?.args["keys"]).toEqual([stockSetting.key]);
+  const input = host.querySelector<HTMLInputElement>('[data-setting-key="stock.stock_move_email_validation"] input')!;
+  input.checked = true; input.dispatchEvent(new Event("change"));
+  expect(controller.dirty()).toBe(true);
+  await controller.save();
+  const write = calls.find(call => call.method === "erp_write_values")!;
+  expect(write.args["changes"]).toEqual([{ key: stockSetting.key, value: true }]);
+  host.querySelector<HTMLButtonElement>('[data-setting-key="stock.module_delivery"] button')!.click();
+  await vi.waitFor(() => expect(openTarget).toHaveBeenCalledWith({ kind: "action", id: 77, res_id: null }));
+  expect(calls.some(call => call.method === "button_immediate_install")).toBe(false);
 });

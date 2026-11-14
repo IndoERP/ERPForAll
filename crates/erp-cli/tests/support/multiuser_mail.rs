@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 /// Positive int4 identity deliberately outside the fixture's generated record set.
 pub const NO_SUCH_ID: i64 = 2_147_483_647;
-pub const OUTSIDE: &str = "This seems to be a multi-company issue, but you do not have access to the proper company to access the record anyhow.";
+pub const OUTSIDE: &str = "The record belongs to a company outside your allowed companies.";
 
 /// MAIL requests never provision credentials. Print only structured errors, never success bodies
 /// or headers; this makes a setup failure distinguishable from an authorization reproducer.
@@ -236,7 +236,7 @@ pub fn record_denied(
         403,
         "erp.exceptions.AccessError",
         &format!(
-            "Uh-oh! Looks like you have stumbled upon some top-secret records.\n\nSorry, {} (id={}) doesn't have '{op}' access to:\n- {description} ({model})\n\nIf you really, really need access, perhaps you can win over your friendly administrator with a batch of freshly baked cookies.{hint}",
+            "Access rules protect some of these records.\n\n{} (id={}) has no '{op}' access to:\n- {description} ({model})\n\nAsk an administrator if you need access to these records.{hint}",
             user.login, user.id
         ),
     );

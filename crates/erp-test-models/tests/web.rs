@@ -101,7 +101,7 @@ impl erp_testkit::TestRules for NoPersons {
     ) -> Result<()> {
         if model.name == PERSON {
             return Err(Error::access(format!(
-                "You are not allowed to {} '{}' ({}) records.",
+                "Your access rights do not let you {} '{}' ({}) records.",
                 op.as_str(),
                 model.description,
                 model.name
@@ -1301,7 +1301,7 @@ async fn spec_grp_033_web_unlink_blocked_by_references() {
     assert_eq!(err.kind(), ErrorKind::UserError);
     assert_eq!(
         err.message(),
-        "The operation cannot be completed: this record is used by Booking"
+        "The database refused the change: Booking records still refer to this record"
     );
     let ctx = err.context().unwrap().clone();
     assert_eq!(
@@ -2203,7 +2203,7 @@ async fn web_unlink_blocked_through_a_cascade() {
     assert_eq!(err.kind(), ErrorKind::UserError);
     assert_eq!(
         err.message(),
-        "The operation cannot be completed: this record is used by Seat"
+        "The database refused the change: Seat records still refer to this record"
     );
     let Some(Value::Map(ctx)) = err.context() else {
         panic!()

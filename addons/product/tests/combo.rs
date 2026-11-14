@@ -62,34 +62,34 @@ async fn test_combo_archiving_protection() {
         .unwrap();
     let combo_item_id = combo_item.rec_ids()[0].get();
 
-    // 3. Attempt to archive Fries variant -> must fail with combo error
-    let err_var = fries_var
-        .write(
-            &mut tx,
-            RawVals::new().set_cell("active", Cell::Bool(false)),
-        )
-        .await;
-    assert!(
-        err_var.is_err(),
-        "Archiving a product variant that is part of a combo must be rejected"
-    );
+    // Validation poisons the ORM transaction. Native callers that recover must wrap the
+    // complete Records::write call, including its poison boundary, in a savepoint.
+    let message = "This product belongs to a combo, so it cannot be archived. Remove it from its combos first.";
+    let err_var = tx
+        .savepoint(async |tx| {
+            fries_var
+                .write(tx, RawVals::new().set_cell("active", Cell::Bool(false)))
+                .await
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err_var.kind(), erp_sdk::ErrorKind::Validation);
+    assert_eq!(err_var.message(), message);
 
-    // 4. Attempt to archive Fries template -> must fail with combo error
-    let err_tmpl = fries_tmpl
-        .write(
-            &mut tx,
-            RawVals::new().set_cell("active", Cell::Bool(false)),
-        )
-        .await;
-    assert!(
-        err_tmpl.is_err(),
-        "Archiving a product template whose variant is part of a combo must be rejected"
-    );
+    let err_tmpl = tx
+        .savepoint(async |tx| {
+            fries_tmpl
+                .write(tx, RawVals::new().set_cell("active", Cell::Bool(false)))
+                .await
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err_tmpl.kind(), erp_sdk::ErrorKind::Validation);
+    assert_eq!(err_tmpl.message(), message);
 
     // 5. Remove from combo -> archiving should succeed
     let item_rec = item_model.browse(vec![combo_item_id]).unwrap();
     item_rec.unlink(&mut tx).await.unwrap();
-
     let ok_var = fries_var
         .write(
             &mut tx,
@@ -98,7 +98,7 @@ async fn test_combo_archiving_protection() {
         .await;
     assert!(
         ok_var.is_ok(),
-        "Once removed from combo, product variant can be archived"
+        "Once removed from combo, product variant can be archived: {ok_var:?}"
     );
 }
 

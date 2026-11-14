@@ -403,7 +403,7 @@ async fn native_panel_state_survives_server_process_loss() {
     fixture.native.client.execute(
         "UPDATE ir_access SET active=false WHERE group_id IS NOT NULL AND model_id=(SELECT id FROM ir_model WHERE model='panel_http.item')", &[])
         .await.unwrap();
-    let message = "You are not allowed to access 'Panel Item' (panel_http.item) records.\n\nNo group currently allows this operation.\n\nContact your administrator to request access if necessary.";
+    let message = "Your access rights do not let you access 'Panel Item' (panel_http.item) records.\n\nNo group may do this.\n\nAsk an administrator if you need this access.";
     for method in [RANGE, MULTI] {
         let path = format!("/erp/json/2/panel_http.item/{method}");
         error(

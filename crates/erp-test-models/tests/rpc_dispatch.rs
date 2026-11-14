@@ -169,7 +169,7 @@ async fn json2_request_errors() {
         &r,
         403,
         "erp.exceptions.AccessError",
-        "You are not allowed to read 'Model A' (test_rpc.model_a) records.",
+        "Your access rights do not let you read 'Model A' (test_rpc.model_a) records.",
     );
     h.cleanup().await.unwrap();
 }
@@ -588,7 +588,7 @@ async fn context_rules() {
         &r,
         403,
         "erp.exceptions.AccessError",
-        "Access to unauthorized or invalid companies.",
+        "One of the selected companies does not exist or is not one of yours.",
     );
     let r = call(
         &h,
@@ -984,7 +984,7 @@ async fn json2_read_group() {
         &r_bob,
         403,
         "erp.exceptions.AccessError",
-        "You are not allowed to read 'Model A' (test_rpc.model_a) records.",
+        "Your access rights do not let you read 'Model A' (test_rpc.model_a) records.",
     );
 
     // Read-only API key is refused on effect 'write'
@@ -1201,7 +1201,7 @@ async fn json2_formatted_read_group() {
         &r_bob,
         403,
         "erp.exceptions.AccessError",
-        "You are not allowed to read 'Model A' (test_rpc.model_a) records.",
+        "Your access rights do not let you read 'Model A' (test_rpc.model_a) records.",
     );
 
     // 3. Validation refusals: invalid field, bad aggregate spec, capped list length
@@ -1339,7 +1339,7 @@ async fn json2_formatted_read_grouping_sets() {
         &r_bob,
         403,
         "erp.exceptions.AccessError",
-        "You are not allowed to read 'Model A' (test_rpc.model_a) records.",
+        "Your access rights do not let you read 'Model A' (test_rpc.model_a) records.",
     );
 
     // 3. Validation refusals: empty grouping_sets, invalid field, bad aggregate spec, capped sets
@@ -1517,7 +1517,7 @@ async fn json2_web_read_group() {
         &r_bob,
         403,
         "erp.exceptions.AccessError",
-        "You are not allowed to read 'Model A' (test_rpc.model_a) records.",
+        "Your access rights do not let you read 'Model A' (test_rpc.model_a) records.",
     );
 
     // 3. Validation refusals: empty groupby, invalid field, bad aggregate spec, opening_info non-objects, capped groupby
@@ -1720,7 +1720,7 @@ async fn json2_read_progress_bar() {
         &r_bob,
         403,
         "erp.exceptions.AccessError",
-        "You are not allowed to read 'Model A' (test_rpc.model_a) records.",
+        "Your access rights do not let you read 'Model A' (test_rpc.model_a) records.",
     );
 
     // 3. Validation refusals: invalid field / group_by
@@ -2008,7 +2008,7 @@ async fn json2_web_name_search() {
         &r_bob,
         403,
         "erp.exceptions.AccessError",
-        "You are not allowed to read 'Model A' (test_rpc.model_a) records.",
+        "Your access rights do not let you read 'Model A' (test_rpc.model_a) records.",
     );
 
     // S2: Field-level access refusal on specification -> 403 AccessError
@@ -2260,7 +2260,7 @@ async fn json2_web_save_multi() {
         &r_bob,
         403,
         "erp.exceptions.AccessError",
-        "You are not allowed to write 'Model A' (test_rpc.model_a) records.",
+        "Your access rights do not let you write 'Model A' (test_rpc.model_a) records.",
     );
 
     // S2: Write binder called with read-only API key -> 403 AccessError
@@ -2513,7 +2513,7 @@ async fn json2_web_resequence() {
         &r_bob,
         403,
         "erp.exceptions.AccessError",
-        "You are not allowed to write 'Person' (test_web.person) records.",
+        "Your access rights do not let you write 'Person' (test_web.person) records.",
     );
 
     // S2: Write binder called with read-only API key -> 403 AccessError
@@ -2650,7 +2650,7 @@ async fn json2_onchange_batch() {
         &r_bob,
         403,
         "erp.exceptions.AccessError",
-        "You are not allowed to create 'User' (res.users) records.",
+        "Your access rights do not let you create 'User' (res.users) records.",
     );
 
     // S2: Write binder called with read-only API key -> 403 AccessError
@@ -2821,7 +2821,7 @@ async fn json2_search_panel_select_range() {
         &r_bob,
         403,
         "erp.exceptions.AccessError",
-        "You are not allowed to read 'Model A' (test_rpc.model_a) records.",
+        "Your access rights do not let you read 'Model A' (test_rpc.model_a) records.",
     );
 
     // 3. Validation refusal: unsupported field type
@@ -2923,7 +2923,7 @@ async fn json2_search_panel_select_multi_range() {
         &r_bob,
         403,
         "erp.exceptions.AccessError",
-        "You are not allowed to read 'Model A' (test_rpc.model_a) records.",
+        "Your access rights do not let you read 'Model A' (test_rpc.model_a) records.",
     );
 
     // 3. Validation refusal: unsupported field type
@@ -3371,7 +3371,7 @@ async fn json2_copy_archive_access_refusals() {
         &r_copy,
         403,
         "erp.exceptions.AccessError",
-        "You are not allowed to create 'Test ORM Partner' (test_orm.partner) records.",
+        "Your access rights do not let you create 'Test ORM Partner' (test_orm.partner) records.",
     );
 
     let r_arc = call(
@@ -3385,7 +3385,7 @@ async fn json2_copy_archive_access_refusals() {
         &r_arc,
         403,
         "erp.exceptions.AccessError",
-        "You are not allowed to write 'Test ORM Partner' (test_orm.partner) records.",
+        "Your access rights do not let you write 'Test ORM Partner' (test_orm.partner) records.",
     );
 
     let r_nc = call(
@@ -3399,7 +3399,7 @@ async fn json2_copy_archive_access_refusals() {
         &r_nc,
         403,
         "erp.exceptions.AccessError",
-        "You are not allowed to create 'Test ORM Partner' (test_orm.partner) records.",
+        "Your access rights do not let you create 'Test ORM Partner' (test_orm.partner) records.",
     );
 
     // Read-only API key

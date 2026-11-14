@@ -335,6 +335,7 @@ fn bind_params(principal: &Principal, params: &[Param]) -> Result<Vec<Bound>> {
 
 fn scalar_box(scalar: &Scalar) -> Result<Bound> {
     Ok(match scalar {
+        Scalar::BigInt(v) => Box::new(v.get()),
         Scalar::Int8(v) => Box::new(*v),
         Scalar::Float8(v) => Box::new(*v),
         Scalar::Numeric(v) => Box::new(*v),
@@ -355,10 +356,25 @@ fn scalar_box(scalar: &Scalar) -> Result<Bound> {
 
 #[test]
 fn scalar_box_preserves_native_scalar_types_and_binary_payloads() {
-    use erp_fields::{TimestampTz, Uuid, Xid8};
+    use erp_fields::{BigInt, TimestampTz, Uuid, Xid8};
     use erp_testkit::tokio_postgres::types::{IsNull, Type};
 
     let cases = [
+        (
+            Scalar::BigInt(BigInt::from_i64(i64::MIN)),
+            Type::INT8,
+            i64::MIN.to_be_bytes().to_vec(),
+        ),
+        (
+            Scalar::BigInt(BigInt::from_i64(0)),
+            Type::INT8,
+            0_i64.to_be_bytes().to_vec(),
+        ),
+        (
+            Scalar::BigInt(BigInt::from_i64(i64::MAX)),
+            Type::INT8,
+            i64::MAX.to_be_bytes().to_vec(),
+        ),
         (Scalar::Uuid(Uuid::NIL), Type::UUID, vec![0; 16]),
         (
             Scalar::Xid8(Xid8::from_u64(u64::MAX)),

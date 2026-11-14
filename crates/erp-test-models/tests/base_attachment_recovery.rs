@@ -702,9 +702,9 @@ async fn force_claim_waits_for_an_in_flight_owner_advancement() {
 
 const IN_FLIGHT: &str = "An attachment ownership advancement is in flight; let the heartbeat settle it, then inspect and confirm again.";
 
-/// The job deadline the recovery ORM was built with, never a literal.
-fn deadline_secs(f: &Fixture) -> i64 {
-    i64::try_from(f.h.orm().job_settings().job_deadline().as_secs()).unwrap()
+/// Conservative hard deadline for old markers without admitted-policy provenance.
+fn deadline_secs(_f: &Fixture) -> i64 {
+    i64::try_from(erp_orm::jobs::Setting::JobDeadlineSecs.bounds().1).unwrap()
 }
 
 /// Prepare and commit one heartbeat advancement, then re-date its persisted pending marker by
@@ -927,5 +927,43 @@ async fn claim_audit_refuses_an_unknown_claim_without_relabelling() {
         .map(|r| r.get(0))
         .collect();
     assert_eq!(origins, vec!["internal".to_owned()]);
+    f.h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn lower_current_deadline_does_not_release_old_owner_work() {
+    use erp_orm::jobs::{JobSettings, Setting};
+    let f = fixture(external_limits()).await;
+    contested(&f).await;
+    let low = JobSettings::builder()
+        .set(
+            Setting::JobDeadlineSecs,
+            Setting::JobDeadlineSecs.bounds().0,
+        )
+        .build()
+        .unwrap();
+    let age = i64::try_from(low.job_deadline().as_secs()).unwrap() + 60;
+    assert!(age < deadline_secs(&f));
+    redated_pending(&f, -age).await;
+    let orm =
+        f.h.orm()
+            .rebuild(f.h.registry().clone())
+            .generation_attachment(erp_orm::GenerationAttachment::new(
+                f.h.registry().clone(),
+                std::sync::Arc::clone(&f.rt),
+            ))
+            .job_settings(low)
+            .build()
+            .unwrap();
+    let inspection = recovery::inspect(&orm, "main").await.unwrap();
+    let error = recovery::begin(&orm, &inspection, Reason::RestorePrimary)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), erp_sdk::ErrorKind::Internal);
+    assert_eq!(error.message(), IN_FLIGHT);
+    assert_eq!(
+        scalar(&f.h, "SELECT count(*) FROM ir_blob_owner_claim").await,
+        0
+    );
     f.h.cleanup().await.unwrap();
 }

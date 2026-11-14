@@ -368,6 +368,10 @@ pub struct FieldSpec {
     pub company_dependent: bool,
     /// `translate`: translatable textual field stored as JSONB with language keys.
     pub translate: bool,
+    /// Resolved column collation.
+    pub collation: erp_fields::TextCollation,
+    /// Whether the field explicitly declares collation (view output admission).
+    pub collation_declared: bool,
     /// Resolved HTML policy, present exactly for Html fields. Raw text is never markup-trusted.
     pub html_policy: Option<erp_fields::html::FieldPolicy>,
     /// `change_default`.
@@ -393,6 +397,7 @@ pub struct FieldSpec {
     pub selection_ondelete: rustc_hash::FxHashMap<String, erp_fields::SelectionOnDelete>,
     /// Generation metadata: physical materialization, source expression, dependencies, and AST.
     pub(crate) generated: Option<crate::generated::GeneratedSpec>,
+    pub(crate) input_adapted: bool,
 }
 
 /// Where an inherited field (`_inherits`) reads and writes its value.
@@ -467,6 +472,12 @@ impl FieldSpec {
     /// True when the field has a search method.
     pub fn has_search_method(&self) -> bool {
         self.search_method.is_some()
+    }
+
+    /// True when create/write may normalize this local generated input.
+    /// This is not assignment eligibility; other assignment surfaces remain guarded.
+    pub fn is_input_adapted(&self) -> bool {
+        self.input_adapted && self.inherited.is_none()
     }
 
     /// True when the field is database-generated.

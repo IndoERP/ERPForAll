@@ -343,12 +343,45 @@ static SEARCH_GROUP_NODE: SchemaNode = SchemaNode::Object(&[
     SchemaProperty::required("children", &CHILDREN),
 ]);
 
+static DASH_COUNT: SchemaNode = SchemaNode::Object(&[
+    SchemaProperty::required("name", &SHORT),
+    SchemaProperty::required("label", &LABEL),
+    SchemaProperty::optional("domain", &DOMAIN_EXPR),
+    SchemaProperty::optional("filter", &SHORT),
+    SchemaProperty::optional("color", &SHORT),
+]);
+static DASH_KPI: SchemaNode = SchemaNode::Object(&[
+    SchemaProperty::required("name", &SHORT),
+    SchemaProperty::required("label", &LABEL),
+    SchemaProperty::required("field", &FIELD_REF),
+    SchemaProperty::required("date_field", &FIELD_REF),
+    SchemaProperty::required("aggregate", &SHORT),
+    SchemaProperty::optional("domain", &DOMAIN_EXPR),
+]);
+static DASH_ITEM: SchemaNode = SchemaNode::TaggedUnion {
+    discriminator: "kind",
+    variants: &[
+        SchemaVariant::new("count", &DASH_COUNT),
+        SchemaVariant::new("kpi", &DASH_KPI),
+    ],
+};
+static DASH_ITEMS: SchemaNode = SchemaNode::Array {
+    item: &DASH_ITEM,
+    max_items: 32,
+};
+static DASHBOARD: SchemaNode = SchemaNode::Object(&[
+    SchemaProperty::required("version", &INT),
+    SchemaProperty::required("revision", &SHORT),
+    SchemaProperty::required("items", &DASH_ITEMS),
+]);
+
 // ---- per-view-type arenas ----------------------------------------------------------------------
 
 static LIST_UNION: SchemaNode = SchemaNode::TaggedUnion {
     discriminator: "kind",
     variants: &[
         SchemaVariant::new("list", &LIST_NODE),
+        SchemaVariant::new("dashboard", &DASHBOARD),
         SchemaVariant::new("field", &FIELD_NODE),
     ],
 };

@@ -337,6 +337,7 @@ fn collect_any<'a>(node: &'a mut Node, out: &mut Vec<&'a mut Leaf>) {
 fn cell_fits(ty: &FieldType, cell: &Cell) -> bool {
     match ty {
         FieldType::Boolean => matches!(cell, Cell::Bool(_)),
+        FieldType::BigInt => matches!(cell, Cell::BigInt(_)),
         FieldType::Integer => matches!(cell, Cell::Int(_)),
         FieldType::Id
         | FieldType::Many2one { .. }
@@ -496,7 +497,7 @@ impl ValueSet {
             return Err(kind_mismatch(kind, other));
         }
         let mut set = match kind {
-            ScalarKind::Int8 => Self::Ints(FxHashSet::default()),
+            ScalarKind::Int8 | ScalarKind::BigInt => Self::Ints(FxHashSet::default()),
             ScalarKind::Text => Self::Texts(FxHashSet::default()),
             ScalarKind::Date => Self::Dates(FxHashSet::default()),
             ScalarKind::Timestamp => Self::DateTimes(FxHashSet::default()),
@@ -514,6 +515,9 @@ impl ValueSet {
         };
         for value in values {
             match (&mut set, value) {
+                (Self::Ints(s), Scalar::BigInt(i)) => {
+                    s.insert(i.get());
+                }
                 (Self::Ints(s), Scalar::Int8(i)) => {
                     s.insert(i);
                 }
@@ -1180,6 +1184,7 @@ impl<'a> Key<'a> {
             Cell::Date(d) => Self::Date(*d),
             Cell::DateTime(d) => Self::DateTime(*d),
             Cell::Uuid(v) => Self::Uuid(*v),
+            Cell::BigInt(v) => Self::Int(v.get()),
             Cell::Xid8(v) => Self::Xid8(*v),
             Cell::TimestampTz(v) => Self::TimestampTz(*v),
 
@@ -1196,6 +1201,7 @@ impl<'a> Key<'a> {
     /// `None` for range literals, which only range tests use.
     fn of_scalar(scalar: &'a Scalar) -> Option<Self> {
         Some(match scalar {
+            Scalar::BigInt(i) => Self::Int(i.get()),
             Scalar::Int8(i) => Self::Int(*i),
             Scalar::Float8(f) => Self::Float(*f),
             Scalar::Numeric(d) => Self::Dec(*d),
@@ -1227,6 +1233,7 @@ impl<'a> Key<'a> {
 
     fn compare(&self, other: &Scalar) -> Option<Ordering> {
         match (self, other) {
+            (Self::Int(a), Scalar::BigInt(b)) => Some(a.cmp(&b.get())),
             (Self::Int(a), Scalar::Int8(b)) => Some(a.cmp(b)),
             (Self::Float(a), Scalar::Float8(b)) => a.partial_cmp(b),
             (Self::Dec(a), Scalar::Numeric(b)) => Some(a.cmp(b)),
@@ -1255,6 +1262,7 @@ fn like_text(cell: &Cell) -> Option<std::borrow::Cow<'_, str>> {
         Cell::Uuid(_) | Cell::Xid8(_) | Cell::TimestampTz(_) => return None,
         Cell::Str(s) => Cow::Borrowed(&**s),
         Cell::Bool(b) => Cow::Borrowed(if *b { "true" } else { "false" }),
+        Cell::BigInt(i) => Cow::Owned(i.to_string()),
         Cell::Int(i) => Cow::Owned(i.to_string()),
         Cell::Id(i) => Cow::Owned(i.to_string()),
         Cell::Float(f) => Cow::Owned(pg_float8_text(*f)),

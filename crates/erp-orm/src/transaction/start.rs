@@ -206,8 +206,9 @@ impl Transaction {
         };
         #[cfg(not(feature = "test-faults"))]
         let import = "";
+        let initial_locks = self.initial_locks.take().unwrap_or_default();
         let begin_sql = format!(
-            "{}{import}; {}",
+            "{}{import}; {initial_locks}{}",
             self.intent.begin_sql(self.isolation),
             self.timeouts.set_local_sql()
         );

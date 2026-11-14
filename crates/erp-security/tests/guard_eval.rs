@@ -289,7 +289,7 @@ async fn evaluation_checks_model_access_and_knows_its_principal() {
     assert_eq!(err.kind(), ErrorKind::Access);
     assert!(
         err.message()
-            .starts_with("You are not allowed to access 'Hidden' (x.hidden) records."),
+            .starts_with("Your access rights do not let you access 'Hidden' (x.hidden) records."),
         "{}",
         err.message()
     );
@@ -438,7 +438,7 @@ async fn a_user_in_no_group_is_refused_before_guards_are_decided() {
     assert_eq!(err.kind(), ErrorKind::Access);
     assert!(
         err.message()
-            .starts_with("You are not allowed to access 'Country' (x.country) records."),
+            .starts_with("Your access rights do not let you access 'Country' (x.country) records."),
         "{}",
         err.message()
     );

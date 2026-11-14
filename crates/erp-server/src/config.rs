@@ -25,6 +25,14 @@ pub enum ConfigError {
     /// Configuration or secret file cannot be read securely.
     #[error("server configuration or protected secret file is invalid")]
     Invalid,
+    /// Invalid node authentication settings, with sanitized setting diagnostics.
+    #[error("{0}")]
+    Auth(#[source] erp_fields::Error),
+    /// The unused startup touch key must be removed before restart.
+    #[error(
+        "startup_limits.session.touch_interval_secs was replaced by ir.config_parameter sessions.touch_interval_seconds"
+    )]
+    RetiredTouchInterval,
     /// Invalid additive read-audit policy, with sanitized field diagnostics.
     #[error("{0}")]
     AuditReadPolicy(#[source] erp_fields::Error),
@@ -39,11 +47,19 @@ pub enum ConfigError {
         "audit reader requires a protected connection to the same database with a distinct role"
     )]
     AuditReaderConnection,
+    /// A SQL-object role setting is malformed or aliases another configured identity.
+    #[error(
+        "server setting {0} requires a distinct PostgreSQL role name of 1..=63 bytes without NUL"
+    )]
+    SqlObjectRole(&'static str),
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawConfig {
     database: String,
+    sql_object_definer_role: Option<toml::Value>,
+    sql_object_maintenance_role: Option<toml::Value>,
+    auth: Option<toml::Value>,
     database_url_file: PathBuf,
     owner_database_url_file: PathBuf,
     node_database_url_file: Option<PathBuf>,
@@ -120,6 +136,9 @@ enum ProxyMode {
 /// Validated configuration. Secret content is omitted from Debug and parser errors.
 pub struct ServerConfig {
     database: String,
+    sql_object_definer_role: Option<String>,
+    sql_object_maintenance_role: Option<String>,
+    auth: erp_security::auth::AuthConfig,
     runtime: tokio_postgres::Config,
     owner: tokio_postgres::Config,
     node: Option<tokio_postgres::Config>,
@@ -152,6 +171,12 @@ impl fmt::Debug for ServerConfig {
     }
 }
 impl ServerConfig {
+    /// Node-local input admission, prefilter capacity and hook execution bounds.
+    /// Changes take effect after restart and are retained across registry rebuilds.
+    pub fn auth(&self) -> erp_security::auth::AuthConfig {
+        self.auth
+    }
+
     /// Load strict TOML and private mode-600 regular files, refusing symlink secret paths.
     /// # Errors
     /// Invalid configuration, secret file, database binding or explicit proxy mode.
@@ -165,7 +190,16 @@ impl ServerConfig {
         if text.len() > 65_536 {
             return Err(ConfigError::Invalid);
         }
-        let raw: RawConfig = toml::from_str(&text).map_err(|_| ConfigError::Invalid)?;
+        let value: toml::Value = toml::from_str(&text).map_err(|_| ConfigError::Invalid)?;
+        if value
+            .get("startup_limits")
+            .and_then(toml::Value::as_table)
+            .is_some_and(|table| table.contains_key("session.touch_interval_secs"))
+        {
+            return Err(ConfigError::RetiredTouchInterval);
+        }
+        let raw: RawConfig = value.try_into().map_err(|_| ConfigError::Invalid)?;
+        let auth = crate::auth_config::read(raw.auth)?;
         if raw.database.is_empty()
             || raw.database.len() > 63
             || !raw
@@ -232,6 +266,20 @@ impl ServerConfig {
             }
             None => None,
         };
+        let mut used = vec![runtime.get_user(), owner.get_user()];
+        used.extend(node.as_ref().map(tokio_postgres::Config::get_user));
+        used.extend(audit_reader.as_ref().map(tokio_postgres::Config::get_user));
+        let definer = sql_object_role(
+            raw.sql_object_definer_role,
+            "sql_object_definer_role",
+            &used,
+        )?;
+        used.push(definer.as_deref());
+        let maintenance = sql_object_role(
+            raw.sql_object_maintenance_role,
+            "sql_object_maintenance_role",
+            &used,
+        )?;
         // Absent values receive documented defaults; supplied invalid values never do.
         let node_name = match raw.node_name {
             Some(name) => name,
@@ -317,6 +365,9 @@ impl ServerConfig {
         .map_err(|_| ConfigError::Invalid)?;
         Ok(Self {
             database: raw.database,
+            sql_object_definer_role: definer,
+            sql_object_maintenance_role: maintenance,
+            auth,
             runtime,
             owner,
             node,
@@ -349,6 +400,14 @@ impl ServerConfig {
     /// further infrastructure. The directory is created (mode 0700) when the server opens it.
     pub fn attachments_toml(&self) -> &str {
         &self.attachments
+    }
+    /// Operator-provisioned NOLOGIN owner of declared SECURITY DEFINER functions; unset grants nothing.
+    pub fn sql_object_definer_role(&self) -> Option<&str> {
+        self.sql_object_definer_role.as_deref()
+    }
+    /// Operator-provisioned maintenance login for declared SQL entry points; unset grants nothing.
+    pub fn sql_object_maintenance_role(&self) -> Option<&str> {
+        self.sql_object_maintenance_role.as_deref()
     }
     /// Configured database identity.
     pub fn database(&self) -> &str {
@@ -446,6 +505,9 @@ impl erp_orm::node::SharedSettings for ServerConfig {
     ) -> Result<(), erp_orm::node::NodeError> {
         let Self {
             database,
+            sql_object_definer_role: _,
+            sql_object_maintenance_role: _,
+            auth: _,
             runtime: _,
             owner: _,
             node: _,
@@ -480,6 +542,8 @@ impl erp_orm::node::SharedSettings for ServerConfig {
             "server.node_connection",
             "server.audit_reader_connection",
             "server.node_name",
+            // Each process pays for these resources; database session policy is separate.
+            "server.auth",
             "server.bind",
             "server.addons_path",
             "server.assets_manifest",
@@ -545,4 +609,19 @@ pub fn read_secret(path: &Path) -> Result<Zeroizing<String>, ConfigError> {
         return Err(ConfigError::Invalid);
     }
     Ok(text)
+}
+
+fn sql_object_role(
+    value: Option<toml::Value>,
+    key: &'static str,
+    used: &[Option<&str>],
+) -> Result<Option<String>, ConfigError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let role = value.as_str().ok_or(ConfigError::SqlObjectRole(key))?;
+    if role.is_empty() || role.len() > 63 || role.contains('\0') || used.contains(&Some(role)) {
+        return Err(ConfigError::SqlObjectRole(key));
+    }
+    Ok(Some(role.to_owned()))
 }

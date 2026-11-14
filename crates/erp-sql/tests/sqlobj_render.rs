@@ -166,7 +166,8 @@ fn decls() -> Vec<SqlObjectDecl> {
         SqlObjectDecl::condition(
             "test_sqr",
             "cond",
-            SqlConditionDecl::new("ERP01", "sqr_cond", "Refused."),
+            SqlConditionDecl::new("ERP01", "sqr_cond", "Refused.")
+                .kind(erp_registry::SqlConditionKind::Validation),
         ),
     ]
 }
@@ -407,5 +408,32 @@ fn canonical_payloads_are_versioned_and_exact() {
         columns[0].quoted(),
         erp_sql::quote("na\"me"),
         "the render callback receives quoted names"
+    );
+}
+
+#[test]
+fn condition_kind_changes_declaration_but_not_physical_identity() {
+    let build = |kind| {
+        let declaration = leak(SqlObjectDecl::condition(
+            "test_sqr",
+            "kind",
+            SqlConditionDecl::new("ERP10", "sqr_kind", "Refused.").kind(kind),
+        ));
+        RegistryBuilder::new([&ADDON])
+            .linked(false)
+            .require_sql_objects([leak(SqlObjectManifest::new("test_sqr", &["kind"]))])
+            .with_sql_objects([declaration])
+            .build()
+            .unwrap()
+    };
+    let validation = build(erp_registry::SqlConditionKind::Validation);
+    let programming = build(erp_registry::SqlConditionKind::Programming);
+    let a = object(&validation, "kind");
+    let b = object(&programming, "kind");
+    assert_eq!(sqlobj::physical_identity(a), sqlobj::physical_identity(b));
+    assert_eq!(sqlobj::shape_payload(a), sqlobj::shape_payload(b));
+    assert_ne!(
+        sqlobj::declaration_payload(a, "", &[]),
+        sqlobj::declaration_payload(b, "", &[])
     );
 }

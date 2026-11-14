@@ -28,7 +28,7 @@ fn current_user(ctx: &DefaultContext) -> Value {
     keys = [key(
         name = "_name_uniq",
         fields = ["company_id", "name"],
-        message = "Reference must be unique per company!"
+        message = "Another transfer of this company already has this reference."
     )],
     constraints = [
         (
@@ -126,8 +126,8 @@ pub struct StockPicking {
     #[field(
         selection,
         selection = [
-            ("direct", "As soon as possible, with back orders"),
-            ("one", "When all products are ready")
+            ("direct", "Ship what is ready, back order the rest"),
+            ("one", "Ship once everything is ready")
         ],
         required = true,
         default = "direct",

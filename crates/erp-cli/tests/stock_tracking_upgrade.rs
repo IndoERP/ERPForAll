@@ -8,7 +8,10 @@
 //! `stock_lot_name_scope`, `stock_lot`, `stock_package`) to stand in for a database that had stock
 //! before, after the three move line tables that reference
 //! them (such a database had none of those either). Unlike such a database it keeps the tracking models' `ir_model`,
-//! field, access and `ir_model_data` rows, which the earlier stock never wrote. A higher manifest
+//! field, access and `ir_model_data` rows, which the earlier stock never wrote. Once SQL-object guards
+//! are installed, dropping these tables is integrity drift and must be refused, never silently repaired.
+//! The explicit previous-binary rehearsal in `examples/stock_guards_upgrade.rs` covers real pre-guard adoption.
+//! A higher manifest
 //! version is presented by rewinding the installed version marker (`latest_version`) below the
 //! manifest's, not by a second manifest: the engine compares only those two values. A changed
 //! artifact is presented by giving the installed receipt and `identity_previous` one digest that
@@ -82,6 +85,7 @@ fn builder(db: &TestDb) -> ModuleSystemBuilder {
     let mut index = AddonIndex::new(true);
     index.add_dev_path(addons());
     ModuleSystem::builder(db.pool().clone(), index)
+        .require_sql_objects([&erp_addon_stock::schema_guards::MANIFEST])
         .native_artifact_identities(current_identities())
         .view_types(erp_addon_web::view_type_contributions())
         .require_core_tables(erp_security::auth::core_tables())
@@ -250,8 +254,9 @@ async fn upgrade(system: &ModuleSystem, case: &str) -> Result<(), (ErrorKind, St
     result
 }
 
-fn all_tables() -> Vec<String> {
-    TRACKING_TABLES.iter().map(|t| (*t).to_owned()).collect()
+fn guarded_table_drift() -> Result<(), (ErrorKind, String)> {
+    Err((ErrorKind::Programming,
+        "SQL object 'stock/correction_delete': installed trigger differs; reconcile through addon upgrade".to_owned()))
 }
 
 fn all_s1() -> Vec<String> {
@@ -259,18 +264,20 @@ fn all_s1() -> Vec<String> {
 }
 
 /// Case A: the same files and the same manifest version as the installed stock. An explicit
-/// upgrade synchronizes the schema whatever the versions say, so the tables and the S1
-/// constraints are created.
+/// upgrade cannot repair missing owned triggers: the whole operation is refused as integrity drift.
 #[test]
-fn upgrade_with_same_version_and_files_creates_the_tracking_tables() {
+fn upgrade_with_same_version_refuses_guarded_tracking_table_drift() {
     run(async {
         let db = TestDb::create().await.unwrap();
-        stock_without_tracking_tables(&db, "1.0.0").await;
+        stock_without_tracking_tables(&db, "1.2.0").await;
         let system = builder(&db).build().unwrap();
-        assert_eq!(upgrade(&system, "A same version, same files").await, Ok(()));
-        assert_eq!(tables(&db).await, all_tables());
-        assert_eq!(s1_constraints(&db).await, all_s1());
-        assert_eq!(installed_version(&db).await, "1.0.0");
+        assert_eq!(
+            upgrade(&system, "A same version, same files").await,
+            guarded_table_drift()
+        );
+        assert_eq!(tables(&db).await, Vec::<String>::new());
+        assert_eq!(s1_constraints(&db).await, Vec::<String>::new());
+        assert_eq!(installed_version(&db).await, "1.2.0");
         db.cleanup().await.unwrap();
     });
 }
@@ -278,19 +285,19 @@ fn upgrade_with_same_version_and_files_creates_the_tracking_tables() {
 /// Case A2: changed stock files under the same manifest version, upgraded the way a release is
 /// (installed receipt of the earlier artifact, `identity_previous`).
 #[test]
-fn release_upgrade_with_same_version_and_changed_files_creates_the_tracking_tables() {
+fn release_upgrade_with_same_version_refuses_guarded_tracking_table_drift() {
     run(async {
         let db = TestDb::create().await.unwrap();
-        stock_without_tracking_tables(&db, "1.0.0").await;
+        stock_without_tracking_tables(&db, "1.2.0").await;
         let previous = earlier_stock_artifact(&db).await;
         let system = builder(&db).identity_previous(previous).build().unwrap();
         assert_eq!(
             upgrade(&system, "A2 same version, changed files").await,
-            Ok(())
+            guarded_table_drift()
         );
-        assert_eq!(tables(&db).await, all_tables());
-        assert_eq!(s1_constraints(&db).await, all_s1());
-        assert_eq!(installed_version(&db).await, "1.0.0");
+        assert_eq!(tables(&db).await, Vec::<String>::new());
+        assert_eq!(s1_constraints(&db).await, Vec::<String>::new());
+        assert_eq!(installed_version(&db).await, "1.2.0");
         db.cleanup().await.unwrap();
     });
 }
@@ -298,16 +305,19 @@ fn release_upgrade_with_same_version_and_changed_files_creates_the_tracking_tabl
 /// Case B: changed stock files and a manifest version above the installed one (marker rewound to
 /// `0.9.0`), upgraded the way a release is.
 #[test]
-fn release_upgrade_with_higher_version_creates_the_tracking_tables() {
+fn release_upgrade_with_higher_version_refuses_guarded_tracking_table_drift() {
     run(async {
         let db = TestDb::create().await.unwrap();
         stock_without_tracking_tables(&db, "0.9.0").await;
         let previous = earlier_stock_artifact(&db).await;
         let system = builder(&db).identity_previous(previous).build().unwrap();
-        assert_eq!(upgrade(&system, "B higher version").await, Ok(()));
-        assert_eq!(tables(&db).await, all_tables());
-        assert_eq!(s1_constraints(&db).await, all_s1());
-        assert_eq!(installed_version(&db).await, "1.0.0");
+        assert_eq!(
+            upgrade(&system, "B higher version").await,
+            guarded_table_drift()
+        );
+        assert_eq!(tables(&db).await, Vec::<String>::new());
+        assert_eq!(s1_constraints(&db).await, Vec::<String>::new());
+        assert_eq!(installed_version(&db).await, "0.9.0");
         db.cleanup().await.unwrap();
     });
 }
@@ -319,7 +329,7 @@ fn release_upgrade_with_higher_version_creates_the_tracking_tables() {
 #[test]
 fn plain_upgrade_with_changed_files_is_refused_whatever_the_version() {
     run(async {
-        for installed in ["1.0.0", "0.9.0"] {
+        for installed in ["1.2.0", "0.9.0"] {
             let db = TestDb::create().await.unwrap();
             stock_without_tracking_tables(&db, installed).await;
             earlier_stock_artifact(&db).await;
@@ -591,7 +601,7 @@ fn upgrade_turns_the_owner_links_into_restrict() {
     });
 }
 
-/// declares in place)
+/// shown on the picking company index; the case's custom-field index changes are not covered here)
 #[test]
 fn upgrade_keeps_the_picking_company_index_the_model_no_longer_declares() {
     run(async {

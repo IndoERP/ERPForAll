@@ -34,6 +34,7 @@ fn system(db: &TestDb) -> ModuleSystem {
         })
         .collect();
     ModuleSystem::builder(db.pool().clone(), index)
+        .require_sql_objects([&erp_addon_stock::schema_guards::MANIFEST])
         .native_artifact_identities(identities)
         .view_types(erp_addon_web::view_type_contributions())
         .require_core_tables(erp_security::auth::core_tables())
@@ -262,6 +263,7 @@ fn stock_adds_default_rule_types_without_transaction_schema() {
             })
             .collect();
         let system = ModuleSystem::builder(db.pool().clone(), index)
+            .require_sql_objects([&erp_addon_stock::schema_guards::MANIFEST])
             .native_artifact_identities(identities)
             .view_types(erp_addon_web::view_type_contributions())
             .require_core_tables(erp_security::auth::core_tables())
@@ -469,7 +471,7 @@ fn barcode_permissions_and_every_view_served_to_manager() {
                 assert_eq!(error.kind(), erp_fields::ErrorKind::Access);
                 assert_eq!(
                     error.message(),
-                    "You are not allowed to modify 'Company' (res.company) records.\n\nThis operation is allowed for the following groups:\n\t- Settings Administration\n\nContact your administrator to request access if necessary."
+                    "Your access rights do not let you modify 'Company' (res.company) records.\n\nGroups that may do this:\n\t- Settings Administration\n\nAsk an administrator if you need this access."
                 );
             } else {
                 let error = model
@@ -481,7 +483,7 @@ fn barcode_permissions_and_every_view_served_to_manager() {
                 assert_eq!(error.kind(), erp_fields::ErrorKind::Access);
                 assert_eq!(
                     error.message(),
-                    "You are not allowed to access 'Barcode Nomenclature' (barcode.nomenclature) records.\n\nThis operation is allowed for the following groups:\n\t- Access Administration\n\t- Internal User\n\t- Regular User\n\t- Settings Administration\n\nContact your administrator to request access if necessary."
+                    "Your access rights do not let you access 'Barcode Nomenclature' (barcode.nomenclature) records.\n\nGroups that may do this:\n\t- Access Administration\n\t- Internal User\n\t- Regular User\n\t- Settings Administration\n\nAsk an administrator if you need this access."
                 );
             }
             let error = model
@@ -494,7 +496,7 @@ fn barcode_permissions_and_every_view_served_to_manager() {
             assert_eq!(error.kind(), erp_fields::ErrorKind::Access);
             assert_eq!(
                 error.message(),
-                "You are not allowed to create 'Barcode Nomenclature' (barcode.nomenclature) records.\n\nThis operation is allowed for the following groups:\n\t- Access Administration\n\t- Settings Administration\n\nContact your administrator to request access if necessary."
+                "Your access rights do not let you create 'Barcode Nomenclature' (barcode.nomenclature) records.\n\nGroups that may do this:\n\t- Access Administration\n\t- Settings Administration\n\nAsk an administrator if you need this access."
             );
             tx.rollback().await.unwrap();
         }

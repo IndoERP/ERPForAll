@@ -87,7 +87,7 @@ impl ExactRatio {
         Self::from_decimal(numerator)?.checked_div(&Self::from_decimal(denominator)?)
     }
 
-    fn normalized(negative: bool, num: Nat, den: Nat) -> Result<Self, MoneyError> {
+    pub(super) fn normalized(negative: bool, num: Nat, den: Nat) -> Result<Self, MoneyError> {
         if den.is_zero() {
             return Err(MoneyError::DivisionByZero);
         }
@@ -109,6 +109,10 @@ impl ExactRatio {
             }
         };
         Ok(Self { negative, num, den })
+    }
+
+    pub(super) fn parts(&self) -> (bool, &Nat, &Nat) {
+        (self.negative, &self.num, &self.den)
     }
 
     /// Whether the value is exactly zero.

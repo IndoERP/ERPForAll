@@ -69,7 +69,10 @@ fn describe(
     // a range has no group value
     let ungroupable = matches!(
         field.ty,
-        FieldType::Json | FieldType::DateRange { .. } | FieldType::DatetimeRange { .. }
+        FieldType::BigInt
+            | FieldType::Json
+            | FieldType::DateRange { .. }
+            | FieldType::DatetimeRange { .. }
     );
     put("groupable", Value::Bool(has_column && !ungroupable));
     if let Some(related) = field.related {

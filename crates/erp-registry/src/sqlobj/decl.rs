@@ -38,6 +38,30 @@ impl SqlObjectDecl {
         self.key
     }
 
+    /// A foreign key owned by `addon` under the local `key`.
+    pub const fn foreign_key(
+        addon: &'static str,
+        key: &'static str,
+        decl: super::integrity::SqlForeignKeyDecl,
+    ) -> Self {
+        Self {
+            addon,
+            key,
+            kind: SqlObjectKindDecl::ForeignKey(decl),
+        }
+    }
+    /// Table persistence owned by `addon` under the local `key`.
+    pub const fn table_options(
+        addon: &'static str,
+        key: &'static str,
+        decl: super::integrity::SqlTableOptionsDecl,
+    ) -> Self {
+        Self {
+            addon,
+            key,
+            kind: SqlObjectKindDecl::TableOptions(decl),
+        }
+    }
     /// A function owned by `addon` under the local `key`.
     pub const fn function(addon: &'static str, key: &'static str, decl: SqlFunctionDecl) -> Self {
         Self {
@@ -79,7 +103,7 @@ impl SqlObjectDecl {
     }
 }
 
-/// What a raw declaration declares. Foreign keys, checks and table options come with later slices.
+/// What a raw native declaration declares. CHECKs reuse model table objects.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum SqlObjectKindDecl {
     /// A function.
@@ -90,6 +114,8 @@ pub(crate) enum SqlObjectKindDecl {
     Condition(SqlConditionDecl),
     /// A restricted table grant policy.
     TableGrant(SqlTableGrantDecl),
+    ForeignKey(super::integrity::SqlForeignKeyDecl),
+    TableOptions(super::integrity::SqlTableOptionsDecl),
 }
 
 /// The four role bindings amendment A2. Symbolic: the operator configures which
@@ -553,12 +579,34 @@ impl SqlTriggerDecl {
     }
 }
 
-/// A raw condition declaration: SQLSTATE, condition identifier and static public message.
+/// The closed classification of a declared SQL condition.
+/// Retry and lock classifications cannot be declared by addons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SqlConditionKind {
+    /// A user-correctable refusal with its declared safe static message.
+    Validation,
+    /// An invariant violation; public text is generic and the request is never retried.
+    Programming,
+}
+
+impl SqlConditionKind {
+    /// Stable spelling used in canonical declaration metadata.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Validation => "validation",
+            Self::Programming => "programming",
+        }
+    }
+}
+
+/// A raw condition declaration: SQLSTATE, identifier, message and explicit classification.
+/// Call [`Self::kind`]; omission is refused at registry construction, never defaulted.
 #[derive(Debug, Clone, Copy)]
 pub struct SqlConditionDecl {
     pub(crate) sqlstate: &'static str,
     pub(crate) identifier: &'static str,
     pub(crate) message: &'static str,
+    pub(crate) kind: Option<SqlConditionKind>,
 }
 
 impl SqlConditionDecl {
@@ -572,6 +620,22 @@ impl SqlConditionDecl {
             sqlstate,
             identifier,
             message,
+            kind: None,
         }
+    }
+
+    /// Explicitly classify this condition. Programming conditions expose only generic text;
+    /// their declared message is diagnostic metadata, never a public validation message.
+    ///
+    /// ```
+    /// use erp_registry::{SqlConditionDecl, SqlConditionKind, SqlObjectDecl};
+    /// let condition = SqlConditionDecl::new("ERP01", "inventory_immutable", "This value cannot be changed.")
+    ///     .kind(SqlConditionKind::Validation);
+    /// let _object = SqlObjectDecl::condition("inventory", "immutable", condition);
+    /// ```
+    #[must_use]
+    pub const fn kind(mut self, kind: SqlConditionKind) -> Self {
+        self.kind = Some(kind);
+        self
     }
 }

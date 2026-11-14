@@ -40,7 +40,7 @@ pub struct ModelData {
 }
 
 /// The prefix the ORM puts before a declared constraint's message.
-const PREFIX: &str = "The operation cannot be completed: ";
+const PREFIX: &str = "The database refused the change: ";
 
 /// Ids every case starts from: two companies with one operation type each, a shared product, a unit,
 /// two shared locations, a shared partner.
@@ -107,6 +107,8 @@ async fn fixture() -> Fixture {
         &erp_addon_stock::ADDON,
         &ADDON,
     ])
+    .require_sql_objects([&erp_addon_stock::schema_guards::MANIFEST])
+    .schema_sync_options(erp_testkit::SchemaSyncOptions::inline().lifecycle(true))
     .build()
     .await
     .unwrap();
@@ -917,7 +919,7 @@ async fn picking_columns_defaults_and_indexes() {
 async fn picking_reference_is_unique_per_company() {
     let f = fixture().await;
     let mut tx = f.h.begin().await.unwrap();
-    let message = "Reference must be unique per company!";
+    let message = "Another transfer of this company already has this reference.";
     create_picking(
         &mut tx,
         f.company,
@@ -1655,18 +1657,18 @@ fn assert_crossover(error: &Error, field: &str, label: &str, value: &str) {
     assert_eq!(error.kind(), ErrorKind::UserError, "{field}: {error:?}");
     let message = error.message();
     assert!(
-        message.starts_with("Uh-oh! You’ve got some company inconsistencies here:\n- “"),
+        message.starts_with("These values link records of different companies:\n- “"),
         "{field}: {message}"
     );
     assert!(
         message.contains(&format!(
-            "belongs to company “Main Company” while “{label}” ({field}: '{value}') belongs to \
-             another company.\n"
+            "is in company “Main Company”, and “{label}” ({field}: '{value}') points to a record of another company.\n"
         )),
         "{field}: {message}"
     );
     assert!(
-        message.ends_with("To avoid a mess, no company crossover is allowed!"),
+        message
+            .ends_with("Choose records of the same company, or records shared by all companies."),
         "{field}: {message}"
     );
 }
@@ -1790,8 +1792,7 @@ async fn deleting_a_partner_who_owns_a_transfer_or_restricts_a_move_is_refused()
     .unwrap();
     let blocked = |model: &str, description: &str| {
         format!(
-            "{PREFIX}Another model is using the record you are trying to delete.\n\nThe \
-             troublemaker is: '{description}' ({model})"
+            "{PREFIX}Other records still point to the record you want to delete.\n\nReferring model: '{description}' ({model})"
         )
     };
     let delete = async |tx: &mut Transaction| {

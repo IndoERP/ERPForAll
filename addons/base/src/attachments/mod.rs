@@ -18,7 +18,10 @@ pub mod ownership;
 pub mod peer_probe;
 
 mod pending;
+mod policy;
 mod quota;
+/// The first key of the per-subject attachment budget lock (registered in `erp_sql::locks`).
+pub use quota::SUBJECT_BUDGET_CLASS as SUBJECT_BUDGET_LOCK_CLASS;
 pub mod recovery;
 mod runtime;
 pub mod schema;
@@ -31,6 +34,7 @@ mod upload_reader;
 
 pub use model::IrAttachment;
 pub use pending::{PendingLimitExceeded, create_pending};
+pub use policy::{UploadPolicy, upload_policy};
 pub use service::{
     AdoptScope, UNLINK_HOOK, adopt, copy, create, create_unique, for_record, open, reattach,
     unlink_for_record, write_content,

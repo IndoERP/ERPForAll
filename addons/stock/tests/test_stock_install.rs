@@ -214,6 +214,8 @@ fn inventory_addon_descriptors_and_manifest_graph() {
 fn inventory_addons_registry_builder() {
     let all = all_addons();
     let registry = Harness::builder(all.iter().copied())
+        .require_sql_objects([&erp_addon_stock::schema_guards::MANIFEST])
+        .schema_sync_options(erp_testkit::SchemaSyncOptions::inline().lifecycle(true))
         .registry_only()
         .expect("clean registry build with all 12 M7 inventory addons");
     assert_dependency_order(registry.addons(), &all);
@@ -224,6 +226,8 @@ fn inventory_addons_registry_order_independent_of_input_order() {
     let mut reversed = all_addons();
     reversed.reverse();
     let registry = Harness::builder(reversed.iter().copied())
+        .require_sql_objects([&erp_addon_stock::schema_guards::MANIFEST])
+        .schema_sync_options(erp_testkit::SchemaSyncOptions::inline().lifecycle(true))
         .registry_only()
         .expect("registry build from addons given in reverse order");
     assert_dependency_order(registry.addons(), &reversed);
@@ -272,6 +276,8 @@ fn inventory_manifest_depends_match_descriptors() {
 async fn inventory_addons_testkit_harness_install() {
     let all = all_addons();
     let h = Harness::builder(all.iter().copied())
+        .require_sql_objects([&erp_addon_stock::schema_guards::MANIFEST])
+        .schema_sync_options(erp_testkit::SchemaSyncOptions::inline().lifecycle(true))
         .build()
         .await
         .expect("throwaway database harness with M7 inventory addon set");

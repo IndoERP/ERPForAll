@@ -18,8 +18,8 @@ use crate::attrs::{array, err, lit_str};
 pub(crate) fn field_kind_mismatch(index_kind: &str, field_kind: &str) -> Option<String> {
     let (allowed, list): (&[&str], &str) = match index_kind {
         "brin" => (
-            &["date", "datetime", "integer"],
-            "date, datetime and integer",
+            &["date", "datetime", "integer", "bigint"],
+            "date, datetime, integer and bigint",
         ),
         "gin" => (&["json"], "json"),
         // btree, btree_not_null and trigram suit any stored column; the caller has refused
@@ -156,6 +156,7 @@ mod tests {
         let types = [
             "boolean",
             "integer",
+            "bigint",
             "float",
             "monetary",
             "char",
@@ -197,7 +198,9 @@ mod tests {
     fn field_kind_rule() {
         assert_eq!(
             field_kind_mismatch("brin", "char").as_deref(),
-            Some("index = \"brin\" is for date, datetime and integer fields (this field is char)")
+            Some(
+                "index = \"brin\" is for date, datetime, integer and bigint fields (this field is char)"
+            )
         );
         assert_eq!(field_kind_mismatch("brin", "integer"), None);
         assert_eq!(

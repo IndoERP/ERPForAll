@@ -25,7 +25,7 @@ use erp_sdk::prelude::*;
     keys = [key(
         name = "_name_unique",
         fields = ["product_id", "company_id", "name"],
-        message = "The combination of lot/serial number and product must be unique within a company including when no company is defined."
+        message = "This lot or serial number already exists for the product in this company. Records without a company share one namespace."
     )],
     // target of the quant and serial position keys, created first because `lot.rs` sorts before
     // `quant.rs` in registry order; changing it needs a migration that drops those keys first

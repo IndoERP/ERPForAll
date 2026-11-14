@@ -417,7 +417,7 @@ async fn genuine_base_1_1_category_upgrade_preserves_data_and_rolls_back_late_fa
     assert_eq!(refused.status.code(), Some(4));
     assert_eq!(
         String::from_utf8_lossy(&refused.stderr),
-        "Error: Module \"base\": schema update failed: The operation cannot be completed: fixture late category schema refusal: db error: ERROR: fixture late category schema refusal\n"
+        "Error: Module \"base\": schema update failed: The database refused the change: fixture late category schema refusal: db error: ERROR: fixture late category schema refusal\n"
     );
     assert_eq!(
         client

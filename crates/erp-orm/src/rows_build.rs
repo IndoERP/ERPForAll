@@ -27,6 +27,7 @@ enum Null {
     BoolFalse,
     /// `0` (integer and many2one_reference fields).
     IntZero,
+    BigIntZero,
     /// `0.0` (float and monetary fields).
     FloatZero,
     /// `[]` (x2many fields).
@@ -37,6 +38,7 @@ impl Null {
     fn of(ty: &FieldType) -> Self {
         match ty {
             FieldType::Boolean => Self::BoolFalse,
+            FieldType::BigInt => Self::BigIntZero,
             FieldType::Integer | FieldType::Many2oneReference { .. } => Self::IntZero,
             FieldType::One2many { .. } | FieldType::Many2many { .. } => Self::EmptyIds,
             FieldType::Float { .. } | FieldType::Monetary { .. } => Self::FloatZero,
@@ -63,6 +65,7 @@ impl Null {
         match self {
             Self::False => Value::False,
             Self::BoolFalse => Value::Bool(false),
+            Self::BigIntZero => Value::BigInt(erp_fields::BigInt::from_i64(0)),
             Self::IntZero => Value::Int(0),
             Self::FloatZero => Value::Float(0.0),
             Self::EmptyIds => Value::list([]),
@@ -113,6 +116,7 @@ fn uses_falsy(data: &ColumnData) -> bool {
             | ColumnData::Date(_)
             | ColumnData::DateTime(_)
             | ColumnData::Uuid(_)
+            | ColumnData::BigInt(_)
             | ColumnData::Xid8(_)
             | ColumnData::TimestampTz(_)
             | ColumnData::Label { .. }
@@ -164,6 +168,7 @@ impl Sink {
             FieldType::Date => ColumnData::Date(Vec::with_capacity(capacity)),
             FieldType::Datetime => ColumnData::DateTime(Vec::with_capacity(capacity)),
             FieldType::Uuid => ColumnData::Uuid(Vec::with_capacity(capacity)),
+            FieldType::BigInt => ColumnData::BigInt(Vec::with_capacity(capacity)),
             FieldType::Xid8 => ColumnData::Xid8(Vec::with_capacity(capacity)),
             FieldType::TimestampTz => ColumnData::TimestampTz(Vec::with_capacity(capacity)),
             FieldType::Json => ColumnData::Json(Vec::with_capacity(capacity)),
@@ -290,6 +295,10 @@ impl Sink {
                 v.push(x);
                 None
             }
+            (ColumnData::BigInt(v), Cell::BigInt(x)) => {
+                v.push(x);
+                None
+            }
             (ColumnData::Xid8(v), Cell::Xid8(x)) => {
                 v.push(x);
                 None
@@ -352,7 +361,7 @@ impl Sink {
                     self.falsy.set(row, true)?;
                     true
                 }
-                Null::BoolFalse | Null::FloatZero | Null::EmptyIds => false,
+                Null::BigIntZero | Null::BoolFalse | Null::FloatZero | Null::EmptyIds => false,
             },
             ColumnData::Float(v) => {
                 let fits = null == Null::FloatZero;
@@ -397,6 +406,13 @@ impl Sink {
                 if fits {
                     v.push(erp_fields::Uuid::NIL);
                     self.falsy.set(row, true)?;
+                }
+                fits
+            }
+            ColumnData::BigInt(v) => {
+                let fits = null == Null::BigIntZero;
+                if fits {
+                    v.push(erp_fields::BigInt::from_i64(0));
                 }
                 fits
             }
@@ -510,6 +526,7 @@ impl Sink {
                 ColumnData::Date(v) => v.push(Date::from_days(0)),
                 ColumnData::DateTime(v) => v.push(DateTime::from_micros(0)),
                 ColumnData::Uuid(v) => v.push(erp_fields::Uuid::NIL),
+                ColumnData::BigInt(v) => v.push(erp_fields::BigInt::from_i64(0)),
                 ColumnData::Xid8(v) => v.push(erp_fields::Xid8::from_u64(0)),
                 ColumnData::TimestampTz(v) => v.push(erp_fields::TimestampTz::UNIX_EPOCH),
                 ColumnData::Json(v) => v.push(None),
@@ -565,6 +582,7 @@ impl Sink {
             ColumnData::Date(v) => Value::Date(*v.get(row).ok_or_else(short)?),
             ColumnData::DateTime(v) => Value::DateTime(*v.get(row).ok_or_else(short)?),
             ColumnData::Uuid(v) => Value::Uuid(*v.get(row).ok_or_else(short)?),
+            ColumnData::BigInt(v) => Value::BigInt(*v.get(row).ok_or_else(short)?),
             ColumnData::Xid8(v) => Value::Xid8(*v.get(row).ok_or_else(short)?),
             ColumnData::TimestampTz(v) => Value::TimestampTz(*v.get(row).ok_or_else(short)?),
             ColumnData::Json(v) => v

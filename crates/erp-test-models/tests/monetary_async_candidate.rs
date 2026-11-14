@@ -1077,7 +1077,7 @@ async fn denied_amount_write_precedes_the_candidate() {
     assert_eq!(error.kind(), ErrorKind::Access);
     assert_eq!(
         error.message(),
-        "You are not allowed to write 'test_monetary_candidate.cand' (test_monetary_candidate.cand) records."
+        "Your access rights do not let you write 'test_monetary_candidate.cand' (test_monetary_candidate.cand) records."
     );
     assert_eq!(
         runs("denied-write").len(),

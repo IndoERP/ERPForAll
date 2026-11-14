@@ -576,7 +576,7 @@ async fn escape_write_checks_keep_allowed_updates_and_direct_escape_controls() {
     assert_eq!(err.kind(), erp_fields::ErrorKind::Access);
     assert_eq!(
         err.message(),
-        "Uh-oh! Looks like you have stumbled upon some top-secret records.\n\nSorry, demo (id=2) doesn't have 'write' access to:\n- Escape over a plain boolean (test_company_escape.plain)\n\nIf you really, really need access, perhaps you can win over your friendly administrator with a batch of freshly baked cookies.\n\nThis seems to be a multi-company issue, you might be able to access the record by switching to the company: F."
+        "Access rules protect some of these records.\n\ndemo (id=2) has no 'write' access to:\n- Escape over a plain boolean (test_company_escape.plain)\n\nAsk an administrator if you need access to these records.\n\nTo open the record, switch to its company: F."
     );
     assert!(tx.is_poisoned());
     tx.rollback().await.unwrap();
@@ -642,7 +642,7 @@ async fn an_inverse_reads_the_new_record_after_its_many2many_values() {
     assert_eq!(err.kind(), erp_fields::ErrorKind::Access);
     assert_eq!(
         err.message(),
-        "Uh-oh! Looks like you have stumbled upon some top-secret records.\n\nSorry, demo (id=2) doesn't have 'read' access to:\n- Member restricted through its companies (test_company_escape.member)\n\nIf you really, really need access, perhaps you can win over your friendly administrator with a batch of freshly baked cookies.\n\nThis seems to be a multi-company issue, you might be able to access the record by switching to the company: F."
+        "Access rules protect some of these records.\n\ndemo (id=2) has no 'read' access to:\n- Member restricted through its companies (test_company_escape.member)\n\nAsk an administrator if you need access to these records.\n\nTo open the record, switch to its company: F."
     );
     tx.rollback().await.unwrap();
 }

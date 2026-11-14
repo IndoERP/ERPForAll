@@ -1198,6 +1198,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "toml 0.8.23",
+ "tracing",
 ]
 
 [[package]]
@@ -1252,6 +1253,7 @@ dependencies = [
 name = "erp-addon-stock"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "erp-addon-account",
  "erp-addon-analytic",
  "erp-addon-barcodes",
@@ -1271,6 +1273,7 @@ dependencies = [
  "erp-addon-web",
  "erp-sdk",
  "erp-testkit",
+ "futures-util",
  "tokio",
  "toml 0.8.23",
 ]

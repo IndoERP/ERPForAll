@@ -40,7 +40,7 @@ async fn source_schema() {
     assert_eq!(err.kind(), erp_sdk::ErrorKind::Validation);
     assert_eq!(
         err.message(),
-        "The operation cannot be completed: A valuation source revision component must be unique."
+        "The database refused the change: A valuation source revision component must be unique."
     );
     for (assignment, key) in [
         ("source_revision=-1", "_revision_nonneg"),

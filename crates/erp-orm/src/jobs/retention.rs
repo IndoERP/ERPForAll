@@ -51,7 +51,7 @@ impl JobHandler for HistoryRetention {
         ctx: &'a mut JobContext<'_>,
     ) -> BoxFuture<'a, std::result::Result<RunOutcome, JobError>> {
         Box::pin(async move {
-            let days = ctx.inner.orm.job_settings().history_days();
+            let days = ctx.settings().history_days();
             loop {
                 let report = ctx
                     .chunk(move |tx| {
@@ -82,7 +82,7 @@ impl JobHandler for DeadExpiry {
         ctx: &'a mut JobContext<'_>,
     ) -> BoxFuture<'a, std::result::Result<RunOutcome, JobError>> {
         Box::pin(async move {
-            let days = ctx.inner.orm.job_settings().dead_retention_days();
+            let days = ctx.settings().dead_retention_days();
             loop {
                 let report = ctx
                     .chunk(move |tx| {

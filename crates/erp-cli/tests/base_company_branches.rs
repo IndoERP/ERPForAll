@@ -367,7 +367,7 @@ async fn acceptance() {
     assert_eq!(revoked.kind(), erp_fields::ErrorKind::Access);
     assert_eq!(
         revoked.message(),
-        "Access to unauthorized or invalid companies."
+        "One of the selected companies does not exist or is not one of yours."
     );
     let selected = refreshed.with_context([(
         "allowed_company_ids",

@@ -22,10 +22,17 @@
 //!
 //! The order holds across calls only when a unit of work makes **one engine call**, or makes later calls
 //! only with keys above the highest key it holds (4): the engine keeps the keys each
-//! transaction locked and refuses a later call naming a lower key it does not hold yet, as a
-//! `Programming` error naming both keys. Collect the changes of a unit of work and pass them in one
-//! call. Count-state writes through the generic `write` lock in row order, not key order; they belong
-//! before the engine call or in their own unit of work.
+//! transaction locked and refuses a later call naming a lower key it does not hold, as a
+//! `Programming` error naming both keys. A key locked inside a savepoint that rolled back is not held
+//! any more (the rollback released its row lock): every call stamps a transaction-local setting that
+//! the rollback undoes with it, so the engine sees which earlier calls still stand. Collect the changes
+//! of a unit of work and pass them in one call. Count-state writes through the generic `write` lock in
+//! row order, not key order; they belong before the engine call or in their own unit of work.
+//!
+//! **Location guards** (`quant_guards`): the validation read takes `FOR SHARE` on the key locations,
+//! which the location guards' `FOR UPDATE NOWAIT` refuses while a stock change is open, so a guard is
+//! retried instead of passing on a snapshot that cannot see a concurrent balance, and an engine call
+//! behind a guard waits for it and is retried on the guard's change.
 //!
 //! **Access.** The engine reads and writes the quant table directly, as the reference's `sudo()` does:
 //! it checks no model access and no record rule. It is for the stock transitions (move validation,
@@ -59,6 +66,7 @@ const BYPASS_USAGES: [&str; 4] = ["supplier", "customer", "inventory", "producti
 /// The company is the company of the ledger line that creates the key, never derived from the location
 /// (B6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct QuantKey {
     /// Company of the balance.
     pub company_id: i64,
@@ -74,9 +82,42 @@ pub struct QuantKey {
     pub owner_id: Option<i64>,
 }
 
+impl QuantKey {
+    /// The key of loose, unlotted, company-owned stock of `product` at `location`.
+    pub fn new(company_id: i64, product_id: i64, location_id: i64) -> Self {
+        Self {
+            company_id,
+            product_id,
+            location_id,
+            lot_id: None,
+            package_id: None,
+            owner_id: None,
+        }
+    }
+
+    /// The same key with this lot.
+    #[must_use]
+    pub fn lot_id(self, lot_id: Option<i64>) -> Self {
+        Self { lot_id, ..self }
+    }
+
+    /// The same key with this package.
+    #[must_use]
+    pub fn package_id(self, package_id: Option<i64>) -> Self {
+        Self { package_id, ..self }
+    }
+
+    /// The same key with this owner.
+    #[must_use]
+    pub fn owner_id(self, owner_id: Option<i64>) -> Self {
+        Self { owner_id, ..self }
+    }
+}
+
 /// A signed change of one key: an on-hand delta, a reserved delta and the incoming date the stock
 /// carries (the source's date when stock moves between locations).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct QuantChange {
     /// The balance it changes.
     pub key: QuantKey,
@@ -86,6 +127,24 @@ pub struct QuantChange {
     pub reserved_quantity: Decimal,
     /// Incoming date carried by the stock; `None` lets the key keep its own date or take now.
     pub in_date: Option<DateTime>,
+}
+
+impl QuantChange {
+    /// A change of `key` by these on-hand and reserved deltas, carrying no incoming date.
+    pub fn new(key: QuantKey, quantity: Decimal, reserved_quantity: Decimal) -> Self {
+        Self {
+            key,
+            quantity,
+            reserved_quantity,
+            in_date: None,
+        }
+    }
+
+    /// The same change carrying this incoming date.
+    #[must_use]
+    pub fn in_date(self, in_date: Option<DateTime>) -> Self {
+        Self { in_date, ..self }
+    }
 }
 
 /// A balance after a change, or as read. Only the engine builds one.
@@ -119,6 +178,7 @@ impl QuantBalance {
 /// given lot or no lot, and exactly the given package and owner (absent means none). The company is a
 /// part of every balance key (B6), so a read is always for one company.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct QuantFilter {
     /// Company of the balances.
     pub company_id: i64,
@@ -137,6 +197,53 @@ pub struct QuantFilter {
     /// The product is tracked by lot or serial number. Its `tracking` field is declared;
     /// until then the caller states it.
     pub tracked: bool,
+}
+
+impl QuantFilter {
+    /// A broad read of untracked `product` at `location` and its descendants, any lot, package or
+    /// owner.
+    pub fn new(company_id: i64, product_id: i64, location_id: i64) -> Self {
+        Self {
+            company_id,
+            product_id,
+            location_id,
+            lot_id: None,
+            package_id: None,
+            owner_id: None,
+            strict: false,
+            tracked: false,
+        }
+    }
+
+    /// The same filter with this lot.
+    #[must_use]
+    pub fn lot_id(self, lot_id: Option<i64>) -> Self {
+        Self { lot_id, ..self }
+    }
+
+    /// The same filter with this package.
+    #[must_use]
+    pub fn package_id(self, package_id: Option<i64>) -> Self {
+        Self { package_id, ..self }
+    }
+
+    /// The same filter with this owner.
+    #[must_use]
+    pub fn owner_id(self, owner_id: Option<i64>) -> Self {
+        Self { owner_id, ..self }
+    }
+
+    /// The same filter, strict or broad.
+    #[must_use]
+    pub fn strict(self, strict: bool) -> Self {
+        Self { strict, ..self }
+    }
+
+    /// The same filter for a tracked or untracked product.
+    #[must_use]
+    pub fn tracked(self, tracked: bool) -> Self {
+        Self { tracked, ..self }
+    }
 }
 
 /// A refused or failed quant operation.
@@ -237,19 +344,18 @@ pub enum QuantError {
 impl fmt::Display for QuantError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::EmptyChange => f.write_str("Quantity or Reserved Quantity should be set."),
+            Self::EmptyChange => f.write_str("Set a quantity, a reserved quantity or both."),
             Self::NotStorable => {
-                f.write_str("Quants cannot be created for consumables or services.")
+                f.write_str("Stock is kept only for storable products, not for consumables or services.")
             }
             Self::ViewLocation { location } => write!(
                 f,
-                "You cannot take products from or deliver products to a location of type \
-                 \"view\" ({location})."
+                "Products cannot be taken from or delivered to {location}: it is a view location."
             ),
             Self::LotOfOtherProduct { lot } => {
                 write!(
                     f,
-                    "The Lot/Serial number ({lot}) is linked to another product."
+                    "Lot or serial number {lot} belongs to a different product."
                 )
             }
             Self::OtherCompany { what, id } => write!(
@@ -303,20 +409,19 @@ impl fmt::Display for QuantError {
                 "Stock quants are not created or updated by key: balances change only through stock \
                  moves and inventory adjustments.",
             ),
-            Self::Copy => f.write_str("You cannot duplicate stock quants."),
+            Self::Copy => f.write_str("A stock quant cannot be copied. Stock changes through stock moves or an inventory adjustment."),
             Self::UnlinkWithBalance => f.write_str(
                 "A stock quant with an on-hand or reserved quantity cannot be deleted: its balance \
                  changes only through stock moves or an inventory adjustment.",
             ),
             Self::UsageToView => f.write_str(
-                "This location's usage cannot be changed to view as it contains products.",
+                "A location that holds products cannot become a view location.",
             ),
             Self::UsageWithStock => {
-                f.write_str("Internal locations having stock can't be converted")
+                f.write_str("A location that holds stock must stay an internal location.")
             }
             Self::CompanyChange => f.write_str(
-                "Changing the company of this record is forbidden at this point, you should rather \
-                 archive it and create a new one.",
+                "The company of this record cannot be changed once it exists. Archive it and create a new record for the other company.",
             ),
             Self::LockOrder { key, held } => write!(
                 f,
@@ -328,7 +433,7 @@ impl fmt::Display for QuantError {
             ),
             Self::ArchiveWithStock { locations } => write!(
                 f,
-                "You can't disable locations {locations} because they still contain products."
+                "Locations {locations} still hold products. Empty them before archiving."
             ),
         }
     }
@@ -407,13 +512,33 @@ fn order(key: &QuantKey) -> impl Ord {
     )
 }
 
-/// The keys a transaction's engine calls locked, and the highest of them (4). Recorded
-/// only after a call succeeded; a later rollback to a savepoint taken before that call releases row
-/// locks the record still names, which only makes the rule stricter than needed.
+/// The transaction-local setting each engine call appends its number to (`:1:2:…`). A rollback to a
+/// savepoint restores the value it had there, so the numbers left are the calls whose locks stand.
+const CALLS_SETTING: &str = "erp.stock_quant_calls";
+
+/// The keys each successful engine call of the transaction locked, by call number (4).
 #[derive(Default)]
 struct HeldKeys {
-    keys: HashSet<QuantKey>,
-    highest: Option<QuantKey>,
+    last: u64,
+    calls: Vec<(u64, Vec<QuantKey>)>,
+}
+
+impl HeldKeys {
+    /// Keep only the calls `standing` names; the others were undone by a savepoint rollback.
+    fn keep(&mut self, standing: &HashSet<u64>) {
+        self.calls.retain(|(call, _)| standing.contains(call));
+    }
+
+    fn holds(&self, key: &QuantKey) -> bool {
+        self.calls.iter().any(|(_, keys)| keys.contains(key))
+    }
+
+    fn highest(&self) -> Option<QuantKey> {
+        self.calls
+            .iter()
+            .flat_map(|(_, keys)| keys.iter().copied())
+            .max_by(|a, b| order(a).cmp(&order(b)))
+    }
 }
 
 fn decode(error: impl fmt::Display) -> Error {
@@ -521,16 +646,23 @@ fn numeric(values: &[MeasureValue], index: usize) -> Result<Decimal> {
 }
 
 /// Validation read of every distinct key: product storable and company, location usage and company,
-/// lot product and company, owner company, package existence. One statement; names are read only to word a refusal.
+/// lot product and company, owner company, package existence. One statement; names are read only to
+/// word a refusal. The same statement appends this call's number to [`CALLS_SETTING`] and returns the
+/// value, and takes `FOR SHARE` on the key locations (see the module's location guards).
 const VALIDATE_KEYS: &str = "\
+WITH g AS MATERIALIZED (SELECT set_config('erp.stock_quant_calls', \
+       COALESCE(current_setting('erp.stock_quant_calls', true), '') || $7::text, true) AS calls), \
+lk AS MATERIALIZED (SELECT id FROM stock_location WHERE id = ANY($3) ORDER BY id FOR SHARE) \
 SELECT i.ord, i.company_id, i.product_id, i.location_id, i.lot_id, i.owner_id, \
        c.id IS NOT NULL, t.is_storable, (t.company_id IS NULL OR t.company_id = i.company_id), \
        l.usage, l.name, (l.company_id IS NULL OR l.company_id = i.company_id \
          OR ('/' || c.parent_path) LIKE ('%/' || l.company_id::text || '/%')), \
        lot.product_id, lot.name, (lot.company_id IS NULL OR lot.company_id = i.company_id), \
-       o.id IS NOT NULL, (o.company_id IS NULL OR o.company_id = i.company_id), pk.id IS NOT NULL \
+       o.id IS NOT NULL, (o.company_id IS NULL OR o.company_id = i.company_id), pk.id IS NOT NULL, \
+       g.calls, (SELECT count(*) FROM lk) \
   FROM unnest($1::int8[], $2::int8[], $3::int8[], $4::int8[], $5::int8[], $6::int8[]) \
        WITH ORDINALITY AS i(company_id, product_id, location_id, lot_id, owner_id, package_id, ord) \
+  CROSS JOIN g \
   LEFT JOIN res_company c ON c.id = i.company_id \
   LEFT JOIN product_product p ON p.id = i.product_id \
   LEFT JOIN product_template t ON t.id = p.product_tmpl_id \
@@ -676,7 +808,10 @@ async fn apply_in_savepoint(
             distinct.push(change.key);
         }
     }
-    let stored = validate_keys(tx, &distinct).await?;
+    let call = tx.extension::<HeldKeys>().last + 1;
+    tx.extension::<HeldKeys>().last = call;
+    let (stored, standing) = validate_keys(tx, &distinct, call).await?;
+    tx.extension::<HeldKeys>().keep(&standing);
     let shape = shape(digits)?;
     let mut dates: HashMap<QuantKey, DateTime> = HashMap::new();
     let mut contributions = Vec::with_capacity(changes.len());
@@ -715,10 +850,10 @@ async fn apply_in_savepoint(
     let uid = tx.env().uid();
     {
         let held = tx.extension::<HeldKeys>();
-        if let Some(highest) = held.highest
+        if let Some(highest) = held.highest()
             && let Some(key) = keys
                 .iter()
-                .find(|k| order(k) < order(&highest) && !held.keys.contains(k))
+                .find(|k| order(k) < order(&highest) && !held.holds(k))
         {
             return Err(QuantError::LockOrder {
                 key: *key,
@@ -884,19 +1019,19 @@ async fn apply_in_savepoint(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    let held = tx.extension::<HeldKeys>();
-    held.keys.extend(balances.iter().map(|b| b.key));
-    held.highest = balances
-        .iter()
-        .map(|b| b.key)
-        .chain(held.highest)
-        .max_by(|a, b| order(a).cmp(&order(b)));
+    tx.extension::<HeldKeys>()
+        .calls
+        .push((call, balances.iter().map(|b| b.key).collect()));
     Ok(balances)
 }
 
 /// Validate the distinct keys of a batch; returns the keys whose balances are stored (internal and
-/// transit locations), keyed for lookup.
-async fn validate_keys(tx: &mut Transaction, keys: &[QuantKey]) -> Result<HashSet<QuantKey>> {
+/// transit locations), keyed for lookup, and the earlier calls whose locks still stand.
+async fn validate_keys(
+    tx: &mut Transaction,
+    keys: &[QuantKey],
+    call: u64,
+) -> Result<(HashSet<QuantKey>, HashSet<u64>)> {
     let company: Vec<i64> = keys.iter().map(|k| k.company_id).collect();
     let product: Vec<i64> = keys.iter().map(|k| k.product_id).collect();
     let location: Vec<i64> = keys.iter().map(|k| k.location_id).collect();
@@ -906,13 +1041,35 @@ async fn validate_keys(tx: &mut Transaction, keys: &[QuantKey]) -> Result<HashSe
     let rows = tx
         .query(
             VALIDATE_KEYS,
-            &[&company, &product, &location, &lot, &owner, &package],
+            &[
+                &company,
+                &product,
+                &location,
+                &lot,
+                &owner,
+                &package,
+                &format!(":{call}"),
+            ],
         )
         .await?;
     if rows.len() != keys.len() {
         return Err(Error::internal(
             "stock quant validation read lost keys of the batch",
         ));
+    }
+    let calls: String = rows
+        .first()
+        .ok_or_else(|| Error::internal("stock quant validation read returned no row"))?
+        .try_get(18)
+        .map_err(decode)?;
+    let mut standing = HashSet::new();
+    for part in calls.split(':').filter(|p| !p.is_empty()) {
+        let number: u64 = part.parse().map_err(|_| {
+            Error::internal(format!("{CALLS_SETTING} holds '{calls}', not call numbers"))
+        })?;
+        if number != call {
+            standing.insert(number);
+        }
     }
     let mut stored = HashSet::new();
     for (key, row) in keys.iter().zip(&rows) {
@@ -1014,7 +1171,7 @@ async fn validate_keys(tx: &mut Transaction, keys: &[QuantKey]) -> Result<HashSe
             stored.insert(*key);
         }
     }
-    Ok(stored)
+    Ok((stored, standing))
 }
 
 /// The `WHERE` of a read, over `q` (quants) and `l` (their location), with parameters `$1` company,

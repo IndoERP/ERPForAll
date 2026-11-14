@@ -346,3 +346,46 @@ fn emergency_events_encode_closed_enums_and_counts() {
     assert_eq!(sessions.to_json()["cause"], "emergency");
     assert_eq!(sessions.to_json()["count"], 4);
 }
+
+#[test]
+fn account_lock_date_event_is_typed_and_bounded() {
+    let before = erp_fields::Date::from_ymd(2024, 1, 31).unwrap();
+    let after = erp_fields::Date::from_ymd(2024, 2, 29).unwrap();
+    let event =
+        AccountLockDateChanged::new(7, AccountLockField::FiscalYear, Some(before), Some(after))
+            .unwrap();
+    let encoded = AuthEvent::AccountLockDateChanged(event).to_json();
+    assert_eq!(
+        encoded,
+        serde_json::json!({"type":"account","event":"account.lock_date_changed",
+        "company_id":7,"field":"fiscalyear_lock_date","old_days":before.days(),"new_days":after.days()})
+    );
+    for id in [0, -1] {
+        let error =
+            AccountLockDateChanged::new(id, AccountLockField::Tax, None, Some(after)).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Programming);
+        assert_eq!(
+            error.message(),
+            "Account lock-date audit requires a positive company id."
+        );
+    }
+    let error = AccountLockDateChanged::new(7, AccountLockField::Sale, Some(after), Some(after))
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Programming);
+    assert_eq!(
+        error.message(),
+        "Account lock-date audit requires a changed date."
+    );
+    let error = AccountLockDateChanged::new(
+        7,
+        AccountLockField::Tax,
+        None,
+        Some(erp_fields::Date::from_days(i32::MIN)),
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Programming);
+    assert_eq!(
+        error.message(),
+        "Account lock-date audit date is outside PostgreSQL's date range."
+    );
+}

@@ -139,7 +139,7 @@ async fn access_is_checked_on_both_cached_and_uncached_reads() {
         assert_eq!(err.kind(), ErrorKind::Access);
         assert_eq!(
             err.message(),
-            "You are not allowed to read 'Test ORM Partner' (test_orm.partner) records."
+            "Your access rights do not let you read 'Test ORM Partner' (test_orm.partner) records."
         );
         assert_eq!(
             rec.get(&mut tx, Partner::NAME).await.unwrap().as_deref(),

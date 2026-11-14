@@ -271,7 +271,7 @@ async fn spec_partner_003_contacts_require_name() {
     assert_eq!(err.kind(), erp_sdk::ErrorKind::Validation);
     assert_eq!(
         err.message(),
-        "The operation cannot be completed: Contacts require a name"
+        "The database refused the change: Contacts require a name"
     );
 
     // (b) creating {'type': 'invoice', 'parent_id': GhostStep} with no name succeeds
@@ -1346,7 +1346,7 @@ async fn test_partner_hierarchy_inaccessible_ancestor_cycle_is_opaque() {
     assert_eq!(
         denied.message(),
         format!(
-            "You are not allowed to access 'Contact' (res.partner) records.\n\nRecords: res.partner({hidden_id},), User: 99999"
+            "Your access rights do not let you access 'Contact' (res.partner) records.\n\nRecords: res.partner({hidden_id},), User: 99999"
         )
     );
     let root = p_rec(&user, "res.partner").browse([root_id]).unwrap();
@@ -1756,7 +1756,7 @@ async fn test_partner_hierarchy_unauthorized_write_returns_access_not_validation
     );
     assert_eq!(
         err.message(),
-        "You are not allowed to write 'Contact' (res.partner) records."
+        "Your access rights do not let you write 'Contact' (res.partner) records."
     );
     let mut harmless = RawVals::new();
     harmless.insert("parent_id".into(), Cell::Null);
@@ -1764,7 +1764,7 @@ async fn test_partner_hierarchy_unauthorized_write_returns_access_not_validation
     assert_eq!(err.kind(), erp_fields::ErrorKind::Access);
     assert_eq!(
         err.message(),
-        "You are not allowed to write 'Contact' (res.partner) records."
+        "Your access rights do not let you write 'Contact' (res.partner) records."
     );
 }
 
@@ -1916,7 +1916,7 @@ async fn test_partner_hierarchy_denied_create_checks_access_before_fence() {
     assert_eq!(err.kind(), erp_fields::ErrorKind::Access);
     assert_eq!(
         err.message(),
-        "You are not allowed to create 'Contact' (res.partner) records."
+        "Your access rights do not let you create 'Contact' (res.partner) records."
     );
 }
 

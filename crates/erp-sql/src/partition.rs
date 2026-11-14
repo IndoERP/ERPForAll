@@ -32,6 +32,7 @@ pub const STEP_LOCK_SPACE: i32 = 1_702;
 /// use erp_fields::ColumnType;
 /// use erp_sql::ddl::ColumnDef;
 /// let columns = [ColumnDef {
+///     collation: erp_fields::TextCollation::DatabaseDefault,
 ///     name: "create_date".into(),
 ///     ty: ColumnType::Timestamp,
 ///     not_null: true,
@@ -63,7 +64,7 @@ pub fn create_partitioned_table(
             format!(
                 "{} {} GENERATED ALWAYS AS ({}) {}{}",
                 quote(&c.name),
-                c.ty.sql(),
+                c.type_sql(),
                 col_gen.expression,
                 col_gen.storage.as_str().to_uppercase(),
                 if c.not_null { " NOT NULL" } else { "" }
@@ -72,7 +73,7 @@ pub fn create_partitioned_table(
             format!(
                 "{} {}{}",
                 quote(&c.name),
-                c.ty.sql(),
+                c.type_sql(),
                 if c.not_null { " NOT NULL" } else { "" }
             )
         };
@@ -341,6 +342,7 @@ mod tests {
     fn partitioned_table_shape() {
         let cols = [
             ColumnDef {
+                collation: erp_fields::TextCollation::DatabaseDefault,
                 name: "name".into(),
                 ty: ColumnType::Varchar(None),
                 not_null: false,
@@ -348,6 +350,7 @@ mod tests {
                 generated: None,
             },
             ColumnDef {
+                collation: erp_fields::TextCollation::DatabaseDefault,
                 name: "create_date".into(),
                 ty: ColumnType::Timestamp,
                 not_null: true,

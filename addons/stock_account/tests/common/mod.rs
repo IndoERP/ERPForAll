@@ -25,15 +25,19 @@ pub async fn harness() -> Harness {
         &erp_addon_account::ADDON,
         &erp_addon_stock_account::ADDON,
     ])
+    .require_sql_objects([&erp_addon_stock::schema_guards::MANIFEST])
+    .schema_sync_options(erp_testkit::SchemaSyncOptions::inline().lifecycle(true))
     .build()
     .await
     .unwrap()
 }
 
+/// Raw fixtures write the required `account_price_include` of `account` themselves: ORM column defaults
+/// do not apply to raw SQL (`db_default`, is a closed list of fail-closed flags).
 /// Raw fixtures deliberately avoid future valuation writers and unrelated product create hooks.
 pub async fn seed(tx: &mut Transaction) {
     let currency = erp_testkit::fixtures::seed_currency_in(tx).await.unwrap();
-    tx.execute("INSERT INTO res_company (id,name,currency_id,parent_path) VALUES (101,'C1',$1,'101/'),(102,'C2',$1,'102/')", &[&currency]).await.unwrap();
+    tx.execute("INSERT INTO res_company (id,name,currency_id,parent_path,account_price_include) VALUES (101,'C1',$1,'101/','tax_excluded'),(102,'C2',$1,'102/','tax_excluded')", &[&currency]).await.unwrap();
     tx.batch("INSERT INTO uom_uom(id,name,relative_factor) VALUES (101,'{\"en_US\":\"Unit\"}',1);
         INSERT INTO product_category(id,name) VALUES (101,'{\"en_US\":\"Category\"}');
         INSERT INTO product_template(id,name,uom_id,type) VALUES (101,'{\"en_US\":\"P1\"}',101,'consu'),(102,'{\"en_US\":\"P2\"}',101,'consu');
@@ -77,7 +81,7 @@ pub async fn rejected(tx: &mut Transaction, sql: &str, table: &str, name: &str) 
     };
     assert_eq!(
         error.message(),
-        format!("The operation cannot be completed: {message}")
+        format!("The database refused the change: {message}")
     );
 }
 
@@ -132,7 +136,7 @@ pub async fn unique(tx: &mut Transaction, sql: &str, table: &str, name: &str) {
     };
     assert_eq!(
         error.message(),
-        format!("The operation cannot be completed: {message}")
+        format!("The database refused the change: {message}")
     );
 }
 
@@ -163,7 +167,7 @@ pub fn foreign_error(tx: &Transaction, error: &Error, table: &str, sqlstate: &st
     assert_eq!(
         error.message(),
         format!(
-            "The operation cannot be completed: Another model is using the record you are trying to delete.\n\nThe troublemaker is: '{}' ({})\nThanks to the following constraint: {culprit}\nHow about archiving the record instead?",
+            "The database refused the change: Other records still point to the record you want to delete.\n\nReferring model: '{}' ({})\nConstraint: {culprit}\nArchive the record instead of deleting it.",
             model.description, model.name
         )
     );

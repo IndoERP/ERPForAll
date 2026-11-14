@@ -62,3 +62,13 @@ test("current windows admit a boolean create key, as the product variants action
   for (const create of [null,0,"false",[]]) refused({...currentResult,context:{create}}, "server", "Current-window create must be a boolean.");
   refused({...windowResult,context:{create:false}}, "unsupported", "Unsupported dialog context key: create.");
 });
+
+/// (partial: browser packaging context grammar)
+test("packaging product context is typed and restricted to packaging windows", () => {
+  const packaging = {...currentResult, model:"product.uom", context:{product_id:7, product_ids:[7,8], active_model:"uom.uom"}};
+  expect(decode(packaging)).toEqual(packaging);
+  refused({...packaging, context:{product_id:0}}, "server", "Packaging product_id must be a positive safe integer.");
+  refused({...packaging, context:{product_ids:[7,"8"]}}, "server", "Packaging product_ids must be a list of positive safe integers.");
+  refused({...packaging, context:{active_model:"res.users"}}, "server", "Packaging active_model must name a product or unit model.");
+  refused({...packaging, model:"library.loan"}, "unsupported", "Unsupported current-window context key: product_id.");
+});

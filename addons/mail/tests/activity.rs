@@ -652,7 +652,7 @@ async fn the_assignee_completes_without_access_to_the_record_others_cannot() {
     assert_eq!(error.kind(), ErrorKind::Access, "{error:?}");
     assert_eq!(
         error.message(),
-        "You are not allowed to write 'Mail Test Task' (test_mail.task) records."
+        "Your access rights do not let you write 'Mail Test Task' (test_mail.task) records."
     );
     tx.flush().await.unwrap();
     assert_eq!(ids(&mut tx, "mail.message", &on_task).await.len(), before);
@@ -2079,7 +2079,7 @@ async fn the_record_state_is_not_shared_between_callers() {
     assert_eq!(error.kind(), ErrorKind::Access, "{error:?}");
     assert_eq!(
         error.message(),
-        "You are not allowed to read 'Activity' (mail.activity) records."
+        "Your access rights do not let you read 'Activity' (mail.activity) records."
     );
     tx.rollback().await.unwrap();
     drop(tx);

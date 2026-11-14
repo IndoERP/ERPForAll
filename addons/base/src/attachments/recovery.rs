@@ -231,7 +231,7 @@ impl Claim {
 ///
 /// `observed_at` is the first preparation and every failing retry re-executes the same marker, so
 /// age alone cannot prove that no write is in flight. The advancement counts as in flight while it
-/// is younger than `jobs.job_deadline_secs` on the database clock (a marker dated in the future is
+/// is younger than the `jobs.job_deadline_secs` catalogue hard bound on the database clock (a marker dated in the future is
 /// young), or while any job of the ownership singleton holds a live lease: every destructive
 /// attachment handler shares that singleton, and this is the liveness test of the queue's claim.
 /// Once both have lapsed the claim proceeds; its higher generation supersedes the stale marker.
@@ -239,7 +239,10 @@ async fn in_flight(tx: &mut Transaction, orm: &Orm, pending: &[u8], now: u64) ->
     let observed = OwnerMarker::decode(pending)
         .map_err(blob_error)?
         .observed_at();
-    let deadline = orm.job_settings().job_deadline().as_secs();
+    // Old markers have no admitted deadline. A lower current policy cannot prove they ended.
+    // Wait the catalogue hard envelope, and still fence on any live singleton lease.
+    orm.job_settings_snapshot().await?;
+    let deadline = erp_sdk::jobs::Setting::JobDeadlineSecs.bounds().1;
     if observed > now || now - observed < deadline {
         return Ok(true);
     }

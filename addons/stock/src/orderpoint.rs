@@ -15,7 +15,7 @@ use erp_sdk::prelude::*;
     keys = [key(
         name = "_product_location_check",
         fields = ["product_id", "location_id", "company_id"],
-        message = "A replenishment rule already exists for this product on this location."
+        message = "This product already has a replenishment rule for this location."
     )],
     constraints = [
         (
@@ -123,7 +123,7 @@ pub struct StockWarehouseOrderpoint {
             ("one_year", "Last 12 months"),
             ("last_year", "Same month last year"),
             ("last_year_2", "Next month last year"),
-            ("last_year_3", "After next month last year"),
+            ("last_year_3", "Two months ahead, last year"),
             ("last_year_quarter", "Last year quarter"),
             ("custom", "Custom Demand")
         ],

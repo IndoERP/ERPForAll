@@ -272,17 +272,13 @@ async fn begin(orm: &Orm, uid: i64) -> Transaction {
 
 fn not_allowed(verb: &str, groups: &[&str]) -> String {
     let info = if groups.is_empty() {
-        "No group currently allows this operation.".to_owned()
+        "No group may do this.".to_owned()
     } else {
         let list: Vec<String> = groups.iter().map(|g| format!("\t- {g}")).collect();
-        format!(
-            "This operation is allowed for the following groups:\n{}",
-            list.join("\n")
-        )
+        format!("Groups that may do this:\n{}", list.join("\n"))
     };
     format!(
-        "You are not allowed to {verb} '{DESCRIPTION}' ({OBJ}) records.\n\n{info}\n\nContact \
-         your administrator to request access if necessary."
+        "Your access rights do not let you {verb} '{DESCRIPTION}' ({OBJ}) records.\n\n{info}\n\nAsk an administrator if you need this access."
     )
 }
 

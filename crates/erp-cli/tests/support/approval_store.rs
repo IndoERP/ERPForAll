@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
+// Included by no test since the store slice was reverted; kept because the staging guard refuses a deleted test file (the evidence-store slice brings it back).
 //! STORE runs against the same genuinely installed base as the policy acceptance fixture.
 use super::*;
 

@@ -1418,3 +1418,160 @@ async fn pre_migration_runs_before_an_earlier_module_syncs_its_column() {
     drop(system);
     db.cleanup().await.unwrap();
 }
+
+/// Whether the column `table.column` is NOT NULL, read from the catalog.
+async fn not_null(orm: &erp_orm::Orm, table: &str, column: &str) -> bool {
+    let found = rows(
+        orm,
+        &format!(
+            "SELECT is_nullable::text FROM information_schema.columns \
+             WHERE table_name = '{table}' AND column_name = '{column}'"
+        ),
+    )
+    .await;
+    assert_eq!(found.len(), 1, "{table}.{column} exists once");
+    found[0][0].as_deref() == Some("NO")
+}
+
+/// Two later modules of the run extend `y`'s model, each with a required column its own `pre`
+/// migration adds and fills; `z`'s fill reads the column `x`'s migration filled. The model waits
+/// at `y`'s and `x`'s steps and is synced at `z`'s, after both `pre` stages.
+/// makes their columns required, in one run)
+#[tokio::test]
+async fn two_later_pre_migrations_hold_the_model_until_the_last() {
+    let addons = Addons::new();
+    addons
+        .add("y", "name = 'Y'\nversion = '1.0'\n")
+        .add("x", "name = 'X'\nversion = '1.0'\ndepends = ['y']\n")
+        .add("z", "name = 'Z'\nversion = '1.0'\ndepends = ['x']\n")
+        .file(
+            "y",
+            "models/item.toml",
+            "[[model]]\nname = \"mig.item\"\ndescription = \"Item\"\n\n\
+             [[model.field]]\nname = \"name\"\ntype = \"char\"\n",
+        );
+    let db = TestDb::create().await.unwrap();
+    let system = migration_builder(&db, &addons).build().unwrap();
+    let init = system
+        .initialize(InitOptions::new().with_skip_auto_install(true))
+        .await
+        .unwrap();
+    let installed = system
+        .button_immediate_install(&su(&init.orm), &[n("z")])
+        .await
+        .unwrap();
+    assert_eq!(installed.installed, vec![n("y"), n("x"), n("z")]);
+    exec(
+        &installed.orm,
+        "INSERT INTO mig_item (name) VALUES ('first')",
+    )
+    .await;
+    addons
+        .add("y", "name = 'Y'\nversion = '1.1'\n")
+        .add("x", "name = 'X'\nversion = '1.1'\ndepends = ['y']\n")
+        .add("z", "name = 'Z'\nversion = '1.1'\ndepends = ['x']\n")
+        .file(
+            "x",
+            "models/item.toml",
+            "[[model]]\nextend = \"mig.item\"\n\n\
+             [[model.field]]\nname = \"code\"\ntype = \"char\"\nrequired = true\n",
+        )
+        .file(
+            "x",
+            "migrations/1.1/pre-a.sql",
+            "ALTER TABLE mig_item ADD COLUMN code varchar;\n\
+             UPDATE mig_item SET code = 'x-' || name;\n",
+        )
+        .file(
+            "z",
+            "models/item.toml",
+            "[[model]]\nextend = \"mig.item\"\n\n\
+             [[model.field]]\nname = \"tag\"\ntype = \"char\"\nrequired = true\n",
+        )
+        .file(
+            "z",
+            "migrations/1.1/pre-a.sql",
+            "ALTER TABLE mig_item ADD COLUMN tag varchar;\n\
+             UPDATE mig_item SET tag = 'z-' || code;\n",
+        );
+
+    let outcome = system
+        .button_immediate_upgrade(&su(&installed.orm), &[n("y"), n("x"), n("z")])
+        .await
+        .unwrap_or_else(|e| panic!("upgrade of y, x and z: {e:?}"));
+    assert_eq!(outcome.upgraded, vec![n("y"), n("x"), n("z")]);
+    assert_eq!(
+        rows(&outcome.orm, "SELECT code, tag FROM mig_item").await,
+        vec![vec![
+            Some("x-first".to_owned()),
+            Some("z-x-first".to_owned())
+        ]]
+    );
+    assert!(not_null(&outcome.orm, "mig_item", "code").await);
+    assert!(not_null(&outcome.orm, "mig_item", "tag").await);
+    drop(system);
+    db.cleanup().await.unwrap();
+}
+
+/// A later module of the run that owns a column of the model but has no `pre` stage selected
+/// holds nothing back: `y`'s new column exists when `y`'s own data file writes it. `x` stays at
+/// its installed version, so its `1.1` script is not selected (a version runs only when it is
+/// above the installed one and at most the target; equal versions select nothing).
+#[tokio::test]
+async fn a_later_module_without_pre_stage_does_not_hold_the_model() {
+    let addons = Addons::new();
+    addons
+        .file(
+            "y",
+            "models/item.toml",
+            "[[model]]\nname = \"mig.item\"\ndescription = \"Item\"\n\n\
+             [[model.field]]\nname = \"name\"\ntype = \"char\"\n",
+        )
+        .file(
+            "x",
+            "models/item.toml",
+            "[[model]]\nextend = \"mig.item\"\n\n\
+             [[model.field]]\nname = \"flag\"\ntype = \"char\"\n",
+        )
+        .file("x", "migrations/1.1/pre-a.sql", "SELECT 1/0;\n");
+    let db = TestDb::create().await.unwrap();
+    let (system, _orm, admin) = installed_y_x(&addons, &db, |b| b).await;
+    addons
+        .add(
+            "y",
+            "name = 'Y'\nversion = '1.1'\ndata = ['data/item.xml']\n",
+        )
+        .file(
+            "y",
+            "models/item.toml",
+            "[[model]]\nname = \"mig.item\"\ndescription = \"Item\"\n\n\
+             [[model.field]]\nname = \"name\"\ntype = \"char\"\n\n\
+             [[model.field]]\nname = \"note\"\ntype = \"char\"\n",
+        )
+        .file(
+            "y",
+            "data/item.xml",
+            "<odoo><record id=\"r1\" model=\"mig.item\"><field name=\"name\">one</field>\
+             <field name=\"note\">from y</field></record></odoo>",
+        );
+
+    let outcome = system
+        .button_immediate_upgrade(&admin, &[n("y"), n("x")])
+        .await
+        .unwrap_or_else(|e| panic!("upgrade of y and x: {e:?}"));
+    assert_eq!(outcome.upgraded, vec![n("y"), n("x")]);
+    assert_eq!(
+        rows(&outcome.orm, "SELECT name, note FROM mig_item").await,
+        vec![vec![Some("one".to_owned()), Some("from y".to_owned())]]
+    );
+    assert_eq!(
+        rows(
+            &outcome.orm,
+            "SELECT latest_version FROM ir_module_module WHERE name = 'x'"
+        )
+        .await,
+        vec![vec![Some("1.0.0".to_owned())]]
+    );
+    drop(system);
+    db.cleanup().await.unwrap();
+}

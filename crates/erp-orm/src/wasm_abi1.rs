@@ -56,6 +56,7 @@ pub fn is_wasm_abi1_native_refusal(error: &Error) -> bool {
 
 pub(crate) fn native_type(ty: &FieldType) -> Option<&'static str> {
     match ty {
+        FieldType::BigInt => Some("bigint"),
         FieldType::Uuid => Some("uuid"),
         FieldType::Xid8 => Some("xid8"),
         FieldType::TimestampTz => Some("timestamptz"),
@@ -84,6 +85,7 @@ pub(crate) fn native_type(ty: &FieldType) -> Option<&'static str> {
 
 fn native_cell(cell: &Cell) -> Option<&'static str> {
     match cell {
+        Cell::BigInt(_) => Some("bigint"),
         Cell::Uuid(_) => Some("uuid"),
         Cell::Xid8(_) => Some("xid8"),
         Cell::TimestampTz(_) => Some("timestamptz"),

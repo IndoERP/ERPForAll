@@ -42,9 +42,9 @@ async fn company(tx: &mut Transaction, name: &str, parent: Option<i64>) -> i64 {
     };
     tx.query(
         "WITH n AS (SELECT nextval(pg_get_serial_sequence('res_company', 'id')) AS id) \
-         INSERT INTO res_company (id, name, active, currency_id, parent_id, parent_path) \
+         INSERT INTO res_company (id, name, active, currency_id, parent_id, parent_path, account_price_include) \
          SELECT id, $1, true, $2, $3::int8, \
-                COALESCE((SELECT parent_path FROM res_company WHERE id = $3::int8), '') || id::text || '/' \
+                COALESCE((SELECT parent_path FROM res_company WHERE id = $3::int8), '') || id::text || '/', 'tax_excluded' \
          FROM n RETURNING id::int8",
         &[&name, &currency, &parent],
     )
@@ -242,7 +242,7 @@ async fn reconcile_follows_the_type_and_is_guarded() {
     .unwrap_err();
     assert_refused(
         &error,
-        "You cannot have a receivable/payable account that is not reconcilable. (account code: 1100)",
+        "A receivable or payable account must allow reconciliation (account code: 1100).",
     );
     let off = create(&model, &mut tx, account_vals("Off", "off_balance", "9000"))
         .await
@@ -254,7 +254,10 @@ async fn reconcile_follows_the_type_and_is_guarded() {
     )
     .await
     .unwrap_err();
-    assert_refused(&error, "An Off-Balance account can not be reconcilable");
+    assert_refused(
+        &error,
+        "Off-balance accounts take no part in reconciliation: turn reconciliation off for this account.",
+    );
 }
 
 #[tokio::test]
@@ -281,7 +284,7 @@ async fn accounts_have_a_company_and_bank_accounts_only_one() {
     .unwrap_err();
     assert_refused(
         &error,
-        "Bank & Cash accounts cannot be shared between companies.",
+        "A bank or cash account belongs to one company only.",
     );
     let shared = create(
         &model,
@@ -305,7 +308,7 @@ async fn accounts_have_a_company_and_bank_accounts_only_one() {
     .unwrap_err();
     assert_refused(
         &error,
-        "The following accounts must be assigned to at least one company",
+        "Each account needs at least one company; these have none",
     );
 }
 
@@ -415,7 +418,9 @@ async fn a_code_is_unique_within_a_company_tree_not_across_trees() {
     .unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Validation, "{error:?}");
     assert!(
-        error.message().contains("Account codes must be unique"),
+        error
+            .message()
+            .contains("Another account of this company tree already uses this code."),
         "{:?}",
         error.message()
     );
@@ -445,9 +450,7 @@ async fn code_characters_are_letters_digits_dots_and_dashes() {
             .unwrap_err();
         assert_refused(
             &error,
-            &format!(
-                "The account code can only contain alphanumeric characters, dots, and dashes. (account code: {bad})"
-            ),
+            &format!("Account code {bad} may use only letters, digits, dots and dashes."),
         );
     }
 }
@@ -1012,7 +1015,10 @@ async fn codes_by_company_given_while_creating_the_account() {
     .await
     .unwrap_err();
     assert!(
-        error.message().contains("company inconsistencies") || error.kind() == ErrorKind::Access,
+        error
+            .message()
+            .contains("link records of different companies")
+            || error.kind() == ErrorKind::Access,
         "{error:?}"
     );
     // (d) the access answer for a caller who does not hold the company needs a non-superuser
@@ -1027,7 +1033,9 @@ async fn codes_by_company_given_while_creating_the_account() {
     .await
     .unwrap_err();
     assert!(
-        error.message().contains("company inconsistencies"),
+        error
+            .message()
+            .contains("link records of different companies"),
         "{error:?}"
     );
     // the plain `code` and a row for the same root in one call: the explicit row wins

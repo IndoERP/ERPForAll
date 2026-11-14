@@ -124,14 +124,29 @@ const RUN_IN_APP: &str = "jobs.run_in_app";
 /// assert_eq!(refused.to_string(), "jobs.poll_interval_secs = 0 is outside 1..=300");
 /// # Ok::<(), erp_orm::node::NodeError>(())
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct JobSettings {
     values: Vec<u64>,
     run_in_app: bool,
+    // Override intent is distinct from effective value: an explicit default must not silently
+    // compete with database authority. This list is bounded by the Shared catalogue.
+    explicit_shared: Vec<Setting>,
     /// Test seam: a lease shorter than the operator floor (feature `test-faults`).
     #[cfg(feature = "test-faults")]
     lease_for_tests: Option<Duration>,
 }
+
+// Equality and the static digest describe effective values, not how a builder obtained them.
+impl PartialEq for JobSettings {
+    fn eq(&self, other: &Self) -> bool {
+        #[cfg(feature = "test-faults")]
+        if self.lease_for_tests != other.lease_for_tests {
+            return false;
+        }
+        self.values == other.values && self.run_in_app == other.run_in_app
+    }
+}
+impl Eq for JobSettings {}
 
 impl Default for JobSettings {
     /// Every default, `jobs.run_in_app` on (the single-node profile).
@@ -139,6 +154,7 @@ impl Default for JobSettings {
         Self {
             values: Setting::ALL.iter().map(|s| s.default_value()).collect(),
             run_in_app: true,
+            explicit_shared: Vec::new(),
             #[cfg(feature = "test-faults")]
             lease_for_tests: None,
         }
@@ -158,6 +174,33 @@ impl JobSettings {
         JobSettingsBuilder {
             settings: JobSettings::default(),
         }
+    }
+
+    pub(crate) fn with_node_settings(&self, node: &Self) -> erp_fields::Result<Self> {
+        let mut builder = JobSettingsBuilder {
+            settings: self.clone(),
+        };
+        for setting in Setting::ALL.iter().copied().filter(|s| !s.is_shared()) {
+            builder = builder.set(setting, node.get(setting));
+        }
+        builder
+            .run_in_app(node.run_in_app())
+            .build()
+            .map_err(|e| erp_fields::Error::validation(e.to_string()).with_source(e))
+    }
+
+    pub(crate) fn refuse_shared_overrides(&self) -> erp_fields::Result<()> {
+        for setting in Setting::ALL.iter().copied().filter(|s| s.is_shared()) {
+            if self.explicit_shared.contains(&setting)
+                || self.get(setting) != setting.default_value()
+            {
+                return Err(erp_fields::Error::validation(format!(
+                    "Remove process override {}; migrate Shared policy through Settings before enabling database job policy.",
+                    setting.name()
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// The value of `setting`.
@@ -332,6 +375,9 @@ impl JobSettingsBuilder {
     pub fn set(mut self, setting: Setting, value: u64) -> Self {
         if let Some(slot) = self.settings.values.get_mut(index(setting)) {
             *slot = value;
+            if setting.is_shared() && !self.settings.explicit_shared.contains(&setting) {
+                self.settings.explicit_shared.push(setting);
+            }
         }
         self
     }
@@ -466,6 +512,7 @@ impl SharedSettings for JobSettings {
         let Self {
             values: _,
             run_in_app: _,
+            explicit_shared: _,
             #[cfg(feature = "test-faults")]
                 lease_for_tests: _,
         } = self;

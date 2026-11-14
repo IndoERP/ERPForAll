@@ -202,6 +202,7 @@ impl CompanyValues {
 fn scalar_cast(ty: &FieldType) -> Option<&'static str> {
     Some(match ty {
         FieldType::Boolean => "boolean",
+        FieldType::BigInt => "int8",
         FieldType::Integer => "int4",
         FieldType::Float { digits: None } => "float8",
         FieldType::Float { digits: Some(_) } | FieldType::Monetary { .. } => "numeric",

@@ -78,7 +78,7 @@ pub async fn codes_by_account(
 /// `account.code.mapping`: one row per account and root company that has a code.
 #[model(
     name = "account.code.mapping",
-    description = "Mapping of account codes per company",
+    description = "Account code of a root company",
     table = "account_account_code",
     order = "company_id, code, id",
     company_access = direct(field = "company_id", branch = "ancestor", empty = "deny"),
@@ -86,7 +86,7 @@ pub async fn codes_by_account(
         key(
             name = "_company_code_uniq",
             fields = ["company_id", "code"],
-            message = "Account codes must be unique. You can't create accounts with these duplicate codes."
+            message = "Another account of this company tree already uses this code."
         ),
         key(
             name = "_account_company_uniq",
@@ -134,7 +134,7 @@ impl AccountCodeMapping {
         {
             if !code_is_valid(&code) {
                 return Err(Error::validation(format!(
-                    "The account code can only contain alphanumeric characters, dots, and dashes. (account code: {code})"
+                    "Account code {code} may use only letters, digits, dots and dashes."
                 )));
             }
         }

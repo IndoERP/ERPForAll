@@ -1443,7 +1443,7 @@ impl TestRules for DemoIsRestricted {
             && ["res.users", "res.groups"].contains(&model.name)
         {
             return Err(Error::access(format!(
-                "You are not allowed to {} '{}' ({}) records.",
+                "Your access rights do not let you {} '{}' ({}) records.",
                 op.as_str(),
                 model.description,
                 model.name
@@ -1487,7 +1487,7 @@ async fn spec_rel_060_users_and_groups_refuse_sudo_commands() {
 
     let mut tx = h.begin_as(DEMO).await.unwrap();
     let refusal = |model: &str, desc: &str, op: &str| {
-        format!("You are not allowed to {op} '{desc}' ({model}) records.")
+        format!("Your access rights do not let you {op} '{desc}' ({model}) records.")
     };
     // the admin environment is made by System: demo has no `principal.impersonate` (
     // A4); the commands still run as the transaction's original principal, demo

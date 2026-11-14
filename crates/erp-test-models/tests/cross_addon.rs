@@ -268,7 +268,7 @@ async fn spec_mod_045_data_only_addon_tables_and_rows() {
     assert_eq!(err.kind(), ErrorKind::Validation);
     assert_eq!(
         err.message(),
-        "The operation cannot be completed: Missing required field 'Tag Name' (name) for model \
+        "The database refused the change: Missing required field 'Tag Name' (name) for model \
          'Tag' (test_data_only.tag)"
     );
     drop(tx);

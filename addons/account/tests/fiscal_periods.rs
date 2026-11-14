@@ -23,7 +23,9 @@ use erp_addon_account::fiscal::{
     require_open_periods,
 };
 use erp_sdk::prelude::*;
-use erp_sdk::{BeginOptions, Context, ErrorKind, SUPERUSER_ID, UserId};
+use erp_sdk::{
+    BeginOptions, Context, ErrorKind, Isolation, OperationIdentity, SUPERUSER_ID, UserId,
+};
 use erp_testkit::{FieldPolicy, Harness, HarnessBuilder};
 
 fn d(y: i32, m: u32, day: u32) -> Date {
@@ -33,6 +35,15 @@ fn d(y: i32, m: u32, day: u32) -> Date {
 /// The caller of `ensure_periods_with` in the tests that do not test its company scope.
 fn system() -> BeginOptions {
     BeginOptions::new(SUPERUSER_ID)
+}
+
+/// A superuser transaction at `READ COMMITTED`, where the second step of a lock run runs
+/// (D8).
+async fn rc(h: &Harness) -> Transaction {
+    h.orm()
+        .begin_opts(system().isolation(Isolation::ReadCommitted))
+        .await
+        .unwrap()
 }
 
 fn calendar(day: i64, month: i64) -> FiscalCalendar {
@@ -69,9 +80,9 @@ async fn company(h: &Harness, name: &str, parent: Option<i64>) -> i64 {
     client
         .query_one(
             "WITH n AS (SELECT nextval(pg_get_serial_sequence('res_company', 'id')) AS id) \
-             INSERT INTO res_company (id, name, active, currency_id, parent_id, parent_path) \
+             INSERT INTO res_company (id, name, active, currency_id, parent_id, parent_path, account_price_include) \
              SELECT id, $1, true, $2, $3::int8, \
-                    COALESCE((SELECT parent_path FROM res_company WHERE id = $3::int8), '') || id::text || '/' \
+                    COALESCE((SELECT parent_path FROM res_company WHERE id = $3::int8), '') || id::text || '/', 'tax_excluded' \
              FROM n RETURNING id::int8",
             &[&name, &currency, &parent],
         )
@@ -392,7 +403,7 @@ async fn lock_dates_close_and_reopen_periods_with_the_refusals_of_the_date_model
 
     // stock-lock January, then the fiscal-year lock cannot reopen it: lower the stock lock first
     let jan = period_id(&h, root, d(2024, 1, 10)).await;
-    let mut tx = h.begin().await.unwrap();
+    let mut tx = rc(&h).await;
     let set = PeriodSet::of(&mut tx, jan).await.unwrap();
     assert_eq!(
         set.ids().len(),
@@ -431,7 +442,7 @@ async fn lock_dates_close_and_reopen_periods_with_the_refusals_of_the_date_model
     let run = hard_lock_begin(&mut tx, &set).await.unwrap();
     tx.commit().await.unwrap();
     drop(tx);
-    let mut tx = h.begin().await.unwrap();
+    let mut tx = rc(&h).await;
     assert_eq!(
         hard_lock_complete(&mut tx, &run).await.unwrap(),
         LockOutcome::Applied
@@ -496,7 +507,7 @@ async fn lock_runs_are_two_step_idempotent_and_superseded_by_generation() {
     .unwrap();
     let jan = period_id(&h, root, d(2024, 1, 1)).await;
     let feb = period_id(&h, root, d(2024, 2, 1)).await;
-    let mut tx = h.begin().await.unwrap();
+    let mut tx = rc(&h).await;
     let jan_set = PeriodSet::of(&mut tx, jan).await.unwrap();
     let feb_set = PeriodSet::of(&mut tx, feb).await.unwrap();
 
@@ -762,7 +773,7 @@ async fn periods_change_only_through_their_operations_and_never_overlap() {
 }
 
 /// The refusal of a company the caller does not hold (the same for one that does not exist).
-const NOT_ALLOWED: &str = "Access to unauthorized or invalid companies.";
+const NOT_ALLOWED: &str = "One of the selected companies does not exist or is not one of yours.";
 
 /// A transaction of user 3 (the accounting manager of `scoped`) whose active companies are
 /// `companies`.
@@ -817,8 +828,7 @@ async fn period_operations_act_only_on_the_callers_companies() {
         .await
         .unwrap();
     }
-    // their January and February are closed; a stock run on January and a hard run on February
-    // are in flight
+    // their January and February are closed; a stock run and a hard run on January are in flight
     set_dates(&h, theirs, Some(d(2024, 2, 29)), None, None).await;
     let their_jan = period_id(&h, theirs, d(2024, 1, 10)).await;
     let their_feb = period_id(&h, theirs, d(2024, 2, 10)).await;
@@ -827,7 +837,7 @@ async fn period_operations_act_only_on_the_callers_companies() {
     let jan_set = PeriodSet::of(&mut tx, their_jan).await.unwrap();
     let feb_set = PeriodSet::of(&mut tx, their_feb).await.unwrap();
     let stock_run = stock_lock_begin(&mut tx, &jan_set).await.unwrap();
-    let hard_run = hard_lock_begin(&mut tx, &feb_set).await.unwrap();
+    let hard_run = hard_lock_begin(&mut tx, &jan_set).await.unwrap();
     tx.commit().await.unwrap();
     drop(tx);
     set_dates(&h, theirs, None, None, None).await;
@@ -894,7 +904,11 @@ async fn period_operations_act_only_on_the_callers_companies() {
     set_dates(&h, mine, Some(d(2024, 1, 31)), None, None).await;
     let my_jan = period_id(&h, mine, d(2024, 1, 10)).await;
     let branch_feb = period_id(&h, branch, d(2024, 2, 10)).await;
-    let mut tx = manager_in(&h, &[mine]).await;
+    let mut tx = h
+        .orm()
+        .begin_opts(manager(&[mine]).isolation(Isolation::ReadCommitted))
+        .await
+        .unwrap();
     assert_eq!(sync_lock_dates(&mut tx, mine).await.unwrap().closed, 2);
     let set = PeriodSet::of(&mut tx, my_jan).await.unwrap();
     assert_eq!(set.ids().len(), 2, "the branch's January moves with mine");
@@ -1022,8 +1036,8 @@ async fn a_company_without_a_valid_parent_path_is_refused_and_is_no_ancestor() {
     for (name, path) in [("No path", None), ("Empty path", Some(""))] {
         let id: i64 = client
             .query_one(
-                "INSERT INTO res_company (name, active, currency_id, parent_path, hard_lock_date) \
-                 VALUES ($1, true, $2, $3, '2030-12-31') RETURNING id::int8",
+                "INSERT INTO res_company (name, active, currency_id, parent_path, hard_lock_date, account_price_include) \
+                 VALUES ($1, true, $2, $3, '2030-12-31', 'tax_excluded') RETURNING id::int8",
                 &[&name, &currency, &path],
             )
             .await
@@ -1198,4 +1212,365 @@ async fn a_period_that_collides_on_its_key_names_the_existing_period() {
     .unwrap_err();
     assert_refused(&error, ErrorKind::Validation, "2024/01");
     assert!(!error.message().contains("none"), "{error:?}");
+}
+
+/// The serial of a company row, read through the record API (so from the transaction's cache).
+async fn cached_serial(tx: &mut Transaction, company: i64) -> i64 {
+    let rows = tx
+        .env()
+        .sudo(true)
+        .records("res.company")
+        .unwrap()
+        .browse([company])
+        .unwrap()
+        .read(tx, &["fiscal_period_serial"])
+        .await
+        .unwrap();
+    let Some(Value::Int(serial)) = rows[0].get("fiscal_period_serial") else {
+        panic!("no serial in {rows:?}");
+    };
+    *serial
+}
+
+#[tokio::test]
+async fn a_lock_date_written_in_the_same_transaction_is_synchronised() {
+    let h = harness().await;
+    let root = company(&h, "Root", None).await;
+    ensure_periods_with(
+        h.orm(),
+        system(),
+        &calendar(31, 12),
+        root,
+        d(2024, 1, 1),
+        d(2024, 2, 29),
+    )
+    .await
+    .unwrap();
+    // the lock-date change is audited, and an audited commit needs the operation's identity
+    let mut tx = h
+        .orm()
+        .begin_opts(system().operation_identity(OperationIdentity::generate().unwrap()))
+        .await
+        .unwrap();
+    tx.env()
+        .sudo(true)
+        .records("res.company")
+        .unwrap()
+        .browse([root])
+        .unwrap()
+        .write(
+            &mut tx,
+            RawVals::new().set_cell("fiscalyear_lock_date", Cell::Date(d(2024, 1, 31))),
+        )
+        .await
+        .unwrap();
+    // the lock policy's write synchronises the periods itself: a later sync finds nothing to move
+    let again = sync_lock_dates(&mut tx, root).await.unwrap();
+    assert_eq!((again.closed, again.reopened), (0, 0));
+    tx.commit().await.unwrap();
+    drop(tx);
+    assert_eq!(
+        statuses(&periods(&h, root).await),
+        [("2024/01", "closed", "open"), ("2024/02", "open", "open")]
+    );
+}
+
+#[tokio::test]
+async fn the_hard_lock_is_in_order_and_moves_the_serial() {
+    let h = harness().await;
+    let root = company(&h, "Root", None).await;
+    ensure_periods_with(
+        h.orm(),
+        system(),
+        &calendar(31, 12),
+        root,
+        d(2024, 1, 1),
+        d(2024, 3, 31),
+    )
+    .await
+    .unwrap();
+    set_dates(&h, root, Some(d(2024, 3, 31)), None, None).await;
+    let jan = period_id(&h, root, d(2024, 1, 10)).await;
+    let mar = period_id(&h, root, d(2024, 3, 10)).await;
+    let mut tx = h.begin().await.unwrap();
+    sync_lock_dates(&mut tx, root).await.unwrap();
+    let mar_set = PeriodSet::of(&mut tx, mar).await.unwrap();
+    let error = hard_lock_begin(&mut tx, &mar_set).await.unwrap_err();
+    assert_refused(&error, ErrorKind::Validation, "2024/01 is not hard-locked");
+    let jan_set = PeriodSet::of(&mut tx, jan).await.unwrap();
+    let run = hard_lock_begin(&mut tx, &jan_set).await.unwrap();
+    tx.commit().await.unwrap();
+    drop(tx);
+    let serial = async || -> i32 {
+        h.db()
+            .client()
+            .await
+            .unwrap()
+            .query_one(
+                "SELECT fiscal_period_serial FROM res_company WHERE id = $1",
+                &[&root],
+            )
+            .await
+            .unwrap()
+            .get(0)
+    };
+    let before = serial().await;
+    let mut tx = rc(&h).await;
+    assert_eq!(
+        hard_lock_complete(&mut tx, &run).await.unwrap(),
+        LockOutcome::Applied
+    );
+    tx.commit().await.unwrap();
+    drop(tx);
+    assert_eq!(
+        serial().await,
+        before + 1,
+        "the hard lock date moved the serial"
+    );
+}
+
+#[tokio::test]
+async fn the_sync_bound_is_per_company() {
+    let h = harness().await;
+    let root = company(&h, "Root", None).await;
+    company(&h, "Branch", Some(root)).await;
+    // 650 months each, 1,300 in all: above one company's bound, below the tree's
+    ensure_periods_with(
+        h.orm(),
+        system(),
+        &calendar(31, 12),
+        root,
+        d(1970, 1, 1),
+        d(2024, 2, 29),
+    )
+    .await
+    .unwrap();
+    set_dates(&h, root, Some(d(2024, 2, 29)), None, None).await;
+    let mut tx = h.begin().await.unwrap();
+    assert_eq!(sync_lock_dates(&mut tx, root).await.unwrap().closed, 1300);
+    tx.rollback().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_setter_and_a_lock_runs_second_step_take_their_locks_in_one_order() {
+    let h = harness().await;
+    let root = company(&h, "Root", None).await;
+    ensure_periods_with(
+        h.orm(),
+        system(),
+        &calendar(31, 12),
+        root,
+        d(2024, 1, 1),
+        d(2024, 1, 31),
+    )
+    .await
+    .unwrap();
+    let jan = period_id(&h, root, d(2024, 1, 10)).await;
+    let mut tx = h.begin().await.unwrap();
+    let set = PeriodSet::of(&mut tx, jan).await.unwrap();
+    let run = stock_lock_begin(&mut tx, &set).await.unwrap();
+    tx.commit().await.unwrap();
+    drop(tx);
+    // the setter holds the company row; the stock lock's T2 then starts on the same company
+    let mut setter = h.begin().await.unwrap();
+    setter
+        .execute(
+            "UPDATE res_company SET fiscalyear_lock_date = '2024-01-31' WHERE id = $1",
+            &[&root],
+        )
+        .await
+        .unwrap();
+    let mut t2 = rc(&h).await;
+    let complete = stock_lock_complete(&mut t2, &run);
+    let sync = async {
+        until_a_session_waits(&h).await;
+        let synced = sync_lock_dates(&mut setter, root).await;
+        if synced.is_ok() {
+            setter.commit().await.unwrap();
+        }
+        synced
+    };
+    let (completed, synced) = tokio::join!(complete, sync);
+    assert_eq!(synced.unwrap().closed, 1);
+    assert_eq!(completed.unwrap(), LockOutcome::Applied);
+    t2.commit().await.unwrap();
+    drop((setter, t2));
+    assert_eq!(
+        statuses(&periods(&h, root).await),
+        [("2024/01", "closed", "stock_locked")]
+    );
+}
+
+#[tokio::test]
+async fn a_malformed_branch_path_refuses_its_tree() {
+    let h = harness().await;
+    let root = company(&h, "Root", None).await;
+    let branch = company(&h, "Branch", Some(root)).await;
+    h.db()
+        .client()
+        .await
+        .unwrap()
+        .execute(
+            "UPDATE res_company SET parent_path = rtrim(parent_path, '/') WHERE id = $1",
+            &[&branch],
+        )
+        .await
+        .unwrap();
+    let error = ensure_periods_with(
+        h.orm(),
+        system(),
+        &calendar(31, 12),
+        root,
+        d(2024, 1, 1),
+        d(2024, 1, 31),
+    )
+    .await
+    .unwrap_err();
+    assert_refused(&error, ErrorKind::Internal, &format!("company {branch}"));
+    assert!(error.message().contains("parent_path"), "{error:?}");
+    let mut tx = h.begin().await.unwrap();
+    let error = sync_lock_dates(&mut tx, root).await.unwrap_err();
+    assert_refused(&error, ErrorKind::Internal, &format!("company {branch}"));
+    tx.rollback().await.unwrap();
+    drop(tx);
+    assert!(periods(&h, root).await.is_empty());
+}
+
+#[tokio::test]
+async fn the_cached_serial_follows_the_sync() {
+    let h = harness().await;
+    let root = company(&h, "Root", None).await;
+    ensure_periods_with(
+        h.orm(),
+        system(),
+        &calendar(31, 12),
+        root,
+        d(2024, 1, 1),
+        d(2024, 1, 31),
+    )
+    .await
+    .unwrap();
+    let mut tx = h.begin().await.unwrap();
+    let before = cached_serial(&mut tx, root).await;
+    sync_lock_dates(&mut tx, root).await.unwrap();
+    assert_eq!(cached_serial(&mut tx, root).await, before + 1);
+    tx.rollback().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_lock_runs_second_step_needs_read_committed() {
+    let h = harness().await;
+    let root = company(&h, "Root", None).await;
+    ensure_periods_with(
+        h.orm(),
+        system(),
+        &calendar(31, 12),
+        root,
+        d(2024, 1, 1),
+        d(2024, 1, 31),
+    )
+    .await
+    .unwrap();
+    let jan = period_id(&h, root, d(2024, 1, 10)).await;
+    let mut tx = h.begin().await.unwrap();
+    let set = PeriodSet::of(&mut tx, jan).await.unwrap();
+    let run = stock_lock_begin(&mut tx, &set).await.unwrap();
+    for result in [
+        stock_lock_complete(&mut tx, &run).await,
+        stock_lock_reset(&mut tx, &run).await,
+    ] {
+        assert_refused(
+            &result.unwrap_err(),
+            ErrorKind::Programming,
+            "READ COMMITTED",
+        );
+    }
+    tx.rollback().await.unwrap();
+    drop(tx);
+    assert_eq!(
+        statuses(&periods(&h, root).await),
+        [("2024/01", "open", "open")]
+    );
+}
+
+/// Whether `column` of period `id` holds this transaction's start time as the ORM stamps it (UTC).
+async fn stamped_utc(tx: &mut Transaction, id: i64, column: &str) -> bool {
+    tx.query(
+        &format!(
+            "SELECT {column} IS NOT DISTINCT FROM (now() AT TIME ZONE 'UTC') \
+             FROM account_fiscal_period WHERE id = $1"
+        ),
+        &[&id],
+    )
+    .await
+    .unwrap()[0]
+        .get(0)
+}
+
+/// The lifecycle stamps of a period row are UTC like an ORM write, whatever the session's time
+/// zone (cycle 13 r4, rust S-1).
+#[tokio::test]
+async fn period_stamps_are_utc_whatever_the_session_time_zone() {
+    const ZONE: &str = "SET LOCAL TIME ZONE 'Asia/Jakarta'";
+    let h = harness().await;
+    let root = company(&h, "Root", None).await;
+    ensure_periods_with(
+        h.orm(),
+        system(),
+        &calendar(31, 12),
+        root,
+        d(2024, 1, 1),
+        d(2024, 2, 29),
+    )
+    .await
+    .unwrap();
+    let jan = period_id(&h, root, d(2024, 1, 1)).await;
+    let mut stamps = Vec::new();
+
+    let mut tx = rc(&h).await;
+    tx.batch(ZONE).await.unwrap();
+    let set = PeriodSet::of(&mut tx, jan).await.unwrap();
+    stock_lock_begin(&mut tx, &set).await.unwrap();
+    stamps.push((
+        "stock_lock_started_at",
+        stamped_utc(&mut tx, jan, "stock_lock_started_at").await,
+    ));
+    tx.rollback().await.unwrap();
+    drop(tx);
+
+    set_dates(&h, root, Some(d(2024, 1, 31)), None, None).await;
+    let mut tx = h.begin().await.unwrap();
+    tx.batch(ZONE).await.unwrap();
+    sync_lock_dates(&mut tx, root).await.unwrap();
+    stamps.push(("closed_at", stamped_utc(&mut tx, jan, "closed_at").await));
+    let set = PeriodSet::of(&mut tx, jan).await.unwrap();
+    let run = hard_lock_begin(&mut tx, &set).await.unwrap();
+    stamps.push((
+        "hard_lock_started_at",
+        stamped_utc(&mut tx, jan, "hard_lock_started_at").await,
+    ));
+    tx.commit().await.unwrap();
+    drop(tx);
+
+    let mut tx = rc(&h).await;
+    tx.batch(ZONE).await.unwrap();
+    assert_eq!(
+        hard_lock_complete(&mut tx, &run).await.unwrap(),
+        LockOutcome::Applied
+    );
+    stamps.push((
+        "hard_locked_at",
+        stamped_utc(&mut tx, jan, "hard_locked_at").await,
+    ));
+    tx.rollback().await.unwrap();
+    drop(tx);
+    let local: Vec<&str> = stamps
+        .iter()
+        .filter(|(_, utc)| !utc)
+        .map(|(c, _)| *c)
+        .collect();
+    assert!(
+        local.is_empty(),
+        "stamped in the session time zone: {local:?}"
+    );
 }

@@ -59,7 +59,7 @@ impl Transaction {
                     .any(|c| all.binary_search(c).is_err())
                 {
                     return Err(Error::access(
-                        "Access to unauthorized or invalid companies.",
+                        "One of the selected companies does not exist or is not one of yours.",
                     ));
                 }
                 Arc::clone(newest)

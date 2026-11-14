@@ -83,5 +83,5 @@ test("the notice region has no tint of its own and a Settings link button keeps 
   expect(css).not.toMatch(/\.client-notice:not\(:empty\)/);
   expect(css).toMatch(/\.client-notice \{ position: relative; overflow-wrap: anywhere; \}/);
   expect(css).toMatch(/\.settings-action-link \{[^}]*align-self: flex-start;/);
-  expect(css).toMatch(/\.form-title-row \.field-label > span:not\(\.field-error\):not\(\.field-help\) \{/);
+  expect(css).toMatch(/\.form-title-row \.field-label > span:first-child:not\(\.field-error\):not\(\.field-help\) \{/);
 });

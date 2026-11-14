@@ -37,6 +37,9 @@ pub struct LifecycleRequest<'a> {
     pub restore_generated_restrictions: bool,
     /// Explicitly verified previous-release preimage for forward upgrade only.
     pub identity_previous: Option<&'a std::path::Path>,
+    /// `--with-demo` (`Some(true)`) or `--without-demo` (`Some(false)`), install only; `None`
+    /// follows the choice stored on the database.
+    pub demo: Option<bool>,
 }
 
 /// What a live module operation did.
@@ -361,6 +364,12 @@ fn resolve_and_execute<E: ModuleLifecycleExecutor>(
             reason: "only an explicit forward upgrade may admit previous-release identity".into(),
         });
     }
+    if args.demo.choice().is_some() && operation != ModuleOperation::Install {
+        return Err(CliError::InvalidInput {
+            arg: "--with-demo/--without-demo".into(),
+            reason: "only the install command takes a demo data choice".into(),
+        });
+    }
     if args.restore_generated_restrictions && operation != ModuleOperation::Upgrade {
         return Err(CliError::InvalidInput {
             arg: "--restore-generated-restrictions".to_owned(),
@@ -589,6 +598,7 @@ fn resolve_and_execute<E: ModuleLifecycleExecutor>(
         addons_path: &args.addons_path,
         restore_generated_restrictions: args.restore_generated_restrictions,
         identity_previous: args.identity_previous.as_deref(),
+        demo: args.demo.choice(),
     };
     let report = executor.execute(operation, &request)?;
     Ok(ModuleRun {

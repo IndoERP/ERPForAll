@@ -18,7 +18,7 @@ use erp_addon_stock::{
 };
 use erp_sdk::ErrorKind;
 use erp_sdk::prelude::*;
-use erp_testkit::Harness;
+use erp_testkit::{Harness, HarnessError};
 
 erp_sdk::addon!(name = "test_stock_quant_engine", depends = ["stock"]);
 
@@ -143,6 +143,8 @@ async fn fixture() -> Fixture {
         &erp_addon_stock::ADDON,
         &ADDON,
     ])
+    .require_sql_objects([&erp_addon_stock::schema_guards::MANIFEST])
+    .schema_sync_options(erp_testkit::SchemaSyncOptions::inline().lifecycle(true))
     .build()
     .await
     .unwrap();
@@ -207,10 +209,6 @@ async fn fixture() -> Fixture {
     let q = product(&mut tx, company, "Q", true).await;
     let consumable = product(&mut tx, company, "Consumable", false).await;
     let l = location(&mut tx, "L", None, "internal").await;
-    // shortcut: a parent and child created in one transaction fail the stored complete-name
-    // recompute at commit ("a parent location has no stored complete name"); flushing the parent first
-    // avoids it until the location compute handles both in one batch (reported with)
-    tx.flush().await.unwrap();
     let c = location(&mut tx, "C", Some(l), "internal").await;
     let x = location(&mut tx, "X", None, "internal").await;
     let view = location(&mut tx, "viewloc1", None, "view").await;
@@ -254,38 +252,17 @@ async fn fixture() -> Fixture {
 impl Fixture {
     /// The key of `product` at `location` of the main company, without lot, package or owner.
     fn key(&self, product: i64, location: i64) -> QuantKey {
-        QuantKey {
-            company_id: self.company,
-            product_id: product,
-            location_id: location,
-            lot_id: None,
-            package_id: None,
-            owner_id: None,
-        }
+        QuantKey::new(self.company, product, location)
     }
 
     /// A filter of `product` at `location` of the main company.
     fn filter(&self, product: i64, location: i64, strict: bool) -> QuantFilter {
-        QuantFilter {
-            company_id: self.company,
-            product_id: product,
-            location_id: location,
-            lot_id: None,
-            package_id: None,
-            owner_id: None,
-            strict,
-            tracked: false,
-        }
+        QuantFilter::new(self.company, product, location).strict(strict)
     }
 }
 
 fn change(key: QuantKey, quantity: &str, reserved: &str) -> QuantChange {
-    QuantChange {
-        key,
-        quantity: dec(quantity),
-        reserved_quantity: dec(reserved),
-        in_date: None,
-    }
+    QuantChange::new(key, dec(quantity), dec(reserved))
 }
 
 async fn apply(tx: &mut Transaction, changes: &[QuantChange]) -> Vec<QuantBalance> {
@@ -394,31 +371,23 @@ async fn refused_changes_name_their_reason_and_store_nothing() {
         (
             change(f.key(f.p, f.l), "0", "0"),
             ErrorKind::Validation,
-            "Quantity or Reserved Quantity should be set.".to_owned(),
+            "Set a quantity, a reserved quantity or both.".to_owned(),
         ),
         (
             change(f.key(f.consumable, f.l), "1", "0"),
             ErrorKind::Validation,
-            "Quants cannot be created for consumables or services.".to_owned(),
+            "Stock is kept only for storable products, not for consumables or services.".to_owned(),
         ),
         (
             change(f.key(f.p, f.view), "1", "0"),
             ErrorKind::Validation,
-            "You cannot take products from or deliver products to a location of type \"view\" \
-             (viewloc1)."
+            "Products cannot be taken from or delivered to viewloc1: it is a view location."
                 .to_owned(),
         ),
         (
-            change(
-                QuantKey {
-                    lot_id: Some(f.lot_z),
-                    ..f.key(f.p, f.l)
-                },
-                "1",
-                "0",
-            ),
+            change(f.key(f.p, f.l).lot_id(Some(f.lot_z)), "1", "0"),
             ErrorKind::Validation,
-            "The Lot/Serial number (Z) is linked to another product.".to_owned(),
+            "Lot or serial number Z belongs to a different product.".to_owned(),
         ),
         (
             change(f.key(f.p, f.l), "0.0000001", "0"),
@@ -477,22 +446,8 @@ async fn key_parts_of_another_company_are_refused() {
     for (key, what, id) in [
         (f.key(foreign_product, f.l), "product", foreign_product),
         (f.key(f.p, foreign_location), "location", foreign_location),
-        (
-            QuantKey {
-                lot_id: Some(foreign_lot),
-                ..base
-            },
-            "lot",
-            foreign_lot,
-        ),
-        (
-            QuantKey {
-                owner_id: Some(foreign_owner),
-                ..base
-            },
-            "owner",
-            foreign_owner,
-        ),
+        (base.lot_id(Some(foreign_lot)), "lot", foreign_lot),
+        (base.owner_id(Some(foreign_owner)), "owner", foreign_owner),
     ] {
         let error = refused(&mut tx, &[change(key, "1", "0")]).await;
         assert_eq!(error.kind(), ErrorKind::Validation, "{what}");
@@ -504,18 +459,7 @@ async fn key_parts_of_another_company_are_refused() {
             )
         );
     }
-    let shared = apply(
-        &mut tx,
-        &[change(
-            QuantKey {
-                owner_id: Some(f.o),
-                ..base
-            },
-            "1",
-            "0",
-        )],
-    )
-    .await;
+    let shared = apply(&mut tx, &[change(base.owner_id(Some(f.o)), "1", "0")]).await;
     assert_eq!(shared.len(), 1);
     tx.rollback().await.unwrap();
     drop(tx);
@@ -528,59 +472,21 @@ async fn earliest_incoming_date_wins() {
     let f = fixture().await;
     let mut tx = f.h.begin().await.unwrap();
     // received with D1, then with the older D2: D2
-    let a = QuantKey {
-        lot_id: Some(f.lot_a),
-        ..f.key(f.p, f.l)
-    };
-    let first = apply(
-        &mut tx,
-        &[QuantChange {
-            in_date: Some(d1()),
-            ..change(a, "1", "0")
-        }],
-    )
-    .await;
+    let a = f.key(f.p, f.l).lot_id(Some(f.lot_a));
+    let first = apply(&mut tx, &[change(a, "1", "0").in_date(Some(d1()))]).await;
     assert_eq!(first[0].in_date, d1());
     assert_eq!(first[0].available(), dec("1"));
-    let second = apply(
-        &mut tx,
-        &[QuantChange {
-            in_date: Some(d2()),
-            ..change(a, "1", "0")
-        }],
-    )
-    .await;
+    let second = apply(&mut tx, &[change(a, "1", "0").in_date(Some(d2()))]).await;
     assert_eq!(second[0].quantity, dec("2"));
     assert_eq!(second[0].in_date, d2());
     // received with D2, then with the later D1: D2 stays
-    let b = QuantKey {
-        lot_id: Some(f.lot_b),
-        ..f.key(f.p, f.l)
-    };
-    apply(
-        &mut tx,
-        &[QuantChange {
-            in_date: Some(d2()),
-            ..change(b, "1", "0")
-        }],
-    )
-    .await;
-    let later = apply(
-        &mut tx,
-        &[QuantChange {
-            in_date: Some(d1()),
-            ..change(b, "1", "0")
-        }],
-    )
-    .await;
+    let b = f.key(f.p, f.l).lot_id(Some(f.lot_b));
+    apply(&mut tx, &[change(b, "1", "0").in_date(Some(d2()))]).await;
+    let later = apply(&mut tx, &[change(b, "1", "0").in_date(Some(d1()))]).await;
     assert_eq!((later[0].quantity, later[0].in_date), (dec("2"), d2()));
     let gathered = gather_quants(
         &mut tx,
-        &QuantFilter {
-            lot_id: Some(f.lot_b),
-            strict: true,
-            ..f.filter(f.p, f.l, true)
-        },
+        &f.filter(f.p, f.l, true).lot_id(Some(f.lot_b)).strict(true),
     )
     .await
     .unwrap();
@@ -605,10 +511,7 @@ async fn untracked_availability_sums_signed_balances() {
     drop(tx);
     // (10, 9) and (1, 1): 1
     let mut tx = f.h.begin().await.unwrap();
-    let packaged = QuantKey {
-        package_id: Some(f.k),
-        ..base
-    };
+    let packaged = base.package_id(Some(f.k));
     apply(
         &mut tx,
         &[change(base, "10", "9"), change(packaged, "1", "1")],
@@ -629,11 +532,7 @@ async fn untracked_availability_sums_signed_balances() {
 
     // three of 1 and one of -3: 0 both ways
     let mut tx = f.h.begin().await.unwrap();
-    let owned = |package: Option<i64>| QuantKey {
-        package_id: package,
-        owner_id: Some(f.o),
-        ..base
-    };
+    let owned = |package: Option<i64>| base.package_id(package).owner_id(Some(f.o));
     apply(
         &mut tx,
         &[
@@ -694,14 +593,8 @@ async fn broad_and_strict_reads_select_their_keys() {
     tx.rollback().await.unwrap();
 
     let base = p(f.l);
-    let packaged = QuantKey {
-        package_id: Some(f.k),
-        ..base
-    };
-    let owned = QuantKey {
-        owner_id: Some(f.o),
-        ..base
-    };
+    let packaged = base.package_id(Some(f.k));
+    let owned = base.owner_id(Some(f.o));
     // 018, 020: 7 loose and unowned, 2 in K, 2 owned by O; broad filters narrow
     let mut tx = f.h.begin().await.unwrap();
     apply(
@@ -714,14 +607,8 @@ async fn broad_and_strict_reads_select_their_keys() {
     )
     .await;
     let broad = f.filter(f.p, f.l, false);
-    let broad_package = QuantFilter {
-        package_id: Some(f.k),
-        ..broad
-    };
-    let broad_owner = QuantFilter {
-        owner_id: Some(f.o),
-        ..broad
-    };
+    let broad_package = broad.package_id(Some(f.k));
+    let broad_owner = broad.owner_id(Some(f.o));
     assert_eq!(available(&mut tx, broad_package).await.0, dec("2"));
     assert_eq!(available(&mut tx, broad_owner).await.0, dec("2"));
     tx.rollback().await.unwrap();
@@ -740,10 +627,7 @@ async fn broad_and_strict_reads_select_their_keys() {
         available(&mut tx, f.filter(f.p, f.l, true)).await.0,
         dec("2")
     );
-    let strict_owner = QuantFilter {
-        owner_id: Some(f.o),
-        ..f.filter(f.p, f.l, true)
-    };
+    let strict_owner = f.filter(f.p, f.l, true).owner_id(Some(f.o));
     assert_eq!(available(&mut tx, strict_owner).await.0, dec("7"));
     tx.rollback().await.unwrap();
     drop(tx);
@@ -755,22 +639,10 @@ async fn tracked_availability_nets_each_lot() {
     let f = fixture().await;
     let mut tx = f.h.begin().await.unwrap();
     let base = f.key(f.p, f.l);
-    let a = QuantKey {
-        lot_id: Some(f.lot_a),
-        ..base
-    };
-    let b = QuantKey {
-        lot_id: Some(f.lot_b),
-        ..base
-    };
-    let tracked = QuantFilter {
-        tracked: true,
-        ..f.filter(f.p, f.l, false)
-    };
-    let of_a = QuantFilter {
-        lot_id: Some(f.lot_a),
-        ..tracked
-    };
+    let a = base.lot_id(Some(f.lot_a));
+    let b = base.lot_id(Some(f.lot_b));
+    let tracked = f.filter(f.p, f.l, false).tracked(true);
+    let of_a = tracked.lot_id(Some(f.lot_a));
     // A (10, reserved 20): 0 and -10
     apply(&mut tx, &[change(a, "10", "20")]).await;
     assert_eq!(available(&mut tx, of_a).await, (dec("0"), dec("-10")));
@@ -791,10 +663,7 @@ async fn tracked_availability_nets_each_lot() {
     assert_eq!((of_key(a), of_key(base)), (dec("2"), dec("3")));
     assert_eq!(stored(&mut tx, base).await, Some(("3".into(), "0".into())));
     assert_eq!(available(&mut tx, of_a).await.0, dec("5"));
-    let strict_a = QuantFilter {
-        strict: true,
-        ..of_a
-    };
+    let strict_a = of_a.strict(true);
     assert_eq!(available(&mut tx, strict_a).await.0, dec("2"));
     tx.rollback().await.unwrap();
 
@@ -813,14 +682,8 @@ async fn owner_and_package_keys_change_alone() {
     let f = fixture().await;
     let mut tx = f.h.begin().await.unwrap();
     let base = f.key(f.p, f.l);
-    let owned = QuantKey {
-        owner_id: Some(f.o),
-        ..base
-    };
-    let packaged = QuantKey {
-        package_id: Some(f.k),
-        ..base
-    };
+    let owned = base.owner_id(Some(f.o));
+    let packaged = base.package_id(Some(f.k));
     apply(
         &mut tx,
         &[
@@ -867,10 +730,7 @@ async fn owner_and_package_keys_change_alone() {
 async fn zero_keys_are_deleted_unless_counted() {
     let f = fixture().await;
     let mut tx = f.h.begin().await.unwrap();
-    let packaged = QuantKey {
-        package_id: Some(f.k),
-        ..f.key(f.p, f.l)
-    };
+    let packaged = f.key(f.p, f.l).package_id(Some(f.k));
     apply(&mut tx, &[change(packaged, "1", "0")]).await;
     let gone = apply(&mut tx, &[change(packaged, "-1", "0")]).await;
     assert_eq!(gone.len(), 1);
@@ -983,25 +843,11 @@ async fn keys_are_processed_in_database_order() {
     let mut tx = f.h.begin().await.unwrap();
     let base = f.key(f.p, f.l);
     let keys = [
-        QuantKey {
-            owner_id: Some(f.o),
-            ..base
-        },
+        base.owner_id(Some(f.o)),
         base,
-        QuantKey {
-            lot_id: Some(f.lot_b),
-            package_id: Some(f.k),
-            ..base
-        },
-        QuantKey {
-            lot_id: Some(f.lot_a),
-            ..base
-        },
-        QuantKey {
-            package_id: Some(f.k),
-            owner_id: Some(f.o),
-            ..base
-        },
+        base.lot_id(Some(f.lot_b)).package_id(Some(f.k)),
+        base.lot_id(Some(f.lot_a)),
+        base.package_id(Some(f.k)).owner_id(Some(f.o)),
         f.key(f.p, f.c),
     ];
     let changes: Vec<QuantChange> = keys.iter().map(|k| change(*k, "1", "0")).collect();
@@ -1083,7 +929,10 @@ async fn quant_model_refuses_generic_writes() {
         .await
         .unwrap_err();
     assert_eq!(error.kind(), ErrorKind::UserError);
-    assert_eq!(error.message(), "You cannot duplicate stock quants.");
+    assert_eq!(
+        error.message(),
+        "A stock quant cannot be copied. Stock changes through stock moves or an inventory adjustment."
+    );
     let error = tx
         .savepoint(async |tx| {
             quants
@@ -1170,7 +1019,7 @@ async fn locations_with_stock_keep_their_usage_and_stay_active() {
     assert_eq!(error.kind(), ErrorKind::UserError);
     assert_eq!(
         error.message(),
-        "This location's usage cannot be changed to view as it contains products."
+        "A location that holds products cannot become a view location."
     );
     let error = write(
         &mut tx,
@@ -1181,7 +1030,7 @@ async fn locations_with_stock_keep_their_usage_and_stay_active() {
     assert_eq!(error.kind(), ErrorKind::UserError);
     assert_eq!(
         error.message(),
-        "Internal locations having stock can't be converted"
+        "A location that holds stock must stay an internal location."
     );
     let error = write(
         &mut tx,
@@ -1192,7 +1041,7 @@ async fn locations_with_stock_keep_their_usage_and_stay_active() {
     assert_eq!(error.kind(), ErrorKind::UserError);
     assert_eq!(
         error.message(),
-        "You can't disable locations L/C because they still contain products."
+        "Locations L/C still hold products. Empty them before archiving."
     );
     let usage = tx
         .query(
@@ -1327,10 +1176,7 @@ async fn quants_with_a_balance_are_not_deleted() {
     let id_of = async |tx: &mut Transaction, key: QuantKey| -> i64 {
         gather_quants(
             tx,
-            &QuantFilter {
-                strict: true,
-                ..f.filter(key.product_id, key.location_id, true)
-            },
+            &f.filter(key.product_id, key.location_id, true).strict(true),
         )
         .await
         .unwrap()[0]
@@ -1386,8 +1232,8 @@ async fn converted_values_cannot_archive_or_retype_a_location_with_stock() {
     let mut tx = f.h.begin().await.unwrap();
     apply(&mut tx, &[change(f.key(f.p, f.c), "1", "0")]).await;
     let locations = tx.env().records("stock.location").unwrap();
-    let archive = "You can't disable locations L/C because they still contain products.";
-    let retype = "Internal locations having stock can't be converted";
+    let archive = "Locations L/C still hold products. Empty them before archiving.";
+    let retype = "A location that holds stock must stay an internal location.";
     let active = "active".to_owned();
     let usage = "usage".to_owned();
     // what JSON `null` and `0` become on the RPC write path
@@ -1558,7 +1404,7 @@ async fn usage_and_company_changes_are_blocked_by_any_balance() {
         assert_eq!(error.kind(), ErrorKind::UserError, "{location}");
         assert_eq!(
             error.message(),
-            "Internal locations having stock can't be converted"
+            "A location that holds stock must stay an internal location."
         );
     }
     // the company of a location never changes; writing the one it has is accepted
@@ -1592,8 +1438,7 @@ async fn usage_and_company_changes_are_blocked_by_any_balance() {
         assert_eq!(error.kind(), ErrorKind::UserError, "{value:?}");
         assert_eq!(
             error.message(),
-            "Changing the company of this record is forbidden at this point, you should rather \
-             archive it and create a new one."
+            "The company of this record cannot be changed once it exists. Archive it and create a new record for the other company."
         );
     }
     locations
@@ -1647,8 +1492,7 @@ async fn engine_reads_see_pending_orm_writes() {
     assert_eq!(error.kind(), ErrorKind::Validation, "{error:?}");
     assert_eq!(
         error.message(),
-        "You cannot take products from or deliver products to a location of type \"view\" \
-         (Soon a view)."
+        "Products cannot be taken from or delivered to Soon a view: it is a view location."
     );
     assert_eq!(quant_rows(&mut tx, f.p).await, 0);
     // C (holding 1) moves from L to X; nothing flushed in between
@@ -1691,7 +1535,7 @@ async fn engine_reads_see_pending_orm_writes() {
     assert_eq!(error.kind(), ErrorKind::UserError, "{error:?}");
     assert_eq!(
         error.message(),
-        "You can't disable locations X/C because they still contain products."
+        "Locations X/C still hold products. Empty them before archiving."
     );
     tx.rollback().await.unwrap();
     drop(tx);
@@ -1747,10 +1591,7 @@ async fn a_missing_package_is_refused_by_name() {
         .await
         .unwrap()[0]
         .get(0);
-    let key = QuantKey {
-        package_id: Some(missing),
-        ..f.key(f.p, f.l)
-    };
+    let key = f.key(f.p, f.l).package_id(Some(missing));
     let error = refused(&mut tx, &[change(key, "1", "0")]).await;
     assert_eq!(error.kind(), ErrorKind::Programming, "{error:?}");
     assert_eq!(
@@ -1760,4 +1601,177 @@ async fn a_missing_package_is_refused_by_name() {
     tx.rollback().await.unwrap();
     drop(tx);
     f.h.cleanup().await.unwrap();
+}
+
+/// A key locked inside a savepoint that then rolled back is no longer held (the rollback released
+/// its row lock), so naming it again below a higher held key is refused; a key locked inside a
+/// savepoint that was released stays held. Review cycle 12 round 2, finding S-1.
+#[tokio::test]
+async fn a_key_locked_in_a_rolled_back_savepoint_is_not_held() {
+    let f = fixture().await;
+    let low = f.key(f.p, f.l);
+    let high = f.key(f.p, f.x);
+    let mut tx = f.h.begin().await.unwrap();
+    let undone = tx
+        .savepoint(async |tx| {
+            apply_quant_changes(tx, &[change(low, "1", "0")]).await?;
+            Err::<(), _>(Error::user("undo the receipt"))
+        })
+        .await;
+    assert!(undone.is_err());
+    apply(&mut tx, &[change(high, "1", "0")]).await;
+    let error = refused(&mut tx, &[change(low, "1", "0")]).await;
+    assert_eq!(error.kind(), ErrorKind::Programming, "{error:?}");
+    assert!(
+        error
+            .message()
+            .starts_with("Stock balance keys are locked in ascending order"),
+        "{error:?}"
+    );
+    assert_eq!(stored(&mut tx, low).await, None);
+    tx.rollback().await.unwrap();
+    drop(tx);
+    // a released savepoint keeps its locks: the key stays held
+    let mut tx = f.h.begin().await.unwrap();
+    tx.savepoint(async |tx| apply_quant_changes(tx, &[change(low, "1", "0")]).await)
+        .await
+        .unwrap();
+    apply(&mut tx, &[change(high, "1", "0")]).await;
+    apply(&mut tx, &[change(low, "1", "0")]).await;
+    assert_eq!(stored(&mut tx, low).await, Some(("2".into(), "0".into())));
+    tx.rollback().await.unwrap();
+    drop(tx);
+    f.h.cleanup().await.unwrap();
+}
+
+/// Round 1 S6, the guard after the receipt: A receives into empty location X and has not committed;
+/// B makes X a view. B's guard must not pass on a snapshot that cannot see A's quant: it is retried
+/// and, once A committed, refused. No balance ends at a view location.
+#[tokio::test]
+async fn a_location_guard_retries_past_a_concurrent_receipt() {
+    let f = fixture().await;
+    let mut a = f.h.begin().await.unwrap();
+    apply(&mut a, &[change(f.key(f.p, f.x), "1", "0")]).await;
+    let attempts = AtomicUsize::new(0);
+    let guard = f.h.run(async |tx| {
+        attempts.fetch_add(1, Ordering::SeqCst);
+        tx.env()
+            .records("stock.location")?
+            .browse([f.x])?
+            .write(tx, RawVals::new().set_cell("usage", text("view")))
+            .await
+    });
+    let release = async {
+        let started = Instant::now();
+        while attempts.load(Ordering::SeqCst) < 2 && started.elapsed() < Duration::from_secs(5) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        a.commit().await.unwrap();
+    };
+    let (guard, ()) = tokio::join!(guard, release);
+    let error = orm_error(guard.expect_err("the guard passed although X holds a balance"));
+    assert_eq!(error.kind(), ErrorKind::UserError, "{error:?}");
+    assert_eq!(
+        error.message(),
+        "A location that holds products cannot become a view location."
+    );
+    assert!(attempts.load(Ordering::SeqCst) >= 2);
+    let mut tx = f.h.begin().await.unwrap();
+    let usage: String = tx
+        .query("SELECT usage FROM stock_location WHERE id = $1", &[&f.x])
+        .await
+        .unwrap()[0]
+        .get(0);
+    assert_eq!(usage, "internal");
+    assert_eq!(
+        stored(&mut tx, f.key(f.p, f.x)).await,
+        Some(("1".into(), "0".into()))
+    );
+    tx.rollback().await.unwrap();
+    drop(tx);
+    f.h.cleanup().await.unwrap();
+}
+
+/// Round 1 S6, the receipt after the guard: B makes empty X a view and has not committed; A receives
+/// into X. A waits for B, is retried on a fresh snapshot after B committed and refused.
+#[tokio::test]
+async fn a_receipt_behind_a_location_guard_is_retried_and_refused() {
+    let f = fixture().await;
+    let mut b = f.h.begin().await.unwrap();
+    b.env()
+        .records("stock.location")
+        .unwrap()
+        .browse([f.x])
+        .unwrap()
+        .write(&mut b, RawVals::new().set_cell("usage", text("view")))
+        .await
+        .unwrap();
+    let attempts = AtomicUsize::new(0);
+    let receipt = f.h.run(async |tx| {
+        attempts.fetch_add(1, Ordering::SeqCst);
+        apply_quant_changes(tx, &[change(f.key(f.p, f.x), "1", "0")]).await
+    });
+    let release = async {
+        until_a_session_waits(&f.h).await;
+        b.commit().await.unwrap();
+    };
+    let (receipt, ()) = tokio::join!(receipt, release);
+    let error = orm_error(receipt.expect_err("the receipt stored a balance at a view location"));
+    assert_eq!(error.kind(), ErrorKind::Validation, "{error:?}");
+    assert_eq!(
+        error.message(),
+        "Products cannot be taken from or delivered to X: it is a view location."
+    );
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    let mut tx = f.h.begin().await.unwrap();
+    assert_eq!(quant_rows(&mut tx, f.p).await, 0);
+    tx.rollback().await.unwrap();
+    drop(tx);
+    f.h.cleanup().await.unwrap();
+}
+
+/// Round 1 S6, the tracking read: A receives a lot quant of P and has not committed; B checks P's
+/// change from lot to serial. B is retried and, once A committed, refused for the lot it holds.
+#[tokio::test]
+async fn a_tracking_check_retries_past_a_concurrent_lot_receipt() {
+    use erp_addon_stock::tracking::{Tracking, TrackingChange, check_tracking_change};
+    let f = fixture().await;
+    let mut a = f.h.begin().await.unwrap();
+    let lot_key = f.key(f.p, f.l).lot_id(Some(f.lot_a));
+    apply(&mut a, &[change(lot_key, "1", "0")]).await;
+    let attempts = AtomicUsize::new(0);
+    let check = f.h.run(async |tx| {
+        attempts.fetch_add(1, Ordering::SeqCst);
+        check_tracking_change(
+            tx,
+            &[TrackingChange {
+                product_id: f.p,
+                from: Tracking::Lot,
+                to: Tracking::Serial,
+            }],
+        )
+        .await
+    });
+    let release = async {
+        let started = Instant::now();
+        while attempts.load(Ordering::SeqCst) < 2 && started.elapsed() < Duration::from_secs(5) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        a.commit().await.unwrap();
+    };
+    let (check, ()) = tokio::join!(check, release);
+    let error =
+        orm_error(check.expect_err("the tracking check passed although P holds a lot quant"));
+    assert_eq!(error.kind(), ErrorKind::Validation, "{error:?}");
+    assert!(error.message().starts_with("Tracking of "), "{error:?}");
+    assert!(attempts.load(Ordering::SeqCst) >= 2);
+    f.h.cleanup().await.unwrap();
+}
+
+/// The ORM error a harness unit of work ended with.
+fn orm_error(error: HarnessError) -> Error {
+    match error {
+        HarnessError::Orm(error) => error,
+        other => panic!("not an ORM error: {other:?}"),
+    }
 }

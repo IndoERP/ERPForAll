@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Stock locations, their negative-stock policy row and the removal strategies.
 //!
-//! Schema only: the location tree, its stored complete name and the one policy row per location
-//! (1, amendment B3). Usage guards, warehouse ownership and the negative-stock guard
-//! belong to later slices.
+//! The parent store maintains location paths. Stored complete names and nearest active warehouse
+//! ownership follow changes through the compute graph. Policy rows and quant-reading
+//! usage/archive guards remain with the quant engine and its follow-up slices. Ownership fields
+//! cannot be assigned by native or RPC model writes.
 
 use erp_sdk::prelude::*;
 
 use crate::error::StockError;
+use crate::warehouse::StockWarehouse;
 
 /// `stock.location`: a node of the location tree, physical (internal, transit) or virtual.
 #[model(
@@ -24,12 +26,12 @@ use crate::error::StockError;
         (
             "_barcode_company_uniq",
             "UNIQUE (barcode, company_id)",
-            "The barcode for a location must be unique per company!"
+            "Another location of this company already uses this barcode."
         ),
         (
             "_inventory_freq_nonneg",
             "CHECK (cyclic_inventory_frequency >= 0)",
-            "The inventory frequency (days) for a location must be non-negative"
+            "The inventory interval of a location cannot be negative."
         ),
         (
             "_generated_role_complete",
@@ -94,6 +96,29 @@ pub struct StockLocation {
     /// Owning company; empty for a location shared between companies.
     #[field(many2one, comodel = "res.company", index = true)]
     pub company_id: Option<RecId>,
+    /// Closest active warehouse rooted at this location or an ancestor. Stored independently
+    /// of the reader's permissions; reading its label still uses normal warehouse access.
+    #[field(
+        many2one,
+        comodel = "stock.warehouse",
+        compute = "_compute_warehouse_id",
+        compute_sudo = true,
+        store = true,
+        readonly = true,
+        copy = false,
+        index = true,
+        string = "Warehouse"
+    )]
+    pub warehouse_id: Option<RecId>,
+    /// Warehouses rooted exactly here, used to invalidate ownership when their root or
+    /// activity changes. This is the inverse of `stock.warehouse.view_location_id`.
+    #[field(
+        one2many,
+        comodel = "stock.warehouse",
+        inverse_name = "view_location_id",
+        readonly = true
+    )]
+    pub warehouse_view_ids: Vec<RecId>,
     /// Suggests replenishment for this location; its computed default comes with.
     #[field(boolean, default = false, copy = false, string = "Replenishments")]
     pub replenish_location: bool,
@@ -143,8 +168,7 @@ pub struct StockLocation {
 
 #[methods(StockLocation, addon = "stock")]
 impl StockLocation {
-    /// Every location gets its policy row in the statement batch that creates it (B3).
-    /// Inserts outside the ORM get none until the insert trigger.
+    /// Ownership inputs are derived; the insertion trigger creates the policy in the same statement.
     #[method(override)]
     async fn create(
         this: &RecordSet<StockLocation>,
@@ -152,66 +176,167 @@ impl StockLocation {
         vals_list: Vec<RawVals>,
         sup: Super,
     ) -> Result<Records> {
-        let created: Records = sup.call(tx, this.as_records(), (vals_list,)).await?;
-        let rows = created
-            .ids()
-            .into_iter()
-            .map(|id| RawVals::new().set_cell("location_id", Cell::Id(id)))
-            .collect::<Vec<_>>();
-        if !rows.is_empty() {
-            this.env()
-                .records("stock.location.policy")?
-                .create(tx, rows)
+        // a `default_<field>` context key would be filled in by the base create after this check
+        let defaulted = OWNERSHIP
+            .iter()
+            .any(|f| this.env().context().contains(&format!("default_{f}")));
+        if defaulted || vals_list.iter().any(has_ownership_assignment) {
+            this.as_records()
+                .check_access(tx, erp_sdk::Operation::Create)
                 .await?;
+            return Err(StockError::LocationOwnershipDerived.into());
         }
+        let created = sup.call(tx, this.as_records(), (vals_list,)).await?;
+        crate::res_company::invalidate_company_locations(tx).await?;
         Ok(created)
     }
 
-    /// `complete_name`: the parent's complete name, `/`, then the name; a root or a view
-    /// location shows its own name. One read of all parents.
-    #[compute(depends = ["name", "usage", "location_id.complete_name"])]
-    async fn _compute_complete_name(
+    #[method(override)]
+    async fn unlink(
+        this: &RecordSet<StockLocation>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<()> {
+        sup.call(tx, this.as_records(), ()).await?;
+        crate::res_company::invalidate_company_locations(tx).await
+    }
+
+    /// Nearest-root ownership propagates through the existing recursive compute graph.
+    /// Parent-store notifications update only moved paths; root membership and activity
+    /// notifications reach their descendants through `location_id.warehouse_id`.
+    #[compute(depends = [
+        "parent_path",
+        "location_id.warehouse_id",
+        "warehouse_view_ids.active",
+        "warehouse_view_ids.sequence"
+    ])]
+    async fn _compute_warehouse_id(
         this: &RecordSet<StockLocation>,
         tx: &mut Transaction,
         out: &mut Assign<'_, StockLocation>,
     ) -> Result<()> {
-        let names = this.mapped(tx, StockLocation::NAME).await?;
-        let usages = this.mapped(tx, StockLocation::USAGE).await?;
-        let parents = this.mapped(tx, StockLocation::LOCATION_ID).await?;
-        let with_parent: Vec<RecId> = parents
+        // Always load archived roots too and test their flag explicitly: the stored result
+        // must not depend on the initiating caller's active_test context.
+        let all = this.with_context([("active_test", Value::Bool(false))]);
+        let roots = all.mapped(tx, StockLocation::WAREHOUSE_VIEW_IDS).await?;
+        let warehouses = RecordSet::<StockWarehouse>::try_from(
+            all.env()
+                .records("stock.warehouse")?
+                .browse_ids(roots.iter().flatten().copied()),
+        )?;
+        let active = warehouses.mapped(tx, StockWarehouse::ACTIVE).await?;
+        let sequences = warehouses.mapped(tx, StockWarehouse::SEQUENCE).await?;
+        let candidates: std::collections::BTreeMap<_, _> = warehouses
+            .rec_ids()
             .iter()
-            .zip(&usages)
-            .filter(|(_, usage)| usage.as_deref() != Some("view"))
-            .filter_map(|(parent, _)| *parent)
+            .copied()
+            .zip(active.into_iter().zip(sequences))
             .collect();
-        let parent_set =
-            RecordSet::<StockLocation>::try_from(this.as_records().browse_ids(with_parent))?;
-        let mut parent_names = parent_set
-            .mapped(tx, StockLocation::COMPLETE_NAME)
-            .await?
-            .into_iter();
-        for (index, ((name, usage), parent)) in
-            names.into_iter().zip(usages).zip(parents).enumerate()
-        {
-            let prefix = if parent.is_some() && usage.as_deref() != Some("view") {
-                let parent_name = parent_names.next().ok_or_else(|| {
-                    Error::internal("location parent names are shorter than the parents read")
+        let parents = all.mapped(tx, StockLocation::LOCATION_ID).await?;
+        let parent_records = RecordSet::<StockLocation>::try_from(
+            all.as_records()
+                .browse_ids(parents.iter().flatten().copied()),
+        )?;
+        let parent_values = parent_records
+            .mapped(tx, StockLocation::WAREHOUSE_ID)
+            .await?;
+        let inherited: std::collections::BTreeMap<_, _> = parent_records
+            .rec_ids()
+            .iter()
+            .copied()
+            .zip(parent_values)
+            .collect();
+        for (index, (root_ids, parent)) in roots.into_iter().zip(parents).enumerate() {
+            let mut direct = None;
+            for id in root_ids {
+                let (is_active, sequence) = candidates.get(&id).ok_or_else(|| {
+                    Error::internal("location ownership is missing a warehouse root")
                 })?;
-                Some(parent_name.ok_or_else(|| {
-                    Error::internal("a parent location has no stored complete name")
-                })?)
-            } else {
-                None
+                if *is_active {
+                    // For several warehouses sharing one root, preserve the source's last
+                    // entry in warehouse order (sequence, id); depth still wins over sequence.
+                    let candidate = (*sequence, id);
+                    if direct.is_none_or(|current| candidate > current) {
+                        direct = Some(candidate);
+                    }
+                }
+            }
+            let owner = match direct {
+                Some((_, id)) => Some(id),
+                None => match parent {
+                    Some(id) => *inherited.get(&id).ok_or_else(|| {
+                        Error::internal("location ownership is missing a parent value")
+                    })?,
+                    None => None, // a root outside a warehouse has no warehouse
+                },
             };
-            // no name yet: no complete name; the required check refuses the row itself
-            let value = name.map(|own| match &prefix {
-                Some(prefix) => format!("{prefix}/{own}").into(),
-                None => own,
-            });
-            out.set(index, StockLocation::COMPLETE_NAME, value)?;
+            out.set(index, StockLocation::WAREHOUSE_ID, owner)?;
         }
         Ok(())
     }
+
+    /// `complete_name`: the parent's full name, `/`, then the name; a root or a view
+    /// shows its own name (/068). Use the graph's prefetched recursive input
+    /// rather than issuing an async field read while this compute group is protected.
+    #[compute(depends = ["name", "usage", "location_id.complete_name"])]
+    fn _compute_complete_name(batch: &mut Batch<'_, StockLocation>) -> Result<()> {
+        for index in batch.indices() {
+            let name = batch.get(index, StockLocation::NAME)?;
+            let usage = batch.get(index, StockLocation::USAGE)?;
+            let parent = batch.get(index, StockLocation::LOCATION_ID)?;
+            let prefix = match parent {
+                Some(id) if usage.as_deref() != Some("view") => Some(
+                    batch
+                        .value_of(StockLocation::COMPLETE_NAME, id)?
+                        .ok_or_else(|| {
+                            Error::internal("a parent location has no stored complete name")
+                        })?,
+                ),
+                Some(_) | None => None, // view locations and roots show only their own name
+            };
+            // A missing own name stays missing; the required-name check refuses it.
+            let value: Option<Arc<str>> = name.map(|own| match prefix {
+                Some(prefix) => format!("{prefix}/{own}").into(),
+                None => own,
+            });
+            batch.set(index, StockLocation::COMPLETE_NAME, value)?;
+        }
+        Ok(())
+    }
+}
+
+/// The ownership fields are outputs of topology, never an alternate way to edit warehouse roots.
+const OWNERSHIP: [&str; 2] = ["warehouse_id", "warehouse_view_ids"];
+fn has_ownership_assignment(vals: &RawVals) -> bool {
+    OWNERSHIP
+        .iter()
+        .any(|field| vals.contains(field) || vals.iter_commands().any(|(name, _)| name == *field))
+}
+
+/// Keep this in the existing location write chain alongside its quant guards.
+pub(crate) async fn check_ownership_assignment(
+    this: &RecordSet<StockLocation>,
+    tx: &mut Transaction,
+    vals: &RawVals,
+) -> Result<()> {
+    if !this.is_empty() && has_ownership_assignment(vals) {
+        this.as_records()
+            .check_access(tx, erp_sdk::Operation::Write)
+            .await?;
+        for field in ["warehouse_id", "warehouse_view_ids"] {
+            if (vals.contains(field) || vals.iter_commands().any(|(name, _)| name == field))
+                && !tx
+                    .has_field_access(this.env(), "stock.location", field, FieldOp::Write)
+                    .await?
+            {
+                return Err(Error::access(format!(
+                    "Writing stock.location.{field} is not allowed."
+                )));
+            }
+        }
+        return Err(StockError::LocationOwnershipDerived.into());
+    }
+    Ok(())
 }
 
 /// `stock.location.policy`: the negative-stock setting of one location, on its own narrow row so
@@ -243,6 +368,38 @@ pub struct StockLocationPolicy {
 
 #[methods(StockLocationPolicy, addon = "stock")]
 impl StockLocationPolicy {
+    /// Refuse an explicitly enabled guard before the policy unique key can mask the typed
+    /// unavailable-feature error. Ordinary defaults and malformed values remain the base
+    /// create path's responsibility; the constraint below also checks its normalized result.
+    #[method(override)]
+    async fn create(
+        this: &RecordSet<StockLocationPolicy>,
+        tx: &mut Transaction,
+        vals_list: Vec<RawVals>,
+        sup: Super,
+    ) -> Result<Records> {
+        this.as_records()
+            .check_access(tx, erp_sdk::Operation::Create)
+            .await?;
+        for vals in &vals_list {
+            if matches!(vals.get("forbid_negative"), Some(Cell::Bool(true)))
+                && let Some(Cell::Id(location_id)) = vals.get("location_id")
+                && *location_id > 0
+            {
+                let location = this
+                    .env()
+                    .records("stock.location")?
+                    .browse([*location_id])?;
+                location.check_access(tx, erp_sdk::Operation::Read).await?;
+                return Err(StockError::ForbidNegativeUnavailable {
+                    location_id: *location_id,
+                }
+                .into());
+            }
+        }
+        sup.call(tx, this.as_records(), (vals_list,)).await
+    }
+
     /// Until the negative-stock guard exists, switching it on is refused (B3).
     #[constrains("forbid_negative")]
     async fn _check_forbid_negative_unavailable(

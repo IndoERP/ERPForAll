@@ -2,6 +2,60 @@
 //! Bounded database policy. Missing parameters use declared defaults; malformed values refuse.
 use erp_sdk::{Error, Result, Transaction};
 
+pub(crate) const MAX_FILE_KEY: &str = "base.attachment_max_bytes";
+pub(crate) const DEFAULT_MAX_FILE: i64 = 128 * 1024 * 1024;
+pub(crate) const HARD_MAX_FILE: i64 = i32::MAX as i64;
+
+fn declarations() -> Result<Vec<erp_sdk::settings::SettingDecl>> {
+    use erp_sdk::settings::{ScopeKind, SettingDecl};
+    Ok(vec![
+        SettingDecl::integer(
+            MAX_FILE_KEY,
+            "Maximum attachment size (bytes)",
+            ScopeKind::Global,
+            DEFAULT_MAX_FILE,
+            (1, HARD_MAX_FILE),
+        )?
+        .help("The largest file a user can attach, in bytes. Default: 134217728 (128 MiB). Allowed: 1 to 2147483647. Zero does not mean unlimited.")?
+        .access(&["base.group_system"], &["base.group_system"])?,
+    ])
+}
+erp_sdk::setting_declarations!(declarations);
+
+pub(crate) fn parse_max_file(value: Option<&str>) -> Result<i64> {
+    parse(&(MAX_FILE_KEY, DEFAULT_MAX_FILE, 1, HARD_MAX_FILE), value)
+}
+
+/// Read the one nonsecret database policy, without giving the caller generic parameter access.
+pub(crate) async fn max_file_bytes(tx: &mut Transaction) -> Result<u64> {
+    let model = tx.env().records("ir.config_parameter")?.model_id();
+    tx.flush_model(model).await?;
+    let rows = tx.query("SELECT CASE WHEN value IS NULL OR octet_length(value)<=32 THEN value ELSE 'invalid' END FROM ir_config_parameter WHERE key=$1", &[&MAX_FILE_KEY]).await?;
+    let value: Option<String> = match rows.first() {
+        Some(row) => row
+            .try_get(0)
+            .map_err(|e| Error::db(format!("attachment size policy: {e}")))?,
+        None => None, // an absent parameter uses the declared default.
+    };
+    Ok(parse_max_file(value.as_deref())? as u64)
+}
+
+pub(crate) fn check_size(size: u64, limit: u64) -> Result<()> {
+    if size > limit {
+        let human = if limit >= 1024 * 1024 && limit.is_multiple_of(1024 * 1024) {
+            format!("{} MiB", limit / (1024 * 1024))
+        } else if limit >= 1024 && limit.is_multiple_of(1024) {
+            format!("{} KiB", limit / 1024)
+        } else {
+            format!("{limit} bytes")
+        };
+        return Err(Error::validation(format!(
+            "The attachment is larger than the limit of {human} ({MAX_FILE_KEY})."
+        )));
+    }
+    Ok(())
+}
+
 // Technical policy lives in System Parameters; storage credentials and node capacity stay in TOML.
 pub(crate) const PARAMETERS: [(&str, i64, i64, i64); 10] = [
     ("attachments.usage_delta_read_limit", 10_000, 1, 10_000),
@@ -23,9 +77,12 @@ pub(crate) const PARAMETERS: [(&str, i64, i64, i64); 10] = [
     ),
 ];
 pub(crate) fn contains(key: &str) -> bool {
-    PARAMETERS.iter().any(|p| p.0 == key)
+    key == MAX_FILE_KEY || PARAMETERS.iter().any(|p| p.0 == key)
 }
 pub(crate) fn validate(key: &str, value: Option<&str>) -> Result<()> {
+    if key == MAX_FILE_KEY {
+        parse_max_file(value)?;
+    }
     if let Some(p) = PARAMETERS.iter().find(|p| p.0 == key) {
         parse(p, value)?;
     }

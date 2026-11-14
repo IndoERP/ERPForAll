@@ -331,11 +331,12 @@ impl Transaction {
         if requests.len() > MAX_ENQUEUE_BATCH {
             return Err(error::batch_too_large(requests.len(), MAX_ENQUEUE_BATCH));
         }
-        let settings = std::sync::Arc::clone(&self.shared.job_settings);
+        let snapshot = self.shared.job_snapshot().await?;
+        let settings = snapshot.settings();
         let caller = StoredPrincipal::capture(env.principal())?;
         let mut rows = Vec::with_capacity(requests.len());
         for request in requests {
-            rows.push(prepare(&request, env, &caller, &settings)?);
+            rows.push(prepare(&request, env, &caller, settings)?);
         }
         let identity = env.operation_identity();
         let correlation = match identity {
@@ -404,7 +405,7 @@ impl Transaction {
             by_uuid.insert(uuid, id);
         }
         if due_soon {
-            self.wake_for_due_jobs(&settings).await?;
+            self.wake_for_due_jobs(settings).await?;
         }
         let mut outcomes: Vec<Option<EnqueueOutcome>> = rows
             .iter()
@@ -434,8 +435,17 @@ impl Transaction {
     ///
     /// The database's errors.
     pub async fn job_wake(&mut self) -> Result<()> {
-        let settings = std::sync::Arc::clone(&self.shared.job_settings);
-        self.wake_for_due_jobs(&settings).await
+        let snapshot = self.shared.job_snapshot().await?;
+        let settings = snapshot.settings();
+        self.wake_for_due_jobs(settings).await
+    }
+
+    /// Notify job runners of validated policy changes, only when this transaction commits.
+    /// This is a hint and conveys no settings-write or job-execution authority.
+    /// # Errors
+    /// Database notification failures; the caller must roll back the settings edit on failure.
+    pub async fn job_settings_changed(&mut self, settings: &super::JobSettings) -> Result<()> {
+        self.wake_for_due_jobs(settings).await
     }
 
     /// A job due within `jobs.wake_slack` was inserted: poke this process's runners after the

@@ -377,7 +377,7 @@ async fn existing_rates_become_spot_before_the_key_switches() {
             assert_eq!(error.kind(), ErrorKind::Validation);
             assert_eq!(
                 error.message(),
-                "The operation cannot be completed: Only one currency rate per day allowed!"
+                "The database refused the change: Only one currency rate per day allowed!"
             );
             assert_eq!(error.constraint(), Some(RATE_KEY));
         }

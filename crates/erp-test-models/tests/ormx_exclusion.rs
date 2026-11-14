@@ -62,11 +62,11 @@ fn declared_message(model: &ModelSpec, name: &str) -> &'static str {
     }
 }
 
-/// `The operation cannot be completed: '<from>' must be before '<to>' on '<description>'`, from
+/// `The database refused the change: '<from>' must be before '<to>' on '<description>'`, from
 /// the registry's labels.
 fn period_message(model: &ModelSpec, from: &str, to: &str, words: &str) -> String {
     format!(
-        "The operation cannot be completed: '{}' must {words} '{}' on '{}'",
+        "The database refused the change: '{}' must {words} '{}' on '{}'",
         model.field(from).unwrap().string,
         model.field(to).unwrap().string,
         model.description
@@ -133,7 +133,7 @@ async fn spec_ormx_016_concurrent_overlapping_bookings_exactly_one_commits() {
     assert_eq!(
         err.message(),
         format!(
-            "The operation cannot be completed: {}",
+            "The database refused the change: {}",
             declared_message(booking, "_no_double_booking")
         )
     );
@@ -162,7 +162,7 @@ async fn spec_ormx_016_concurrent_overlapping_bookings_exactly_one_commits() {
     assert_eq!(
         err.message(),
         format!(
-            "The operation cannot be completed: {}",
+            "The database refused the change: {}",
             declared_message(booking, "_no_double_booking")
         )
     );
@@ -193,7 +193,7 @@ async fn spec_ormx_016_concurrent_overlapping_bookings_exactly_one_commits() {
     assert_eq!(
         err.message(),
         format!(
-            "The operation cannot be completed: {}",
+            "The database refused the change: {}",
             declared_message(stay_model, "_no_double_stay")
         )
     );
@@ -389,7 +389,7 @@ async fn spec_ormx_018_the_filter_excludes_cancelled_records() {
     assert_eq!(
         err.message(),
         format!(
-            "The operation cannot be completed: {}",
+            "The database refused the change: {}",
             declared_message(booking, "_no_double_booking")
         )
     );
@@ -516,7 +516,7 @@ async fn spec_ormx_019_without_overlaps_keys_on_range_fields() {
     assert_eq!(
         err.message(),
         format!(
-            "The operation cannot be completed: {}",
+            "The database refused the change: {}",
             declared_message(model, "_rate_key")
         )
     );
@@ -535,7 +535,7 @@ async fn spec_ormx_019_without_overlaps_keys_on_range_fields() {
     assert_eq!(
         err.message(),
         format!(
-            "The operation cannot be completed: '{}' (scale.rate.validity) is an empty range: \
+            "The database refused the change: '{}' (scale.rate.validity) is an empty range: \
              its lower end must be before its upper end",
             validity.string
         )
@@ -720,7 +720,7 @@ async fn spec_ormx_020_range_values_round_trip_and_operators() {
     assert_eq!(
         err.message(),
         format!(
-            "The operation cannot be completed: '{label}' (scale.rate.validity) is an empty \
+            "The database refused the change: '{label}' (scale.rate.validity) is an empty \
              range: its lower end must be before its upper end"
         )
     );
@@ -1020,7 +1020,7 @@ async fn spec_ormx_021_typed_objects_from_model_files() {
     assert_eq!(
         err.message(),
         format!(
-            "The operation cannot be completed: {}",
+            "The database refused the change: {}",
             declared_message(booking, "_no_double_hold")
         )
     );
@@ -1068,7 +1068,7 @@ async fn spec_ormx_021_typed_objects_from_model_files() {
     assert_eq!(
         err.message(),
         format!(
-            "The operation cannot be completed: {}",
+            "The database refused the change: {}",
             declared_message(season, "_one_season")
         )
     );

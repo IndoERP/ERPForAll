@@ -647,7 +647,7 @@ fn empty_period(from: Option<&Cell>, to: Option<&Cell>, bounds: RangeBounds) -> 
 /// before '<to label>' on '<description>'` (`must not be after` for `[]`).
 fn period_error(spec: &ModelSpec, from: &FieldSpec, to: &FieldSpec, bounds: RangeBounds) -> Error {
     Error::validation(format!(
-        "The operation cannot be completed: '{}' must {} '{}' on '{}'",
+        "The database refused the change: '{}' must {} '{}' on '{}'",
         from.string,
         bounds.order_words(),
         to.string,

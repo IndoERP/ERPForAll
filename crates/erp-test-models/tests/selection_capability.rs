@@ -601,7 +601,7 @@ async fn metadata_filters_visibility_and_catalog_authority() {
             .unwrap_err();
         assert_eq!(error.kind(), ErrorKind::Access);
         let expected = if denied == 0 {
-            "You are not allowed to read 'Selection catalog' (selection_capability.catalog) records.".to_owned()
+            "Your access rights do not let you read 'Selection catalog' (selection_capability.catalog) records.".to_owned()
         } else {
             let field = if denied == 1 { "key" } else { "label" };
             format!(
@@ -992,7 +992,7 @@ async fn catalog_retains_company_rule_and_refuses_invalid_company_context() {
     assert_eq!(error.kind(), ErrorKind::Access);
     assert_eq!(
         error.message(),
-        "Access to unauthorized or invalid companies."
+        "One of the selected companies does not exist or is not one of yours."
     );
     drop((tx, setup));
     h.cleanup().await.unwrap();

@@ -269,6 +269,7 @@ impl JsonWriter {
         match value {
             Value::False => self.falsy(),
             Value::Bool(b) => self.boolean(*b),
+            Value::BigInt(i) => self.formatted(i, true)?,
             Value::Int(i) => self.int(*i),
             Value::Float(f) => self.float(*f)?,
             Value::Decimal(d) => self.formatted(d.normalize(), false)?,
@@ -445,6 +446,7 @@ impl JsonWriter {
         match cell {
             CellRef::False => self.falsy(),
             CellRef::Bool(b) => self.boolean(b),
+            CellRef::BigInt(i) => self.formatted(i, true)?,
             CellRef::Int(i) => self.int(i),
             CellRef::Float(f) => self.float(f)?,
             CellRef::Decimal(d) => self.formatted(d.normalize(), false)?,
@@ -1176,5 +1178,34 @@ mod tests {
             serialize(&Value::list([deep]), usize::MAX).unwrap_err(),
             WriteError::TooDeep
         );
+    }
+}
+
+#[cfg(test)]
+mod bigint_tests {
+    #![allow(clippy::unwrap_used, reason = "tests")]
+    use super::*;
+    use erp_fields::rows::Rows;
+    use erp_fields::{BigInt, ValueMap};
+    #[test]
+    fn bigint_wire_is_exact_in_dynamic_and_typed_rows() {
+        for n in [i64::MIN, 0, 9007199254740993, i64::MAX] {
+            let value = Value::BigInt(BigInt::from_i64(n));
+            let bytes = serialize(&value, 1024).unwrap();
+            assert_eq!(bytes, format!("\"{n}\"").as_bytes());
+            assert_eq!(
+                serialize(&Value::list([value.clone()]), 1024).unwrap(),
+                format!("[\"{n}\"]").as_bytes()
+            );
+            let map: ValueMap = [("counter".to_owned(), value)].into_iter().collect();
+            let batch = Value::from(Rows::from_maps([map]).unwrap());
+            assert_eq!(
+                serialize(&batch, 1024).unwrap(),
+                format!("[{{\"counter\":\"{n}\"}}]").as_bytes()
+            );
+            assert_eq!(serialize(&batch, 1), Err(WriteError::TooLarge));
+        }
+        assert_eq!(serialize(&Value::Int(42), 1024).unwrap(), b"42");
+        assert_eq!(serialize(&Value::str("42"), 1024).unwrap(), b"\"42\"");
     }
 }

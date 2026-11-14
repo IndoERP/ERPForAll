@@ -26,6 +26,7 @@ pub mod constant_filter;
 pub mod ddl;
 pub mod delta;
 pub mod dml;
+pub mod exact_numeric;
 pub mod exclusion;
 pub mod filter;
 pub mod keyset;

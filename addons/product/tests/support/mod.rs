@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Shared fixtures of the `product` tests: a harness with `base`, `uom` and `product`, the seeded
 //! default unit (`uom.product_uom_unit`) and a test addon that extends `product.product` the way a
 //! valuation addon would.
@@ -8,6 +9,7 @@
 //! `crates/erp-cli/tests/product_install.rs`.
 #![allow(dead_code, reason = "each test binary uses a subset")]
 
+use erp_addon_base::ResGroups;
 use erp_addon_product::{ProductProduct, SellerQuery};
 use erp_sdk::prelude::*;
 use erp_testkit::Harness;
@@ -60,6 +62,21 @@ impl CostProbe {
             Some(Value::Int(cents)) => Ok(vec![Decimal::new(cents, 2); this.len()]),
             _ => sup.call(tx, this.as_records(), ()).await,
         }
+    }
+}
+
+/// The unit tests control feature state explicitly; real group policy is tested at installation.
+#[extend(ResGroups, addon = "test_product")]
+pub struct UomFeatureProbe {}
+#[methods(ResGroups, addon = "test_product")]
+impl UomFeatureProbe {
+    #[method(override)]
+    async fn _is_uom_feature_enabled(
+        this: &RecordSet<ResGroups>,
+        _tx: &mut Transaction,
+        _sup: Super,
+    ) -> Result<bool> {
+        Ok(this.env().context().get("test_multi_uom") == Some(Value::Bool(true)))
     }
 }
 
@@ -133,6 +150,32 @@ pub async fn harness_with_policy(policy: erp_testkit::DomainPolicy) -> Harness {
                 .set_cell("name", Cell::Str("product_uom_unit".into()))
                 .set_cell("model", Cell::Str("uom.uom".into()))
                 .set_cell("res_id", Cell::Id(unit.rec_ids()[0].get())),
+        ],
+    )
+    .await
+    .unwrap();
+    let action = tx
+        .env()
+        .records("ir.actions.act_window")
+        .unwrap()
+        .create(
+            &mut tx,
+            vec![
+                RawVals::new()
+                    .set_cell("name", Cell::Str("Packaging Barcodes".into()))
+                    .set_cell("res_model", Cell::Str("product.uom".into())),
+            ],
+        )
+        .await
+        .unwrap();
+    data.create(
+        &mut tx,
+        vec![
+            RawVals::new()
+                .set_cell("module", Cell::Str("product".into()))
+                .set_cell("name", Cell::Str("product_uom_action_view_list".into()))
+                .set_cell("model", Cell::Str("ir.actions.act_window".into()))
+                .set_cell("res_id", Cell::Id(action.ids()[0])),
         ],
     )
     .await

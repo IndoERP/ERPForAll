@@ -5,6 +5,7 @@ import { RpcClient } from "../src/client/transport.js";
 import { Chatter } from "../src/client/chatter.js";
 import { RecordForm } from "../src/client/record-form.js";
 import { RecordState } from "../src/client/record.js";
+import { refuseInvalidAttachmentRequest } from "./fixtures/attachment-upload.js";
 import "../src/client/fields.js";
 import type { Field, Node, View } from "../src/client/metadata.js";
 
@@ -195,13 +196,13 @@ test("declining the confirmation deletes nothing, and a host without a dialog fa
 test("a file over the upload cap is refused before it is read", async () => {
   const calls: string[] = [];
   const { chatter } = (() => {
-    const rpc = new RpcClient(async (p) => { calls.push(path(p)); return threadAnswer(); }, () => {});
+    const rpc = new RpcClient(async (p) => { calls.push(path(p)); if (path(p).endsWith("/ir.attachment/erp_upload_limits")) return json({ max_file_bytes: 4, inline_max_bytes: 4 }); return threadAnswer(); }, () => {});
     return { chatter: mount(rpc) };
   })();
   await settle();
   const input = host.querySelector<HTMLInputElement>(".erp-mail-chatter-file-input")!;
   const big = new File(["x"], "big.bin");
-  Object.defineProperty(big, "size", { value: 26 * 1024 * 1024 });
+  Object.defineProperty(big, "size", { value: 5 });
   const read = vi.spyOn(big, "arrayBuffer");
   Object.defineProperty(input, "files", { value: [big], configurable: true });
   input.dispatchEvent(new Event("change"));
@@ -335,15 +336,21 @@ test("a reload checks for uncommitted editor drafts before it reads the record",
 /// (partial: files attached before a failing one are shown at once)
 test("when a later file fails, the files already attached still appear in the panel", async () => {
   let attached = false;
-  const rpc = new RpcClient(async (p) => {
-    if (path(p).endsWith("/thread_attach")) { attached = true; return json({ attachment_id: 91, name: "ok.txt", mimetype: "text/plain", file_size: 1 }); }
+  const rpc = new RpcClient(async (p, init) => {
+    if (path(p).endsWith("/ir.attachment/erp_upload_limits")) return json({ max_file_bytes: 4, inline_max_bytes: 4 });
+    if (path(p).endsWith("/thread_attach")) {
+      const refusal = refuseInvalidAttachmentRequest(JSON.parse(String(init?.body)), 4);
+      if (refusal) return refusal;
+      attached = true;
+      return json({ attachment_id: 91, name: "ok.txt", mimetype: "text/plain", file_size: 1 });
+    }
     return threadAnswer([], attached ? [{ id: 91, name: "ok.txt", checksum: "c91" }] : []);
   }, () => {});
   const chatter = mount(rpc);
   await settle();
   const input = host.querySelector<HTMLInputElement>(".erp-mail-chatter-file-input")!;
   const big = new File(["x"], "big.bin");
-  Object.defineProperty(big, "size", { value: 26 * 1024 * 1024 });
+  Object.defineProperty(big, "size", { value: 5 });
   Object.defineProperty(input, "files", { value: [new File(["a"], "ok.txt", { type: "text/plain" }), big], configurable: true });
   input.dispatchEvent(new Event("change"));
   await vi.waitFor(() => expect(alertText()).toContain("upload limit"));

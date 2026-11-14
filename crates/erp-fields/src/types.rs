@@ -5,6 +5,41 @@ use std::fmt;
 
 use crate::range::RangeBounds;
 
+/// Closed SQL collation vocabulary for textual columns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub enum TextCollation {
+    /// The collation selected when the database was created.
+    #[default]
+    DatabaseDefault,
+    /// Byte order in the database encoding; no normalization or linguistic folding.
+    C,
+}
+
+impl TextCollation {
+    /// Parse the declaration name. Names are exact and never SQL fragments.
+    ///
+    /// # Errors
+    /// Returns Programming for names outside the reviewed vocabulary.
+    pub fn parse(name: &str) -> crate::Result<Self> {
+        match name {
+            "default" => Ok(Self::DatabaseDefault),
+            "C" => Ok(Self::C),
+            _ => Err(crate::Error::programming(format!(
+                "unsupported collation {name:?}; expected default or C; locale/ICU collations require a later release"
+            ))),
+        }
+    }
+
+    /// Canonical declaration and pg_catalog collation name.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::DatabaseDefault => "default",
+            Self::C => "C",
+        }
+    }
+}
+
 /// Precision of a `Float` with `digits`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Digits {
@@ -116,7 +151,7 @@ impl IndexKind {
     /// ```
     pub fn field_types(self) -> Option<&'static [&'static str]> {
         match self {
-            Self::Brin => Some(&["date", "datetime", "integer"]),
+            Self::Brin => Some(&["date", "datetime", "integer", "bigint"]),
             Self::Gin => Some(&["json"]),
             Self::Btree | Self::BtreeNotNull | Self::Trigram => None,
         }
@@ -242,6 +277,8 @@ pub enum FieldType {
     Datetime,
     /// Native UUID; text and identity policies are separate from its 128 bits.
     Uuid,
+    /// Exact signed 64-bit scalar.
+    BigInt,
     /// Native unsigned full-width PostgreSQL transaction id.
     Xid8,
     /// Explicit-offset, bounded timezone-aware microsecond instant.
@@ -327,6 +364,7 @@ impl FieldType {
             Self::Date => "date",
             Self::Datetime => "datetime",
             Self::Uuid => "uuid",
+            Self::BigInt => "bigint",
             Self::Xid8 => "xid8",
             Self::TimestampTz => "timestamptz",
             Self::Json => "json",
@@ -404,6 +442,7 @@ impl FieldType {
             Self::Date => ColumnType::Date,
             Self::Datetime => ColumnType::Timestamp,
             Self::Uuid => ColumnType::Uuid,
+            Self::BigInt => ColumnType::BigInt,
             Self::Xid8 => ColumnType::Xid8,
             Self::TimestampTz => ColumnType::TimestampTz,
             Self::Json => ColumnType::Jsonb,
@@ -434,6 +473,7 @@ impl FieldType {
             Self::Date => Storage::Date,
             Self::Datetime => Storage::DateTime,
             Self::Uuid => Storage::Uuid,
+            Self::BigInt => Storage::BigInt,
             Self::Xid8 => Storage::Xid8,
             Self::TimestampTz => Storage::TimestampTz,
             Self::Json => Storage::Json,
@@ -469,6 +509,8 @@ pub enum Storage {
     DateTime,
     /// [`crate::Uuid`], with nil distinct from SQL NULL.
     Uuid,
+    /// Exact signed 64-bit scalar.
+    BigInt,
     /// [`crate::Xid8`], with all unsigned bits retained.
     Xid8,
     /// [`crate::TimestampTz`], distinct from naive Datetime.
@@ -494,6 +536,8 @@ pub enum Storage {
 pub enum ColumnType {
     /// `int4`.
     Int4,
+    /// Signed bigint scalar, native int8 with scalar cache decoding.
+    BigInt,
     /// `int8` (ids and many2one).
     Int8,
     /// `float8` (`double precision`).
@@ -529,7 +573,7 @@ impl ColumnType {
     pub fn udt_name(self) -> &'static str {
         match self {
             Self::Int4 => "int4",
-            Self::Int8 => "int8",
+            Self::Int8 | Self::BigInt => "int8",
             Self::Float8 => "float8",
             Self::Numeric => "numeric",
             Self::Varchar(_) => "varchar",
@@ -556,7 +600,7 @@ impl ColumnType {
 
     pub fn rank(self) -> u8 {
         match self {
-            Self::Int4 | Self::Int8 | Self::Xid8 => 0,
+            Self::Int4 | Self::Int8 | Self::BigInt | Self::Xid8 => 0,
             Self::Varchar(_) | Self::Uuid => 1,
             Self::Date => 2,
             Self::Jsonb | Self::DateRange(_) | Self::TsRange(_) => 3,

@@ -18,7 +18,7 @@ use tokio_postgres::Row;
 use super::apikey_store::KeyScope;
 pub use super::login::ApiKeyLastUse;
 use super::session::{Cached, Refusal, SessionCheck, SessionSecret};
-use super::settings::{AuthConfig, CACHE_NAME};
+use super::settings::CACHE_NAME;
 use crate::resolver::Resolver;
 
 /// A borrowed API-key attempt. Raw credentials are never formatted or retained by `Auth`.
@@ -255,7 +255,6 @@ pub(super) struct KeyCheck<'a> {
     pub legacy: Option<super::apikey_legacy::LegacyMatch>,
     pub request: &'a ApiKeyRequest<'a>,
     pub cached: Arc<Cached>,
-    pub config: &'a AuthConfig,
     pub address_hash: [u8; 32],
     #[cfg(feature = "test-support")]
     pub verdict_gate: &'a std::sync::Mutex<Option<ApiKeyVerdictGate>>,
@@ -345,7 +344,6 @@ impl CredentialCheck for KeyCheck<'_> {
                 sql: self.session_sql,
                 digest: secret.digest(),
                 cached: Arc::clone(&self.cached),
-                config: self.config,
             };
             match check.finish(&cookie_rows, policy)? {
                 CredentialVerdict::Accepted { principal, .. } => {

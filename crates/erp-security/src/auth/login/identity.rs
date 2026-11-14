@@ -515,7 +515,11 @@ impl Auth {
                 &[
                     &authorization.session.id().to_text(),
                     &current.settings.max_inactivity().as_secs_f64(),
-                    &self.config.rotation_grace().as_secs_f64(),
+                    &current
+                        .settings
+                        .session_policy()
+                        .rotation_grace()
+                        .as_secs_f64(),
                 ],
             )
             .await?;

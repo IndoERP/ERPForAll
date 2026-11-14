@@ -150,7 +150,7 @@ impl fmt::Display for PrincipalError {
                 write!(f, "invalid XML id '{value}': it {problem}")
             }
             Self::UnauthorizedCompanies => {
-                f.write_str("Access to unauthorized or invalid companies.")
+                f.write_str("One of the selected companies does not exist or is not one of yours.")
             }
             Self::DuplicateCompany { company } => {
                 write!(f, "company {company} is listed twice")

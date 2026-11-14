@@ -870,6 +870,12 @@ fn invoke_json<'a>(
     records: &'a Records,
     args_json: &'a str,
 ) -> BoxFuture<'a, Result<String>> {
+    if tx.in_generated_input()
+        && matches!(chain.method, "create" | "write" | "unlink")
+        && let Err(error) = tx.refuse_adapter_effect()
+    {
+        return Box::pin(async move { Err(error) });
+    }
     let Some(target) = chain.targets.get(index).cloned() else {
         let method = chain.method;
         return Box::pin(async move {
@@ -915,6 +921,12 @@ pub(crate) fn invoke<'a, A: Send + 'static, R: Send + 'static>(
     records: &'a Records,
     args: A,
 ) -> BoxFuture<'a, Result<R>> {
+    if tx.in_generated_input()
+        && matches!(chain.method, "create" | "write" | "unlink")
+        && let Err(error) = tx.refuse_adapter_effect()
+    {
+        return Box::pin(async move { Err(error) });
+    }
     let Some(target) = chain.targets.get(index).cloned() else {
         let method = chain.method;
         return Box::pin(async move {
@@ -989,6 +1001,11 @@ pub fn call_method<'a, A: Send + 'static, R: Send + 'static>(
     Box::pin(async move {
         // the switchers of the environment's with_user switches first (A4)
         tx.admit_method_records(records, method).await?;
+        if method == crate::generated_input::METHOD && !tx.in_generated_input() {
+            return Err(Error::programming(
+                "Generated input adapter requires the create/write input scope",
+            ));
+        }
         match tx.dispatch().chain(records.model_id(), method) {
             Some(chain) => invoke(chain, 0, tx, records, args).await,
             None => {

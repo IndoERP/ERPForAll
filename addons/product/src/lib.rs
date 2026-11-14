@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Product master catalog, variants, categories, pricelists, and vendor agreements.
 
 erp_sdk::addon!(
@@ -8,15 +9,22 @@ erp_sdk::addon!(
 
 pub mod attribute;
 pub mod barcode;
+mod barcode_state;
 pub mod category;
 pub mod combo;
+pub mod custom_attribute;
 pub mod defaults;
 pub mod error;
 pub mod migrations;
+pub mod packaging;
+mod packaging_actions;
+mod packaging_lifecycle;
+
 mod names;
 pub mod pricelist;
 pub mod product;
 pub mod product_uom;
+mod res_groups;
 pub mod sellers;
 pub mod supplierinfo;
 pub mod template;
@@ -26,6 +34,7 @@ pub mod variant_generator;
 pub use attribute::{ProductAttribute, ProductAttributeValue};
 pub use category::ProductCategory;
 pub use combo::{ProductCombo, ProductComboItem};
+pub use custom_attribute::ProductAttributeCustomValue;
 pub use pricelist::{ProductPricelist, ProductPricelistItem};
 pub use product::{ProductProduct, ProductProductMethods};
 pub use product_uom::{ProductUom, UomUomPackagings};

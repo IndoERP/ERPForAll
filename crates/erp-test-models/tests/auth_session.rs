@@ -237,18 +237,24 @@ async fn rotation() {
 /// and the row stays for the holder of the new secret)
 #[tokio::test]
 async fn predecessor_after_grace_is_too_old() {
-    let config = AuthConfig::DEFAULT.with_rotation_grace_secs(0).unwrap();
+    let config = AuthConfig::DEFAULT;
     let w = world_with(
         builder().build().await.unwrap(),
         config,
         HashPoolConfig::DEFAULT,
     )
     .await;
+    set_param(&w.h, "sessions.rotation_grace_seconds", "5").await;
     user_with_password(&w.h, "bob", "pw").await;
     let ok = login(&w.auth, "bob", "pw").await.unwrap();
     let old = cookie(&ok);
     let checked = check(&w, &old).await;
     let next = w.auth.rotate(&checked, &old).await.unwrap().unwrap();
+    sql(
+        &w,
+        "UPDATE erp_session SET rotated_at = now() - interval '6 seconds'",
+    )
+    .await;
     expired(&w, &old, "session is too old").await;
     assert_eq!(count(&w.h, "erp_session").await, 1);
     check(&w, &next).await;
@@ -272,6 +278,7 @@ async fn logout_during_grace_ends_both_secrets() {
 async fn idle_sessions_are_refused_and_collected() {
     let w = world().await;
     user_with_password(&w.h, "bob", "pw").await;
+    set_param(&w.h, "sessions.touch_interval_seconds", "1").await;
     set_param(&w.h, "sessions.max_inactivity_seconds", "60").await;
     let idle = login(&w.auth, "bob", "pw").await.unwrap();
     let collected = login(&w.auth, "bob", "pw").await.unwrap();
@@ -569,4 +576,73 @@ async fn observation_stamp_rejects_negative_and_above_xid_range() {
         );
     }
     tx.rollback().await.unwrap();
+}
+
+#[tokio::test]
+async fn session_policy_controls_rotation_touch_and_grace() {
+    let w = world().await;
+    user_with_password(&w.h, "policy-user", "pw").await;
+    let ok = login(&w.auth, "policy-user", "pw").await.unwrap();
+    set_param(&w.h, "sessions.rotation_grace_seconds", "5").await;
+    set_param(&w.h, "sessions.rotation_interval_seconds", "60").await;
+    set_param(&w.h, "sessions.touch_interval_seconds", "3600").await;
+    sql(&w, "UPDATE erp_session SET created_at = now() - interval '120 seconds', last_seen_at = now() - interval '120 seconds'").await;
+    let checked = check(&w, &cookie(&ok)).await;
+    assert!(checked.rotation_due(), "database rotation interval is used");
+    assert!(!checked.touch_due(), "database touch interval is used");
+    assert_eq!(w.auth.touch(&[Touch::new(checked.id())]).await.unwrap(), 0);
+    let next = w
+        .auth
+        .rotate(&checked, &cookie(&ok))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(check(&w, &cookie(&ok)).await.via_previous());
+    sql(
+        &w,
+        "UPDATE erp_session SET rotated_at = now() - interval '6 seconds'",
+    )
+    .await;
+    expired(&w, &cookie(&ok), "session is too old").await;
+    check(&w, &next).await;
+    set_param(&w.h, "sessions.touch_interval_seconds", "1").await;
+    sql(
+        &w,
+        "UPDATE erp_session SET last_seen_at = now() - interval '2 seconds'",
+    )
+    .await;
+    let touch = Touch::new(checked.id());
+    assert_eq!(w.auth.touch(&[touch.clone(), touch]).await.unwrap(), 1);
+    assert_eq!(
+        count(&w.h, "erp_session WHERE prev_digest IS NOT NULL").await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn session_policy_invalid_row_stops_touch_without_mutation() {
+    let w = world().await;
+    user_with_password(&w.h, "policy-invalid", "pw").await;
+    let ok = login(&w.auth, "policy-invalid", "pw").await.unwrap();
+    sql(&w, "INSERT INTO ir_config_parameter (key,value) VALUES ('sessions.touch_interval_seconds','0'); UPDATE erp_session SET last_seen_at = now() - interval '120 seconds'").await;
+    let error = w
+        .auth
+        .touch(&[Touch::new(ok.session().id())])
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (error.kind(), error.message()),
+        (
+            ErrorKind::Validation,
+            "ir.config_parameter sessions.touch_interval_seconds = '0' is not a whole number in 1..=3600"
+        )
+    );
+    assert_eq!(
+        count(
+            &w.h,
+            "erp_session WHERE last_seen_at < now() - interval '60 seconds'"
+        )
+        .await,
+        1
+    );
 }

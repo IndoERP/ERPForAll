@@ -33,8 +33,7 @@ const HOLDER1: &str = "test_company_related.holder1";
 const TAG: &str = "test_company.tag";
 const DEMO: i64 = 2;
 
-const OUTSIDE: &str = "This seems to be a multi-company issue, but you do not have access to the \
-                       proper company to access the record anyhow.";
+const OUTSIDE: &str = "The record belongs to a company outside your allowed companies.";
 
 async fn harness() -> Harness {
     let policy = DomainPolicy::builder(Otherwise::Allow).build().unwrap();
@@ -263,8 +262,7 @@ fn hop_message_on(
     )
 }
 
-const SWITCH_TO_OTHER: &str = "This seems to be a multi-company issue, you might be able to \
-                               access the record by switching to the company: Other.";
+const SWITCH_TO_OTHER: &str = "To open the record, switch to its company: Other.";
 
 /// A foreign hop of the path is refused, naming the field, the record and the hop; the first
 /// failing hop in path order is the one reported; a company the user is in is suggested, one
@@ -359,8 +357,7 @@ async fn a_foreign_hop_is_refused_with_the_full_message() {
     let mut tx = begin(&h, &[w.r, w.o], &[w.r]).await;
     let err = read(&mut tx, w.mid_foreign, "mid_name").await.unwrap_err();
     assert_eq!(err.kind(), ErrorKind::Access, "{err}");
-    let hint = "This seems to be a multi-company issue, you might be able to access the record \
-                by switching to the company: Other.";
+    let hint = "To open the record, switch to its company: Other.";
     assert_eq!(
         err.message(),
         hop_message(
@@ -646,9 +643,7 @@ async fn parent_forms_follow_the_company_tree() {
     );
     assert!(
         err.message().ends_with(
-            "which belongs to a company outside your active companies.\n\nThis seems to be a \
-             multi-company issue, you might be able to access the record by switching to the \
-             company: Branch."
+            "which belongs to a company outside your active companies.\n\nTo open the record, switch to its company: Branch."
         ),
         "{err}"
     );
@@ -1191,8 +1186,7 @@ async fn a_hop_moving_to_another_company_drops_the_cached_value() {
             "Related Mid",
             MID,
             Some(w.mid_r),
-            "This seems to be a multi-company issue, you might be able to access the record by \
-             switching to the company: Other."
+            "To open the record, switch to its company: Other."
         )
     );
     mid.write_values(&mut tx, &map(&[("company_id", int(w.r))]))
@@ -2284,7 +2278,7 @@ async fn search_refuses_a_company_removed_earlier_in_the_transaction() {
         assert_eq!(err.kind(), ErrorKind::Access, "{field}: {err}");
         assert_eq!(
             err.message(),
-            "Access to unauthorized or invalid companies.",
+            "One of the selected companies does not exist or is not one of yours.",
             "{field}"
         );
     }

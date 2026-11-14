@@ -3067,7 +3067,7 @@ async fn denied_write_rules_precede_mixed_currency_resolution() {
     assert_eq!(error.kind(), ErrorKind::Access);
     assert_eq!(
         error.message(),
-        "You are not allowed to write 'test_monetary_mutation.line' (test_monetary_mutation.line) records."
+        "Your access rights do not let you write 'test_monetary_mutation.line' (test_monetary_mutation.line) records."
     );
     assert!(!error.message().contains("currencies"));
     assert_eq!(

@@ -870,7 +870,7 @@ async fn rate_lookup_is_access_checked() {
     assert_eq!(error.kind(), ErrorKind::Access);
     assert_eq!(
         error.message(),
-        "Access to unauthorized or invalid companies."
+        "One of the selected companies does not exist or is not one of yours."
     );
     drop(tx);
     open.cleanup().await.unwrap();
@@ -1536,7 +1536,7 @@ async fn dated_parameter_reader_is_access_checked() {
     assert_eq!(error.kind(), ErrorKind::Access);
     assert_eq!(
         error.message(),
-        "You are not allowed to read 'Dated Parameter' (ir.dated.parameter) records."
+        "Your access rights do not let you read 'Dated Parameter' (ir.dated.parameter) records."
     );
     drop(user);
     h.cleanup().await.unwrap();
@@ -2124,13 +2124,13 @@ async fn spot_protection_preserves_access_checks() {
     assert_eq!(error.kind(), ErrorKind::Access);
     assert_eq!(
         error.message(),
-        "You are not allowed to write 'Currency Rate Type' (res.currency.rate.type) records."
+        "Your access rights do not let you write 'Currency Rate Type' (res.currency.rate.type) records."
     );
     let error = records.unlink(&mut tx).await.unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Access);
     assert_eq!(
         error.message(),
-        "You are not allowed to unlink 'Currency Rate Type' (res.currency.rate.type) records."
+        "Your access rights do not let you unlink 'Currency Rate Type' (res.currency.rate.type) records."
     );
     tx.rollback().await.unwrap();
     drop(tx);

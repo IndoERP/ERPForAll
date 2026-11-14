@@ -55,7 +55,7 @@ const MAX_STEP_LOCK_TIMEOUT: Duration = Duration::from_millis(i32::MAX as u64);
 ///     .backfill_batch(NonZeroU32::new(500).expect("not zero"));
 /// assert_eq!(options.large_table_rows_limit(), Some(50_000));
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchemaSyncOptions {
     large_table_rows: Option<u64>,
     backfill_batch: NonZeroU32,
@@ -126,10 +126,9 @@ impl SchemaSyncOptions {
 
     /// No table is large: all work runs in the transaction ([`crate::Transaction::init_models`]).
     pub const fn inline() -> Self {
-        Self {
-            large_table_rows: None,
-            ..Self::new()
-        }
+        let mut options = Self::new();
+        options.large_table_rows = None;
+        options
     }
 
     /// A table that existed before the synchronization is *large* when it has more than `rows`
@@ -228,14 +227,14 @@ impl SchemaSyncOptions {
     /// functions to the definer role and reconciles the declared grants; an object that names a
     /// binding not configured here is refused by name.
     #[must_use]
-    pub const fn sql_roles(mut self, roles: crate::SqlRoleBindings) -> Self {
+    pub fn sql_roles(mut self, roles: crate::SqlRoleBindings) -> Self {
         self.sql_roles = roles;
         self
     }
 
     /// The role bindings set by [`Self::sql_roles`].
-    pub const fn sql_role_bindings(&self) -> crate::SqlRoleBindings {
-        self.sql_roles
+    pub fn sql_role_bindings(&self) -> crate::SqlRoleBindings {
+        self.sql_roles.clone()
     }
 
     /// The row threshold above which a table is large; `None` for [`Self::inline`].

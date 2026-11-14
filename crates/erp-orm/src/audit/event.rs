@@ -10,6 +10,82 @@ use serde_json::{Value, json};
 use super::MAX_COLLECTED_KEYS;
 use crate::{ApiKeyId, KeyKind, UserId};
 
+/// Closed identifiers of the accounting lock-date policy. Exhaustive for security consumers:
+/// adding a field must make each policy match decide its applicability explicitly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AccountLockField {
+    /// Global fiscal-year date.
+    FiscalYear,
+    /// Sales journal date.
+    Sale,
+    /// Purchase journal date.
+    Purchase,
+    /// Tax-report date.
+    Tax,
+    /// Irreversible hard date.
+    Hard,
+}
+impl AccountLockField {
+    /// Stable technical field identifier; never supplied as arbitrary input text.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::FiscalYear => "fiscalyear_lock_date",
+            Self::Sale => "sale_lock_date",
+            Self::Purchase => "purchase_lock_date",
+            Self::Tax => "tax_lock_date",
+            Self::Hard => "hard_lock_date",
+        }
+    }
+}
+/// A company lock date changed, committed with its policy mutation.
+/// Actor/time are the audit row's existing attribution and database timestamp.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AccountLockDateChanged {
+    company: i64,
+    field: AccountLockField,
+    old: Option<erp_fields::Date>,
+    new: Option<erp_fields::Date>,
+}
+impl AccountLockDateChanged {
+    /// Validate the closed evidence payload; no text or arbitrary JSON is accepted.
+    /// # Errors
+    /// `Programming` for invalid company, unchanged dates, or dates outside PostgreSQL's domain.
+    pub fn new(
+        company: i64,
+        field: AccountLockField,
+        old: Option<erp_fields::Date>,
+        new: Option<erp_fields::Date>,
+    ) -> Result<Self> {
+        if company <= 0 {
+            return Err(erp_fields::Error::programming(
+                "Account lock-date audit requires a positive company id.",
+            ));
+        }
+        if old == new {
+            return Err(erp_fields::Error::programming(
+                "Account lock-date audit requires a changed date.",
+            ));
+        }
+        // DATE's wire/storage domain (erp-fields/src/pg.rs), not an operator setting.
+        if old
+            .into_iter()
+            .chain(new)
+            .any(|d| !(-2_440_588..=2_145_042_905).contains(&d.days()))
+        {
+            return Err(erp_fields::Error::programming(
+                "Account lock-date audit date is outside PostgreSQL's date range.",
+            ));
+        }
+        Ok(Self {
+            company,
+            field,
+            old,
+            new,
+        })
+    }
+}
+
 /// The route audience of an API key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -434,6 +510,8 @@ impl AttachmentProbeRecorded {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum AuthEvent {
+    /// A company lock-date policy changed.
+    AccountLockDateChanged(AccountLockDateChanged),
     /// An owner-operated attachment peer probe changed state.
     AttachmentProbeRecorded(AttachmentProbeRecorded),
     /// A key was issued.
@@ -462,6 +540,10 @@ impl AuthEvent {
     /// The event as the JSON object stored in the `events` array: stable keys, integers only.
     pub(crate) fn to_json(&self) -> Value {
         match self {
+            Self::AccountLockDateChanged(e) => json!({
+                "type":"account", "event":"account.lock_date_changed", "company_id":e.company,
+                "field":e.field.as_str(), "old_days":e.old.map(|d|d.days()), "new_days":e.new.map(|d|d.days())
+            }),
             Self::AttachmentProbeRecorded(e) => {
                 json!({"type":"attachment","event":"attachment.peer_probe","store_id":e.store,"session":e.session.to_string(),"outcome":e.outcome.text(),"participants":e.participants})
             }

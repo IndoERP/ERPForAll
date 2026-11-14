@@ -266,7 +266,7 @@ impl AccountAccount {
         for account in this.iter() {
             let id = account.as_records().ids()[0];
             let code = account.get(tx, AccountAccount::CODE).await?;
-            store_code(tx, this.env(), root, id, text_of(&code)).await?;
+            store_code(tx, this.env(), root, id, text_of(&code), false).await?;
         }
         // every company of the tree reads the new value (the reference invalidates `code` for all
         // companies here too)
@@ -320,6 +320,9 @@ impl AccountAccount {
         Ok(())
     }
 
+    /// A code row the same values give for that root company (`code_mapping_ids`) wins over
+    /// `code`; a row for another root company is kept next to it.
+    ///
     /// # Errors
     /// `Validation` for a `code` that is not text (absent and null mean no code), and the errors
     /// of the create and of the code storage.
@@ -415,13 +418,7 @@ impl AccountAccount {
                         })?,
                 };
                 // a code row of the same call for this root company is the code: it wins over `code`
-                // shortcut: one lookup per account with a code, group by root if creates with codes get large
-                if !codes_by_account(tx, this.env(), &[id], root)
-                    .await?
-                    .contains_key(&id)
-                {
-                    store_code(tx, this.env(), root, id, code).await?;
-                }
+                store_code(tx, this.env(), root, id, code, true).await?;
             }
         }
         Ok(created)
@@ -442,7 +439,7 @@ impl AccountAccount {
             {
                 let label = code_label(tx, &account).await?;
                 return Err(Error::validation(format!(
-                    "You cannot have a receivable/payable account that is not reconcilable. (account code: {label})"
+                    "A receivable or payable account must allow reconciliation (account code: {label})."
                 )));
             }
         }
@@ -462,7 +459,7 @@ impl AccountAccount {
                 && account.get(tx, AccountAccount::RECONCILE).await?
             {
                 return Err(Error::validation(
-                    "An Off-Balance account can not be reconcilable",
+                    "Off-balance accounts take no part in reconciliation: turn reconciliation off for this account.",
                 ));
             }
         }
@@ -491,7 +488,7 @@ impl AccountAccount {
             .await?;
         if !cash.is_empty() {
             return Err(Error::validation(
-                "Bank & Cash accounts cannot be shared between companies.",
+                "A bank or cash account belongs to one company only.",
             ));
         }
         let orphans = tx
@@ -513,7 +510,7 @@ impl AccountAccount {
                 .map(|name| format!("- {}", text_of(name)))
                 .collect();
             return Err(Error::validation(format!(
-                "The following accounts must be assigned to at least one company:\n{}",
+                "Each account needs at least one company; these have none:\n{}",
                 lines.join("\n")
             )));
         }
@@ -540,8 +537,15 @@ impl AccountAccount {
 }
 
 /// Store `code` as the code of account `id` in root company `root`: create the row, update it, or
-/// remove it when `code` is empty.
-async fn store_code(tx: &mut Transaction, env: &Env, root: i64, id: i64, code: &str) -> Result<()> {
+/// remove it when `code` is empty; with `keep_existing` a row already there stays as it is.
+async fn store_code(
+    tx: &mut Transaction,
+    env: &Env,
+    root: i64,
+    id: i64,
+    code: &str,
+    keep_existing: bool,
+) -> Result<()> {
     let mappings = env.sudo(true).records("account.code.mapping")?;
     let existing = mappings
         .search(
@@ -552,6 +556,9 @@ async fn store_code(tx: &mut Transaction, env: &Env, root: i64, id: i64, code: &
             ]),
         )
         .await?;
+    if keep_existing && !existing.is_empty() {
+        return Ok(());
+    }
     match (existing.is_empty(), code.is_empty()) {
         (true, true) => {}
         (true, false) => {

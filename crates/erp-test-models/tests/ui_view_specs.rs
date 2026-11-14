@@ -235,7 +235,7 @@ async fn view_mode_defaults_and_switching() {
     assert_eq!(err.kind(), ErrorKind::Validation);
     assert_eq!(
         err.to_string(),
-        format!("The operation cannot be completed: {INHERITANCE_MODE}")
+        format!("The database refused the change: {INHERITANCE_MODE}")
     );
 
     // a view without parent cannot become an extension
@@ -243,7 +243,7 @@ async fn view_mode_defaults_and_switching() {
     assert_eq!(err.kind(), ErrorKind::Validation);
     assert_eq!(
         err.to_string(),
-        format!("The operation cannot be completed: {INHERITANCE_MODE}")
+        format!("The database refused the change: {INHERITANCE_MODE}")
     );
 
     // an explicit primary keeps its mode when re-parented
@@ -3857,7 +3857,7 @@ async fn spec_data_060_groups_in_arch_filter_elements_per_user() {
         .await
         .unwrap_err();
     assert_eq!(access_err.kind(), ErrorKind::Access);
-    assert!(access_err.to_string().contains("not allowed to read"));
+    assert!(access_err.to_string().contains("do not let you read"));
 
     tx.rollback().await.unwrap();
     h.cleanup().await.unwrap();

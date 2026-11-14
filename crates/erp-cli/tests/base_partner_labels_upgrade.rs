@@ -939,7 +939,7 @@ async fn genuine_previous_cli_partner_label_upgrade_preserves_identity_repeats_a
     assert_eq!(refused.status.code(), Some(1));
     assert_eq!(
         std::str::from_utf8(&refused.stderr).unwrap().trim(),
-        "Error: The operation cannot be completed: fixture blocked label version publication: db error: ERROR: fixture blocked label version publication"
+        "Error: The database refused the change: fixture blocked label version publication: db error: ERROR: fixture blocked label version publication"
     );
     assert_eq!(module_version(&client).await, old_version);
     assert_eq!(label(&client, child).await, OLD_LABEL);

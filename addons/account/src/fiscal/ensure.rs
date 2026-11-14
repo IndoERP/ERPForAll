@@ -35,14 +35,19 @@ fn broken_path(company: i64, path: Option<&str>) -> Error {
 ///
 /// # Errors
 ///
-/// `Missing` when the company does not exist; `Internal` naming the company and its path when a
-/// `parent_path` is NULL, empty or malformed.
+/// `Missing` when the company does not exist; `Internal` naming the company and its path when its,
+/// its root's or a tree member's `parent_path` is NULL, empty or malformed (a malformed member
+/// would be no company's descendant, so its periods would ignore the lock dates).
 pub(crate) async fn company_tree(tx: &mut Transaction, company_id: i64) -> Result<(i64, Vec<i64>)> {
     let rows = tx
         .query(
             "SELECT c.parent_path, r.id::int8, r.parent_path, \
                (SELECT array_agg(b.id::int8 ORDER BY b.id) FROM res_company b \
-                WHERE b.parent_path LIKE r.parent_path || '%') \
+                WHERE b.parent_path LIKE r.parent_path || '%'), \
+               (SELECT b.id::int8 FROM res_company b WHERE b.parent_path LIKE r.parent_path || '%' \
+                AND b.parent_path !~ '^([0-9]+/)+$' ORDER BY b.id LIMIT 1), \
+               (SELECT b.parent_path FROM res_company b WHERE b.parent_path LIKE r.parent_path || '%' \
+                AND b.parent_path !~ '^([0-9]+/)+$' ORDER BY b.id LIMIT 1) \
              FROM res_company c LEFT JOIN res_company r ON r.id = (CASE \
                WHEN c.parent_path ~ '^([0-9]+/)+$' THEN split_part(c.parent_path, '/', 1)::int8 END) \
              WHERE c.id = $1",
@@ -66,11 +71,16 @@ pub(crate) async fn company_tree(tx: &mut Transaction, company_id: i64) -> Resul
         return Err(broken_path(root, root_path.as_deref()));
     }
     let tree = tree.ok_or_else(|| broken_path(root, root_path.as_deref()))?;
+    if let Some(member) = row.try_get::<_, Option<i64>>(4).map_err(db)? {
+        let member_path: Option<String> = row.try_get(5).map_err(db)?;
+        return Err(broken_path(member, member_path.as_deref()));
+    }
     Ok((root, tree))
 }
 
 /// The refusal of a company the caller may not act for: the same answer whether it exists or not.
-pub const NOT_ALLOWED: &str = "Access to unauthorized or invalid companies.";
+pub const NOT_ALLOWED: &str =
+    "One of the selected companies does not exist or is not one of yours.";
 
 /// Outside superuser mode, every company of `companies` must be one of the caller's active
 /// companies ([`Transaction::companies`]) or a branch below one: a branch follows its parent's lock
@@ -83,18 +93,48 @@ pub const NOT_ALLOWED: &str = "Access to unauthorized or invalid companies.";
 /// [`Transaction::companies`].
 pub(crate) async fn require_company_access(tx: &mut Transaction, companies: &[i64]) -> Result<()> {
     let env = tx.env();
+    require_held(tx, &env, companies, false).await
+}
+
+/// Outside superuser mode of `env`, every company of `companies` must be one of the caller's
+/// active companies or an ancestor of one: the companies whose records a `branch = "ancestor"`
+/// company rule admits, as the journal's.
+///
+/// # Errors
+///
+/// `Access` ([`NOT_ALLOWED`]) for a company outside them or one that does not exist; the errors of
+/// [`Transaction::companies`].
+pub(crate) async fn require_company_or_ancestor_access(
+    tx: &mut Transaction,
+    env: &Env,
+    companies: &[i64],
+) -> Result<()> {
+    require_held(tx, env, companies, true).await
+}
+
+/// `companies` are, each, an active company of `env`, or a branch below one (`ancestors` false)
+/// or an ancestor of one (`ancestors` true).
+async fn require_held(
+    tx: &mut Transaction,
+    env: &Env,
+    companies: &[i64],
+    ancestors: bool,
+) -> Result<()> {
     if env.su() {
         return Ok(());
     }
-    let allowed: Vec<i64> = tx.companies(&env).await?.iter().map(|c| c.get()).collect();
+    let allowed: Vec<i64> = tx.companies(env).await?.iter().map(|c| c.get()).collect();
     let mut wanted = companies.to_vec();
     wanted.sort_unstable();
     wanted.dedup();
+    // `c` descends from `a`: the wanted company is `c` below a held one, or `a` above one
+    let (wanted_side, held_side) = if ancestors { ("a", "c") } else { ("c", "a") };
     let rows = tx
         .query(
             &format!(
-                "SELECT count(DISTINCT c.id)::int8 FROM res_company c JOIN res_company a \
-                 ON {ANCESTOR_OF_C} WHERE c.id = ANY($1::int8[]) AND a.id = ANY($2::int8[])"
+                "SELECT count(DISTINCT {wanted_side}.id)::int8 FROM res_company c JOIN res_company a \
+                 ON {ANCESTOR_OF_C} WHERE {wanted_side}.id = ANY($1::int8[]) \
+                 AND {held_side}.id = ANY($2::int8[])"
             ),
             &[&wanted, &allowed],
         )
@@ -311,8 +351,8 @@ async fn insert(
                     WHEN p.date_to <= c.fiscal THEN 'closed' ELSE 'open' END, \
                CASE WHEN p.date_to <= GREATEST(c.stock, c.hard) THEN 'stock_locked' \
                     ELSE 'open' END, \
-               CASE WHEN p.date_to <= GREATEST(c.fiscal, c.hard) THEN now() END, \
-               CASE WHEN p.date_to <= c.hard THEN now() END, 0, 0 \
+               CASE WHEN p.date_to <= GREATEST(c.fiscal, c.hard) THEN (now() AT TIME ZONE 'UTC') END, \
+               CASE WHEN p.date_to <= c.hard THEN (now() AT TIME ZONE 'UTC') END, 0, 0 \
              FROM c CROSS JOIN p ORDER BY c.id, p.date_from \
              ON CONFLICT DO NOTHING"),
             &[&tree, &years, &numbers, &froms, &tos, &names],

@@ -567,7 +567,7 @@ impl Converter<'_> {
                     None => Err(invalid(value, "a number")),
                 }
             }
-            FieldType::Uuid | FieldType::Xid8 | FieldType::TimestampTz => {
+            FieldType::BigInt | FieldType::Uuid | FieldType::Xid8 | FieldType::TimestampTz => {
                 scalar(Value::str(text.ok_or_else(not_text)?), Vec::new())
             }
             FieldType::Char { .. }

@@ -80,6 +80,8 @@ pub enum ToolSchema {
 /// and checked by [`validate`] without a regular-expression engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StringPattern {
+    /// Canonical signed i64 decimal text.
+    BigInt,
     /// `YYYY-MM-DD`.
     Date,
     /// `YYYY-MM-DD HH:MM:SS` (naive UTC, the server's datetime form).
@@ -92,6 +94,7 @@ impl StringPattern {
     /// The JSON Schema `pattern` text.
     pub const fn regex(self) -> &'static str {
         match self {
+            Self::BigInt => "^(0|-?[1-9][0-9]{0,18})$",
             Self::Date => "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
             Self::Datetime => "^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$",
             Self::Uuid => {
@@ -103,6 +106,7 @@ impl StringPattern {
     /// Position by position: `d` a decimal digit, `h` a hexadecimal digit, anything else itself.
     const fn template(self) -> &'static str {
         match self {
+            Self::BigInt => "",
             Self::Date => "dddd-dd-dd",
             Self::Datetime => "dddd-dd-dd dd:dd:dd",
             Self::Uuid => "hhhhhhhh-hhhh-hhhh-hhhh-hhhhhhhhhhhh",
@@ -111,6 +115,7 @@ impl StringPattern {
 
     const fn describe(self) -> &'static str {
         match self {
+            Self::BigInt => "canonical signed 64-bit decimal text",
             Self::Date => "a date (YYYY-MM-DD)",
             Self::Datetime => "a datetime (YYYY-MM-DD HH:MM:SS)",
             Self::Uuid => "a UUID",
@@ -119,6 +124,9 @@ impl StringPattern {
 
     /// Whether `text` has the form (the same strings the `regex` accepts).
     pub fn matches(self, text: &str) -> bool {
+        if self == Self::BigInt {
+            return erp_fields::BigInt::parse(text).is_ok();
+        }
         let template = self.template().as_bytes();
         text.len() == template.len()
             && text.bytes().zip(template).all(|(c, t)| match t {
@@ -784,6 +792,7 @@ fn field_schema(field: &FieldSpec) -> Result<ToolSchema, Excluded> {
         | FieldType::Many2oneReference { .. }
         | FieldType::DateRange { .. }
         | FieldType::DatetimeRange { .. }) => return Err(Excluded::Unsupported(ty.type_name())),
+        FieldType::BigInt => unbounded_string(Some(20), Some(StringPattern::BigInt)),
         FieldType::Boolean => ToolSchema::Boolean,
         FieldType::Integer => ToolSchema::Integer {
             minimum: Some(i64::from(i32::MIN)),

@@ -56,7 +56,7 @@ impl erp_testkit::TestRules for FixturePolicy {
             Ok(())
         } else {
             Err(Error::access(format!(
-                "You are not allowed to {} '{}' ({}) records.",
+                "Your access rights do not let you {} '{}' ({}) records.",
                 op.as_str(),
                 model.description,
                 model.name

@@ -18,7 +18,7 @@ fn domain_type(ty: &FieldType) -> (DomainFieldType, Option<&str>) {
         FieldType::Id => DomainFieldType::Id,
         FieldType::Boolean => DomainFieldType::Boolean,
         // the row version is an integer to rules
-        FieldType::Integer | FieldType::RowVersion => DomainFieldType::Integer,
+        FieldType::BigInt | FieldType::Integer | FieldType::RowVersion => DomainFieldType::Integer,
         FieldType::Float { .. } => DomainFieldType::Float,
         FieldType::Monetary { .. } => DomainFieldType::Monetary,
         FieldType::Char { .. } => DomainFieldType::Char,

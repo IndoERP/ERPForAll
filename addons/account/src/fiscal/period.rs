@@ -240,16 +240,25 @@ impl AccountFiscalPeriod {
 #[extend(ResCompany, addon = "account")]
 struct AccountCompanyLockDates {
     /// Any entry up to and including that date is postponed to a later date.
-    #[field(date, readonly = true, string = "Global Lock Date")]
+    #[field(date, readonly = true, copy = false, string = "Global Lock Date")]
     pub fiscalyear_lock_date: Option<Date>,
+    /// Entries affecting tax reports up to and including this date are locked.
+    #[field(date, readonly = true, copy = false, string = "Tax Lock Date")]
+    pub tax_lock_date: Option<Date>,
+    /// Sales journal entries up to and including this date are locked.
+    #[field(date, readonly = true, copy = false, string = "Sales Lock Date")]
+    pub sale_lock_date: Option<Date>,
+    /// Purchase journal entries up to and including this date are locked.
+    #[field(date, readonly = true, copy = false, string = "Purchase Lock Date")]
+    pub purchase_lock_date: Option<Date>,
     /// Irreversible lock date, without exceptions.
-    #[field(date, readonly = true, string = "Hard Lock Date")]
+    #[field(date, readonly = true, copy = false, string = "Hard Lock Date")]
     pub hard_lock_date: Option<Date>,
     /// The end of the last stock-locked period; no reference counterpart.
-    #[field(date, readonly = true, string = "Stock Lock Date")]
+    #[field(date, readonly = true, copy = false, string = "Stock Lock Date")]
     pub stock_lock_date: Option<Date>,
     /// Bumped by every period creation and lock-date synchronisation of the company tree, so that
     /// the two serialize on the root company row (see [`super::ensure_periods`]).
-    #[field(integer, readonly = true)]
+    #[field(integer, readonly = true, copy = false)]
     pub fiscal_period_serial: i32,
 }

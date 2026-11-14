@@ -68,6 +68,7 @@ pub fn wasm_abi1_value_to_json(value: &Value) -> Result<serde_json::Value> {
             )
         })?;
         Ok(match value {
+            Value::BigInt(_) => return Err(unsupported("bigint")),
             Value::Uuid(_) => return Err(unsupported("uuid")),
             Value::Xid8(_) => return Err(unsupported("xid8")),
             Value::TimestampTz(_) => return Err(unsupported("timestamptz")),
@@ -110,15 +111,29 @@ pub(crate) fn vals_to_json(vals: &RawVals) -> Result<serde_json::Value> {
 
 /// The values of the wire form `json`, converted with the fields of `records`' model.
 ///
+/// This route invokes the method chain directly, without the generated-input adapter (
+/// D2: no wire codec), so every generated name, flagged or not, is refused here before any
+/// override sees it.
+///
 /// # Errors
-/// `Validation` when `json` is not an object or a value does not fit its field.
-pub(crate) fn vals_from_json(records: &Records, json: &serde_json::Value) -> Result<RawVals> {
+/// `Validation` when `json` is not an object, names a generated field, or a value does not fit
+/// its field.
+pub(crate) fn vals_from_json(
+    tx: &Transaction,
+    records: &Records,
+    json: &serde_json::Value,
+) -> Result<RawVals> {
     let serde_json::Value::Object(map) = json else {
         return Err(Error::validation(format!(
             "the values of a write on '{}' must be a JSON object, got {json}",
             records.model_name()
         )));
     };
+    crate::database_generated::check_write_names(
+        tx,
+        records.spec(),
+        map.keys().map(String::as_str),
+    )?;
     let values: Vec<(String, Value)> = map
         .iter()
         .map(|(name, value)| (name.clone(), json_to_value(value)))
@@ -202,7 +217,7 @@ impl MethodCodec for CreateCodec {
             }
             let vals_list = list
                 .iter()
-                .map(|doc| vals_from_json(records, doc))
+                .map(|doc| vals_from_json(tx, records, doc))
                 .collect::<Result<Vec<_>>>()?;
             let created =
                 invoke::<(Vec<RawVals>,), Records>(chain, index, tx, records, (vals_list,)).await?;
@@ -244,7 +259,7 @@ impl MethodCodec for WriteCodec {
         Box::pin(async move {
             let (doc,): (serde_json::Value,) =
                 serde_json::from_str(args_json).map_err(|e| bad_args("write", &e))?;
-            let vals = vals_from_json(records, &doc)?;
+            let vals = vals_from_json(tx, records, &doc)?;
             invoke::<(RawVals,), ()>(chain, index, tx, records, (vals,)).await?;
             Ok("null".to_owned())
         })
@@ -319,6 +334,10 @@ mod native_fields_tests {
     #[test]
     fn native_fields_abi1_json_refuses_nested_tagged_scalars_without_inferring_strings() {
         for (value, name) in [
+            (
+                Value::BigInt(erp_fields::BigInt::from_i64(i64::MAX)),
+                "bigint",
+            ),
             (Value::Uuid(Uuid::NIL), "uuid"),
             (Value::Xid8(Xid8::from_u64(u64::MAX)), "xid8"),
             (Value::TimestampTz(TimestampTz::UNIX_EPOCH), "timestamptz"),

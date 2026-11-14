@@ -1339,6 +1339,14 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
             quote!({ let _ = __sup; <#self_ty>::#name(&__this, __tx, #(#arg_names,)*).await })
         };
         let span = m.line_span;
+        if name_str == "_adapt_generated_input" && !m.is_override {
+            entries.push(quote_spanned! {span=>
+                #[#rt::linkme::distributed_slice(#rt::GENERATED_INPUT_ADAPTER_DECLS)]
+                #[linkme(crate = #rt::linkme)]
+                static __ERP_GENERATED_INPUT_ADAPTER: #rt::GeneratedInputAdapterDecl =
+                    #rt::GeneratedInputAdapterDecl::new(#addon, <#target as #rt::Model>::MODEL_NAME);
+            });
+        }
         entries.push(quote_spanned! {span=>
             #[allow(non_snake_case)]
             fn #entry<'a>(

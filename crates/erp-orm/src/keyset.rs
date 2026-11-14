@@ -197,6 +197,10 @@ fn key_value(spec: &ModelSpec, term: &KeyTerm, value: &Value) -> Result<KeyValue
                 Scalar::Timestamp(parse_timestamp(s).ok_or_else(mismatch)?)
             }
             (ScalarKind::Uuid, Value::Uuid(v)) => Scalar::Uuid(*v),
+            (ScalarKind::BigInt, Value::BigInt(v)) => Scalar::BigInt(*v),
+            (ScalarKind::BigInt, Value::Str(s)) => {
+                Scalar::BigInt(erp_fields::BigInt::parse(s).map_err(|_| mismatch())?)
+            }
             (ScalarKind::Xid8, Value::Xid8(v)) => Scalar::Xid8(*v),
             (ScalarKind::TimestampTz, Value::TimestampTz(v)) => Scalar::TimestampTz(*v),
             (ScalarKind::Uuid, Value::Str(s)) => {

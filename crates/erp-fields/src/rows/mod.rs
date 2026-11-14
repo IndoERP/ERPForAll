@@ -466,12 +466,18 @@ impl Rows {
     pub fn i64(&self, row: usize, key: &str) -> Result<Option<i64>> {
         let column = self.present(row, key)?;
         match column.data() {
+            column::ColumnData::BigInt(v) if !column.is_false(row) => v
+                .get(row)
+                .map(|i| Some(i.get()))
+                .ok_or_else(|| inconsistent("a column is shorter than its batch")),
+            column::ColumnData::BigInt(_) => Ok(None),
             column::ColumnData::Int(v) if !column.is_false(row) => v
                 .get(row)
                 .map(|i| Some(*i))
                 .ok_or_else(|| inconsistent("a column is shorter than its batch")),
             column::ColumnData::Int(_) => Ok(None),
             column::ColumnData::Dyn(v) => match v.get(row) {
+                Some(Value::BigInt(i)) => Ok(Some(i.get())),
                 Some(Value::Int(i)) => Ok(Some(*i)),
                 Some(Value::False) => Ok(None),
                 other => Err(self.not_a(row, key, other, "an integer")),

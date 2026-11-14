@@ -35,6 +35,7 @@ enum Data {
     Date(Vec<i32>),
     DateTime(Vec<i64>),
     Uuid(Vec<erp_fields::Uuid>),
+    BigInt(Vec<erp_fields::BigInt>),
     Xid8(Vec<erp_fields::Xid8>),
     TimestampTz(Vec<erp_fields::TimestampTz>),
 
@@ -59,6 +60,7 @@ impl Data {
             Storage::Date => Self::Date(Vec::new()),
             Storage::DateTime => Self::DateTime(Vec::new()),
             Storage::Uuid => Self::Uuid(Vec::new()),
+            Storage::BigInt => Self::BigInt(Vec::new()),
             Storage::Xid8 => Self::Xid8(Vec::new()),
             Storage::TimestampTz => Self::TimestampTz(Vec::new()),
             Storage::Json => Self::Json(Vec::new()),
@@ -79,6 +81,7 @@ impl Data {
             Self::Date(_) => "date",
             Self::DateTime(_) => "datetime",
             Self::Uuid(_) => "uuid",
+            Self::BigInt(_) => "bigint",
             Self::Xid8(_) => "xid8",
             Self::TimestampTz(_) => "timestamptz",
             Self::Json(_) => "json",
@@ -105,6 +108,7 @@ impl Data {
             Self::Date(v) => grow(v, slot, 0),
             Self::DateTime(v) => grow(v, slot, 0),
             Self::Uuid(v) => grow(v, slot, erp_fields::Uuid::NIL),
+            Self::BigInt(v) => grow(v, slot, erp_fields::BigInt::from_i64(0)),
             Self::Xid8(v) => grow(v, slot, erp_fields::Xid8::from_u64(0)),
             Self::TimestampTz(v) => grow(v, slot, erp_fields::TimestampTz::UNIX_EPOCH),
             Self::Json(v) => grow(v, slot, None),
@@ -127,6 +131,7 @@ impl Data {
             Self::Decimal(v) => room(v, slots),
             Self::Str(v) => room(v, slots),
             Self::Uuid(v) => room(v, slots),
+            Self::BigInt(v) => room(v, slots),
             Self::Xid8(v) => room(v, slots),
             Self::TimestampTz(v) => room(v, slots),
             Self::Json(v) => room(v, slots),
@@ -146,6 +151,7 @@ impl Data {
             Self::Decimal(v) => v.capacity(),
             Self::Str(v) => v.capacity(),
             Self::Uuid(v) => v.capacity(),
+            Self::BigInt(v) => v.capacity(),
             Self::Xid8(v) => v.capacity(),
             Self::TimestampTz(v) => v.capacity(),
             Self::Json(v) => v.capacity(),
@@ -165,6 +171,7 @@ impl Data {
             Self::Decimal(v) => v.truncate(slots),
             Self::Str(v) => v.truncate(slots),
             Self::Uuid(v) => v.truncate(slots),
+            Self::BigInt(v) => v.truncate(slots),
             Self::Xid8(v) => v.truncate(slots),
             Self::TimestampTz(v) => v.truncate(slots),
             Self::Json(v) => v.truncate(slots),
@@ -243,6 +250,7 @@ impl Column {
             Data::Date(v) => Cell::Date(Date::from_days(*v.get(slot)?)),
             Data::DateTime(v) => Cell::DateTime(DateTime::from_micros(*v.get(slot)?)),
             Data::Uuid(v) => Cell::Uuid(*v.get(slot)?),
+            Data::BigInt(v) => Cell::BigInt(*v.get(slot)?),
             Data::Xid8(v) => Cell::Xid8(*v.get(slot)?),
             Data::TimestampTz(v) => Cell::TimestampTz(*v.get(slot)?),
             Data::Json(v) => v.get(slot)?.clone().map_or(Cell::Null, Cell::Json),
@@ -272,6 +280,7 @@ impl Column {
             (Data::Date(v), Cell::Date(x)) => v[slot] = x.days(),
             (Data::DateTime(v), Cell::DateTime(x)) => v[slot] = x.micros(),
             (Data::Uuid(v), Cell::Uuid(x)) => v[slot] = x,
+            (Data::BigInt(v), Cell::BigInt(x)) => v[slot] = x,
             (Data::Xid8(v), Cell::Xid8(x)) => v[slot] = x,
             (Data::TimestampTz(v), Cell::TimestampTz(x)) => v[slot] = x,
             (Data::Json(v), Cell::Json(x)) => v[slot] = Some(x),
@@ -682,6 +691,19 @@ impl ModelCache {
     /// True when any value is dirty.
     pub(crate) fn has_dirty(&self) -> bool {
         self.columns.iter().flatten().any(|c| c.dirty.any())
+    }
+
+    /// A dirty database value of this field, without allocating an id/value list.
+    pub(crate) fn has_real_dirty(&self, field: FieldId) -> bool {
+        self.column(field)
+            .is_some_and(|column| column.dirty.ones().any(|slot| !self.ids[slot].is_new()))
+    }
+
+    pub(crate) fn has_any_real_dirty(&self) -> bool {
+        self.columns
+            .iter()
+            .flatten()
+            .any(|column| column.dirty.ones().any(|slot| !self.ids[slot].is_new()))
     }
 
     /// Whether `id`'s value of `field` is dirty.

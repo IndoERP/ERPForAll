@@ -271,7 +271,7 @@ async fn duplicate_language_name_is_rejected() {
     assert_eq!(err.kind(), ErrorKind::Validation);
     assert_eq!(
         err.message(),
-        "The operation cannot be completed: The name of the language must be unique!"
+        "The database refused the change: The name of the language must be unique!"
     );
 }
 

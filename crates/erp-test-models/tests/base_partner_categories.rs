@@ -58,7 +58,7 @@ async fn category_fields_defaults_and_order() {
     assert_eq!(err.kind(), ErrorKind::Validation);
     assert_eq!(
         err.message(),
-        "The operation cannot be completed: Missing required field 'Name' (name) for model 'Partner Tag' (res.partner.category)"
+        "The database refused the change: Missing required field 'Name' (name) for model 'Partner Tag' (res.partner.category)"
     );
     let fields = cats
         .fields_get(&mut tx, Some(&["name", "parent_path"]), None)
@@ -154,7 +154,7 @@ async fn category_parent_store_refuses_cycles() {
         assert_eq!(err.kind(), ErrorKind::UserError);
         assert_eq!(
             err.message(),
-            "You are creating a loop in your 'Partner Tag' records. A record cannot be a child of itself or one of its own sub-items. Please select a different parent."
+            "This parent would make a loop in the 'Partner Tag' records: a record cannot sit under itself or under one of its own children. Choose another parent."
         );
         assert_eq!(
             gold.value(&mut tx, "parent_path").await.unwrap(),
@@ -187,7 +187,7 @@ async fn category_parent_store_refuses_cycles() {
     assert_eq!(err.kind(), ErrorKind::UserError);
     assert_eq!(
         err.message(),
-        "You are creating a loop in your 'Partner Tag' records. A record cannot be a child of itself or one of its own sub-items. Please select a different parent."
+        "This parent would make a loop in the 'Partner Tag' records: a record cannot sit under itself or under one of its own children. Choose another parent."
     );
     assert_eq!(
         gold.value(&mut tx, "parent_path").await.unwrap(),

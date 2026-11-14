@@ -11,6 +11,7 @@ erp-addon-base = { workspace = true }
 erp-addon-uom = { workspace = true }
 rust_decimal = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 erp-testkit = { workspace = true }

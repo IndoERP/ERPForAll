@@ -532,16 +532,19 @@ async fn compile_domain(
 /// hierarchy conditions: completion stops on such a rule, which is resolved as
 /// [`search_access`] resolves a search's own rule (expanded under the predicate context, start
 /// records found as the superuser), and completion runs again. Each round adds one rule, so this
-/// ends.
+/// ends. The flag tells whether a start set of such a rule was found by a search (names,
+/// many2many ids): a decision made with the result is then never remembered, as for a rule
+/// resolved at the top level ([`compile_predicate`]).
 async fn prepare_sql_domain_resolved(
     tx: &mut Transaction,
     records: &Records,
     domain: &Domain,
-) -> Result<Domain> {
+) -> Result<(Domain, bool)> {
     let mut rules = crate::prepare::NestedRules::default();
+    let mut searched = false;
     loop {
         let error = match prepare_sql_domain(tx, records, domain, &rules) {
-            Ok(prepared) => return Ok(prepared),
+            Ok(prepared) => return Ok((prepared, searched)),
             Err(error) => error,
         };
         let Some(key) = rules.take_missing() else {
@@ -571,7 +574,9 @@ async fn prepare_sql_domain_resolved(
             }
         };
         let security = predicate_records(&Records::empty(env.clone(), model));
-        let rule = crate::hierarchy::resolve(tx, &security.engine_sudo(), &rule, true).await?;
+        let (rule, found) =
+            crate::hierarchy::resolve_tracking(tx, &security.engine_sudo(), &rule, true).await?;
+        searched |= found;
         if !rules.insert(key, rule) {
             return Err(error);
         }
@@ -631,7 +636,7 @@ async fn compile_domain_at(
     let _search_scope = crate::search_method::scope(tx)?;
     let env = records.env();
     let spec = records.spec();
-    let prepared = prepare_sql_domain_resolved(tx, records, domain).await?;
+    let (prepared, searched) = prepare_sql_domain_resolved(tx, records, domain).await?;
     let registry = env.registry();
     let context = WhereContext {
         registry,
@@ -674,7 +679,7 @@ async fn compile_domain_at(
         fields: plan.fields,
         constant: plan.constant,
         reads_own_rows,
-        volatile: false,
+        volatile: searched,
     }))
 }
 
@@ -1191,7 +1196,7 @@ impl PlanPolicy {
 /// The driver type of a parameter, matching the cast of its placeholder.
 pub(crate) fn param_type(param: &Param) -> Type {
     let scalar = |kind: ScalarKind, array: bool| match (kind, array) {
-        (ScalarKind::Int8, false) => Type::INT8,
+        (ScalarKind::Int8 | ScalarKind::BigInt, false) => Type::INT8,
         (ScalarKind::Float8, false) => Type::FLOAT8,
         (ScalarKind::Numeric, false) => Type::NUMERIC,
         (ScalarKind::Text, false) => Type::TEXT,
@@ -1204,7 +1209,7 @@ pub(crate) fn param_type(param: &Param) -> Type {
         (ScalarKind::TimestampTz, false) => Type::TIMESTAMPTZ,
         (ScalarKind::TimestampTz, true) => Type::TIMESTAMPTZ_ARRAY,
 
-        (ScalarKind::Int8, true) => Type::INT8_ARRAY,
+        (ScalarKind::Int8 | ScalarKind::BigInt, true) => Type::INT8_ARRAY,
         (ScalarKind::Float8, true) => Type::FLOAT8_ARRAY,
         (ScalarKind::Numeric, true) => Type::NUMERIC_ARRAY,
         (ScalarKind::Text, true) => Type::TEXT_ARRAY,
@@ -1252,6 +1257,7 @@ pub(crate) fn bind(params: &[Param]) -> Result<Vec<Box<dyn ToSql + Sync + Send>>
                     )));
                 }
                 Param::Count(n) => Box::new(*n),
+                Param::Scalar(Scalar::BigInt(v)) => Box::new(v.get()),
                 Param::Scalar(Scalar::Int8(v)) => Box::new(*v),
                 Param::Scalar(Scalar::Float8(v)) => Box::new(*v),
                 Param::Scalar(Scalar::Numeric(v)) => Box::new(*v),
@@ -1267,6 +1273,11 @@ pub(crate) fn bind(params: &[Param]) -> Result<Vec<Box<dyn ToSql + Sync + Send>>
                 }
                 Param::Scalar(Scalar::TsRange(r, b)) => Box::new(erp_fields::RangeSql::new(*r, *b)),
                 Param::Array(kind, items) => match kind {
+                    // collect refuses mismatched scalars; it never drops an operand.
+                    ScalarKind::BigInt => Box::new(collect(items, |s| match s {
+                        Scalar::BigInt(v) => Some(v.get()),
+                        _ => None,
+                    })?),
                     ScalarKind::Int8 => Box::new(collect(items, |s| match s {
                         Scalar::Int8(v) => Some(*v),
                         _ => None,
@@ -1331,6 +1342,14 @@ pub(crate) async fn flush_read_inputs(
     tx: &mut Transaction,
     fields: &[(ModelId, FieldId)],
 ) -> Result<()> {
+    if tx.in_generated_input() {
+        for &(model, field) in fields {
+            if tx.read_requires_flush(model, field) {
+                return tx.refuse_adapter_read(model, field);
+            }
+        }
+        return Ok(());
+    }
     let registry = Arc::clone(tx.registry());
     let mut models: Vec<ModelId> = fields.iter().map(|(m, _)| *m).collect();
     models.sort_unstable();

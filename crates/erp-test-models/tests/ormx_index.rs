@@ -213,7 +213,7 @@ async fn spec_ormx_023_index_kinds_and_typed_include_filter_indexes() {
     assert_eq!(err.kind(), ErrorKind::Programming);
     assert_eq!(
         err.message(),
-        "field 'scale.ix.wrong.code': index = \"brin\" is for date, datetime and integer fields \
+        "field 'scale.ix.wrong.code': index = \"brin\" is for date, datetime, integer and bigint fields \
          (this field is char)"
     );
     let err = wrong(Box::leak(Box::new([
@@ -1651,7 +1651,7 @@ async fn unique_index_swap_preserves_uniqueness_during_replace() {
     assert_eq!(
         err.message(),
         format!(
-            "The operation cannot be completed: duplicate key value violates unique constraint \"{uq_name}\""
+            "The database refused the change: duplicate key value violates unique constraint \"{uq_name}\""
         )
     );
     tx.rollback().await.unwrap();
@@ -1689,7 +1689,7 @@ async fn unique_index_swap_preserves_uniqueness_during_replace() {
     assert_eq!(
         err.message(),
         format!(
-            "The operation cannot be completed: duplicate key value violates unique constraint \"{uq_name}\""
+            "The database refused the change: duplicate key value violates unique constraint \"{uq_name}\""
         )
     );
     tx.rollback().await.unwrap();
@@ -1713,7 +1713,7 @@ async fn unique_index_swap_preserves_uniqueness_during_replace() {
     assert_eq!(
         err.message(),
         format!(
-            "The operation cannot be completed: duplicate key value violates unique constraint \"{uq_name}\""
+            "The database refused the change: duplicate key value violates unique constraint \"{uq_name}\""
         )
     );
     tx.rollback().await.unwrap();
@@ -1956,7 +1956,7 @@ async fn large_table_failed_unique_swap_cleans_up_swap_index() {
     assert_eq!(
         cause.message(),
         format!(
-            "The operation cannot be completed: could not create unique index \"{temp_name}\": failed to build swap index {temp_name}; live index {uq_name} is unchanged and still in use"
+            "The database refused the change: could not create unique index \"{temp_name}\": failed to build swap index {temp_name}; live index {uq_name} is unchanged and still in use"
         )
     );
 
@@ -2680,7 +2680,7 @@ async fn large_table_swap_unique_constraint_and_dependency_preflight() {
             assert_eq!(
                 err.message(),
                 format!(
-                    "The operation cannot be completed: duplicate key value violates unique constraint \"{name}\""
+                    "The database refused the change: duplicate key value violates unique constraint \"{name}\""
                 )
             );
             drop(tx);

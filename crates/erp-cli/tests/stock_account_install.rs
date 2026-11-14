@@ -51,6 +51,7 @@ fn system(db: &TestDb) -> ModuleSystem {
         })
         .collect();
     ModuleSystem::builder(db.pool().clone(), index)
+        .require_sql_objects([&erp_addon_stock::schema_guards::MANIFEST])
         .native_artifact_identities(identities)
         .view_types(erp_addon_web::view_type_contributions())
         .require_core_tables(erp_security::auth::core_tables())
@@ -225,7 +226,7 @@ async fn install() {
             assert_eq!(
                 error.message(),
                 format!(
-                    "You are not allowed to {verb} '{description}' ({model}) records.\n\nNo group currently allows this operation.\n\nContact your administrator to request access if necessary."
+                    "Your access rights do not let you {verb} '{description}' ({model}) records.\n\nNo group may do this.\n\nAsk an administrator if you need this access."
                 )
             );
         }

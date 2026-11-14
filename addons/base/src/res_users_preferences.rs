@@ -38,7 +38,7 @@ fn cell_kind(cell: &Cell) -> &'static str {
     match cell {
         Cell::Null => "no value",
         Cell::Bool(_) => "a boolean",
-        Cell::Int(_) | Cell::Id(_) => "an integer",
+        Cell::BigInt(_) | Cell::Int(_) | Cell::Id(_) => "an integer",
         Cell::Float(_) | Cell::Decimal(_) => "a number",
         Cell::Str(_) => "text",
         Cell::Date(_) => "a date",

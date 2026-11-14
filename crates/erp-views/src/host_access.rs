@@ -171,6 +171,13 @@ pub fn checked_view_input<'a>(
     guarded: &'a GuardedArch,
     evaluation: &'a GuardEvaluation<'_>,
 ) -> Result<crate::CheckedViewInput<'a>> {
+    if !evaluation.is_for(env) {
+        return Err(Error::access(
+            "guard evaluation was minted for another principal (or the environment's binding cannot be built in this transaction)",
+        ));
+    }
+    verify_binding(guarded, evaluation)?;
+    admit_dashboards(env, guarded)?;
     let filtered = filter(env, guarded, evaluation)?;
     if env.registry().generation() != guarded.registry_generation() {
         return Err(Error::validation(format!(
@@ -213,6 +220,7 @@ pub fn checked_panel_view_input<'a>(
         ));
     }
     verify_binding(guarded, evaluation)?;
+    admit_dashboards(env, guarded)?;
     panel_admission::validate(guarded, env.registry(), budget)?;
     let filtered = decide_panel(guarded, evaluation)?;
     if env.registry().generation() != guarded.registry_generation() {
@@ -225,6 +233,27 @@ pub fn checked_panel_view_input<'a>(
         .model(&guarded.table().root_model)
         .ok_or_else(|| Error::programming("Panel input root model is missing."))?;
     Ok(filtered.into_checked_input(model))
+}
+fn admit_dashboards(env: &Env, guarded: &GuardedArch) -> Result<()> {
+    let arch = guarded.arch();
+    let spec = env
+        .registry()
+        .model(&guarded.table().root_model)
+        .ok_or_else(|| Error::programming("Dashboard root model is missing."))?;
+    let mut dashboards = 0;
+    for (id, _) in arch.walk(arch.root_id()) {
+        if arch.tag(id) == "dashboard" {
+            dashboards += 1;
+            let node = arch
+                .node_ref(id.to_idx())
+                .ok_or_else(|| Error::programming("Dashboard node outside arch."))?;
+            crate::validate_dashboard(node, spec).map_err(|e| Error::validation(e.to_string()))?;
+        }
+    }
+    if dashboards > 1 {
+        return Err(Error::validation("Only one dashboard region is allowed."));
+    }
+    Ok(())
 }
 /// Fixed located unsupported-panel syntax, when this error was minted by panel admission.
 ///
@@ -284,6 +313,19 @@ fn decide_inner<'a>(
             continue;
         }
         let node = field.node.index();
+        let mut ancestor = Some(NodeId::from_idx(field.node));
+        let mut dashboard = None;
+        while let Some(id) = ancestor {
+            if arch.tag(id) == "dashboard" {
+                dashboard = Some(id);
+                break;
+            }
+            ancestor = arch.parent(id);
+        }
+        if let Some(id) = dashboard {
+            decisions[id.to_idx().index()] = FilterDecision::Deny;
+            continue;
+        }
         if panels && panel_section(arch, field.node) {
             let slot = decisions
                 .get_mut(node)

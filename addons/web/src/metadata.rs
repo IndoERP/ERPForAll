@@ -2915,6 +2915,80 @@ impl WebIrUiMenu {
     }
 }
 
+pub(crate) struct DashboardDescription {
+    pub(crate) views: wire::ViewDescription,
+    pub(crate) action: wire::WindowAction,
+    pub(crate) search_unreadable: bool,
+    admission: ResponseAdmission,
+}
+impl DashboardDescription {
+    pub(crate) fn wire(&mut self, value: &impl Serialize) -> Result<Value> {
+        self.admission.wire(value)
+    }
+}
+/// Resolve a dashboard only through a caller-authorized saved action and its selected list.
+pub(crate) async fn dashboard_description(
+    env: &Env,
+    tx: &mut Transaction,
+    model: &str,
+    action_id: i64,
+    view_id: i64,
+) -> Result<DashboardDescription> {
+    let mut admission = ResponseAdmission::new();
+    let records = env.records("ir.actions.act_window")?.browse([action_id])?;
+    let action = load_action(&records, tx, &mut admission).await?;
+    let selected = action
+        .views
+        .iter()
+        .find(|v| matches!(v.view_type, wire::ViewType::List) && action.model == model)
+        .ok_or_else(|| fail("Dashboard action does not select this model's list."))?;
+    let row = records
+        .sudo(true)
+        .read_with(tx, &["search_view_id", "limit"], Load::Raw)
+        .await?;
+    let row = row
+        .first()
+        .ok_or_else(|| fail("Dashboard action is missing."))?;
+    let search_view = optional_id(row, "search_view_id")?;
+    let request = |id: Option<i64>, kind| ViewsRequest {
+        model,
+        views: vec![Value::List(
+            vec![id.map(Value::Int).unwrap_or(Value::False), Value::str(kind)].into(),
+        )],
+        wire_major: 1,
+        options: ValueMap::new(),
+        action_presentation: None,
+    };
+    let mut list_request = request(selected.id.map(|id| u64::from(id) as i64), "list");
+    list_request.action_presentation = Some(ActionListPresentation {
+        search_view,
+        limit: admitted_page_limit(i64::from(get_i32(row, "limit")?))?,
+    });
+    let mut description = get_views(env, tx, list_request, &mut admission).await?;
+    let expected = u64::try_from(view_id).map_err(|_| fail("Invalid dashboard view identity."))?;
+    if !description.views.iter().any(|view| matches!(view.identity, wire::ViewIdentity::Stored { id } if u64::from(id) == expected))
+    {
+        return Err(fail(
+            "Dashboard view does not belong to the selected action.",
+        ));
+    }
+    let needs_search = description.views.iter().flat_map(|v| &v.nodes).any(|n| matches!(n, wire::ViewNode::Dashboard { items, .. } if items.iter().any(|item| matches!(item, wire::DashboardItem::Count { filter: Some(_), .. }))));
+    let mut search_unreadable = false;
+    if needs_search {
+        match get_views(env, tx, request(search_view, "search"), &mut admission).await {
+            Ok(mut search) => description.views.append(&mut search.views),
+            Err(error) if error.kind() == ErrorKind::Access => search_unreadable = true,
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(DashboardDescription {
+        views: description,
+        action,
+        search_unreadable,
+        admission,
+    })
+}
+
 async fn load_action_views(
     this: &Records,
     tx: &mut Transaction,

@@ -29,7 +29,7 @@ use tokio_postgres::Row;
 use zeroize::{Zeroize, Zeroizing};
 
 use super::secret::SessionKeys;
-use super::settings::{AuthConfig, AuthSettings, CACHE_NAME};
+use super::settings::{AuthSettings, CACHE_NAME};
 use super::token_plan::TokenPlan;
 use crate::resolver::Resolver;
 
@@ -361,12 +361,12 @@ impl CheckedSession {
         self.via_previous
     }
 
-    /// The secret is older than `session.rotation_interval_secs` ([`super::Auth::rotate`]).
+    /// The secret is older than `sessions.rotation_interval_seconds` ([`super::Auth::rotate`]).
     pub fn rotation_due(&self) -> bool {
         self.rotation_due
     }
 
-    /// `last_seen_at` is older than `session.touch_interval_secs` ([`super::Auth::touch`]).
+    /// `last_seen_at` is older than `sessions.touch_interval_seconds` ([`super::Auth::touch`]).
     pub fn touch_due(&self) -> bool {
         self.touch_due
     }
@@ -547,7 +547,6 @@ pub(crate) struct SessionCheck<'a> {
     pub(crate) sql: &'a str,
     pub(crate) digest: [u8; 32],
     pub(crate) cached: Arc<Cached>,
-    pub(crate) config: &'a AuthConfig,
 }
 
 /// Private wire contract: PostgreSQL's unsigned 32-bit xmin in the upper bits, current-digest
@@ -678,7 +677,8 @@ impl CredentialCheck for SessionCheck<'_> {
             return refuse(Refusal::Pending, Some(id));
         }
         if !current {
-            let within = since_rotated.is_some_and(|s| secs(s) <= self.config.rotation_grace());
+            let within = since_rotated
+                .is_some_and(|s| secs(s) <= self.cached.settings.session_policy().rotation_grace());
             if !within {
                 return refuse(Refusal::TooOld, None);
             }
@@ -719,8 +719,9 @@ impl CredentialCheck for SessionCheck<'_> {
             id,
             user: principal.subject(),
             via_previous: !current,
-            rotation_due: current && since_rotation >= self.config.rotation_interval(),
-            touch_due: since_seen >= self.config.touch_interval(),
+            rotation_due: current
+                && since_rotation >= self.cached.settings.session_policy().rotation_interval(),
+            touch_due: since_seen >= self.cached.settings.session_policy().touch_interval(),
         };
         Ok(CredentialVerdict::accepted(principal, checked))
     }

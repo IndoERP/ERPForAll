@@ -32,7 +32,7 @@ pub const MAX_INDEX_COLUMNS: usize = 32;
 pub enum IndexMethod {
     /// `btree` (the default): equality, ranges and ordering; `include` allowed.
     Btree,
-    /// `brin`: block ranges, for `date`, `datetime` and `integer` fields whose values follow the
+    /// `brin`: block ranges, for `date`, `datetime`, `integer` and `bigint` fields whose values follow the
     /// insert order.
     Brin,
     /// `gin` with `jsonb_path_ops`, for `json` fields (`@>`, `@?`, `@@`). It is that one operator
@@ -114,9 +114,9 @@ impl IndexMethod {
     pub fn field_types(self) -> Option<&'static [&'static str]> {
         match self {
             Self::Btree => None,
-            // the same lists as `IndexKind::field_types` (pinned by `tests/index_kinds.rs`)
-            Self::Brin => Some(&["date", "datetime", "integer"]),
-            Self::Gin => Some(&["json"]),
+            // Keep field-level and typed model-index admission on one source.
+            Self::Brin => IndexKind::Brin.field_types(),
+            Self::Gin => IndexKind::Gin.field_types(),
             // the types `btree_gist` has operator classes for (no `jsonb`)
             Self::Gist => Some(&[
                 "boolean",
@@ -380,7 +380,7 @@ fn and_list(items: &[&str]) -> String {
 /// use erp_fields::IndexKind;
 /// assert_eq!(
 ///     erp_registry::index_kind_mismatch(IndexKind::Brin, "char").as_deref(),
-///     Some("index = \"brin\" is for date, datetime and integer fields (this field is char)")
+///     Some("index = \"brin\" is for date, datetime, integer and bigint fields (this field is char)")
 /// );
 /// assert_eq!(erp_registry::index_kind_mismatch(IndexKind::Gin, "json"), None);
 /// ```

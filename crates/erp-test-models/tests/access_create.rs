@@ -175,7 +175,7 @@ async fn false_and_null_rows_raise_the_record_level_error() {
     assert_eq!(
         err.message(),
         format!(
-            "You are not allowed to create 'Object For Test Access Right' (test_access.some_obj) \
+            "Your access rights do not let you create 'Object For Test Access Right' (test_access.some_obj) \
              records.\n\nRecords: test_access.some_obj({},), User: {DEMO}",
             first[0]
         )
@@ -230,7 +230,7 @@ async fn false_and_null_rows_raise_the_record_level_error() {
     assert_eq!(err.kind(), ErrorKind::Access, "{err}");
     assert!(
         err.message().starts_with(
-            "You are not allowed to create 'Object For Test Access Right' \
+            "Your access rights do not let you create 'Object For Test Access Right' \
              (test_access.some_obj) records."
         ),
         "{err}"
@@ -515,7 +515,7 @@ async fn assert_create_refused(tx: &mut Transaction, err: &erp_sdk::Error) {
     assert_eq!(
         err.message(),
         format!(
-            "You are not allowed to create 'Access Ledger' (test_access.ledger) \
+            "Your access rights do not let you create 'Access Ledger' (test_access.ledger) \
              records.\n\nRecords: test_access.ledger({},), User: {DEMO}",
             ids[0]
         )
@@ -680,7 +680,7 @@ async fn a_related_write_rewriting_a_precomputed_input_keeps_the_check_after_the
     assert_eq!(
         err.message(),
         format!(
-            "You are not allowed to create 'Access Ledger Line' (test_access.ledger_line) \
+            "Your access rights do not let you create 'Access Ledger Line' (test_access.ledger_line) \
              records.\n\nRecords: test_access.ledger_line({},), User: {DEMO}",
             ids[1]
         )

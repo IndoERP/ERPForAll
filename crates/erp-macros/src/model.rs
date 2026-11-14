@@ -307,7 +307,7 @@ fn parse_field(name: &str, attr: &syn::Attribute) -> syn::Result<FieldOut> {
     for meta in rest {
         match key(meta).as_str() {
             k @ ("string" | "help" | "compute" | "inverse" | "related" | "groups"
-            | "search_method") => {
+            | "search_method" | "collation") => {
                 let s = lit_str(value(meta)?)?;
                 let m = format_ident!("{}", k);
                 calls.push(quote!(.#m(#s)));
@@ -323,6 +323,7 @@ fn parse_field(name: &str, attr: &syn::Attribute) -> syn::Result<FieldOut> {
             | "company_dependent"
             | "change_default"
             | "user_writeable"
+            | "input_adapted"
             | "secret"
             | "bypass_search_access"
             | "delegate"
@@ -393,6 +394,7 @@ fn parse_field(name: &str, attr: &syn::Attribute) -> syn::Result<FieldOut> {
 
     let (kind_tokens, marker) = match kind.as_str() {
         "boolean" => (quote!(#rt::KindDecl::Boolean), quote!(Boolean)),
+        "bigint" => (quote!(#rt::KindDecl::BigInt), quote!(BigInt)),
         "integer" => (quote!(#rt::KindDecl::Integer), quote!(Integer)),
         "float" => match opt("digits") {
             None => (
@@ -1786,6 +1788,15 @@ mod id_sequence_tests {
 mod native_field_tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, reason = "tests")]
     use super::*;
+
+    #[test]
+    fn field_collation_parameter_requires_a_string() {
+        let invalid: syn::Attribute = syn::parse_quote!(#[field(char, collation = 42)]);
+        let error = parse_field("code", &invalid)
+            .err()
+            .expect("non-string collation refused");
+        assert_eq!(error.to_string(), "expected a string literal");
+    }
 
     #[test]
     fn native_fields_emit_exact_kinds_without_char_substitution() {

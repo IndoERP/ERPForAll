@@ -186,6 +186,8 @@ pub enum Cell {
     DateTime(DateTime),
     /// Native UUID; nil is not SQL NULL.
     Uuid(crate::Uuid),
+    /// Exact signed 64-bit integer, including zero.
+    BigInt(crate::BigInt),
     /// Native full-width unsigned transaction id.
     Xid8(crate::Xid8),
     /// Bounded timezone-aware microsecond instant.
@@ -220,6 +222,7 @@ impl Cell {
                 | (Self::Date(_), Storage::Date)
                 | (Self::DateTime(_), Storage::DateTime)
                 | (Self::Uuid(_), Storage::Uuid)
+                | (Self::BigInt(_), Storage::BigInt)
                 | (Self::Xid8(_), Storage::Xid8)
                 | (Self::TimestampTz(_), Storage::TimestampTz)
                 | (Self::Json(_), Storage::Json)
@@ -250,6 +253,33 @@ pub trait FieldValue: Sized + Send + Sync + 'static {
     /// Convert into a cell.
     fn into_cell(self) -> Cell;
 }
+
+impl FieldValue for crate::BigInt {
+    fn from_cell(cell: &Cell) -> Result<Self> {
+        match cell {
+            Cell::Null => Ok(Self::from_i64(0)),
+            Cell::BigInt(v) => Ok(*v),
+            other => Err(type_error("bigint", other)),
+        }
+    }
+    fn into_cell(self) -> Cell {
+        Cell::BigInt(self)
+    }
+}
+impl FieldValue for Option<crate::BigInt> {
+    fn from_cell(cell: &Cell) -> Result<Self> {
+        match cell {
+            Cell::Null => Ok(None),
+            Cell::BigInt(v) => Ok(Some(*v)),
+            other => Err(type_error("optional bigint", other)),
+        }
+    }
+    fn into_cell(self) -> Cell {
+        self.map_or(Cell::Null, Cell::BigInt)
+    }
+}
+impl ValueFor<kinds::BigInt> for crate::BigInt {}
+impl ValueFor<kinds::BigInt> for Option<crate::BigInt> {}
 
 impl FieldValue for bool {
     fn from_cell(cell: &Cell) -> Result<Self> {
@@ -616,6 +646,8 @@ pub mod kinds {
     pub enum Datetime {}
     /// Native UUID.
     pub enum Uuid {}
+    /// Signed bigint.
+    pub enum BigInt {}
     /// Native full-width xid8.
     pub enum Xid8 {}
     /// Native timezone-aware timestamp.

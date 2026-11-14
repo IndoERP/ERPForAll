@@ -399,7 +399,7 @@ async fn spec_env_036_prefetch_unreadable_fallback() {
     assert_eq!(
         err.message(),
         format!(
-            "You are not allowed to access 'Test ORM Category' (test_orm.category) records.\n\nRecords: test_orm.category({},), User: {DEMO}",
+            "Your access rights do not let you access 'Test ORM Category' (test_orm.category) records.\n\nRecords: test_orm.category({},), User: {DEMO}",
             cat1.ids()[0]
         )
     );

@@ -2,14 +2,14 @@
 //!
 //! Serialization failures and deadlocks are `Concurrency` (the unit of work retries them),
 //! `55P03` is `Lock`. Otherwise an error whose SQLSTATE and CONSTRAINT diagnostic are a condition
-//! an addon declared (contract §6) is `Validation` with the declared message, never the
-//! server's text; anything else is `Database` with its SQLSTATE.
+//! an addon declared (contract §6) uses its declared kind: `Validation` with safe static
+//! text, or `Programming` with generic internal-error text. Anything else is `Database`.
 
 use erp_fields::{Error, ErrorKind};
 use erp_registry::{Registry, TableObjectKind};
 use tokio_postgres::error::SqlState;
 
-pub(crate) const PREFIX: &str = "The operation cannot be completed: ";
+pub(crate) const PREFIX: &str = "The database refused the change: ";
 
 pub(crate) fn map_pg_error(registry: &Registry, err: tokio_postgres::Error) -> Error {
     let Some(db) = err.as_db_error() else {
@@ -94,9 +94,9 @@ pub(crate) fn map_pg_error(registry: &Registry, err: tokio_postgres::Error) -> E
                     None => format!("'{constraint}'"),
                 };
                 format!(
-                    "{PREFIX}Another model is using the record you are trying to delete.\n\n\
-                     The troublemaker is: '{}' ({})\nThanks to the following constraint: \
-                     {culprit}\nHow about archiving the record instead?",
+                    "{PREFIX}Other records still point to the record you want to delete.\n\n\
+                     Referring model: '{}' ({})\nConstraint: \
+                     {culprit}\nArchive the record instead of deleting it.",
                     m.description, m.name,
                 )
             }
@@ -141,9 +141,9 @@ pub(crate) fn map_pg_error(registry: &Registry, err: tokio_postgres::Error) -> E
     }
 }
 
-/// The `Validation` error of a declared SQL condition: the declaration's message verbatim (never
-/// the server's message, DETAIL, HINT or CONTEXT), the identifier as the constraint, and a context
-/// naming the qualified identity. Every value is declared static data.
+/// A declared condition's safe error: static Validation text and context, or generic Programming
+/// text with server-side diagnostics. Neither path exposes server MESSAGE, DETAIL, HINT or CONTEXT.
+/// Both retain the source, SQLSTATE and declared constraint identifier.
 fn declared_condition(
     id: erp_registry::SqlObjectId,
     declared: &erp_registry::SqlCondition,
@@ -151,6 +151,20 @@ fn declared_condition(
     err: tokio_postgres::Error,
 ) -> Error {
     let state = declared.sqlstate();
+    match declared.kind() {
+        erp_registry::SqlConditionKind::Programming => {
+            tracing::error!(target: "erp::orm", condition = %id, identifier, sqlstate = state,
+                "declared SQL invariant failed");
+            return Error::database(
+                ErrorKind::Programming,
+                Some(state.to_owned()),
+                "Internal server error",
+                err,
+            )
+            .with_constraint(identifier);
+        }
+        erp_registry::SqlConditionKind::Validation => {}
+    }
     let context = erp_fields::ValueMap::from([
         (
             "sql_condition".to_owned(),

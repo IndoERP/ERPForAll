@@ -25,7 +25,10 @@ use erp_orm::{
     SchemaStepReport, SchemaSync, SchemaSyncOptions, SelfApplied, Signal, SignalKey, StaticPolicy,
     StepCursor, StepFingerprint, StepProgress, Transaction, model_hooks,
 };
-use erp_registry::{AddonDescriptor, BASE_ADDON, ModelDecl, Registry, RegistryBuilder, WEB_ADDON};
+use erp_registry::{
+    AddonDescriptor, BASE_ADDON, ModelDecl, Registry, RegistryBuilder, SqlObjectDecl,
+    SqlObjectManifest, WEB_ADDON,
+};
 use erp_views::{PublishedViewTypes, ViewTypeContribution};
 use indexmap::IndexMap;
 
@@ -50,12 +53,14 @@ use crate::migrations::{
 };
 use crate::package_runtime::{PackageChange, PackageRuntime};
 use crate::post_commit::{ColumnName, IndexName, PostCommitAction, SchemaStepRef, TableName};
+use crate::sql_uninstall::{SqlGuardLimits, SqlUninstallGuard, SqlUninstallGuardManifest};
 use crate::store;
 use crate::version::{ODOO_SERIES, SemverVersion};
 use crate::view_types::{ViewTypeInputs, view_type_factory};
 use erp_data::load::{AddonFiles, DataNotice, FileReadError, NoticeKind};
 
 mod installed_identity;
+mod sql_uninstall;
 mod uninstall_impact;
 pub(crate) fn keep_identity_tables_linked() {
     installed_identity::keep_linked();
@@ -582,8 +587,14 @@ pub struct ModuleSystemBuilder {
     index: AddonIndex,
     code: Vec<&'static AddonDescriptor>,
     native_artifact_identities: BTreeMap<ModuleName, String>,
+    not_linked: HashMap<&'static str, &'static str>,
     identity_previous: Option<PreviousIdentity>,
     decls: Vec<&'static ModelDecl>,
+    sql_manifests: Vec<&'static SqlObjectManifest>,
+    sql_decls: Vec<&'static SqlObjectDecl>,
+    sql_guards: Vec<&'static SqlUninstallGuard>,
+    guard_manifests: Vec<&'static SqlUninstallGuardManifest>,
+    guard_limits: SqlGuardLimits,
     impls: Vec<&'static MethodImpl>,
     constraints: Vec<&'static ConstraintImpl>,
     hooks: Vec<&'static HookImpl>,
@@ -792,6 +803,17 @@ impl ModuleSystemBuilder {
         self
     }
 
+    /// Native addons of the addon directory that this binary leaves out on purpose, each with the
+    /// reason an operator reads when an install route refuses it or the catalogue omits it. Only a
+    /// folder that holds a Rust crate gets this reason; any other folder keeps its own refusal.
+    pub fn not_linked(
+        mut self,
+        reasons: impl IntoIterator<Item = (&'static str, &'static str)>,
+    ) -> Self {
+        self.not_linked.extend(reasons);
+        self
+    }
+
     /// Verified previous release receipts for an explicit operator-run forward migration.
     /// Existing receipts are checked against these bytes while candidate files are consumed;
     /// migration never re-stamps receipts. Never set this on a serving/request module system.
@@ -812,6 +834,61 @@ impl ModuleSystemBuilder {
     /// whose addon is in its set.
     pub fn decls(mut self, decls: impl IntoIterator<Item = &'static ModelDecl>) -> Self {
         self.decls.extend(decls);
+        self
+    }
+
+    /// Require native SQL-object registrations at every registry composition.
+    /// Manifests of addons absent from a stage are ignored. Repeated references to the same
+    /// manifest count once; missing or conflicting keys fail registry construction.
+    ///
+    /// ```no_run
+    /// # fn configure(builder: erp_modules::system::ModuleSystemBuilder) -> erp_modules::system::ModuleSystemBuilder {
+    /// use erp_registry::{SqlObjectManifest, SqlObjectDecl, SqlFunctionDecl, SqlLanguage, SqlResult};
+    /// static EXPECTED: SqlObjectManifest = SqlObjectManifest::new("my_addon", &["guard"]);
+    /// static GUARD: SqlObjectDecl = SqlObjectDecl::function("my_addon", "guard",
+    ///     SqlFunctionDecl::new("my_guard", SqlLanguage::PlPgSql, SqlResult::Trigger,
+    ///         "BEGIN RETURN NEW; END"));
+    /// builder.require_sql_objects([&EXPECTED]).with_sql_objects([&GUARD])
+    /// # }
+    /// ```
+    pub fn require_sql_objects(
+        mut self,
+        manifests: impl IntoIterator<Item = &'static SqlObjectManifest>,
+    ) -> Self {
+        self.sql_manifests.extend(manifests);
+        self
+    }
+
+    /// Supply trusted native SQL-object declarations, in addition to linked declarations.
+    /// Each stage receives only declarations of its addon set. This input is never read from
+    /// runtime addon files, overlays, package data or requests.
+    pub fn with_sql_objects(
+        mut self,
+        decls: impl IntoIterator<Item = &'static SqlObjectDecl>,
+    ) -> Self {
+        self.sql_decls.extend(decls);
+        self
+    }
+
+    /// Add native count-only uninstall guards. Linked guards are included automatically.
+    pub fn with_sql_uninstall_guards(
+        mut self,
+        guards: impl IntoIterator<Item = &'static SqlUninstallGuard>,
+    ) -> Self {
+        self.sql_guards.extend(guards);
+        self
+    }
+    /// Require exact guard registration; an omitted guard refuses the build.
+    pub fn require_sql_uninstall_guards(
+        mut self,
+        manifests: impl IntoIterator<Item = &'static SqlUninstallGuardManifest>,
+    ) -> Self {
+        self.guard_manifests.extend(manifests);
+        self
+    }
+    /// Node admission bounds for native guard declarations and evaluator count calls.
+    pub fn sql_guard_limits(mut self, limits: SqlGuardLimits) -> Self {
+        self.guard_limits = limits;
         self
     }
 
@@ -954,7 +1031,9 @@ impl ModuleSystemBuilder {
     /// batch sizes and the lock timeouts of those steps. The same options plan the steps and run
     /// them. A test sets a tiny `large_table_rows` to exercise the steps.
     pub fn schema_sync_options(mut self, options: SchemaSyncOptions) -> Self {
-        self.schema_sync = options;
+        // This stored copy is also used by the post-commit runner. Only the transactional
+        // install/upgrade schema step can opt into lifecycle DDL (A6).
+        self.schema_sync = options.lifecycle(false);
         self
     }
 
@@ -1003,6 +1082,14 @@ impl ModuleSystemBuilder {
             });
         }
         self.timeouts.check()?;
+        self.sql_guards.extend(
+            crate::sql_uninstall::SQL_UNINSTALL_GUARDS
+                .iter()
+                .filter(|guard| {
+                    guard.addon == "base" || self.code.iter().any(|addon| addon.name == guard.addon)
+                }),
+        );
+        crate::sql_uninstall::validate(&self.sql_guards, &self.guard_manifests, self.guard_limits)?;
         // claim the process's operation key now, so a taken key fails the build, not an operation
         operation_key()?;
         let entries = self.index.discover_entries()?;
@@ -1013,6 +1100,15 @@ impl ModuleSystemBuilder {
                     module: ModuleName::new(addon.name)?,
                     message: "two code descriptors for this addon".to_owned(),
                 });
+            }
+        }
+        for guard in &self.sql_guards {
+            if guard.addon != "base" && !code.contains_key(guard.addon) {
+                return Err(erp_fields::Error::programming(format!(
+                    "SQL uninstall guard owner '{}' has no native addon descriptor",
+                    guard.addon
+                ))
+                .into());
             }
         }
         let mut hooks: Vec<&'static HookImpl> = self.hooks;
@@ -1029,9 +1125,14 @@ impl ModuleSystemBuilder {
             index: Mutex::new(self.index),
             code,
             native_artifact_identities: self.native_artifact_identities,
+            not_linked: self.not_linked,
             identity_previous: self.identity_previous,
             data_only: Mutex::new(HashMap::new()),
             decls: self.decls,
+            sql_manifests: self.sql_manifests,
+            sql_decls: self.sql_decls,
+            sql_guards: self.sql_guards,
+            guard_limits: self.guard_limits,
             hooks,
             migrations,
             loader: self.loader,
@@ -1111,11 +1212,16 @@ struct Parts {
     index: Mutex<AddonIndex>,
     code: HashMap<&'static str, &'static AddonDescriptor>,
     native_artifact_identities: BTreeMap<ModuleName, String>,
+    not_linked: HashMap<&'static str, &'static str>,
     identity_previous: Option<PreviousIdentity>,
     /// Descriptors made for data-only addons, one per (name, dependencies, policy), kept for the
     /// system's life (registries hold `&'static` descriptors).
     data_only: Mutex<HashMap<DataOnlyDescriptorKey, &'static AddonDescriptor>>,
     decls: Vec<&'static ModelDecl>,
+    sql_manifests: Vec<&'static SqlObjectManifest>,
+    sql_decls: Vec<&'static SqlObjectDecl>,
+    sql_guards: Vec<&'static SqlUninstallGuard>,
+    guard_limits: SqlGuardLimits,
     hooks: Vec<&'static HookImpl>,
     /// Checked at build ([`crate::migrations::validate_native`]).
     migrations: Vec<NativeMigration>,
@@ -2159,12 +2265,23 @@ impl Parts {
                 Some(AddonSourceKind::Embedded) | None => {}
             }
         }
-        Ok(Arc::new(
+        let registry = Arc::new(
             RegistryBuilder::new(addons)
                 .with_decls(decls)
+                .require_sql_objects(self.sql_manifests.iter().copied())
+                .with_sql_objects(
+                    self.sql_decls
+                        .iter()
+                        .copied()
+                        .filter(|d| names.contains(d.addon())),
+                )
                 .overlay(&overlay)
                 .build()?,
-        ))
+        );
+        for guard in self.sql_guards.iter().filter(|g| names.contains(g.addon)) {
+            guard.tables(&registry)?;
+        }
+        Ok(registry)
     }
 }
 
@@ -2177,8 +2294,14 @@ impl ModuleSystem {
             index,
             code: Vec::new(),
             native_artifact_identities: BTreeMap::new(),
+            not_linked: HashMap::new(),
             identity_previous: None,
             decls: Vec::new(),
+            sql_manifests: Vec::new(),
+            sql_decls: Vec::new(),
+            sql_guards: Vec::new(),
+            guard_manifests: Vec::new(),
+            guard_limits: SqlGuardLimits::default(),
             impls: Vec::new(),
             constraints: Vec::new(),
             hooks: Vec::new(),
@@ -2665,7 +2788,10 @@ impl ModuleSystem {
             if self.parts.code.contains_key(name.as_str()) {
                 offered.push(Arc::clone(entry.manifest()));
             } else {
-                match data_only_refusal(entry) {
+                match self
+                    .unlinked_native(entry)
+                    .or_else(|| data_only_refusal(entry))
+                {
                     None => offered.push(Arc::clone(entry.manifest())),
                     Some(reason) => refused.push((name.clone(), reason)),
                 }
@@ -2696,11 +2822,54 @@ impl ModuleSystem {
                     .to_owned(),
             ));
         };
+        self.refuse_unlinked_native(name, entries)?;
         match data_only_refusal(entry) {
             None => Ok(()),
             Some(reason) => Err(mismatch(format!(
                 "Human installation of an addon that is not linked requires a data-only addon: {reason}"
             ))),
+        }
+    }
+
+    /// Why `entry` is a native addon without its code in this binary: its folder holds a Rust crate
+    /// (`Cargo.toml` or `src/`) and no descriptor of that name is linked. The reason registered with
+    /// [`ModuleSystemBuilder::not_linked`] wins; otherwise one fixed sentence (never the first entry a
+    /// directory listing happens to return).
+    fn unlinked_native(&self, entry: &AddonEntry) -> Option<String> {
+        let AddonSourceKind::DevFolder(dir) = entry.source_kind() else {
+            return None;
+        };
+        let name = entry.name().as_str();
+        if self.parts.code.contains_key(name) || entry.manifest().wasm().is_some() {
+            return None;
+        }
+        let crate_file = |file: &str| fs::symlink_metadata(dir.join(file)).is_ok();
+        if !(crate_file("Cargo.toml") || crate_file("src")) {
+            return None;
+        }
+        Some(self.parts.not_linked.get(name).map_or_else(
+            || NOT_LINKED_NATIVE.to_owned(),
+            |reason| (*reason).to_owned(),
+        ))
+    }
+
+    /// Every install route (browser, `erp module install`, a dependency of either) refuses a native
+    /// addon whose code this binary does not link: without it the addon would be marked installed
+    /// with none of its tables, methods or hooks.
+    fn refuse_unlinked_native(
+        &self,
+        name: &ModuleName,
+        entries: &IndexMap<ModuleName, AddonEntry>,
+    ) -> Result<()> {
+        match entries
+            .get(name)
+            .and_then(|entry| self.unlinked_native(entry))
+        {
+            None => Ok(()),
+            Some(reason) => Err(Error::AddonCodeMismatch {
+                module: name.clone(),
+                message: format!("this binary does not link the addon's native code: {reason}"),
+            }),
         }
     }
 
@@ -2870,10 +3039,19 @@ impl ModuleSystem {
                 .await
                 .map_err(|e| extension_error("pg_trgm", e))?;
             erp_orm::core_ddl_run(&mut optx.tx, erp_orm::CorePhase::BeforeModels).await?;
-            optx.tx
-                .init_models(&[])
+            let bootstrap = SchemaSyncOptions::inline()
+                .lifecycle(true)
+                .sql_roles(self.parts.schema_sync.sql_role_bindings());
+            let sync = optx
+                .tx
+                .init_models_with(&[], &bootstrap)
                 .await
                 .map_err(|e| limits.during_schema_step().classify(e.into()))?;
+            if !sync.is_complete() {
+                return Err(Error::InvariantViolation {
+                    message: "inline bootstrap left unfinished schema steps".to_owned(),
+                });
+            }
             let deferred =
                 erp_orm::core_ddl_run(&mut optx.tx, erp_orm::CorePhase::AfterModels).await?;
             erp_orm::core_ddl_refuse_deferred(&deferred)?;
@@ -2916,6 +3094,103 @@ impl ModuleSystem {
             AfterCommit::RunPostCommit,
         )
         .await
+    }
+
+    /// Compose the installed registry for grant publication without hooks, recovery or schema writes.
+    /// The caller supplies an owner transaction on this database; the operation lock is held until
+    /// that transaction ends. Package callers admit stored packages before this call under that lock.
+    ///
+    /// # Errors
+    /// Refuses a busy lifecycle, transient states, pending post-commit work, unavailable installed
+    /// sources, identity/discovery errors and inconsistent dependency graphs. Never repairs them.
+    pub async fn registry_for_publication(&self, tx: &mut Transaction) -> Result<Arc<Registry>> {
+        let locked: bool = tx
+            .query(
+                "SELECT pg_try_advisory_xact_lock($1,$2)",
+                &[&OPERATION_LOCK.0, &OPERATION_LOCK.1],
+            )
+            .await?
+            .first()
+            .ok_or_else(|| Error::InvariantViolation {
+                message: "publication lock returned no state".to_owned(),
+            })?
+            .try_get(0)
+            .map_err(|e| Error::InvariantViolation {
+                message: format!("invalid publication lock state: {e}"),
+            })?;
+        if !locked {
+            return Err(Error::OperationInProgress);
+        }
+        self.installed_composition(tx, |refusal| {
+            erp_fields::Error::programming(match refusal {
+                InstalledRefusal::PendingOperations => "Pending module operations require operator recovery before publishing runtime grants",
+                InstalledRefusal::PendingPostCommit => "Pending module post-commit work requires operator recovery before publishing runtime grants",
+                InstalledRefusal::SourcesUnavailable => "Installed addon sources are unavailable for runtime grant publication",
+            })
+        })
+        .await
+    }
+
+    /// The registry of [`Self::registry_for_publication`] without taking [`OPERATION_LOCK`]: for
+    /// a serving node that only reads it. Nodes admit concurrently and must not refuse each other
+    /// or a module operation; such a caller reads its registry generation before this call, so an
+    /// operation that commits meanwhile supersedes the result.
+    ///
+    /// # Errors
+    /// Those of [`Self::registry_for_publication`] except the busy lifecycle; a pending operation,
+    /// pending post-commit work or an unavailable source is a
+    /// [`Concurrency`](erp_fields::ErrorKind::Concurrency) refusal in the node's own words.
+    pub async fn installed_registry(&self, tx: &mut Transaction) -> Result<Arc<Registry>> {
+        self.installed_composition(tx, |refusal| {
+            erp_fields::Error::new(
+                erp_fields::ErrorKind::Concurrency,
+                match refusal {
+                    InstalledRefusal::PendingOperations => {
+                        "Pending module operations require operator recovery"
+                    }
+                    InstalledRefusal::PendingPostCommit | InstalledRefusal::SourcesUnavailable => {
+                        "Installed modules are unavailable or require post-commit recovery"
+                    }
+                },
+            )
+        })
+        .await
+    }
+
+    /// The installed composition both registry readers share; `refuse` words a refusal for its
+    /// caller.
+    async fn installed_composition(
+        &self,
+        tx: &mut Transaction,
+        refuse: impl Fn(InstalledRefusal) -> erp_fields::Error,
+    ) -> Result<Arc<Registry>> {
+        self.require_initialized(tx).await?;
+        let mut catalog = store::load(tx).await?;
+        if catalog.rows().any(|r| r.state().is_transient()) {
+            return Err(refuse(InstalledRefusal::PendingOperations).into());
+        }
+        if !pending_steps(tx).await?.is_empty() {
+            return Err(refuse(InstalledRefusal::PendingPostCommit).into());
+        }
+        let (entries, _hashes) = self.discover_admitted().await?;
+        for entry in entries.values() {
+            if catalog.get(entry.manifest().name().as_str()).is_some() {
+                catalog.attach_manifest(Arc::clone(entry.manifest()))?;
+            }
+        }
+        check_consistent(&catalog, LoadMode::Load)?;
+        let GraphInput {
+            states,
+            manifests,
+            unavailable,
+        } = graph_input(&catalog, |s| s == ModuleState::Installed);
+        let (graph, drops) = ModuleGraph::build(&manifests, &states, LoadMode::Load)?;
+        if !unavailable.is_empty() || !drops.is_empty() {
+            return Err(refuse(InstalledRefusal::SourcesUnavailable).into());
+        }
+        let modules = graph.plain_load_names();
+        ordered_addon_entries(&modules, &entries)?;
+        self.parts.compose(&modules, &entries)
     }
 
     /// A plain load of the installed set (no update): the registry of every installed module
@@ -3136,11 +3411,19 @@ impl ModuleSystem {
         let mut optx = self.begin_operation(wait).await?;
         let result: std::result::Result<_, Failure> = async {
             self.require_initialized(&mut optx.tx).await?;
+            let prepared = self.prepare_sql_uninstall(&mut optx, &request, &entries, authorizer).await.map_err(Failure::Refused)?;
             let authorization = if let Some(authorizer) = authorizer {
-                let checked = authorizer
-                    .authorize(&mut optx.tx)
-                    .await
-                    .map_err(|e| Failure::Refused(e.into()))?;
+                let checked = match prepared.authority {
+                    sql_uninstall::GuardAuthority::Checked(checked)=>checked,
+                    state=>{
+                        let checked=authorizer.authorize(&mut optx.tx).await.map_err(|e|Failure::Refused(e.into()))?;
+                        if let sql_uninstall::GuardAuthority::Recheck(previous)=state
+                            && (previous.session_id!=checked.session_id || previous.principal.subject()!=checked.principal.subject()) {
+                            return Err(Failure::Refused(erp_fields::Error::conflict("SQL uninstall authority changed during lock-first opening").into()));
+                        }
+                        checked
+                    }
+                };
                 optx.verify_intact().await.map_err(Failure::Refused)?;
                 optx.tx
                     .operation_bind_actor(&optx.control, checked.principal.clone())
@@ -3149,6 +3432,7 @@ impl ModuleSystem {
             } else {
                 None
             };
+            self.evaluate_sql_guards(&mut optx.tx, &prepared.removing).await.map_err(Failure::Refused)?;
             // Every lifecycle entry point converges framework-owned tables, including native
             // operator upgrades of databases created by older binaries. Operator authority was
             // checked by the public entry point; session authority was checked above. A forced
@@ -3207,11 +3491,14 @@ impl ModuleSystem {
                 Request::Pending => Ok(()),
             };
             scheduled.map_err(Failure::Refused)?;
-            if human_native_lifecycle {
-                for row in catalog.rows() {
-                    // Only scheduled installs require install closure admission here.
-                    if row.state() == ModuleState::ToInstall {
+            for row in catalog.rows() {
+                // Only scheduled installs require install closure admission here: every route
+                // refuses an unlinked native addon, the browser route also a non-data-only one.
+                if row.state() == ModuleState::ToInstall {
+                    if human_native_lifecycle {
                         self.require_human_install(row.name(), &entries).map_err(Failure::Refused)?;
+                    } else {
+                        self.refuse_unlinked_native(row.name(), &entries).map_err(Failure::Refused)?;
                     }
                 }
             }
@@ -5021,19 +5308,22 @@ fn affected_models<'r>(
         .collect()
 }
 
-/// A module still to come in this run (`later`) creates the model's table or owns one of its
-/// stored columns or table objects. The registry of an update run holds every module from the
-/// start, while the reference syncs at a module's step only what the modules loaded so far
-/// declare: syncing now would change that module's
-/// table before its pre-migrations ran. The model waits for that module's step, where it is
-/// among the affected models again. Declarations without columns (the `web` extension of `base`
-/// every model inherits, a non-stored field) do not hold a model back.
+/// A module still to come in this run whose `pre` migrations are selected (`later`, see
+/// `pre_holders` in the update loop) creates the model's table or owns one of its columns or
+/// table objects. The registry of an update run holds every module from the start, while the
+/// reference syncs at a module's step only what the modules loaded so far declare and runs a
+/// module's `pre` migrations before loading it: syncing
+/// now would change that module's table before its `pre` migrations ran. The model waits for
+/// that module's step, where it is among the affected models again. A declaration without
+/// columns (the `web` extension of `base` every model inherits, a one2many) holds nothing back,
+/// and neither does a later module without a selected `pre` stage: the model is synced at the
+/// earlier step as before, so the earlier module's data files and `post` migrations see it.
 fn waits_for_later(model: &erp_registry::ModelSpec, later: &[ModuleName]) -> bool {
     let is_later = |addon: &str| later.iter().any(|m| m.as_str() == addon);
     model
         .fields
         .iter()
-        .any(|f| f.store && f.modules.iter().any(|a| is_later(a)))
+        .any(|f| f.has_column() && f.modules.iter().any(|a| is_later(a)))
         || model.mro.iter().any(|d| {
             is_later(d.addon)
                 && ((d.name == model.name && !d.is_extension()) || !d.table_objects.is_empty())
@@ -5146,6 +5436,8 @@ impl<'s> Run<'s> {
                 self.checkpoint(tx).await?;
             }
         }
+        tx.refuse_deferred_sql_objects(&self.system.parts.schema_sync)
+            .await?;
         Ok(())
     }
 
@@ -5362,6 +5654,68 @@ impl<'s> Run<'s> {
             session.begin_modules(&loading)?;
         }
 
+        // The migrations of every module the run upgrades, selected before the first step, so an
+        // earlier step knows which later modules have a `pre` stage: a model such a module still
+        // changes waits for its schema step (`waits_for_later`). A reinit runs no migration.
+        let mut staged_by_module: HashMap<ModuleName, Option<StagedSteps>> = HashMap::new();
+        if !self.reinit {
+            for node in graph.phase_order() {
+                if node.state() != ModuleState::ToUpgrade {
+                    continue;
+                }
+                let module = node.name();
+                let manifest = node.manifest();
+                let row =
+                    catalog
+                        .get(module.as_str())
+                        .ok_or_else(|| Error::InvariantViolation {
+                            message: format!("module {module} of the update has no row"),
+                        })?;
+                // the version the upgrade installs. Never absent here: an incompatible manifest
+                // version makes the module not installable (manifest.rs, version adaptation), and
+                // the update graph drops a not-installable module before the run
+                // (`Error::DroppedUpdateModules`)
+                let target_version = manifest.version().semver().copied().ok_or_else(|| {
+                    Error::InvariantViolation {
+                        message: format!(
+                            "module {module} is upgraded, but its manifest version '{}' is \
+                             incompatible; the update graph drops such modules",
+                            manifest.version().raw()
+                        ),
+                    }
+                })?;
+                let staged = self
+                    .system
+                    .migrations_for(
+                        module,
+                        &self.entries,
+                        row.latest_version(),
+                        target_version,
+                        &self.migration_budget,
+                    )
+                    .await?;
+                staged_by_module.insert(module.clone(), staged);
+            }
+        }
+        let pre_holders: Vec<ModuleName> = loading
+            .iter()
+            .filter(|m| {
+                staged_by_module
+                    .get(*m)
+                    .is_some_and(|s| s.as_ref().is_some_and(|s| !s.pre.is_empty()))
+            })
+            .cloned()
+            .collect();
+        // the modules after `module` in this run that hold a model back (`waits_for_later`)
+        let holders_after =
+            |pending: &[ModuleName], module: &ModuleName| -> Result<Vec<ModuleName>> {
+                Ok(pending_after(pending, module)?
+                    .iter()
+                    .filter(|m| pre_holders.contains(m))
+                    .cloned()
+                    .collect())
+            };
+
         let mut pending = loading.as_slice();
         for node in graph.phase_order() {
             let module = node.name().clone();
@@ -5378,7 +5732,7 @@ impl<'s> Run<'s> {
             }
             match node.state() {
                 ModuleState::ToInstall => {
-                    self.update_schema(tx, limits, &module, pending_after(pending, &module)?)
+                    self.update_schema(tx, limits, &module, &holders_after(pending, &module)?)
                         .await?;
                     let demo = self.demo_for(catalog, &module, &manifest)?;
                     let demo = self
@@ -5412,31 +5766,14 @@ impl<'s> Run<'s> {
                     let demo = row.demo();
                     let installed_version = row.latest_version();
                     if !self.reinit {
-                        // the version the upgrade installs. Never absent here: an incompatible
-                        // manifest version makes the module not installable (manifest.rs, version
-                        // adaptation), and the update graph drops a not-installable module
-                        // before the run (`Error::DroppedUpdateModules`)
-                        let target_version =
-                            manifest.version().semver().copied().ok_or_else(|| {
-                                Error::InvariantViolation {
-                                    message: format!(
-                                        "module {module} is upgraded, but its manifest version \
-                                         '{}' is incompatible; the update graph drops such \
-                                         modules",
-                                        manifest.version().raw()
-                                    ),
-                                }
-                            })?;
-                        let mut staged = self
-                            .system
-                            .migrations_for(
-                                &module,
-                                &self.entries,
-                                row.latest_version(),
-                                target_version,
-                                &self.migration_budget,
-                            )
-                            .await?;
+                        let mut staged = staged_by_module.remove(&module).ok_or_else(|| {
+                            Error::InvariantViolation {
+                                message: format!(
+                                    "module {module} is upgraded, but no migrations were selected \
+                                     for it before the run"
+                                ),
+                            }
+                        })?;
                         if let Some(staged) = staged.as_mut() {
                             let pre = std::mem::take(&mut staged.pre);
                             self.run_migration_steps(
@@ -5448,7 +5785,7 @@ impl<'s> Run<'s> {
                             )
                             .await?;
                         }
-                        self.update_schema(tx, limits, &module, pending_after(pending, &module)?)
+                        self.update_schema(tx, limits, &module, &holders_after(pending, &module)?)
                             .await?;
                         let mode = ConvertMode::Update;
                         let demo = self
@@ -5484,13 +5821,8 @@ impl<'s> Run<'s> {
                         self.finish_module(catalog, &module, &manifest, demo)?;
                     } else {
                         if !self.demo_only {
-                            self.update_schema(
-                                tx,
-                                limits,
-                                &module,
-                                pending_after(pending, &module)?,
-                            )
-                            .await?;
+                            // a reinit runs no `pre` migration: nothing waits for a later step
+                            self.update_schema(tx, limits, &module, &[]).await?;
                         }
                         let mode = ConvertMode::Init;
                         let demo = self
@@ -5573,7 +5905,22 @@ impl<'s> Run<'s> {
             // purge's row locks, a worker synchronizing the schema could hold it and wait for
             // them while this operation waits for it.
             tx.query(erp_sql::ddl::SCHEMA_LOCK, &[]).await?;
+            self.system.evaluate_sql_guards(tx, &removing).await?;
             let removing_set: HashSet<&ModuleName> = removing.iter().collect();
+            let old = Arc::clone(tx.registry());
+            let remaining_names: Vec<_> = current
+                .iter()
+                .filter(|n| !removing_set.contains(n))
+                .cloned()
+                .collect();
+            let remaining_orm = self.system.orm_for(&remaining_names, &self.entries)?;
+            let remaining = remaining_orm
+                .env(SUPERUSER_ID, erp_orm::Context::new())
+                .registry()
+                .clone();
+            let sql_removal = tx
+                .plan_sql_object_removal(control, &old, &remaining, &self.system.parts.schema_sync)
+                .await?;
             for module in removing.iter().rev() {
                 let manifest =
                     Arc::clone(
@@ -5587,6 +5934,8 @@ impl<'s> Run<'s> {
                     .await?;
                 tx.flush().await?;
             }
+            // Native hooks may write in this same transaction despite the external-writer fence.
+            self.system.evaluate_sql_guards(tx, &removing).await?;
             if let Some(loader) = &self.system.parts.loader {
                 // One call for all of them (their records may reference each other): the error
                 // names all of them.
@@ -5608,7 +5957,8 @@ impl<'s> Run<'s> {
                         source: Box::new(source),
                     })?;
             }
-            let old = Arc::clone(tx.registry());
+            self.system.evaluate_sql_guards(tx, &removing).await?;
+            tx.apply_sql_object_removal(control, sql_removal).await?;
             current.retain(|n| !removing_set.contains(n));
             orm = self.system.orm_for(&current, &self.entries)?;
             tx.operation_switch_orm(control, &orm).await?;
@@ -5690,8 +6040,9 @@ impl<'s> Run<'s> {
     }
 
     /// Create or alter the tables of the module's affected models, then `init()` on each.
-    /// `later` are the modules of the run still to come after `module`; a model
-    /// one of them still changes waits for its step ([`waits_for_later`]).
+    /// `later` are the modules of the run still to come after `module` that
+    /// have a selected `pre` stage; a model one of them still changes waits for its step
+    /// ([`waits_for_later`]).
     async fn update_schema(
         &self,
         tx: &mut Transaction,
@@ -5715,12 +6066,15 @@ impl<'s> Run<'s> {
                 .iter()
                 .any(|d| later.iter().any(|l| l.as_str() == d.addon))
         }) {
-            return Err(Error::InvariantViolation {
-                message: format!(
-                    "model {} waits for a later module of the run that does not contribute to it",
-                    model.name
-                ),
-            });
+            return Err(step_error(module, ModuleStep::Schema, None)(
+                Error::InvariantViolation {
+                    message: format!(
+                        "model {} waits for a later module of the run that does not contribute \
+                         to it",
+                        model.name
+                    ),
+                },
+            ));
         }
         let ids: Vec<erp_registry::ModelId> = models
             .iter()
@@ -5728,7 +6082,7 @@ impl<'s> Run<'s> {
             .map(|m| m.id)
             .collect();
         // an install or upgrade is the one place SQL objects may change (A6)
-        let options = self.system.parts.schema_sync.lifecycle(true);
+        let options = self.system.parts.schema_sync.clone().lifecycle(true);
         let declares_sql_objects = registry
             .sql_objects()
             .objects()
@@ -5736,7 +6090,7 @@ impl<'s> Run<'s> {
             .any(|o| o.owner() == module.as_str());
         if ids.is_empty() && declares_sql_objects {
             // no table model to sync, but SQL objects to install (plan D9)
-            tx.init_sql_objects(&options).await.map_err(|e| {
+            tx.init_sql_objects_subset(&options).await.map_err(|e| {
                 step_error(module, ModuleStep::Schema, None)(
                     limits.during_schema_step().classify(e.into()),
                 )
@@ -8009,6 +8363,18 @@ pub fn validate_database_name(name: &str) -> Result<DatabaseName> {
     DatabaseName::parse(name)
 }
 
+/// Why the installed registry cannot be composed now (worded by each reader).
+#[derive(Debug, Clone, Copy)]
+enum InstalledRefusal {
+    PendingOperations,
+    PendingPostCommit,
+    SourcesUnavailable,
+}
+
+/// The options of every `CREATE DATABASE` that makes an ERPForAll database: UTF-8, `C` collation,
+/// copied from `template0` (`erp db restore` creates its database with the same options).
+pub const DATABASE_CREATE_OPTIONS: &str = "ENCODING 'unicode' LC_COLLATE 'C' TEMPLATE template0";
+
 /// Create an empty database for ERPForAll: `C` collation from
 /// `template0`, UTF-8. Then build a [`ModuleSystem`] on it and call [`ModuleSystem::initialize`]
 /// (which installs `pg_trgm`, `base` and the auto-install set). `maintenance` is a pool on an
@@ -8048,7 +8414,7 @@ pub async fn create_database(maintenance: &Pool, name: &DatabaseName) -> Result<
         return Err(Error::DatabaseExists { name: name.clone() });
     }
     let sql = format!(
-        "CREATE DATABASE {} ENCODING 'unicode' LC_COLLATE 'C' TEMPLATE template0",
+        "CREATE DATABASE {} {DATABASE_CREATE_OPTIONS}",
         erp_sql::quote(name.as_str())
     );
     match client.batch_execute(&sql).await {
@@ -8184,7 +8550,7 @@ fn data_only_refusal(entry: &AddonEntry) -> Option<String> {
 
 /// The refusal rule for a folder holding a Rust crate: it is a native addon, and this binary was
 /// not built with it, so neither the native nor the data-only route can install it.
-const NOT_LINKED_NATIVE: &str = "a native addon's Rust crate: this binary does not link the addon";
+const NOT_LINKED_NATIVE: &str = "the folder holds a Rust crate (Cargo.toml or src/) of a native addon that this binary does not link";
 
 /// The allowlist walk of [`data_only_refusal`]. `top` is the addon folder, `at` the directory read.
 fn check_addon_dir(top: &Path, at: &Path, depth: usize, seen: &mut usize) -> Option<String> {
@@ -9684,5 +10050,19 @@ mod package_data_tests {
                 "{escape}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod sql_object_option_tests {
+    #![allow(clippy::expect_used, reason = "test assertions")]
+    /// The stored options also feed SchemaRunner: only update_schema's local copy may opt in.
+    #[test]
+    fn stored_schema_options_never_authorize_lifecycle_ddl() {
+        let pool = erp_orm::pool::create_pool(tokio_postgres::Config::new(), 2)
+            .expect("test pool needs no connection");
+        let builder = super::ModuleSystem::builder(pool, crate::AddonIndex::new(true))
+            .schema_sync_options(erp_orm::SchemaSyncOptions::new().lifecycle(true));
+        assert!(!builder.schema_sync.is_lifecycle());
     }
 }

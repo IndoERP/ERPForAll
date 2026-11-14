@@ -293,7 +293,7 @@ const SQL_OBJECT_TASK: &str = "a later release";
 /// key's name; the five fields are declared on both `RawFile` and `RawModel`.
 macro_rules! first_sql_key {
     ($raw:expr) => {
-        first_sql_key!(@ $raw; sql_function, sql_trigger, sql_condition, sql_grant, persistence)
+        first_sql_key!(@ $raw; sql_function, sql_foreign_key, sql_table_options, sql_trigger, sql_condition, sql_grant, persistence)
     };
     (@ $raw:expr; $($key:ident),+) => {
         [$((stringify!($key), $raw.$key.is_some())),+]
@@ -402,6 +402,8 @@ struct RawFile {
     // refused with a reason: SQL objects are declared by native addons only; read so
     // the refusal names the key instead of calling it unknown
     sql_function: Option<toml::Value>,
+    sql_foreign_key: Option<toml::Value>,
+    sql_table_options: Option<toml::Value>,
     sql_trigger: Option<toml::Value>,
     sql_condition: Option<toml::Value>,
     sql_grant: Option<toml::Value>,
@@ -449,6 +451,8 @@ struct RawModel {
     // refused with a reason: SQL objects are declared by native addons only; read so
     // the refusal names the key instead of calling it unknown
     sql_function: Option<toml::Value>,
+    sql_foreign_key: Option<toml::Value>,
+    sql_table_options: Option<toml::Value>,
     sql_trigger: Option<toml::Value>,
     sql_condition: Option<toml::Value>,
     sql_grant: Option<toml::Value>,
@@ -554,6 +558,8 @@ struct RawField {
     bounds: Option<String>,
     generated: Option<String>,
     generated_storage: Option<String>,
+    input_adapted: Option<bool>,
+    collation: Option<toml::Value>,
     // refused with a reason
     compute: Option<toml::Value>,
     depends: Option<toml::Value>,
@@ -943,8 +949,8 @@ fn field_def(raw: RawField) -> std::result::Result<FieldDef, String> {
         ("bounds", raw.bounds.is_some()),
     ];
     let allowed: &[&str] = match ty {
-        "boolean" | "integer" | "text" | "html" | "date" | "datetime" | "uuid" | "xid8"
-        | "timestamptz" | "json" => &[],
+        "bigint" | "boolean" | "integer" | "text" | "html" | "date" | "datetime" | "uuid"
+        | "xid8" | "timestamptz" | "json" => &[],
         "float" => &["digits"],
         "monetary" => &["currency_field"],
         "char" => &["size"],
@@ -983,6 +989,7 @@ fn field_def(raw: RawField) -> std::result::Result<FieldDef, String> {
     let kind =
         match ty {
             "boolean" => KindDef::Boolean,
+            "bigint" => KindDef::BigInt,
             "integer" => KindDef::Integer,
             "text" => KindDef::Text,
             "html" => KindDef::Html,
@@ -1079,6 +1086,16 @@ fn field_def(raw: RawField) -> std::result::Result<FieldDef, String> {
             _ => return Err(format!("unknown field type '{}'", clip(ty))),
         };
     let mut def = FieldDef::new(raw.name, kind);
+    def.collation = match raw.collation {
+        None => None,
+        Some(toml::Value::String(name)) => Some(name),
+        Some(other) => {
+            return Err(format!(
+                "field '{}': collation: expected a string, got {other}",
+                def.name
+            ));
+        }
+    };
     def.string = raw.string;
     def.help = raw.help;
     def.required = raw.required;
@@ -1108,6 +1125,9 @@ fn field_def(raw: RawField) -> std::result::Result<FieldDef, String> {
     def.domain = raw.domain;
     def.context = raw.context;
     def.check_company = raw.check_company;
+    if let Some(enabled) = raw.input_adapted {
+        def = def.input_adapted(enabled);
+    }
     if raw.generated_storage.is_some() && raw.generated.is_none() {
         return Err("attribute 'generated_storage' conflicts with generation".to_owned());
     }

@@ -771,6 +771,17 @@ try {
   // item, group rows start folded, Enter opens one (its records are read with the group's domain), the page never
   // scrolls sideways, and the group row is as tall as a record row. Nested and temporal groups survive reload;
   // the probe removes its grouping before returning to the remaining scenes.
+  // The study compares the same mounted surface at desktop, laptop, tablet and phone widths.
+  // Keep the previous viewport: later interaction assertions continue in their original context.
+  const qualityShots = async scene => {
+    const previous = await evaluate('({width:innerWidth,height:innerHeight,mobile:matchMedia("(pointer: coarse)").matches})');
+    for (const [width, height] of [[1440,900],[1280,900],[768,1024],[390,844]]) {
+      await shot(`fixture-quality-${scene}-${width}`, width, height);
+      assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, `${scene} page fits ${width}`);
+    }
+    await call("Emulation.setDeviceMetricsOverride", { ...previous, deviceScaleFactor: 1 });
+    await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+  };
   const groupedListProbe = async prefix => {
     const savedPriority = priorityValue; priorityValue = "normal";
     await evaluate('[...document.querySelectorAll(".client-notification-close")].forEach(button => button.click())');
@@ -866,6 +877,7 @@ try {
     assert.equal(await evaluate('getComputedStyle(document.querySelector(".pivot-cell")).textAlign'), "end", "figures are aligned to the end of the cell");
     assert.equal(await evaluate('document.querySelector("[role=toolbar]").getAttribute("aria-label")'), "Main actions");
     await shot(`${prefix}-pivot-1440`, 1440, 900);
+    if (prefix === "fixture") await qualityShots("pivot");
     await phone("plain");
     // every header is a node (closed or opened), a level is indented 24px; the search's Group By sets the rows.
     assert.equal(await evaluate('document.querySelector(".pivot-row-total .pivot-row-header").classList.contains("pivot-node-opened")'), true);
@@ -1883,6 +1895,7 @@ try {
       assert.equal(await evaluate('document.querySelector(".status-badge.dirty")?.getClientRects().length > 0'),true,`dirty status badge remains visible at ${width}px`);
     }
   }
+  await qualityShots("form");
   await call("Emulation.setDeviceMetricsOverride",{width:1440,height:900,deviceScaleFactor:1,mobile:false});
   await evaluate('[...document.querySelectorAll("button")].find(button=>button.textContent==="Save").click()');
   await wait('[...document.querySelectorAll("[data-client-notice] .client-notification-message")].some(node => node.textContent === "Record saved.")');
@@ -1890,6 +1903,7 @@ try {
   await evaluate('[...document.querySelectorAll("[data-client-navigation] button")].find(button=>button.textContent==="Notes").click()');
   await wait('document.querySelector("table[aria-label=Records]") !== null');
   await shot("fixture-list-desktop", 1440, 900);
+  await qualityShots("list");
   const gutters = await evaluate(`(() => { const box = s => document.querySelector(s).getBoundingClientRect(); const pad = (s, p) => parseFloat(getComputedStyle(document.querySelector(s))[p]); const cb = box('.list-table tbody .list-row-select'); const lastTd = [...document.querySelectorAll('.list-table tbody tr:first-child td')].pop(); const last = lastTd.getBoundingClientRect(); const panel = document.querySelector('.control-panel'); const cs = getComputedStyle(panel); const row = box('.list-table tbody tr:first-child'), head = box('.list-table thead tr'), mid = cb.top + cb.height / 2; return { checkboxLeft: Math.round(cb.left), panelLeft: Math.round(box('.control-panel').left + parseFloat(cs.paddingLeft)), lastPadEnd: pad('.list-table tbody tr:first-child td:last-child', 'paddingRight'), panelPadRight: parseFloat(cs.paddingRight), rowMid: Math.abs(mid - (row.top + row.height / 2)), rowHeight: Math.round(row.height), headHeight: Math.round(head.height) }; })()`);
   assert.ok(gutters.rowMid <= 1, `the row checkbox is centred in its row: ${JSON.stringify(gutters)}`);
   assert.equal(gutters.headHeight, gutters.rowHeight, `the header row is as tall as a record row: ${JSON.stringify(gutters)}`);

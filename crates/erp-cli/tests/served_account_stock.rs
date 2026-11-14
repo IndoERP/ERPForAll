@@ -161,10 +161,8 @@ async fn served_node_offers_and_installs_account_and_stock() {
     assert!(
         log.contains(
             "addon catalogue: unlinked_native is not offered for installation: \
-             src is not allowed (rule: a native addon's Rust crate: this binary does not link the addon)"
-        ) || log.contains(
-            "addon catalogue: unlinked_native is not offered for installation: \
-             Cargo.toml is not allowed (rule: a native addon's Rust crate: this binary does not link the addon)"
+             the folder holds a Rust crate (Cargo.toml or src/) of a native addon that this binary \
+             does not link"
         ),
         "{log}"
     );

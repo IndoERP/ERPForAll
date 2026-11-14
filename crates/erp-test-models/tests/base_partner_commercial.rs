@@ -532,7 +532,7 @@ async fn descendant_sync_runs_with_the_callers_authority() {
         .await
         .unwrap_err();
     let expected = format!(
-        "You are not allowed to modify 'Contact' (res.partner) records.\n\nRecords: res.partner({},), User: 2",
+        "Your access rights do not let you modify 'Contact' (res.partner) records.\n\nRecords: res.partner({},), User: 2",
         denied.ids()[0]
     );
     assert_eq!(error.kind(), erp_sdk::ErrorKind::Access);
@@ -638,7 +638,7 @@ async fn creating_under_an_unreadable_commercial_partner_is_refused() {
         .await
         .unwrap_err();
     let expected = format!(
-        "You are not allowed to access 'Contact' (res.partner) records.\n\nRecords: res.partner({},), User: 2",
+        "Your access rights do not let you access 'Contact' (res.partner) records.\n\nRecords: res.partner({},), User: 2",
         top.ids()[0]
     );
     assert_eq!(error.kind(), erp_sdk::ErrorKind::Access, "{error:?}");

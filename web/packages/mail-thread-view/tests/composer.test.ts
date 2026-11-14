@@ -423,13 +423,6 @@ test("the composer stages attachments with chips, validates limits, and allows s
   const removeBtn = chips[0]?.querySelector<HTMLButtonElement>(".erp-mail-attachment-chip-remove");
   expect(removeBtn?.getAttribute("aria-label")).toBe("Remove spec.pdf");
 
-  // Oversized attachment limit (> 25 MiB)
-  composer.attach({ id: 202, name: "huge.zip", size: 26 * 1024 * 1024 });
-  flushSync();
-  expect(composer.attachments).toHaveLength(1);
-  expect(errorLine.hidden).toBe(false);
-  expect(errorLine.textContent).toContain('File "huge.zip" exceeds maximum allowed size of 25 MiB');
-
   // Max attachments limit (100)
   for (let i = 1; i < 100; i++) {
     composer.attach({ id: 300 + i, name: `file_${i}.txt`, size: 10 });
@@ -520,4 +513,57 @@ test("when the second of two files fails to upload, the first still shows as a c
   const chips = composer.element.querySelectorAll(".erp-mail-attachment-chip");
   expect(chips).toHaveLength(1);
   expect(chips[0]!.getAttribute("data-id")).toBe("801");
+});
+
+/// (partial: the size limit comes only from the injected upload, no client constant)
+test("a file above the old 25 MiB figure is passed to the upload and the configured refusal is shown", async () => {
+  const rig = new Rig();
+  rig.records(ann);
+  const offered: string[] = [];
+  const limit = 64 * 1024 * 1024;
+  rig.services = {
+    ...rig.services,
+    uploadAttachment: async (file: File) => {
+      offered.push(file.name);
+      if (file.size > limit) throw new Error(`"${file.name}" exceeds the current browser upload limit of 64 MiB.`);
+      return { id: 900 + offered.length, name: file.name, size: file.size, mimetype: file.type };
+    },
+  };
+  const composer = rig.composer();
+  const input = composer.element.querySelector<HTMLInputElement>(".erp-mail-file-input")!;
+  const errorLine = composer.element.querySelector(".erp-mail-composer-error") as HTMLElement;
+  const pick = (file: File): void => {
+    Object.defineProperty(input, "files", { value: [file], configurable: true });
+    input.dispatchEvent(new Event("change"));
+  };
+  const sized = (name: string, size: number): File => {
+    const file = new File(["x"], name);
+    Object.defineProperty(file, "size", { value: size });
+    return file;
+  };
+  pick(sized("thirty.bin", 30 * 1024 * 1024));
+  await settle();
+  expect(offered).toEqual(["thirty.bin"]);
+  expect(composer.attachments.map((a) => a.name)).toEqual(["thirty.bin"]);
+  pick(sized("huge.bin", 100 * 1024 * 1024));
+  await settle();
+  expect(offered).toEqual(["thirty.bin", "huge.bin"]);
+  expect(errorLine.textContent).toBe('"huge.bin" exceeds the current browser upload limit of 64 MiB.');
+  expect(errorLine.textContent).not.toContain("25 MiB");
+});
+
+/// (partial: the paperclip carries the host's limit hint for keyboard and screen reader)
+test("the composer paperclip describes the upload limit through aria-describedby", () => {
+  const rig = new Rig();
+  rig.records(ann);
+  rig.services = {
+    ...rig.services,
+    uploadAttachment: async (file: File) => ({ id: 1, name: file.name }),
+    uploadLimitHint: () => "Each file can be up to 128 MiB.",
+  };
+  const composer = rig.composer();
+  const attachBtn = composer.element.querySelector<HTMLButtonElement>('.erp-mail-composer-action[data-action="attach"]')!;
+  const id = attachBtn.getAttribute("aria-describedby")!;
+  expect(composer.element.querySelector(`#${id}`)?.textContent).toBe("Each file can be up to 128 MiB.");
+  expect(attachBtn.querySelector(`#${id}`)).toBeNull(); // next to the button: inside it the hint would be part of the button's name
 });

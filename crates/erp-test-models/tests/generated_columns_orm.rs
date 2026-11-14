@@ -1104,7 +1104,7 @@ async fn generated_values_preserve_owner_row_rules() {
     assert_eq!(
         error.message(),
         format!(
-            "You are not allowed to access 'sql_runtime.sample' (sql_runtime.sample) records.\n\nRecords: sql_runtime.sample({},), User: {user_id}",
+            "Your access rights do not let you access 'sql_runtime.sample' (sql_runtime.sample) records.\n\nRecords: sql_runtime.sample({},), User: {user_id}",
             hidden.ids()[0]
         )
     );
@@ -1288,7 +1288,7 @@ async fn cross_record_alias_query(query: u8, delegated: bool) {
     assert_eq!(
         denied.message(),
         format!(
-            "You are not allowed to access 'sql_runtime.sample' (sql_runtime.sample) records.\n\nRecords: sql_runtime.sample({},), User: {}",
+            "Your access rights do not let you access 'sql_runtime.sample' (sql_runtime.sample) records.\n\nRecords: sql_runtime.sample({},), User: {}",
             target.ids()[0],
             reader.ids()[0]
         )

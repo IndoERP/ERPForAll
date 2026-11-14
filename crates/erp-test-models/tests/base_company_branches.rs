@@ -1579,7 +1579,7 @@ async fn refused_creator_changes_nobody_s_allowed_companies() {
     assert_eq!(error.kind(), ErrorKind::Access, "{error:?}");
     assert_eq!(
         error.message(),
-        "You are not allowed to create 'Company' (res.company) records."
+        "Your access rights do not let you create 'Company' (res.company) records."
     );
     tx.rollback().await.unwrap();
     drop(tx);

@@ -81,6 +81,8 @@ pub struct HarnessBuilder {
     policy_sources: Vec<&'static PolicySourceWrite>,
     config: OrmConfig,
     init: bool,
+    schema_sync: erp_orm::SchemaSyncOptions,
+    sql_manifests: Vec<&'static erp_registry::SqlObjectManifest>,
     audit_store: bool,
     identify_untagged: bool,
     before_schema: Vec<String>,
@@ -126,6 +128,8 @@ impl Harness {
             policy_sources: Vec::new(),
             config: OrmConfig::default(),
             init: true,
+            schema_sync: erp_orm::SchemaSyncOptions::inline(),
+            sql_manifests: Vec::new(),
             audit_store: true,
             identify_untagged: false,
             before_schema: Vec::new(),
@@ -312,6 +316,22 @@ impl HarnessBuilder {
         decls: impl IntoIterator<Item = &'static ModelDecl>,
     ) -> Self {
         self.decls.extend(decls);
+        self
+    }
+
+    /// Require the listed native SQL object registrations.
+    pub fn require_sql_objects(
+        mut self,
+        manifests: impl IntoIterator<Item = &'static erp_registry::SqlObjectManifest>,
+    ) -> Self {
+        self.sql_manifests.extend(manifests);
+        self
+    }
+
+    /// Schema options for this explicit installation fixture. SQL object DDL requires
+    /// `SchemaSyncOptions::inline().lifecycle(true)`; the default does not authorize it.
+    pub fn schema_sync_options(mut self, options: erp_orm::SchemaSyncOptions) -> Self {
+        self.schema_sync = options;
         self
     }
 
@@ -511,6 +531,7 @@ impl HarnessBuilder {
                 .linked(self.linked)
                 .with_core_event_decls(self.event_decls)
                 .with_decls(self.decls)
+                .require_sql_objects(self.sql_manifests)
                 .overlay(&self.overlay)
                 .build()?,
         ))
@@ -527,6 +548,7 @@ impl HarnessBuilder {
                 .linked(self.linked)
                 .with_core_event_decls(self.event_decls)
                 .with_decls(self.decls)
+                .require_sql_objects(self.sql_manifests)
                 .overlay(&self.overlay)
                 .build()?,
         );
@@ -584,6 +606,7 @@ impl HarnessBuilder {
                 .linked(self.linked)
                 .with_core_event_decls(self.event_decls)
                 .with_decls(self.decls)
+                .require_sql_objects(self.sql_manifests)
                 .overlay(&self.overlay)
                 .build()?,
         );
@@ -656,7 +679,10 @@ impl HarnessBuilder {
             // registry), then those of the crates linked into the test (`erp-rpc`'s idempotency
             // keys, `erp-security`'s sessions and login throttle)
             erp_orm::core_ddl_run(&mut tx, erp_orm::CorePhase::BeforeModels).await?;
-            tx.init_models(&[]).await?;
+            let sync = tx.init_models_with(&[], &self.schema_sync).await?;
+            if !sync.is_complete() {
+                return Err(erp_fields::Error::programming("Harness schema initialization requires inline completion; deferred steps are unsupported.").into());
+            }
             let deferred = erp_orm::core_ddl_run(&mut tx, erp_orm::CorePhase::AfterModels).await?;
             erp_orm::core_ddl_refuse_deferred(&deferred)?;
             if let Some(users) = registry.model("res.users").filter(|m| m.has_table()) {

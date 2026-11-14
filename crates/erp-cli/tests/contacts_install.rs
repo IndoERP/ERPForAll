@@ -554,8 +554,9 @@ fn internal_user_reads_tags_and_industries_and_is_refused_on_partner_create() {
             .unwrap_err();
         assert_eq!(err.kind(), erp_fields::ErrorKind::Access);
         assert!(
-            err.message()
-                .starts_with("You are not allowed to create 'Contact' (res.partner) records."),
+            err.message().starts_with(
+                "Your access rights do not let you create 'Contact' (res.partner) records."
+            ),
             "unexpected error message: {}",
             err.message()
         );

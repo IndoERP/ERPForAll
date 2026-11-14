@@ -449,6 +449,12 @@ const ENTRY_POINTS: &[(&str, Class)] = &[
             "pokes the process's job runners after the commit and sends one payload-free NOTIFY; reads and writes no record (a later release)",
         ),
     ),
+    (
+        "Transaction::job_settings_changed",
+        Unchecked(
+            "the job_wake of a settings edit: called by the settings write (base ir_config_setting.rs) after a `base.jobs.*` value was stored under that write's own checks, it pokes the runners after the commit and sends one payload-free NOTIFY with the new policy's notify interval; reads and writes no record and grants nothing",
+        ),
+    ),
     ("RecordSet::exists", Unchecked(PARITY_EXISTS)),
     ("RecordSet::try_lock_for_update", Unchecked(PARITY_LOCK)),
     ("RecordSet::new_record", Unchecked(NEW_RECORD)),
@@ -884,6 +890,48 @@ const ENTRY_POINTS: &[(&str, Class)] = &[
     ("Transaction::init_models", Unchecked(SCHEMA)),
     ("Transaction::init_models_with", Unchecked(SCHEMA)),
     ("Transaction::init_sql_objects", Unchecked(SCHEMA)),
+    (
+        "Transaction::init_sql_objects_subset",
+        Unchecked(
+            "the subset form of init_sql_objects for an addon schema step with no model table, called by the module executor (erp-modules system.rs) on its install transaction; DDL of declared SQL objects, no record of a model is read for a caller",
+        ),
+    ),
+    (
+        "Transaction::refuse_deferred_sql_objects",
+        Unchecked(
+            "end-of-lifecycle check of the module executor: reads the registry, the SQL-object provenance table and the PostgreSQL catalog and refuses absent or stale objects and unsafe grants; installs nothing and reads no record of a model",
+        ),
+    ),
+    (
+        "Transaction::verify_sql_object_publication",
+        Unchecked(
+            "read-only check of the installed SQL-object graph and its effective privileges against the registry, called at server start-up and node admission (erp-cli human.rs); takes the exclusive schema lock for its transaction (erp-orm schema_sqlobj.rs) and reads the provenance table and the PostgreSQL catalog, no record of a model",
+        ),
+    ),
+    (
+        "Transaction::reconcile_sql_object_grants",
+        Unchecked(
+            "brings the GRANT/REVOKE of declared SQL objects to their declaration when runtime grants are published (erp-cli human.rs grant_runtime_with_registry, reached from erp db init, erp db publish-grants, the browser module lifecycle and the CLI module operations in addon_life.rs); server start-up only verifies; DDL, not a record operation; never creates or replaces an object and refuses unsafe grants",
+        ),
+    ),
+    (
+        "Transaction::operation_reopen_locked",
+        Unchecked(
+            "lock-first reopening of the guarded uninstall's preparation, called only by the module executor's SQL uninstall guard (erp-modules system/sql_uninstall.rs) on its own operation transaction; refuses a foreign operation control, any principal but System with full elevation, a hook scope and a transaction that already wrote (test: sql_objects_uninstall.rs lock_first_opening_refuses_foreign_control_and_prior_mutations); takes advisory and table locks, reads and writes no record of a model",
+        ),
+    ),
+    (
+        "Transaction::plan_sql_object_removal",
+        Unchecked(
+            "plans the RESTRICT drops of the SQL objects an uninstall removes, called only by the module executor's uninstall (erp-modules system.rs) under its operation control; refuses a foreign control, an unmanaged transaction and any principal but System with full elevation; reads the registry, the SQL-object provenance table and the PostgreSQL catalog, runs no DDL and reads no record of a model",
+        ),
+    ),
+    (
+        "Transaction::apply_sql_object_removal",
+        Unchecked(
+            "runs a removal plan in the transaction that made it (refused in another one, test: sql_objects_uninstall.rs removal_plan_of_another_transaction_is_refused), called only by the module executor's uninstall (erp-modules system.rs) under its operation control, with the same control and principal refusals as the plan; DDL (DROP ... RESTRICT) and provenance rows, no record of a model",
+        ),
+    ),
     ("reflection::reflect_models", Unchecked(SCHEMA)),
     ("core_ddl::run", Unchecked(SCHEMA)),
     ("core_ddl::run_deferred", Unchecked(SCHEMA)),
@@ -988,7 +1036,7 @@ const SUDO_SITES: &[(&str, usize, &str)] = &[
     (
         "account/fiscal/settings.rs::read",
         1,
-        "reads the fiscal calendar settings (year end, horizon) of a root company for period creation; the framework reads its own configuration, and a user whose entry needs a period needs no settings group; the values are bounded and are not returned to the caller (a later release)",
+        "reads the fiscal calendar settings (year end, horizon) of a root company for period creation; the framework reads its own configuration, and a user whose entry needs a period needs no settings group; the values are bounded and only named in refusals (a later release)",
     ),
     (
         "account/journal/mod.rs::check_accounts_as_default",
@@ -998,12 +1046,12 @@ const SUDO_SITES: &[(&str, usize, &str)] = &[
     (
         "account/journal/mod.rs::check_default_account_types",
         1,
-        "reads only `account_type` of the default accounts of the journals or accounts being checked, so the type rule does not depend on which accounts the caller's company rule shows; nothing read is returned to the caller (099)",
+        "reads only `account_type` of the default accounts of the journals or accounts being checked, so the type rule does not depend on which accounts the caller's company rule shows; the type is only named in refusals, and never for an account the caller may not read (099)",
     ),
     (
         "account/journal/mod.rs::next_code",
         1,
-        "proposes a free journal code: reads the codes of the company's and its parent companies' journals, archived and rule-hidden ones included, because `UNIQUE (company_id, code)` counts them all; only the codes are read, and only the chosen free code reaches the caller",
+        "proposes a free journal code: reads the codes of the company's and its parent companies' journals, archived and rule-hidden ones included, because `UNIQUE (company_id, code)` counts the company's own and the reference skips the parents' codes too; only for a caller who passed the create check of the model and may create journals in that company; only the codes are read, and only the chosen free code reaches the caller",
     ),
     (
         "account/journal/settings.rs::read",
@@ -1446,6 +1494,16 @@ const SUDO_SITES: &[(&str, usize, &str)] = &[
         "fixed search_view_id/limit presentation columns of the singleton action already admitted by load_action's record-read, action-group and target-model checks; the view descriptions keep the original caller environment and selected-view/field-group checks, while page limits remain validated",
     ),
     (
+        "web/metadata.rs::dashboard_description",
+        1,
+        "the search_view_id and limit columns of the one window action the dashboard request names, read after load_action admitted it with the caller's record-read, action-group and target-model checks (the same columns load_action_views reads); the list and search descriptions are then built in the caller's environment, a search view the caller cannot read only hides the strip, and only the action's own search view id and its validated page limit leave, never a value of a business record",
+    ),
+    (
+        "web/dashboard_settings.rs::read",
+        1,
+        "the three fixed dashboard settings web.dashboard_max_items, web.dashboard_max_period_days and web.dashboard_periods (global, nonsecret configuration the framework reads for itself, so a dashboard viewer needs no settings group); no business data is read in that environment; the item and day bounds are applied and named in refusals, and the configured period choices are returned to the caller as the strip's period list",
+    ),
+    (
         "web/metadata.rs::menu_modules",
         1,
         "oldest external-ID module and target ID for the already authorized/pruned menu forest only; set-based identity/size preflights precede bounded presentation reads; no external ID creation or authorization grant (/028)",
@@ -1546,21 +1604,6 @@ const SUDO_SITES: &[(&str, usize, &str)] = &[
         "creates the internal notes of `_message_log_batch`, a private method (not RPC, not data-callable) whose callers check access to the records first, as the reference ERP's sudo log; bodies are escaped text, the subtype is `mail.mt_note` and nobody is notified",
     ),
     (
-        "product/barcode.rs::check_barcode_uniqueness",
-        1,
-        "searches variants, templates and packagings for a barcode collision across every company the barcode may clash with, so a record the caller cannot read still collides; only ids leave the superuser search, and the name of a colliding record is read with the caller's own access",
-    ),
-    (
-        "product/barcode.rs::check_template_barcode_uniqueness",
-        1,
-        "the template form of the same check: superuser search for colliding variants and templates by barcode and company, names read with the caller's access as above",
-    ),
-    (
-        "product/product.rs::create",
-        1,
-        "reads only `company_id` of the template named in the create values, to give the barcode check the variant's company (a variant takes its template's company,); the create itself runs with the caller's access",
-    ),
-    (
         "product/product.rs::write",
         1,
         "counts `product.combo.item` rows that use the variants being archived, so a variant in a combo the caller cannot read is still refused; only the count is used and the error names no combo",
@@ -1571,9 +1614,44 @@ const SUDO_SITES: &[(&str, usize, &str)] = &[
         "the template form of the combo check: counts combo items that use the template's variants before archiving, count only, no names in the error",
     ),
     (
-        "product/product_uom.rs::_check_barcode_uniqueness",
+        "product/attribute.rs::attribute_usage",
         1,
-        "counts variants that already use a packaging's barcode (limit 1), so a variant the caller cannot read still collides; the error names no product",
+        "finds the attribute lines of active templates that use one attribute, in every company (an attribute is global), so a product the caller cannot read still blocks the archive, delete or variant-mode change; it runs after the caller's write or unlink check on the attribute, and the lines feed only an emptiness test and `visible_product_names`, which searches the templates again with the caller's own access and names a hidden one only as \"restricted products\"",
+    ),
+    (
+        "product/attribute.rs::value_usage",
+        1,
+        "the value form of `attribute_usage`: elevated only when `refuse_value_use` asks for the global view (the `is_used_on_products` compute passes the caller's environment), after the caller's write or unlink check on the value; the lines feed only an emptiness test and the caller-access name search as above",
+    ),
+    (
+        "product/attribute.rs::unlink",
+        2,
+        "after the caller's unlink check and `refuse_value_use`, finds the template values of the deleted value and the variants (archived too) that carry them, reading only `active`, to decide whether the value is archived (only archived variants use it) or deleted; a variant the caller cannot read still counts, and no value of either model leaves the method",
+    ),
+    (
+        "product/attribute.rs::_compute_default_extra_price_changed",
+        1,
+        "searches the template values of the original attribute value on templates of the caller's allowed companies and of their parent companies (a `parent_of` domain on the list from `tx.companies`, taken before the elevated search), and on shared templates, and compares their `price_extra` with the new default; only the boolean leaves the search",
+    ),
+    (
+        "product/packaging_actions.rs::action",
+        1,
+        "resolves the external identity `product.product_uom_action_view_list` and reads `res_model`, `name`, `target` and `views` of that one window action, refusing one that does not target `product.uom` (the reference ERP `_for_xml_id` reads the action with privileges); the three RPC callers first check read access on their one record and its existence, the domain names the checked record (and, for a unit, the context's `product_ids` as a filter only), and the opened list applies the caller's own access",
+    ),
+    (
+        "product/packaging_lifecycle.rs::before_template_unit_write",
+        1,
+        "after the caller's write check on the templates whose `uom_id` changes, searches their variants (archived too) and calls the `_update_uom` hook on them with privileges and `skip_uom_conversion`, as the reference ERP's template write does (`product_template.py:839`), so documents of dependent addons follow the unit change; base product's hook changes nothing and the target unit was validated and registered first",
+    ),
+    (
+        "uom/res_groups.rs::_is_uom_feature_enabled",
+        1,
+        "reads the `uom.group_uom` external identity, that group's implication closure and the superuser's group links to tell whether the global multi-unit feature is on (the reference ERP `_is_feature_enabled` reads the superuser's groups with privileges); a private method without `#[rpc]`, returning one boolean, that authorizes nothing for the caller",
+    ),
+    (
+        "account/tax/settings.rs::limit",
+        1,
+        "reads the global setting `account.tax_repartition_lines_max` for the tax distribution checks; the framework reads its own configuration, and a user who creates or edits a tax needs no settings group; the value is a bounded number and only named in refusals",
     ),
     (
         "mail/thread_rpc.rs::read_followers",
@@ -2645,7 +2723,7 @@ fn record_header(h: &Harness, model: &str, op: Operation) -> String {
         Unlink => "delete",
     };
     format!(
-        "You are not allowed to {verb} '{}' ({}) records.",
+        "Your access rights do not let you {verb} '{}' ({}) records.",
         spec.description, spec.name
     )
 }
@@ -2857,7 +2935,7 @@ async fn checked_entry_points_go_through_the_engine() {
             (Withheld(_), Err(e))
                 if e.kind() == erp_fields::ErrorKind::Validation
                     && e.message()
-                        == format!("The operation cannot be completed: {KEYED_MESSAGE}") => {}
+                        == format!("The database refused the change: {KEYED_MESSAGE}") => {}
             _ => failures.push(format!(
                 "{name}: as a user, expected {expect:?}, got {user:?}"
             )),

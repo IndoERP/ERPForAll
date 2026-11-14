@@ -115,7 +115,7 @@ async fn spec_rel_013_restrict_refuses() {
     assert_eq!(err.kind(), ErrorKind::Validation, "{err}");
     assert!(
         err.message()
-            .contains("Another model is using the record you are trying to delete"),
+            .contains("Other records still point to the record you want to delete"),
         "{err}"
     );
     assert_eq!(

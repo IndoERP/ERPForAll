@@ -311,7 +311,7 @@ async fn spec_crud_014_missing_required_value() {
     assert_eq!(err.sqlstate(), Some("23502"));
     assert_eq!(
         err.message(),
-        "The operation cannot be completed: Missing required field 'Name' (name) for model 'Model B' (test_rpc.model_b)"
+        "The database refused the change: Missing required field 'Name' (name) for model 'Model B' (test_rpc.model_b)"
     );
     tx.rollback().await.unwrap();
     drop(tx);
@@ -486,7 +486,7 @@ async fn spec_crud_042_constraint_violation_message() {
     assert_eq!(err.kind(), ErrorKind::Validation);
     assert_eq!(
         err.message(),
-        "The operation cannot be completed: The value must be positive"
+        "The database refused the change: The value must be positive"
     );
     tx.rollback().await.unwrap();
     drop(tx);
@@ -627,7 +627,7 @@ async fn spec_crud_046_index_and_unique_index_table_objects() {
     assert_eq!(err.kind(), ErrorKind::Validation);
     assert_eq!(
         err.message(),
-        "The operation cannot be completed: base_id and value should be unique"
+        "The database refused the change: base_id and value should be unique"
     );
     tx.rollback().await.unwrap();
     drop(tx);
@@ -1737,7 +1737,7 @@ impl erp_testkit::TestRules for NoTagWrites {
     ) -> erp_sdk::Result<()> {
         if model.name == "x.def_tag" && matches!(op, Operation::Write | Operation::Unlink) {
             return Err(Error::access(format!(
-                "You are not allowed to {} '{}' ({}) records.",
+                "Your access rights do not let you {} '{}' ({}) records.",
                 op.as_str(),
                 model.description,
                 model.name

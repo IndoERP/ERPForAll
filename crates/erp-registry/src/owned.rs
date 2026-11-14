@@ -98,6 +98,8 @@ pub enum KindDef {
     Date,
     /// Native UUID without identity policy.
     Uuid,
+    /// Exact signed 64-bit scalar.
+    BigInt,
     /// Native full-width unsigned PostgreSQL transaction identifier.
     Xid8,
     /// Explicit-offset, bounded microsecond instant.
@@ -155,6 +157,7 @@ impl KindDef {
             Self::Date => "date",
             Self::Datetime => "datetime",
             Self::Uuid => "uuid",
+            Self::BigInt => "bigint",
             Self::Xid8 => "xid8",
             Self::TimestampTz => "timestamptz",
             Self::Json => "json",
@@ -294,15 +297,25 @@ pub struct FieldDef {
     pub check_company: Option<bool>,
     /// `translate`: translatable textual field stored as JSONB with language keys.
     pub translate: Option<bool>,
+    /// SQL collation declaration, validated at registration.
+    pub collation: Option<String>,
     /// Explicit host HTML policy; omitted Html declarations use the full default allowlists.
     pub html_policy: Option<erp_fields::html::FieldPolicy>,
     /// Generated column expression: `Some(Some(expr))` to set, `Some(None)` for explicit removal.
     pub generated: Option<Option<String>>,
     /// Storage kind of the generated column (virtual or stored).
     pub generated_storage: Option<crate::generated::GeneratedStorage>,
+    /// Owner-only opt-in to the generated input adapter.
+    pub input_adapted: Option<bool>,
 }
 
 impl FieldDef {
+    /// Declare SQL collation (`default` or `C`); registration validates name and storage.
+    pub fn collation(mut self, name: impl Into<String>) -> Self {
+        self.collation = Some(name.into());
+        self
+    }
+
     /// Choose sanitizing or explicit untrusted text. No privilege bypass exists.
     pub fn sanitize(self, enabled: bool) -> Self {
         self.html_policy(if enabled {
@@ -347,9 +360,11 @@ impl FieldDef {
             context: None,
             check_company: None,
             translate: None,
+            collation: None,
             html_policy: None,
             generated: None,
             generated_storage: None,
+            input_adapted: None,
         }
     }
 
@@ -475,6 +490,21 @@ impl FieldDef {
         self
     }
 
+    /// Allow create/write input to be normalized by `_adapt_generated_input`.
+    /// Only the field's declaring addon may set or clear this option. It does not make the
+    /// database-generated column assignment-eligible.
+    ///
+    /// ```
+    /// use erp_registry::{FieldDef, KindDef};
+    /// let input = FieldDef::new("total", KindDef::Integer).generated("source + 1").input_adapted(true);
+    /// assert_eq!(input.input_adapted, Some(true));
+    /// ```
+    #[must_use]
+    pub fn input_adapted(mut self, enabled: bool) -> Self {
+        self.input_adapted = Some(enabled);
+        self
+    }
+
     /// Set the expression for a database-generated column.
     #[must_use]
     pub fn generated(mut self, expr: impl Into<String>) -> Self {
@@ -509,6 +539,7 @@ impl FieldDef {
             ("string", self.string.as_deref()),
             ("help", self.help.as_deref()),
             ("related", self.related.as_deref()),
+            ("collation", self.collation.as_deref()),
             ("compute", self.compute.as_deref()),
             ("groups", self.groups.as_deref()),
             ("domain", self.domain.as_deref()),
@@ -598,6 +629,7 @@ impl FieldDef {
             ))),
             KindDef::Boolean
             | KindDef::Integer
+            | KindDef::BigInt
             | KindDef::Float { .. }
             | KindDef::Monetary {
                 currency_field: None,
@@ -627,7 +659,8 @@ impl FieldDef {
             .saturating_add(opt(&self.compute))
             .saturating_add(opt(&self.groups))
             .saturating_add(opt(&self.domain))
-            .saturating_add(opt(&self.context));
+            .saturating_add(opt(&self.context))
+            .saturating_add(opt(&self.collation));
         if let Some(DefaultValue::Str(s)) = &self.default {
             total = total.saturating_add(text(s));
         }
@@ -659,6 +692,7 @@ impl FieldDef {
             }
             KindDef::Boolean
             | KindDef::Integer
+            | KindDef::BigInt
             | KindDef::Float { .. }
             | KindDef::Char { .. }
             | KindDef::Text
@@ -688,7 +722,10 @@ impl FieldDef {
             | (DefaultValue::Bool(_), KindDef::Boolean)
             | (
                 DefaultValue::Int(_),
-                KindDef::Integer | KindDef::Float { .. } | KindDef::Monetary { .. },
+                KindDef::Integer
+                | KindDef::BigInt
+                | KindDef::Float { .. }
+                | KindDef::Monetary { .. },
             )
             | (
                 DefaultValue::Str(_),
@@ -697,7 +734,8 @@ impl FieldDef {
                 | KindDef::Html
                 | KindDef::Selection { .. }
                 | KindDef::Date
-                | KindDef::Datetime,
+                | KindDef::Datetime
+                | KindDef::BigInt,
             ) => true,
             (DefaultValue::Float(f), KindDef::Float { .. } | KindDef::Monetary { .. }) => {
                 f.is_finite()
@@ -795,6 +833,7 @@ impl FieldDef {
             KindDef::Date => KindDecl::Date,
             KindDef::Datetime => KindDecl::Datetime,
             KindDef::Uuid => KindDecl::Uuid,
+            KindDef::BigInt => KindDecl::BigInt,
             KindDef::Xid8 => KindDecl::Xid8,
             KindDef::TimestampTz => KindDecl::TimestampTz,
             KindDef::Json => KindDecl::Json,
@@ -857,6 +896,7 @@ impl FieldDef {
         fd.context = interner.opt_str(self.context.as_deref())?;
         fd.check_company = self.check_company;
         fd.translate = self.translate;
+        fd.collation = interner.opt_str(self.collation.as_deref())?;
         fd.html_policy = self.html_policy;
         fd.generated = match &self.generated {
             None => None,
@@ -864,6 +904,7 @@ impl FieldDef {
             Some(Some(expr)) => Some(Some(interner.str(expr)?)),
         };
         fd.generated_storage = self.generated_storage;
+        fd.input_adapted = self.input_adapted;
         Ok(fd)
     }
 }

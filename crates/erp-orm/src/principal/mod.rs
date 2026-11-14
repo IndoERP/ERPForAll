@@ -484,7 +484,7 @@ impl Principal {
     /// assert_eq!(principal.with_default_companies().companies().allowed(), [c1, c2]);
     /// assert_eq!(
     ///     principal.with_companies(vec![c3]).unwrap_err().to_string(),
-    ///     "Access to unauthorized or invalid companies."
+    ///     "One of the selected companies does not exist or is not one of yours."
     /// );
     /// # Ok::<(), erp_orm::PrincipalError>(())
     /// ```

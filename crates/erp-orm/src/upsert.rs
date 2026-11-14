@@ -443,6 +443,7 @@ impl Records {
     /// physical inserts/changes under the writer, including deferred compute provenance.
     /// Relation/bulk capture and nested event-relevant side effects remain unsupported.
     pub async fn upsert(&self, tx: &mut Transaction, call: UpsertCall) -> Result<UpsertResult> {
+        tx.refuse_adapter_effect()?;
         tx.admit_records(self).await?;
         tx.check_capture_create(self, &call.rows)?;
         let before = tx.mutations();
@@ -727,6 +728,7 @@ enum KeyPart {
     Date(Date),
     DateTime(DateTime),
     Uuid(erp_fields::Uuid),
+    BigInt(erp_fields::BigInt),
     Xid8(erp_fields::Xid8),
     TimestampTz(erp_fields::TimestampTz),
 }
@@ -742,6 +744,7 @@ fn key_part(spec: &ModelSpec, field: &FieldSpec, cell: &Cell) -> Result<KeyPart>
         Cell::Date(d) => KeyPart::Date(*d),
         Cell::DateTime(d) => KeyPart::DateTime(*d),
         Cell::Uuid(v) => KeyPart::Uuid(*v),
+        Cell::BigInt(v) => KeyPart::BigInt(*v),
         Cell::Xid8(v) => KeyPart::Xid8(*v),
         Cell::TimestampTz(v) => KeyPart::TimestampTz(*v),
 
@@ -769,7 +772,7 @@ fn out_of_range(spec: &ModelSpec, fields: &[&FieldSpec]) -> Error {
         .map(|f| format!("'{}' ({})", f.string, f.name))
         .collect();
     Error::validation(format!(
-        "The operation cannot be completed: the new value of {} on '{}' is out of range",
+        "The database refused the change: the new value of {} on '{}' is out of range",
         names.join(" or "),
         spec.description
     ))
@@ -778,6 +781,10 @@ fn out_of_range(spec: &ModelSpec, fields: &[&FieldSpec]) -> Error {
 /// `a + b` for an accumulated field, checked.
 fn add_checked(spec: &ModelSpec, field: &FieldSpec, a: &Cell, b: &Cell) -> Result<Cell> {
     let sum = match (a, b) {
+        (Cell::BigInt(x), Cell::BigInt(y)) => x
+            .get()
+            .checked_add(y.get())
+            .map(|v| Cell::BigInt(erp_fields::BigInt::from_i64(v))),
         (Cell::Int(x), Cell::Int(y)) => x.checked_add(*y).map(Cell::Int),
         (Cell::Float(x), Cell::Float(y)) => Some(x + y).filter(|s| s.is_finite()).map(Cell::Float),
         (Cell::Decimal(x), Cell::Decimal(y)) => x.checked_add(*y).map(Cell::Decimal),
@@ -855,7 +862,7 @@ fn prepare(
             // (review DB-S1)
             if field.required && matches!(cell, Cell::Null) {
                 return Err(Error::validation(format!(
-                    "The operation cannot be completed: the key field '{}' ({}) of '{}' is required \
+                    "The database refused the change: the key field '{}' ({}) of '{}' is required \
                      and row {n} gives no value for it",
                     field.string, field.name, spec.description
                 )));
@@ -2043,7 +2050,7 @@ fn check_floors(spec: &ModelSpec, plan: &Plan<'_>, out: &[RowOutcome]) -> Result
             let field = spec.field_by_id(*f);
             if below(spec, field, value, floor)? {
                 return Err(Error::validation(format!(
-                    "The operation cannot be completed: a new '{}' record would start with '{}' \
+                    "The database refused the change: a new '{}' record would start with '{}' \
                      ({}) = {} below its floor {}",
                     spec.description,
                     field.string,

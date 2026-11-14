@@ -348,7 +348,7 @@ impl Env {
     ///
     /// # Errors
     ///
-    /// `Access` ("Access to unauthorized or invalid companies.") when the context names a company
+    /// `Access` ("One of the selected companies does not exist or is not one of yours.") when the context names a company
     /// the subject is not in; `Validation` when `allowed_company_ids` is not a list of company ids
     /// or a company is listed twice.
     pub fn companies(&self) -> Result<&[CompanyId]> {

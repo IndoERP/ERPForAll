@@ -20,6 +20,14 @@ const MAX_DOMAIN_TOKENS = 256;
 const MAX_LABEL = 4096;
 const invalid = (what: string): never => { throw new ClientError("server", `Invalid ${what}.`); };
 const refuse = (message: string): never => { throw new ClientError("validation", message); };
+const repeated = (axis: "row" | "col", field: PivotField): string => `These ${axis === "row" ? "rows" : "columns"} are already grouped by ${field.label}${field.interval ? ` (${field.interval})` : ""}. Choose another ${field.interval ? "field or period" : "field"}.`;
+/** A grouping is on an axis once: from a header's menu, from the search's Group By, from the address or from an action's context. */
+/** The same for what a pivot opens with: nobody chose it here, so the sentence says where the repetition is written. */
+const declaredTwice = (axis: "row" | "col", field: PivotField): string => `This pivot is set to group its ${axis === "row" ? "rows" : "columns"} by ${field.label}${field.interval ? ` (${field.interval})` : ""} twice. Remove one of the two from the view, the action's context or the page address.`;
+const refuseRepeated = (levels: readonly PivotField[], axis: "row" | "col", message: (axis: "row" | "col", field: PivotField) => string = repeated): void => {
+  const seen = new Set<string>();
+  for (const level of levels) { if (seen.has(groupingKey(level))) refuse(message(axis, level)); seen.add(groupingKey(level)); }
+};
 const unsupported = (message: string): never => { throw new ClientError("unsupported", message); };
 
 /** One grouping: a field and, for dates, the interval (month when none is declared). */
@@ -53,6 +61,8 @@ export interface PivotConfig {
 export const COUNT: PivotMeasure = { id: "__count", label: "Count", spec: "__count", kind: "integer" };
 const isDate = (field: { kind: string }): boolean => field.kind === "date" || field.kind === "datetime";
 export const specOf = (field: PivotField): string => field.interval ? `${field.name}:${field.interval}` : field.name;
+/** What a grouping groups by, whatever way it was written: a date with no interval groups by month, so `published` and `published:month` are one grouping. */
+export const groupingKey = (field: PivotField): string => isDate(field) ? `${field.name}:${field.interval ?? "month"}` : field.name;
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** A grouping from its `field` or `field:interval` text. A date with no interval groups by month. */
@@ -143,6 +153,8 @@ export function applyContext(config: PivotConfig, context: Record<string, unknow
   if (!rows && !cols && !measures) return config;
   const known = new Set(config.measures.map(measure => measure.id));
   for (const id of measures ?? []) if (!known.has(id)) refuse(`The context key pivot_measures names ${id}, which is not a measure of this model.`);
+  const twice = (measures ?? []).find((id, index, all) => all.indexOf(id) !== index);
+  if (twice !== undefined) refuse(`The context key pivot_measures names ${twice} twice.`); // the address names a measure once
   return {
     ...config,
     rows: rows ? rows.map(spec => resolveSpec(spec, config.groupable)) : config.rows,
@@ -314,6 +326,7 @@ export class PivotModel {
   constructor(readonly config: PivotConfig, private readonly call: PivotCall, private readonly currentDomain: () => unknown[], private readonly limits: PivotLimits, initial: PivotInitial = archState(config), private readonly accept: (snapshot: PivotSnapshot) => void = () => undefined) {
     if (initial.rows.length > PIVOT_MAX_LEVELS || initial.cols.length > PIVOT_MAX_LEVELS) refuse(`The pivot groups by at most ${PIVOT_MAX_LEVELS} fields on an axis.`);
     if (initial.active.length > PIVOT_MAX_MEASURES) refuse(`The pivot shows at most ${PIVOT_MAX_MEASURES} measures.`);
+    refuseRepeated(initial.rows, "row", declaredTwice); refuseRepeated(initial.cols, "col", declaredTwice);
     for (const id of initial.active) if (!config.measures.some(measure => measure.id === id)) refuse(`Unknown pivot measure ${id}.`);
     const axis = (levels: readonly PivotField[], open: string[][] | undefined): Axis => {
       const map = new Map<string, string[]>();
@@ -510,6 +523,8 @@ export class PivotModel {
         if (!field) return refuse("Choose a field to expand this header by.");
         if (depth !== target.levels.length) return refuse("A header can only be expanded one level deeper than the groupings so far.");
         if (depth >= PIVOT_MAX_LEVELS) return refuse(`The pivot groups by at most ${PIVOT_MAX_LEVELS} fields on an axis.`);
+        // A group split by its own field has one identical child, and the page address names a grouping of an axis once.
+        if (target.levels.some(level => groupingKey(level) === groupingKey(field))) return refuse(repeated(axis, field));
         target.levels.push(field);
       }
       target.open.set(pk(path), [...path]); target.full = false;
@@ -546,6 +561,7 @@ export class PivotModel {
   setRows(fields: readonly PivotField[] | null): Promise<void> {
     const levels = fields ?? this.config.rows;
     if (levels.length > PIVOT_MAX_LEVELS) return Promise.reject(new ClientError("validation", `The pivot groups by at most ${PIVOT_MAX_LEVELS} fields on an axis.`));
+    try { refuseRepeated(levels, "row"); } catch (error) { return Promise.reject(error); }
     return this.change(state => { state.axes[0] = { levels: [...levels], open: new Map(), all: true, full: true }; }, { full: true });
   }
 

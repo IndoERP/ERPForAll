@@ -219,7 +219,7 @@ async fn fields_get_exposes_only_digits_to_users_denied_the_precision_table() {
     assert_eq!(error.kind(), ErrorKind::Access);
     assert_eq!(
         error.message(),
-        "You are not allowed to read 'Decimal Precision' (decimal.precision) records."
+        "Your access rights do not let you read 'Decimal Precision' (decimal.precision) records."
     );
     let items = env.records("test_defaults.item").unwrap();
     assert_eq!(digits(&mut tx, &items).await, expected_digits(5));

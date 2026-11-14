@@ -352,7 +352,7 @@ async fn run() {
             assert_eq!(error.kind(), erp_fields::ErrorKind::Access);
             assert_eq!(
                 error.message(),
-                "You are not allowed to access 'Access Groups' (res.groups) records.\n\nThis operation is allowed for the following groups:\n\t- Settings Administration\n\nContact your administrator to request access if necessary."
+                "Your access rights do not let you access 'Access Groups' (res.groups) records.\n\nGroups that may do this:\n\t- Settings Administration\n\nAsk an administrator if you need this access."
             );
         }
         tx.rollback().await.unwrap();

@@ -30,6 +30,15 @@ pub struct ResCompany {
     /// Materialized path of the company hierarchy.
     #[field(char, index = true)]
     pub parent_path: Option<Arc<str>>,
+    /// Topmost company, resolved from the validated tree. Search/group/order are unsupported.
+    #[field(
+        many2one,
+        comodel = "res.company",
+        compute = "_compute_root_id",
+        readonly = true,
+        compute_sudo = false
+    )]
+    pub root_id: Option<RecId>,
     /// Partner representing this company.
     #[field(many2one, comodel = "res.partner", ondelete = "restrict")]
     pub partner_id: Option<RecId>,
@@ -139,6 +148,60 @@ async fn link_to_creators(tx: &mut Transaction, created: &Records) -> Result<()>
 
 #[methods(ResCompany, addon = "base")]
 impl ResCompany {
+    /// Resolve roots in a batch without retaining hierarchy state across calls or rollback.
+    #[compute(depends = ["parent_id", "parent_path"])]
+    async fn _compute_root_id(
+        this: &RecordSet<ResCompany>,
+        tx: &mut Transaction,
+        out: &mut Assign<'_, ResCompany>,
+    ) -> Result<()> {
+        let saved: Vec<i64> = this
+            .as_records()
+            .rec_ids()
+            .iter()
+            .filter_map(|id| id.as_real().map(|real| real.get()))
+            .collect();
+        let roots = crate::company_tree::roots(tx, &saved).await?;
+        for (index, id) in this.as_records().rec_ids().iter().enumerate() {
+            let root = if let Some(real) = id.as_real() {
+                let raw = roots
+                    .get(&real.get())
+                    .copied()
+                    .ok_or_else(|| Error::programming("The company root was not resolved."))?;
+                RecId::from_real(raw).ok_or_else(|| {
+                    Error::programming("The company root has an invalid identity.")
+                })?
+            } else {
+                crate::company_tree::draft_root(tx, this.as_records(), *id).await?
+            };
+            out.set(index, ResCompany::ROOT_ID, Some(root))?;
+        }
+        Ok(())
+    }
+
+    /// Selected companies reachable through active branch edges. Native-only.
+    /// # Errors
+    /// Admission, membership, missing-company and malformed-tree errors are propagated.
+    #[method]
+    async fn _accessible_branches(
+        this: &RecordSet<ResCompany>,
+        tx: &mut Transaction,
+    ) -> Result<Records> {
+        crate::company_tree::accessible(tx, this.as_records()).await
+    }
+
+    /// Whether this recordset is exactly the active membership of its complete company trees.
+    /// This can reveal that an omitted active sibling exists; it returns no hidden identity.
+    /// # Errors
+    /// Caller read access, validated company selection and hierarchy errors are propagated.
+    #[method]
+    async fn _all_branches_selected(
+        this: &RecordSet<ResCompany>,
+        tx: &mut Transaction,
+    ) -> Result<bool> {
+        crate::company_tree::all_selected(tx, this.as_records()).await
+    }
+
     /// The partner is created in the caller's environment with no default parent.
     ///
     /// The link is one `res.users` write with elevated rights: `company_ids` is

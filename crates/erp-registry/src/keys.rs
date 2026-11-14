@@ -70,12 +70,18 @@ pub struct BusinessKey {
     /// `NULLS DISTINCT`: rows with NULL parts never conflict, so the key cannot arbitrate an
     /// upsert.
     pub nulls_distinct: bool,
+    /// Redundant id-containing keys exist for composite FK targets, never upsert arbitration.
+    contains_id: bool,
 }
 
 impl BusinessKey {
     /// Why the key cannot arbitrate an upsert, or `None` when it can.
     pub fn arbitration_refusal(&self) -> Option<&'static str> {
-        self.nulls_distinct.then_some("nulls_distinct")
+        if self.contains_id {
+            Some("id")
+        } else {
+            self.nulls_distinct.then_some("nulls_distinct")
+        }
     }
 }
 
@@ -154,6 +160,7 @@ fn check_row_version(model: &ModelSpec) -> Result<()> {
 fn key_kind_refusal(ty: &FieldType) -> Option<&'static str> {
     match ty {
         FieldType::Boolean
+        | FieldType::BigInt
         | FieldType::Integer
         | FieldType::Float { digits: Some(_) }
         | FieldType::Monetary { .. }
@@ -241,13 +248,16 @@ fn business_keys(model: &ModelSpec) -> Result<Vec<BusinessKey>> {
                      columns of the model's own table"
                 )));
             }
-            if let Some(reason) = key_kind_refusal(&field.ty) {
+            // Composite (company, id) keys are explicit FK targets (B6);
+            // they cannot arbitrate upsert and an id-only key remains redundant.
+            let composite_id = matches!(field.ty, FieldType::Id) && decl.fields.len() > 1;
+            if let Some(reason) = key_kind_refusal(&field.ty).filter(|_| !composite_id) {
                 return Err(Error::programming(format!(
                     "{what}: field '{fname}' ({}) cannot be a key field: {reason}",
                     field.ty.type_name()
                 )));
             }
-            if field.column().is_none() {
+            if field.column().is_none() && !composite_id {
                 return Err(Error::programming(format!(
                     "{what}: field '{fname}' is not stored; key fields must be columns of the \
                      model's own table"
@@ -261,6 +271,7 @@ fn business_keys(model: &ModelSpec) -> Result<Vec<BusinessKey>> {
             fields,
             message: decl.message,
             nulls_distinct: decl.nulls_distinct,
+            contains_id: decl.fields.contains(&"id"),
         });
     }
     Ok(keys)

@@ -2,8 +2,9 @@
 //! Move lines (`stock.move.line`), their serial child rows (`stock.move.line.serial`) and their
 //! correction rows (`stock.move.line.correction`): tables only (
 //! D2.5, D4). The statements that write open
-//! lines, children and corrections, the logical-row surface (8, amendment C2) and the
-//! `done_at` and append-only triggers (amendment C1) are later slices'.
+//! lines, children and corrections and the logical-row surface (8, amendment C2)
+//! remain later slices. The `done_at` and append-only database backstops are installed by
+//! [`crate::schema_guards`].
 //!
 //! The three models live in one file in this order on purpose: schema sync adds table constraints in
 //! registry order (source file, then line), and each composite foreign key needs its `UNIQUE (id, …)`
@@ -33,7 +34,7 @@ fn now(_ctx: &DefaultContext) -> Value {
 /// form, as on [`crate::stock_move::StockMove`] (C3).
 #[model(
     name = "stock.move.line",
-    description = "Product Moves (Stock Move Line)",
+    description = "Stock move line",
     order = "result_package_id desc, id",
     rec_name = "product_id",
     id_sequence = LOGICAL_ID_SEQUENCE,
@@ -42,7 +43,7 @@ fn now(_ctx: &DefaultContext) -> Value {
         (
             "_quantity_nonneg",
             "CHECK (quantity >= 0)",
-            "You can not enter negative quantities."
+            "Quantity cannot be negative."
         ),
         (
             "_digits_range",
@@ -306,7 +307,7 @@ pub struct StockMoveLine {
     )]
     pub location_dest_id: Option<RecId>,
     /// Added through an entire package.
-    #[field(boolean, string = "Is added through entire package")]
+    #[field(boolean, string = "Moved as a whole package")]
     pub is_entire_pack: bool,
     /// Open membership (5): `open` is the reservation, `done` the ledger. Written only by
     /// the transition statements.
@@ -324,7 +325,7 @@ pub struct StockMoveLine {
     #[field(boolean, required = true, default = true, string = "Active")]
     pub active: bool,
     /// First completion time (1); never changed afterwards (its trigger is
-    /// 's, amendment C1).
+    /// installed by [`crate::schema_guards`], amendment C1).
     #[field(datetime, readonly = true, copy = false, string = "Done At")]
     pub done_at: Option<DateTime>,
     /// Highest correction `seq` of the line (1, D2.2 I6).
@@ -475,7 +476,7 @@ pub struct StockMoveLineSerial {
 /// the child scopes (D4.1), which also makes's `(move_line_id, serial_child_id, seq)` unique.
 /// Each tuple part is a column (`old_*`, `new_*`, D4.2): a child-mode line's line scope stores no
 /// quantity or lot, a child scope its quantity 0 or 1, its lot and its overrides (null: follows the
-/// line). Append-only is's trigger (amendment C1).
+/// line). Append-only is enforced by [`crate::schema_guards`] (amendment C1).
 #[model(
     name = "stock.move.line.correction",
     description = "Move Line Correction",

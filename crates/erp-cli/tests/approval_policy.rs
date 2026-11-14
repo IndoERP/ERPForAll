@@ -28,6 +28,9 @@ use erp_testkit::TestDb;
 
 const MODEL: &str = "ir.approval.policy";
 
+#[path = "support/approval_limits.rs"]
+mod approval_limits;
+
 /// On a 16 MiB stack: the ORM's create and write chains overflow the default test thread stack in
 /// unoptimized builds (the pattern of `base_company_branches.rs`).
 fn run<F: std::future::Future<Output = ()>>(test: impl FnOnce() -> F + Send + 'static) {
@@ -1692,6 +1695,16 @@ async fn an_active_user_approve_or_deny_revision_is_refused_until_enforcement_ex
         assert_eq!(error.kind(), ErrorKind::Validation, "{error}");
         assert!(error.message().ends_with(FENCED_TAIL), "{error}");
         assert!(no_active_fenced_revision(&f).await);
+        // a copy of the archived revision that asks for `active = true` reaches the fence (a copy
+        // of an active row meets the selector tie first)
+        let mut tx = f.begin(admin).await;
+        let archived = tx.env().records(MODEL).unwrap().browse([id]).unwrap();
+        let defaults = erp_fields::ValueMap::from_iter([("active".to_owned(), Value::Bool(true))]);
+        let error = archived.copy(&mut tx, Some(defaults)).await.unwrap_err();
+        tx.rollback().await.unwrap();
+        assert_eq!(error.kind(), ErrorKind::Validation, "{error}");
+        assert!(error.message().ends_with(FENCED_TAIL), "{error}");
+        assert!(no_active_fenced_revision(&f).await);
         // revisions are never deleted through the model; SQL clears the row for the next round
         f.sql("DELETE FROM ir_approval_policy WHERE id = $1", &[&id])
             .await;
@@ -1733,6 +1746,12 @@ async fn an_active_user_approve_or_deny_revision_is_refused_until_enforcement_ex
         .await
         .unwrap_err();
     assert_eq!(error.orm_kind(), Some(ErrorKind::Validation), "{error}");
+    match error.kind() {
+        erp_data::load::LoadErrorKind::Orm(error) => {
+            assert!(error.message().ends_with(FENCED_TAIL), "{error}");
+        }
+        other => panic!("expected the model's refusal, got {other:?}"),
+    }
     tx.rollback().await.unwrap();
     assert!(no_active_fenced_revision(&f).await);
 
@@ -1743,7 +1762,8 @@ async fn an_active_user_approve_or_deny_revision_is_refused_until_enforcement_ex
     let source = tx.env().records(MODEL).unwrap().browse([old]).unwrap();
     let error = source.copy(&mut tx, None).await.unwrap_err();
     tx.rollback().await.unwrap();
-    // the tie with the original is refused before the fence is reached: one outcome, a refusal
+    // a copy of an ACTIVE row meets the selector tie first (the fence is covered above, on the
+    // archived row): one outcome, a refusal
     assert_eq!(error.kind(), ErrorKind::Validation, "{error}");
     f.archive(admin, old).await;
     assert!(no_active_fenced_revision(&f).await);

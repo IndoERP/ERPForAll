@@ -120,7 +120,7 @@ pub(super) const LISTED: usize = 5;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct CompanyInconsistency {
-    /// `res.company` records are their own company (`Record is company …`).
+    /// `res.company` records are their own company (`The record is company …`).
     pub itself: bool,
     /// The record's display name (unused for `itself`).
     pub record: String,
@@ -156,27 +156,29 @@ impl CompanyInconsistency {
     }
 }
 
+/// The message for `items` (at most [`LISTED`] lines are written by the caller's slice).
 fn message(items: &[CompanyInconsistency]) -> String {
     let mut lines = Vec::with_capacity(items.len().saturating_add(2));
-    lines.push("Uh-oh! You’ve got some company inconsistencies here:".to_owned());
+    lines.push("These values link records of different companies:".to_owned());
     for i in items {
         let companies = i.companies.join(", ");
         let values = i.values.join(", ");
         lines.push(if i.itself {
             format!(
-                "- Record is company “{companies}” while “{}” ({}: {values}) belongs to another \
-                 company.",
+                "- The record is company “{companies}”, and “{}” ({}: {values}) points to a record \
+                 of another company.",
                 i.label, i.field
             )
         } else {
             format!(
-                "- “{}” belongs to company “{companies}” while “{}” ({}: {values}) belongs to \
+                "- “{}” is in company “{companies}”, and “{}” ({}: {values}) points to a record of \
                  another company.",
                 i.record, i.label, i.field
             )
         });
     }
-    lines.push("To avoid a mess, no company crossover is allowed!".to_owned());
+    lines
+        .push("Choose records of the same company, or records shared by all companies.".to_owned());
     lines.join("\n")
 }
 
@@ -269,12 +271,12 @@ mod tests {
         let error = CompanyError::Inconsistent { items, total: 9 };
         assert_eq!(
             error.to_string(),
-            "Uh-oh! You’ve got some company inconsistencies here:\n\
-             - “C0” belongs to company “Company B” while “Parent” (parent_id: 'PA') belongs to \
-             another company.\n\
-             - Record is company “Company A” while “Partner” (partner_id: 'x', \"it's\") belongs \
-             to another company.\n\
-             To avoid a mess, no company crossover is allowed!"
+            "These values link records of different companies:\n\
+             - “C0” is in company “Company B”, and “Parent” (parent_id: 'PA') points to a record \
+             of another company.\n\
+             - The record is company “Company A”, and “Partner” (partner_id: 'x', \"it's\") points \
+             to a record of another company.\n\
+             Choose records of the same company, or records shared by all companies."
         );
     }
 

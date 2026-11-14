@@ -109,6 +109,7 @@ pub struct RegistryBuilder {
     sql_manifests: Vec<&'static SqlObjectManifest>,
     sql_decls: Vec<&'static SqlObjectDecl>,
     sql_limits: SqlObjectLimits,
+    input_adapters: Vec<&'static crate::GeneratedInputAdapterDecl>,
 }
 
 impl RegistryBuilder {
@@ -124,6 +125,7 @@ impl RegistryBuilder {
             sql_manifests: Vec::new(),
             sql_decls: Vec::new(),
             sql_limits: SqlObjectLimits::DEFAULT,
+            input_adapters: Vec::new(),
         }
     }
 
@@ -215,6 +217,17 @@ impl RegistryBuilder {
         self
     }
 
+    /// Supply adapter declaration metadata for native builders.
+    /// The ORM separately checks the executable method and its signature.
+    #[must_use]
+    pub fn with_generated_input_adapters(
+        mut self,
+        declarations: impl IntoIterator<Item = &'static crate::GeneratedInputAdapterDecl>,
+    ) -> Self {
+        self.input_adapters.extend(declarations);
+        self
+    }
+
     /// Compose the registry.
     ///
     /// With [`ManualFieldPolicy::DropBroken`] the registry is composed in rounds: a round that
@@ -259,6 +272,7 @@ impl RegistryBuilder {
             if drops.is_empty() {
                 let mut registry = result?;
                 registry.dropped = dropped;
+                crate::generated_input::validate(&registry, &self.input_adapters, self.linked)?;
                 registry.sql_objects = crate::sqlobj::graph::resolve(
                     &registry,
                     &self.sql_manifests,
@@ -1174,6 +1188,7 @@ pub(crate) fn index_kind_str(kind: Option<IndexKind>) -> &'static str {
 #[derive(Debug, Clone)]
 struct Merged {
     params: FieldDecl,
+    declaring_addon: &'static str,
     selection: Option<Selection>,
     modules: Vec<&'static str>,
     magic: bool,
@@ -1220,6 +1235,7 @@ impl Merged {
         let native = native_index_for(fd, decl, magic);
         let mut merged = Self {
             params: FieldDecl::new(fd.name, fd.kind),
+            declaring_addon: decl.addon,
             selection: None,
             modules: Vec::new(),
             magic,
@@ -1238,6 +1254,12 @@ impl Merged {
 
     fn apply(&mut self, model: &str, fd: &FieldDecl, decl: &'static ModelDecl) -> Result<()> {
         let addon = decl.addon;
+        if fd.input_adapted.is_some() && addon != self.declaring_addon {
+            return Err(Error::programming(format!(
+                "Invalid generated input field '{model}.{}': only declaring addon '{}' may set input_adapted; addon '{addon}' cannot set or clear it",
+                fd.name, self.declaring_addon
+            )));
+        }
         if !same_kind(&self.params.kind, &fd.kind) {
             // M2: Refuse runtime type change on a natively indexed field.
             if decl.runtime {
@@ -1261,13 +1283,18 @@ impl Merged {
             let modules = std::mem::take(&mut self.modules);
             // a type change keeps `secret` (D2)
             let secret = self.params.secret;
+            let collation = self.params.collation;
             let native = if decl.runtime {
                 self.native
             } else {
                 native_index_for(fd, decl, self.magic)
             };
             *self = Self {
-                params: FieldDecl::new(fd.name, fd.kind),
+                declaring_addon: self.declaring_addon,
+                params: FieldDecl {
+                    input_adapted: self.params.input_adapted,
+                    ..FieldDecl::new(fd.name, fd.kind)
+                },
                 selection: None,
                 modules,
                 magic: self.magic,
@@ -1275,6 +1302,7 @@ impl Merged {
                 native,
             };
             self.params.secret = secret;
+            self.params.collation = collation;
         }
         if addon == MANUAL_ADDON {
             self.manual = true;
@@ -1341,6 +1369,11 @@ impl Merged {
                     kind: new_kind,
                 }));
             }
+        }
+        if let Some(name) = fd.collation {
+            erp_fields::TextCollation::parse(name).map_err(|error| {
+                Error::programming(format!("field '{model}.{}': {}", fd.name, error.message()))
+            })?;
         }
         let prev_gen =
             self.params.generated.is_some() && !matches!(self.params.generated, Some(None));
@@ -1503,8 +1536,10 @@ impl Merged {
             user_writeable,
             tracking,
             translate,
+            collation,
             db_default,
-            html_policy
+            html_policy,
+            input_adapted
         );
         p.kind = match (p.kind, fd.kind) {
             (KindDecl::Char { size }, KindDecl::Char { size: new }) => {
@@ -2443,6 +2478,11 @@ fn resolve_field(model: &str, id: FieldId, merged: Merged) -> Result<FieldSpec> 
         copy_default = false;
     }
     let is_generated = matches!(p.generated, Some(Some(_)));
+    if p.input_adapted.is_some() && !is_generated {
+        return Err(Error::programming(format!(
+            "Invalid generated input field '{model}.{name}': input_adapted requires a generated field"
+        )));
+    }
     let (store, readonly, copy, compute_sudo);
     if is_generated {
         // The per-declaration checks in `apply` see one `fd` at a time; a base `compute`,
@@ -2491,6 +2531,7 @@ fn resolve_field(model: &str, id: FieldId, merged: Merged) -> Result<FieldSpec> 
         if !matches!(
             p.kind,
             KindDecl::Boolean
+                | KindDecl::BigInt
                 | KindDecl::Integer
                 | KindDecl::Float { .. }
                 | KindDecl::Monetary { .. }
@@ -2563,6 +2604,7 @@ fn resolve_field(model: &str, id: FieldId, merged: Merged) -> Result<FieldSpec> 
     let ty = match p.kind {
         KindDecl::Id => FieldType::Id,
         KindDecl::Boolean => FieldType::Boolean,
+        KindDecl::BigInt => FieldType::BigInt,
         KindDecl::Integer => FieldType::Integer,
         KindDecl::Float { digits } => FieldType::Float { digits },
         KindDecl::Monetary { currency_field } => FieldType::Monetary {
@@ -2683,6 +2725,23 @@ fn resolve_field(model: &str, id: FieldId, merged: Merged) -> Result<FieldSpec> 
         KindDecl::DateRange { bounds } => FieldType::DateRange { bounds },
         KindDecl::DatetimeRange { bounds } => FieldType::DatetimeRange { bounds },
     };
+    let collation = match p.collation {
+        None => erp_fields::TextCollation::DatabaseDefault,
+        Some(raw) => {
+            if !matches!(ty, FieldType::Char { .. } | FieldType::Text)
+                || !store
+                || p.translate == Some(true)
+                || p.company_dependent == Some(true)
+            {
+                return Err(Error::programming(format!(
+                    "field '{model}.{name}': collation requires a stored Char/Text SQL column, not translated or company-dependent"
+                )));
+            }
+            erp_fields::TextCollation::parse(raw).map_err(|error| {
+                Error::programming(format!("field '{model}.{name}': {}", error.message()))
+            })?
+        }
+    };
     let tracking = resolve_tracking(model, name, p.tracking, &ty, store, &p)?;
     let html_policy = if matches!(ty, FieldType::Html) {
         Some(
@@ -2722,6 +2781,7 @@ fn resolve_field(model: &str, id: FieldId, merged: Merged) -> Result<FieldSpec> 
                 | FieldType::Text
                 | FieldType::Html
                 | FieldType::Boolean
+                | FieldType::BigInt
                 | FieldType::Integer
                 | FieldType::Float { .. }
                 | FieldType::Monetary { .. }
@@ -2876,6 +2936,8 @@ fn resolve_field(model: &str, id: FieldId, merged: Merged) -> Result<FieldSpec> 
         delegate: p.delegate.unwrap_or(false),
         company_dependent: p.company_dependent.unwrap_or(false),
         translate,
+        collation,
+        collation_declared: p.collation.is_some(),
         html_policy,
         change_default: p.change_default.unwrap_or(false),
         user_writeable: p.user_writeable.unwrap_or(false),
@@ -2885,6 +2947,7 @@ fn resolve_field(model: &str, id: FieldId, merged: Merged) -> Result<FieldSpec> 
         inherited: None,
         server_set,
         selection_ondelete,
+        input_adapted: p.input_adapted.unwrap_or(false),
         generated: match p.generated {
             Some(Some(source)) => {
                 let storage = p

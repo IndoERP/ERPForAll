@@ -351,7 +351,7 @@ async fn assert_internal_reader_cannot_save(installed: &Orm, db: &erp_testkit::T
     assert_eq!(denied.kind(), erp_fields::ErrorKind::Access);
     assert_eq!(
         denied.message(),
-        "Setting is unavailable or access is denied."
+        format!("Setting {KEY} is unavailable or access is denied.")
     );
     tx.rollback().await.unwrap();
 }

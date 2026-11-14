@@ -148,12 +148,14 @@ fn guards() -> Vec<SqlObjectDecl> {
         SqlObjectDecl::condition(
             ADDON,
             "cond_truncate",
-            SqlConditionDecl::new("ERP01", "sqlobj_no_truncate", TRUNCATE_MESSAGE),
+            SqlConditionDecl::new("ERP01", "sqlobj_no_truncate", TRUNCATE_MESSAGE)
+                .kind(erp_registry::SqlConditionKind::Validation),
         ),
         SqlObjectDecl::condition(
             ADDON,
             "cond_negative",
-            SqlConditionDecl::new("ERP02", "sqlobj_negative", NEGATIVE_MESSAGE),
+            SqlConditionDecl::new("ERP02", "sqlobj_negative", NEGATIVE_MESSAGE)
+                .kind(erp_registry::SqlConditionKind::Validation),
         ),
     ]
 }
@@ -1166,4 +1168,249 @@ async fn unowned_definer_undeclared_and_missing_objects_are_refused() {
         "SQL object 'test_sqlobj/trg_label': installed trigger differs; reconcile through addon \
          upgrade",
     );
+}
+
+#[tokio::test]
+async fn lifecycle_subset_defers_new_table_objects_and_dependents() {
+    let h = harness().await;
+    let mut decls = label("v1");
+    decls.push(compare(&[]));
+    decls.push(function(
+        "fn_dependent",
+        SqlFunctionDecl::new(
+            "sqlobj_dependent",
+            SqlLanguage::PlPgSql,
+            SqlResult::Scalar(SqlScalar::Text),
+            "BEGIN RETURN sqlobj_compare(); END",
+        )
+        .deps(
+            const {
+                &[SqlDep::Object {
+                    addon: ADDON,
+                    key: "fn_compare",
+                }]
+            },
+        ),
+    ));
+    decls.push(function(
+        "fn_zready",
+        SqlFunctionDecl::new(
+            "sqlobj_zready",
+            SqlLanguage::PlPgSql,
+            SqlResult::Scalar(SqlScalar::Text),
+            "BEGIN RETURN 'ready'; END",
+        ),
+    ));
+    let registry = build(vec![move_model(&[]), other_model()], decls).unwrap();
+    let other = registry.model(OTHER).unwrap().id;
+    let move_id = registry.model(MOVE).unwrap().id;
+    let orm = orm(&h, registry).await;
+    let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+    let options = SchemaSyncOptions::inline().lifecycle(true);
+    assert!(
+        tx.init_models_with(&[other], &options)
+            .await
+            .unwrap()
+            .is_complete()
+    );
+    assert_eq!(
+        one(
+            &mut tx,
+            "SELECT (to_regprocedure('sqlobj_label()') IS NULL)::text"
+        )
+        .await
+        .as_deref(),
+        Some("true")
+    );
+    assert_eq!(
+        one(&mut tx, "SELECT sqlobj_zready()").await.as_deref(),
+        Some("ready")
+    );
+    assert_eq!(
+        one(&mut tx, "SELECT count(*)::text FROM erp_schema_sql_object")
+            .await
+            .as_deref(),
+        Some("1")
+    );
+    assert!(
+        tx.init_models_with(&[move_id], &options)
+            .await
+            .unwrap()
+            .is_complete()
+    );
+    tx.refuse_deferred_sql_objects(&options).await.unwrap();
+    let result = tx
+        .query(
+            "INSERT INTO test_sqlobj_move (name) VALUES ('input') RETURNING name",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(result[0].get::<_, String>(0), "v1");
+    assert_eq!(
+        one(&mut tx, "SELECT (sqlobj_dependent() LIKE '%name%')::text")
+            .await
+            .as_deref(),
+        Some("true")
+    );
+    tx.commit().await.unwrap();
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn full_and_non_lifecycle_syncs_keep_missing_table_refusals() {
+    let h = harness().await;
+    let registry = build(vec![move_model(&[]), other_model()], label("v1")).unwrap();
+    let other = registry.model(OTHER).unwrap().id;
+    let orm = orm(&h, registry).await;
+    let options = SchemaSyncOptions::inline().lifecycle(true);
+    let expected = "SQL object 'test_sqlobj/fn_label': table 'test_sqlobj_move' of model 'test_sqlobj.move' does not exist and is not created by this sync";
+    let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+    let error = tx.init_sql_objects(&options).await.unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Programming);
+    assert_eq!(error.message(), expected);
+    tx.rollback().await.unwrap();
+    drop(tx);
+    let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+    let error = tx
+        .init_models_with(&[other], &options.clone().lifecycle(false))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Programming);
+    assert_eq!(error.message(), expected);
+    tx.rollback().await.unwrap();
+    drop(tx);
+    // The full path names every model as synced, so its supported graph is installed rather
+    // than being treated as an empty subset. D6 still refuses a SQL-language pre-table dependency.
+    let registry = build(
+        vec![move_model(&[])],
+        vec![function(
+            "fn_sql",
+            SqlFunctionDecl::new(
+                "sqlobj_sql",
+                SqlLanguage::Sql,
+                SqlResult::Scalar(SqlScalar::Text),
+                "SELECT name FROM test_sqlobj_move LIMIT 1",
+            )
+            .deps(const { &[SqlDep::Model(MOVE)] }),
+        )],
+    )
+    .unwrap();
+    let orm = self::orm(&h, registry).await;
+    let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+    let error = tx.init_models_with(&[], &options).await.unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Programming);
+    assert_eq!(
+        error.message(),
+        "SQL object 'test_sqlobj/fn_sql': SQL-language function depends on table 'test_sqlobj_move' created by this sync"
+    );
+    tx.rollback().await.unwrap();
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn subset_deferral_refuses_recorded_missing_tables_and_untracked_functions() {
+    let h = harness().await;
+    let registry = build(vec![move_model(&[]), other_model()], label("v1")).unwrap();
+    let other = registry.model(OTHER).unwrap().id;
+    let orm = orm(&h, Arc::clone(&registry)).await;
+    let options = SchemaSyncOptions::inline().lifecycle(true);
+    let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+    tx.batch("CREATE FUNCTION sqlobj_label() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$").await.unwrap();
+    tx.commit().await.unwrap();
+    drop(tx);
+    let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+    let error = tx.init_models_with(&[other], &options).await.unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Programming);
+    assert_eq!(
+        error.message(),
+        "SQL object 'test_sqlobj/fn_label': function \"public\".\"sqlobj_label\"() exists but is not owned by SQL object provenance; adopting it needs an explicit migration"
+    );
+    tx.rollback().await.unwrap();
+    drop(tx);
+    let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+    tx.batch("DROP FUNCTION sqlobj_label()").await.unwrap();
+    tx.commit().await.unwrap();
+    drop(tx);
+    sync(&h, Arc::clone(&registry)).await.unwrap();
+    let orm = self::orm(&h, registry).await;
+    let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+    tx.batch("DROP TABLE test_sqlobj_move CASCADE")
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    drop(tx);
+    let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+    let error = tx.init_models_with(&[other], &options).await.unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Programming);
+    assert_eq!(
+        error.message(),
+        "SQL object 'test_sqlobj/fn_label': table 'test_sqlobj_move' of model 'test_sqlobj.move' does not exist and is not created by this sync"
+    );
+    tx.rollback().await.unwrap();
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn recorded_dependent_is_refused_when_its_new_dependency_is_deferred() {
+    let h = harness().await;
+    let old = function(
+        "fn_old",
+        SqlFunctionDecl::new(
+            "sqlobj_old",
+            SqlLanguage::PlPgSql,
+            SqlResult::Scalar(SqlScalar::Text),
+            "BEGIN RETURN 'old'; END",
+        ),
+    );
+    sync(&h, build(vec![other_model()], vec![old]).unwrap())
+        .await
+        .unwrap();
+    let dependent = function(
+        "fn_old",
+        SqlFunctionDecl::new(
+            "sqlobj_old",
+            SqlLanguage::PlPgSql,
+            SqlResult::Scalar(SqlScalar::Text),
+            "BEGIN RETURN sqlobj_new(); END",
+        )
+        .deps(
+            const {
+                &[SqlDep::Object {
+                    addon: ADDON,
+                    key: "fn_new",
+                }]
+            },
+        ),
+    );
+    let new = function(
+        "fn_new",
+        SqlFunctionDecl::new(
+            "sqlobj_new",
+            SqlLanguage::PlPgSql,
+            SqlResult::Scalar(SqlScalar::Text),
+            "BEGIN RETURN 'new'; END",
+        )
+        .deps(const { &[SqlDep::Model(MOVE)] }),
+    );
+    let registry = build(vec![other_model(), move_model(&[])], vec![dependent, new]).unwrap();
+    let other = registry.model(OTHER).unwrap().id;
+    let orm = orm(&h, registry).await;
+    let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+    let error = tx
+        .init_models_with(&[other], &SchemaSyncOptions::inline().lifecycle(true))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Programming);
+    assert_eq!(
+        error.message(),
+        "SQL object 'test_sqlobj/fn_old': dependency 'test_sqlobj/fn_new' is deferred until a later schema step"
+    );
+    tx.rollback().await.unwrap();
+    drop(tx);
+    assert_eq!(
+        cell(&h, "SELECT sqlobj_old()").await.as_deref(),
+        Some("old")
+    );
+    h.cleanup().await.unwrap();
 }

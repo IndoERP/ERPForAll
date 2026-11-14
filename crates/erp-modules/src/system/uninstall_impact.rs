@@ -671,6 +671,21 @@ impl ModuleSystem {
             .operation_switch_orm(&optx.control, &old_orm)
             .await?;
         let old = Arc::clone(optx.tx.registry());
+        if old
+            .sql_objects()
+            .objects()
+            .iter()
+            .any(|o| resolved.iter().any(|n| n.as_str() == o.owner()))
+            || self
+                .parts
+                .sql_guards
+                .iter()
+                .any(|g| resolved.iter().any(|n| n.as_str() == g.addon))
+        {
+            return Err(unsupported(
+                "SQL-object uninstall effects and guards ( in a later release)",
+            ));
+        }
         let remaining_names: Vec<_> = installed
             .into_iter()
             .filter(|name| !resolved.contains(name))

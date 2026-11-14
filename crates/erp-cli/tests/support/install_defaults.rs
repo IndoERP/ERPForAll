@@ -28,6 +28,8 @@ pub const ACCOUNT: &[(&str, &[&str])] = &[
             "menu_action_account_journal_group_list",
             "menu_finance",
             "menu_finance_configuration",
+            "menu_tax_groups",
+            "menu_taxes",
         ],
     ),
     (

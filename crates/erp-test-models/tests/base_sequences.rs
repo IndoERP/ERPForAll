@@ -1441,7 +1441,7 @@ async fn test_use_date_range_primary_key_collision_23505_is_validation_error() {
     assert_eq!(err.sqlstate(), Some("23505"));
     assert!(
         err.message()
-            .starts_with("The operation cannot be completed:"),
+            .starts_with("The database refused the change:"),
         "expected Validation message prefix, got: {}",
         err.message()
     );

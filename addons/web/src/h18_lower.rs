@@ -36,6 +36,9 @@ fn layout_error(message: impl std::fmt::Display) -> ViewError {
     ))
 }
 
+#[path = "h18_dashboard.rs"]
+mod dashboard;
+
 trait Node<'a>: Copy {
     fn tag(self) -> &'a str;
     fn attr(self, key: &str) -> Option<&'a str>;
@@ -524,7 +527,8 @@ fn classify<'a, N: Node<'a>>(
     let parent = parent.ok_or_else(|| invalid("Missing parent of a view node."))?;
     let allowed = match parent.tag() {
         "form" if service => node.tag() == "widget",
-        "list" | "pivot" => node.tag() == "field",
+        "list" => matches!(node.tag(), "field" | "dashboard"),
+        "pivot" => node.tag() == "field",
         "search" => matches!(
             node.tag(),
             "field" | "filter" | "separator" | "group" | "searchpanel"
@@ -574,6 +578,18 @@ fn classify<'a, N: Node<'a>>(
         }
     }
     match node.tag() {
+        "dashboard" => {
+            // Original dashboard syntax/types were admitted by the checked host bridge.
+            if parent
+                .children()
+                .filter(|child| child.tag() == "dashboard")
+                .count()
+                != 1
+            {
+                return Err(invalid("Only one dashboard region is allowed."));
+            }
+            Ok("dashboard")
+        }
         "field" if key == "pivot" => {
             // `widget`, `invisible` and `options` stay refused by name: the table formats every measure itself.
             attrs(node, &["name", "string", "type", "interval"])?;
@@ -1208,7 +1224,7 @@ fn structure<'a, N: Node<'a>>(
     service: bool,
 ) -> ViewResult<()> {
     let kind = classify(node, parent, spec, key, service)?;
-    if kind == "searchpanel" {
+    if matches!(kind, "searchpanel" | "dashboard") {
         return Ok(());
     } // category validation produces a typed unsupported descriptor
     if kind == "unwrap" {
@@ -1390,6 +1406,9 @@ fn plan<'a, N: Node<'a>>(
                 > 1
         {
             return Err(layout_error("A record form allows at most one <aside>."));
+        }
+        if kind == "dashboard" {
+            return Ok(());
         }
         for (position, child) in node.children().enumerate() {
             if node.tag() == "form" && child.tag() == "header" && position != 0 {
@@ -1825,6 +1844,7 @@ fn build_entry<'a, N: Node<'a>>(
                     set_children(object, plan, index)?;
                     set_view_actions(object, node)?;
                 }
+                "dashboard" => dashboard::build(node, spec, object, budget)?,
                 "list" => {
                     set_children(object, plan, index)?;
                     if let Some(raw) = node.attr("limit") {
@@ -2502,6 +2522,8 @@ mod tests {
         let catalogue =
             ViewCatalogue::new(vec![ViewDescriptor::new(1, "fixture", spec.name, xml)])?;
         let combined = catalogue.combine(1)?;
+        admit_fixture_dashboard(combined.arch().root(), spec)?;
+
         let schema = match kind {
             "form" => form_schema()?,
             "list" => list_schema()?,
@@ -2514,6 +2536,8 @@ mod tests {
         let bytes = DescriptionEncoder::new(budget, &ViewLimits::default()).encode(&payload)?;
         Ok(serde_json::from_slice(bytes.as_json_bytes()).unwrap())
     }
+
+    include!("tests/h18_dashboard.rs");
 
     #[test]
     fn pivot_arch_defaults_and_roles() {

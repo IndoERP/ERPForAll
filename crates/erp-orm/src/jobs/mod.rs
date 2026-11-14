@@ -26,6 +26,7 @@ mod retention;
 mod runner;
 pub(crate) mod schema;
 mod settings;
+mod settings_source;
 mod transition;
 mod wake;
 
@@ -287,3 +288,5 @@ pub trait JobHandler: Send + Sync + 'static {
         ctx: &'a mut JobContext<'_>,
     ) -> BoxFuture<'a, std::result::Result<RunOutcome, JobError>>;
 }
+
+pub use settings_source::{JobSettingsCompatibility, JobSettingsSnapshot, JobSettingsSource};

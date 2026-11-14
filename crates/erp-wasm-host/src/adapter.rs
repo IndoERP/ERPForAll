@@ -642,7 +642,7 @@ fn column_of(field: &str, ty: &FieldType, cells: &[Cell]) -> Outcome<ColumnData>
         )
     };
     Ok(match ty {
-        FieldType::Uuid | FieldType::Xid8 | FieldType::TimestampTz => {
+        FieldType::BigInt | FieldType::Uuid | FieldType::Xid8 | FieldType::TimestampTz => {
             return Err(boundary_error(
                 BoundaryErrorKind::Unsupported,
                 format!(
@@ -894,7 +894,12 @@ mod native_fields_tests {
     use super::*;
     #[test]
     fn native_fields_columns_refuse_even_when_legacy_wire_could_hold_text_or_null() {
-        for ty in [FieldType::Uuid, FieldType::Xid8, FieldType::TimestampTz] {
+        for ty in [
+            FieldType::BigInt,
+            FieldType::Uuid,
+            FieldType::Xid8,
+            FieldType::TimestampTz,
+        ] {
             for cells in [vec![], vec![Cell::Null]] {
                 let error = column_of("native_value", &ty, &cells).unwrap_err();
                 assert_eq!(error.kind, BoundaryErrorKind::Unsupported);

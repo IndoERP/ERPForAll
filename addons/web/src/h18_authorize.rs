@@ -68,7 +68,8 @@ fn decision(node: &wire::ViewNode, allowed: bool) -> Result<Decision> {
         return Ok(Decision::Keep);
     }
     match node {
-        wire::ViewNode::Field { .. }
+        wire::ViewNode::Dashboard { .. }
+        | wire::ViewNode::Field { .. }
         | wire::ViewNode::SearchField { .. }
         | wire::ViewNode::PivotField { .. }
         | wire::ViewNode::SearchFilter { .. } => Ok(Decision::Prune),
@@ -101,7 +102,8 @@ fn children(node: &wire::ViewNode) -> Result<&[u32]> {
         | Notebook { children }
         | Page { children, .. }
         | SearchGroup { children, .. } => Ok(children),
-        Field { .. }
+        Dashboard { .. }
+        | Field { .. }
         | Button { .. }
         | CancelButton { .. }
         | ActionButton { .. }
@@ -138,7 +140,8 @@ fn children_mut(node: &mut wire::ViewNode) -> Result<Option<&mut Vec<u32>>> {
         | Notebook { children }
         | Page { children, .. }
         | SearchGroup { children, .. } => Ok(Some(children)),
-        Field { .. }
+        Dashboard { .. }
+        | Field { .. }
         | Button { .. }
         | CancelButton { .. }
         | ActionButton { .. }
@@ -308,6 +311,18 @@ fn validate_builtin_field_models(model: &str, node: &wire::ViewNode) -> Result<(
         }
         wire::ViewNode::PivotField { field, .. } => {
             require_builtin_root_field(model, "pivot_field", field)
+        }
+        wire::ViewNode::Dashboard { items, .. } => {
+            for item in items {
+                if let wire::DashboardItem::Kpi {
+                    field, date_field, ..
+                } = item
+                {
+                    require_builtin_root_field(model, "dashboard", field)?;
+                    require_builtin_root_field(model, "dashboard", date_field)?;
+                }
+            }
+            Ok(())
         }
         wire::ViewNode::List {
             search_panel: Some(wire::ListSearchPanel::Selection { field, .. }),

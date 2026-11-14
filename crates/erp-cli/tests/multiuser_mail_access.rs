@@ -303,7 +303,7 @@ fn thread_serialization_and_mutations_cannot_cross_the_parent_boundary() {
             ),
             403,
             "erp.exceptions.AccessError",
-            "You are not allowed to modify 'Product' (product.template) records.\n\nThis operation is allowed for the following groups:\n\t- Product Administrator\n\t- Settings Administration\n\nContact your administrator to request access if necessary.",
+            "Your access rights do not let you modify 'Product' (product.template) records.\n\nGroups that may do this:\n\t- Products / Product Administrator\n\t- Settings Administration\n\nAsk an administrator if you need this access.",
         );
         assert_eq!(m.search(Subject::Admin, "mail.message", &[]), messages);
         assert_eq!(m.search(Subject::Admin, "ir.attachment", &[]), attachments);

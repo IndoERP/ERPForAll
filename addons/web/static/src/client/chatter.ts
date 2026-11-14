@@ -23,6 +23,9 @@ import { icon } from "./icons.js";
 import { Followers } from "./chatter-followers.js";
 import { el } from "./dom.js";
 import { ClientError, type RpcClient } from "./transport.js";
+import { attachmentLimitHint, checkAttachmentFile, checkAttachmentRequest } from "./attachment-policy.js";
+
+let nextAttachHint = 0;
 
 /** Configuration options for mounting a chatter component. */
 export interface ChatterOptions {
@@ -99,13 +102,6 @@ function getOrCreateStore(host: HTMLElement, reportError: (err: unknown) => void
   return entry.store;
 }
 
-/**
- * Largest file the client reads into memory and base64-encodes before sending (the composer's own cap).
- * shortcut: the server's inline limit is not sent to the client, so this fixed cap is the only early check; the
- * server still refuses what it does not accept. Read the real limit from the bootstrap once the server exposes it.
- */
-const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -175,21 +171,22 @@ async function uploadFile(
   rpc: RpcClient,
   ref: ThreadRef,
   method: "thread_upload" | "thread_attach",
-  file: File
+  file: File,
+  active: () => boolean
 ): Promise<UploadedFile> {
-  if (file.size > MAX_UPLOAD_BYTES) {
-    throw new ClientError("validation", `"${file.name}" is larger than the ${formatBytes(MAX_UPLOAD_BYTES)} upload limit`);
-  }
+  await checkAttachmentFile(rpc, file);
+  if (!active()) throw new DOMException("The attachment upload was cancelled.", "AbortError");
+  const args = {
+    ids: [ref.id], name: file.name,
+    ...(file.type === "" ? {} : { mimetype: file.type }),
+    data: await readFileAsBase64(file),
+  };
+  if (!active()) throw new DOMException("The attachment upload was cancelled.", "AbortError");
+  checkAttachmentRequest(rpc, args);
   const answer = (await rpc.call(
     ref.model,
     method,
-    {
-      ids: [ref.id],
-      name: file.name,
-      // a browser reports "" for a type it does not know; the server then detects it
-      ...(file.type === "" ? {} : { mimetype: file.type }),
-      data: await readFileAsBase64(file),
-    },
+    args,
     { write: true }
   )) as Record<string, unknown> | null;
   const id = answer?.["attachment_id"];
@@ -284,6 +281,15 @@ export class Chatter {
 
     const filesToolbar = el("div", undefined, "erp-mail-chatter-files-toolbar");
     const attachFilesBtn = el("button", "Attach files", "erp-mail-chatter-attach-files-btn erp-chatter-btn");
+    const uploadHint = attachmentLimitHint(options.rpc);
+    let uploadNote: HTMLElement | undefined;
+    if (uploadHint !== undefined) {
+      // A sibling of the button, not a child: inside it the hint would be part of the button's name and be read twice.
+      uploadNote = el("span", uploadHint, "visually-hidden");
+      uploadNote.id = `erp-chatter-attach-hint-${++nextAttachHint}`;
+      attachFilesBtn.title = uploadHint;
+      attachFilesBtn.setAttribute("aria-describedby", uploadNote.id);
+    }
     attachFilesBtn.type = "button";
     const selectFilesBtn = el("button", "Select files", "erp-mail-chatter-select-files-btn erp-chatter-btn");
     selectFilesBtn.type = "button";
@@ -297,7 +303,7 @@ export class Chatter {
     discardSelectionBtn.type = "button";
     selectionActions.append(deleteSelectedBtn, discardSelectionBtn);
 
-    filesToolbar.append(attachFilesBtn, selectFilesBtn, selectionActions);
+    filesToolbar.append(attachFilesBtn, ...(uploadNote ? [uploadNote] : []), selectFilesBtn, selectionActions);
     const filesList = el("div", undefined, "erp-mail-chatter-files-list");
     filesPanel.append(filesToolbar, filesList);
 
@@ -399,7 +405,7 @@ export class Chatter {
       const failures: unknown[] = [];
       try {
         for (const file of files) {
-          await uploadFile(options.rpc, ref, "thread_attach", file);
+          await uploadFile(options.rpc, ref, "thread_attach", file, () => !this.disposed);
           attached++;
         }
       } catch (err) {
@@ -576,8 +582,9 @@ export class Chatter {
           now: () => new Date(),
           locale: "en-US",
           ...(options.timeZone ? { timeZone: options.timeZone } : {}),
+          uploadLimitHint: () => attachmentLimitHint(options.rpc),
           uploadAttachment: async (file: File): Promise<AttachmentUploadResult> => {
-            const uploaded = await uploadFile(options.rpc, ref, "thread_upload", file);
+            const uploaded = await uploadFile(options.rpc, ref, "thread_upload", file, () => !this.disposed);
             return {
               id: uploaded.id,
               name: uploaded.name,

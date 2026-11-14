@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! Routes, rules and the topology version row: tables only. Validation, the
-//! archive cascade, route resolution, the generation bump and the topology cache belong to
-//! (topology ADR D1, D2, D10).
+//! Routes, rules and topology version schema. Lifecycle validation and draft helpers are native
+//! stock methods. Resolution, contextual cycles and the bounded cache remain separate slices.
 
 use erp_sdk::prelude::*;
 
@@ -193,11 +192,7 @@ pub struct StockRule {
     )]
     pub location_src_id: Option<RecId>,
     /// The move's destination comes from the rule instead of the operation type.
-    #[field(
-        boolean,
-        default = false,
-        string = "Destination location origin from rule"
-    )]
+    #[field(boolean, default = false, string = "Destination taken from the rule")]
     pub location_dest_from_rule: bool,
     /// Route of the rule; deleting the route deletes it.
     #[field(
@@ -206,6 +201,8 @@ pub struct StockRule {
         required = true,
         ondelete = "cascade",
         index = true,
+        // The native rule constraint permits a route of an ancestor company (STKROUTE-006).
+        check_company = false,
         string = "Route"
     )]
     pub route_id: Option<RecId>,
@@ -223,7 +220,7 @@ pub struct StockRule {
         selection = [
             ("make_to_stock", "Take From Stock"),
             ("make_to_order", "Trigger Another Rule"),
-            ("mts_else_mto", "Take From Stock, if unavailable, Trigger Another Rule")
+            ("mts_else_mto", "Use stock first, else trigger another rule")
         ],
         default = "make_to_stock",
         required = true,

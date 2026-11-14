@@ -49,18 +49,14 @@ fn model_error(policy: &PolicySnapshot, b: &PrincipalBinding<'_>, op: Operation)
 
 fn not_allowed(verb: &str, groups: &[&str]) -> String {
     let info = if groups.is_empty() {
-        "No group currently allows this operation.".to_owned()
+        "No group may do this.".to_owned()
     } else {
         let list: Vec<String> = groups.iter().map(|g| format!("\t- {g}")).collect();
-        format!(
-            "This operation is allowed for the following groups:\n{}",
-            list.join("\n")
-        )
+        format!("Groups that may do this:\n{}", list.join("\n"))
     };
     format!(
-        "You are not allowed to {verb} 'Object For Test Access Right' \
-         (test_access_right.some_obj) records.\n\n{info}\n\nContact your administrator to request \
-         access if necessary."
+        "Your access rights do not let you {verb} 'Object For Test Access Right' \
+         (test_access_right.some_obj) records.\n\n{info}\n\nAsk an administrator if you need this access."
     )
 }
 
@@ -595,11 +591,9 @@ fn spec_sec_009_record_level_error_message() {
         ),
     ];
     let head = format!(
-        "Uh-oh! Looks like you have stumbled upon some top-secret records.\n\nSorry, Bob Bobman \
-         (id={BOB}) doesn't have 'read' access to:"
+        "Access rules protect some of these records.\n\nBob Bobman (id={BOB}) has no 'read' access to:"
     );
-    let tail = "If you really, really need access, perhaps you can win over your friendly \
-                administrator with a batch of freshly baked cookies.";
+    let tail = "Ask an administrator if you need access to these records.";
     let denied = [4, 5, 6];
     for (rules, blamed) in cases {
         let policy = snapshot(rules);
@@ -636,7 +630,7 @@ fn spec_sec_009_record_level_error_message() {
                 .join("\n");
                 let blame: Vec<String> = blamed.iter().map(|n| format!("- {n}")).collect();
                 format!(
-                    "{head}\n{listing}\n\nBlame the following accesses:\n{}\n\n{tail}",
+                    "{head}\n{listing}\n\nRules that refused it:\n{}\n\n{tail}",
                     blame.join("\n")
                 )
             } else {
@@ -665,7 +659,7 @@ fn debug_listing_needs_debug_mode_internal_and_technical_features() {
         explained
             .message()
             .unwrap()
-            .contains("Blame the following accesses")
+            .contains("Rules that refused it")
     };
     assert!(message(&[USER, G1, NO_ONE], true));
     assert!(!message(&[USER, G1, NO_ONE], false), "debug mode off");

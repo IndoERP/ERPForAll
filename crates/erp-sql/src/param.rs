@@ -16,6 +16,8 @@ use erp_fields::{
 /// One scalar parameter value.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Scalar {
+    /// Exact bigint field operand.
+    BigInt(erp_fields::BigInt),
     /// `int8` (ids, many2one, integer columns compared as `int8`).
     Int8(i64),
     /// `float8`.
@@ -43,6 +45,8 @@ pub enum Scalar {
 /// The SQL type of a [`Scalar`] (all members of an array parameter have the same kind).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ScalarKind {
+    /// Exact signed bigint with safe integer/canonical text admission.
+    BigInt,
     /// `int8`.
     Int8,
     /// `float8`.
@@ -71,7 +75,7 @@ impl ScalarKind {
     /// The type name used in placeholder casts.
     pub fn sql(self) -> &'static str {
         match self {
-            Self::Int8 => "int8",
+            Self::Int8 | Self::BigInt => "int8",
             Self::Float8 => "float8",
             Self::Numeric => "numeric",
             Self::Text => "text",
@@ -90,6 +94,7 @@ impl ScalarKind {
     /// the `int4` range compare instead of failing to bind.
     pub fn of_field(ty: &FieldType) -> Option<Self> {
         Some(match ty {
+            FieldType::BigInt => Self::BigInt,
             FieldType::Id
             | FieldType::Many2one { .. }
             | FieldType::Many2oneReference { .. }
@@ -121,6 +126,7 @@ impl Scalar {
     /// The SQL type of the value.
     pub fn kind(&self) -> ScalarKind {
         match self {
+            Self::BigInt(_) => ScalarKind::BigInt,
             Self::Int8(_) => ScalarKind::Int8,
             Self::Float8(_) => ScalarKind::Float8,
             Self::Numeric(_) => ScalarKind::Numeric,
@@ -138,6 +144,7 @@ impl Scalar {
     /// `None` for different kinds.
     pub(crate) fn partial_cmp_same(&self, other: &Scalar) -> Option<std::cmp::Ordering> {
         match (self, other) {
+            (Self::BigInt(a), Self::BigInt(b)) => a.partial_cmp(b),
             (Self::Int8(a), Self::Int8(b)) => a.partial_cmp(b),
             (Self::Float8(a), Self::Float8(b)) => a.partial_cmp(b),
             (Self::Numeric(a), Self::Numeric(b)) => a.partial_cmp(b),
@@ -196,6 +203,7 @@ impl Param {
 /// Other types have none.
 pub fn falsy_value(ty: &FieldType) -> Option<Scalar> {
     Some(match ty {
+        FieldType::BigInt => Scalar::BigInt(erp_fields::BigInt::from_i64(0)),
         FieldType::Integer | FieldType::Many2oneReference { .. } | FieldType::RowVersion => {
             Scalar::Int8(0)
         }
@@ -220,6 +228,14 @@ pub struct NotConvertible;
 /// caller names the condition in its error.
 pub fn to_scalar(kind: ScalarKind, value: &DomainValue) -> Result<Scalar, NotConvertible> {
     let scalar = match kind {
+        // None becomes NotConvertible below; the caller names the condition.
+        ScalarKind::BigInt => match value {
+            DomainValue::Int(i) if i.unsigned_abs() < F64_EXACT_INT => {
+                Some(Scalar::BigInt(erp_fields::BigInt::from_i64(*i)))
+            }
+            DomainValue::Str(s) => erp_fields::BigInt::parse(s).ok().map(Scalar::BigInt),
+            _ => None,
+        },
         ScalarKind::Int8 => match value {
             DomainValue::Int(i) => Some(Scalar::Int8(*i)),
             DomainValue::Bool(b) => Some(Scalar::Int8(i64::from(*b))),

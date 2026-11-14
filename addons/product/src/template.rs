@@ -1,6 +1,7 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Product Template model (`product.template`).
 
-use crate::defaults::{company_currency_id, default_unit_id, env_company_id, opt_id};
+use crate::defaults::{company_currency_id, default_unit_id, env_company_id};
 use crate::product::ProductProductMethods;
 use erp_sdk::prelude::*;
 use erp_sdk::{Operation, ValueMap};
@@ -75,6 +76,21 @@ pub struct ProductTemplate {
     /// Default unit of measure for operations.
     #[field(many2one, comodel = "uom.uom", required = true, string = "Unit")]
     pub uom_id: Option<RecId>,
+
+    /// Additional sales packaging units. The main-unit exclusion is a selection domain.
+    #[field(
+        many2many,
+        comodel = "uom.uom",
+        relation = "product_template_uom_rel",
+        column1 = "template_id",
+        column2 = "uom_id",
+        string = "Packagings"
+    )]
+    pub uom_ids: Vec<RecId>,
+
+    /// Label of the main unit.
+    #[field(char, related = "uom_id.name", string = "Unit Name")]
+    pub uom_name: Option<Arc<str>>,
 
     /// Catalog base sales price.
     #[field(float, digits = "Product Price", string = "Sales Price")]
@@ -274,73 +290,106 @@ impl ProductTemplate {
         mut vals_list: Vec<RawVals>,
         sup: Super,
     ) -> Result<Records> {
-        if vals_list.is_empty() {
-            return sup.call(tx, this.as_records(), (vals_list,)).await;
-        }
-
-        let ctx = this.env().context();
-        let default_uom_id = if vals_list.iter().any(|v| !v.contains("uom_id")) {
-            Some(default_unit_id(tx).await?)
-        } else {
-            None
-        };
-
-        // The variant mirrors barcode, reference and cost of a template created without
-        // attribute lines; take them from the submitted values, before the variant exists.
-        let mut mirrored: Vec<Mirrored> = Vec::new();
-        for vals in &mut vals_list {
-            if !vals.contains("uom_id")
-                && let Some(uom_id) = default_uom_id
-            {
-                vals.insert("uom_id".into(), Cell::Id(uom_id));
+        tx.savepoint(async |tx| {
+            let barcode_keys =
+                crate::barcode::prepare(tx, this.env(), &[], &[], &vals_list).await?;
+            if vals_list.is_empty() {
+                return sup.call(tx, this.as_records(), (vals_list,)).await;
             }
-            if !vals.contains("list_price") {
-                vals.insert("list_price".into(), Cell::Decimal(Decimal::ONE));
+
+            let ctx = this.env().context();
+            let default_uom_id = if vals_list.iter().any(|v| !v.contains("uom_id")) {
+                Some(default_unit_id(tx).await?)
+            } else {
+                None
+            };
+
+            // The variant mirrors barcode, reference and cost of a template created without
+            // attribute lines; take them from the submitted values, before the variant exists.
+            let mut mirrored: Vec<Mirrored> = Vec::new();
+            for vals in &mut vals_list {
+                if !vals.contains("uom_id")
+                    && let Some(uom_id) = default_uom_id
+                {
+                    vals.insert("uom_id".into(), Cell::Id(uom_id));
+                }
+                if !vals.contains("list_price") {
+                    vals.insert("list_price".into(), Cell::Decimal(Decimal::ONE));
+                }
+                let text = |name: &str| match vals.get(name) {
+                    Some(Cell::Str(s)) if !s.is_empty() => Some(s.clone()),
+                    _ => None,
+                };
+                let price = match vals.get("standard_price") {
+                    Some(Cell::Decimal(d)) => *d,
+                    _ => Decimal::ZERO,
+                };
+                mirrored.push((text("barcode"), text("default_code"), price));
             }
-            let text = |name: &str| match vals.get(name) {
-                Some(Cell::Str(s)) if !s.is_empty() => Some(s.clone()),
-                _ => None,
-            };
-            let price = match vals.get("standard_price") {
-                Some(Cell::Decimal(d)) => *d,
-                _ => Decimal::ZERO,
-            };
-            mirrored.push((text("barcode"), text("default_code"), price));
-        }
 
-        let records = sup.call(tx, this.as_records(), (vals_list,)).await?;
+            let records: Records = sup.call(tx, this.as_records(), (vals_list,)).await?;
+            crate::packaging_lifecycle::register_units(&records, tx, &["uom_id", "uom_ids"])
+                .await?;
 
-        let bypass_create_variant = ctx
-            .get("create_product_product")
-            .map(|v| !v.is_truthy())
-            .unwrap_or(false);
+            let bypass_create_variant = ctx
+                .get("create_product_product")
+                .map(|v| !v.is_truthy())
+                .unwrap_or(false);
 
-        if !bypass_create_variant {
-            let prod_model = this.env().records("product.product")?;
-            for (tmpl_id, (barcode, default_code, standard_price)) in
-                records.rec_ids().iter().zip(mirrored)
-            {
-                let tmpl = this.browse(vec![tmpl_id.get()])?;
-                let attr_lines = tmpl.mapped(tx, ProductTemplate::ATTRIBUTE_LINE_IDS).await?;
-                if attr_lines.iter().flatten().next().is_none() {
-                    let mut prod_vals =
-                        RawVals::new().set_cell("product_tmpl_id", Cell::Id(tmpl_id.get()));
-                    if let Some(bc) = barcode {
-                        prod_vals = prod_vals.set_cell("barcode", Cell::Str(bc));
+            if !bypass_create_variant {
+                let prod_model = this.env().records("product.product")?;
+                let mut variant_values = Vec::new();
+                for (tmpl_id, (barcode, default_code, standard_price)) in
+                    records.rec_ids().iter().zip(mirrored)
+                {
+                    let tmpl = this.browse(vec![tmpl_id.get()])?;
+                    let attr_lines = tmpl.mapped(tx, ProductTemplate::ATTRIBUTE_LINE_IDS).await?;
+                    if attr_lines.iter().flatten().next().is_none() {
+                        let mut prod_vals =
+                            RawVals::new().set_cell("product_tmpl_id", Cell::Id(tmpl_id.get()));
+                        if let Some(bc) = barcode {
+                            prod_vals = prod_vals.set_cell("barcode", Cell::Str(bc));
+                        }
+                        if let Some(dc) = default_code {
+                            prod_vals = prod_vals.set_cell("default_code", Cell::Str(dc));
+                        }
+                        if standard_price > Decimal::ZERO {
+                            prod_vals =
+                                prod_vals.set_cell("standard_price", Cell::Decimal(standard_price));
+                        }
+                        variant_values.push(prod_vals);
                     }
-                    if let Some(dc) = default_code {
-                        prod_vals = prod_vals.set_cell("default_code", Cell::Str(dc));
-                    }
-                    if standard_price > Decimal::ZERO {
-                        prod_vals =
-                            prod_vals.set_cell("standard_price", Cell::Decimal(standard_price));
-                    }
-                    prod_model.create(tx, vec![prod_vals]).await?;
+                }
+                if !variant_values.is_empty() {
+                    prod_model.create(tx, variant_values).await?;
                 }
             }
-        }
 
-        Ok(records)
+            let families: Vec<i64> = records.rec_ids().iter().map(|id| id.get()).collect();
+            crate::barcode::reconcile(tx, this.env(), &families, &[], barcode_keys).await?;
+            Ok(records)
+        })
+        .await
+    }
+
+    /// Release template claims and the claims of its cascaded variants.
+    #[method(override)]
+    async fn unlink(
+        this: &RecordSet<ProductTemplate>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<()> {
+        crate::barcode::refuse_bypass(this.env())?;
+        let ids: Vec<i64> = this
+            .as_records()
+            .rec_ids()
+            .iter()
+            .map(|id| id.get())
+            .collect();
+        let families = ids.clone();
+        let keys = crate::barcode::prepare(tx, this.env(), &families, &[], &[]).await?;
+        sup.call(tx, this.as_records(), ()).await?;
+        crate::barcode::reconcile(tx, this.env(), &families, &[], keys).await
     }
 
     /// Archive cascade: archiving template archives variants.
@@ -351,78 +400,91 @@ impl ProductTemplate {
         vals: RawVals,
         sup: Super,
     ) -> Result<()> {
-        let is_active_change = vals.get("active").cloned();
-        let barcode_change = vals.get("barcode").cloned();
+        tx.savepoint(async |tx| {
+            crate::packaging_lifecycle::before_template_unit_write(this.as_records(), tx, &vals).await?;
+            let is_active_change = vals.get("active").cloned();
+            let barcode_change = vals.get("barcode").cloned();
 
-        if let Some(Cell::Str(ref bc)) = barcode_change {
-            let mut tmpl_tuples = Vec::new();
-            for rec_id in this.as_records().rec_ids() {
-                let rec = this.browse(vec![rec_id.get()])?;
-                let comp_id = match vals.get("company_id") {
-                    Some(c) => opt_id(c.clone(), "company_id")?,
-                    None => opt_id(rec.cell(tx, "company_id").await?, "company_id")?,
-                };
-                tmpl_tuples.push((rec_id.get(), comp_id, bc.to_string()));
-            }
-            if !tmpl_tuples.is_empty() {
-                crate::barcode::check_template_barcode_uniqueness(tx, this.env(), &tmpl_tuples)
-                    .await?;
-            }
-        }
-
-        if let Some(Cell::Bool(false)) = is_active_change {
-            let combo_item_model = this.env().sudo(true).records("product.combo.item")?;
-            let variant_ids = this
-                .mapped(tx, ProductTemplate::PRODUCT_VARIANT_IDS)
-                .await?;
-            let ids: Vec<i64> = variant_ids
-                .into_iter()
-                .flatten()
+            crate::barcode::refuse_bypass(this.env())?;
+            let families: Vec<i64> = this
+                .as_records()
+                .rec_ids()
+                .iter()
                 .map(|id| id.get())
                 .collect();
-            if !ids.is_empty() {
-                let d = Domain::condition("product_id", Operator::In, ids)?;
-                if combo_item_model.search_count(tx, &d, None).await? > 0 {
-                    return Err(Error::validation(
-                        "You cannot archive a product that is part of a combo. Please remove it from the following combos first.",
-                    ));
+            let relevant = vals.contains("barcode") || vals.contains("company_id");
+            let barcode_keys = if relevant {
+                crate::barcode::prepare(tx, this.env(), &families, &[], std::slice::from_ref(&vals))
+                    .await?
+            } else {
+                Vec::new()
+            };
+
+            if let Some(Cell::Bool(false)) = is_active_change {
+                let combo_item_model = this.env().sudo(true).records("product.combo.item")?;
+                let variant_ids = this
+                    .mapped(tx, ProductTemplate::PRODUCT_VARIANT_IDS)
+                    .await?;
+                let ids: Vec<i64> = variant_ids
+                    .into_iter()
+                    .flatten()
+                    .map(|id| id.get())
+                    .collect();
+                if !ids.is_empty() {
+                    let d = Domain::condition("product_id", Operator::In, ids)?;
+                    if combo_item_model.search_count(tx, &d, None).await? > 0 {
+                        return Err(Error::validation(
+                            "This product belongs to a combo, so it cannot be archived. Remove it from its combos first.",
+                        ));
+                    }
                 }
             }
-        }
 
-        sup.call(tx, this.as_records(), (vals,)).await?;
+            let units_changed = vals.contains("uom_id") || vals.contains("uom_ids") || vals.commands("uom_ids").is_some();
+            sup.call(tx, this.as_records(), (vals,)).await?;
+            if units_changed {
+                crate::packaging_lifecycle::register_units(this.as_records(), tx, &["uom_id", "uom_ids"]).await?;
+            }
 
-        if let Some(Cell::Str(ref bc)) = barcode_change {
-            let prod_model = this.env().records("product.product")?;
-            for rec_id in this.as_records().rec_ids() {
-                let d_all = Domain::condition("product_tmpl_id", Operator::Eq, rec_id.get())?;
-                let variants = prod_model.search(tx, &d_all).await?;
-                if variants.len() == 1 {
+            if let Some(Cell::Str(ref bc)) = barcode_change {
+                let prod_model = this
+                    .env()
+                    .records("product.product")?
+                    .with_context([("active_test", Value::Bool(false))]);
+                for rec_id in this.as_records().rec_ids() {
+                    let d_all = Domain::condition("product_tmpl_id", Operator::Eq, rec_id.get())?;
+                    let variants = prod_model.search(tx, &d_all).await?;
+                    if variants.len() == 1 {
+                        let mut v_vals = RawVals::new();
+                        v_vals.insert("barcode".into(), Cell::Str(bc.clone()));
+                        variants.write(tx, v_vals).await?;
+                    }
+                }
+            }
+
+            if let Some(Cell::Bool(active)) = is_active_change {
+                let variant_ids = this
+                    .mapped(tx, ProductTemplate::PRODUCT_VARIANT_IDS)
+                    .await?;
+                let ids: Vec<i64> = variant_ids
+                    .into_iter()
+                    .flatten()
+                    .map(|id| id.get())
+                    .collect();
+                if !ids.is_empty() {
+                    let prod_model = this.env().records("product.product")?;
                     let mut v_vals = RawVals::new();
-                    v_vals.insert("barcode".into(), Cell::Str(bc.clone()));
+                    v_vals.insert("active".into(), Cell::Bool(active));
+                    let variants = prod_model.browse(ids)?;
                     variants.write(tx, v_vals).await?;
                 }
             }
-        }
-
-        if let Some(Cell::Bool(active)) = is_active_change {
-            let variant_ids = this
-                .mapped(tx, ProductTemplate::PRODUCT_VARIANT_IDS)
-                .await?;
-            let ids: Vec<i64> = variant_ids
-                .into_iter()
-                .flatten()
-                .map(|id| id.get())
-                .collect();
-            if !ids.is_empty() {
-                let prod_model = this.env().records("product.product")?;
-                let mut v_vals = RawVals::new();
-                v_vals.insert("active".into(), Cell::Bool(active));
-                let variants = prod_model.browse(ids)?;
-                variants.write(tx, v_vals).await?;
+            if relevant {
+                crate::barcode::reconcile(tx, this.env(), &families, &[], barcode_keys).await?;
             }
-        }
-        Ok(())
+            Ok(())
+        })
+        .await
     }
 
     /// Compute pointer to first variant and total variant count.
@@ -575,7 +637,10 @@ impl ProductTemplate {
         tx: &mut Transaction,
         out: &mut Assign<'_, ProductTemplate>,
     ) -> Result<()> {
-        let prod_model = this.env().records("product.product")?;
+        let prod_model = this
+            .env()
+            .records("product.product")?
+            .with_context([("active_test", Value::Bool(false))]);
         for (index, tmpl_id) in this.as_records().rec_ids().iter().enumerate() {
             let domain = Domain::condition("product_tmpl_id", Operator::Eq, tmpl_id.get())?;
             let variants = prod_model.search(tx, &domain).await?;
@@ -593,7 +658,10 @@ impl ProductTemplate {
     /// Inverse barcode sets variant barcode on single-variant products.
     #[method]
     async fn _set_barcode(this: &RecordSet<ProductTemplate>, tx: &mut Transaction) -> Result<()> {
-        let prod_model = this.env().records("product.product")?;
+        let prod_model = this
+            .env()
+            .records("product.product")?
+            .with_context([("active_test", Value::Bool(false))]);
         let barcodes = this.mapped(tx, ProductTemplate::BARCODE).await?;
 
         for (tmpl_id, barcode_opt) in this.as_records().rec_ids().iter().zip(barcodes) {

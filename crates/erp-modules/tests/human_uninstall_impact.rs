@@ -519,7 +519,7 @@ async fn audit_failure_rolls_back_uninstall() {
             .await
             .unwrap_err(),
         ErrorKind::Validation,
-        "The operation cannot be completed: insert or update on table \"erp_module_lifecycle_audit\" violates foreign key constraint \"fixture_reject_uninstall\"",
+        "The database refused the change: insert or update on table \"erp_module_lifecycle_audit\" violates foreign key constraint \"fixture_reject_uninstall\"",
     );
     assert_note_intact(&installed.orm).await;
     assert_eq!(
@@ -3308,5 +3308,70 @@ async fn composition_blockers_are_negative_only_and_deterministic() {
     assert_eq!(plain.uninstall_composition_blocker(), None);
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert!(take_log().is_empty());
+    db.cleanup().await.unwrap();
+}
+
+fn sql_guard_count<'a>(
+    read: &'a mut erp_modules::sql_uninstall::SqlGuardRead<'_>,
+) -> BoxFuture<'a, erp_fields::Result<u64>> {
+    Box::pin(async move { read.count_all("test.note").await })
+}
+static SQL_GUARD: erp_modules::sql_uninstall::SqlUninstallGuard =
+    erp_modules::sql_uninstall::SqlUninstallGuard::new(
+        "note",
+        "protected",
+        &["test.note"],
+        "protected_rows",
+        "Protected rows prevent removal",
+        sql_guard_count,
+    );
+
+#[tokio::test]
+async fn sql_guarded_addon_is_refused_by_both_confirmed_planning_routes() {
+    let db = TestDb::create().await.unwrap();
+    let addons = Addons::new();
+    addons.add("note", "name='Note'\ndepends=['base']\n");
+    let system = builder(&db, &addons)
+        .code([&NOTE])
+        .decls([model("note", "test.note")])
+        .with_sql_uninstall_guards([&SQL_GUARD])
+        .build()
+        .unwrap();
+    let init = system
+        .initialize(InitOptions::new().with_skip_auto_install(true))
+        .await
+        .unwrap();
+    ensure_signal_schema(&init.orm).await;
+    exec(
+        &init.orm,
+        "INSERT INTO res_users(id,name) VALUES (2,'Administrator')",
+    )
+    .await;
+    let authorizer = allowed();
+    let installed = system
+        .install_authorized(&[n("note")], &authorizer)
+        .await
+        .unwrap();
+    let before = states(&installed.orm).await;
+    let message = "Uninstall impact cannot describe SQL-object uninstall effects and guards ( in a later release); unsupported until a later release";
+    assert_error(
+        system
+            .preview_uninstall_authorized(&[n("note")], &authorizer)
+            .await
+            .unwrap_err(),
+        ErrorKind::Validation,
+        message,
+    );
+    let fingerprint = format!("uninstall-v1:{}", "0".repeat(64));
+    assert_error(
+        system
+            .uninstall_authorized(&[n("note")], &fingerprint, &authorizer)
+            .await
+            .unwrap_err(),
+        ErrorKind::Validation,
+        message,
+    );
+    assert_eq!(states(&installed.orm).await, before);
+    assert!(table_exists(&installed.orm, "test_note").await);
     db.cleanup().await.unwrap();
 }

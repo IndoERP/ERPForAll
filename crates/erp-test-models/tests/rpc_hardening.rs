@@ -139,7 +139,7 @@ async fn unique_violations_conceal_the_detail_line() {
         &r,
         422,
         "erp.exceptions.ValidationError",
-        "The operation cannot be completed: duplicate key value violates unique constraint \
+        "The database refused the change: duplicate key value violates unique constraint \
          \"test_rpc_effects_name_unique\"",
     );
     let text = String::from_utf8_lossy(r.body()).into_owned();

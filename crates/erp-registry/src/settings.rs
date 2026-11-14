@@ -314,7 +314,12 @@ impl SettingDecl {
     /// Wrong type, intrinsic bound violation or custom validation failure.
     pub fn validate(&self, value: &Value) -> Result<()> {
         if !self.kind.fits(value) {
-            return Err(invalid());
+            // One sentence for every refusal of a value, naming the setting and what it takes.
+            return Err(Error::validation(format!(
+                "{} takes {}.",
+                self.key,
+                self.kind.describe()
+            )));
         }
         if let Some(validator) = self.validator {
             validator(value)?;

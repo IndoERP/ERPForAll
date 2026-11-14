@@ -162,7 +162,7 @@ async fn walk() {
     assert_eq!(error.kind(), ErrorKind::Access);
     assert_eq!(
         error.message(),
-        "Setting is unavailable or access is denied."
+        "Setting base.jobs.history_days is unavailable or access is denied."
     );
     denied_tx.rollback().await.unwrap();
     drop(denied_tx);
@@ -173,7 +173,7 @@ async fn walk() {
     let description = describe(&env, &mut tx, scope.clone()).await.unwrap();
     assert!(description.items.iter().any(|item| matches!(item,
         erp_sdk::views::wire::SettingsItem::Info { key, detail: Some(detail), .. }
-            if key == "base.jobs_configuration_status" && detail == "Values saved here are stored configuration. Running jobs use process configuration until live settings integration is delivered."
+            if key == "base.jobs_configuration_status" && detail == "Saved limits apply to new job admissions without restart. Running jobs keep their admitted limits."
     )));
     // Serve the shipped primary service view through the exposed producer at desktop and phone options.
     let view_id: i64 = tx.query("SELECT res_id::int8 FROM ir_model_data WHERE module='base' AND name='technical_jobs_settings_form' AND model='ir.ui.view'", &[]).await.unwrap()[0].get(0);
@@ -276,7 +276,7 @@ async fn walk() {
         assert_eq!(error.kind(), ErrorKind::Access);
         assert_eq!(
             error.message(),
-            "Setting is unavailable or access is denied."
+            format!("Setting {key} is unavailable or access is denied.")
         );
     }
     let error = read_values(
@@ -293,7 +293,7 @@ async fn walk() {
     assert_eq!(error.kind(), ErrorKind::Access);
     assert_eq!(
         error.message(),
-        "Setting is unavailable or access is denied."
+        format!("Setting {base} is unavailable or access is denied.")
     );
     let defaults = read_values(&env, &mut tx, scope.clone(), vec![base.into(), cap.into()])
         .await
@@ -311,7 +311,7 @@ async fn walk() {
         )
         .await
         .unwrap_err(),
-        "Invalid value for base.jobs.backoff_base_secs; use the declared integer range.",
+        "base.jobs.backoff_base_secs takes a whole number from 1 to 3600.",
     );
     // Individually admissible, invalid against an unchanged default base. No prefix survives even when caught.
     refused(
@@ -410,7 +410,7 @@ async fn walk() {
     assert_eq!(error.sqlstate(), Some("23514"));
     refused(
         error,
-        "The operation cannot be completed: new row for relation \"ir_config_setting_audit\" violates check constraint \"fixture_reject_jobs_audit\"",
+        "The database refused the change: new row for relation \"ir_config_setting_audit\" violates check constraint \"fixture_reject_jobs_audit\"",
     );
     let unchanged = read_values(&fault_env, &mut fault, scope.clone(), vec![base.into()])
         .await

@@ -421,6 +421,7 @@ impl Exporter {
                 }
             }
             (FieldType::Uuid, Cell::Uuid(value)) => Value::str(value.to_string()),
+            (FieldType::BigInt, Cell::BigInt(value)) => Value::str(value.to_string()),
             (FieldType::Xid8, Cell::Xid8(value)) => Value::str(value.to_string()),
             (FieldType::TimestampTz, Cell::TimestampTz(value)) => Value::str(value.to_string()),
             (FieldType::Uuid | FieldType::Xid8 | FieldType::TimestampTz, Cell::Null) => blank(),

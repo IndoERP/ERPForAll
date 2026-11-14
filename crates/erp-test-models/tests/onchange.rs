@@ -577,7 +577,7 @@ impl erp_testkit::TestRules for NoCreate {
     ) -> Result<()> {
         if model.name == MESSAGE && op == Operation::Create {
             return Err(Error::access(
-                "You are not allowed to create 'Message' records.",
+                "Your access rights do not let you create 'Message' records.",
             ));
         }
         Ok(())
@@ -2997,7 +2997,7 @@ async fn delegate_parent_checked_by_id_only() {
     assert_eq!(
         err.message(),
         format!(
-            "You are not allowed to access 'Vault' (test_web.vault) records.\n\nRecords: \
+            "Your access rights do not let you access 'Vault' (test_web.vault) records.\n\nRecords: \
              test_web.vault({sealed},), User: {uid}"
         )
     );
@@ -5163,7 +5163,7 @@ async fn in_memory_record_of_an_unreadable_origin_is_an_access_error() {
     assert_eq!(
         err.message(),
         format!(
-            "You are not allowed to access 'Multi sub-line' (test_web.multi_sub) records.\n\n\
+            "Your access rights do not let you access 'Multi sub-line' (test_web.multi_sub) records.\n\n\
              Records: test_web.multi_sub({},), User: {uid}",
             fixture.hidden
         )
@@ -5752,7 +5752,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 /// The error a read of a hidden record gives.
 fn hidden_message(description: &str, model: &str, id: i64, uid: i64) -> String {
     format!(
-        "You are not allowed to access '{description}' ({model}) records.\n\nRecords: \
+        "Your access rights do not let you access '{description}' ({model}) records.\n\nRecords: \
          {model}({id},), User: {uid}"
     )
 }

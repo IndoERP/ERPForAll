@@ -49,7 +49,9 @@
     ],
     "active_company_ids": [
       1
-    ]
+    ],
+    "attachment_limits": null,
+    "rpc_body_bytes": null
   },
   "menus": {
     "path": "/erp/json/2/ir.ui.menu/erp_load_web_menus",
@@ -516,7 +518,8 @@
                 "scope_kinds": [
                   "global",
                   "company"
-                ], "app": null
+                ],
+                "app": null
               },
               "modifiers": {
                 "readonly": null,

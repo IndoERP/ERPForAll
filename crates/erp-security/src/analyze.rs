@@ -61,6 +61,7 @@ pub(crate) fn comodel_of(ty: &FieldType) -> Option<&str> {
         | FieldType::Many2many { comodel, .. } => Some(comodel.as_str()),
         FieldType::Id
         | FieldType::Boolean
+        | FieldType::BigInt
         | FieldType::Integer
         | FieldType::Float { .. }
         | FieldType::Monetary { .. }

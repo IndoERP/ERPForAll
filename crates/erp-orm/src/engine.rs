@@ -2493,6 +2493,51 @@ impl Transaction {
         })
     }
 
+    /// Whether the SQL read of this field needs writes/recomputations that an adapter cannot do.
+    /// Mirrors flush_fields' generated-source expansion and recompute_fields' upstream graph.
+    /// Audit write metadata changes with any pending write on its model; immutable magic fields
+    /// such as id do not depend on unrelated writes.
+    pub(crate) fn read_requires_flush(&self, model: ModelId, field: FieldId) -> bool {
+        let spec = self.registry().model_by_id(model);
+        let wanted = spec.field_by_id(field);
+        let pending = |model, field| {
+            self.shared
+                .graph
+                .upstream((model, field))
+                .iter()
+                .any(|(m, f)| {
+                    self.shared
+                        .graph
+                        .compute((*m, *f))
+                        .is_some_and(|compute| compute.stored)
+                        && self.has_real_pending_of(*m, *f)
+                })
+        };
+        let dirty = |field| {
+            self.cache
+                .model(model)
+                .is_some_and(|cache| cache.has_real_dirty(field))
+        };
+        if wanted.magic && matches!(wanted.name, "write_date" | "write_uid") {
+            return self
+                .cache
+                .model(model)
+                .is_some_and(|cache| cache.has_any_real_dirty())
+                || spec.fields.iter().any(|field| pending(model, field.id));
+        }
+        if dirty(field) || pending(model, field) {
+            return true;
+        }
+        // Inherited generated metadata has owner ids; the query compiler supplies owner inputs.
+        wanted.inherited.is_none()
+            && wanted.generated().is_some_and(|generated| {
+                generated
+                    .dependencies()
+                    .iter()
+                    .any(|source| dirty(*source) || pending(model, *source))
+            })
+    }
+
     /// Recompute every pending field of `model` for database records, after the pending fields
     /// they depend on (on any model), in rank order.
     pub(crate) async fn recompute_model(&mut self, env: &Env, model: ModelId) -> Result<()> {

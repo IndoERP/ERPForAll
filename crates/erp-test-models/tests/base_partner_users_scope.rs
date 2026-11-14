@@ -714,10 +714,7 @@ async fn search(tx: &mut Transaction, model: &str) -> BTreeSet<i64> {
 fn denied(h: &Harness, reader: i64, op: &str, model: &str) -> String {
     let description = &h.registry().model(model).unwrap().description;
     format!(
-        "Uh-oh! Looks like you have stumbled upon some top-secret records.\n\nSorry, reader \
-         (id={reader}) doesn't have '{op}' access to:\n- {description} ({model})\n\nIf you really, \
-         really need access, perhaps you can win over your friendly administrator with a batch \
-         of freshly baked cookies.\n\n{}",
+        "Access rules protect some of these records.\n\nreader (id={reader}) has no '{op}' access to:\n- {description} ({model})\n\nAsk an administrator if you need access to these records.\n\n{}",
         CompanyHint::OutsideYourCompanies.text().unwrap()
     )
 }

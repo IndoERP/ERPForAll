@@ -866,8 +866,7 @@ async fn menu_tree_on_base() {
     assert_eq!(error.kind(), ErrorKind::UserError, "{error}");
     assert_eq!(
         error.message(),
-        "You are creating a loop in your 'Menu' records. A record cannot be a child of itself \
-         or one of its own sub-items. Please select a different parent."
+        "This parent would make a loop in the 'Menu' records: a record cannot sit under itself or under one of its own children. Choose another parent."
     );
     rollback(tx).await;
 
@@ -880,9 +879,8 @@ async fn menu_tree_on_base() {
     assert_eq!(error.kind(), ErrorKind::Validation, "{error}");
     assert_eq!(
         error.message(),
-        "The operation cannot be completed: Another model is using the record you are trying to \
-         delete.\n\nThe troublemaker is: 'Menu' (ir.ui.menu)\nThanks to the following constraint: \
-         'Parent Menu' (parent_id)\nHow about archiving the record instead?"
+        "The database refused the change: Other records still point to the record you want to delete.\n\nReferring model: 'Menu' (ir.ui.menu)\nConstraint: \
+         'Parent Menu' (parent_id)\nArchive the record instead of deleting it."
     );
     rollback(tx).await;
     h.cleanup().await.unwrap();

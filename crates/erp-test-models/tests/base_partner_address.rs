@@ -730,7 +730,7 @@ async fn failed_parent_name_nested_create_cannot_commit_a_partial_root() {
     assert_eq!(error.kind(), erp_sdk::ErrorKind::Validation);
     assert_eq!(
         error.message(),
-        "The operation cannot be completed: Contacts require a name"
+        "The database refused the change: Contacts require a name"
     );
     let driver = std::error::Error::source(&error)
         .unwrap()

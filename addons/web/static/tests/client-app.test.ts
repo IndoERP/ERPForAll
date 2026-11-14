@@ -3490,3 +3490,87 @@ test("the context line returns to the sheet when a render leaves no title block"
   form.replaceChildren();
   await vi.waitFor(() => expect(root.querySelector(".content-sheet > .form-record-context")).toBe(line));
 });
+
+/// (partial: mounted app registers a recovered count after an initial failed read)
+test("dashboard retry recovers count filtering in the mounted list", async () => {
+  history.replaceState(null, "", "/erp/action-20?view_type=list");
+  const revision = "a".repeat(64), queries: unknown[] = [];
+  let fails = true;
+  const dashboard = { kind: "dashboard", version: 1, revision, items: [{ kind: "count", name: "open", label: "Open notes", domain: null, filter: "open", color: "info" }] };
+  const views = { ...description, views: [description.views[0], { ...description.views[1], nodes: [{ kind: "list", children: [1, 2] }, description.views[1]!.nodes[1], dashboard] }] };
+  vi.stubGlobal("fetch", vi.fn(async (path: string, init: RequestInit) => {
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    if (path.endsWith("erp_read_dashboard")) {
+      if (fails) return new Response(JSON.stringify({ message: "Try the read again." }), { status: 500 });
+      return new Response(JSON.stringify({ version: 1, hidden: false, revision, period: "week", periods: [{ id: "week", label: "Week", kind: "rolling", days: 7 }], values: [{ name: "open", value: "1", domain: [["name", "=", "Open"]] }] }), { headers: { "Content-Type": "application/json" } });
+    }
+    if (path.endsWith("web_search_read")) queries.push(body["domain"]);
+    const value = path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] }
+      : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, { wire_major: 1, id: 20, name: "Notes", model: "test.note", target: "current", views: [{ id: 2, type: "list" }], domain: null, context: null }, views)
+      : path.endsWith("get_views") ? views : path.endsWith("web_search_read") ? { length: 1, records: [{ id: 5, name: "Open" }] } : [];
+    return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
+  }));
+  const root = host(); app = new HumanApp(root, bootstrap); await app.start();
+  await vi.waitFor(() => expect(root.querySelector(".dashboard-strip [role=alert]")?.textContent).toContain("Dashboard unavailable:"));
+  fails = false;
+  [...root.querySelectorAll<HTMLButtonElement>(".dashboard-strip button")].find(button => button.textContent === "Retry")!.click();
+  const card = root.querySelector<HTMLButtonElement>("button[data-dashboard-item=open]")!;
+  await vi.waitFor(() => expect(card.disabled).toBe(false)); card.click();
+  await vi.waitFor(() => expect(queries.at(-1)).toEqual([["name", "=", "Open"]]));
+  expect(card.getAttribute("aria-pressed")).toBe("true");
+});
+
+/// (partial: an active card kept in the address does not block the list when the strip read fails)
+test("a saved dashboard card does not stop the list from opening when the strip cannot be read", async () => {
+  history.replaceState(null, "", `/erp/action-20?view_type=list&search_filters=${encodeURIComponent('["dashboard_open"]')}`);
+  const revision = "a".repeat(64), queries: unknown[] = [];
+  const dashboard = { kind: "dashboard", version: 1, revision, items: [{ kind: "count", name: "open", label: "Open notes", domain: null, filter: "open", color: "info" }] };
+  const views = { ...description, views: [description.views[0], { ...description.views[1], nodes: [{ kind: "list", children: [1, 2] }, description.views[1]!.nodes[1], dashboard] }] };
+  vi.stubGlobal("fetch", vi.fn(async (path: string, init: RequestInit) => {
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    if (path.endsWith("erp_read_dashboard")) {
+      return new Response(JSON.stringify({ message: "Try the read again." }), { status: 500 });
+    }
+    if (path.endsWith("web_search_read")) queries.push(body["domain"]);
+    const value = path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] }
+      : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, { wire_major: 1, id: 20, name: "Notes", model: "test.note", target: "current", views: [{ id: 2, type: "list" }], domain: null, context: null }, views)
+      : path.endsWith("get_views") ? views : path.endsWith("web_search_read") ? { length: 1, records: [{ id: 5, name: "Open" }] } : [];
+    return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
+  }));
+  const root = host(); app = new HumanApp(root, bootstrap); await app.start();
+  await vi.waitFor(() => expect(root.querySelector(".dashboard-strip [role=alert]")?.textContent).toContain("Dashboard unavailable:"));
+  // The list is there with its rows, read without the card's domain, and nothing says the address is invalid.
+  await vi.waitFor(() => expect(queries.length).toBeGreaterThan(0));
+  expect(queries.at(-1)).toEqual([]);
+  expect(root.textContent).not.toContain("Invalid search_filters");
+  // The committed address no longer carries the dropped card.
+  expect(new URLSearchParams(location.search).has("search_filters")).toBe(false);
+  expect(root.querySelector(".dashboard-strip")).not.toBeNull();
+});
+
+/// (partial: a related list opened from another page shows no strip and reads no dashboard)
+test("a related list declared with a dashboard shows no strip and reads no dashboard", async () => {
+  const revision = "a".repeat(64), queries: unknown[] = [], paths: string[] = [];
+  const dashboard = { kind: "dashboard", version: 1, revision, items: [{ kind: "count", name: "open", label: "Open notes", domain: null, filter: "open", color: "info" }] };
+  const views = { ...description, views: [description.views[0], { ...description.views[1], nodes: [{ kind: "list", children: [1, 2] }, description.views[1]!.nodes[1], dashboard] }] };
+  vi.stubGlobal("fetch", vi.fn(async (path: string, init: RequestInit) => {
+    paths.push(path);
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    if (path.endsWith("web_search_read")) queries.push(body["domain"]);
+    const value = path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] }
+      : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, { wire_major: 1, id: 20, name: "Notes", model: "test.note", target: "current", views: [{ id: 2, type: "list" }], domain: null, context: null }, views)
+      : path.endsWith("get_views") ? views : path.endsWith("web_search_read") ? { length: 1, records: [{ id: 5, name: "Open" }] } : [];
+    return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
+  }));
+  const root = host(); app = new HumanApp(root, bootstrap);
+  // The page-local identity a form button or pivot cell would have stored; the app keeps it private.
+  const id = (app as unknown as { methodActions: { add(entry: unknown): string } }).methodActions.add({
+    result: { kind: "current_window", name: "Related", model: "test.note", views: [{ id: null, type: "list" }], domain: [["name", "=", "Open"]], context: {} },
+    context: {}, origin: { action: "20" }, originLabel: "Source" });
+  history.replaceState(null, "", `/erp/action-20?view_type=list&model=test.note&method_action=${encodeURIComponent(id)}`);
+  await app.start();
+  await vi.waitFor(() => expect(queries.length).toBeGreaterThan(0));
+  expect(root.querySelector(".form-breadcrumb-path")).not.toBeNull();
+  expect(root.querySelector(".dashboard-strip")).toBeNull();
+  expect(paths.some(path => path.endsWith("erp_read_dashboard"))).toBe(false);
+});

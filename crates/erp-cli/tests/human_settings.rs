@@ -187,26 +187,27 @@ async fn persisted_settings() {
     assert_eq!(invalid.kind(), erp_sdk::ErrorKind::Access);
     assert_eq!(
         invalid.message(),
-        "Setting is unavailable or access is denied."
+        "Setting database.secret is unavailable or access is denied."
     );
-    for changes in [
-        vec![],
-        vec![
-            ("base.test_enabled".into(), Value::Bool(false)),
-            ("base.test_enabled".into(), Value::Bool(true)),
-        ],
-        vec![("base.test_enabled".into(), Value::str("true"))],
+    for (changes, expected) in [
+        (vec![], "Invalid settings request."),
+        (
+            vec![
+                ("base.test_enabled".into(), Value::Bool(false)),
+                ("base.test_enabled".into(), Value::Bool(true)),
+            ],
+            "Invalid settings request.",
+        ),
+        (
+            vec![("base.test_enabled".into(), Value::str("true"))],
+            "base.test_enabled takes true or false.",
+        ),
     ] {
         let error = write_values(&env, &mut tx, SettingsScope::Global {}, "1".into(), changes)
             .await
             .unwrap_err();
         assert_eq!(error.kind(), erp_sdk::ErrorKind::Validation);
-        assert!(matches!(
-            error.message(),
-            "Invalid settings request."
-                | "invalid declared setting or value"
-                | "base.test_enabled takes true or false."
-        ));
+        assert_eq!(error.message(), expected);
     }
     let too_many = (0..257)
         .map(|i| (format!("base.unknown_{i}"), Value::Bool(true)))
@@ -275,7 +276,7 @@ async fn persisted_settings() {
     assert_eq!(denied_company.kind(), erp_sdk::ErrorKind::Access);
     assert_eq!(
         denied_company.message(),
-        "Access to unauthorized or invalid companies."
+        "Choose a company available to your account."
     );
     let company_env = env.with_company(company_id).unwrap();
     let company_default = read_values(
@@ -338,7 +339,7 @@ async fn persisted_settings() {
     assert_eq!(corrupt.kind(), erp_sdk::ErrorKind::Validation);
     assert_eq!(
         corrupt.message(),
-        "Stored setting is invalid for its declaration."
+        "Stored setting base.test_enabled is invalid."
     );
     // Safety-admission regression: corrupt storage must be rejected before its oversized
     // text crosses the PostgreSQL boundary, while the present key must never become a default.
@@ -358,17 +359,20 @@ async fn persisted_settings() {
     let production_read = tx
         .captured()
         .iter()
-        .find(|sql| sql.starts_with("SELECT s.revision, v.setting_key,"))
+        .find(|sql| sql.starts_with("SELECT COALESCE(s.revision,'0'),v.setting_key,"))
         .unwrap()
         .clone();
     tx.capture_statements(false);
     assert_eq!(oversized.kind(), erp_sdk::ErrorKind::Validation);
     assert_eq!(
         oversized.message(),
-        "Stored setting is invalid for its declaration."
+        "Stored setting base.test_enabled is invalid."
     );
     let rows = tx
-        .query(&production_read, &[&"global", &vec![key.clone()]])
+        .query(
+            &production_read,
+            &[&"global", &vec![key.clone()], &"base.attachment_max_bytes"],
+        )
         .await
         .unwrap();
     assert_eq!(rows.len(), 1);

@@ -201,12 +201,21 @@ async fn test_identical_barcode_different_companies() {
         .await;
     assert!(p1.is_ok());
 
+    // company_id is delegated to the template: different companies require different families.
+    let second_template = tmpl_model
+        .create(
+            &mut tx,
+            vec![RawVals::new().set_cell("name", Cell::Str("Other company family".into()))],
+        )
+        .await
+        .unwrap();
+    let second_template_id = second_template.rec_ids()[0].get();
     let p2 = prod_model
         .create(
             &mut tx,
             vec![
                 RawVals::new()
-                    .set_cell("product_tmpl_id", Cell::Id(tmpl_id))
+                    .set_cell("product_tmpl_id", Cell::Id(second_template_id))
                     .set_cell("company_id", Cell::Id(comp_b))
                     .set_cell("barcode", Cell::Str("BAR-SHARED".into())),
             ],
@@ -435,120 +444,85 @@ async fn test_skip_barcode_uniqueness_check() {
         )
         .await;
 
+    let error = res.expect_err("barcode uniqueness cannot be skipped");
+    assert_eq!(error.kind(), erp_sdk::ErrorKind::Validation);
     assert!(
-        res.is_ok(),
-        "With skip_barcode_uniqueness_check=true, duplicate barcodes should be accepted"
+        error.message().contains("skip_barcode_uniqueness_check"),
+        "{error}"
     );
 }
 
-/// for two nodes. Asserted: the second assignment of a barcode waits for the first transaction, and
-/// a transaction that starts after the commit is refused. NOT asserted: refusal of a second
-/// transaction whose snapshot predates the commit; the ORM runs at REPEATABLE READ, so that case
-/// needs a claim row and is open, see the review record)
+/// the actual second result is asserted; this is not a two-node variant-generation test)
 #[tokio::test]
 async fn test_concurrent_barcode_assignments_are_serialized() {
     let h = harness().await;
-    let mut tx1 = h.begin().await.unwrap();
-    let mut tx2 = h.begin().await.unwrap();
-    let prod1 = tx1.env().records("product.product").unwrap();
-    let prod2 = tx2.env().records("product.product").unwrap();
-    let tmpl1 = tx1.env().records("product.template").unwrap();
-    let tmpl2 = tx2.env().records("product.template").unwrap();
-    let t1 = tmpl1
+    let mut setup = h.begin().await.unwrap();
+    let tm = setup.env().records("product.template").unwrap();
+    let templates = tm
         .create(
-            &mut tx1,
-            vec![RawVals::new().set_cell("name", Cell::Str("T1".into()))],
-        )
-        .await
-        .unwrap()
-        .rec_ids()[0]
-        .get();
-    let t2 = tmpl2
-        .create(
-            &mut tx2,
-            vec![RawVals::new().set_cell("name", Cell::Str("T2".into()))],
-        )
-        .await
-        .unwrap()
-        .rec_ids()[0]
-        .get();
-
-    let committed_at = std::sync::Mutex::new(None);
-    let first = async {
-        prod1
-            .create(
-                &mut tx1,
-                vec![
-                    RawVals::new()
-                        .set_cell("product_tmpl_id", Cell::Id(t1))
-                        .set_cell("barcode", Cell::Str("CONCURRENT-BAR-01".into())),
-                ],
-            )
-            .await
-            .unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        tx1.commit().await.unwrap();
-        *committed_at.lock().unwrap() = Some(std::time::Instant::now());
-    };
-    let second = async {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        let started = std::time::Instant::now();
-        let _ = prod2
-            .create(
-                &mut tx2,
-                vec![
-                    RawVals::new()
-                        .set_cell("product_tmpl_id", Cell::Id(t2))
-                        .set_cell("barcode", Cell::Str("CONCURRENT-BAR-01".into())),
-                ],
-            )
-            .await;
-        (started, std::time::Instant::now())
-    };
-    let ((), (started, finished)) = tokio::join!(first, second);
-    let committed = committed_at
-        .lock()
-        .unwrap()
-        .expect("first transaction committed");
-    assert!(
-        finished >= committed,
-        "the second assignment finished {:?} before the first commit (it started {:?} after it began)",
-        committed.duration_since(finished),
-        started.elapsed()
-    );
-    drop(tx2);
-
-    // a transaction that begins after the commit sees the barcode and is refused
-    let mut tx3 = h.begin().await.unwrap();
-    let t3 = tx3
-        .env()
-        .records("product.template")
-        .unwrap()
-        .create(
-            &mut tx3,
-            vec![RawVals::new().set_cell("name", Cell::Str("T3".into()))],
-        )
-        .await
-        .unwrap()
-        .rec_ids()[0]
-        .get();
-    let err = tx3
-        .env()
-        .records("product.product")
-        .unwrap()
-        .create(
-            &mut tx3,
+            &mut setup,
             vec![
-                RawVals::new()
-                    .set_cell("product_tmpl_id", Cell::Id(t3))
-                    .set_cell("barcode", Cell::Str("CONCURRENT-BAR-01".into())),
+                RawVals::new().set_cell("name", Cell::Str("T1".into())),
+                RawVals::new().set_cell("name", Cell::Str("T2".into())),
             ],
         )
         .await
-        .expect_err("the committed barcode is taken");
-    assert!(
-        err.message().contains("CONCURRENT-BAR-01"),
-        "{}",
-        err.message()
-    );
+        .unwrap();
+    let ids: Vec<i64> = templates.rec_ids().iter().map(|id| id.get()).collect();
+    setup.commit().await.unwrap();
+    let (mut one, mut two) = h.begin_pair().await.unwrap();
+    let pid = erp_testkit::backend_pid(&mut two).await.unwrap();
+    let first = one
+        .env()
+        .records("product.template")
+        .unwrap()
+        .browse(vec![ids[0]])
+        .unwrap();
+    let second = two
+        .env()
+        .records("product.template")
+        .unwrap()
+        .browse(vec![ids[1]])
+        .unwrap();
+    first
+        .write(
+            &mut one,
+            RawVals::new().set_cell("barcode", Cell::Str("CONCURRENT-BAR-01".into())),
+        )
+        .await
+        .unwrap();
+    let waiting = tokio::spawn(async move {
+        let result = second
+            .write(
+                &mut two,
+                RawVals::new().set_cell("barcode", Cell::Str("CONCURRENT-BAR-01".into())),
+            )
+            .await;
+        (result, two)
+    });
+    erp_testkit::wait_until_blocked(&h, pid, std::time::Duration::from_secs(30))
+        .await
+        .unwrap();
+    one.commit().await.unwrap();
+    let (result, mut two) = waiting.await.unwrap();
+    let error = result.expect_err("stale snapshot must fail");
+    assert_eq!(error.kind(), erp_sdk::ErrorKind::Concurrency, "{error}");
+    assert_eq!(error.sqlstate(), Some("40001"));
+    two.rollback().await.unwrap();
+    let mut fresh = h.begin().await.unwrap();
+    let second = fresh
+        .env()
+        .records("product.template")
+        .unwrap()
+        .browse(vec![ids[1]])
+        .unwrap();
+    let error = second
+        .write(
+            &mut fresh,
+            RawVals::new().set_cell("barcode", Cell::Str("CONCURRENT-BAR-01".into())),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), erp_sdk::ErrorKind::Validation);
+    assert!(error.message().contains("CONCURRENT-BAR-01"), "{error}");
 }

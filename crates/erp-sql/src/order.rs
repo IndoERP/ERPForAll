@@ -399,6 +399,12 @@ impl<'a> OrderCompiler<'a> {
             }
         };
         let expr = match (&field.ty, term.property) {
+            (FieldType::Many2one { .. }, _) if !field.has_column() => {
+                return Err(Error::programming(format!(
+                    "Ordering needs a stored relation: {}.{}.",
+                    model.name, field.name
+                )));
+            }
             (FieldType::Many2one { comodel, .. }, property) => {
                 if seen.contains(&entry) {
                     // ordering a many2one already being ordered: skipped (loop guard)

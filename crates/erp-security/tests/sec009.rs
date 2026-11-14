@@ -225,12 +225,10 @@ async fn record_level_error_messages() {
         ),
     ];
     let head = format!(
-        "Uh-oh! Looks like you have stumbled upon some top-secret records.\n\nSorry, Bob Bobman \
-         (id={}) doesn't have 'read' access to:",
+        "Access rules protect some of these records.\n\nBob Bobman (id={}) has no 'read' access to:",
         s.bob
     );
-    let tail = "If you really, really need access, perhaps you can win over your friendly \
-                administrator with a batch of freshly baked cookies.";
+    let tail = "Ask an administrator if you need access to these records.";
     for (rules, blamed) in cases {
         set_rules(&client, &s, rules).await;
         let (orm, source) = policy_orm(&h).await;
@@ -266,7 +264,7 @@ async fn record_level_error_messages() {
                     .collect();
                 let blame: Vec<String> = blamed.iter().map(|n| format!("- {n}")).collect();
                 format!(
-                    "{head}\n{}\n\nBlame the following accesses:\n{}\n\n{tail}",
+                    "{head}\n{}\n\nRules that refused it:\n{}\n\n{tail}",
                     listing.join("\n"),
                     blame.join("\n")
                 )
@@ -427,10 +425,9 @@ async fn debug_without_the_technical_group_reads_no_names() {
     assert_eq!(
         err.message(),
         format!(
-            "Uh-oh! Looks like you have stumbled upon some top-secret records.\n\nSorry, Bob \
-             Bobman (id={}) doesn't have 'read' access to:\n- Object For Test Access Right \
-             (x.some_obj)\n\nIf you really, really need access, perhaps you can win over your \
-             friendly administrator with a batch of freshly baked cookies.",
+            "Access rules protect some of these records.\n\nBob \
+             Bobman (id={}) has no 'read' access to:\n- Object For Test Access Right \
+             (x.some_obj)\n\nAsk an administrator if you need access to these records.",
             s.bob
         )
     );

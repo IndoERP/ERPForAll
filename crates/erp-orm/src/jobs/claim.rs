@@ -5,6 +5,7 @@
 //! singleton key needs two statements (see [`SINGLETON_CANDIDATES_SQL`]). The reaper returns jobs
 //! whose lease ran out, skipping any row a running chunk still holds.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use erp_fields::{Error, Result, Uuid};
@@ -26,6 +27,7 @@ pub struct ClaimedJob {
     pub(crate) max_attempts: u32,
     pub(crate) epoch: i64,
     pub(crate) lease: Duration,
+    pub(crate) settings: Arc<super::JobSettingsSnapshot>,
     pub(crate) singleton: Option<String>,
     pub(crate) payload: serde_json::Value,
     pub(crate) progress: Option<serde_json::Value>,
@@ -160,7 +162,11 @@ fn undecodable(source: tokio_postgres::Error) -> Error {
 }
 
 /// Decode one claimed row (columns of [`claimed_columns!`]).
-pub(crate) fn decode(row: &tokio_postgres::Row, lease: Duration) -> Result<ClaimedJob> {
+pub(crate) fn decode(
+    row: &tokio_postgres::Row,
+    lease: Duration,
+    settings: Arc<super::JobSettingsSnapshot>,
+) -> Result<ClaimedJob> {
     let kind: String = row.try_get(2).map_err(undecodable)?;
     let decl = *super::enqueue::kind_map()
         .get(kind.as_str())
@@ -189,6 +195,7 @@ pub(crate) fn decode(row: &tokio_postgres::Row, lease: Duration) -> Result<Claim
             .map_err(|_| Error::internal("erp_job holds negative max_attempts"))?,
         epoch: row.try_get(6).map_err(undecodable)?,
         lease,
+        settings,
         singleton: row.try_get(7).map_err(undecodable)?,
         payload: row.try_get(8).map_err(undecodable)?,
         progress: row.try_get(9).map_err(undecodable)?,
@@ -206,6 +213,7 @@ pub(crate) async fn claim_plain(
     leases: &[f64],
     limit: i64,
     owner: Uuid,
+    settings: Arc<super::JobSettingsSnapshot>,
 ) -> Result<Vec<ClaimedJob>> {
     let names: Vec<&str> = kinds.iter().map(|k| k.name).collect();
     let leases_vec: Vec<f64> = leases.to_vec();
@@ -222,7 +230,7 @@ pub(crate) async fn claim_plain(
     rows.iter()
         .map(|row| {
             let lease = lease_of(row, kinds, leases)?;
-            decode(row, lease)
+            decode(row, lease, Arc::clone(&settings))
         })
         .collect()
 }

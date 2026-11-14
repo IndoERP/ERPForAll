@@ -123,7 +123,7 @@ pub(crate) fn check_url(url: &str) -> Result<()> {
 }
 
 /// Resolve one new attachment's content into a link source and its stored properties.
-async fn prepare(tx: &mut Transaction, env: &Env, item: NewAttachment) -> Result<Pending> {
+fn prepare(env: &Env, item: NewAttachment, file_limit: u64) -> Result<Pending> {
     check_name(&item.name)?;
     check_parent_shape(&item)?;
     let rt = runtime(env)?;
@@ -162,16 +162,22 @@ async fn prepare(tx: &mut Transaction, env: &Env, item: NewAttachment) -> Result
         }
         AttachmentContent::Bytes(bytes) => bytes,
         AttachmentContent::Base64(text) => {
+            // A lower policy also bounds the allocation before decoding. Exact decoded size is
+            // checked below; encoded length alone cannot distinguish base64 padding.
+            let encoded_limit = file_limit.div_ceil(3) * 4;
+            if text.len() as u64 > encoded_limit {
+                super::settings::check_size(file_limit + 1, file_limit)?;
+            }
             let longest = (limits.inline_max_bytes.saturating_add(2) / 3 + 1) * 4;
             if text.len() > longest {
                 return Err(upload_required(limits.inline_max_bytes));
             }
             base64::engine::general_purpose::STANDARD
                 .decode(text.as_bytes())
-                .map_err(|_| Error::user("Attachment is not encoded in base64."))?
+                .map_err(|_| Error::user("The attachment data is not valid base64."))?
         }
     };
-    let _ = tx;
+    super::settings::check_size(bytes.len() as u64, file_limit)?;
     if bytes.is_empty() {
         return Ok(pending);
     }
@@ -327,12 +333,16 @@ async fn insert(tx: &mut Transaction, env: &Env, pending: Vec<Pending>) -> Resul
 /// an upload that is not usable, or bytes above the inline threshold (stream them with
 /// [`super::Uploader`]); `Programming` when no attachment runtime is attached.
 pub async fn create(tx: &mut Transaction, items: Vec<NewAttachment>) -> Result<Vec<RecId>> {
-    let env = tx.env();
-    let mut pending = Vec::with_capacity(items.len());
-    for item in items {
-        pending.push(prepare(tx, &env, item).await?);
-    }
-    insert(tx, &env, pending).await
+    tx.savepoint(async |tx| {
+        let env = tx.env();
+        let file_limit = super::upload_policy(tx).await?.max_file_bytes();
+        let mut pending = Vec::with_capacity(items.len());
+        for item in items {
+            pending.push(prepare(&env, item, file_limit)?);
+        }
+        insert(tx, &env, pending).await
+    })
+    .await
 }
 
 /// Standalone attachments come before field-bound ones, then
@@ -340,14 +350,23 @@ pub async fn create(tx: &mut Transaction, items: Vec<NewAttachment>) -> Result<V
 ///
 /// # Errors
 ///
-/// As [`create`]; `User` ("Attachment is not encoded in base64.") for malformed base64.
+/// As [`create`]; `User` ("The attachment data is not valid base64.") for malformed base64.
 pub async fn create_unique(tx: &mut Transaction, items: Vec<NewAttachment>) -> Result<Vec<RecId>> {
+    tx.savepoint(async |tx| create_unique_checked(tx, items).await)
+        .await
+}
+
+async fn create_unique_checked(
+    tx: &mut Transaction,
+    items: Vec<NewAttachment>,
+) -> Result<Vec<RecId>> {
     let env = tx.env();
+    let file_limit = super::upload_policy(tx).await?.max_file_bytes();
     let mut out = Vec::with_capacity(items.len());
     for item in items {
-        let pending = prepare(tx, &env, item).await?;
+        let pending = prepare(&env, item, file_limit)?;
         let (checksum, mimetype) = match &pending.source {
-            Source::Upload(id) => upload_identity(tx, &env, id).await?,
+            Source::Upload(id) => upload_identity(tx, &env, id, file_limit).await?,
             _ => (pending.checksum.clone(), pending.mimetype.clone()),
         };
         let mut reuse = None;
@@ -391,15 +410,21 @@ async fn upload_identity(
     tx: &mut Transaction,
     env: &Env,
     id: &UploadId,
+    file_limit: u64,
 ) -> Result<(Option<String>, Option<String>)> {
     let rows = tx
         .query(
-            "SELECT sha1, detected_mimetype FROM ir_blob_upload WHERE id = $1::text::uuid \
+            "SELECT sha1, detected_mimetype, size FROM ir_blob_upload WHERE id = $1::text::uuid \
              AND state = 1 AND expires_at > now() AND subject_user = $2 AND actor = $3",
             &[&id.as_str(), &env.uid(), &super::upload::actor_text(env)],
         )
         .await?;
     let row = rows.first().ok_or_else(super::types::upload_not_usable)?;
+    let size: i64 = col!(row, 2);
+    super::settings::check_size(
+        u64::try_from(size).map_err(|_| Error::invariant("Negative staged attachment size."))?,
+        file_limit,
+    )?;
     let sha1: Option<Vec<u8>> = col!(row, 0);
     Ok((sha1.map(|s| to_hex(&s)), col!(row, 1)))
 }
@@ -441,7 +466,8 @@ pub async fn write_content(
         },
         content,
     );
-    let pending = prepare(tx, &env, item).await?;
+    let file_limit = super::upload_policy(tx).await?.max_file_bytes();
+    let pending = prepare(&env, item, file_limit)?;
     let sources = vec![pending.source.clone()];
     let linked = link::link(tx, &env, &sources).await?;
     let l = linked

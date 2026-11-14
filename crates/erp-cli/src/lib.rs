@@ -15,6 +15,7 @@ mod audit_reader;
 mod auth_revoke;
 pub mod cluster;
 pub mod db;
+mod db_lifecycle;
 pub mod dev;
 pub mod error;
 mod human;
@@ -31,9 +32,10 @@ pub use args::{
     AccessAction, AccessArgs, AccessCommand, AddonAction, AddonBuildArgs, AddonCommand,
     AddonInstallArgs, AddonPackageArgs, AddonUninstallArgs, AuthAction, AuthCommand,
     BuildObjectArgs, BuildTarget, Cli, ClusterAction, ClusterCommand, Commands, DatabaseName,
-    DbAction, DbCommand, DevArgs, DisableRuleArgs, EmergencyReasonArg, EmergencyRevokeArgs,
-    GrantVacuumRoleArgs, ModuleAction, ModuleCommand, ModuleOpArgs, RolloutAction, RolloutCommand,
-    RolloutOpenArgs, ScaffoldArgs, VacuumTransientArgs,
+    DbAction, DbCommand, DbTargetArgs, DemoArgs, DevArgs, DisableRuleArgs, DumpArgs,
+    EmergencyReasonArg, EmergencyRevokeArgs, GrantVacuumRoleArgs, ModuleAction, ModuleCommand,
+    ModuleOpArgs, NeutralizeArgs, RestoreArgs, RolloutAction, RolloutCommand, RolloutOpenArgs,
+    ScaffoldArgs, VacuumTransientArgs,
 };
 pub use error::{CliError, Result};
 pub use module::{
@@ -219,3 +221,5 @@ fn execute(cli: &Cli) -> Result<()> {
 pub mod ui_assets;
 
 mod uom_grants;
+
+mod sql_object_publication;

@@ -2,8 +2,10 @@
 import { PanelCompatibilityError, PanelRecoverySafety, attemptPanelRecovery } from "./panel-recovery.js";
 import { unavailablePanelMessage } from "./panel-metadata.js";
 import { loginReturnUrl } from "./login-return.js";
+import { initializeAttachmentPolicy } from "./attachment-policy.js";
 import { createHotkeyController, type HotkeyBinding } from "@erpforall/elang";
 import { reportHotkeyError } from "../../../../../web/src/runtime/hotkeys.js";
+import { dropAbsentDashboardFilters, mountDashboard } from "./dashboard.js";
 import { SearchModel, createSearchBar } from "./search/index.js";
 import { readMenuModule, readSettingsTarget } from "./settings-items.js";
 import { icon, menuIcon } from "./icons.js";
@@ -37,7 +39,7 @@ import type { NumericLocale } from "./numeric-values.js";
 import "./fields.js";
 import { decodeEditorLocale as readEditorLocale, type EditorLocale } from "./datetime-values.js";
 import { RecordState, specification } from "./record.js";
-import { parseRoute, routeUrl, rpcId, type Route } from "./route.js";
+import { parseRoute, routeUrl, rpcId, type Route, isAddressSizeRefusal } from "./route.js";
 import "./services.js";
 import { type ServiceController } from "./services.js";
 import { serviceControllers } from "./registry.js";
@@ -275,6 +277,7 @@ export class HumanApp {
       this.messages.network.observe(event, options);
     });
     this.listenForMenuIntent();
+    initializeAttachmentPolicy(this.rpc, bootstrap["attachment_limits"], bootstrap["rpc_body_bytes"]);
 
     this.renderHeader(bootstrap);
 
@@ -2098,7 +2101,9 @@ export class HumanApp {
     const accept = (snapshot: PivotSnapshot): void => {
       try { routeUrl(routeFor(snapshot)); }
       catch (error) {
-        if (error instanceof ClientError && error.kind === "validation") throw new ClientError("validation", groupingRows
+        // "Too large" is said only for the two size bounds of the address: its length and the list of expanded headers. Any other refusal keeps
+        // its own message (a field named twice on an axis used to be reported as size).
+        if (isAddressSizeRefusal(error)) throw new ClientError("validation", groupingRows
           ? "This table is too large to keep in the page address. Choose fewer Group By fields or narrow the search."
           : "This table is too large to keep in the page address. Collapse some headers or show fewer measures first.");
         throw error;
@@ -2284,9 +2289,45 @@ export class HumanApp {
       } }
     });
 
+    // A list opened from a form button or a pivot cell keeps the ORIGIN page's action in its address (the way back), so the strip's
+    // counts would be read under that action's domain, not this list's: such a list shows no strip.
+    const strip = route.method_action === undefined ? view.dashboard : undefined;
+    const dashboardAction = route.action === undefined ? undefined : rpcId(route.action);
+    if (strip && (dashboardAction === undefined || view.id === undefined)) throw new ClientError("unsupported", "Dashboard requires a saved window action and list view.");
+    const dashboard = strip ? mountDashboard({
+      config: strip,
+      read: (domain, period) => this.rpc.call(description.model, "erp_read_dashboard", {
+        action_id: dashboardAction, view_id: view.id, revision: strip.revision,
+        period, domain_scope: domain, context,
+      }),
+      apply: (name, domain) => this.run(async () => {
+        if (!searchModel.getFilters().some(f => f.id === `dashboard_${name}`)) searchModel.addDeclaredFilters([{
+          id: `dashboard_${name}`, description: strip!.items.find(item => item.name === name)!.label, domain, isActive: false,
+        }]);
+        searchModel.toggleFilter(`dashboard_${name}`);
+        await applySearch();
+      }),
+      selected: name => searchModel.getFilters().some(f => f.id === `dashboard_${name}` && f.isActive),
+      current: () => generation === this.generation && !this.expired,
+    }) : undefined;
+    if (dashboard) {
+      await dashboard.refresh(baseDomain);
+      searchModel.addDeclaredFilters([...dashboard.domains()].map(([name,domain]) => ({
+        id: `dashboard_${name}`, description: strip!.items.find(item => item.name === name)!.label,
+        domain, isActive: false,
+      })));
+      staging.append(dashboard.element);
+    }
+
     // Restore search state from route and URL search params
     const urlParams = new URL(routeUrl(route), window.location.origin).searchParams;
     if (urlParams.has("search_groupby")) await searchModel.loadGroupByCatalogue();
+    // A card that is not offered now (its read failed, the strip is hidden for this user, or this is a related list) cannot stay active
+    // from the address: the list opens without it, and the strip says why it is unavailable.
+    dropAbsentDashboardFilters(urlParams, new Set(searchModel.getFilters().map(filter => filter.id)));
+    // The address this navigation commits must not keep the dropped card, or a reload or a shared link brings it back.
+    const keptFilters = urlParams.get("search_filters");
+    if (keptFilters === null) delete route.search_filters; else route.search_filters = keptFilters;
     searchModel.loadFromUrlParams(urlParams);
     const restoredList = searchModel.getListState();
     if (restoredList) { offset = restoredList.offset;
@@ -2351,12 +2392,13 @@ export class HumanApp {
     } }) : undefined;
     if (tabs) categoriesArea.append(tabs.element);
 
-    const searchBar = createSearchBar(searchModel, () => this.run(async () => {
+    const applySearch = async (): Promise<void> => {
       offset = 0;
       resetGroups();
       updateUrlWithSearch();
       await load();
-    }));
+    };
+    const searchBar = createSearchBar(searchModel, () => this.run(applySearch));
 
     const searchArea = panel.querySelector("[data-control-search]") || panel;
     if (searchArea !== panel) searchArea.replaceChildren(searchBar.element);
@@ -2418,7 +2460,7 @@ export class HumanApp {
         } finally {
           this.busy = false;
         }
-        await load();
+        await load(true);
       }), "dropdown-item action-delete-btn danger");
       deleteBtn.setAttribute("role", "menuitem");
       actionMenu.append(deleteBtn);
@@ -2553,8 +2595,9 @@ export class HumanApp {
       const message = el("p", "Unable to load these records. Adjust the search or reload the page.", "list-load-error");
       message.setAttribute("role", "alert"); results.replaceChildren(message);
     };
-    const load = async (): Promise<void> => {
+    const load = async (refreshDashboard = false): Promise<void> => {
       const mine = ++request, base = searchModel.getDomain();
+      void dashboard?.refresh(tabs ? tabs.rowDomain(base) : base, refreshDashboard);
       const savedOpen = searchModel.getListState()?.open ?? [];
       groupedModel?.dispose();
       const groupName = searchModel.getGroupBy()[0], grouping = groupName === undefined ? undefined : searchModel.getGroupableField(groupName.split(":")[0]!);
@@ -2895,9 +2938,9 @@ export class HumanApp {
       }
     };
 
-    try { await load(); } catch (error) { disposeActionMenu(); disposeQuickFilters(); disposePageSize(); searchBar.dispose(); throw error; }
+    try { await load(); } catch (error) { disposeActionMenu(); disposeQuickFilters(); disposePageSize(); searchBar.dispose(); dashboard?.dispose(); throw error; }
     return {
-      dispose: () => { for (const stop of fieldStops.splice(0)) stop(); groupedModel?.dispose(); disposeActionMenu(); disposeQuickFilters(); disposePageSize(); searchBar.dispose(); },
+      dispose: () => { for (const stop of fieldStops.splice(0)) stop(); groupedModel?.dispose(); disposeActionMenu(); disposeQuickFilters(); disposePageSize(); searchBar.dispose(); dashboard?.dispose(); },
       settle: () => { settleColumns?.(); }
     };
   }

@@ -294,7 +294,7 @@ async fn base_write_preserves_model_authorization() {
     assert_error(
         &error,
         erp_sdk::ErrorKind::Access,
-        &format!("You are not allowed to write '{DESCRIPTION}' ({MODEL}) records."),
+        &format!("Your access rights do not let you write '{DESCRIPTION}' ({MODEL}) records."),
     );
     assert_eq!(
         record.value(&mut tx, "amount").await.unwrap(),
@@ -331,7 +331,7 @@ async fn base_write_preserves_record_authorization() {
         &error,
         erp_sdk::ErrorKind::Access,
         &format!(
-            "You are not allowed to modify '{DESCRIPTION}' ({MODEL}) records.\n\nRecords: {MODEL}({},), User: 2",
+            "Your access rights do not let you modify '{DESCRIPTION}' ({MODEL}) records.\n\nRecords: {MODEL}({},), User: 2",
             record.ids()[0]
         ),
     );

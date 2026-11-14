@@ -59,7 +59,7 @@ async fn a_packaging_barcode_is_unique() {
         .expect_err("the same packaging barcode twice");
     assert!(
         err.message()
-            .contains("A barcode can only be assigned to one packaging.")
+            .contains("This barcode is already used by another packaging.")
             || err.message().contains("_barcode_uniq"),
         "unexpected error: {}",
         err.message()
@@ -75,7 +75,8 @@ async fn a_packaging_barcode_cannot_equal_a_product_barcode() {
     let err = packaging(&mut tx, with_barcode, unit, "11223344")
         .await
         .expect_err("a product already uses this barcode");
-    assert_eq!(err.message(), "A product already uses the barcode");
+    assert_eq!(err.kind(), erp_sdk::ErrorKind::Validation);
+    assert!(err.message().contains("product"), "{err}");
 }
 
 #[tokio::test]
@@ -97,7 +98,9 @@ async fn a_product_barcode_cannot_equal_a_packaging_barcode() {
         )
         .await
         .expect_err("a packaging already uses this barcode");
-    assert_eq!(err.message(), "A packaging already uses the barcode");
+    assert_eq!(err.kind(), erp_sdk::ErrorKind::Validation);
+    assert!(err.message().contains("PKG-555"), "{err}");
+    assert!(err.message().contains("packaging"), "{err}");
 }
 
 #[tokio::test]

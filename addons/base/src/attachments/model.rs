@@ -175,6 +175,33 @@ async fn check_circular(tx: &mut Transaction, ids: &[i64]) -> Result<()> {
 
 #[methods(IrAttachment, addon = "base")]
 impl IrAttachment {
+    /// Current nonsecret upload limits for clients allowed to create attachments.
+    #[method]
+    #[rpc(effect = read, model)]
+    async fn erp_upload_limits(
+        this: &RecordSet<IrAttachment>,
+        tx: &mut Transaction,
+    ) -> Result<Value> {
+        this.as_records()
+            .check_access(tx, Operation::Create)
+            .await?;
+        let policy = super::upload_policy(tx).await?;
+        Ok(Value::Map(Arc::new(
+            [
+                (
+                    "max_file_bytes".to_owned(),
+                    Value::Int(policy.max_file_bytes() as i64),
+                ),
+                (
+                    "inline_max_bytes".to_owned(),
+                    Value::Int(policy.inline_max_bytes() as i64),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        )))
+    }
+
     /// Check the values, then the parents the new attachments belong to (create needs write on
     /// the parent), then create.
     #[method(override)]

@@ -105,10 +105,14 @@ impl AttrKind {
                 Some(Self::Expression)
             }
             (_, "context") => Some(Self::Context),
-            ("filter", "date" | "end_date") => Some(Self::FieldName),
+            ("filter", "date" | "end_date") | ("kpi", "field" | "date_field") => {
+                Some(Self::FieldName)
+            }
             (_, decoration) if decoration.starts_with("decoration-") => Some(Self::Expression),
             ("field", "domain") => Some(Self::FieldDomain),
-            ("filter", "domain") | ("field", "filter_domain") => Some(Self::FilterDomain),
+            ("filter" | "count" | "kpi", "domain") | ("field", "filter_domain") => {
+                Some(Self::FilterDomain)
+            }
             ("list", "default_order") => Some(Self::ListOrder),
             ("pivot", "default_order") => Some(Self::PivotOrder),
             _ => None,

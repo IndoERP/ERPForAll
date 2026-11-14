@@ -47,24 +47,19 @@ fn description(model: &ModelSpec) -> &str {
 /// let text = erp_security::explain::model_message(users, erp_orm::Operation::Write, &[]);
 /// assert_eq!(
 ///     text,
-///     "You are not allowed to modify 'User' (res.users) records.\n\nNo group currently allows \
-///      this operation.\n\nContact your administrator to request access if necessary."
+///     "Your access rights do not let you modify 'User' (res.users) records.\n\nNo group may do this.\n\nAsk an administrator if you need this access."
 /// );
 /// # Ok::<(), erp_fields::Error>(())
 /// ```
 pub fn model_message(model: &ModelSpec, op: Operation, groups: &[String]) -> String {
     let group_info = if groups.is_empty() {
-        "No group currently allows this operation.".to_owned()
+        "No group may do this.".to_owned()
     } else {
         let list: Vec<String> = groups.iter().map(|g| format!("\t- {g}")).collect();
-        format!(
-            "This operation is allowed for the following groups:\n{}",
-            list.join("\n")
-        )
+        format!("Groups that may do this:\n{}", list.join("\n"))
     };
     format!(
-        "You are not allowed to {} '{}' ({}) records.\n\n{group_info}\n\nContact your \
-         administrator to request access if necessary.",
+        "Your access rights do not let you {} '{}' ({}) records.\n\n{group_info}\n\nAsk an administrator if you need this access.",
         model_verb(op),
         description(model),
         model.name
@@ -112,7 +107,7 @@ pub fn blame(evidence: &RecordEvidence) -> Vec<RuleRef> {
 ///     .with_company(Some(EvidenceCompany::own(CompanyId::new(2)?, "Company B".into())));
 /// let evidence = RecordEvidence::new(vec![column], vec![row], "Bob")?;
 /// let message = RecordMessage::new(users, erp_orm::Operation::Write, 5, &evidence);
-/// assert!(message.render().ends_with("switching to the company: Company B."));
+/// assert!(message.render().ends_with("switch to its company: Company B."));
 /// assert!(message.context().is_some());
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
@@ -167,16 +162,13 @@ impl<'a> RecordMessage<'a> {
     pub fn render(&self) -> String {
         let (model, evidence) = (self.model, self.evidence);
         let operation_error = format!(
-            "Uh-oh! Looks like you have stumbled upon some top-secret records.\n\nSorry, {} \
-             (id={}) doesn't have '{}' access to:",
+            "Access rules protect some of these records.\n\n{} (id={}) has no '{}' access to:",
             evidence.subject_name(),
             self.uid,
             operation_name(self.op)
         );
-        let mut resolution_info = "If you really, really need access, perhaps you can win over \
-                                   your friendly administrator with a batch of freshly baked \
-                                   cookies."
-            .to_owned();
+        let mut resolution_info =
+            "Ask an administrator if you need access to these records.".to_owned();
         let hint = self.hint();
         if let Some(text) = hint.text() {
             resolution_info.push_str("\n\n");
@@ -223,7 +215,7 @@ impl<'a> RecordMessage<'a> {
             .map(|rule| format!("- {}", rule.name()))
             .collect();
         format!(
-            "{operation_error}\n{}\n\nBlame the following accesses:\n{}\n\n{resolution_info}",
+            "{operation_error}\n{}\n\nRules that refused it:\n{}\n\n{resolution_info}",
             records.join("\n"),
             rules.join("\n")
         )

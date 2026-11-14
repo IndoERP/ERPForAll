@@ -90,6 +90,8 @@ export interface FavoriteItem {
 }
 
 export interface SearchModelOptions {
+  /** Additional server-admitted filters, supplied before URL restoration. */
+  filters?: readonly FilterItem[];
   model: string;
   fields: Map<string, Field>;
   viewFields?: Field[];

@@ -7,6 +7,8 @@
       <menuitem id="menu_account_tag" name="Account Tags" action="action_account_tag" sequence="20"/>
       <menuitem id="menu_action_account_journal_form" name="Journals" action="action_account_journal_form" groups="account.group_account_manager" sequence="30"/>
       <menuitem id="menu_action_account_journal_group_list" name="Ledgers" action="action_account_journal_group_list" sequence="40"/>
+      <menuitem id="menu_taxes" name="Taxes" action="action_taxes" sequence="50"/>
+      <menuitem id="menu_tax_groups" name="Tax groups" action="action_tax_groups" sequence="60"/>
     </menuitem>
   </menuitem>
   <menuitem id="menu_account_fiscal_period" name="Fiscal Periods" parent="menu_finance_configuration" action="action_account_fiscal_period" sequence="30"/>

@@ -40,7 +40,7 @@ pub struct ModelData {
 }
 
 /// The prefix the ORM puts before a declared constraint's message.
-const PREFIX: &str = "The operation cannot be completed: ";
+const PREFIX: &str = "The database refused the change: ";
 
 const LINE: &str = "stock.move.line";
 const SERIAL: &str = "stock.move.line.serial";
@@ -148,6 +148,8 @@ async fn fixture() -> Fixture {
         &erp_addon_stock::ADDON,
         &ADDON,
     ])
+    .require_sql_objects([&erp_addon_stock::schema_guards::MANIFEST])
+    .schema_sync_options(erp_testkit::SchemaSyncOptions::inline().lifecycle(true))
     .build()
     .await
     .unwrap();
@@ -399,9 +401,7 @@ fn assert_foreign_key(f: &Fixture, error: &Error, model: &str, constraint: &str)
     assert_eq!(
         error.message(),
         format!(
-            "{PREFIX}Another model is using the record you are trying to delete.\n\nThe troublemaker \
-             is: '{description}' ({model})\nThanks to the following constraint: '{constraint}'\nHow \
-             about archiving the record instead?"
+            "{PREFIX}Other records still point to the record you want to delete.\n\nReferring model: '{description}' ({model})\nConstraint: '{constraint}'\nArchive the record instead of deleting it."
         )
     );
 }
@@ -876,7 +876,7 @@ async fn line_checks_refuse_and_accept_boundaries() {
     }
     assert_eq!(
         message(&f, LINE, "_quantity_nonneg"),
-        "You can not enter negative quantities."
+        "Quantity cannot be negative."
     );
     // accepted: zero, digits 0 and 28, a done line with its time, a deactivated reopened row at zero,
     // a converted quantity
@@ -1284,18 +1284,18 @@ fn assert_crossover(error: &Error, field: &str, label: &str, value: &str) {
     assert_eq!(error.kind(), ErrorKind::UserError, "{field}: {error:?}");
     let message = error.message();
     assert!(
-        message.starts_with("Uh-oh! You’ve got some company inconsistencies here:\n- “"),
+        message.starts_with("These values link records of different companies:\n- “"),
         "{field}: {message}"
     );
     assert!(
         message.contains(&format!(
-            "belongs to company “Main Company” while “{label}” ({field}: '{value}') belongs to \
-             another company.\n"
+            "is in company “Main Company”, and “{label}” ({field}: '{value}') points to a record of another company.\n"
         )),
         "{field}: {message}"
     );
     assert!(
-        message.ends_with("To avoid a mess, no company crossover is allowed!"),
+        message
+            .ends_with("Choose records of the same company, or records shared by all companies."),
         "{field}: {message}"
     );
 }
@@ -1973,5 +1973,312 @@ async fn no_two_step_path_defeats_the_tracking_check() {
     }
     tx.rollback().await.unwrap();
     drop(tx);
+    f.h.cleanup().await.unwrap();
+}
+
+/// A guard failure is SQL-mapped, with the statement rolled back to its savepoint.
+async fn guard_refusal(
+    tx: &mut Transaction,
+    sql: &str,
+    state: &str,
+    identifier: &str,
+    kind: ErrorKind,
+    message: &str,
+) {
+    let error = tx
+        .savepoint(async |tx| tx.batch(sql).await)
+        .await
+        .expect_err(sql);
+    assert_eq!(error.kind(), kind, "{sql}: {error:?}");
+    assert_eq!(error.message(), message, "{sql}");
+    assert_eq!(error.sqlstate(), Some(state));
+    assert_eq!(error.constraint(), Some(identifier));
+}
+
+#[tokio::test]
+async fn done_at_guards_moves_and_lines_atomically() {
+    let f = fixture().await;
+    let mut tx = f.h.begin().await.unwrap();
+    let first = insert(&mut tx, &line_sql(&f, f.mv, &[])).await.unwrap();
+    let second = insert(&mut tx, &line_sql(&f, f.second_move, &[]))
+        .await
+        .unwrap();
+    for (table, a, b) in [
+        ("stock_move", f.mv, f.second_move),
+        ("stock_move_line", first, second),
+    ] {
+        tx.batch(&format!("UPDATE {table} SET done_at=NULL WHERE id IN ({a},{b}); UPDATE {table} SET done_at='2026-01-02 03:04:05+00' WHERE id={a}; UPDATE {table} SET done_at=done_at WHERE id={a}; UPDATE {table} SET done_at=NULL WHERE false")).await.unwrap();
+        for assignment in ["NULL", "'2026-01-03 03:04:05+00'"] {
+            guard_refusal(
+                &mut tx,
+                &format!("UPDATE {table} SET done_at={assignment} WHERE id IN ({a},{b})"),
+                "ERP01",
+                "stock_done_at_immutable",
+                ErrorKind::Validation,
+                "The first completion time cannot be changed or cleared.",
+            )
+            .await;
+        }
+        if table == "stock_move_line" {
+            guard_refusal(
+                &mut tx,
+                &format!("UPDATE {table} SET id=id+1000000 WHERE id={a}"),
+                "ERP01",
+                "stock_done_at_immutable",
+                ErrorKind::Validation,
+                "The first completion time cannot be changed or cleared.",
+            )
+            .await;
+        }
+        let rows = tx
+            .query(
+                &format!("SELECT id,done_at::text FROM {table} WHERE id IN ({a},{b}) ORDER BY id"),
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0].get::<_, Option<String>>(1),
+            Some("2026-01-02 03:04:05".to_owned())
+        );
+        assert_eq!(rows[1].get::<_, Option<String>>(1), None);
+        tx.batch(&format!("UPDATE {table} SET write_date=now() WHERE id={a}; UPDATE {table} SET done_at='2026-01-04 00:00:00+00' WHERE id={b}")).await.unwrap();
+    }
+    tx.rollback().await.unwrap();
+    drop(tx);
+    f.h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn correction_history_is_append_only_even_for_the_application_role() {
+    let f = fixture().await;
+    let mut tx = f.h.begin().await.unwrap();
+    let line = insert(
+        &mut tx,
+        &line_sql(&f, f.mv, &[("done_at", "now()"), ("membership", "'done'")]),
+    )
+    .await
+    .unwrap();
+    let correction = insert(&mut tx, &correction_sql(&f, line, &[]))
+        .await
+        .unwrap();
+    // Two rows make bulk mutation rollback observable as well as single-row refusal.
+    insert(&mut tx, &correction_sql(&f, line, &[("seq", "2")]))
+        .await
+        .unwrap();
+    // Role creation and grants are transactional: the final rollback removes them even on error.
+    let role = format!("{}_guard_writer", f.h.db().name());
+    tx.batch(&format!("CREATE ROLE {role} NOLOGIN; GRANT {role} TO CURRENT_USER; GRANT USAGE ON SCHEMA public TO {role}; GRANT SELECT,INSERT,UPDATE,DELETE,TRUNCATE ON ALL TABLES IN SCHEMA public TO {role}; GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO {role}; SET LOCAL ROLE {role}")).await.unwrap();
+    tx.batch("UPDATE stock_move_line_correction SET seq=seq WHERE false; DELETE FROM stock_move_line_correction WHERE false").await.unwrap();
+    for sql in [
+        format!("UPDATE stock_move_line_correction SET seq=seq WHERE id={correction}"),
+        "UPDATE stock_move_line_correction SET seq=seq+100".to_owned(),
+        format!("DELETE FROM stock_move_line_correction WHERE id={correction}"),
+        "DELETE FROM stock_move_line_correction".to_owned(),
+        "TRUNCATE stock_move_line_correction".to_owned(),
+    ] {
+        guard_refusal(
+            &mut tx,
+            &sql,
+            "ERP02",
+            "stock_correction_row_immutable",
+            ErrorKind::Programming,
+            "Internal server error",
+        )
+        .await;
+        assert_eq!(
+            tx.query(
+                "SELECT count(*),sum(seq)::bigint FROM stock_move_line_correction",
+                &[]
+            )
+            .await
+            .unwrap()[0]
+                .get::<_, i64>(0),
+            2
+        );
+        assert_eq!(
+            tx.query(
+                "SELECT sum(seq)::bigint FROM stock_move_line_correction",
+                &[]
+            )
+            .await
+            .unwrap()[0]
+                .get::<_, i64>(0),
+            3
+        );
+    }
+    // The table is append-only, not read-only.
+    insert(&mut tx, &correction_sql(&f, line, &[("seq", "3")]))
+        .await
+        .unwrap();
+    tx.rollback().await.unwrap();
+    drop(tx);
+    f.h.cleanup().await.unwrap();
+}
+
+/// The policy rows the insert trigger makes are stamped in UTC like an ORM write, whatever the
+/// session's time zone (cycle 13 r3, database M1).
+#[tokio::test]
+async fn trigger_made_policies_are_stamped_in_utc() {
+    let f = fixture().await;
+    let mut tx = f.h.begin().await.unwrap();
+    tx.batch("SET LOCAL TIME ZONE 'Asia/Jakarta'")
+        .await
+        .unwrap();
+    let rows = tx
+        .query(
+            "INSERT INTO stock_location (name,usage,active) VALUES ('Zoned internal','internal',true) RETURNING id",
+            &[],
+        )
+        .await
+        .unwrap();
+    let id: i64 = rows[0].get(0);
+    let stamped = tx
+        .query(
+            "SELECT create_date = (now() AT TIME ZONE 'UTC'), write_date = (now() AT TIME ZONE 'UTC') \
+             FROM stock_location_policy WHERE location_id = $1",
+            &[&id],
+        )
+        .await
+        .unwrap();
+    assert_eq!(stamped.len(), 1);
+    assert!(stamped[0].get::<_, bool>(0), "create_date is not UTC");
+    assert!(stamped[0].get::<_, bool>(1), "write_date is not UTC");
+    tx.rollback().await.unwrap();
+    drop(tx);
+    f.h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn raw_location_inserts_have_policies_and_policy_deletes_are_refused() {
+    let f = fixture().await;
+    let mut tx = f.h.begin().await.unwrap();
+    let rows = tx.query("INSERT INTO stock_location (name,usage,active) VALUES ('Raw internal','internal',true),('Raw view','view',false),('Raw transit','transit',true) RETURNING id", &[]).await.unwrap();
+    let ids: Vec<i64> = rows.iter().map(|row| row.get(0)).collect();
+    let policies = tx.query("SELECT location_id,forbid_negative FROM stock_location_policy WHERE location_id=ANY($1) ORDER BY location_id", &[&ids]).await.unwrap();
+    assert_eq!(policies.len(), ids.len());
+    assert!(policies.iter().all(|row| !row.get::<_, bool>(1)));
+    let a = ids[0];
+    for sql in [
+        format!("DELETE FROM stock_location_policy WHERE location_id={a}"),
+        "TRUNCATE stock_location_policy".to_owned(),
+    ] {
+        guard_refusal(
+            &mut tx,
+            &sql,
+            "ERP03",
+            "stock_location_policy_required",
+            ErrorKind::Validation,
+            "Each inventory location must retain its stock policy.",
+        )
+        .await;
+    }
+    // A reparent collides with the existing policy before the statement trigger.
+    let error = tx
+        .savepoint(async |tx| {
+            tx.batch(&format!(
+                "UPDATE stock_location_policy SET location_id={} WHERE location_id={a}",
+                f.location
+            ))
+            .await
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Validation);
+    assert_eq!(
+        error.message(),
+        "The database refused the change: A location has one stock policy."
+    );
+    assert_eq!(error.sqlstate(), Some("23505"));
+    tx.batch(&format!("UPDATE stock_location_policy SET forbid_negative=forbid_negative WHERE location_id={a}; DELETE FROM stock_location WHERE id={a}")).await.unwrap();
+    assert_eq!(
+        tx.query(
+            "SELECT count(*) FROM stock_location_policy WHERE location_id=$1",
+            &[&a]
+        )
+        .await
+        .unwrap()[0]
+            .get::<_, i64>(0),
+        0
+    );
+    tx.rollback().await.unwrap();
+    drop(tx);
+    f.h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn copy_locations_creates_policy_rows() {
+    use futures_util::SinkExt;
+    let f = fixture().await;
+    let client = f.h.db().client().await.unwrap();
+    client.batch_execute("BEGIN").await.unwrap();
+    let sink = client
+        .copy_in("COPY stock_location(name,usage,active) FROM STDIN")
+        .await
+        .unwrap();
+    let mut sink = std::pin::pin!(sink);
+    sink.send(bytes::Bytes::from_static(
+        b"Copied A\tinternal\tt\nCopied B\tview\tf\n",
+    ))
+    .await
+    .unwrap();
+    assert_eq!(sink.finish().await.unwrap(), 2);
+    let row = client.query_one("SELECT count(*),count(p.id),bool_and(NOT p.forbid_negative) FROM stock_location l LEFT JOIN stock_location_policy p ON p.location_id=l.id WHERE l.name IN ('Copied A','Copied B')", &[]).await.unwrap();
+    assert_eq!(row.get::<_, i64>(0), 2);
+    assert_eq!(row.get::<_, i64>(1), 2);
+    assert!(row.get::<_, bool>(2));
+    let audit = client.query_one("SELECT bool_and(p.create_uid IS NULL AND p.write_uid IS NULL) FROM stock_location l JOIN stock_location_policy p ON p.location_id=l.id WHERE l.name IN ('Copied A','Copied B')", &[]).await.unwrap();
+    assert!(audit.get::<_, bool>(0));
+    client.batch_execute("ROLLBACK").await.unwrap();
+    drop(client);
+    f.h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn parent_cascade_and_stale_policy_delete_cannot_leave_a_gap() {
+    let f = fixture().await;
+    let mut setup = f.h.begin().await.unwrap();
+    let location = setup.query("INSERT INTO stock_location(name,usage) VALUES ('Concurrent policy','view') RETURNING id", &[]).await.unwrap()[0].get::<_,i64>(0);
+    setup.commit().await.unwrap();
+    drop(setup);
+    let mut parent = f.h.begin().await.unwrap();
+    let mut policy = f.h.begin().await.unwrap();
+    // Establish the losing connection's snapshot before the cascade commits.
+    let pid = erp_testkit::backend_pid(&mut policy).await.unwrap();
+    parent
+        .execute("DELETE FROM stock_location WHERE id=$1", &[&location])
+        .await
+        .unwrap();
+    let (result, ()) = tokio::join!(
+        async {
+            policy
+                .execute(
+                    "DELETE FROM stock_location_policy WHERE location_id=$1",
+                    &[&location],
+                )
+                .await
+        },
+        async {
+            erp_testkit::wait_until_blocked(&f.h, pid, std::time::Duration::from_secs(30))
+                .await
+                .unwrap();
+            parent.commit().await.unwrap();
+        }
+    );
+    let error = result.unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Concurrency);
+    assert_eq!(error.sqlstate(), Some("40001"));
+    assert_eq!(
+        error.message(),
+        "could not serialize access due to concurrent delete"
+    );
+    policy.rollback().await.unwrap();
+    drop(policy);
+    drop(parent);
+    let mut check = f.h.begin().await.unwrap();
+    assert_eq!(check.query("SELECT count(*) FROM stock_location l LEFT JOIN stock_location_policy p ON p.location_id=l.id WHERE p.id IS NULL", &[]).await.unwrap()[0].get::<_,i64>(0), 0);
+    check.rollback().await.unwrap();
+    drop(check);
     f.h.cleanup().await.unwrap();
 }

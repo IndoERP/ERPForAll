@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 pub const CATEGORY: &str = "product.category";
 pub const ITEM: &str = "product.pricelist.item";
 pub const ACCESS: &str = "erp.exceptions.AccessError";
-pub const OUTSIDE: &str = "\n\nThis seems to be a multi-company issue, but you do not have access to the proper company to access the record anyhow.";
+pub const OUTSIDE: &str = "\n\nThe record belongs to a company outside your allowed companies.";
 
 pub fn ids(value: &Value) -> Vec<i64> {
     value
@@ -115,10 +115,10 @@ pub fn field_denial(label: &str, model: &str, field: &str, op: &str) -> String {
 }
 pub fn model_denial(label: &str, model: &str, verb: &str, groups: &[&str]) -> String {
     let group_info = if groups.is_empty() {
-        "No group currently allows this operation.".to_owned()
+        "No group may do this.".to_owned()
     } else {
         format!(
-            "This operation is allowed for the following groups:\n{}",
+            "Groups that may do this:\n{}",
             groups
                 .iter()
                 .map(|g| format!("\t- {g}"))
@@ -127,13 +127,13 @@ pub fn model_denial(label: &str, model: &str, verb: &str, groups: &[&str]) -> St
         )
     };
     format!(
-        "You are not allowed to {verb} '{label}' ({model}) records.\n\n{group_info}\n\nContact your administrator to request access if necessary."
+        "Your access rights do not let you {verb} '{label}' ({model}) records.\n\n{group_info}\n\nAsk an administrator if you need this access."
     )
 }
 pub fn record_denial(user: &User, label: &str, model: &str, op: &str, outside: bool) -> String {
     let hint = if outside { OUTSIDE } else { "" };
     format!(
-        "Uh-oh! Looks like you have stumbled upon some top-secret records.\n\nSorry, {} (id={}) doesn't have '{op}' access to:\n- {label} ({model})\n\nIf you really, really need access, perhaps you can win over your friendly administrator with a batch of freshly baked cookies.{hint}",
+        "Access rules protect some of these records.\n\n{} (id={}) has no '{op}' access to:\n- {label} ({model})\n\nAsk an administrator if you need access to these records.{hint}",
         user.login, user.id
     )
 }

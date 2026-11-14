@@ -34,7 +34,6 @@ const BASE_KEYS: [&str; 8] = [
     "base.manage_users",
 ];
 const UNAVAILABLE: &str = "Setting item references an unavailable action or menu.";
-const DENIED: &str = "Setting is unavailable or access is denied.";
 
 // Test-only items declared for `base` by this binary: a probe whose resolver behaviour the walk switches,
 // and an item restricted to the company scope.
@@ -728,13 +727,15 @@ async fn general_section() {
         )
         .await
         .unwrap_err();
+        assert_eq!(unknown.kind(), ErrorKind::Access);
         assert_eq!(
-            (refused.kind(), refused.message()),
-            (unknown.kind(), unknown.message())
+            unknown.message(),
+            "Setting base.no_such_setting is unavailable or access is denied."
         );
+        assert_eq!(refused.kind(), ErrorKind::Access);
         assert_eq!(
-            (refused.kind(), refused.message()),
-            (ErrorKind::Access, DENIED)
+            refused.message(),
+            format!("Setting {item_key} is unavailable or access is denied.")
         );
         let unknown = write_values(
             &admin,
@@ -754,13 +755,15 @@ async fn general_section() {
         )
         .await
         .unwrap_err();
+        assert_eq!(unknown.kind(), ErrorKind::Access);
         assert_eq!(
-            (refused.kind(), refused.message()),
-            (unknown.kind(), unknown.message())
+            unknown.message(),
+            "Setting base.no_such_setting is unavailable or access is denied."
         );
+        assert_eq!(refused.kind(), ErrorKind::Access);
         assert_eq!(
-            (refused.kind(), refused.message()),
-            (ErrorKind::Access, DENIED)
+            refused.message(),
+            format!("Setting {item_key} is unavailable or access is denied.")
         );
     }
 
@@ -871,7 +874,7 @@ async fn general_section() {
     assert_eq!(refused.kind(), ErrorKind::Access);
     assert_eq!(
         refused.message(),
-        "Access to unauthorized or invalid companies."
+        "One of the selected companies does not exist or is not one of yours."
     );
     tx.rollback().await.unwrap();
     drop(tx);

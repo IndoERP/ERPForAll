@@ -222,7 +222,6 @@ limits! {
     ws_inflight_bytes => ("admission.ws_inflight_bytes", 64 * MIB, 1, u64::MAX),
     ws_message_read_secs => ("ws.message_read_secs", 30, 1, 600),
     ws_min_bytes_per_sec => ("ws.min_bytes_per_sec", 8 * KIB, KIB, MIB),
-    touch_interval_secs => ("session.touch_interval_secs", 60, 10, 3600),
     // settings needed to validate D14's dynamic byte bounds.
     rpc_body_bytes => ("limits.rpc_body_bytes", 2 * MIB, 64 * KIB, 128 * MIB),
     rpc_result_bytes => ("limits.rpc_result_bytes", 16 * MIB, MIB, GIB),

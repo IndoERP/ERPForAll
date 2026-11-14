@@ -1,4 +1,5 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
+import { readDashboard, type DashboardConfig } from "./dashboard.js";
 import { readSectionsPanel, type SectionsPanel } from "./panel-metadata.js";
 import { PanelCompatibilityError } from "./panel-recovery.js";
 import { knownMenuIcon } from "./icons.js";
@@ -81,7 +82,7 @@ export type Node = { kind: "field"; field: Field; label: string; widget: string 
   | { kind: "page"; name: string; label: string; children: Node[] }
   | { kind: "separator"; label: string }
   | SearchFieldNode | SearchFilterNode | SearchSeparatorNode | SearchGroupNode
-  | PivotNode | PivotFieldNode;
+  | PivotNode | PivotFieldNode | { kind: "dashboard"; config: DashboardConfig };
 /** Pivot root: the two flags of the arch; the grouping and measure fields are its `pivot_field` children. */
 export interface PivotNode { kind: "pivot"; children: Node[]; disableLinking: boolean; displayQuantity: boolean; /** `<measure> asc|desc` as the server normalized it. */ defaultOrder: string | null }
 /** One field of a pivot: a row grouping, a column grouping or a measure. */
@@ -100,6 +101,8 @@ export type ButtonNode = ({ kind: "button" } | { kind: "stat_button"; children: 
 export interface CancelNode { kind: "cancel_button"; label: string; variant: ButtonRank; invisible: ValidatedAst | null; details?: ButtonDetails }
 export type ListSearchPanel = { kind: "selection"; field: Field; label: string; enableCounters: boolean; expand: boolean; defaultValue: string | null; notice: string | null } | { kind: "unsupported"; message: string } | SectionsPanel;
 export interface View {
+  id?: number;
+  dashboard?: DashboardConfig;
   type: "list" | "form" | "search" | "pivot";
   mode: "record" | "service";
   nodes: Node[];
@@ -230,6 +233,7 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
     if (rootNode["kind"] !== type) throw new ClientError("server", "View root type does not match renderer.");
     const mode = (type === "list" || type === "search" || type === "pivot") ? "record" : rootNode["record_mode"];
     if (mode !== "record" && mode !== "service" || (type === "list" || type === "search" || type === "pivot") && mode !== "record") unsupported("Unsupported form record mode.");
+    let dashboard: DashboardConfig | undefined;
     const seen = new Set<number>(), selected: Field[] = [], contextFields = new Set<string>();
     const admitViewContext = (raw: unknown): ValidatedAst => {
       const ast = admitContext(raw);
@@ -243,6 +247,7 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
       const node = object(arena[index], "view node"), kind = node["kind"];
       if (kind === "form") closed(node, ["kind", "record_mode", "children", ...(Object.hasOwn(node, "create") ? ["create"] : []), ...(Object.hasOwn(node, "edit") ? ["edit"] : []), ...(Object.hasOwn(node, "delete") ? ["delete"] : [])], "view node");
       else if (kind === "list") closed(node, ["kind", "children", ...(Object.hasOwn(node, "search_panel") ? ["search_panel"] : []), ...(Object.hasOwn(node, "page_limit") ? ["page_limit"] : []), ...(Object.hasOwn(node, "create") ? ["create"] : []), ...(Object.hasOwn(node, "edit") ? ["edit"] : []), ...(Object.hasOwn(node, "delete") ? ["delete"] : [])], "view node");
+      else if (kind === "dashboard") closed(node,["kind","version","revision","items"],"dashboard node");
       else if (kind === "field") closed(node, ["kind", "field", "widget", "options", "modifiers", "label", "force_save"], "view node");
       else if (kind === "widget") closed(node, ["kind", "widget", "options", "modifiers"], "view node");
       else if (kind === "button" || kind === "stat_button") closed(node, ["kind", "name", "button_type", "label", "variant", "confirm", "modifiers", ...(Object.hasOwn(node,"details")?["details"]:[]), ...(kind === "stat_button" ? ["children"] : [])], "view node");
@@ -266,7 +271,8 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
       else unsupported(`Unsupported view node: ${String(kind)}.`);
       if (depth > 1 && (kind === "form" || kind === "list" || kind === "search" || kind === "pivot") || type === "pivot" && kind !== "pivot" && kind !== "pivot_field"
         || type !== "pivot" && (kind === "pivot" || kind === "pivot_field") || kind === "pivot_field" && parentKind !== "pivot"
-        || type === "list" && kind !== "list" && kind !== "field"
+        || type === "list" && kind !== "list" && kind !== "field" && kind !== "dashboard"
+        || kind === "dashboard" && parentKind !== "list"
         || type === "search" && kind !== "search" && kind !== "search_field" && kind !== "search_filter" && kind !== "search_separator" && kind !== "search_group"
         || type !== "search" && (kind === "search" || kind === "search_field" || kind === "search_filter" || kind === "search_separator" || kind === "search_group")
         || parentKind === "search_group" && kind !== "search_filter" && kind !== "search_separator"
@@ -444,6 +450,11 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
         if (operator !== null && !["ilike", "=", "!=", ">", "<", ">=", "<="].includes(operator)) unsupported(`Unsupported search field operator '${operator}' for '${model}.${name}'.`);
         return { kind: "search_field", field, label, filterDomain, operator };
       }
+      if (kind === "dashboard") {
+        if (dashboard) throw new ClientError("server", "Duplicate dashboard region.");
+        dashboard = readDashboard(node, fields, model);
+        return { kind, config: dashboard };
+      }
       if (kind === "search_filter") {
         const name = text(node["name"], "filter name"), label = text(node["label"], "filter label");
         if (!name.trim() || !label.trim()) throw new ClientError("server", "Search filter requires name and label.");
@@ -532,6 +543,8 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
       selected.push({...fields.get(name)!, readonly:true, required:false, invisible:true, forceSave:false});
     }
     views.set(type, {
+      ...(identity["kind"] === "stored" ? { id: integer(identity["id"], "view id") } : {}),
+      ...(dashboard ? { dashboard } : {}),
       type,
       mode,
       nodes: [tree],

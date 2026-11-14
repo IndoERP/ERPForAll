@@ -53,6 +53,12 @@ export function actionResult(raw: unknown): ActionResult {
           // Same rule as the server's normalizer (`addons/web/src/action_result.rs`): these two keys are
           // booleans on a current window only; a dialog refuses them.
           if (typeof value !== "boolean") throw new ClientError("server", `Current-window ${key} must be a boolean.`);
+        } else if (model === "product.uom" && key === "product_id") {
+          if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) throw new ClientError("server", "Packaging product_id must be a positive safe integer.");
+        } else if (model === "product.uom" && key === "product_ids") {
+          if (!Array.isArray(value) || !value.every(id => typeof id === "number" && Number.isSafeInteger(id) && id > 0)) throw new ClientError("server", "Packaging product_ids must be a list of positive safe integers.");
+        } else if (model === "product.uom" && key === "active_model") {
+          if (value !== "product.template" && value !== "product.product" && value !== "uom.uom") throw new ClientError("server", "Packaging active_model must name a product or unit model.");
         } else if (!/^default_[a-z_][a-z0-9_]*$/.test(key)) throw new ClientError("unsupported", `Unsupported current-window context key: ${key}.`);
       }
       // The server owns domain syntax validation; independently bound the entire decoded

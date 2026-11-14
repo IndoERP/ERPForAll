@@ -23,8 +23,8 @@ use erp_sdk::{Actor, CompanyId, Operation, PrincipalKind, Row, SUPERUSER_ID, Use
 
 use crate::group_graph::Graph;
 
-/// Most humans an Approve revision may name or resolve to (users plus groups when written, users
-/// when resolved).
+/// Hard ceiling on named references and eligible humans. Administrators may lower
+/// the operating bound with the global `base.approval_max_approvers` declared setting.
 pub const MAX_APPROVERS: usize = 64;
 /// Most active companies a call may resolve.
 pub const MAX_COMPANIES: usize = 256;
@@ -480,6 +480,7 @@ fn check_combination(revision: &Stored) -> Result<()> {
 /// Every write-time rule of the revisions `ids` (after the ORM wrote them).
 async fn check_revisions(env: &Env, tx: &mut Transaction, ids: &[i64]) -> Result<()> {
     tx.flush().await?;
+    let max_approvers = crate::approval_settings::limit(tx).await?;
     let sql = format!(
         "SELECT {COLUMNS}, (SELECT count(*) FROM ir_approval_policy_users_rel r WHERE r.policy_id = p.id) \
          + (SELECT count(*) FROM ir_approval_policy_groups_rel g WHERE g.policy_id = p.id) \
@@ -495,9 +496,9 @@ async fn check_revisions(env: &Env, tx: &mut Transaction, ids: &[i64]) -> Result
         if revision.outcome != Outcome::Approve && named > 0 {
             return Err(revision.refuse("only an Approve revision names approvers."));
         }
-        if usize::try_from(named).map_err(|_| unreadable("approvers"))? > MAX_APPROVERS {
+        if usize::try_from(named).map_err(|_| unreadable("approvers"))? > max_approvers {
             return Err(revision.refuse(&format!(
-                "names more than {MAX_APPROVERS} approvers and groups."
+                "names more than {max_approvers} approvers and groups (base.approval_max_approvers)."
             )));
         }
         if revision.active
@@ -712,6 +713,7 @@ impl IrApprovalPolicy {
         this.as_records()
             .check_access(tx, Operation::Create)
             .await?;
+        crate::approval_settings::lock_policy_edit(tx).await?;
         check_companies(this.env(), tx, &vals_list).await?;
         new_same_selector(tx, &vals_list).await?;
         let created: Records = sup.call(tx, this.as_records(), (vals_list,)).await?;
@@ -733,6 +735,7 @@ impl IrApprovalPolicy {
         }
         let records = this.as_records();
         records.check_access(tx, Operation::Write).await?;
+        crate::approval_settings::lock_policy_edit(tx).await?;
         if vals.iter().any(|(name, _)| name != "active") || vals.iter_commands().next().is_some() {
             return Err(Error::validation(IMMUTABLE));
         }
@@ -1114,7 +1117,9 @@ fn bounded(companies: &[CompanyId]) -> Result<Vec<i64>> {
 /// # Errors
 ///
 /// `Validation` for an unknown revision, one that is not an Approve revision, an empty or too long
-/// company list, and more than [`MAX_APPROVERS`] eligible users; the statements' errors.
+/// company list, a named or eligible set above the transaction-visible
+/// `base.approval_max_approvers` setting (never above [`MAX_APPROVERS`]), and corrupt setting
+/// storage; the statements' errors.
 pub async fn eligible_approvers(
     tx: &mut Transaction,
     revision: PolicyRevisionId,
@@ -1122,11 +1127,34 @@ pub async fn eligible_approvers(
     companies: &[CompanyId],
 ) -> Result<EligibleApprovers> {
     let company_ids = bounded(companies)?;
+    let max_approvers = crate::approval_settings::limit(tx).await?;
+    let named = tx
+        .query(
+            "SELECT (SELECT count(*) FROM ir_approval_policy_users_rel WHERE policy_id=$1) + \
+         (SELECT count(*) FROM ir_approval_policy_groups_rel WHERE policy_id=$1)",
+            &[&revision.get()],
+        )
+        .await?;
+    let named: i64 = named
+        .first()
+        .ok_or_else(|| unreadable("approvers"))?
+        .try_get(0)
+        .map_err(|_| unreadable("approvers"))?;
+    if usize::try_from(named).map_err(|_| unreadable("approvers"))? > max_approvers {
+        return Err(Error::validation(format!(
+            "Approval policy revision {} names more than {max_approvers} approvers and groups (base.approval_max_approvers).",
+            revision.get()
+        )));
+    }
     let rows = tx
         .query(
             "SELECT p.outcome, ARRAY(SELECT g.group_id::int8 FROM ir_approval_policy_groups_rel g \
-             WHERE g.policy_id = p.id) FROM ir_approval_policy p WHERE p.id = $1::int8",
-            &[&revision.get()],
+             WHERE g.policy_id = p.id ORDER BY g.group_id LIMIT $2::int8) \
+             FROM ir_approval_policy p WHERE p.id = $1::int8",
+            &[
+                &revision.get(),
+                &i64::try_from(MAX_APPROVERS + 1).map_err(|_| unreadable("approver ceiling"))?,
+            ],
         )
         .await?;
     let Some(row) = rows.first() else {
@@ -1143,10 +1171,20 @@ pub async fn eligible_approvers(
         )));
     }
     let groups: Vec<i64> = row.try_get(1).map_err(|_| unreadable("approver groups"))?;
+    if groups.len() > max_approvers {
+        return Err(Error::validation(format!(
+            "Approval policy revision {} names more than {max_approvers} approvers and groups (base.approval_max_approvers).",
+            revision.get()
+        )));
+    }
     let holding: Vec<i64> = Graph::load(tx).await?.down(groups).into_iter().collect();
     let excluded: Vec<i64> = excluded.iter().map(|u| u.get()).collect();
-    let limit = i64::try_from(MAX_APPROVERS + 1)
-        .map_err(|_| Error::internal("The approver bound does not fit a statement limit."))?;
+    let limit = i64::try_from(
+        max_approvers
+            .checked_add(1)
+            .ok_or_else(|| Error::internal("The approver bound overflowed."))?,
+    )
+    .map_err(|_| Error::internal("The approver bound does not fit a statement limit."))?;
     let rows = tx
         .query(
             "SELECT u.id::int8 FROM res_users u \
@@ -1168,9 +1206,10 @@ pub async fn eligible_approvers(
             ],
         )
         .await?;
-    if rows.len() > MAX_APPROVERS {
+    if rows.len() > max_approvers {
         return Err(Error::validation(format!(
-            "Approval policy revision {} has more than {MAX_APPROVERS} eligible approvers.",
+            "Approval policy revision {} has more than {max_approvers} eligible approvers \
+             (base.approval_max_approvers).",
             revision.get()
         )));
     }

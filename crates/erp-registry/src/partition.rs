@@ -499,6 +499,7 @@ pub(crate) fn check_references(models: &[ModelSpec], sink: &mut Sink) -> Result<
                 | FieldType::Many2oneReference { .. }
                 | FieldType::Id
                 | FieldType::Boolean
+                | FieldType::BigInt
                 | FieldType::Integer
                 | FieldType::Float { .. }
                 | FieldType::Monetary { .. }

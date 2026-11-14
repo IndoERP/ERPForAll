@@ -281,7 +281,7 @@ pub(crate) async fn web_unlink(tx: &mut Transaction, records: &Records) -> Resul
         ),
     );
     Err(Error::user(format!(
-        "The operation cannot be completed: this record is used by {model_name}"
+        "The database refused the change: {model_name} records still refer to this record"
     ))
     .with_context(Value::Map(Arc::new(context))))
 }

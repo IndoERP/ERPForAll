@@ -47,6 +47,8 @@ pub enum Value {
     DateTime(DateTime),
     /// Native UUID, never inferred from ordinary string contents.
     Uuid(crate::Uuid),
+    /// Exact signed bigint; emitted as decimal text.
+    BigInt(crate::BigInt),
     /// Native unsigned full-width transaction id.
     Xid8(crate::Xid8),
     /// Explicit timezone-aware microsecond instant.
@@ -100,6 +102,7 @@ impl Value {
         match self {
             Self::False => false,
             Self::Bool(b) => *b,
+            Self::BigInt(i) => i.get() != 0,
             Self::Int(i) => *i != 0,
             Self::Float(f) => *f != 0.0,
             Self::Decimal(d) => !d.is_zero(),
@@ -133,6 +136,7 @@ impl Value {
             Cell::Date(d) => Self::Date(*d),
             Cell::DateTime(d) => Self::DateTime(*d),
             Cell::Uuid(value) => Self::Uuid(*value),
+            Cell::BigInt(value) => Self::BigInt(*value),
             Cell::Xid8(value) => Self::Xid8(*value),
             Cell::TimestampTz(value) => Self::TimestampTz(*value),
             Cell::Json(j) => Self::Json(Arc::clone(j)),
@@ -156,6 +160,7 @@ impl PartialEq for Value {
             (Self::Date(a), Self::Date(b)) => a == b,
             (Self::DateTime(a), Self::DateTime(b)) => a == b,
             (Self::Uuid(a), Self::Uuid(b)) => a == b,
+            (Self::BigInt(a), Self::BigInt(b)) => a == b,
             (Self::Xid8(a), Self::Xid8(b)) => a == b,
             (Self::TimestampTz(a), Self::TimestampTz(b)) => a == b,
             (Self::Json(a), Self::Json(b)) => a == b,
@@ -197,6 +202,7 @@ impl Hash for Value {
             Self::Map(_) | Self::Row(_) => 11,
             Self::Range(_) => 12,
             Self::Uuid(_) => 13,
+            Self::BigInt(_) => 16,
             Self::Xid8(_) => 14,
             Self::TimestampTz(_) => 15,
         };
@@ -212,6 +218,7 @@ impl Hash for Value {
             Self::Date(d) => d.hash(state),
             Self::DateTime(d) => d.hash(state),
             Self::Uuid(value) => value.hash(state),
+            Self::BigInt(value) => value.hash(state),
             Self::Xid8(value) => value.hash(state),
             Self::TimestampTz(value) => value.hash(state),
             Self::Json(j) => hash_json(j, state),
@@ -290,6 +297,7 @@ impl fmt::Display for Value {
             Self::Date(d) => write!(f, "'{d}'"),
             Self::DateTime(d) => write!(f, "'{d}'"),
             Self::Uuid(value) => write!(f, "'{value}'"),
+            Self::BigInt(value) => write!(f, "'{value}'"),
             Self::Xid8(value) => write!(f, "'{value}'"),
             Self::TimestampTz(value) => write!(f, "'{value}'"),
             Self::Json(j) => write!(f, "{j}"),
@@ -383,6 +391,12 @@ impl From<crate::DateRange> for Value {
 impl From<crate::DatetimeRange> for Value {
     fn from(r: crate::DatetimeRange) -> Self {
         Self::Range(RangeValue::Datetime(r))
+    }
+}
+
+impl From<crate::BigInt> for Value {
+    fn from(value: crate::BigInt) -> Self {
+        Self::BigInt(value)
     }
 }
 

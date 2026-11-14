@@ -27,7 +27,8 @@ impl Records {
     /// 2. other names that are not fields are skipped (never an error);
     /// 3. the persisted `ir.default` user default, when that model is installed;
     /// 4. the field's `default` (static value or function of the environment);
-    /// 5. the persisted `ir.default` fallback of company-dependent fields;
+    /// 5. the persisted `ir.default` fallback of company-dependent fields, only when the
+    ///    environment has a current company;
     /// 6. a field delegated to an `_inherits` parent: the parent model's `default_get` (its own
     ///    chain), unless the environment may not write the field (its groups).
     ///
@@ -74,12 +75,24 @@ async fn base_default_get(
     }
     let empty = Records::empty(records.env().clone(), records.model_id());
     // Base not installed => no stored defaults in ir.default.
-    let model_defaults = if crate::ir_default::is_available(records.env().registry()) {
-        crate::ir_default::get_model_defaults(tx, records.env(), records.model_name(), None).await?
-    } else {
-        Default::default()
-    };
-    let (mut out, parents) = resolve_own(tx, &empty, names, &model_defaults)?;
+    let (model_defaults, company_fallbacks) =
+        if crate::ir_default::is_available(records.env().registry()) {
+            let defaults = crate::ir_default::get_model_defaults(
+                tx,
+                records.env(),
+                records.model_name(),
+                None,
+            )
+            .await?;
+            // Step 5 is the current company's fallback. Without a current company an omitted
+            // property stores no override and every company reads its own fallback, so offering
+            // the shared one would only turn it into a supplied value.
+            let current = !tx.companies(records.env()).await?.is_empty();
+            (defaults, current)
+        } else {
+            (Default::default(), false)
+        };
+    let (mut out, parents) = resolve_own(tx, &empty, names, &model_defaults, company_fallbacks)?;
     // step 6: each parent model's own `default_get`, overrides included
     for (parent, list) in parents {
         let parent_records = Records::empty(empty.env().clone(), parent);
@@ -97,6 +110,7 @@ fn resolve_own(
     records: &Records,
     names: &[String],
     model_defaults: &rustc_hash::FxHashMap<String, Value>,
+    company_fallbacks: bool,
 ) -> Result<(ValueMap, ParentNames)> {
     let spec = records.spec();
     let env = records.env();
@@ -142,6 +156,7 @@ fn resolve_own(
         }
         // Step 5: ir.default fallback for company-dependent fields (CRUD §4.5 step 5)
         if field.company_dependent
+            && company_fallbacks
             && let Some(value) = model_defaults.get(name.as_str())
         {
             let value = normalize(tx, records, field, value)?;

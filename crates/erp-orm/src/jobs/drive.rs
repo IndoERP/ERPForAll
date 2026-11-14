@@ -159,11 +159,11 @@ async fn call_step(
 }
 
 /// How long to wait before the next attempt of `claimed`, which just failed.
-fn retry_delay(inner: &Inner, claimed: &ClaimedJob, attempt: u32) -> Result<Duration> {
+fn retry_delay(_inner: &Inner, claimed: &ClaimedJob, attempt: u32) -> Result<Duration> {
     let backoff: Backoff = claimed
         .decl
         .backoff
-        .unwrap_or_else(|| default_backoff(inner.orm.job_settings()));
+        .unwrap_or_else(|| default_backoff(claimed.settings.settings()));
     backoff.delay_random(attempt)
 }
 
@@ -182,7 +182,7 @@ impl JobRunner {
         }
         let inner = Arc::clone(&self.inner);
         let _running = RunningGuard::new(Arc::clone(&inner), claimed.decl.name);
-        let settings = inner.orm.job_settings();
+        let settings = claimed.settings.settings();
         if !claimed.decl.accepts_version(claimed.kind_version) {
             // an older binary in a rollout window: hand the job back, keep the attempt
             inner.counters.version_skips.fetch_add(1, Ordering::Relaxed);
@@ -513,6 +513,7 @@ impl JobRunner {
                 ..TickReport::default()
             });
         }
+        self.refresh_settings().await?;
         let reaped = self.reap_if_due().await?;
         let claimed = self.claim(self.free_slots()).await?;
         let count = u32::try_from(claimed.len()).unwrap_or(u32::MAX);
@@ -568,13 +569,11 @@ impl JobRunner {
 
     async fn run_loop(self, mut stop: watch::Receiver<bool>) {
         let mut running: JoinSet<()> = JoinSet::new();
-        // An isolated owner runner cannot create or manipulate schedules outside its fixed set.
-        if (self.admits_kind(&super::retention::history_retention_decl())
-            || self.admits_kind(&super::retention::dead_expiry_decl()))
-            && let Err(error) = super::retention::ensure_core_schedules(&self.inner.orm).await
-        {
-            tracing::error!(target: "erp::jobs", error = %error, "the core job schedules could not be ensured; retention will not run until the next start");
-        }
+        // Owner-only runners never create schedules outside their exact native set. A policy
+        // outage at startup must not strand retention until a process restart.
+        let needs_core_schedules = self.admits_kind(&super::retention::history_retention_decl())
+            || self.admits_kind(&super::retention::dead_expiry_decl());
+        let mut core_schedules_ready = !needs_core_schedules;
         // one more claim a notify interval after a wake-up covers the hints that were suppressed
         // inside that interval
         let mut trailing: Option<Instant> = None;
@@ -589,7 +588,22 @@ impl JobRunner {
                 trailing = Some(Instant::now() + self.settings().notify_interval());
                 woken = false;
             }
-            if self.node_may_claim() {
+            // A failed read may supply a bounded retry wait, never permission to claim.
+            let refreshed = match self.refresh_settings().await {
+                Ok(_) => true,
+                Err(error) => {
+                    tracing::error!(target: "erp::jobs", error = %error, "job policy reload failed; new admission stopped");
+                    false
+                }
+            };
+            if refreshed && !core_schedules_ready {
+                match super::retention::ensure_core_schedules(&self.inner.orm).await {
+                    Ok(()) => core_schedules_ready = true,
+                    Err(error) => tracing::error!(target: "erp::jobs", error = %error,
+                        "core job schedules could not be ensured; retrying after the poll interval"),
+                }
+            }
+            if refreshed && self.node_may_claim() {
                 if let Err(error) = self.reap_if_due().await {
                     tracing::warn!(target: "erp::jobs", error = %error, "the job reaper failed; it runs again at its next turn");
                 }

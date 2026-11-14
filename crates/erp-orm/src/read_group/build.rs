@@ -823,6 +823,12 @@ impl<'r> Builder<'r> {
                 term.out = inner.out;
                 return Ok(term);
             }
+            if matches!(field.ty, FieldType::BigInt) {
+                return Err(Error::programming(format!(
+                    "{}.{}: bigint grouping requires a later release",
+                    model.name, field.name
+                )));
+            }
             self.prepare_closure(tx, model, field).await?;
             let mut granularity = parts.func;
             match &field.ty {
@@ -945,6 +951,12 @@ impl<'r> Builder<'r> {
         let field = model
             .field(parts.field)
             .ok_or_else(|| field_error(external, model, parts.field, spec))?;
+        if matches!(field.ty, FieldType::BigInt) {
+            return Err(Error::programming(format!(
+                "{}.{}: bigint aggregation requires a later release",
+                model.name, field.name
+            )));
+        }
         let Some(func_name) = parts.func else {
             return Err(bad(
                 external,
@@ -1357,6 +1369,7 @@ impl<'r> Builder<'r> {
                 Value::Date(d) => Scalar::Date(*d),
                 Value::DateTime(d) => Scalar::Timestamp(*d),
                 Value::Uuid(v) => Scalar::Uuid(*v),
+                Value::BigInt(v) => Scalar::BigInt(*v),
                 Value::Xid8(v) => Scalar::Xid8(*v),
                 Value::TimestampTz(v) => Scalar::TimestampTz(*v),
                 _ => return None,

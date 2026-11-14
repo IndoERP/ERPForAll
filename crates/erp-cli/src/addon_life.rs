@@ -132,11 +132,7 @@ async fn open(config: &ServerConfig) -> Result<(Node, erp_orm::Env)> {
         .map_err(|e| CliError::Execution(format!("could not connect to the database: {e}")))?;
     let baseline = Signal::read(&client).await?;
     drop(client);
-    let node = Node::open(
-        pool_with_size(config.owner_connection(), 4)?,
-        config.addons(),
-        Some(baseline),
-    )?;
+    let node = Node::open_configured(config, Some(baseline))?;
     let loaded = node.load().await.map_err(module_error)?;
     let caller = loaded.orm.env(SUPERUSER_ID, Context::new());
     Ok((node, caller))

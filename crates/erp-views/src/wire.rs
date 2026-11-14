@@ -108,7 +108,31 @@ object!(/// Authenticated, authorized no-store shell bootstrap.
     Bootstrap { wire_major: WireMajor, registry_version: String, asset_version: String,
         identity: Identity, companies: Vec<Company>, current_company_id: WireId,
         allowed_company_ids: Vec<WireId>, active_company_ids: Vec<WireId>, locale: Locale,
-        csrf: Csrf, renderers: Vec<Renderer> });
+        csrf: Csrf, renderers: Vec<Renderer>,
+        #[serde(default)] attachment_limits: Option<AttachmentUploadLimits>,
+        #[serde(default)] rpc_body_bytes: Option<u32> });
+object!(/// Effective upload policy; absent runtime is represented by a null bootstrap member.
+    AttachmentUploadLimits { max_file_bytes: u32, inline_max_bytes: u32 });
+impl AttachmentUploadLimits {
+    /// Construct bounded limits for policy publication.
+    ///
+    /// # Errors
+    /// Refuses a zero/overflowing file maximum or an inline maximum above the file or storage bound.
+    ///
+    /// ```
+    /// let policy = erp_views::wire::AttachmentUploadLimits::new(1024, 512).unwrap();
+    /// assert_eq!(policy.max_file_bytes, 1024);
+    /// ```
+    pub fn new(max: u64, inline: u64) -> Result<Self, &'static str> {
+        if max == 0 || max > i32::MAX as u64 || inline > max || inline > 65536 {
+            return Err("Invalid attachment upload limits.");
+        }
+        Ok(Self {
+            max_file_bytes: max as u32,
+            inline_max_bytes: inline as u32,
+        })
+    }
+}
 object!(/// Authenticated identity, never credentials.
     Identity { uid: WireId, name: String, internal: bool });
 object!(/// Authorized company label.
@@ -578,12 +602,56 @@ pub enum ListSearchPanel {
         message: String,
     },
 }
+/// Declarative dashboard metric; references are descriptive and require host authorization.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema-gen", derive(ts_rs::TS))]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[non_exhaustive]
+pub enum DashboardItem {
+    /// A count narrowed by a domain or a companion search-view filter.
+    Count {
+        /// Stable item identity in the owning view.
+        name: String,
+        /// Human-readable caption from the owning view.
+        label: String,
+        /// Admitted root-model domain, mutually exclusive with filter.
+        domain: Option<WireDocument>,
+        /// Companion search-view filter name, mutually exclusive with domain.
+        filter: Option<String>,
+        /// Optional semantic color role.
+        color: Option<String>,
+    },
+    /// Numeric aggregation over current and previous periods.
+    Kpi {
+        /// Stable item identity in the owning view.
+        name: String,
+        /// Human-readable caption from the owning view.
+        label: String,
+        /// Stored numeric measure.
+        field: FieldRef,
+        /// Stored date or datetime field.
+        date_field: FieldRef,
+        /// Admitted aggregate function.
+        aggregate: String,
+        /// Optional additional root-model domain.
+        domain: Option<WireDocument>,
+    },
+}
 /// Strict list/form arena, including the static record-form layout.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema-gen", derive(ts_rs::TS))]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 #[non_exhaustive]
 pub enum ViewNode {
+    /// View-neutral dashboard region; initially attached to list views.
+    Dashboard {
+        /// Closed dashboard contract version.
+        version: u32,
+        /// Content revision of the saved declaration.
+        revision: String,
+        /// Ordered metric declarations, never list row fields.
+        items: Vec<DashboardItem>,
+    },
     /// List root.
     List {
         /// Child arena indexes.

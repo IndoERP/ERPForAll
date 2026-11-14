@@ -45,7 +45,7 @@ fn company_context_uses_live_membership_and_empty_means_defaults() {
             ),
             403,
             ACCESS,
-            "Access to unauthorized or invalid companies.",
+            "One of the selected companies does not exist or is not one of yours.",
         );
         error(
             &f.rpc(

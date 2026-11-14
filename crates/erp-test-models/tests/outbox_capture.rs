@@ -678,7 +678,7 @@ async fn direct_create_dispatch_failure_is_rollback_only() {
             "capture fixture constraint refusal".to_owned()
         } else {
             format!(
-                "You are not allowed to create 'Capture' (test.capture) records.\n\nRecords: test.capture({},), User: 2",
+                "Your access rights do not let you create 'Capture' (test.capture) records.\n\nRecords: test.capture({},), User: 2",
                 ids[0].get::<_, i64>(0)
             )
         };

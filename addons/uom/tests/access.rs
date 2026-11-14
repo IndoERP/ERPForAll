@@ -47,7 +47,7 @@ async fn privileged_warm_unit_cannot_bypass_caller_model_read_denial() {
     assert_eq!(error.kind(), ErrorKind::Access);
     assert_eq!(
         error.message(),
-        "You are not allowed to read 'Unit of Measure' (uom.uom) records."
+        "Your access rights do not let you read 'Unit of Measure' (uom.uom) records."
     );
     assert_eq!(
         erp_addon_uom::models::load_unit(&system, &mut tx, id)
@@ -118,7 +118,7 @@ async fn caller_must_read_target_and_all_ancestors_even_after_system_warmup() {
             .unwrap();
     }
     let expected = format!(
-        "You are not allowed to access 'Unit of Measure' (uom.uom) records.\n\nRecords: uom.uom({},), User: 42",
+        "Your access rights do not let you access 'Unit of Measure' (uom.uom) records.\n\nRecords: uom.uom({},), User: 42",
         hidden.ids()[0]
     );
     let user = system.with_user(42);

@@ -37,6 +37,11 @@ pub fn execute(action: &DbAction) -> Result<String> {
         // composed as the server does it for the database in the configuration file
         DbAction::VacuumTransient(args) => crate::human::vacuum_transient(args),
         DbAction::GrantVacuumRole(args) => crate::human::grant_vacuum_role(args),
+        // they open their own connections from the configuration
+        DbAction::Drop(args) => crate::db_lifecycle::drop_db(args),
+        DbAction::Dump(args) => crate::db_lifecycle::dump(args),
+        DbAction::Restore(args) => crate::db_lifecycle::restore(args),
+        DbAction::Neutralize(args) => crate::db_lifecycle::neutralize(args),
     }
 }
 
@@ -72,6 +77,11 @@ pub fn execute_with(
         DbAction::GrantVacuumRole(args) => {
             runtime()?.block_on(crate::human::grant_vacuum_role_async(args))
         }
+        // they open their own connections from the configuration
+        DbAction::Drop(args) => crate::db_lifecycle::drop_db(args),
+        DbAction::Dump(args) => crate::db_lifecycle::dump(args),
+        DbAction::Restore(args) => crate::db_lifecycle::restore(args),
+        DbAction::Neutralize(args) => crate::db_lifecycle::neutralize(args),
     }
 }
 
@@ -91,14 +101,14 @@ pub fn execute_with(
 /// Version 13 relabels attachment recovery: owner writes, the runtime role reads progress; grants unchanged.
 fn runtime_grant_contract() -> String {
     format!(
-        r#"{{"version":{RUNTIME_GRANT_CONTRACT_VERSION},"ui_assets":"read-only","node_features":"execute-only","event_outbox":"insert-only","uom_references":"guarded-monotone","job_queue":"column-grants","audit_trail":"insert-only","attachment_usage":"append-only","audit_reader":"select-only","attachment_owner":"read-only","attachment_pending":"guarded-create","attachment_peer":"read-only","attachment_recovery":"owner-write, progress-read"}}"#
+        r#"{{"version":{RUNTIME_GRANT_CONTRACT_VERSION},"ui_assets":"read-only","node_features":"execute-only","event_outbox":"insert-only","uom_references":"guarded-monotone","job_queue":"column-grants","audit_trail":"insert-only","attachment_usage":"append-only","audit_reader":"select-only","attachment_owner":"read-only","attachment_pending":"guarded-create","attachment_peer":"read-only","attachment_recovery":"owner-write, progress-read","sql_objects":"declared-bindings"}}"#
     )
 }
 
 /// The contract version this build publishes.: v5 went to (job queue) and v6
 /// to (audit trail, includes v5's guarantees); change it here and in
 /// `scripts/human-release.py` (`RUNTIME_GRANT_CONTRACTS`) together.
-const RUNTIME_GRANT_CONTRACT_VERSION: u32 = 13;
+const RUNTIME_GRANT_CONTRACT_VERSION: u32 = 15;
 
 async fn build_object(
     args: &BuildObjectArgs,

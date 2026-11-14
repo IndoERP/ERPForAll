@@ -1822,7 +1822,7 @@ async fn spec_comp_030_batched_recompute_partially_unreadable() {
     assert_eq!(err1.kind(), ErrorKind::Access);
     assert_eq!(
         err1.message(),
-        "You are not allowed to read 'Model with computed fields left unassigned' (test_orm.compute.unassigned) records."
+        "Your access rights do not let you read 'Model with computed fields left unassigned' (test_orm.compute.unassigned) records."
     );
     let err2 = r2_demo
         .get(&mut tx, ComputeUnassigned::BARS)
@@ -1831,7 +1831,7 @@ async fn spec_comp_030_batched_recompute_partially_unreadable() {
     assert_eq!(err2.kind(), ErrorKind::Access);
     assert_eq!(
         err2.message(),
-        "You are not allowed to read 'Model with computed fields left unassigned' (test_orm.compute.unassigned) records."
+        "Your access rights do not let you read 'Model with computed fields left unassigned' (test_orm.compute.unassigned) records."
     );
 
     // Modifying records and flushing should not trigger an access error in either order:
@@ -2030,7 +2030,7 @@ async fn a_required_stored_compute_computed_after_the_insert_is_refused_before_i
     );
     assert_eq!(
         err.message(),
-        "The operation cannot be completed: Missing required field 'Code' (code) for model \
+        "The database refused the change: Missing required field 'Code' (code) for model \
          'Required late' (test_orm.compute.required_late): it is computed after the INSERT \
          because it is declared precompute = false"
     );

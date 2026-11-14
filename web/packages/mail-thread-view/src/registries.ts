@@ -46,6 +46,8 @@ export interface ThreadViewServices {
   readonly timeZone?: string;
   /** Upload an attachment through the host's attachment service. */
   uploadAttachment?(file: File): Promise<AttachmentUploadResult>;
+  /** The host's upload limit in user words, shown to keyboard and screen-reader users on the attach action. */
+  uploadLimitHint?(): string | undefined;
 }
 
 /** What every component of one mounted thread shares. */

@@ -172,7 +172,7 @@ impl<R: TestRules> AccessPolicy for RulesPolicy<R> {
 /// The record-level half of a test policy's explanation (the engine asks about the records a
 /// check denied, then again with the evidence it gathered): a test policy has no rules to
 /// evaluate or blame, so it asks for no column, and its text names the first denied record that
-/// exists: `You are not allowed to <verb> '<description>' (<model>) records.\n\nRecords:
+/// exists: `Your access rights do not let you <verb> '<description>' (<model>) records.\n\nRecords:
 /// <model>(<id>,), User: <uid>`.
 fn explain_records(req: &ExplainRequest<'_>, generation: PolicyGeneration) -> Result<Explanation> {
     let deny = Explanation::new(AccessDecision::Deny, generation, Vec::new());
@@ -191,7 +191,7 @@ fn explain_records(req: &ExplainRequest<'_>, generation: PolicyGeneration) -> Re
     };
     let model = req.model();
     Ok(deny.with_message(format!(
-        "You are not allowed to {verb} '{}' ({}) records.\n\nRecords: {}({},), User: {}",
+        "Your access rights do not let you {verb} '{}' ({}) records.\n\nRecords: {}({},), User: {}",
         model.description,
         model.name,
         model.name,
@@ -441,7 +441,7 @@ impl AccessPolicy for DomainPolicy {
     ) -> Result<()> {
         if self.domain(b, model, op)?.is_false() {
             return Err(Error::access(format!(
-                "You are not allowed to {} '{}' ({}) records.",
+                "Your access rights do not let you {} '{}' ({}) records.",
                 op.as_str(),
                 model.description,
                 model.name

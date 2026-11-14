@@ -23,8 +23,7 @@ export interface ComposerOptions extends ThreadViewBaseOptions {
 /** Maximum number of attachments permitted on one message. */
 export const MAX_ATTACHMENTS = 100;
 
-/** Maximum bytes per uploaded attachment file (25 MiB). */
-export const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
+let hintCounter = 0;
 
 const COMPOSER_OPTION_KEYS = ["sendOnEnter", "platform", "silent"];
 
@@ -189,10 +188,6 @@ export class Composer {
       this.#showError(t(this.#view, "Cannot attach more than %s files", MAX_ATTACHMENTS));
       return;
     }
-    if (attachment.size !== undefined && attachment.size > MAX_FILE_SIZE_BYTES) {
-      this.#showError(t(this.#view, 'File "%s" exceeds maximum allowed size of 25 MiB', attachment.name));
-      return;
-    }
     this.#attachments.push(attachment);
     this.#renderAttachmentChips();
     this.#syncDraft();
@@ -342,6 +337,7 @@ export class Composer {
     for (const [actionId, action] of view.registries.composerActions.getEntries()) {
       const button = h(doc, "button", { type: "button", class: "erp-mail-composer-action", "data-action": actionId });
       const ctx = this.#actionContext(button);
+      let note: HTMLElement | undefined;
       try {
         if (action.condition !== undefined && !untrack(() => (action as ComposerAction).condition!(ctx))) continue;
         const reason = untrack(() => action.unavailable?.(ctx) ?? null);
@@ -351,6 +347,12 @@ export class Composer {
         }
         const actionLabel = untrack(() => action.label(ctx));
         button.title = actionLabel;
+        const hint = actionId === "attach" ? view.services.uploadLimitHint?.() : undefined;
+        if (hint !== undefined) {
+          // A sibling of the button, not a child: inside it the hint would be part of the button's name and be read twice.
+          note = h(doc, "span", { class: "visually-hidden", id: `erp-mail-attach-hint-${++hintCounter}` }, hint);
+          button.setAttribute("aria-describedby", note.id);
+        }
         button.append(...(action.glyph !== undefined ? [glyphNode(doc, action.glyph)] : []), h(doc, "span", { class: "erp-mail-action-label" }, actionLabel));
       } catch (error) {
         view.reportError(error);
@@ -358,6 +360,7 @@ export class Composer {
       }
       button.addEventListener("click", () => void this.#runAction(action, button));
       buttons.push(button);
+      if (note !== undefined) buttons.push(note);
     }
     this.#actionsRow.replaceChildren(...buttons);
   }
@@ -386,13 +389,6 @@ export class Composer {
     if (this.#attachments.length + files.length > MAX_ATTACHMENTS) {
       this.#showError(t(this.#view, "Cannot attach more than %s files", MAX_ATTACHMENTS));
       return;
-    }
-
-    for (const file of files) {
-      if (file.size > MAX_FILE_SIZE_BYTES) {
-        this.#showError(t(this.#view, 'File "%s" exceeds maximum allowed size of 25 MiB', file.name));
-        return;
-      }
     }
 
     const upload = this.#view.services.uploadAttachment;

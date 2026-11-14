@@ -62,23 +62,25 @@ pub(crate) fn execute(action: &AttachmentAction) -> Result<String> {
     human::runtime()?.block_on(execute_async(action, target, operation))
 }
 
-// Job settings: like every served `Orm`, this one keeps `JobSettings::default()` (no builder
-// outside tests calls `.job_settings`). `recovery::begin` ages a pending owner advancement against
-// `job_settings().job_deadline()`, so once a deployment configures `jobs.*`, this builder must load
-// the same values as the served binary.
+// Recovery uses the same database authority, through a separate read pool.
 fn owner_orm(
     pool: &deadpool_postgres::Pool,
     runtime: Option<Arc<AttachmentRuntime>>,
+    policy_pool: &deadpool_postgres::Pool,
 ) -> Result<Orm> {
     let registry = registry()?;
     let mut builder = Orm::builder(Arc::clone(&registry), pool.clone())
         .require_core_tables(erp_security::auth::core_tables())
         .require_core_tables(erp_addon_base::partner_hierarchy::core_tables());
     if let Some(runtime) = runtime {
-        builder =
-            builder.generation_attachment(erp_orm::GenerationAttachment::new(registry, runtime));
+        builder = builder.generation_attachment(erp_orm::GenerationAttachment::new(
+            Arc::clone(&registry),
+            runtime,
+        ));
     }
-    Ok(builder.build()?)
+    let reader = Orm::builder(Arc::clone(&registry), policy_pool.clone()).build()?;
+    let source = erp_addon_base::jobs_settings_source::DatabaseJobSettingsSource::new(reader)?;
+    Ok(builder.job_settings_source(Arc::new(source)).build()?)
 }
 
 async fn execute_async(
@@ -88,7 +90,8 @@ async fn execute_async(
 ) -> Result<String> {
     let config = human::config(&target.config)?;
     let pool = pool_with_size(config.owner_connection(), 1)?;
-    let preflight = owner_orm(&pool, None)?;
+    let policy_pool = pool_with_size(config.owner_connection(), 1)?;
+    let preflight = owner_orm(&pool, None, &policy_pool)?;
     let mut tx = preflight
         .begin_opts(BeginOptions::new(SUPERUSER_ID).isolation(Isolation::ReadCommitted))
         .await?;
@@ -104,7 +107,7 @@ async fn execute_async(
         }
     }
     let runtime = human::open_attachments(&config).await?;
-    let orm = owner_orm(&pool, Some(runtime))?;
+    let orm = owner_orm(&pool, Some(runtime), &policy_pool)?;
     if matches!(action, AttachmentAction::Claim(_)) {
         orm.check_audit_store().await?;
     }

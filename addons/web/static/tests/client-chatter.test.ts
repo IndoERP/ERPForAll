@@ -3,8 +3,10 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { MessagingStore } from "@erpforall/mail-store";
 import { RpcClient } from "../src/client/transport.js";
 import { Chatter } from "../src/client/chatter.js";
+import { initializeAttachmentPolicy } from "../src/client/attachment-policy.js";
 import { RecordForm } from "../src/client/record-form.js";
 import { RecordState } from "../src/client/record.js";
+import { refuseInvalidAttachmentRequest } from "./fixtures/attachment-upload.js";
 import "../src/client/fields.js";
 import type { Field, Node, View } from "../src/client/metadata.js";
 
@@ -923,6 +925,7 @@ test("AT-02 and AT-03: files panel lists grouped attachments with duplicate coun
     throw new Error(`Unexpected path: ${path}`);
   }, () => {});
 
+  initializeAttachmentPolicy(rpc, { max_file_bytes: 134217728, inline_max_bytes: 2048 });
   const chatter = new Chatter({
     host,
     model: "res.partner",
@@ -955,6 +958,9 @@ test("AT-02 and AT-03: files panel lists grouped attachments with duplicate coun
 
   // "Attach files" button triggers record file input
   const attachFilesBtn = filesPanel.querySelector<HTMLButtonElement>(".erp-mail-chatter-attach-files-btn")!;
+  // The upload limit describes the button from next to it, so the button's name stays "Attach files".
+  expect(attachFilesBtn.textContent).toBe("Attach files");
+  expect(filesPanel.querySelector(`#${attachFilesBtn.getAttribute("aria-describedby")}`)?.textContent).toBe("Each file can be up to 2 KiB.");
   const fileInput = host.querySelector<HTMLInputElement>(".erp-mail-chatter-file-input")!;
   let attachClicked = false;
   fileInput.click = () => { attachClicked = true; };
@@ -1042,6 +1048,79 @@ const UPLOAD_ANSWER = (id: number, name: string, size: number) => ({
 const jsonResponse = (value: unknown, status = 200): Response =>
   new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 
+/// (partial: chatter refuses before encoding and write RPC using a fresh server limit)
+test("attachment policy refuses a selected file before reading its bytes", async () => {
+  const writes: string[] = [];
+  const reader = vi.spyOn(FileReader.prototype, "readAsDataURL");
+  const rpc = new RpcClient(async (path, init) => {
+    const name = String(path);
+    if (name.endsWith("/ir.attachment/erp_upload_limits")) {
+      expect(JSON.parse(String(init?.body))).toEqual({});
+      return jsonResponse({ max_file_bytes: 4, inline_max_bytes: 4 });
+    }
+    if (name.endsWith("/mail.store/store_fetch")) return jsonResponse({
+      store: answerPayload(10, {}),
+      topics: [
+        { topic: "schema", ok: true, data: JSON.parse(TEST_SCHEMA) },
+        { topic: "thread", ok: true, data: {
+          thread: { model: "res.partner", id: 42, can_post: true, attachment_count: 0 },
+          messages: { model: "res.partner", id: 42, message_ids: [], has_more_before: false, has_more_after: false },
+          attachments: { attachment_ids: [], has_more: false },
+        } },
+      ],
+    });
+    if (name.endsWith("/res.partner/thread_upload")) {
+      writes.push(name);
+      return jsonResponse(UPLOAD_ANSWER(888, "too-large.txt", 5));
+    }
+    throw new Error(`Unexpected path: ${name}`);
+  }, () => {});
+  const chatter = new Chatter({ host, model: "res.partner", recordId: 42, rpc });
+  await flushAsync();
+  const input = host.querySelector<HTMLInputElement>(".erp-mail-file-input")!;
+  Object.defineProperty(input, "files", { value: [new File(["12345"], "too-large.txt")], configurable: true });
+  input.dispatchEvent(new Event("change"));
+  await vi.waitFor(() => {
+    expect(host.textContent).toContain("4 bytes");
+  });
+  expect(reader).not.toHaveBeenCalled();
+  expect(writes).toEqual([]);
+  reader.mockRestore();
+  chatter.dispose();
+});
+
+test("disposing chatter during policy refresh suppresses later file reads and writes", async () => {
+  let resolvePolicy!: (response: Response) => void;
+  const pending = new Promise<Response>(resolve => { resolvePolicy = resolve; });
+  let refreshing = false;
+  const writes: string[] = [];
+  const reader = vi.spyOn(FileReader.prototype, "readAsDataURL");
+  const rpc = new RpcClient(async path => {
+    if (String(path).endsWith("/ir.attachment/erp_upload_limits")) { refreshing = true; return pending; }
+    if (String(path).endsWith("/res.partner/thread_upload")) { writes.push(String(path)); return jsonResponse(UPLOAD_ANSWER(888, "one.txt", 1)); }
+    return jsonResponse({ store: answerPayload(10, {}), topics: [
+      { topic: "schema", ok: true, data: JSON.parse(TEST_SCHEMA) },
+      { topic: "thread", ok: true, data: {
+        thread: { model: "res.partner", id: 42, can_post: true, attachment_count: 0 },
+        messages: { model: "res.partner", id: 42, message_ids: [], has_more_before: false, has_more_after: false },
+        attachments: { attachment_ids: [], has_more: false },
+      } },
+    ] });
+  }, () => {});
+  const chatter = new Chatter({ host, model: "res.partner", recordId: 42, rpc });
+  await flushAsync();
+  const input = host.querySelector<HTMLInputElement>(".erp-mail-file-input")!;
+  Object.defineProperty(input, "files", { value: [new File(["x"], "one.txt")], configurable: true });
+  input.dispatchEvent(new Event("change"));
+  await vi.waitFor(() => expect(refreshing).toBe(true));
+  chatter.dispose();
+  resolvePolicy(jsonResponse({ max_file_bytes: 4, inline_max_bytes: 4 }));
+  await flushAsync();
+  expect(reader).not.toHaveBeenCalled();
+  expect(writes).toEqual([]);
+  reader.mockRestore();
+});
+
 /** The request a chatter must never send: the generic create with another product's field names. */
 const expectNoGenericCreate = (calls: { path: string }[]): void => {
   expect(calls.some((c) => c.path.endsWith("/ir.attachment/create"))).toBe(false);
@@ -1075,7 +1154,10 @@ test("composer paperclip uploads through thread_upload and the post carries the 
       });
     }
 
+    if (String(path).endsWith("/ir.attachment/erp_upload_limits")) return jsonResponse({ max_file_bytes: 134217728, inline_max_bytes: 2048 });
     if (String(path).endsWith("/res.partner/thread_upload")) {
+      const refusal = refuseInvalidAttachmentRequest(body, 2048);
+      if (refusal) return refusal;
       return jsonResponse(UPLOAD_ANSWER(888, "my_upload.txt", 12));
     }
 
@@ -1157,6 +1239,7 @@ test("a refused composer upload shows the server message inline and adds no chip
         ],
       });
     }
+    if (String(path).endsWith("/ir.attachment/erp_upload_limits")) return jsonResponse({ max_file_bytes: 134217728, inline_max_bytes: 2048 });
     if (String(path).endsWith("/res.partner/thread_upload")) {
       return jsonResponse({ name: "erp.exceptions.ValidationError", message: refusal }, 422);
     }
@@ -1202,7 +1285,10 @@ test("the attachments panel uploads through thread_attach and shows the new file
         ],
       });
     }
+    if (String(path).endsWith("/ir.attachment/erp_upload_limits")) return jsonResponse({ max_file_bytes: 134217728, inline_max_bytes: 2048 });
     if (String(path).endsWith("/res.partner/thread_attach")) {
+      const refusal = refuseInvalidAttachmentRequest(body, 2048);
+      if (refusal) return refusal;
       attached = true;
       return jsonResponse(UPLOAD_ANSWER(777, "hello.txt", 11));
     }

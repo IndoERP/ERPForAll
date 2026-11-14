@@ -242,6 +242,41 @@ pub struct ModuleOpArgs {
     /// Verified previous release for an explicit forward migration; upgrade only.
     #[arg(long)]
     pub identity_previous: Option<PathBuf>,
+
+    /// With `install`: the demo data choice (the database's stored choice decides without it).
+    #[command(flatten)]
+    pub demo: DemoArgs,
+}
+
+/// The demo data choice of `erp db init` and `erp module install`. The choice is stored on the
+/// database (the `demo` flag of its modules, `base` first); a module installed later gets demo
+/// data when every module it depends on has it.
+#[derive(Args, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DemoArgs {
+    /// Load demo data. `erp db init`: the new database is a demo database. `erp module install`
+    /// on a database without demo data: the demo data of every installed addon is loaded first
+    /// (irreversible), then the addons install with theirs
+    #[arg(long, conflicts_with = "without_demo")]
+    pub with_demo: bool,
+
+    /// No demo data (the default of `erp db init`). `erp module install` refuses it on a
+    /// database that has demo data: demo data cannot be switched off
+    #[arg(long)]
+    pub without_demo: bool,
+}
+
+impl DemoArgs {
+    /// `Some(true)` for `--with-demo`, `Some(false)` for `--without-demo`, `None` for neither.
+    pub fn choice(self) -> Option<bool> {
+        if self.with_demo {
+            Some(true)
+        } else if self.without_demo {
+            Some(false)
+        } else {
+            None
+        }
+    }
 }
 
 /// `erp addon` subcommand container.
@@ -555,7 +590,7 @@ pub struct DbCommand {
     pub action: DbAction,
 }
 
-/// Database actions (`build-object`).
+/// Database actions run by an operator.
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DbAction {
@@ -576,6 +611,101 @@ pub enum DbAction {
     /// Give a maintenance role its privileges on the vacuum state table (and no others), as the
     /// database owner. The role must be another role than the owner and the runtime role.
     GrantVacuumRole(GrantVacuumRoleArgs),
+    /// Drop one database. Refused while a node of it is running.
+    Drop(DbTargetArgs),
+    /// Write one database to a new archive file (PostgreSQL custom format, mode 600). Refused
+    /// while a node of it is running.
+    Dump(DumpArgs),
+    /// Create one database from an archive written by `erp db dump`. Refuses an existing
+    /// database unless `--replace`.
+    Restore(RestoreArgs),
+    /// Make a copy safe to test on: scheduled jobs held, sessions, API keys and login throttle
+    /// removed, every password replaced by one throwaway password, database secret replaced,
+    /// `database.neutralized` set. Can be repeated. Refused while a node of it is running.
+    Neutralize(NeutralizeArgs),
+}
+
+/// The database of `erp db drop | dump | restore | neutralize` and its connection.
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DbTargetArgs {
+    /// Deployment configuration file: its owner connection (host, port, role and password file)
+    /// is used, its database name is not
+    #[arg(long)]
+    pub config: PathBuf,
+
+    /// The database to act on
+    #[arg(short = 'd', long = "database")]
+    pub database: DatabaseName,
+
+    /// Act even when a node of the database is running (its row in the node registry is not
+    /// stopped and its lease has not expired); a drop then also ends the open sessions
+    #[arg(long)]
+    pub force_live: bool,
+}
+
+/// Arguments for `erp db dump`.
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DumpArgs {
+    /// The database and its connection.
+    #[command(flatten)]
+    pub target: DbTargetArgs,
+
+    /// The archive to write; it must not exist
+    #[arg(long)]
+    pub file: PathBuf,
+
+    /// Directory of the PostgreSQL client programs (`pg_dump`); without it, `PATH` is searched
+    #[arg(long, env = "ERP_PG_BIN")]
+    pub pg_bin: Option<PathBuf>,
+}
+
+/// Arguments for `erp db restore`.
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RestoreArgs {
+    /// The database and its connection.
+    #[command(flatten)]
+    pub target: DbTargetArgs,
+
+    /// The archive written by `erp db dump`
+    #[arg(long)]
+    pub file: PathBuf,
+
+    /// Drop an existing database of that name first
+    #[arg(long)]
+    pub replace: bool,
+
+    /// Directory of the PostgreSQL client programs (`pg_restore`); without it, `PATH` is searched
+    #[arg(long, env = "ERP_PG_BIN")]
+    pub pg_bin: Option<PathBuf>,
+}
+
+/// Arguments for `erp db neutralize`.
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct NeutralizeArgs {
+    /// The database and its connection.
+    #[command(flatten)]
+    pub target: DbTargetArgs,
+
+    /// Mode-600 regular file holding the throwaway password every user with a password gets
+    /// (at least 12 bytes); it is never printed
+    #[arg(long)]
+    pub password_file: PathBuf,
+
+    /// The database is a physical copy of its whole cluster (a base backup or a volume
+    /// snapshot): it carries the recorded identity of the original, so neutralize refuses it
+    /// without this option
+    #[arg(long)]
+    pub physical_copy: bool,
+
+    /// Neutralize a database that has no recorded identity: such a database cannot be told
+    /// from the original it may have been copied from, so neutralize refuses it without this
+    /// option
+    #[arg(long)]
+    pub unrecorded_identity: bool,
 }
 
 /// Explicit server configuration; credentials are only read from private files.
@@ -600,6 +730,9 @@ pub struct InitArgs {
     /// Mode-600 regular file containing the initial password.
     #[arg(long)]
     pub admin_password_file: PathBuf,
+    /// The demo data choice of the new database (default: without).
+    #[command(flatten)]
+    pub demo: DemoArgs,
 }
 
 /// Arguments for `erp db build-object`.
@@ -967,6 +1100,7 @@ impl ModuleOpArgs {
             dry_run: false,
             restore_generated_restrictions: false,
             identity_previous: None,
+            demo: DemoArgs::default(),
         }
     }
 

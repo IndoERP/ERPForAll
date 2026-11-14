@@ -505,6 +505,8 @@ pub enum KindDecl {
     Date,
     /// Native UUID without identity policy.
     Uuid,
+    /// Exact signed 64-bit scalar.
+    BigInt,
     /// Native full-width unsigned PostgreSQL transaction identifier.
     Xid8,
     /// Explicit-offset, bounded microsecond instant.
@@ -742,6 +744,8 @@ pub struct FieldDecl {
     pub tracking: Option<Option<u32>>,
     /// `translate`: translatable textual field stored as JSONB with language keys.
     pub translate: Option<bool>,
+    /// SQL collation declaration, validated at registration.
+    pub collation: Option<&'static str>,
     /// `db_default`: schema sync keeps the static default as the column's database
     /// default, so a row written outside the ORM without the column takes it. Stored required
     /// booleans with a static boolean default only (checked at registry build).
@@ -752,6 +756,8 @@ pub struct FieldDecl {
     pub generated: Option<Option<&'static str>>,
     /// Storage kind of the generated column (virtual or stored).
     pub generated_storage: Option<crate::generated::GeneratedStorage>,
+    /// Owner-only opt-in to the generated input adapter.
+    pub input_adapted: Option<bool>,
 }
 
 impl FieldDecl {
@@ -769,6 +775,12 @@ impl FieldDecl {
     /// Select the host HTML policy. Non-HTML fields are refused at final registry assembly.
     pub const fn html_policy(mut self, policy: erp_fields::html::FieldPolicy) -> Self {
         self.html_policy = Some(policy);
+        self
+    }
+
+    /// Declare SQL collation (`default` or `C`); registration validates the name and storage.
+    pub const fn collation(mut self, name: &'static str) -> Self {
+        self.collation = Some(name);
         self
     }
 
@@ -808,10 +820,12 @@ impl FieldDecl {
             secret: None,
             tracking: None,
             translate: None,
+            collation: None,
             db_default: None,
             html_policy: None,
             generated: None,
             generated_storage: None,
+            input_adapted: None,
         }
     }
 
@@ -956,6 +970,11 @@ impl FieldDecl {
     /// Native UUID.
     pub const fn uuid(name: &'static str) -> Self {
         Self::new(name, KindDecl::Uuid)
+    }
+
+    /// A signed 64-bit scalar.
+    pub const fn bigint(name: &'static str) -> Self {
+        Self::new(name, KindDecl::BigInt)
     }
 
     /// Native full-width unsigned transaction identifier.
@@ -1270,6 +1289,20 @@ impl FieldDecl {
     /// ```
     pub const fn translate(mut self, on: bool) -> Self {
         self.translate = Some(on);
+        self
+    }
+
+    /// Allow create/write input to be normalized by `_adapt_generated_input`.
+    /// Only the field's declaring addon may set or clear this option. It does not make the
+    /// database-generated column assignment-eligible.
+    ///
+    /// ```
+    /// use erp_registry::FieldDecl;
+    /// let input = FieldDecl::integer("total").generated("source + 1").input_adapted(true);
+    /// assert_eq!(input.input_adapted, Some(true));
+    /// ```
+    pub const fn input_adapted(mut self, enabled: bool) -> Self {
+        self.input_adapted = Some(enabled);
         self
     }
 

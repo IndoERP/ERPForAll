@@ -174,7 +174,11 @@ async fn rollout_child_worker() {
     let (config, alias, capable) = child_config();
     let registry = harness_builder(alias).registry_only().unwrap();
     let pool = erp_orm::pool::create_pool(config.clone(), 4).unwrap();
+    let baseline = erp_orm::Signal::read(&pool.get().await.unwrap())
+        .await
+        .unwrap();
     let orm = Orm::builder(registry, pool)
+        .signal(erp_orm::Signal::new(baseline))
         .policy(StaticPolicy::AllowAll)
         .trust_caller_resolutions()
         .require_core_tables(erp_security::auth::core_tables())
@@ -226,9 +230,16 @@ async fn rollout_child_worker() {
         .unwrap();
     let hashing: &'static HashPool = waiting_pool(1);
     let auth = Arc::new(
-        Auth::with_membership(orm, AuthConfig::DEFAULT, hashing, member.admission())
-            .await
-            .unwrap(),
+        Auth::with_membership(
+            orm,
+            AuthConfig::DEFAULT
+                .with_throttle_entries(if alias { 128 } else { 64 })
+                .unwrap(),
+            hashing,
+            member.admission(),
+        )
+        .await
+        .unwrap(),
     );
     let model = auth.orm().registry().model_id("res.users").unwrap();
     let base_domain = auth
@@ -287,7 +298,38 @@ async fn rollout_child_worker() {
                     }
                 }
             }
-            "stats" => json!({"type":"stats", "jobs":hashing.stats().jobs}),
+            "stats" => {
+                json!({"type":"stats", "jobs":hashing.stats().jobs, "entries":auth.config().throttle_entries()})
+            }
+            "set_policy" => {
+                let mut tx = auth.orm().begin(erp_orm::SUPERUSER_ID).await.unwrap();
+                let rows = tx.env().records("ir.config_parameter").unwrap();
+                let _: String = rows
+                    .call(
+                        &mut tx,
+                        "set_str",
+                        (
+                            request["key"].as_str().unwrap().to_owned(),
+                            Some(request["value"].as_str().unwrap().to_owned()),
+                        ),
+                    )
+                    .await
+                    .unwrap();
+                tx.commit().await.unwrap();
+                json!({"type":"policy_written"})
+            }
+            "check_policy" => {
+                let cookie =
+                    SessionSecret::from_cookie(request["cookie"].as_str().unwrap()).unwrap();
+                let begun = auth
+                    .begin_session(&cookie, erp_security::auth::CredentialOptions::new())
+                    .await
+                    .unwrap();
+                let answer = json!({"type":"checked_policy", "rotation":begun.session.rotation_due(), "touch":begun.session.touch_due()});
+                let mut tx = begun.tx;
+                tx.rollback().await.unwrap();
+                answer
+            }
             "start_waiting_login" => {
                 assert!(
                     pending.is_none() && release.is_none(),
@@ -591,6 +633,9 @@ impl Fixture {
     async fn new() -> Self {
         let h = harness_builder(true).build().await.unwrap();
         prepare(&h).await;
+        let mut signal_tx = h.begin().await.unwrap();
+        signal_tx.install_signal().await.unwrap();
+        signal_tx.commit().await.unwrap();
         set_param(&h, "base.login_cooldown_after", "100").await;
         set_param(&h, "base.login_cooldown_after_login", "2").await;
         let mut tx = h.begin().await.unwrap();
@@ -941,5 +986,54 @@ async fn incompatible_replacement_joins_only_after_disable_and_drain() {
         replacement.os_pid, replacement.node
     );
     tokio::join!(base.finish(), replacement.finish());
+    fixture.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_processes_observe_session_policy_with_independent_capacity() {
+    let fixture = Fixture::new().await;
+    let (mut a, mut b) = fixture.peers().await;
+    assert_eq!(a.call(json!({"op":"stats"})).await["entries"], 64);
+    assert_eq!(b.call(json!({"op":"stats"})).await["entries"], 128);
+    let secret = private_cookie(
+        a.login("canonical", "correct", "198.51.100.240").await,
+        fixture.uid,
+    );
+    b.check(&secret, fixture.uid).await;
+    for (key, value) in [
+        ("sessions.rotation_grace_seconds", "5"),
+        ("sessions.rotation_interval_seconds", "60"),
+        ("sessions.touch_interval_seconds", "3600"),
+    ] {
+        assert_eq!(
+            a.call(json!({"op":"set_policy", "key":key, "value":value}))
+                .await["type"],
+            "policy_written"
+        );
+    }
+    let mut tx = fixture.h.begin().await.unwrap();
+    tx.batch("UPDATE erp_session SET created_at=now()-interval '120 seconds', last_seen_at=now()-interval '120 seconds'").await.unwrap();
+    tx.commit().await.unwrap();
+    for peer in [&mut a, &mut b] {
+        let answer = peer
+            .call(json!({"op":"check_policy", "cookie":secret.to_cookie().as_str()}))
+            .await;
+        assert_eq!(
+            answer,
+            json!({"type":"checked_policy", "rotation":true, "touch":false})
+        );
+    }
+    a.call(json!({"op":"set_policy", "key":"sessions.touch_interval_seconds", "value":"1"}))
+        .await;
+    let answer = b
+        .call(json!({"op":"check_policy", "cookie":secret.to_cookie().as_str()}))
+        .await;
+    assert_eq!(
+        answer,
+        json!({"type":"checked_policy", "rotation":true, "touch":true})
+    );
+    b.kill().await;
+    a.check(&secret, fixture.uid).await;
+    a.finish().await;
     fixture.cleanup().await;
 }

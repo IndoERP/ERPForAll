@@ -791,7 +791,7 @@ async fn installed_native() {
     assert_eq!(result(&denied)["name"], "erp.exceptions.AccessError");
     assert_eq!(
         result(&denied)["message"],
-        "You are not allowed to access 'Library Book' (sample_library.book) records.\n\nThis operation is allowed for the following groups:\n\t- Access Administration\n\t- Internal User\n\t- Regular User\n\t- Settings Administration\n\nContact your administrator to request access if necessary."
+        "Your access rights do not let you access 'Library Book' (sample_library.book) records.\n\nGroups that may do this:\n\t- Access Administration\n\t- Internal User\n\t- Regular User\n\t- Settings Administration\n\nAsk an administrator if you need this access."
     );
     ok(
         &service,
@@ -1015,7 +1015,7 @@ async fn native_browser(db: &TestDb, installed: &erp_orm::Orm, reader: &erp_orm:
         "bookModel":"sample_library.book","wizardModel":"sample_library.lend.wizard","loanModel":"sample_library.loan",
         "bookId":book,"bookTitle":"Browser Kindred","borrowerId":borrower,"borrowerName":"Octavia",
         "openMethod":"lend","confirmMethod":"action_confirm",
-        "deniedError":{"status":403,"name":"erp.exceptions.AccessError","message":"You are not allowed to access 'Library Book' (sample_library.book) records.\n\nThis operation is allowed for the following groups:\n\t- Access Administration\n\t- Internal User\n\t- Regular User\n\t- Settings Administration\n\nContact your administrator to request access if necessary."}
+        "deniedError":{"status":403,"name":"erp.exceptions.AccessError","message":"Your access rights do not let you access 'Library Book' (sample_library.book) records.\n\nGroups that may do this:\n\t- Access Administration\n\t- Internal User\n\t- Regular User\n\t- Settings Administration\n\nAsk an administrator if you need this access."}
     });
     let browser =
         tokio::task::spawn_blocking(move || wizard_browser::run(dir.path(), contract)).await;

@@ -8,6 +8,11 @@
 //! and only in an addon install or upgrade (A6).
 
 use std::collections::{BTreeMap, BTreeSet};
+#[path = "schema_sqlobj_integrity.rs"]
+mod integrity;
+#[path = "schema_sqlobj_uninstall.rs"]
+mod uninstall;
+pub use uninstall::SqlObjectRemoval;
 
 use erp_fields::{Error, ErrorKind, Result};
 use erp_registry::{
@@ -30,7 +35,7 @@ pub(crate) const SQL_OBJECT_DDL: &str = "\
 CREATE TABLE IF NOT EXISTS erp_schema_sql_object (
     addon                text   NOT NULL,
     key                  text   NOT NULL,
-    kind                 text   NOT NULL CHECK (kind IN ('function', 'trigger', 'condition')),
+    kind                 text   NOT NULL CHECK (kind IN ('function', 'trigger', 'condition', 'foreign_key', 'table_options')),
     physical_identity    text   NOT NULL UNIQUE,
     format_version       int4   NOT NULL,
     shape                text   NOT NULL,
@@ -97,11 +102,21 @@ enum Phase {
     Derived,
     /// After the signal triggers (S3).
     Trigger,
+    /// Composite FKs after tables and unique keys.
+    Integrity,
     /// No DDL, provenance only (conditions, B5 maps them).
     Record,
 }
 
+/// Only a lifecycle subset may defer new objects until another module creates their table.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SqlObjectScope {
+    Full,
+    Subset,
+}
+
 struct Row {
+    installed: Option<Vec<u8>>,
     shape: String,
     declaration: Vec<u8>,
     body: Option<Vec<u8>>,
@@ -134,21 +149,55 @@ pub(crate) struct SqlObjectSync<'r> {
     lifecycle: bool,
     create_tables: bool,
     ran: bool,
+    upgrade_integrity: bool,
     /// The validated role bindings (B4); `None` when the registry declares no SQL object.
     roles: Option<crate::schema_sqlobj_roles::BoundRoles>,
     graph: &'r SqlObjectGraph,
+    deferred: BTreeSet<SqlObjectId>,
 }
 
 impl SqlObjectSync<'_> {
+    /// Objects omitted by this lifecycle subset must not be admitted or installed yet.
+    pub(crate) fn is_deferred(&self, id: SqlObjectId) -> bool {
+        self.deferred.contains(&id)
+    }
+
+    /// A table recreated by partition sync would discard recorded integrity identities.
+    pub(crate) fn refuse_integrity_recreation(&self, tables: &[String]) -> Result<()> {
+        for item in &self.items {
+            if item.row.is_none()
+                || !matches!(
+                    item.object.kind(),
+                    SqlObjectKind::ForeignKey(_) | SqlObjectKind::TableOptions(_)
+                )
+            {
+                continue;
+            }
+            for reference in item.object.references() {
+                if let SqlReference::Model(model) = reference
+                    && tables.iter().any(|table| table == model.table())
+                {
+                    return Err(refuse(
+                        item.object.id(),
+                        format!(
+                            "referenced table '{}' is recreated by partition synchronization; explicit migration required",
+                            model.table()
+                        ),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// A6: refuse the first object that needs a change outside a lifecycle transaction.
     fn admit(&self) -> Result<()> {
         if self.lifecycle {
             return Ok(());
         }
-        let first = self
-            .items
-            .iter()
-            .find(|i| i.action != Action::Unchanged || self.create_tables);
+        let first = self.items.iter().find(|i| {
+            i.action != Action::Unchanged || self.create_tables || self.upgrade_integrity
+        });
         match first {
             Some(item) => Err(refuse(
                 item.object.id(),
@@ -170,6 +219,7 @@ impl Transaction {
         provenance: bool,
         synced: &[&ModelSpec],
         options: &crate::SchemaSyncOptions,
+        scope: SqlObjectScope,
     ) -> Result<SqlObjectSync<'r>> {
         let graph = registry.sql_objects();
         let mut sync = SqlObjectSync {
@@ -177,19 +227,28 @@ impl Transaction {
             lifecycle: options.is_lifecycle(),
             create_tables: !provenance && !graph.objects().is_empty(),
             ran: false,
+            upgrade_integrity: false,
             roles: None,
             graph,
+            deferred: BTreeSet::new(),
         };
         if graph.objects().is_empty() && !provenance {
             return Ok(sync);
         }
+        let needed = graph.objects().iter().any(|o| {
+            matches!(
+                o.kind(),
+                SqlObjectKind::ForeignKey(_) | SqlObjectKind::TableOptions(_)
+            )
+        });
+        sync.upgrade_integrity = self.plan_integrity_catalog(provenance, needed).await?;
         let mut rows: BTreeMap<(String, String), Row> = BTreeMap::new();
         if provenance {
             let addons: Vec<&str> = registry.addons().iter().map(|a| a.name).collect();
             let found = self
                 .query(
                     "SELECT addon, key, format_version, step_state, shape, declaration_sha256, \
-                     body_sha256 FROM erp_schema_sql_object WHERE addon = ANY($1) ORDER BY \
+                     body_sha256, installed_sha256 FROM erp_schema_sql_object WHERE addon = ANY($1) ORDER BY \
                      addon, key",
                     &[&addons],
                 )
@@ -219,6 +278,9 @@ impl Transaction {
                 rows.insert(
                     (addon, key),
                     Row {
+                        installed: row
+                            .try_get(7)
+                            .map_err(|e| unreadable("installed hash", e))?,
                         shape: get(4)?,
                         declaration: row.try_get(5).map_err(|e| unreadable("hash", e))?,
                         body: row.try_get(6).map_err(|e| unreadable("hash", e))?,
@@ -304,23 +366,44 @@ impl Transaction {
         let mut derived: BTreeSet<SqlObjectId> = BTreeSet::new();
         for object in graph.objects() {
             let id = object.id();
-            for reference in object.references() {
-                if let SqlReference::Model(m) = reference
-                    && !existing.contains(m.table())
-                    && !synced.contains(m.table())
-                {
+            // Read every identity before deferral so a missing dependency never hides a collision.
+            let observed = match object.kind() {
+                SqlObjectKind::ForeignKey(_) | SqlObjectKind::TableOptions(_) => {
+                    integrity::observed(self, object).await?
+                }
+                _ => None,
+            };
+            // Consume every positional catalog flag before any deferral/skip.
+            let present = match object.kind() {
+                SqlObjectKind::Function(_) => functions.next().ok_or_else(missing_flag)?,
+                SqlObjectKind::Trigger(_) => triggers.next().ok_or_else(missing_flag)?,
+                SqlObjectKind::ForeignKey(_) | SqlObjectKind::TableOptions(_) => observed.is_some(),
+                _ => false,
+            };
+            let row = rows.remove(&(id.addon().to_owned(), id.key().to_owned()));
+            let missing = object.references().iter().find_map(|reference| match reference {
+                SqlReference::Model(m) if !existing.contains(m.table()) && !synced.contains(m.table()) =>
+                    Some(format!("table '{}' of model '{}' does not exist and is not created by this sync", m.table(), m.model())),
+                SqlReference::Object(dep) if sync.deferred.contains(dep) =>
+                    Some(format!("dependency '{dep}' is deferred until a later schema step")),
+                _ => None,
+            });
+            if let Some(reason) = missing {
+                if scope != SqlObjectScope::Subset || !sync.lifecycle || row.is_some() {
+                    return Err(refuse(id, reason));
+                }
+                if present {
                     return Err(refuse(
                         id,
                         format!(
-                            "table '{}' of model '{}' does not exist and is not created by this \
-                             sync",
-                            m.table(),
-                            m.model()
+                            "{} exists but is not owned by SQL object provenance; adopting it needs an explicit migration",
+                            sqlobj::physical_identity(object)
                         ),
                     ));
                 }
+                sync.deferred.insert(id);
+                continue;
             }
-            let row = rows.remove(&(id.addon().to_owned(), id.key().to_owned()));
             let shape = sqlobj::shape_payload(object);
             if let Some(row) = &row
                 && let Some(label) = sqlobj::shape_change(object, &row.shape)?
@@ -359,12 +442,24 @@ impl Transaction {
                             }
                         }
                     }
-                    let present = functions.next().ok_or_else(missing_flag)?;
                     (phase, present, "function")
                 }
-                SqlObjectKind::Trigger(_) => {
-                    let present = triggers.next().ok_or_else(missing_flag)?;
-                    (Phase::Trigger, present, "trigger")
+                SqlObjectKind::Trigger(_) => (Phase::Trigger, present, "trigger"),
+                SqlObjectKind::ForeignKey(_) | SqlObjectKind::TableOptions(_) => {
+                    if let Some(row) = &row
+                        && observed.as_ref().map(|v| sha256(v.as_bytes())) != row.installed
+                    {
+                        return Err(refuse(
+                            id,
+                            "installed integrity differs; reconcile through addon upgrade",
+                        ));
+                    }
+                    let phase = if matches!(object.kind(), SqlObjectKind::ForeignKey(_)) {
+                        Phase::Integrity
+                    } else {
+                        Phase::Record
+                    };
+                    (phase, observed.is_some(), "integrity")
                 }
                 SqlObjectKind::Condition(_) => (Phase::Record, false, "condition"),
                 // no DDL and no provenance row: reconciled by the grant phase of every lifecycle
@@ -412,11 +507,39 @@ impl Transaction {
                 catalog_input: None,
             });
         }
+        // B6: the same safety admission for model sync and init_sql_objects. Only newly
+        // added FKs over existing tables may need a scan; unchanged guards never trigger it.
+        let mut candidates: Vec<String> = sync
+            .items
+            .iter()
+            .filter_map(|item| match item.object.kind() {
+                SqlObjectKind::ForeignKey(f)
+                    if item.action == Action::Create && existing.contains(f.model().table()) =>
+                {
+                    Some(f.model().table().to_owned())
+                }
+                _ => None, // only new FKs need validation; every other kind has its own phase
+            })
+            .collect();
+        candidates.sort();
+        candidates.dedup();
+        let large = self.large_tables(&candidates, options.large_rows()).await?;
+        for item in &sync.items {
+            if let SqlObjectKind::ForeignKey(f) = item.object.kind()
+                && item.action == Action::Create
+                && large.contains(f.model().table())
+            {
+                return Err(refuse(
+                    item.object.id(),
+                    "deferred integrity installation requires in a later release",
+                ));
+            }
+        }
         sync.admit()?;
         // B4: the bindings are validated before any DDL, over the tables that exist now
         let mut schemas: Vec<String> = vec![current.clone()];
-        for item in &sync.items {
-            for schema in &item.schemas {
+        for object in graph.objects() {
+            for schema in &sqlobj::search_path_schemas(graph, object, &current) {
                 if !schemas.contains(schema) {
                     schemas.push(schema.clone());
                 }
@@ -463,6 +586,7 @@ impl Transaction {
             self.batch(SQL_OBJECT_DDL).await?;
             sync.ran = true;
         }
+        self.install_integrity_catalog(sync).await?;
         self.install_functions(sync, Phase::Early).await
     }
 
@@ -614,7 +738,8 @@ impl Transaction {
         // B4: ownership and grants, only in a lifecycle sync (A6; `admit` refused any other one
         // that would change an object)
         if let (true, Some(roles)) = (sync.lifecycle, &sync.roles) {
-            self.grant_sql_objects(sync.graph, roles).await?;
+            self.grant_sql_objects(sync.graph, roles, &sync.deferred, true)
+                .await?;
         }
         Ok(())
     }
@@ -664,8 +789,22 @@ impl Transaction {
                     let installed = self.installed(id, sql, &[&table, &t.name()]).await?;
                     ("trigger", Some(installed))
                 }
-                // S0 refused every other kind but conditions
-                _ => ("condition", None),
+                SqlObjectKind::ForeignKey(_) | SqlObjectKind::TableOptions(_) => {
+                    let observed =
+                        integrity::observed(self, item.object)
+                            .await?
+                            .ok_or_else(|| {
+                                refuse(id, "installed integrity is missing after its DDL")
+                            })?;
+                    let kind = if matches!(item.object.kind(), SqlObjectKind::ForeignKey(_)) {
+                        "foreign_key"
+                    } else {
+                        "table_options"
+                    };
+                    (kind, Some(sha256(observed.as_bytes())))
+                }
+                SqlObjectKind::Condition(_) => ("condition", None),
+                _ => return Err(refuse(id, "a later object kind cannot be recorded")),
             };
             cols[0].push(id.addon().to_owned());
             cols[1].push(id.key().to_owned());
@@ -779,23 +918,155 @@ impl Transaction {
     /// declared, drift); `Access` for an unsafe role binding or a privilege a bound role or
     /// PUBLIC holds beyond the declaration (A2); the DDL's errors, naming the object.
     pub async fn init_sql_objects(&mut self, options: &crate::SchemaSyncOptions) -> Result<()> {
+        self.sync_sql_objects(options, SqlObjectScope::Full).await
+    }
+
+    /// Reconcile objects of one addon schema step that creates no model table.
+    /// New objects of a later module may wait only when `options` marks a lifecycle operation.
+    /// The module executor must call [`Self::refuse_deferred_sql_objects`] before commit.
+    ///
+    /// ```no_run
+    /// # async fn step(tx: &mut erp_orm::Transaction, options: &erp_orm::SchemaSyncOptions) -> erp_fields::Result<()> {
+    /// tx.init_sql_objects_subset(options).await?;
+    /// // Run any remaining module schema steps in this transaction before the final check.
+    /// tx.refuse_deferred_sql_objects(options).await
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    /// The refusals and database errors of [`Self::init_sql_objects`].
+    #[doc(hidden)]
+    pub async fn init_sql_objects_subset(
+        &mut self,
+        options: &crate::SchemaSyncOptions,
+    ) -> Result<()> {
+        self.sync_sql_objects(options, SqlObjectScope::Subset).await
+    }
+
+    /// Refuse incomplete SQL-object work at the end of an addon lifecycle operation.
+    /// Reads the final registry, provenance and catalog under the schema lock; never installs
+    /// or repairs anything. Policies have no provenance row and are checked by target/grants.
+    ///
+    /// # Errors
+    /// `Programming` names an object no schema step installed or a declaration left stale;
+    /// provenance, catalog, role and privilege refusals are as [`Self::init_sql_objects`].
+    #[doc(hidden)]
+    pub async fn refuse_deferred_sql_objects(
+        &mut self,
+        options: &crate::SchemaSyncOptions,
+    ) -> Result<()> {
+        let registry = std::sync::Arc::clone(self.registry());
+        self.verify_sql_object_publication(&registry, options).await
+    }
+
+    /// Verify the complete installed graph and effective privileges without repairing objects.
+    /// The owner-side caller holds lifecycle exclusion and supplies its installed registry.
+    /// # Errors
+    /// Returns named programming errors for absent/stale objects and Access for unsafe roles or grants.
+    pub async fn verify_sql_object_publication(
+        &mut self,
+        registry: &Registry,
+        options: &crate::SchemaSyncOptions,
+    ) -> Result<()> {
+        self.sql_object_publication(registry, options, false).await
+    }
+
+    /// Reconcile declared ACLs only; never creates/replaces an object or transfers ownership.
+    /// # Errors
+    /// Missing, drifted or re-owned objects require an addon upgrade; unsafe grants refuse and the
+    /// caller must roll back this transaction. Takes the existing schema lock.
+    pub async fn reconcile_sql_object_grants(
+        &mut self,
+        registry: &Registry,
+        options: &crate::SchemaSyncOptions,
+    ) -> Result<()> {
+        self.sql_object_publication(registry, options, true).await
+    }
+
+    async fn sql_object_publication(
+        &mut self,
+        registry: &Registry,
+        options: &crate::SchemaSyncOptions,
+        reconcile: bool,
+    ) -> Result<()> {
+        let graph = registry.sql_objects();
+        let (saved, lock_timeout) = self.set_schema_limits(false).await?;
+        self.take_schema_lock(&lock_timeout).await?;
+        let present = self.sql_object_provenance_exists().await?;
+        let recorded: Vec<_> = graph
+            .objects()
+            .iter()
+            .filter(|o| !matches!(o.kind(), SqlObjectKind::TableGrant(_)))
+            .collect();
+        let addons: Vec<String> = recorded.iter().map(|o| o.owner().to_owned()).collect();
+        let keys: Vec<String> = recorded.iter().map(|o| o.id().key().to_owned()).collect();
+        let found = if present {
+            self.flags(
+                "SELECT EXISTS (SELECT 1 FROM erp_schema_sql_object o WHERE o.addon=u.a AND \
+                 o.key=u.k) FROM unnest($1::text[], $2::text[]) WITH ORDINALITY AS u(a,k,i) \
+                 ORDER BY u.i",
+                &addons,
+                Some(&keys),
+            )
+            .await?
+        } else {
+            vec![false; recorded.len()]
+        };
+        if let Some((object, _)) = recorded.iter().zip(found).find(|(_, found)| !found) {
+            return Err(refuse(
+                object.id(),
+                "deferred installation was not completed by any schema step of this operation",
+            ));
+        }
+        // Strict planning performs no DDL and preserves all installed-shape/drift refusals.
+        let sync = self
+            .plan_sql_objects(registry, present, &[], options, SqlObjectScope::Full)
+            .await?;
+        if let Some(item) = sync.items.iter().find(|i| i.action != Action::Unchanged) {
+            return Err(refuse(
+                item.object.id(),
+                "declaration was not reconciled by any schema step of this operation",
+            ));
+        }
+        if let Some(roles) = &sync.roles {
+            if reconcile {
+                self.check_sql_object_owners(graph, roles, &BTreeSet::new())
+                    .await?;
+                self.grant_sql_objects(graph, roles, &BTreeSet::new(), false)
+                    .await?;
+            } else {
+                self.verify_sql_object_privileges(graph, roles, &BTreeSet::new())
+                    .await?;
+            }
+        }
+        self.set_timeouts(&saved.0, &saved.1).await
+    }
+
+    async fn sql_object_provenance_exists(&mut self) -> Result<bool> {
+        self.query("SELECT to_regclass($1) IS NOT NULL", &[&OBJECT_TABLE])
+            .await?
+            .first()
+            .ok_or_else(missing_flag)?
+            .try_get(0)
+            .map_err(|e| unreadable("provenance table", e))
+    }
+
+    async fn sync_sql_objects(
+        &mut self,
+        options: &crate::SchemaSyncOptions,
+        scope: SqlObjectScope,
+    ) -> Result<()> {
         let registry = std::sync::Arc::clone(self.registry());
         let (saved, lock_timeout) = self.set_schema_limits(false).await?;
         self.take_schema_lock(&lock_timeout).await?;
-        let present = self
-            .query("SELECT to_regclass($1) IS NOT NULL", &[&OBJECT_TABLE])
-            .await?
-            .first()
-            .map(|r| r.try_get::<_, bool>(0))
-            .transpose()
-            .map_err(|e| unreadable("provenance table", e))?
-            .ok_or_else(missing_flag)?;
+        let present = self.sql_object_provenance_exists().await?;
         let mut sync = self
-            .plan_sql_objects(&registry, present, &[], options)
+            .plan_sql_objects(&registry, present, &[], options, scope)
             .await?;
         self.install_sql_objects_early(&mut sync).await?;
         self.install_sql_objects_derived(&mut sync).await?;
         self.install_sql_objects_triggers(&mut sync).await?;
+        self.install_sql_object_constraints(&mut sync).await?;
         self.record_sql_objects(&sync).await?;
         self.set_timeouts(&saved.0, &saved.1).await
     }

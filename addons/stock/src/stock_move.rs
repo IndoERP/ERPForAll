@@ -440,7 +440,7 @@ pub struct StockMove {
     #[field(
         boolean,
         default = false,
-        string = "Whether the move was added after the picking's confirmation"
+        string = "Set when the move was added to the transfer after it was confirmed"
     )]
     pub additional: bool,
     /// Reference; its compute is's.
@@ -469,11 +469,12 @@ pub struct StockMove {
     /// Replenish the scrapped quantity.
     #[field(boolean, string = "Should Replenish")]
     pub should_replenish_scrapped: bool,
-    /// Bumped by every change to the move's open lines (1, D2.3).
-    #[field(integer, required = true, readonly = true, default = 0)]
+    /// Bumped by every change to the move's open lines (1, D2.3); written only by the
+    /// stock engine's statements ("Writers"), so a copy starts at 0 as a new move does.
+    #[field(integer, required = true, readonly = true, default = 0, copy = false)]
     pub open_line_version: i32,
     /// When the move was done (1); never changed afterwards (its trigger is
-    /// 's, amendment C1).
+    /// installed by [`crate::schema_guards`], amendment C1).
     #[field(datetime, readonly = true, copy = false, string = "Done At")]
     pub done_at: Option<DateTime>,
 }

@@ -239,6 +239,9 @@ pub(crate) async fn register(
         erp_orm::node::FeatureKey::new("auth.login_principal")?,
         erp_orm::node::FeatureVersion::new(1)?,
     )])?)
+    .settings(
+        &erp_addon_base::jobs_settings_source::DatabaseJobSettingsSource::compatibility_identity()?,
+    )?
     .settings(config)?
     .settings(config.startup_limits())?
     .settings(&rpc)?
@@ -724,10 +727,10 @@ async fn spawn_job_runners(
     membership: &NodeMembership,
 ) -> std::io::Result<JobRunners> {
     let process = Arc::new(tokio::sync::Semaphore::new(
-        orm.job_settings().workers() as usize
+        orm.job_node_settings().workers() as usize,
     ));
     let database = Arc::new(tokio::sync::Semaphore::new(
-        orm.job_settings().workers_per_db() as usize,
+        orm.job_node_settings().workers_per_db() as usize,
     ));
     let build_error = |e: erp_fields::Error| {
         std::io::Error::other(format!(

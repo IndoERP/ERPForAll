@@ -414,7 +414,7 @@ fn lower_expr_to_raw(model: &str, field: &str, expr: Expr, depth: usize) -> Resu
 fn scalar_type_of_field(ty: &FieldType) -> Option<ScalarType> {
     match ty {
         FieldType::Boolean => Some(ScalarType::Boolean),
-        FieldType::Integer => Some(ScalarType::Integer),
+        FieldType::Integer | FieldType::BigInt => Some(ScalarType::Integer),
         FieldType::Float { .. } => Some(ScalarType::Float),
         FieldType::Monetary { .. } => Some(ScalarType::Monetary),
         FieldType::Char { .. } | FieldType::Text => Some(ScalarType::Text),
@@ -707,7 +707,7 @@ fn validate_target_type(
                 return Err(unsupp());
             }
         }
-        FieldType::Integer => {
+        FieldType::Integer | FieldType::BigInt => {
             if !matches!(inferred, ScalarType::Integer | ScalarType::Null) {
                 return Err(unsupp());
             }

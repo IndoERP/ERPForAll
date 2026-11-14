@@ -142,7 +142,7 @@ fn assert_access(error: &erp_sdk::Error, message: &str) {
 
 fn denied(verb: &str, id: i64, uid: i64) -> String {
     format!(
-        "You are not allowed to {verb} 'Object For Test Access Right' (test_access.some_obj) \
+        "Your access rights do not let you {verb} 'Object For Test Access Right' (test_access.some_obj) \
          records.\n\nRecords: test_access.some_obj({id},), User: {uid}"
     )
 }
@@ -179,7 +179,7 @@ async fn spec_sec_007_superuser_bypass() {
         .unwrap_err();
     assert_access(
         &err,
-        "You are not allowed to read 'Object For Test Access Right' (test_access.some_obj) \
+        "Your access rights do not let you read 'Object For Test Access Right' (test_access.some_obj) \
          records.",
     );
     // in superuser mode: everything, without a statement
@@ -937,7 +937,7 @@ async fn access_domain_overrides_ask_the_groups() {
     assert_access(
         &err,
         &format!(
-            "You are not allowed to access 'Access Category' (test_access.categ) records.\n\n\
+            "Your access rights do not let you access 'Access Category' (test_access.categ) records.\n\n\
              Records: test_access.categ({},), User: {DEMO}",
             ids[1]
         ),
@@ -1072,7 +1072,7 @@ async fn parameters_never_reach_memory() {
 
 fn refused(description: &str, model: &str, id: i64) -> String {
     format!(
-        "You are not allowed to access '{description}' ({model}) records.\n\nRecords: {model}({id},), User: {DEMO}"
+        "Your access rights do not let you access '{description}' ({model}) records.\n\nRecords: {model}({id},), User: {DEMO}"
     )
 }
 
@@ -1578,7 +1578,7 @@ async fn cached_reads_recheck_model_access_after_dropping_sudo() {
             .expect_err(path);
         assert_access(
             &err,
-            "You are not allowed to read 'Object For Test Access Right' (test_access.some_obj) records.",
+            "Your access rights do not let you read 'Object For Test Access Right' (test_access.some_obj) records.",
         );
         // Denial never destroys the value or authorizes the restricted identity.
         assert_eq!(

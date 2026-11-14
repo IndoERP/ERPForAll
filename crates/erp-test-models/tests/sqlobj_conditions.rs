@@ -28,17 +28,20 @@ static MANIFEST: SqlObjectManifest = SqlObjectManifest::new(
 static UNBALANCED: SqlObjectDecl = SqlObjectDecl::condition(
     "test_sqcond",
     "unbalanced",
-    SqlConditionDecl::new("ERP01", "erp01_unbalanced", "The move is not balanced."),
+    SqlConditionDecl::new("ERP01", "erp01_unbalanced", "The move is not balanced.")
+        .kind(erp_registry::SqlConditionKind::Validation),
 );
 static LOCKED: SqlObjectDecl = SqlObjectDecl::condition(
     "test_sqcond",
     "locked_period",
-    SqlConditionDecl::new("ERP01", "erp01_locked_period", "The period is locked."),
+    SqlConditionDecl::new("ERP01", "erp01_locked_period", "The period is locked.")
+        .kind(erp_registry::SqlConditionKind::Validation),
 );
 static OTHER: SqlObjectDecl = SqlObjectDecl::condition(
     "test_sqcond",
     "other_state",
-    SqlConditionDecl::new("ERP02", "erp02_other", "Another declared state."),
+    SqlConditionDecl::new("ERP02", "erp02_other", "Another declared state.")
+        .kind(erp_registry::SqlConditionKind::Validation),
 );
 
 const RAISED: &str = "row 42 secret";
@@ -146,7 +149,8 @@ async fn unregistered_pairs_and_standard_states_keep_their_mapping() {
     static CLASH: SqlObjectDecl = SqlObjectDecl::condition(
         "test_sqcond",
         "clash",
-        SqlConditionDecl::new("ERP01", "erp01_unbalanced", "Other text."),
+        SqlConditionDecl::new("ERP01", "erp01_unbalanced", "Other text.")
+            .kind(erp_registry::SqlConditionKind::Validation),
     );
     static CLASH_MANIFEST: SqlObjectManifest = SqlObjectManifest::new(
         "test_sqcond",
@@ -229,8 +233,41 @@ async fn unregistered_pairs_and_standard_states_keep_their_mapping() {
     assert_eq!(error.sqlstate(), Some("23505"));
     assert_eq!(
         error.message(),
-        "The operation cannot be completed: duplicate key value violates unique constraint \
+        "The database refused the change: duplicate key value violates unique constraint \
          \"sqcond_unique_v_key\""
     );
     assert_eq!(error.constraint(), Some("sqcond_unique_v_key"));
+}
+
+#[tokio::test]
+async fn programming_condition_is_generic_and_not_a_validation() {
+    use erp_registry::SqlConditionKind;
+    static PROGRAMMING: SqlObjectDecl = SqlObjectDecl::condition(
+        "test_sqcond",
+        "programming",
+        SqlConditionDecl::new("ERP10", "sqcond_immutable", "Never expose this diagnostic.")
+            .kind(SqlConditionKind::Programming),
+    );
+    static EXPECTED: SqlObjectManifest = SqlObjectManifest::new("test_sqcond", &["programming"]);
+    let registry = Arc::new(
+        RegistryBuilder::new([&base_users::ADDON, &ADDON])
+            .linked(false)
+            .require_sql_objects([&EXPECTED])
+            .with_sql_objects([&PROGRAMMING])
+            .build()
+            .unwrap(),
+    );
+    let db = TestDb::create().await.unwrap();
+    let orm = orm_on(&db, registry);
+    let error = raise(&orm, "ERP10", Some("sqcond_immutable")).await;
+    assert_eq!(error.kind(), ErrorKind::Programming);
+    assert_eq!(error.message(), "Internal server error");
+    assert_eq!(error.sqlstate(), Some("ERP10"));
+    assert_eq!(error.constraint(), Some("sqcond_immutable"));
+    assert!(error.context().is_none());
+    assert_no_server_text(&error);
+    let rpc = erp_rpc::RpcFailure::Domain(error);
+    assert_eq!(rpc.status(), 500);
+    assert_eq!(rpc.message(), "Internal server error");
+    assert_eq!(rpc.retry_after(), None);
 }

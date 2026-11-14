@@ -16,6 +16,22 @@ use erp_server::web::{
 /// The base addon's content read behind the server's content route.
 pub(crate) struct BaseAttachmentContent;
 
+impl erp_server::web::WebAttachmentPolicy for BaseAttachmentContent {
+    fn load<'a>(
+        &'a self,
+        tx: &'a mut erp_orm::Transaction,
+    ) -> erp_orm::BoxFuture<'a, erp_fields::Result<erp_views::wire::AttachmentUploadLimits>> {
+        Box::pin(async move {
+            let policy = erp_addon_base::attachments::upload_policy(tx).await?;
+            erp_views::wire::AttachmentUploadLimits::new(
+                policy.max_file_bytes(),
+                policy.inline_max_bytes(),
+            )
+            .map_err(erp_fields::Error::programming)
+        })
+    }
+}
+
 impl WebAttachmentContent for BaseAttachmentContent {
     fn lookup<'a>(
         &'a self,

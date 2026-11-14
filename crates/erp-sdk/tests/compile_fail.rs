@@ -15,3 +15,11 @@ fn instruction_and_labelled_data_have_no_string_conversion() {
     cases.pass("tests/ui/ai_tools/pass/control.rs");
     cases.compile_fail("tests/ui/ai_tools/*.rs");
 }
+
+#[test]
+fn bigint_field_types_are_distinct_from_integer_and_record_ids() {
+    let cases = trybuild::TestCases::new();
+    cases.pass("tests/ui/bigint/pass/control.rs");
+    cases.compile_fail("tests/ui/bigint/i32.rs");
+    cases.compile_fail("tests/ui/bigint/i64.rs");
+}

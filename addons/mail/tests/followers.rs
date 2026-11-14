@@ -19,9 +19,9 @@ use support::*;
 const TICKET: &str = "test_mail.ticket";
 /// The engine's refusal of the test policies below (texts of the access engine, not of `mail`).
 const WRITE_DENIED: &str =
-    "You are not allowed to write 'Mail Test Ticket' (test_mail.ticket) records.";
+    "Your access rights do not let you write 'Mail Test Ticket' (test_mail.ticket) records.";
 const UNLINK_DENIED: &str =
-    "You are not allowed to unlink 'Mail Test Ticket' (test_mail.ticket) records.";
+    "Your access rights do not let you unlink 'Mail Test Ticket' (test_mail.ticket) records.";
 
 async fn harness() -> Harness {
     Harness::builder([
@@ -104,7 +104,7 @@ async fn a_partner_follows_a_record_once() {
     assert_eq!(error.kind(), ErrorKind::Validation);
     assert_eq!(
         error.message(),
-        "The operation cannot be completed: A partner can follow a document only once."
+        "The database refused the change: A partner can follow a document only once."
     );
     assert_eq!(ids(&mut tx, "mail.followers", &of_ticket(t)).await.len(), 1);
     // the same partner may follow another record of the same model

@@ -536,7 +536,7 @@ async fn partner_identity_persists_and_requires_a_name() {
     assert_eq!(error.kind(), ErrorKind::Validation);
     assert_eq!(
         error.message(),
-        "The operation cannot be completed: Contacts require a name"
+        "The database refused the change: Contacts require a name"
     );
     let contact = partners
         .create(
@@ -865,17 +865,14 @@ async fn menu_row(
 
 fn model_denial(verb: &str, description: &str, model: &str, groups: &[&str]) -> String {
     let group_info = if groups.is_empty() {
-        "No group currently allows this operation.".to_owned()
+        "No group may do this.".to_owned()
     } else {
         let list: Vec<String> = groups.iter().map(|g| format!("\t- {g}")).collect();
-        format!(
-            "This operation is allowed for the following groups:\n{}",
-            list.join("\n")
-        )
+        format!("Groups that may do this:\n{}", list.join("\n"))
     };
     format!(
-        "You are not allowed to {verb} '{description}' ({model}) records.\n\n{group_info}\n\n\
-         Contact your administrator to request access if necessary."
+        "Your access rights do not let you {verb} '{description}' ({model}) records.\n\n{group_info}\n\n\
+         Ask an administrator if you need this access."
     )
 }
 

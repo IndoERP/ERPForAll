@@ -55,6 +55,7 @@ export class SearchModel {
   readonly companyId: number;
   private facets: SearchFacet[] = [];
   private filters: FilterItem[] = [];
+  private declaredFilters: FilterItem[] = [];
   private listeners: (() => void)[] = [];
   private readonly initialDomain: unknown[];
   private sequence = 0;
@@ -71,6 +72,7 @@ export class SearchModel {
   private readonly recordNames = new Map<string, string>();
 
   constructor(options: SearchModelOptions) {
+    this.addDeclaredFilters(options.filters ?? []);
     this.model = options.model;
     this.fields = options.fields;
     this.viewFields = options.viewFields ?? [...options.fields.values()];
@@ -129,6 +131,12 @@ export class SearchModel {
     for (const listener of this.listeners) listener();
   }
   getFacets(): SearchFacet[] { return structuredClone(this.facets); }
+  /** Register bounded admitted definitions before URL state is loaded. */
+  addDeclaredFilters(filters: readonly FilterItem[]): void {
+    if (this.declaredFilters.length + filters.length > MAX_ITEMS || filters.some(f => this.filters.some(old => old.id === f.id)) || new Set(filters.map(f => f.id)).size !== filters.length) invalid("Duplicate or excessive declared filters.");
+    this.declaredFilters.push(...structuredClone(filters));
+    this.filters.push(...structuredClone(filters));
+  }
   getFilters(): FilterItem[] { this.refreshDates(); return structuredClone(this.filters); }
   /** True when the owner groups by several fields and by date intervals (the pivot view). */
   hasGroupByIntervals(): boolean { return this.multipleGroupBy; }
@@ -457,7 +465,7 @@ export class SearchModel {
   loadFromUrlParams(params: URLSearchParams): boolean {
     const keys = ["search_facets", "search_filters", "search_groupby"];
     if (!keys.some(key => params.has(key))) return false;
-    const staging = new SearchModel({ model: this.model, fields: this.fields, viewFields: this.viewFields, initialDomain: this.initialDomain, groupBy: this.groupByLoader });
+    const staging = new SearchModel({ model: this.model, fields: this.fields, viewFields: this.viewFields, initialDomain: this.initialDomain, groupBy: this.groupByLoader, filters: this.declaredFilters });
     staging.catalogue = this.catalogue;
     for (const key of keys) {
       const raw = params.get(key);

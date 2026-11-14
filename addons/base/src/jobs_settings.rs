@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! Declared database-global jobs policy. Runtime adoption belongs to LIVE-CONFIG.
+//! Declared database-global jobs policy. Native composition reads committed policy at job admission.
 use erp_sdk::jobs::{JobSettings, Setting};
 use erp_sdk::settings::{ScopeKind, SettingDecl, SettingGroupDecl, SettingsRegistry};
 use erp_sdk::{Error, Result, Value};
@@ -8,13 +8,13 @@ use std::collections::BTreeMap;
 const GROUP: &str = "base.jobs";
 const ADMIN: &str = "base.group_system";
 
-fn shared() -> impl Iterator<Item = Setting> {
+pub(crate) fn shared() -> impl Iterator<Item = Setting> {
     Setting::ALL
         .iter()
         .copied()
         .filter(|setting| setting.is_shared())
 }
-fn key(setting: Setting) -> String {
+pub(crate) fn key(setting: Setting) -> String {
     format!("base.{}", setting.name())
 }
 fn presentation(setting: Setting) -> Result<(&'static str, &'static str)> {
@@ -84,7 +84,7 @@ fn declarations() -> Result<Vec<SettingDecl>> {
         })
         .collect()
 }
-fn validate(values: &BTreeMap<String, Value>) -> Result<()> {
+pub(crate) fn settings(values: &BTreeMap<String, Value>) -> Result<JobSettings> {
     let mut builder = JobSettings::builder();
     for setting in shared() {
         let external = key(setting);
@@ -95,9 +95,12 @@ fn validate(values: &BTreeMap<String, Value>) -> Result<()> {
             .map_err(|_| Error::validation(format!("{external} must be nonnegative.")))?;
         builder = builder.set(setting, value);
     }
-    builder.build().map(|_| ()).map_err(|error| {
+    builder.build().map_err(|error| {
         Error::validation(error.to_string().replace("jobs.", "base.jobs.")).with_source(error)
     })
+}
+fn validate(values: &BTreeMap<String, Value>) -> Result<()> {
+    settings(values).map(|_| ())
 }
 fn groups() -> Result<Vec<SettingGroupDecl>> {
     let keys: Vec<_> = shared().map(key).collect();

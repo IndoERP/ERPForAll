@@ -29,7 +29,7 @@ pub const MAX_HIERARCHY_PATH_BYTES: usize = 8192;
     constraints = [(
         "_factor_gt_zero",
         "CHECK (relative_factor != 0)",
-        "The conversion ratio for a unit of measure cannot be 0!"
+        "A unit of measure needs a conversion ratio other than 0."
     )],
 )]
 pub struct Uom {
@@ -294,7 +294,10 @@ impl Uom {
         this.as_records()
             .check_access(tx, Operation::Create)
             .await?;
-        if vals_list.iter().any(|vals| vals.contains("factor")) {
+        // a `default_factor` context key would be filled in by the base create after this check
+        if vals_list.iter().any(|vals| vals.contains("factor"))
+            || this.env().context().contains("default_factor")
+        {
             return Err(factor_assignment_error());
         }
         if vals_list.iter().any(|vals| vals.contains("parent_path")) {

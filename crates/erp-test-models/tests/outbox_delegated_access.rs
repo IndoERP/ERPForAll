@@ -490,7 +490,7 @@ async fn denied_mixed_writes_preserve_both_owners_and_events() {
                     _ => unreachable!("record denial cases only"),
                 };
                 format!(
-                    "You are not allowed to modify '{description}' ({model}) records.\n\nRecords: {model}({id},), User: 7"
+                    "Your access rights do not let you modify '{description}' ({model}) records.\n\nRecords: {model}({id},), User: 7"
                 )
             }
             Denial::None => unreachable!("only denial cases are exercised"),

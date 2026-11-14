@@ -47,7 +47,7 @@ pub const MAX_ROWS: usize = 1_000_000;
 /// Default maximum number of extracted records per batch (PERF.LOAD-STREAM).
 pub const DEFAULT_BATCH_SIZE: usize = 1_000;
 
-const DB_PREFIX: &str = "The operation cannot be completed: ";
+const DB_PREFIX: &str = "The database refused the change: ";
 
 const TOO_MANY: &str = "Found more than 10 errors and more than one error per 10 records, \
                         interrupted to avoid showing too many errors.";

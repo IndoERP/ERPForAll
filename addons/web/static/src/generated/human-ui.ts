@@ -34,7 +34,16 @@ locale: Locale,
 /** Wire member `csrf`. */
 csrf: Csrf,
 /** Wire member `renderers`. */
-renderers: Array<Renderer>, };
+renderers: Array<Renderer>,
+/** Wire member `attachment_limits`. */
+attachment_limits: AttachmentUploadLimits | null,
+/** Wire member `rpc_body_bytes`. */
+rpc_body_bytes: number | null, };
+export type AttachmentUploadLimits = {
+/** Wire member `max_file_bytes`. */
+max_file_bytes: number,
+/** Wire member `inline_max_bytes`. */
+inline_max_bytes: number, };
 export type Identity = {
 /** Wire member `uid`. */
 uid: WireId,
@@ -182,6 +191,51 @@ export type FieldRef = {
 model: string,
 /** Wire member `name`. */
 name: string, };
+export type DashboardItem = { "kind": "count",
+/**
+ * Stable item identity in the owning view.
+ */
+name: string,
+/**
+ * Human-readable caption from the owning view.
+ */
+label: string,
+/**
+ * Admitted root-model domain, mutually exclusive with filter.
+ */
+domain: WireDocument | null,
+/**
+ * Companion search-view filter name, mutually exclusive with domain.
+ */
+filter: string | null,
+/**
+ * Optional semantic color role.
+ */
+color: string | null, } | { "kind": "kpi",
+/**
+ * Stable item identity in the owning view.
+ */
+name: string,
+/**
+ * Human-readable caption from the owning view.
+ */
+label: string,
+/**
+ * Stored numeric measure.
+ */
+field: FieldRef,
+/**
+ * Stored date or datetime field.
+ */
+date_field: FieldRef,
+/**
+ * Admitted aggregate function.
+ */
+aggregate: string,
+/**
+ * Optional additional root-model domain.
+ */
+domain: WireDocument | null, };
 export type Modifiers = {
 /** Wire member `readonly`. */
 readonly: WireDocument | null,
@@ -471,7 +525,19 @@ notice: string | null, } | { "kind": "unsupported",
  * Precise supported-scope boundary.
  */
 message: string, };
-export type ViewNode = { "kind": "list",
+export type ViewNode = { "kind": "dashboard",
+/**
+ * Closed dashboard contract version.
+ */
+version: number,
+/**
+ * Content revision of the saved declaration.
+ */
+revision: string,
+/**
+ * Ordered metric declarations, never list row fields.
+ */
+items: Array<DashboardItem>, } | { "kind": "list",
 /**
  * Child arena indexes.
  */

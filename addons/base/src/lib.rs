@@ -25,8 +25,10 @@
 //! # Ok::<(), erp_sdk::Error>(())
 //! ```
 
+mod approval_settings;
 pub mod attachments;
 mod company_lifecycle;
+mod company_tree;
 pub mod dated_parameter;
 pub mod decimal_precision;
 pub mod group_graph;
@@ -46,6 +48,7 @@ pub mod ir_sequence;
 pub mod ir_ui_menu;
 pub mod ir_ui_view;
 mod jobs_settings;
+pub mod jobs_settings_source;
 pub mod migrations;
 pub mod money;
 mod partner_address;

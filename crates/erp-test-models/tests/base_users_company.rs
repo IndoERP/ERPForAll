@@ -25,9 +25,7 @@ use users_support::{
 };
 
 /// The text of the foreign-key refusal (`erp-orm` `dberror`), for the model and field named.
-const IN_USE: &str = "The operation cannot be completed: Another model is using the record you \
-     are trying to delete.\n\nThe troublemaker is: 'User' (res.users)\nThanks to the following \
-     constraint: 'Company' (company_id)\nHow about archiving the record instead?";
+const IN_USE: &str = "The database refused the change: Other records still point to the record you want to delete.\n\nReferring model: 'User' (res.users)\nConstraint: 'Company' (company_id)\nArchive the record instead of deleting it.";
 
 /// The refusal of an active user without a default company.
 fn no_default(user: &str) -> String {

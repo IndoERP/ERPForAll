@@ -1327,7 +1327,7 @@ async fn spec_qast_018_company_scope() {
         .unwrap_err();
     assert_eq!(
         refused.to_string(),
-        "Access to unauthorized or invalid companies."
+        "One of the selected companies does not exist or is not one of yours."
     );
     drop(resolved);
     drop(client);

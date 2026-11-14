@@ -239,10 +239,7 @@ async fn policy_orm(h: &Harness) -> Orm {
 
 fn refused(paul: i64, label: &str) -> String {
     format!(
-        "Uh-oh! Looks like you have stumbled upon some top-secret records.\n\nSorry, Paul \
-         (id={paul}) doesn't have 'read' access to:\n- {label}\n\nIf you really, really need \
-         access, perhaps you can win over your friendly administrator with a batch of freshly \
-         baked cookies."
+        "Access rules protect some of these records.\n\nPaul (id={paul}) has no 'read' access to:\n- {label}\n\nAsk an administrator if you need access to these records."
     )
 }
 

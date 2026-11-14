@@ -20,7 +20,7 @@ const MASTER_TAGS: [&str; 3] = [
     keys = [key(
         name = "_name_uniq",
         fields = ["name", "applicability", "country_id"],
-        message = "A tag with the same name and applicability already exists in this country."
+        message = "This country already has a tag of this name for the same use."
     )],
 )]
 pub struct AccountAccountTag {
@@ -76,7 +76,7 @@ impl AccountAccountTag {
                     .await?;
                 let name = name.first().and_then(|n| n.as_deref()).unwrap_or_default();
                 return Err(Error::validation(format!(
-                    "You cannot delete this account tag ({name}), it is used on the chart of account definition."
+                    "Tag {name} is part of the chart of accounts the accounting app installs, so it cannot be deleted."
                 )));
             }
         }

@@ -638,9 +638,100 @@ impl Output {
             _ => return Err(invalid("Builtin button target is invalid")),
         })
     }
+    fn dashboard(&mut self, object: Members<'_>) -> ViewResult<wire::ViewNode> {
+        if integer(required(object, "version")?)? != 1 {
+            return Err(invalid("Unsupported dashboard version"));
+        }
+        let revision = text(required(object, "revision")?)?;
+        if revision.len() != 64
+            || !revision
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        {
+            return Err(invalid("Dashboard revision must be lowercase SHA-256 text"));
+        }
+        let source = array(required(object, "items")?)?;
+        if source.is_empty() || source.len() > 32 {
+            return Err(invalid("Dashboard item count must be between 1 and 32"));
+        }
+        let mut items = self.vector(source.len())?;
+        for (index, item) in source.iter().enumerate() {
+            let (kind, item) = variant(item)?;
+            let name = text(required(item, "name")?)?;
+            if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+                return Err(invalid(
+                    "Dashboard item name must contain letters, digits or underscores",
+                ));
+            }
+            for previous in &source[..index] {
+                if text(required(variant(previous)?.1, "name")?)? == name {
+                    return Err(invalid("Duplicate dashboard item name"));
+                }
+            }
+            let name = self.text(name)?;
+            let label = self.text(text(required(item, "label")?)?)?;
+            if label.trim().is_empty() {
+                return Err(invalid("Dashboard item label must be nonempty"));
+            }
+            let domain = optional(item, "domain")
+                .map(|value| self.expression(value))
+                .transpose()?;
+            items.push(match kind {
+                "count" => {
+                    let filter = optional(item, "filter")
+                        .map(|v| self.text(text(v)?))
+                        .transpose()?;
+                    if domain.is_some() == filter.is_some()
+                        || filter.as_ref().is_some_and(|f| f.trim().is_empty())
+                    {
+                        return Err(invalid(
+                            "Dashboard count requires exactly one domain or named filter",
+                        ));
+                    }
+                    let color = optional(item, "color")
+                        .map(|v| self.text(text(v)?))
+                        .transpose()?;
+                    if color
+                        .as_deref()
+                        .is_some_and(|v| !matches!(v, "info" | "success" | "warning" | "danger"))
+                    {
+                        return Err(invalid("Dashboard count color is invalid"));
+                    }
+                    wire::DashboardItem::Count {
+                        name,
+                        label,
+                        domain,
+                        filter,
+                        color,
+                    }
+                }
+                "kpi" => {
+                    let aggregate = text(required(item, "aggregate")?)?;
+                    if !matches!(aggregate, "sum" | "avg" | "min" | "max") {
+                        return Err(invalid("Dashboard aggregate is invalid"));
+                    }
+                    wire::DashboardItem::Kpi {
+                        name,
+                        label,
+                        domain,
+                        aggregate: self.text(aggregate)?,
+                        field: self.field(required(item, "field")?)?,
+                        date_field: self.field(required(item, "date_field")?)?,
+                    }
+                }
+                _ => return Err(invalid("Unknown dashboard item kind")),
+            });
+        }
+        Ok(wire::ViewNode::Dashboard {
+            version: 1,
+            revision: self.text(text(required(object, "revision")?)?)?,
+            items,
+        })
+    }
     fn node(&mut self, value: &DescriptionValue) -> ViewResult<wire::ViewNode> {
         let (kind, object) = variant(value)?;
         Ok(match kind {
+            "dashboard" => self.dashboard(object)?,
             "list" => wire::ViewNode::List {
                 children: self.indices(object)?,
                 search_panel: self.panel(object)?,
@@ -1041,7 +1132,8 @@ fn children(node: &wire::ViewNode) -> &[u32] {
         | wire::ViewNode::Search { children, .. }
         | wire::ViewNode::Pivot { children, .. }
         | wire::ViewNode::SearchGroup { children, .. } => children,
-        wire::ViewNode::Field { .. }
+        wire::ViewNode::Dashboard { .. }
+        | wire::ViewNode::Field { .. }
         | wire::ViewNode::Chatter { .. }
         | wire::ViewNode::Button { .. }
         | wire::ViewNode::CancelButton { .. }
@@ -1144,6 +1236,7 @@ fn validate_layout(
                 Some(N::Form { .. } | N::Sheet { .. } | N::Group { .. } | N::Page { .. })
             ) && !service
         }
+        N::Dashboard { .. } => matches!(parent, Some(N::List { .. })),
         N::Heading { .. } => matches!(parent, Some(N::Title { .. })),
         N::ButtonBox { .. } => matches!(parent, Some(N::Sheet { .. })),
         N::StatButton { .. } => matches!(parent, Some(N::ButtonBox { .. })),
@@ -1168,7 +1261,8 @@ fn validate_layout(
         _ => !service,
     };
     let allowed_child = match parent {
-        Some(N::List { .. } | N::Heading { .. } | N::StatButton { .. }) => {
+        Some(N::List { .. }) => matches!(node, N::Field { .. } | N::Dashboard { .. }),
+        Some(N::Heading { .. } | N::StatButton { .. }) => {
             matches!(node, N::Field { .. })
         }
         Some(N::Pivot { .. }) => matches!(node, N::PivotField { .. }),
@@ -1214,6 +1308,15 @@ fn validate_layout(
         return Err(invalid("Builtin view has an invalid layout hierarchy"));
     }
     match node {
+        N::List { children, .. }
+            if children
+                .iter()
+                .filter(|index| matches!(nodes.get(**index as usize), Some(N::Dashboard { .. })))
+                .count()
+                > 1 =>
+        {
+            return Err(invalid("Only one dashboard region is allowed"));
+        }
         N::Form { children, .. } => {
             let mut asides = 0;
             let mut chatters = 0;

@@ -255,7 +255,7 @@ async fn unknown_groups_and_foreign_default_companies_are_refused() {
     assert_eq!(err.kind(), ErrorKind::Access);
     assert_eq!(
         err.message(),
-        "Access to unauthorized or invalid companies."
+        "One of the selected companies does not exist or is not one of yours."
     );
     h.cleanup().await.unwrap();
 }

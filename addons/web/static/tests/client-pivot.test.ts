@@ -286,6 +286,73 @@ test("a header whose depth is already grouped refuses a different field and says
   await rejects(model.expand("row", [k("normal")], field("author_id")), "validation", /already grouped by State; collapse the headers at that depth to choose another field/);
 });
 
+/// (a field that already groups an axis is refused for that axis by name; the other axis and another interval stay open)
+test("a header refuses the field that already groups its axis, and the same field still groups the other axis", async () => {
+  const { model } = await made([pivotField("priority", "row", "Priority"), pivotField("state", "col", "State"), pivotField("size", "measure", "Size")]);
+  const before = model.snapshot();
+  await rejects(model.expand("row", [k("normal")], field("priority")), "validation", /These rows are already grouped by Priority\. Choose another field\./);
+  expect(model.snapshot()).toEqual(before); // the refused choice leaves the table as it was
+  await rejects(model.expand("col", [k("draft")], field("state")), "validation", /These columns are already grouped by State\. Choose another field\./);
+  await model.expand("col", [k("draft")], field("priority")); // the rows' field on the columns is a different question
+  expect(model.levelAt("col", 1)?.name).toBe("priority");
+});
+
+/// (a grouping named twice on an axis is refused by name whichever way it arrives: the search's Group By, the address, an action's context; a date with no interval is its month)
+test("an axis refuses a grouping named twice from the search, the address or a context, and two periods of one date are two groupings", async () => {
+  const { model } = await made();
+  const before = model.snapshot();
+  await rejects(model.setRows([field("published"), field("published", "month")]), "validation", /These rows are already grouped by Published \(month\)\. Choose another field or period\./);
+  await rejects(model.setRows([field("priority"), field("author_id"), field("priority")]), "validation", /These rows are already grouped by Priority\. Choose another field\./);
+  expect(model.snapshot()).toEqual(before); // a refused Group By leaves the table as it was
+  const cfg = config(standard());
+  const built = (initial: ReturnType<typeof archState>) => () => new PivotModel(cfg, recorder().call, () => [], LIMITS, initial);
+  expect(built(paramsState({ pivot_rows: "published,published:month" }, cfg))).toThrow("This pivot is set to group its rows by Published (month) twice. Remove one of the two from the view, the action's context or the page address.");
+  expect(built(paramsState({ pivot_cols: "state,state" }, cfg))).toThrow("This pivot is set to group its columns by State twice. Remove one of the two from the view, the action's context or the page address.");
+  expect(built(archState(applyContext(cfg, { pivot_row_groupby: ["author_id", "author_id"] })))).toThrow("This pivot is set to group its rows by Author twice. Remove one of the two from the view, the action's context or the page address.");
+  await model.setRows([field("published", "year"), field("published", "month")]);
+  expect(model.snapshot().rows).toEqual(["published:year", "published:month"]);
+  // A measure named twice by a context would be drawn twice and then refuse every later change of the measures.
+  expect(() => applyContext(cfg, { pivot_measures: ["size", "size"] })).toThrow("The context key pivot_measures names size twice.");
+});
+
+/// (when every groupable field already groups the axis, the menu says so in one entry that chooses nothing)
+test("the expand menu says that no other field is left when every groupable field already groups the axis", async () => {
+  const only = { ...decodePivotFields({ priority: fieldsReply.priority, size: { ...fieldsReply.size, groupable: false } }), items: [] };
+  const { call, requests } = recorder();
+  const model = new PivotModel(readPivotView(view([pivotField("priority", "row", "Priority"), pivotField("size", "measure", "Size")]), only), call, () => [], LIMITS);
+  await model.load();
+  const pivot = mountPivot({ model, locale: american, title: "Notes", run: job => { void job(); }, openCell: async () => {} });
+  document.body.append(pivot.element);
+  header(pivot.element, "row", [k("normal")]).click();
+  const menu = pivot.element.querySelector<HTMLElement>(".pivot-field-menu")!;
+  const entries = [...menu.children] as HTMLElement[];
+  expect(entries.map(entry => entry.textContent)).toEqual(["No other field to group these rows by"]);
+  expect(entries[0]!.getAttribute("aria-disabled")).toBe("true");
+  const read = requests.length;
+  entries[0]!.click();
+  expect(menu.children).toHaveLength(0); // it closes the menu and chooses nothing
+  expect(requests).toHaveLength(read);
+});
+
+/// (the menu leaves out what already groups the axis: a plain field, and for a date field the intervals in use)
+test("the expand menu leaves out the fields and the date intervals that already group that axis", async () => {
+  const { root, settle } = await mounted();
+  header(root, "row", [k("normal")]).click();
+  choose(root, "By month"); // rows: priority, then published by month
+  await settle();
+  const month = root.querySelector<HTMLElement>('tbody [aria-haspopup="menu"]'); // a month header: nothing is grouped below it yet
+  expect(month).not.toBeNull();
+  month!.click();
+  const menu = root.querySelector<HTMLElement>(".pivot-field-menu")!;
+  const labels = [...menu.querySelectorAll<HTMLElement>("[role=menuitem]")].map(item => item.textContent);
+  expect(labels).not.toContain("Priority");
+  expect(labels).not.toContain("By month"); // the search view's item names the grouping the rows already have
+  expect(labels).not.toContain("Month"); // and so does the date field's own interval entry
+  expect(labels).toContain("Published"); // the date field stays for its other intervals
+  expect(labels).toContain("Year");
+  expect(labels).toContain("By author");
+});
+
 /// (expand all reads every set once; collapse all reads nothing, keeps the groupings, and a Total expands by them again)
 test("expand all reads every level at once, collapse all folds both Totals without a read and the Total opens again without one", async () => {
   const { model, requests } = await made([pivotField("priority", "row", "Priority"), pivotField("state", "row", "State"), pivotField("size", "measure", "Size")]);
@@ -684,7 +751,8 @@ test("a header with no grouping below it opens a menu of the search view's items
   const menu = root.querySelector<HTMLElement>(".pivot-field-menu")!;
   expect(menu.classList.contains("open")).toBe(true);
   const entries = [...menu.querySelectorAll<HTMLElement>("[role=menuitem]")].filter(item => !item.classList.contains("pivot-interval-item")).map(item => item.textContent);
-  expect(entries).toEqual(["By author", "By month", "Author", "Name", "Priority", "Published", "Size", "State"]);
+  // Priority already groups the rows, so it is not offered for them again.
+  expect(entries).toEqual(["By author", "By month", "Author", "Name", "Published", "Size", "State"]);
   expect(menu.querySelectorAll(".pivot-menu-heading")).toHaveLength(2);
   const author = [...menu.querySelectorAll<HTMLElement>("[role=menuitem]")].find(item => item.textContent === "Author")!;
   author.click();
@@ -1250,6 +1318,8 @@ test("a malformed pivot parameter, an unknown grouping and a record id are refus
     "/erp/action-20?view_type=pivot&pivot_rows=nothing&pivot_open=%7B%22r%22%3A%5B%5D%7D",
     "/erp/action-20?view_type=pivot&pivot_measures=__count%2Cnothing",
     "/erp/action-20?view_type=pivot&pivot_open=%7B%22r%22%3A%5B%5B%22a%22%5D%5D%7D",
+    "/erp/action-20?view_type=pivot&pivot_rows=priority%2Cpriority", // a grouping twice on an axis is malformed
+    "/erp/action-20?view_type=pivot&pivot_rows=published%2Cpublished%3Amonth", // written two ways it passes the address and the table refuses it
     "/erp/action-20?view_type=pivot&id=5"
   ]) {
     const refused = await startApp(path, { tolerant: true });

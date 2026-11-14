@@ -8,6 +8,7 @@
 //! declared EXECUTE and table grants, and checks the privileges each bound role effectively holds
 //! (through every membership, `PUBLIC` included) against the declaration.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use erp_fields::{Error, ErrorKind, Result};
@@ -23,11 +24,11 @@ use crate::grantee::{Grant, reach_cte};
 /// `schema_owner` is the role schema sync runs as (`current_user`), so it is not configured
 /// here. A binding left unset may not be named by any declared object: such an object is refused
 /// by name, and nothing is granted to a role by default.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SqlRoleBindings {
-    definer: Option<&'static str>,
-    maintenance: Option<&'static str>,
-    request: Option<&'static str>,
+    definer: Option<Cow<'static, str>>,
+    maintenance: Option<Cow<'static, str>>,
+    request: Option<Cow<'static, str>>,
 }
 
 impl SqlRoleBindings {
@@ -42,32 +43,53 @@ impl SqlRoleBindings {
 
     /// The NOLOGIN role that owns the `SECURITY DEFINER` functions.
     #[must_use]
-    pub const fn definer(mut self, role: &'static str) -> Self {
-        self.definer = Some(role);
+    pub fn definer(mut self, role: &'static str) -> Self {
+        self.definer = Some(Cow::Borrowed(role));
         self
     }
 
     /// The maintenance pool's login role.
     #[must_use]
-    pub const fn maintenance(mut self, role: &'static str) -> Self {
-        self.maintenance = Some(role);
+    pub fn maintenance(mut self, role: &'static str) -> Self {
+        self.maintenance = Some(Cow::Borrowed(role));
         self
     }
 
     /// The request (runtime) role.
     #[must_use]
-    pub const fn request(mut self, role: &'static str) -> Self {
-        self.request = Some(role);
+    pub fn request(mut self, role: &'static str) -> Self {
+        self.request = Some(Cow::Borrowed(role));
+        self
+    }
+
+    /// Owned database name for the `definer` binding, for node configuration.
+    #[must_use]
+    pub fn definer_owned(mut self, role: String) -> Self {
+        self.definer = Some(Cow::Owned(role));
+        self
+    }
+
+    /// Owned database name for the `maintenance` binding, for node configuration.
+    #[must_use]
+    pub fn maintenance_owned(mut self, role: String) -> Self {
+        self.maintenance = Some(Cow::Owned(role));
+        self
+    }
+
+    /// Owned database name for the `request` binding, for node configuration.
+    #[must_use]
+    pub fn request_owned(mut self, role: String) -> Self {
+        self.request = Some(Cow::Owned(role));
         self
     }
 
     /// The role configured for `binding`; always `None` for `schema_owner` (`current_user`).
-    pub const fn role(&self, binding: SqlBinding) -> Option<&'static str> {
+    pub fn role(&self, binding: SqlBinding) -> Option<&str> {
         match binding {
             SqlBinding::SchemaOwner => None,
-            SqlBinding::Definer => self.definer,
-            SqlBinding::Maintenance => self.maintenance,
-            SqlBinding::Request => self.request,
+            SqlBinding::Definer => self.definer.as_deref(),
+            SqlBinding::Maintenance => self.maintenance.as_deref(),
+            SqlBinding::Request => self.request.as_deref(),
         }
     }
 }
@@ -82,7 +104,7 @@ const CONFIGURED: [SqlBinding; 3] = [
 /// One validated binding: its role and the role quoted for statements.
 struct Bound {
     binding: SqlBinding,
-    role: &'static str,
+    role: String,
     quoted: String,
 }
 
@@ -182,8 +204,9 @@ const FUNCTION_LEAK_SQL: &str = concat!(
 /// the restricted tables (`$2`) beyond the comma-separated operations of `$3`, and with `$4` on
 /// every other relation of the current schema at all. Table privileges and column privileges
 /// both count. Returns the restricted table's position (`NULL` for another relation), the
-/// relation, the role that holds the privilege (one whose own table or column ACL entry grants it,
-/// the bound role first, else the bound role) and the privilege.
+/// relation, who holds the privilege (a role whose own table or column ACL entry grants it, the
+/// bound role first; else `PUBLIC` when an entry for PUBLIC grants it; else the bound role) and the
+/// privilege.
 const TABLE_LEAK_SQL: &str = concat!(
     roles_cte!(),
     ", policy AS (
@@ -196,39 +219,55 @@ const TABLE_LEAK_SQL: &str = concat!(
        AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
        AND c.oid NOT IN (SELECT oid FROM policy WHERE oid IS NOT NULL)
 )
-SELECT t.n::int4, c.relname::text, r.rolname::text, p.priv
+SELECT t.n::int4, c.relname::text,
+       CASE WHEN h.direct OR NOT h.public THEN r.rolname::text ELSE 'PUBLIC' END, p.priv
   FROM tables t JOIN pg_class c ON c.oid = t.oid
   CROSS JOIN roles JOIN pg_roles r ON r.oid = roles.oid
   CROSS JOIN unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES',
                           'TRIGGER', 'MAINTAIN']) AS p (priv)
+  CROSS JOIN LATERAL (
+    SELECT coalesce(bool_or(e.grantee = roles.oid), false) AS direct,
+           coalesce(bool_or(e.grantee = 0), false) AS public
+      FROM (SELECT a.grantee, a.privilege_type
+              FROM aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) a
+            UNION ALL
+            SELECT a.grantee, a.privilege_type
+              FROM pg_attribute att, aclexplode(att.attacl) a
+             WHERE att.attrelid = c.oid AND att.attnum > 0 AND att.attacl IS NOT NULL) e
+     WHERE e.privilege_type = p.priv) h
  WHERE NOT (p.priv = ANY (string_to_array(t.a, ',')))
    AND (has_table_privilege(roles.oid, t.oid, p.priv)
         OR (p.priv IN ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES')
             AND has_any_column_privilege(roles.oid, t.oid, p.priv)))
- ORDER BY t.n NULLS LAST, c.relname, p.priv,
-       NOT (EXISTS (SELECT FROM aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) a
-                     WHERE a.grantee = roles.oid AND a.privilege_type = p.priv)
-            OR EXISTS (SELECT FROM pg_attribute att, aclexplode(att.attacl) a
-                        WHERE att.attrelid = c.oid AND att.attnum > 0 AND att.attacl IS NOT NULL
-                          AND a.grantee = roles.oid AND a.privilege_type = p.priv)),
-       r.rolname <> $1, r.rolname LIMIT 1"
+ ORDER BY t.n NULLS LAST, c.relname, p.priv, NOT h.direct, NOT h.public, r.rolname <> $1,
+       r.rolname LIMIT 1"
 );
 
 /// The first schema of the A1 search paths (`$2`) on which the bound role or a role it reaches
-/// holds CREATE (it could plant a function or relation a body resolves), with the role that
-/// holds it (one whose own ACL entry grants it, the bound role first, else the bound role).
+/// holds CREATE (it could plant a function or relation a body resolves), with who holds it (as
+/// in [`TABLE_LEAK_SQL`]).
 const SCHEMA_LEAK_SQL: &str = concat!(
     roles_cte!(),
-    "SELECT s.name, r.rolname::text
+    "SELECT s.name, CASE WHEN h.direct OR NOT h.public THEN r.rolname::text ELSE 'PUBLIC' END
   FROM unnest($2::text[]) WITH ORDINALITY AS s (name, n)
   JOIN pg_namespace ns ON ns.nspname = s.name
   CROSS JOIN roles JOIN pg_roles r ON r.oid = roles.oid
+  CROSS JOIN LATERAL (
+    SELECT coalesce(bool_or(a.grantee = roles.oid), false) AS direct,
+           coalesce(bool_or(a.grantee = 0), false) AS public
+      FROM aclexplode(coalesce(ns.nspacl, acldefault('n', ns.nspowner))) a
+     WHERE a.privilege_type = 'CREATE') h
  WHERE has_schema_privilege(roles.oid, ns.oid, 'CREATE')
- ORDER BY s.n,
-       NOT EXISTS (SELECT FROM aclexplode(coalesce(ns.nspacl, acldefault('n', ns.nspowner))) a
-                    WHERE a.grantee = roles.oid AND a.privilege_type = 'CREATE'),
-       r.rolname <> $1, r.rolname LIMIT 1"
+ ORDER BY s.n, NOT h.direct, NOT h.public, r.rolname <> $1, r.rolname LIMIT 1"
 );
+
+/// The first SQL object function signature (`$1`) or restricted table (`$2`) that does not
+/// resolve: the leak queries join on the resolved objects, so an unresolved one would be skipped.
+const UNRESOLVED_SQL: &str = "\
+SELECT 'function', s FROM unnest($1::text[]) AS s WHERE to_regprocedure(s) IS NULL
+UNION ALL
+SELECT 'table', t FROM unnest($2::text[]) AS t WHERE to_regclass(t) IS NULL
+ LIMIT 1";
 
 fn decode(e: tokio_postgres::Error) -> Error {
     Error::new(
@@ -245,20 +284,30 @@ fn missing_row(what: &str) -> Error {
     )
 }
 
-/// `SQL object '<addon>/<key>': role '<role>' has forbidden <capability>` (contract §2), with the
-/// role that holds it when the bound role reaches it through membership.
+/// `SQL object '<addon>/<key>': role "<role>" has forbidden <capability>` (contract §2), with
+/// where it comes from when the bound role does not hold it itself: a role it reaches through
+/// membership, or PUBLIC. `PUBLIC` is never a real role name (the grantee checks refuse it).
 fn forbidden(who: &str, role: &str, holder: &str, capability: &str) -> Error {
+    let subject = if role == "PUBLIC" {
+        "PUBLIC".to_owned()
+    } else {
+        format!("role {role:?}")
+    };
     let through = if holder == role {
         String::new()
+    } else if holder == "PUBLIC" {
+        " (granted to PUBLIC)".to_owned()
     } else {
-        format!(" (held by role '{holder}', which it reaches through membership)")
+        format!(" (held by role {holder:?}, which it reaches through membership)")
     };
     Error::access(format!(
-        "{who}: role '{role}' has forbidden {capability}{through}"
+        "{who}: {subject} has forbidden {capability}{through}"
     ))
 }
 
-/// Every binding the graph names, with the first object (in dependency order) naming it.
+/// Every binding the graph needs, with the first object (in dependency order) needing it. A
+/// definer function or a table policy also needs `request`: what makes them restricted is proven
+/// against the request role, so it must be validated even when no object names it.
 fn needed(graph: &SqlObjectGraph) -> BTreeMap<SqlBinding, SqlObjectId> {
     let mut first = BTreeMap::new();
     for object in graph.objects() {
@@ -269,20 +318,28 @@ fn needed(graph: &SqlObjectGraph) -> BTreeMap<SqlBinding, SqlObjectId> {
             SqlObjectKind::Function(f) => {
                 if f.security() == SqlSecurity::Definer {
                     add(SqlBinding::Definer);
+                    add(SqlBinding::Request);
                 }
                 f.execute().iter().copied().for_each(&mut add);
             }
-            SqlObjectKind::TableGrant(g) => add(g.binding()),
+            SqlObjectKind::TableGrant(g) => {
+                add(g.binding());
+                add(SqlBinding::Request);
+            }
             _ => {}
         }
     }
     first
 }
 
-fn functions(graph: &SqlObjectGraph) -> Vec<(SqlObjectId, &SqlFunction)> {
+fn functions<'r>(
+    graph: &'r SqlObjectGraph,
+    deferred: &BTreeSet<SqlObjectId>,
+) -> Vec<(SqlObjectId, &'r SqlFunction)> {
     graph
         .objects()
         .iter()
+        .filter(|o| !deferred.contains(&o.id()))
         .filter_map(|o| match o.kind() {
             SqlObjectKind::Function(f) => Some((o.id(), f)),
             _ => None,
@@ -294,10 +351,15 @@ fn functions(graph: &SqlObjectGraph) -> Vec<(SqlObjectId, &SqlFunction)> {
 type Policy = (SqlObjectId, SqlBinding, &'static [SqlTableOp]);
 
 /// The restricted tables of the graph with their policies (at least one each), by table.
-fn restricted(graph: &SqlObjectGraph) -> BTreeMap<&str, Vec<Policy>> {
+fn restricted<'r>(
+    graph: &'r SqlObjectGraph,
+    deferred: &BTreeSet<SqlObjectId>,
+) -> BTreeMap<&'r str, Vec<Policy>> {
     let mut tables: BTreeMap<&str, Vec<Policy>> = BTreeMap::new();
     for object in graph.objects() {
-        if let SqlObjectKind::TableGrant(g) = object.kind() {
+        if let SqlObjectKind::TableGrant(g) = object.kind()
+            && !deferred.contains(&object.id())
+        {
             let policies = tables.entry(g.model().table()).or_default();
             policies.push((object.id(), g.binding(), g.ops()));
         }
@@ -339,6 +401,26 @@ impl Transaction {
                 )));
             }
         }
+        if !needed.is_empty() {
+            let rows = self.query("SELECT rolname::text, rolsuper, rolcreaterole, rolreplication, rolbypassrls FROM pg_catalog.pg_roles WHERE rolname=current_user", &[]).await?;
+            let owner = rows
+                .first()
+                .ok_or_else(|| missing_row("of the schema owner"))?;
+            let name: String = owner.try_get(0).map_err(decode)?;
+            for (column, capability) in [
+                (1, "SUPERUSER"),
+                (2, "CREATEROLE"),
+                (3, "REPLICATION"),
+                (4, "BYPASSRLS"),
+            ] {
+                let forbidden: bool = owner.try_get(column).map_err(decode)?;
+                if forbidden {
+                    return Err(Error::access(format!(
+                        "SQL object role binding 'schema_owner': role {name:?} has forbidden {capability}"
+                    )));
+                }
+            }
+        }
         let mut bound: Vec<Bound> = Vec::new();
         for binding in CONFIGURED {
             let Some(role) = roles.role(binding) else {
@@ -354,12 +436,12 @@ impl Transaction {
             let quoted = self.check_sql_role(binding, role, tables).await?;
             bound.push(Bound {
                 binding,
-                role,
+                role: role.to_owned(),
                 quoted,
             });
         }
         if bound.len() > 1 {
-            let names: Vec<&str> = bound.iter().map(|b| b.role).collect();
+            let names: Vec<&str> = bound.iter().map(|b| b.role.as_str()).collect();
             let pair = self.query(PAIR_SQL, &[&names]).await?;
             if let Some(row) = pair.first() {
                 let at = |i: usize| -> Result<&Bound> {
@@ -388,7 +470,7 @@ impl Transaction {
             let can: bool = row.try_get(0).map_err(decode)?;
             if !can {
                 let owner: String = row.try_get(1).map_err(decode)?;
-                let (d, o) = (erp_sql::quote(definer.role), erp_sql::quote(&owner));
+                let (d, o) = (erp_sql::quote(&definer.role), erp_sql::quote(&owner));
                 return Err(Error::access(format!(
                     "SQL object role binding 'definer': the schema owner {owner:?} cannot act as \
                      role {:?}; the operator runs GRANT {d} TO {o} WITH INHERIT TRUE, SET TRUE",
@@ -476,8 +558,10 @@ impl Transaction {
         &mut self,
         graph: &SqlObjectGraph,
         bound: &BoundRoles,
+        deferred: &BTreeSet<SqlObjectId>,
+        allow_owner_transfer: bool,
     ) -> Result<()> {
-        let functions = functions(graph);
+        let functions = functions(graph, deferred);
         let signatures: Vec<String> = functions
             .iter()
             .map(|(_, f)| sqlobj::signature(f))
@@ -499,7 +583,12 @@ impl Transaction {
             let mut sql = String::new();
             if definer {
                 let d = bound.get(SqlBinding::Definer)?;
-                if owner.as_deref() != Some(d.role) {
+                if owner.as_deref() != Some(d.role.as_str()) {
+                    if !allow_owner_transfer {
+                        return Err(Error::programming(format!(
+                            "SQL object '{id}': installed owner differs; reconcile through addon upgrade"
+                        )));
+                    }
                     sql = format!("{};\n", sqlobj::transfer_to_definer(f, &d.quoted));
                 }
             }
@@ -519,7 +608,7 @@ impl Transaction {
             self.sql_object_ddl(*id, &sql).await?;
         }
         let all: Vec<String> = bound.roles.iter().map(|b| b.quoted.clone()).collect();
-        for (table, policies) in restricted(graph) {
+        for (table, policies) in restricted(graph, deferred) {
             let grants: Vec<(String, &[SqlTableOp])> = policies
                 .iter()
                 .map(|(_, b, ops)| bound.get(*b).map(|b| (b.quoted.clone(), *ops)))
@@ -531,8 +620,157 @@ impl Transaction {
             self.sql_object_ddl(id, &sqlobj::table_grants(table, &all, &grants))
                 .await?;
         }
-        self.verify_sql_object_privileges(graph, bound, &signatures)
+        self.fence_sql_object_descendants(graph, bound, deferred, true)
+            .await?;
+        self.verify_sql_object_privileges(graph, bound, deferred)
             .await
+    }
+
+    /// Descendants have no independent policy unless the graph declares them explicitly. Access
+    /// goes through the declared parent so its statement-level guards cannot be bypassed.
+    async fn fence_sql_object_descendants(
+        &mut self,
+        graph: &SqlObjectGraph,
+        bound: &BoundRoles,
+        deferred: &BTreeSet<SqlObjectId>,
+        reconcile: bool,
+    ) -> Result<()> {
+        let restricted = restricted(graph, deferred);
+        if restricted.is_empty() {
+            return Ok(());
+        }
+        let roots: Vec<String> = restricted.keys().map(|t| erp_sql::quote(t)).collect();
+        let ids: Vec<SqlObjectId> = restricted
+            .values()
+            .map(|policies| {
+                policies
+                    .first()
+                    .map(|p| p.0)
+                    .ok_or_else(|| missing_row("of a descendant policy"))
+            })
+            .collect::<Result<_>>()?;
+        let rows = self.query("WITH RECURSIVE roots AS (SELECT pg_catalog.to_regclass(r.t)::oid AS oid, r.n FROM unnest($1::text[]) WITH ORDINALITY r(t,n)), descendants(root,oid) AS (SELECT n,oid FROM roots UNION SELECT d.root,i.inhrelid FROM descendants d JOIN pg_catalog.pg_inherits i ON i.inhparent=d.oid) SELECT d.root::int4,n.nspname::text,c.relname::text FROM descendants d JOIN pg_catalog.pg_class c ON c.oid=d.oid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE d.oid NOT IN (SELECT oid FROM roots) ORDER BY d.root,n.nspname,c.relname", &[&roots]).await?;
+        let mut tables = Vec::new();
+        let mut owners = Vec::new();
+        for row in rows {
+            let n: i32 = row.try_get(0).map_err(decode)?;
+            let id = position(n)
+                .and_then(|n| ids.get(n))
+                .copied()
+                .ok_or_else(|| missing_row("of a descendant root"))?;
+            let schema: String = row.try_get(1).map_err(decode)?;
+            let table: String = row.try_get(2).map_err(decode)?;
+            tables.push(format!(
+                "{}.{}",
+                erp_sql::quote(&schema),
+                erp_sql::quote(&table)
+            ));
+            owners.push(id);
+        }
+        if tables.is_empty() {
+            return Ok(());
+        }
+        if reconcile {
+            for (table, id) in tables.iter().zip(&owners) {
+                let mut sql = format!("REVOKE ALL ON TABLE {table} FROM PUBLIC");
+                for role in &bound.roles {
+                    sql.push_str(&format!(
+                        "; REVOKE ALL ON TABLE {table} FROM {}",
+                        role.quoted
+                    ));
+                }
+                self.sql_object_ddl(*id, &sql).await?;
+            }
+        }
+        let id_at = |n| {
+            position(n)
+                .and_then(|n| owners.get(n))
+                .copied()
+                .ok_or_else(|| missing_row("of a descendant privilege"))
+        };
+        if let Some(row) = self
+            .query(PUBLIC_SQL, &[&Vec::<String>::new(), &tables])
+            .await?
+            .first()
+        {
+            let n: i32 = row.try_get(1).map_err(decode)?;
+            let privilege: String = row.try_get(2).map_err(decode)?;
+            let id = id_at(n)?;
+            let table = position(n)
+                .and_then(|n| tables.get(n))
+                .ok_or_else(|| missing_row("of a descendant name"))?;
+            return Err(forbidden(
+                &format!("SQL object '{id}'"),
+                "PUBLIC",
+                "PUBLIC",
+                &format!("{privilege} on undeclared descendant {table}"),
+            ));
+        }
+        let allowed = vec![String::new(); tables.len()];
+        for role in &bound.roles {
+            if let Some(row) = self
+                .query(TABLE_LEAK_SQL, &[&role.role, &tables, &allowed, &false])
+                .await?
+                .first()
+            {
+                let n: i32 = row.try_get(0).map_err(decode)?;
+                let table: String = row.try_get(1).map_err(decode)?;
+                let holder: String = row.try_get(2).map_err(decode)?;
+                let privilege: String = row.try_get(3).map_err(decode)?;
+                let id = id_at(n)?;
+                return Err(forbidden(
+                    &format!("SQL object '{id}'"),
+                    &role.role,
+                    &holder,
+                    &format!("{privilege} on undeclared descendant {table:?}"),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Ownership is integrity, not an ACL repair: publication never adopts re-owned objects.
+    pub(crate) async fn check_sql_object_owners(
+        &mut self,
+        graph: &SqlObjectGraph,
+        bound: &BoundRoles,
+        deferred: &BTreeSet<SqlObjectId>,
+    ) -> Result<()> {
+        for (id, f) in functions(graph, deferred) {
+            let signature = sqlobj::signature(f);
+            let rows = self.query("SELECT pg_catalog.pg_get_userbyid(p.proowner)::text, current_user::text FROM pg_catalog.pg_proc p WHERE p.oid=pg_catalog.to_regprocedure($1)", &[&signature]).await?;
+            let row = rows.first().ok_or_else(|| Error::programming(format!("SQL object '{id}': installed function is missing; reconcile through addon upgrade")))?;
+            let actual: String = row.try_get(0).map_err(decode)?;
+            let owner: String = row.try_get(1).map_err(decode)?;
+            let expected = if f.security() == SqlSecurity::Definer {
+                bound.get(SqlBinding::Definer)?.role.as_str()
+            } else {
+                owner.as_str()
+            };
+            if actual != expected {
+                return Err(Error::programming(format!(
+                    "SQL object '{id}': installed owner {actual:?} differs from {expected:?}; reconcile through addon upgrade"
+                )));
+            }
+        }
+        for (table, policies) in restricted(graph, deferred) {
+            let rows = self.query("SELECT pg_catalog.pg_get_userbyid(c.relowner)::text, current_user::text FROM pg_catalog.pg_class c WHERE c.oid=pg_catalog.to_regclass($1)", &[&erp_sql::quote(table)]).await?;
+            let row = rows
+                .first()
+                .ok_or_else(|| missing_row("of a restricted table owner"))?;
+            let actual: String = row.try_get(0).map_err(decode)?;
+            let owner: String = row.try_get(1).map_err(decode)?;
+            if actual != owner {
+                let id = policies
+                    .first()
+                    .map(|p| p.0)
+                    .ok_or_else(|| missing_row("of a restricted table policy"))?;
+                return Err(Error::programming(format!(
+                    "SQL object '{id}': installed owner {actual:?} differs from {owner:?}; reconcile through addon upgrade"
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// The effective-privilege check (A2, A4): PUBLIC holds nothing on any SQL object function or
@@ -541,14 +779,21 @@ impl Transaction {
     /// table only the declared operations (table and column privileges both count), no CREATE
     /// on an A1 search path schema, and the definer no privilege on any other relation of the
     /// current schema. The first excess is refused `Access`, naming object, role and privilege.
-    async fn verify_sql_object_privileges(
+    pub(crate) async fn verify_sql_object_privileges(
         &mut self,
         graph: &SqlObjectGraph,
         bound: &BoundRoles,
-        signatures: &[String],
+        deferred: &BTreeSet<SqlObjectId>,
     ) -> Result<()> {
-        let functions = functions(graph);
-        let restricted = restricted(graph);
+        self.check_sql_object_owners(graph, bound, deferred).await?;
+        self.fence_sql_object_descendants(graph, bound, deferred, false)
+            .await?;
+        let functions = functions(graph, deferred);
+        let signatures: Vec<String> = functions
+            .iter()
+            .map(|(_, f)| sqlobj::signature(f))
+            .collect();
+        let restricted = restricted(graph, deferred);
         let tables: Vec<String> = restricted.keys().map(|t| erp_sql::quote(t)).collect();
         let policies: Vec<&Vec<Policy>> = restricted.values().collect();
         let table_id = |n: i32, binding: SqlBinding| {
@@ -569,6 +814,17 @@ impl Transaction {
                 .ok_or_else(|| missing_row("position"))
         };
         let function_ids: Vec<SqlObjectId> = functions.iter().map(|(id, _)| *id).collect();
+        if let Some(row) = self
+            .query(UNRESOLVED_SQL, &[&signatures, &tables])
+            .await?
+            .first()
+        {
+            let kind: String = row.try_get(0).map_err(decode)?;
+            let name: String = row.try_get(1).map_err(decode)?;
+            return Err(Error::programming(format!(
+                "the SQL object privilege check cannot resolve {kind} {name}"
+            )));
+        }
         if let Some(row) = self
             .query(PUBLIC_SQL, &[&signatures, &tables])
             .await?
@@ -614,7 +870,7 @@ impl Transaction {
                 let what = format!("EXECUTE on function {}", signature_of(&functions, id));
                 return Err(forbidden(
                     &format!("SQL object '{id}'"),
-                    b.role,
+                    &b.role,
                     &holder,
                     &what,
                 ));
@@ -646,7 +902,7 @@ impl Transaction {
                     None => format!("SQL object role binding '{}'", b.binding),
                 };
                 let what = format!("{privilege} on table {}", erp_sql::quote(&relation));
-                return Err(forbidden(&who, b.role, &holder, &what));
+                return Err(forbidden(&who, &b.role, &holder, &what));
             }
             if let Some(row) = self
                 .query(SCHEMA_LEAK_SQL, &[&b.role, &bound.schemas])
@@ -657,7 +913,44 @@ impl Transaction {
                 let holder: String = row.try_get(1).map_err(decode)?;
                 let what = format!("CREATE on schema {}", erp_sql::quote(&schema));
                 let who = format!("SQL object role binding '{}'", b.binding);
-                return Err(forbidden(&who, b.role, &holder, &what));
+                return Err(forbidden(&who, &b.role, &holder, &what));
+            }
+        }
+        for (id, f) in &functions {
+            for binding in f.execute() {
+                let role = &bound.get(*binding)?.role;
+                let signature = sqlobj::signature(f);
+                let rows = self.query("SELECT pg_catalog.has_function_privilege($1::text::name, pg_catalog.to_regprocedure($2), 'EXECUTE')", &[role, &signature]).await?;
+                let has: bool = rows
+                    .first()
+                    .ok_or_else(|| missing_row("of required EXECUTE"))?
+                    .try_get(0)
+                    .map_err(decode)?;
+                if !has {
+                    return Err(Error::access(format!(
+                        "SQL object '{id}': role {role:?} lacks required EXECUTE on function {signature}"
+                    )));
+                }
+            }
+        }
+        for (table, policies) in &restricted {
+            for (id, binding, ops) in policies {
+                let role = &bound.get(*binding)?.role;
+                for op in *ops {
+                    let quoted = erp_sql::quote(table);
+                    let capability = op.sql();
+                    let rows = self.query("SELECT pg_catalog.has_table_privilege($1::text::name, pg_catalog.to_regclass($2), $3)", &[role, &quoted, &capability]).await?;
+                    let has: bool = rows
+                        .first()
+                        .ok_or_else(|| missing_row("of a required table privilege"))?
+                        .try_get(0)
+                        .map_err(decode)?;
+                    if !has {
+                        return Err(Error::access(format!(
+                            "SQL object '{id}': role {role:?} lacks required {capability} on table {quoted}"
+                        )));
+                    }
+                }
             }
         }
         Ok(())

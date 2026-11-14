@@ -4,7 +4,7 @@
 import { icon } from "./icons.js";
 import { formatNumeric, type NumericLocale } from "./numeric-values.js";
 import { attachMenuDropdown } from "./menu-dropdown.js";
-import { PIVOT_INTERVALS, pivotExportDocument, type PivotExportDocument, type PivotField, type PivotInterval, type PivotMeasure, type PivotModel, type PivotTable } from "./pivot.js";
+import { PIVOT_INTERVALS, groupingKey, pivotExportDocument, type PivotExportDocument, type PivotField, type PivotInterval, type PivotMeasure, type PivotModel, type PivotTable } from "./pivot.js";
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, className?: string): HTMLElementTagNameMap[K] => {
   const node = document.createElement(tag);
@@ -136,22 +136,28 @@ export function mountPivot(options: PivotViewOptions): PivotView {
       node.setAttribute("role", "menuitem");
       return node;
     };
-    if (model.config.items.length) {
+    // What already groups this axis is not offered for it again; the model refuses it as well.
+    const used = new Set(Array.from({ length: model.levelCount[axis] }, (_, depth) => groupingKey(model.levelAt(axis, depth)!)));
+    const free = (field: PivotField): boolean => !used.has(groupingKey(field));
+    const declared = model.config.items.filter(found => free(found.field));
+    if (declared.length) {
       entries.push(heading("Group by"));
-      for (const found of model.config.items) entries.push(item(found.description, () => choose(found.field)));
+      for (const found of declared) entries.push(item(found.description, () => choose(found.field)));
       const separator = el("div", undefined, "pivot-menu-separator");
       separator.setAttribute("role", "separator");
       entries.push(separator);
     }
     entries.push(heading("Fields"));
     for (const field of [...model.config.groupable.values()].sort((a, b) => a.label.localeCompare(b.label))) {
-      if (field.kind !== "date" && field.kind !== "datetime") { entries.push(item(field.label, () => choose(field))); continue; }
+      if (field.kind !== "date" && field.kind !== "datetime") { if (free(field)) entries.push(item(field.label, () => choose(field))); continue; }
+      const intervals = [...PIVOT_INTERVALS].reverse().filter(interval => free({ ...field, interval }));
+      if (!intervals.length) continue;
       const parent = item(field.label, () => undefined, "pivot-field-parent");
       parent.setAttribute("aria-haspopup", "menu"); parent.setAttribute("aria-expanded", "false");
       parent.append(icon("chevron-down"));
       const group = el("div", undefined, "pivot-interval-group");
       group.setAttribute("role", "group"); group.setAttribute("aria-label", `${field.label} by`); group.hidden = true;
-      for (const interval of [...PIVOT_INTERVALS].reverse()) group.append(item(INTERVAL_LABELS[interval], () => choose({ ...field, interval }), "pivot-interval-item"));
+      for (const interval of intervals) group.append(item(INTERVAL_LABELS[interval], () => choose({ ...field, interval }), "pivot-interval-item"));
       const toggle = (open: boolean): void => { group.hidden = !open; parent.setAttribute("aria-expanded", String(open)); };
       parent.addEventListener("click", () => toggle(Boolean(group.hidden)));
       parent.addEventListener("keydown", event => {
@@ -159,6 +165,13 @@ export function mountPivot(options: PivotViewOptions): PivotView {
         if (event.key === "ArrowLeft") { event.preventDefault(); toggle(false); }
       });
       entries.push(parent, group);
+    }
+    if (!entries.some(entry => entry.getAttribute("role") === "menuitem")) {
+      // Every groupable field already groups this axis: say so in an entry that takes the focus, so Escape still closes the menu.
+      const none = item(`No other field to group these ${axis === "row" ? "rows" : "columns"} by`, () => closeFieldMenu(true), "pivot-field-none");
+      none.setAttribute("aria-disabled", "true");
+      entries.length = 0; // no heading over nothing
+      entries.push(none);
     }
     fieldMenu.replaceChildren(...entries);
     const rect = anchor.getBoundingClientRect();

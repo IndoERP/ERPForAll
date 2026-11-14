@@ -255,7 +255,7 @@ async fn genuine_previous_company_schema_upgrade_preserves_identity_and_rolls_ba
     assert_eq!(refused.status.code(), Some(1));
     assert_eq!(
         std::str::from_utf8(&refused.stderr).unwrap().trim(),
-        "Error: The operation cannot be completed: fixture late company publication refusal: db error: ERROR: fixture late company publication refusal"
+        "Error: The database refused the change: fixture late company publication refusal: db error: ERROR: fixture late company publication refusal"
     );
     assert!(
         absent().await,

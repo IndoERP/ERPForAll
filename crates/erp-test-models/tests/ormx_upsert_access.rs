@@ -336,10 +336,7 @@ fn ids_in(ids: &[RecId]) -> String {
 /// The SEC-009 record-level text (normal mode) of `op` for `user`.
 fn record_refused(name: &str, user: i64, op: &str) -> String {
     format!(
-        "Uh-oh! Looks like you have stumbled upon some top-secret records.\n\nSorry, {name} \
-         (id={user}) doesn't have '{op}' access to:\n- Scale Quant (scale.quant)\n\nIf you \
-         really, really need access, perhaps you can win over your friendly administrator with a \
-         batch of freshly baked cookies."
+        "Access rules protect some of these records.\n\n{name} (id={user}) has no '{op}' access to:\n- Scale Quant (scale.quant)\n\nAsk an administrator if you need access to these records."
     )
 }
 
@@ -347,9 +344,7 @@ fn record_refused(name: &str, user: i64, op: &str) -> String {
 fn model_refused(verb: &str, groups: &[&str]) -> String {
     let list: Vec<String> = groups.iter().map(|g| format!("\t- {g}")).collect();
     format!(
-        "You are not allowed to {verb} 'Scale Quant' (scale.quant) records.\n\nThis operation is \
-         allowed for the following groups:\n{}\n\nContact your administrator to request access \
-         if necessary.",
+        "Your access rights do not let you {verb} 'Scale Quant' (scale.quant) records.\n\nGroups that may do this:\n{}\n\nAsk an administrator if you need this access.",
         list.join("\n")
     )
 }
@@ -533,7 +528,7 @@ async fn spec_ormx_008_unreadable_existing_rows_are_never_named() {
     ];
     let spec = f.h.registry().model("scale.quant").unwrap().clone();
     let hidden = format!(
-        "The operation cannot be completed: {}",
+        "The database refused the change: {}",
         spec.business_key("_quant_key").unwrap().message
     );
     let upsert = async |tx: &mut Transaction, picked: &[usize]| {
@@ -795,7 +790,7 @@ async fn spec_ormx_008_every_matched_row_must_be_readable() {
         .await;
     let spec = f.h.registry().model("scale.quant").unwrap().clone();
     let hidden = format!(
-        "The operation cannot be completed: {}",
+        "The database refused the change: {}",
         spec.business_key("_quant_key").unwrap().message
     );
     let key_q1 = || key_row(f.products[0], f.locations[0]);

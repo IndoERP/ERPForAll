@@ -4,6 +4,7 @@
 #![recursion_limit = "256"]
 pub mod boundary;
 
+mod auth_config;
 pub mod config;
 pub mod conn;
 pub mod prefs;

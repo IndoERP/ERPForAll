@@ -1418,13 +1418,13 @@ async fn stored_states_are_checked_and_module_links_indexed() {
     for (sql, message) in [
         (
             "UPDATE ir_module_module SET state = 'unavailable' WHERE name = 'base'",
-            "The operation cannot be completed: A module state must be one of the stored states.",
+            "The database refused the change: A module state must be one of the stored states.",
         ),
         (
             "INSERT INTO ir_module_post_commit \
              (module, key, kind, table_name, state, revision, attempts) \
              VALUES ('base', 'k', 'analyze', 'ir_module_module', 'running', 1, 0)",
-            "The operation cannot be completed: A post-commit step state must be pending, done \
+            "The database refused the change: A post-commit step state must be pending, done \
              or failed.",
         ),
     ] {

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Variant generator and attribute combination matrix engine.
 //!
 //! Handles:
@@ -9,7 +10,7 @@
 
 use crate::template_attribute::ProductTemplateAttributeValue;
 use erp_sdk::prelude::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 pub const VARIANT_LIMIT: usize = 1000;
 
@@ -200,7 +201,47 @@ pub async fn update_line_ptavs(tx: &mut Transaction, env: &Env, ptal_id: i64) ->
 }
 
 /// Generate or update product variants matrix for a product template.
+///
+/// A barcoded single-variant template keeps its barcode when the generator replaces that
+/// variant: creating the first new variant ends the mirror, so when the
+/// replaced variant is then deleted the barcode is written back to the template. An archived
+/// replaced variant still holds it and the template stays cleared.
 pub async fn sync_template_variants(tx: &mut Transaction, env: &Env, tmpl_id: i64) -> Result<()> {
+    let tmpl = env.records("product.template")?.browse(vec![tmpl_id])?;
+    let mirror = if crate::barcode::single_mirrors(tx, &[tmpl_id])
+        .await?
+        .is_empty()
+    {
+        None
+    } else {
+        match tmpl.cell(tx, "barcode").await? {
+            Cell::Str(barcode) => Some(barcode),
+            other => {
+                return Err(Error::programming(format!(
+                    "product.template.barcode returned {other:?} for a mirrored template, expected text"
+                )));
+            }
+        }
+    };
+    sync_variants(tx, env, tmpl_id).await?;
+    let Some(barcode) = mirror else {
+        return Ok(());
+    };
+    let held = Domain::condition("product_tmpl_id", Operator::Eq, tmpl_id)?
+        & Domain::condition("barcode", Operator::Eq, &*barcode)?;
+    let variants = env
+        .records("product.product")?
+        .with_context([("active_test", Value::Bool(false))]);
+    if variants.search_count(tx, &held, None).await? == 0
+        && tmpl.cell(tx, "barcode").await? != Cell::Str(barcode.clone())
+    {
+        tmpl.write(tx, RawVals::new().set_cell("barcode", Cell::Str(barcode)))
+            .await?;
+    }
+    Ok(())
+}
+
+async fn sync_variants(tx: &mut Transaction, env: &Env, tmpl_id: i64) -> Result<()> {
     let tmpl_model = env.records("product.template")?;
     let ptal_model = env.records("product.template.attribute.line")?;
     let ptav_model = env.records("product.template.attribute.value")?;
@@ -320,7 +361,7 @@ pub async fn sync_template_variants(tx: &mut Transaction, env: &Env, tmpl_id: i6
     let found = valid_combinations(&ptav_lists, &exclusion_map, VARIANT_LIMIT)?;
     if found.len() > VARIANT_LIMIT {
         return Err(Error::validation(format!(
-            "The number of variants to generate is above allowed limit ({VARIANT_LIMIT})."
+            "This change would create more than {VARIANT_LIMIT} variants, the most one product can have."
         )));
     }
     let mut valid_combos: Vec<String> = Vec::with_capacity(found.len());
@@ -364,6 +405,31 @@ pub async fn sync_template_variants(tx: &mut Transaction, env: &Env, tmpl_id: i6
         }
     }
 
+    // Snapshot replacement metadata before deleting or archiving predecessors. Keep it local
+    // to this template: an empty predecessor combination is a subset of every new combination.
+    let all_variants = env
+        .with_context([("active_test", Value::Bool(false))])
+        .records("product.product")?
+        .search(tx, &d_prod)
+        .await?;
+    let surviving: HashSet<i64> = existing_combos.values().copied().collect();
+    let mut packaging_sources = Vec::new();
+    for old in all_variants.iter() {
+        if surviving.contains(&old.ids()[0]) {
+            continue;
+        }
+        let extra = cell_to_ids(old.cell(tx, "extra_uom_ids").await?, "extra_uom_ids")?;
+        if !extra.is_empty() {
+            let combination: BTreeSet<i64> = cell_to_ids(
+                old.cell(tx, "product_template_attribute_value_ids").await?,
+                "product_template_attribute_value_ids",
+            )?
+            .into_iter()
+            .collect();
+            packaging_sources.push((combination, extra));
+        }
+    }
+
     // Create missing variants
     for (comb_str, ptavs) in valid_combos.iter().zip(combo_ptavs) {
         if !existing_combos.contains_key(comb_str) {
@@ -371,7 +437,18 @@ pub async fn sync_template_variants(tx: &mut Transaction, env: &Env, tmpl_id: i6
                 .iter()
                 .filter_map(|&id| RecId::from_real(id))
                 .collect();
+            let combination: BTreeSet<i64> = ptavs.iter().copied().collect();
+            let mut extra = BTreeSet::new();
+            for (old_combination, old_extra) in &packaging_sources {
+                if old_combination.is_subset(&combination) {
+                    extra.extend(old_extra.iter().copied());
+                }
+            }
             let prod_vals = RawVals::new()
+                .set_cell(
+                    "extra_uom_ids",
+                    Cell::Ids(crate::packaging::rec_ids(extra)?.into()),
+                )
                 .set_cell("product_tmpl_id", Cell::Id(tmpl_id))
                 .set_cell("combination_indices", Cell::Str(comb_str.as_str().into()))
                 .set_cell(

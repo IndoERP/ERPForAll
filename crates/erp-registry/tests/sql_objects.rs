@@ -55,14 +55,16 @@ static LINKED_MANIFEST: SqlObjectManifest = SqlObjectManifest::new("test_sq_link
 static LINKED_COND: SqlObjectDecl = SqlObjectDecl::condition(
     "test_sq_linked",
     "cond",
-    SqlConditionDecl::new("ERP09", "linked_cond", "Linked condition."),
+    SqlConditionDecl::new("ERP09", "linked_cond", "Linked condition.")
+        .kind(erp_registry::SqlConditionKind::Validation),
 );
 #[erp_registry::linkme::distributed_slice(erp_registry::SQL_OBJECT_DECLS)]
 #[linkme(crate = erp_registry::linkme)]
 static LINKED_ABSENT: SqlObjectDecl = SqlObjectDecl::condition(
     "test_sq_never_installed",
     "cond",
-    SqlConditionDecl::new("ERP08", "absent_cond", "Never installed."),
+    SqlConditionDecl::new("ERP08", "absent_cond", "Never installed.")
+        .kind(erp_registry::SqlConditionKind::Validation),
 );
 
 const MOVE: &str = "sqa.move";
@@ -151,7 +153,8 @@ fn condition() -> SqlObjectDecl {
     SqlObjectDecl::condition(
         "test_sqa",
         "cond_unbalanced",
-        SqlConditionDecl::new("ERP01", "sqa_unbalanced", "The move is not balanced."),
+        SqlConditionDecl::new("ERP01", "sqa_unbalanced", "The move is not balanced.")
+            .kind(erp_registry::SqlConditionKind::Validation),
     )
 }
 
@@ -898,7 +901,8 @@ fn spec_ormx_038_malformed_declarations_fail_before_ddl() {
             SqlObjectDecl::condition(
                 "test_sqb",
                 "again",
-                SqlConditionDecl::new("ERP01", "sqa_unbalanced", "Other text."),
+                SqlConditionDecl::new("ERP01", "sqa_unbalanced", "Other text.")
+                    .kind(erp_registry::SqlConditionKind::Validation),
             ),
         ],
         "SQL object 'test_sqb/again': condition ERP01 'sqa_unbalanced' is also declared by \
@@ -911,7 +915,8 @@ fn spec_ormx_038_malformed_declarations_fail_before_ddl() {
             SqlObjectDecl::condition(
                 "test_sqa",
                 "same",
-                SqlConditionDecl::new("ERP01", "sqa_unbalanced", "The move is not balanced."),
+                SqlConditionDecl::new("ERP01", "sqa_unbalanced", "The move is not balanced.")
+                    .kind(erp_registry::SqlConditionKind::Validation),
             ),
         ],
         "SQL object 'test_sqa/same': condition ERP01 'sqa_unbalanced' is also declared by \
@@ -919,7 +924,12 @@ fn spec_ormx_038_malformed_declarations_fail_before_ddl() {
     );
     // conditions: SQLSTATE namespace, identifier, message bounds (exactly the limit is accepted)
     let cond = |state, message| {
-        SqlObjectDecl::condition("test_sqa", "c", SqlConditionDecl::new(state, "c", message))
+        SqlObjectDecl::condition(
+            "test_sqa",
+            "c",
+            SqlConditionDecl::new(state, "c", message)
+                .kind(erp_registry::SqlConditionKind::Validation),
+        )
     };
     refused_decls(
         vec![cond("23505", "Duplicate.")],
@@ -1210,12 +1220,14 @@ fn conditions_are_found_by_sqlstate_and_identifier() {
     let other = SqlObjectDecl::condition(
         "test_sqb",
         "cond_locked",
-        SqlConditionDecl::new("ERP01", "sqb_locked", "The period is locked."),
+        SqlConditionDecl::new("ERP01", "sqb_locked", "The period is locked.")
+            .kind(erp_registry::SqlConditionKind::Validation),
     );
     let third = SqlObjectDecl::condition(
         "test_sqc",
         "cond_other_state",
-        SqlConditionDecl::new("ERP02", "sqc_other", "Other state."),
+        SqlConditionDecl::new("ERP02", "sqc_other", "Other state.")
+            .kind(erp_registry::SqlConditionKind::Validation),
     );
     let registry = Build::new(vec![condition(), other, third]).run().unwrap();
     let graph = registry.sql_objects();
@@ -1360,4 +1372,55 @@ fn spec_ormx_051_role_bindings_are_validated_at_registry_build() {
         "SQL object 'test_sqa/grant_b': a grant policy for binding 'request' on table 'sqa_move' \
          is also declared by 'test_sqa/grant_a'",
     );
+    // a shared id sequence: INSERT needs USAGE on it, which no policy grants yet
+    for binding in [Request, Definer] {
+        let mut shared = Build::new(vec![table_grant("grant", binding, &[Select, Insert])]);
+        shared.models = vec![move_model().id_sequence("sqa_ids")];
+        refused(
+            shared,
+            "SQL object 'test_sqa/grant': model 'sqa.move' takes its ids from the shared \
+             sequence 'sqa_ids', and table grants do not cover sequences yet; an INSERT policy \
+             needs a model with its own identity id",
+        );
+    }
+    let mut shared = Build::new(vec![table_grant("grant", Request, &[Select])]);
+    shared.models = vec![move_model().id_sequence("sqa_ids")];
+    shared.run().unwrap();
+}
+
+/// A condition without an explicit kind is refused; registration must never silently choose
+/// a public classification (lead amendment 2026-11-13).
+#[test]
+fn condition_kind_is_required() {
+    let declaration = SqlObjectDecl::condition(
+        "test_sqa",
+        "missing_kind",
+        SqlConditionDecl::new("ERP10", "sqa_missing_kind", "Refused."),
+    );
+    let error = Build::new(vec![declaration]).run().unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Programming);
+    assert_eq!(
+        error.message(),
+        "SQL object 'test_sqa/missing_kind': condition kind is missing; declare Validation or Programming"
+    );
+}
+
+#[test]
+fn condition_kind_is_preserved() {
+    for kind in [
+        erp_registry::SqlConditionKind::Validation,
+        erp_registry::SqlConditionKind::Programming,
+    ] {
+        let decl = SqlObjectDecl::condition(
+            "test_sqa",
+            "kind",
+            SqlConditionDecl::new("ERP10", "sqa_kind", "Refused.").kind(kind),
+        );
+        let registry = Build::new(vec![decl]).run().unwrap();
+        let (_, condition) = registry
+            .sql_objects()
+            .condition("ERP10", "sqa_kind")
+            .unwrap();
+        assert_eq!(condition.kind(), kind);
+    }
 }

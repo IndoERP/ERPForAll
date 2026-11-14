@@ -526,7 +526,7 @@ mod tests {
     fn wire_type(column: ColumnType) -> Type {
         match column {
             ColumnType::Int4 => Type::INT4,
-            ColumnType::Int8 => Type::INT8,
+            ColumnType::BigInt | ColumnType::Int8 => Type::INT8,
             ColumnType::Float8 => Type::FLOAT8,
             ColumnType::Numeric => Type::NUMERIC,
             ColumnType::Varchar(_) => Type::VARCHAR,
@@ -552,6 +552,7 @@ mod tests {
         let all = [
             ColumnType::Int4,
             ColumnType::Int8,
+            ColumnType::BigInt,
             ColumnType::Float8,
             ColumnType::Numeric,
             ColumnType::Varchar(None),

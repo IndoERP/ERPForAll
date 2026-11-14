@@ -401,8 +401,7 @@ impl EvidenceCompany {
 /// let hint = CompanyHint::Suggested { company: CompanyId::new(2)?, display_name: "Company B".into() };
 /// assert_eq!(
 ///     hint.text().as_deref(),
-///     Some("This seems to be a multi-company issue, you might be able to access the record by \
-///           switching to the company: Company B.")
+///     Some("To open the record, switch to its company: Company B.")
 /// );
 /// assert!(CompanyHint::None.text().is_none());
 /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -440,19 +439,15 @@ impl CompanyHint {
         match self {
             Self::None => None,
             Self::Ambiguous => Some(
-                "Note: this might be a multi-company issue. Switching company may help - in \
-                 the reference ERP, not in real life!"
+                "The records belong to several companies: switching the current company may help."
                     .to_owned(),
             ),
             Self::Suggested { display_name, .. } => Some(format!(
-                "This seems to be a multi-company issue, you might be able to access the record \
-                 by switching to the company: {display_name}."
+                "To open the record, switch to its company: {display_name}."
             )),
-            Self::OutsideYourCompanies => Some(
-                "This seems to be a multi-company issue, but you do not have access to the \
-                 proper company to access the record anyhow."
-                    .to_owned(),
-            ),
+            Self::OutsideYourCompanies => {
+                Some("The record belongs to a company outside your allowed companies.".to_owned())
+            }
         }
     }
 

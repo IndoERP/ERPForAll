@@ -36,7 +36,7 @@ fn domain_type(ty: &FieldType) -> (DomainFieldType, Option<&str>) {
     let t = match ty {
         FieldType::Id => DomainFieldType::Id,
         FieldType::Boolean => DomainFieldType::Boolean,
-        FieldType::Integer => DomainFieldType::Integer,
+        FieldType::Integer | FieldType::BigInt => DomainFieldType::Integer,
         FieldType::Float { .. } => DomainFieldType::Float,
         FieldType::Monetary { .. } => DomainFieldType::Monetary,
         FieldType::Char { .. } => DomainFieldType::Char,

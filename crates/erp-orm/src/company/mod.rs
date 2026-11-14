@@ -336,7 +336,15 @@ impl Transaction {
             if !f.check_company.is_on() || !f.ty.is_relational() || f.inherited.is_some() {
                 continue;
             }
-            if !(all || written.is_some_and(|w| w.contains(&f.id))) {
+            // A company-dependent link is matched against the current company, never the
+            // record's (`company_decide`), so a write of the record's company fields alone
+            // cannot change its verdict; it is checked on create and when it is written.
+            let checked = if f.company_dependent {
+                written.is_none_or(|w| w.contains(&f.id))
+            } else {
+                all || written.is_some_and(|w| w.contains(&f.id))
+            };
+            if !checked {
                 continue;
             }
             let comodel = crate::relational::comodel_of(registry, f)?;

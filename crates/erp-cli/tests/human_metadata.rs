@@ -374,7 +374,7 @@ async fn assert_readonly_access_floors(
     assert_eq!(error.kind(), erp_sdk::ErrorKind::Access);
     assert_eq!(
         error.message(),
-        "You are not allowed to modify 'Note' (acceptance_notes.note) records.\n\nNo group currently allows this operation.\n\nContact your administrator to request access if necessary."
+        "Your access rights do not let you modify 'Note' (acceptance_notes.note) records.\n\nNo group may do this.\n\nAsk an administrator if you need this access."
     );
     let values: erp_sdk::ValueMap = [(
         "name".to_owned(),
@@ -2608,9 +2608,9 @@ async fn assert_action_result_contract(
     assert_eq!(body["name"], "erp.exceptions.AccessError");
     assert_eq!(
         body["message"],
-        "You are not allowed to access 'Module' (ir.module.module) records.\n\n\
-         This operation is allowed for the following groups:\n\t- Settings Administration\n\n\
-         Contact your administrator to request access if necessary."
+        "Your access rights do not let you access 'Module' (ir.module.module) records.\n\n\
+         Groups that may do this:\n\t- Settings Administration\n\n\
+         Ask an administrator if you need this access."
     );
     assert_eq!(result(&current_denied)["name"], body["name"]);
     assert_eq!(result(&current_denied)["message"], body["message"]);

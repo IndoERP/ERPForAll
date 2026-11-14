@@ -52,6 +52,9 @@ erp_sdk::setting_declarations!(settings);
 pub mod assets;
 
 mod action_result;
+mod dashboard;
+mod dashboard_period;
+mod dashboard_settings;
 mod h18_authorize;
 mod h18_lower;
 mod h18_storage;
@@ -314,3 +317,9 @@ mod pivot_settings_tests {
         }
     }
 }
+
+#[cfg(feature = "test-support")]
+#[path = "tests/dashboard_ranges.rs"]
+mod dashboard_ranges;
+#[cfg(feature = "test-support")]
+pub use dashboard_ranges::test_dashboard_ranges;

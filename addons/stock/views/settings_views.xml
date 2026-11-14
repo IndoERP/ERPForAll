@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<erp>
+  <record id="inventory_settings_form" model="ir.ui.view">
+    <field name="name">stock.settings.service</field>
+    <field name="model">ir.config.setting</field>
+    <field name="arch" type="xml">
+      <form record_mode="service"><widget name="web.settings" scope_kinds="global,company" app="stock"/></form>
+    </field>
+  </record>
+  <record id="inventory_settings_action" model="ir.actions.act_window">
+    <field name="name">Inventory settings</field>
+    <field name="res_model">ir.config.setting</field>
+    <field name="view_mode">form</field>
+    <field name="view_id" ref="inventory_settings_form"/>
+  </record>
+  <record id="inventory_addons_form" model="ir.ui.view">
+    <field name="name">stock.addons.service</field>
+    <field name="model">ir.module.module</field>
+    <field name="arch" type="xml"><form record_mode="service"><widget name="web.addons"/></form></field>
+  </record>
+  <record id="inventory_addons_action" model="ir.actions.act_window">
+    <field name="name">Addons</field>
+    <field name="res_model">ir.module.module</field>
+    <field name="view_mode">form</field>
+    <field name="view_id" ref="inventory_addons_form"/>
+  </record>
+  <!-- Minimal app entry; the remaining Inventory menus extend these same identities. -->
+  <menuitem id="menu_stock_root" name="Inventory" sequence="140" groups="stock.group_stock_user,stock.group_stock_manager" web_icon="lucide:package"/>
+  <menuitem id="menu_stock_config_settings" name="Configuration" parent="menu_stock_root" groups="stock.group_stock_manager" sequence="100"/>
+  <menuitem id="menu_stock_settings" name="Settings" parent="menu_stock_config_settings" action="inventory_settings_action" groups="stock.group_stock_manager" sequence="10"/>
+</erp>

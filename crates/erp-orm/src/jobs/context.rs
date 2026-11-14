@@ -488,6 +488,16 @@ impl<'r> JobContext<'r> {
         })
     }
 
+    /// Immutable effective policy captured when this run was claimed.
+    pub fn settings(&self) -> &super::JobSettings {
+        self.claimed.settings.settings()
+    }
+
+    /// Committed policy revision captured when this run was claimed.
+    pub fn settings_revision(&self) -> u64 {
+        self.claimed.settings.revision()
+    }
+
     /// The job.
     pub fn job(&self) -> JobRef {
         self.claimed.job
@@ -554,15 +564,15 @@ impl<'r> JobContext<'r> {
 
     /// Time left of the run's budget (`jobs.run_budget_secs`); zero when it is used up.
     pub fn budget_left(&self) -> Duration {
-        self.inner
-            .orm
-            .job_settings()
+        self.claimed
+            .settings
+            .settings()
             .run_budget()
             .saturating_sub(self.started.elapsed())
     }
 
     pub fn budget_exhausted(&self) -> bool {
-        let settings = self.inner.orm.job_settings();
+        let settings = self.claimed.settings.settings();
         self.chunks >= settings.max_chunks_per_run()
             && self.started.elapsed() >= settings.run_budget()
     }
@@ -689,7 +699,7 @@ impl<'r> JobContext<'r> {
 
     fn begin_options(&self) -> std::result::Result<BeginOptions, JobError> {
         let decl = self.claimed.decl;
-        let settings = self.inner.orm.job_settings();
+        let settings = self.claimed.settings.settings();
         let (lock, statement, transaction) = settings.chunk_timeouts(decl.timeouts);
         let timeouts = Timeouts::new(lock, statement, transaction).map_err(JobError::from)?;
         let isolation = match decl.isolation {
@@ -794,7 +804,7 @@ impl<'r> JobContext<'r> {
             }
         }
         let output = body.run(tx).await.map_err(ChunkFailure::from)?;
-        let settings = Arc::clone(&self.inner.orm.shared.job_settings);
+        let settings = self.claimed.settings.settings();
         let size = super::enqueue::jsonb_text_len(&output.progress);
         if size > settings.progress_max_bytes() {
             return Err(ChunkFailure::Job(JobError::permanent(
@@ -922,7 +932,7 @@ impl<'r> JobContext<'r> {
                 "the progress of a checkpoint could not be serialized to JSON",
             )
         })?;
-        let limit = self.inner.orm.job_settings().progress_max_bytes();
+        let limit = self.claimed.settings.settings().progress_max_bytes();
         let size = super::enqueue::jsonb_text_len(&value);
         if size > limit {
             return Err(JobError::permanent(

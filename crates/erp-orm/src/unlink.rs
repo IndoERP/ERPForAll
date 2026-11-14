@@ -60,6 +60,7 @@ impl Records {
     /// effects, `ResourceExhausted` for capture bounds, and database/constraint failures. A
     /// failure after pending business work is discarded also prevents commit, before DELETE.
     pub async fn unlink(&self, tx: &mut Transaction) -> Result<()> {
+        tx.refuse_adapter_effect()?;
         tx.admit_records(self).await?;
         if !self.is_empty() {
             check_delete_capture(tx, self)?;

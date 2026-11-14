@@ -704,7 +704,7 @@ async fn warm_cache_does_not_bypass_company_authority_under_sudo() {
     error(
         forbidden.value(&mut reader, "note").await.unwrap_err(),
         ErrorKind::Access,
-        "Access to unauthorized or invalid companies.",
+        "One of the selected companies does not exist or is not one of yours.",
     );
     drop(reader);
     drop(tx);
@@ -1512,6 +1512,57 @@ async fn no_company_supplied_properties_refuse_without_partial_create() {
             "company-dependent fields require a current company",
         );
     }
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn no_company_create_leaves_the_shared_fallback_unstored() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed(&mut tx).await;
+    let env = tx.env();
+    default(&mut tx, &env, "shared", None, None).await;
+    let model = env.records("property.runtime").unwrap();
+    assert!(
+        model
+            .default_get(&mut tx, &["note"])
+            .await
+            .unwrap()
+            .get("note")
+            .is_none()
+    );
+    let record = model
+        .create_values(&mut tx, &[vals(&[("name", Value::str("no company"))])])
+        .await
+        .unwrap();
+    tx.flush().await.unwrap();
+    let rows = tx
+        .query("SELECT note IS NULL FROM property_runtime", &[])
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].get::<_, bool>(0));
+    for id in [1, 2] {
+        assert_eq!(
+            record
+                .with_env(company(&env, id))
+                .value(&mut tx, "note")
+                .await
+                .unwrap(),
+            Value::str("shared")
+        );
+    }
+    // In a current company the same fallback is still offered as the default.
+    assert_eq!(
+        model
+            .with_env(company(&env, 1))
+            .default_get(&mut tx, &["note"])
+            .await
+            .unwrap()
+            .get("note"),
+        Some(&Value::str("shared"))
+    );
     drop(tx);
     h.cleanup().await.unwrap();
 }

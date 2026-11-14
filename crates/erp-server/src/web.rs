@@ -265,6 +265,18 @@ pub use content::{
 };
 pub use pivot_export::{PivotWorkbook, WebPivotExport};
 
+/// Native composition supplies current nonsecret upload policy without coupling HTTP to an addon.
+pub trait WebAttachmentPolicy: Send + Sync {
+    /// Load policy inside the authenticated shell transaction and its registry generation.
+    ///
+    /// # Errors
+    /// Preserve provider database, validation and runtime configuration errors for the caller.
+    fn load<'a>(
+        &'a self,
+        tx: &'a mut erp_orm::Transaction,
+    ) -> erp_orm::BoxFuture<'a, erp_fields::Result<erp_views::wire::AttachmentUploadLimits>>;
+}
+
 #[derive(Debug)]
 struct BrowserCredential {
     auth: Arc<Auth>,
@@ -378,6 +390,7 @@ pub struct WebApp {
     services: RwLock<Services>,
     lifecycle: Option<Arc<dyn WebLifecycle>>,
     attachment_content: Option<Arc<dyn WebAttachmentContent>>,
+    attachment_policy: Option<Arc<dyn WebAttachmentPolicy>>,
     pivot_export: Option<Arc<dyn WebPivotExport>>,
     refreshing: Mutex<()>,
     requests: Arc<Semaphore>,
@@ -429,6 +442,7 @@ impl WebApp {
             }),
             lifecycle: None,
             attachment_content: None,
+            attachment_policy: None,
             pivot_export: None,
             refreshing: Mutex::new(()),
             requests: Arc::new(Semaphore::new(crate::startup_limits::RPC_CONCURRENCY)),
@@ -443,6 +457,19 @@ impl WebApp {
     /// Supply the native RPC service. The service must use this application's same ORM lineage.
     pub fn with_rpc(mut self, rpc: Arc<erp_rpc::RpcService>) -> Self {
         self.services.get_mut().rpc = Some(rpc);
+        self
+    }
+
+    /// Supply the upload policy used in authenticated bootstrap data.
+    ///
+    /// ```no_run
+    /// fn compose(app: erp_server::web::WebApp,
+    ///     policy: std::sync::Arc<dyn erp_server::web::WebAttachmentPolicy>) -> erp_server::web::WebApp {
+    ///     app.with_attachment_policy(policy)
+    /// }
+    /// ```
+    pub fn with_attachment_policy(mut self, provider: Arc<dyn WebAttachmentPolicy>) -> Self {
+        self.attachment_policy = Some(provider);
         self
     }
     /// Supply startup compatibility admission for this configured database.
@@ -1882,7 +1909,12 @@ impl WebApp {
             .map(|id| id.get())
             .collect();
         let current = env.company_id().map_err(auth_error)?.ok_or_else(internal)?;
+        let attachment_limits = match &self.attachment_policy {
+            Some(provider) => Some(provider.load(tx).await.map_err(auth_error)?),
+            None => None, // No provider composed: bootstrap explicitly carries no policy snapshot.
+        };
         let document = serde_json::json!({"wire_major":1,"registry_version":env.registry().generation().to_string(),
+            "attachment_limits":attachment_limits,"rpc_body_bytes":self.config.startup_limits().rpc_body_bytes(),
             "asset_version":self.assets.version(),"identity":{"uid":env.uid(),"name":name,"internal":true},
             "companies":companies,"current_company_id":current,"allowed_company_ids":ids,"active_company_ids":active,
             "locale":{"lang":context.lang(),"tz":context.tz().unwrap_or("UTC"),

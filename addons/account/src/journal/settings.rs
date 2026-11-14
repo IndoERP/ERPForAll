@@ -245,7 +245,8 @@ impl JournalSettings {
     }
 
     /// Whether an account of `account_type` may be the default account of a `journal_type`
-    /// journal; the refusal names the setting to change.
+    /// journal: the type is one the journal type's setting allows. The refusal names the type and
+    /// the setting to change; the caller refuses an account it may not read before asking.
     ///
     /// # Errors
     ///

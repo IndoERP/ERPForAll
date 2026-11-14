@@ -602,7 +602,7 @@ async fn category_quick_create_retains_create_permission_checks() {
     assert_eq!(error.kind(), erp_sdk::ErrorKind::Access);
     assert_eq!(
         error.message(),
-        "You are not allowed to create 'Product Category' (product.category) records."
+        "Your access rights do not let you create 'Product Category' (product.category) records."
     );
     assert_eq!(
         tx.env()

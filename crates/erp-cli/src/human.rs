@@ -29,11 +29,7 @@ pub(crate) fn runtime() -> Result<tokio::runtime::Runtime> {
         .map_err(|_| failed("could not start the server runtime"))
 }
 fn modules(config: &ServerConfig, baseline: Option<erp_orm::Generations>) -> Result<Node> {
-    Node::open(
-        pool_with_size(config.owner_connection(), 4)?,
-        config.addons(),
-        baseline,
-    )
+    Node::open_configured(config, baseline)
 }
 
 pub(crate) fn initialize(args: &InitArgs) -> Result<String> {
@@ -69,10 +65,38 @@ pub(crate) async fn initialize_async(args: &InitArgs) -> Result<String> {
         .map_err(|_| failed("could not inspect bootstrap state"))?
         .try_get(0)
         .map_err(|_| failed("invalid bootstrap state"))?;
+    let demo = args.demo.choice().unwrap_or(false);
+    if exists {
+        // an initialized database keeps the choice it was created with (`base`'s demo flag)
+        let stored: Option<bool> = owner
+            .query_opt("SELECT demo FROM ir_module_module WHERE name = 'base'", &[])
+            .await
+            .map_err(|_| failed("could not inspect bootstrap state"))?
+            .map(|row| row.try_get(0))
+            .transpose()
+            .map_err(|_| failed("invalid bootstrap state"))?;
+        if let (Some(asked), Some(stored)) = (args.demo.choice(), stored)
+            && asked != stored
+        {
+            let flag = if asked {
+                "--with-demo"
+            } else {
+                "--without-demo"
+            };
+            return Err(CliError::InvalidInput {
+                arg: flag.to_owned(),
+                reason: format!(
+                    "database {} is already initialized {} demo data; {flag} cannot change that",
+                    config.database(),
+                    if stored { "with" } else { "without" },
+                ),
+            });
+        }
+    }
     drop(owner);
     if !exists {
         let initialized = system
-            .initialize(InitOptions::new())
+            .initialize(InitOptions::new().with_demo(demo))
             .await
             .map_err(|e| CliError::ModuleOperation(Box::new(e)))?;
         if !initialized.post_commit.is_clean() {
@@ -111,6 +135,7 @@ pub(crate) async fn initialize_async(args: &InitArgs) -> Result<String> {
             ],
         )
         .await?;
+    let activation_registry = node.registry_for_publication(&mut activation_guard).await?;
     let mut tx = loaded.orm.begin(SUPERUSER_ID).await?;
     // This must be the first operation on this connection: System resolution sends no query,
     // and this bootstrap ORM has no Signal. LOCK is a utility statement, so a waiter takes its
@@ -182,7 +207,7 @@ pub(crate) async fn initialize_async(args: &InitArgs) -> Result<String> {
             ],
         )
         .await?;
-    grant_runtime(&mut tx, &config).await?;
+    grant_runtime_with_registry(&mut tx, &config, &activation_registry).await?;
     tx.commit().await?;
     activation_guard.rollback().await?;
     crate::audit_reader::verify_configured(&config).await.map_err(|error| {
@@ -197,9 +222,12 @@ pub(crate) async fn initialize_async(args: &InitArgs) -> Result<String> {
 // Evaluate on the runtime connection, shared with startup publication admission. The UI asset
 // tables are SELECT-only: any table- or column-level write right counts as a defect.
 const MISSING_RUNTIME_GRANTS_SQL: &str = "
+WITH RECURSIVE restricted(oid) AS (SELECT c.oid FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname=ANY($1::text[]) UNION SELECT i.inhrelid FROM pg_catalog.pg_inherits i JOIN restricted r ON r.oid=i.inhparent)
 SELECT NOT has_schema_privilege('public','USAGE') OR EXISTS (
     SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
     WHERE n.nspname='public' AND CASE
+        WHEN c.relkind IN ('r','p') AND c.oid IN (SELECT oid FROM restricted) THEN FALSE
+        WHEN c.relkind='S' AND EXISTS (SELECT 1 FROM pg_catalog.pg_depend d JOIN pg_catalog.pg_class t ON t.oid=d.refobjid WHERE d.classid='pg_catalog.pg_class'::regclass AND d.refclassid='pg_catalog.pg_class'::regclass AND d.objid=c.oid AND d.deptype IN ('a','i') AND t.relnamespace=n.oid AND t.oid IN (SELECT oid FROM restricted)) THEN FALSE
         WHEN c.relkind IN ('r','p') AND c.relname IN ('installed_addon_identity','installed_addon_identity_audit','erp_node_feature','erp_node_feature_digest')
         THEN has_table_privilege(c.oid,'SELECT') OR has_table_privilege(c.oid,'INSERT')
             OR has_table_privilege(c.oid,'UPDATE') OR has_table_privilege(c.oid,'DELETE')
@@ -448,6 +476,22 @@ impl erp_orm::Refresh for AttachmentGenerationFence {
     }
 }
 
+/// A separate, bounded primary pool prevents an enqueue transaction starving its policy read.
+/// The installed packages' computes are part of it: a package's computed field cannot be built
+/// without its compute.
+fn database_job_source(
+    registry: Arc<erp_registry::Registry>,
+    pool: deadpool_postgres::Pool,
+    checks: &erp_modules::PackageChecks,
+) -> Result<Arc<dyn erp_orm::jobs::JobSettingsSource>> {
+    let reader = Orm::builder(registry, pool)
+        .computes(checks.computes.iter().copied())
+        .build()?;
+    Ok(Arc::new(
+        erp_addon_base::jobs_settings_source::DatabaseJobSettingsSource::new(reader)?,
+    ))
+}
+
 /// Fixed native attachment handlers use this minimal owner ORM. Package/Wasm methods,
 /// constraints, computes, unlink hooks and request policy are deliberately not installed.
 pub(crate) async fn attachment_maintenance_orm(config: &ServerConfig, source: &Orm) -> Result<Orm> {
@@ -458,7 +502,7 @@ pub(crate) async fn attachment_maintenance_orm(config: &ServerConfig, source: &O
     tx.rollback().await?;
     // Capacity follows the validated jobs.workers_per_db node setting, plus one control
     // connection for lease/checkpoint work. It cannot become an unbounded independent pool.
-    let pool_size = usize::try_from(source.job_settings().workers_per_db())
+    let pool_size = usize::try_from(source.job_node_settings().workers_per_db())
         .map_err(|_| failed("jobs.workers_per_db exceeds the node connection range"))?
         .checked_add(1)
         .ok_or_else(|| failed("jobs.workers_per_db owner connection range overflow"))?;
@@ -470,7 +514,11 @@ pub(crate) async fn attachment_maintenance_orm(config: &ServerConfig, source: &O
         Arc::clone(source.registry()),
         attachments,
     ))
-    .job_settings(source.job_settings().clone());
+    .job_settings(source.job_node_settings().clone());
+    let authority = source
+        .job_settings_source()
+        .ok_or_else(|| failed("Attachment maintenance requires database job policy authority."))?;
+    builder = builder.job_settings_source(authority);
     if let Some(signal) = source.signal() {
         builder =
             builder.signal(Signal::new(signal.applied()).with_refresh(AttachmentGenerationFence));
@@ -633,7 +681,10 @@ pub(crate) async fn publish_grants_async(args: &ServerArgs) -> Result<String> {
         tx.rollback().await?;
         return Err(error.into());
     }
-    let publication = grant_runtime(&mut tx, &config).await;
+    let publication_node = modules(&config, None)?;
+    let publication_registry = publication_node.registry_for_publication(&mut tx).await?;
+    let restricted_tables = crate::sql_object_publication::restricted_tables(&publication_registry);
+    let publication = grant_runtime_with_registry(&mut tx, &config, &publication_registry).await;
     if let Err(error) = publication {
         tx.rollback().await?;
         return Err(error);
@@ -645,7 +696,7 @@ pub(crate) async fn publish_grants_async(args: &ServerArgs) -> Result<String> {
     })?;
     crate::uom_grants::verify(&client).await?;
     let missing: bool = client
-        .query_one(MISSING_RUNTIME_GRANTS_SQL, &[])
+        .query_one(MISSING_RUNTIME_GRANTS_SQL, &[&restricted_tables])
         .await
         .map_err(|_| failed("Runtime grants committed but runtime verification query failed"))?
         .try_get(0)
@@ -756,6 +807,17 @@ pub(crate) async fn grant_runtime(
     tx: &mut erp_orm::Transaction,
     config: &ServerConfig,
 ) -> Result<()> {
+    let node = modules(config, None)?;
+    let registry = node.registry_for_publication(tx).await?;
+    grant_runtime_with_registry(tx, config, &registry).await
+}
+
+async fn grant_runtime_with_registry(
+    tx: &mut erp_orm::Transaction,
+    config: &ServerConfig,
+    registry: &erp_registry::Registry,
+) -> Result<()> {
+    let options = crate::sql_object_publication::options(config)?;
     let connection = config.runtime_connection();
     let role = connection
         .get_user()
@@ -763,7 +825,9 @@ pub(crate) async fn grant_runtime(
     // This validates that the runtime role cannot inherit/escalate to an owner or superuser.
     tx.grant_signal_request_role(role).await?;
     let role_sql = erp_sql::quote(role);
-    tx.batch(&format!("GRANT USAGE ON SCHEMA public TO {role_sql}; GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {role_sql}; GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {role_sql}; REVOKE ALL ON erp_module_install_audit FROM {role_sql}; REVOKE ALL ON SEQUENCE erp_module_install_audit_id_seq FROM {role_sql}")).await?;
+    tx.reconcile_sql_object_grants(registry, &options).await?;
+    crate::sql_object_publication::grant_ordinary(tx, role, registry).await?;
+    tx.batch(&format!("REVOKE ALL ON erp_module_install_audit FROM {role_sql}; REVOKE ALL ON SEQUENCE erp_module_install_audit_id_seq FROM {role_sql}")).await?;
     // The validation marks may not exist until a translated model is first synchronized.
     let marks = tx
         .query(
@@ -1035,6 +1099,7 @@ pub(crate) async fn grant_runtime(
             ));
         }
     }
+    tx.verify_sql_object_publication(registry, &options).await?;
     Ok(())
 }
 
@@ -1228,6 +1293,13 @@ pub(crate) async fn grant_vacuum_role_async(args: &GrantVacuumRoleArgs) -> Resul
     ))
 }
 
+struct RuntimeAuthConfig<'a> {
+    loaded: &'a Orm,
+    node: AuthConfig,
+    job_policy_pool: deadpool_postgres::Pool,
+    run_jobs: bool,
+}
+
 #[allow(
     clippy::too_many_arguments,
     reason = "the request ORM's composition inputs, each from a different owner"
@@ -1235,18 +1307,26 @@ pub(crate) async fn grant_vacuum_role_async(args: &GrantVacuumRoleArgs) -> Resul
 async fn runtime_auth(
     runtime_pool: deadpool_postgres::Pool,
     policy_pool: deadpool_postgres::Pool,
-    loaded: &Orm,
+    configuration: RuntimeAuthConfig<'_>,
     baseline: erp_orm::Generations,
     wasm_methods: Vec<WasmMethodImpl>,
     checks: erp_modules::PackageChecks,
     admission: erp_orm::node::NodeAdmission,
     attachments: Arc<erp_sdk::blob::AttachmentRuntime>,
 ) -> Result<Arc<Auth>> {
+    let loaded = configuration.loaded;
     let registry = loaded.registry();
+    let jobs = database_job_source(Arc::clone(registry), configuration.job_policy_pool, &checks)?;
     let source = PolicySource::build(Arc::clone(registry), policy_pool).await?;
     let resolver = Resolver::for_registry(registry)?;
     let provider: Arc<dyn erp_orm::PolicyProvider> = Arc::new(source.clone());
     let orm = server_request_orm_builder(loaded, runtime_pool, wasm_methods, checks, attachments)?
+        .job_settings(
+            erp_orm::jobs::JobSettings::builder()
+                .run_in_app(configuration.run_jobs)
+                .build()?,
+        )
+        .job_settings_source(jobs)
         .resolver(resolver)
         .policy(provider)
         .rpc_impls([
@@ -1256,10 +1336,12 @@ async fn runtime_auth(
         ])
         .signal(Signal::new(baseline).with_refresh(NativeRefresh { source }))
         .build()?;
-    Auth::with_membership(orm, AuthConfig::DEFAULT, HashPool::global(), admission)
-        .await
-        .map(Arc::new)
-        .map_err(Into::into)
+    orm.job_settings_snapshot().await?;
+    let auth =
+        Auth::with_membership(orm, configuration.node, HashPool::global(), admission).await?;
+    // Resource settings only: no credentials, signing keys or database secrets.
+    tracing::debug!(target: "erp::auth", config = ?auth.config(), "served authentication configured");
+    Ok(Arc::new(auth))
 }
 
 pub(crate) fn serve(args: &ServerArgs) -> Result<()> {
@@ -1311,6 +1393,10 @@ pub(crate) fn serve(args: &ServerArgs) -> Result<()> {
                 runtime_pool,
                 audit_reader,
                 policy_pool: pool_with_size(config.runtime_connection(), 2)?,
+                job_policy_pool: pool_with_size(
+                    config.runtime_connection(),
+                    erp_orm::jobs::JobSettings::default().workers_per_db() as usize,
+                )?,
                 publication_pool,
                 installing: tokio::sync::Mutex::new(()),
                 asset_snapshot: tokio::sync::Mutex::new(None),
@@ -1330,6 +1416,7 @@ pub(crate) fn serve(args: &ServerArgs) -> Result<()> {
                 .with_asset_authority(lifecycle.clone())
                 .with_lifecycle(lifecycle)
                 .with_attachment_content(Arc::new(crate::attachment_content::BaseAttachmentContent))
+                .with_attachment_policy(Arc::new(crate::attachment_content::BaseAttachmentContent))
                 .with_pivot_export(Arc::new(crate::pivot_export::WebAddonPivotExport));
             let listener =
                 tokio::net::TcpListener::bind(config.bind().map_err(|e| failed(e.to_string()))?)
@@ -1392,6 +1479,7 @@ struct NativeLifecycle {
     runtime_pool: deadpool_postgres::Pool,
     audit_reader: Option<erp_orm::audit::AuditReaderConnection>,
     policy_pool: deadpool_postgres::Pool,
+    job_policy_pool: deadpool_postgres::Pool,
     publication_pool: deadpool_postgres::Pool,
     installing: tokio::sync::Mutex<()>,
     /// Spaces out the rebuilds of the registry after one failed (review r1 M3).
@@ -1518,8 +1606,32 @@ impl NativeLifecycle {
             ));
         }
         crate::uom_grants::verify(&client).await?;
+        let admission_orm = Orm::builder(
+            crate::access::registry().map_err(cli_field_error)?,
+            pool_with_size(self.config.owner_connection(), 1).map_err(cli_field_error)?,
+        )
+        .build()?;
+        let mut admission_tx = admission_orm
+            .begin_opts(
+                erp_orm::BeginOptions::new(SUPERUSER_ID)
+                    .isolation(erp_orm::Isolation::ReadCommitted),
+            )
+            .await?;
+        let admission_registry = self
+            .node
+            .registry_for_admission(&mut admission_tx)
+            .await
+            .map_err(cli_field_error)?;
+        let restricted_tables =
+            crate::sql_object_publication::restricted_tables(&admission_registry);
+        admission_tx
+            .verify_sql_object_publication(
+                &admission_registry,
+                &crate::sql_object_publication::options(&self.config).map_err(cli_field_error)?,
+            )
+            .await?;
         let missing_grants: bool = client
-            .query_one(MISSING_RUNTIME_GRANTS_SQL, &[])
+            .query_one(MISSING_RUNTIME_GRANTS_SQL, &[&restricted_tables])
             .await
             .map_err(|error| {
                 erp_fields::Error::db("could not inspect runtime publication grants")
@@ -1564,6 +1676,14 @@ impl NativeLifecycle {
         }
         self.check_catalogue_identity().await?;
         let loaded = self.node.load().await.map_err(module_error)?;
+        admission_tx
+            .verify_sql_object_publication(
+                loaded.orm.registry(),
+                &crate::sql_object_publication::options(&self.config).map_err(cli_field_error)?,
+            )
+            .await?;
+        admission_tx.rollback().await?;
+        drop(admission_tx);
         // Loading re-admits database packages and may replace or remove index entries. Names
         // alone cannot bind a same-name replacement to this membership's original bytes.
         self.check_catalogue_identity().await?;
@@ -1635,7 +1755,12 @@ impl NativeLifecycle {
         let auth = runtime_auth(
             self.runtime_pool.clone(),
             self.policy_pool.clone(),
-            &loaded.orm,
+            RuntimeAuthConfig {
+                loaded: &loaded.orm,
+                node: self.config.auth(),
+                job_policy_pool: self.job_policy_pool.clone(),
+                run_jobs: self.config.jobs_run_in_app(),
+            },
             baseline,
             wasm_methods,
             checks,
@@ -2185,8 +2310,6 @@ fn catalog<'a>(
         let catalog = system.human_catalog().await.map_err(module_error)?;
         for (name, reason) in &catalog.refused {
             // Loud, never a silent skip: an operator sees why an addon of the directory is absent.
-            // A native addon this binary leaves out on purpose logs that reason, not the file rule.
-            let reason = crate::native_addons::not_linked_reason(name.as_str()).unwrap_or(reason);
             eprintln!("addon catalogue: {name} is not offered for installation: {reason}");
         }
         let names: Vec<&str> = catalog.offered.iter().map(|m| m.name().as_str()).collect();

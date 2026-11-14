@@ -77,3 +77,6 @@ pub use guard::{GuardLookup, GuardedArch};
 pub use limits::ViewLimits;
 pub use parse::{check_xml_nesting, root_tag};
 pub use registry::{find_view_type, is_valid_view_type_key, validate_view_types};
+
+mod dashboard_admission;
+pub use dashboard_admission::validate_dashboard;

@@ -16,7 +16,7 @@ use erp_sdk::ErrorKind;
 use erp_sdk::prelude::*;
 use erp_testkit::Harness;
 
-const PREFIX: &str = "The operation cannot be completed: ";
+const PREFIX: &str = "The database refused the change: ";
 
 async fn harness() -> Harness {
     Harness::builder([
@@ -27,6 +27,8 @@ async fn harness() -> Harness {
         &erp_addon_barcodes_gs1_nomenclature::ADDON,
         &erp_addon_stock::ADDON,
     ])
+    .require_sql_objects([&erp_addon_stock::schema_guards::MANIFEST])
+    .schema_sync_options(erp_testkit::SchemaSyncOptions::inline().lifecycle(true))
     .build()
     .await
     .unwrap()
@@ -212,6 +214,7 @@ async fn location_table_complete_name_and_policy_row() {
             "cyclic_inventory_frequency",
             "last_inventory_date",
             "storage_category_id",
+            "warehouse_id",
             "generated_warehouse_id",
             "generated_addon",
             "generated_role",
@@ -226,6 +229,7 @@ async fn location_table_complete_name_and_policy_row() {
         "stock_location__usage_index",
         "stock_location__location_id_index",
         "stock_location__company_id_index",
+        "stock_location__warehouse_id_index",
         "stock_location__storage_category_id_index",
     ] {
         assert!(found.contains(name), "index {name} missing: {found:?}");
@@ -369,8 +373,7 @@ async fn policy_row_refuses_forbid_negative_until_its_slice() {
         policy.cell(&mut tx, "forbid_negative").await.unwrap(),
         Cell::Bool(false)
     );
-    // a fresh row created with the flag set is refused too
-    policy.unlink(&mut tx).await.unwrap();
+    // A create with the unavailable flag reports the same typed refusal as a write.
     let error = create(
         &mut tx,
         "stock.location.policy",
@@ -382,6 +385,33 @@ async fn policy_row_refuses_forbid_negative_until_its_slice() {
     .unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Validation);
     assert_eq!(error.message(), expected);
+    assert_eq!(
+        std::error::Error::source(&error)
+            .and_then(|source| source.downcast_ref::<erp_addon_stock::StockError>()),
+        Some(&erp_addon_stock::StockError::ForbidNegativeUnavailable { location_id: id })
+    );
+    let error = create(
+        &mut tx,
+        "stock.location.policy",
+        RawVals::new().set_cell("location_id", Cell::Id(id)),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Validation);
+    assert_eq!(
+        error.message(),
+        "The database refused the change: A location has one stock policy."
+    );
+    let stored = tx
+        .query(
+            "SELECT id,forbid_negative FROM stock_location_policy WHERE location_id=$1",
+            &[&id],
+        )
+        .await
+        .unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].get::<_, i64>(0), policy.ids()[0]);
+    assert!(!stored[0].get::<_, bool>(1));
     tx.rollback().await.unwrap();
     drop(tx);
     h.cleanup().await.unwrap();
@@ -433,7 +463,7 @@ async fn location_barcode_and_inventory_frequency_constraints() {
     .unwrap_err();
     assert_violation(
         &error,
-        "The barcode for a location must be unique per company!",
+        "Another location of this company already uses this barcode.",
         "stock_location_barcode_company_uniq",
     );
     // the same barcode in another company, and shared locations without barcode, do not collide
@@ -469,7 +499,7 @@ async fn location_barcode_and_inventory_frequency_constraints() {
     .unwrap_err();
     assert_violation(
         &error,
-        "The inventory frequency (days) for a location must be non-negative",
+        "The inventory interval of a location cannot be negative.",
         "stock_location_inventory_freq_nonneg",
     );
     tx.rollback().await.unwrap();
@@ -572,7 +602,7 @@ async fn warehouse_table_and_unique_name_and_code_per_company() {
         .unwrap_err();
     assert_violation(
         &error,
-        "The name of the warehouse must be unique per company!",
+        "Another warehouse of this company already has this name.",
         "stock_warehouse_warehouse_name_uniq",
     );
     let error = create(&mut tx, "stock.warehouse", vals("Other WH", "WH", main))
@@ -580,7 +610,7 @@ async fn warehouse_table_and_unique_name_and_code_per_company() {
         .unwrap_err();
     assert_violation(
         &error,
-        "The short name of the warehouse must be unique per company!",
+        "Another warehouse of this company already has this short name.",
         "stock_warehouse_warehouse_code_uniq",
     );
     // renaming into the existing name is refused as well
@@ -596,7 +626,7 @@ async fn warehouse_table_and_unique_name_and_code_per_company() {
     .unwrap_err();
     assert_violation(
         &error,
-        "The name of the warehouse must be unique per company!",
+        "Another warehouse of this company already has this name.",
         "stock_warehouse_warehouse_name_uniq",
     );
     // the same name and code in another company are allowed
@@ -1013,7 +1043,7 @@ async fn storage_category_table_weight_check_and_policies() {
     .unwrap_err();
     assert_violation(
         &error,
-        "Max weight should be a positive number.",
+        "Maximum weight cannot be negative.",
         "stock_storage_category_positive_max_weight",
     );
     tx.rollback().await.unwrap();
@@ -1077,7 +1107,7 @@ async fn storage_capacity_table_quantity_and_uniqueness() {
         .unwrap_err();
         assert_violation(
             &error,
-            "Quantity should be a positive number.",
+            "A capacity quantity must be greater than zero.",
             "stock_storage_category_capacity_positive_quantity",
         );
     }
@@ -1091,7 +1121,7 @@ async fn storage_capacity_table_quantity_and_uniqueness() {
         .unwrap_err();
     assert_violation(
         &error,
-        "Multiple capacity rules for one package type.",
+        "A storage category takes one capacity rule per package type.",
         "stock_storage_category_capacity_unique_package_type",
     );
     tx.rollback().await.unwrap();
@@ -1154,7 +1184,7 @@ async fn package_type_table_dimension_checks_and_unique_barcode() {
         ),
         (
             "max_weight",
-            "Max Weight must be positive",
+            "The maximum weight of a package type cannot be negative.",
             "stock_package_type_positive_max_weight",
         ),
     ] {
@@ -1185,7 +1215,7 @@ async fn package_type_table_dimension_checks_and_unique_barcode() {
     .unwrap_err();
     assert_violation(
         &error,
-        "A barcode can only be assigned to one package type!",
+        "This barcode already belongs to another package type.",
         "stock_package_type_barcode_uniq",
     );
     tx.rollback().await.unwrap();
@@ -1387,6 +1417,119 @@ async fn cross_company_links_are_refused() {
     )
     .await
     .unwrap();
+    tx.rollback().await.unwrap();
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+/// Trigger-generated policy audit users follow each newly created location.
+#[tokio::test]
+async fn location_policy_preserves_audit_users_and_raw_nulls() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    let uid = tx.env().uid();
+    let locations = tx
+        .env()
+        .records("stock.location")
+        .unwrap()
+        .create(
+            &mut tx,
+            vec![
+                RawVals::new().set_cell("name", text("Audit A")),
+                RawVals::new().set_cell("name", text("Audit B")),
+            ],
+        )
+        .await
+        .unwrap();
+    let rows = tx.query("SELECT l.create_uid,l.write_uid,p.create_uid,p.write_uid FROM stock_location l JOIN stock_location_policy p ON p.location_id=l.id WHERE l.id=ANY($1) ORDER BY l.id", &[&locations.ids()]).await.unwrap();
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        for column in 0..4 {
+            assert_eq!(row.get::<_, Option<i64>>(column), Some(uid));
+        }
+    }
+    let other: i64 = tx
+        .query(
+            "INSERT INTO res_users(name,login) VALUES ('Audit other','audit-other') RETURNING id",
+            &[],
+        )
+        .await
+        .unwrap()[0]
+        .get(0);
+    let raw = tx.query("INSERT INTO stock_location(name,usage,create_uid,write_uid) VALUES ('Raw audited A','view',$1,$2),('Raw audited B','view',$2,$1),('Raw unknown','view',NULL,NULL) RETURNING id", &[&uid,&other]).await.unwrap();
+    for (row, (creator, writer)) in raw.iter().zip([
+        (Some(uid), Some(other)),
+        (Some(other), Some(uid)),
+        (None, None),
+    ]) {
+        let id: i64 = row.get(0);
+        let policies = tx
+            .query(
+                "SELECT create_uid,write_uid FROM stock_location_policy WHERE location_id=$1",
+                &[&id],
+            )
+            .await
+            .unwrap();
+        assert_eq!(policies.len(), 1);
+        assert_eq!(policies[0].get::<_, Option<i64>>(0), creator);
+        assert_eq!(policies[0].get::<_, Option<i64>>(1), writer);
+    }
+    tx.rollback().await.unwrap();
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+/// Empty, malformed and mixed create batches retain their normal boundaries.
+#[tokio::test]
+async fn policy_create_preflight_keeps_empty_type_and_batch_boundaries() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    let location = location(&mut tx, "Policy batch", "view", None).await;
+    let id = location.ids()[0];
+    let records = tx.env().records("stock.location.policy").unwrap();
+    assert!(records.create(&mut tx, vec![]).await.unwrap().is_empty());
+    let error = create(
+        &mut tx,
+        "stock.location.policy",
+        RawVals::new()
+            .set_cell("location_id", Cell::Id(id))
+            .set_cell("forbid_negative", text("malformed")),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Programming);
+    assert_eq!(
+        error.message(),
+        "invalid value Str(\"malformed\") for field stock.location.policy.forbid_negative of type boolean"
+    );
+    let error = tx
+        .savepoint(async |tx| {
+            records
+                .create(
+                    tx,
+                    vec![
+                        RawVals::new()
+                            .set_cell("location_id", Cell::Id(id))
+                            .set_cell("forbid_negative", Cell::Bool(false)),
+                        RawVals::new()
+                            .set_cell("location_id", Cell::Id(id))
+                            .set_cell("forbid_negative", Cell::Bool(true)),
+                    ],
+                )
+                .await
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Validation);
+    assert_eq!(
+        error.message(),
+        format!(
+            "Location {id} cannot forbid negative stock yet: the negative-stock guard is not supported until a later release."
+        )
+    );
+    let rows = tx.query("SELECT count(*),bool_or(forbid_negative) FROM stock_location_policy WHERE location_id=$1", &[&id]).await.unwrap();
+    assert_eq!(rows[0].get::<_, i64>(0), 1);
+    assert!(!rows[0].get::<_, bool>(1));
     tx.rollback().await.unwrap();
     drop(tx);
     h.cleanup().await.unwrap();

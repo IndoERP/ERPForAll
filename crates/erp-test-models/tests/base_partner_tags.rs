@@ -303,7 +303,7 @@ impl TestRules for TagRules {
             Ok(())
         } else {
             Err(Error::access(format!(
-                "You are not allowed to {} '{}' ({}) records.",
+                "Your access rights do not let you {} '{}' ({}) records.",
                 op.as_str(),
                 model.description,
                 model.name
@@ -404,7 +404,7 @@ async fn rpc_archive_sequence() {
         &denied,
         403,
         "erp.exceptions.AccessError",
-        "You are not allowed to write 'Contact' (res.partner) records.",
+        "Your access rights do not let you write 'Contact' (res.partner) records.",
     );
     assert_eq!(
         support::rpc::ok(&read(support::rpc::alice()).await),
@@ -495,7 +495,7 @@ async fn spec_partner_070_category_loop_rpc_preserves_paths() {
         assert_eq!(error.kind(), ErrorKind::UserError);
         assert_eq!(
             error.message(),
-            "You are creating a loop in your 'Partner Tag' records. A record cannot be a child of itself or one of its own sub-items. Please select a different parent."
+            "This parent would make a loop in the 'Partner Tag' records: a record cannot sit under itself or under one of its own children. Choose another parent."
         );
         assert_eq!(
             all.values(&mut setup, "parent_path").await.unwrap(),
@@ -533,7 +533,7 @@ async fn spec_partner_070_category_loop_rpc_preserves_paths() {
             &response,
             422,
             "erp.exceptions.UserError",
-            "You are creating a loop in your 'Partner Tag' records. A record cannot be a child of itself or one of its own sub-items. Please select a different parent.",
+            "This parent would make a loop in the 'Partner Tag' records: a record cannot sit under itself or under one of its own children. Choose another parent.",
         );
         let after = support::rpc::ok(
             &rpc(
@@ -562,7 +562,7 @@ impl TestRules for TagReadDeniedRules {
     ) -> Result<()> {
         if model.name == "res.partner.category" && op == Operation::Read {
             return Err(Error::access(
-                "You are not allowed to read 'Partner Tag' (res.partner.category) records.",
+                "Your access rights do not let you read 'Partner Tag' (res.partner.category) records.",
             ));
         }
         TagRules.check_model(binding, model, op)
@@ -609,7 +609,7 @@ async fn context_tag_default_does_not_bypass_target_read_access() {
     assert_eq!(error.kind(), ErrorKind::Access);
     assert_eq!(
         error.message(),
-        "Failed to write field res.partner.category_id\nYou are not allowed to read 'Partner Tag' (res.partner.category) records."
+        "Failed to write field res.partner.category_id\nYour access rights do not let you read 'Partner Tag' (res.partner.category) records."
     );
     let contacts = tx
         .env()
@@ -661,7 +661,7 @@ async fn context_tag_default_missing_positive_target_refuses_create() {
     assert_eq!(error.sqlstate(), Some("23503"));
     assert_eq!(
         error.message(),
-        "The operation cannot be completed: insert or update on table \"res_partner_res_partner_category_rel\" violates foreign key constraint \"res_partner_res_partner_category_rel_category_id_fkey\""
+        "The database refused the change: insert or update on table \"res_partner_res_partner_category_rel\" violates foreign key constraint \"res_partner_res_partner_category_rel_category_id_fkey\""
     );
     let all_partners = tx.env().records("res.partner").unwrap();
     let absent = all_partners

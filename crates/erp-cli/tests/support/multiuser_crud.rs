@@ -182,9 +182,16 @@ const TASKS: [&str; 4] = [TASK_RES, TASK_IR, TASK_MAIL, TASK_SERVICE];
 
 // The groups an access denial names: the product manager group, and Settings, which implies it
 // (addons/product/security/product_security.xml, implied_by_ids), in the order of the message
-// (focused run 3).
-const PRODUCT_MANAGER: &[&str] = &["Product Administrator", "Settings Administration"];
-const UOM_MANAGERS: &[&str] = &["Product Administrator", "Settings Administration"];
+// (focused run 3). The manager
+// group belongs to the Products privilege, so its full name carries that prefix.
+const PRODUCT_MANAGER: &[&str] = &[
+    "Products / Product Administrator",
+    "Settings Administration",
+];
+const UOM_MANAGERS: &[&str] = &[
+    "Products / Product Administrator",
+    "Settings Administration",
+];
 // Spec cases behind the expectations: PRODUCT-099 (managers write, users read), PRODUCT-100 (company
 // isolation), SEC-001/-003 (no grant, grants OR), SEC-008/-009 (model and record message), SEC-068
 // (direct company restriction), SEC-069 (company through the owner record), SEC-074 (a generated
@@ -345,11 +352,19 @@ pub const MANIFEST: &[ModelCase] = &[
     company("product.combo", "Product Combo", COMPANY_BASIS),
     company(
         "product.uom",
-        "Link between products and their UoMs",
+        "Product unit with its own barcode",
         COMPANY_BASIS,
     ),
     company_via_parent("product.product", "Product Variant", VARIANT_BASIS),
     read_only("uom.uom", "uom", "Unit of Measure", UOM_BASIS, UOM_MANAGERS),
+    // Users read only the custom values they created (an access-row domain on create_uid); no
+    // policy of this matrix seeds per-user records yet.
+    deferred(
+        "product.attribute.custom.value",
+        "product",
+        false,
+        TASK_SERVICE,
+    ),
     // res.*
     res("res.company"),
     res("res.country"),
@@ -414,6 +429,8 @@ pub const MANIFEST: &[ModelCase] = &[
     service("ir.module.post_commit", "base"),
     service("res.users.apikeys", "base"),
     service("res.users.log", "base"),
+    service("product.barcode.claim", "product"),
+    service("product.barcode.scope", "product"),
     service("uom.reference.fence", "uom"),
     service("uom.reference.use", "uom"),
     transient("change.password.own"),
@@ -583,8 +600,7 @@ const UNAUTHENTICATED_MESSAGE: &str =
 fn model_message(case: &ModelCase, op: Op) -> String {
     let groups: Vec<String> = case.groups().iter().map(|g| format!("\t- {g}")).collect();
     format!(
-        "You are not allowed to {} '{}' ({}) records.\n\nThis operation is allowed for the \
-         following groups:\n{}\n\nContact your administrator to request access if necessary.",
+        "Your access rights do not let you {} '{}' ({}) records.\n\nGroups that may do this:\n{}\n\nAsk an administrator if you need this access.",
         op.verb(),
         case.description,
         case.model,
@@ -607,20 +623,15 @@ enum Hint<'h> {
 fn record_message(case: &ModelCase, op: Op, name: &str, id: i64, hint: &Hint<'_>) -> String {
     let hint = match hint {
         Hint::None => String::new(),
-        Hint::OutsideYourCompanies => "\n\nThis seems to be a multi-company issue, but you do not \
-                                       have access to the proper company to access the record \
-                                       anyhow."
-            .to_owned(),
-        Hint::Switch(company) => format!(
-            "\n\nThis seems to be a multi-company issue, you might be able to access the record \
-             by switching to the company: {company}."
-        ),
+        Hint::OutsideYourCompanies => {
+            "\n\nThe record belongs to a company outside your allowed companies.".to_owned()
+        }
+        Hint::Switch(company) => {
+            format!("\n\nTo open the record, switch to its company: {company}.")
+        }
     };
     format!(
-        "Uh-oh! Looks like you have stumbled upon some top-secret records.\n\nSorry, {name} \
-         (id={id}) doesn't have '{}' access to:\n- {} ({})\n\nIf you really, really need access, \
-         perhaps you can win over your friendly administrator with a batch of freshly baked \
-         cookies.{hint}",
+        "Access rules protect some of these records.\n\n{name} (id={id}) has no '{}' access to:\n- {} ({})\n\nAsk an administrator if you need access to these records.{hint}",
         op.record_name(),
         case.description,
         case.model

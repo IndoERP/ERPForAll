@@ -40,7 +40,7 @@ pub struct ModelData {
     pub noupdate: bool,
 }
 
-const PREFIX: &str = "The operation cannot be completed: ";
+const PREFIX: &str = "The database refused the change: ";
 
 /// Ids every case starts from: two companies, products, warehouses, locations and storage
 /// categories of each, and one package type.
@@ -165,6 +165,8 @@ async fn fixture() -> Fixture {
         &erp_addon_stock::ADDON,
         &ADDON,
     ])
+    .require_sql_objects([&erp_addon_stock::schema_guards::MANIFEST])
+    .schema_sync_options(erp_testkit::SchemaSyncOptions::inline().lifecycle(true))
     .build()
     .await
     .unwrap();
@@ -413,18 +415,18 @@ fn assert_crossover(error: &Error, field: &str, label: &str, value: &str) {
     assert_eq!(error.kind(), ErrorKind::UserError, "{field}: {error:?}");
     let message = error.message();
     assert!(
-        message.starts_with("Uh-oh! You’ve got some company inconsistencies here:\n- “"),
+        message.starts_with("These values link records of different companies:\n- “"),
         "{field}: {message}"
     );
     assert!(
         message.contains(&format!(
-            "belongs to company “Main Company” while “{label}” ({field}: '{value}') belongs to \
-             another company.\n"
+            "is in company “Main Company”, and “{label}” ({field}: '{value}') points to a record of another company.\n"
         )),
         "{field}: {message}"
     );
     assert!(
-        message.ends_with("To avoid a mess, no company crossover is allowed!"),
+        message
+            .ends_with("Choose records of the same company, or records shared by all companies."),
         "{field}: {message}"
     );
 }
@@ -582,7 +584,7 @@ async fn orderpoint_refuses_a_second_rule_for_one_product_and_location() {
     assert_eq!(error.kind(), ErrorKind::Validation, "{error:?}");
     assert_eq!(
         error.message(),
-        format!("{PREFIX}A replenishment rule already exists for this product on this location.")
+        format!("{PREFIX}This product already has a replenishment rule for this location.")
     );
     assert_eq!(
         error.constraint(),

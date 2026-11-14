@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! The stock tracking tables ship no access rows yet (adds them):
-//! on a real `stock` install with the compiled policy, an ordinary internal user is refused on each
-//! of them, for reading and for creating.
+//! Installed tracking permissions expose quant projections to employees while denying
+//! lot/private-helper reads and all direct tracking creation.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -39,6 +38,7 @@ fn system(db: &TestDb) -> ModuleSystem {
         })
         .collect();
     ModuleSystem::builder(db.pool().clone(), index)
+        .require_sql_objects([&erp_addon_stock::schema_guards::MANIFEST])
         .native_artifact_identities(identities)
         .view_types(erp_addon_web::view_type_contributions())
         .require_core_tables(erp_security::auth::core_tables())
@@ -73,15 +73,12 @@ fn run(body: impl std::future::Future<Output = ()> + Send + 'static) {
         .unwrap();
 }
 
-fn refusal(verb: &str, description: &str, model: &str) -> String {
-    format!(
-        "You are not allowed to {verb} '{description}' ({model}) records.\n\nNo group currently \
-         allows this operation.\n\nContact your administrator to request access if necessary."
-    )
-}
+#[path = "support/stock_access.rs"]
+mod stock_access;
+use stock_access::refusal;
 
 #[test]
-fn internal_user_is_refused_on_tracking_tables_until_access_rows_ship() {
+fn internal_user_reads_quant_projections_but_cannot_manage_tracking() {
     run(async {
         let db = TestDb::builder().pool_size(8).create().await.unwrap();
         let system = system(&db);
@@ -179,18 +176,28 @@ fn internal_user_is_refused_on_tracking_tables_until_access_rows_ship() {
             ("stock.serial.position", "Serial Number Position"),
         ] {
             let records = tx.env().records(model).unwrap();
-            let error = records
+            let read = records
                 .search_count(&mut tx, &erp_sdk::Domain::constant(true), None)
-                .await
-                .unwrap_err();
-            assert_eq!(error.kind(), erp_fields::ErrorKind::Access, "{model}");
-            assert_eq!(error.message(), refusal("access", description, model));
+                .await;
+            if matches!(model, "stock.quant" | "stock.serial.position") {
+                read.unwrap();
+            } else {
+                let error = read.unwrap_err();
+                assert_eq!(error.kind(), erp_fields::ErrorKind::Access, "{model}");
+                assert_eq!(
+                    error.message(),
+                    refusal(&orm, "access", "r", description, model).await
+                );
+            }
             let error = records
                 .create(&mut tx, vec![RawVals::new()])
                 .await
                 .unwrap_err();
             assert_eq!(error.kind(), erp_fields::ErrorKind::Access, "{model}");
-            assert_eq!(error.message(), refusal("create", description, model));
+            assert_eq!(
+                error.message(),
+                refusal(&orm, "create", "c", description, model).await
+            );
         }
         // the quant unlink guard runs the model access check before its own refusal
         let error = tx
@@ -201,7 +208,10 @@ fn internal_user_is_refused_on_tracking_tables_until_access_rows_ship() {
             .await
             .unwrap_err();
         assert_eq!(error.kind(), erp_fields::ErrorKind::Access);
-        assert_eq!(error.message(), refusal("delete", "Quants", "stock.quant"));
+        assert_eq!(
+            error.message(),
+            refusal(&orm, "delete", "d", "Quants", "stock.quant").await
+        );
         // the quant upsert guard runs the model access checks before its own refusal
         let error = tx
             .env()
@@ -211,7 +221,10 @@ fn internal_user_is_refused_on_tracking_tables_until_access_rows_ship() {
             .await
             .unwrap_err();
         assert_eq!(error.kind(), erp_fields::ErrorKind::Access);
-        assert_eq!(error.message(), refusal("create", "Quants", "stock.quant"));
+        assert_eq!(
+            error.message(),
+            refusal(&orm, "create", "c", "Quants", "stock.quant").await
+        );
         // the quant copy guard runs the create access check before its own refusal
         let error = tx
             .env()
@@ -223,7 +236,10 @@ fn internal_user_is_refused_on_tracking_tables_until_access_rows_ship() {
             .await
             .unwrap_err();
         assert_eq!(error.kind(), erp_fields::ErrorKind::Access);
-        assert_eq!(error.message(), refusal("create", "Quants", "stock.quant"));
+        assert_eq!(
+            error.message(),
+            refusal(&orm, "create", "c", "Quants", "stock.quant").await
+        );
         tx.rollback().await.unwrap();
         drop(tx);
         db.cleanup().await.unwrap();

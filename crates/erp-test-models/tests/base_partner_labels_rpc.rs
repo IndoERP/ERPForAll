@@ -580,7 +580,7 @@ async fn partner_rpc_binding_and_write_authority_are_preserved() {
         &denied,
         403,
         "erp.exceptions.AccessError",
-        "You are not allowed to create 'Contact' (res.partner) records.",
+        "Your access rights do not let you create 'Contact' (res.partner) records.",
     );
     assert_eq!(lookup(&h, json!({"name": "Denied"})).await, json!([]));
     let denied = call(

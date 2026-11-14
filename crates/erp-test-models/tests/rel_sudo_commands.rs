@@ -44,7 +44,7 @@ impl TestRules for DemoIsRestricted {
 
 fn refusal(model: &ModelSpec, op: Operation) -> Error {
     Error::access(format!(
-        "You are not allowed to {} '{}' ({}) records.",
+        "Your access rights do not let you {} '{}' ({}) records.",
         op.as_str(),
         model.description,
         model.name
@@ -53,7 +53,7 @@ fn refusal(model: &ModelSpec, op: Operation) -> Error {
 
 fn denied(model: &str, op: Operation) -> String {
     format!(
-        "You are not allowed to {} '{model}' ({model}) records.",
+        "Your access rights do not let you {} '{model}' ({model}) records.",
         op.as_str()
     )
 }

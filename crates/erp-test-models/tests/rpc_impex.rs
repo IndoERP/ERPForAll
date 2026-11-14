@@ -329,7 +329,7 @@ async fn test_rpc_impex_refused_under_restricting_policy() {
     assert_eq!(msgs[0]["type"], "error");
     assert_eq!(
         msgs[0]["message"],
-        "You are not allowed to create 'Export: integer' (export.integer) records."
+        "Your access rights do not let you create 'Export: integer' (export.integer) records."
     );
 
     h.cleanup().await.unwrap();

@@ -349,6 +349,7 @@ fn comparable(ty: &FieldType) -> bool {
     matches!(
         ty,
         FieldType::Boolean
+            | FieldType::BigInt
             | FieldType::Integer
             | FieldType::Float { .. }
             | FieldType::Monetary { .. }

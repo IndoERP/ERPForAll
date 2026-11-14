@@ -676,7 +676,7 @@ async fn spec_rel_016_no_existence_check_on_many2one_assignment() {
     // Error message format from CRUD schema (/ crud-schema.md:318-320)
     assert!(
         err.message()
-            .contains("The troublemaker is: 'Rel Mixed' (test_rel.mixed)"),
+            .contains("Referring model: 'Rel Mixed' (test_rel.mixed)"),
         "{err}"
     );
     assert!(err.message().contains("many2one_id"), "{err}");

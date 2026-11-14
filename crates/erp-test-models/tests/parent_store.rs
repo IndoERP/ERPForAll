@@ -319,8 +319,7 @@ async fn spec_crud_057_hierarchy_loops_are_refused() {
         assert_eq!(err.kind(), ErrorKind::UserError);
         assert_eq!(
             err.message(),
-            "You are creating a loop in your 'Dep Category' records. A record cannot be a child \
-             of itself or one of its own sub-items. Please select a different parent."
+            "This parent would make a loop in the 'Dep Category' records: a record cannot sit under itself or under one of its own children. Choose another parent."
         );
     }
     assert!(!tx.is_poisoned(), "refused before any write");

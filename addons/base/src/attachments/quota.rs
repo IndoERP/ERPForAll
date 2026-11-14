@@ -7,7 +7,7 @@ use erp_sdk::{Error, Result, Transaction};
 /// Advisory lock classes are disjoint from GC holds. Database first, subject second; both
 /// transaction scoped on the primary. No lock survives intent commit or spans body transfer.
 const DATABASE_BUDGET_LOCK: i64 = 0x4552_5051_554f_5441;
-const SUBJECT_BUDGET_CLASS: i32 = 0x4552_5153;
+pub const SUBJECT_BUDGET_CLASS: i32 = 0x4552_5153;
 
 pub(crate) fn sql_bytes(bytes: u64) -> Result<i64> {
     i64::try_from(bytes)

@@ -10,7 +10,7 @@ pub const ROOT_LEN: usize = 2;
 /// `account.root`: `10` is the child of `1`.
 #[model(
     name = "account.root",
-    description = "Account codes first 2 digits",
+    description = "Leading digits of account codes",
     order = "name, id",
     keys = [key(name = "_name_uniq", fields = ["name"], message = "An account root exists once.")],
 )]

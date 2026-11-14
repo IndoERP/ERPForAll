@@ -263,7 +263,7 @@ fn convert(action: &ServerAction, model: &str, field: &str, ty: &FieldType) -> R
             }
             .into());
         }
-        FieldType::Uuid | FieldType::Xid8 | FieldType::TimestampTz => {
+        FieldType::BigInt | FieldType::Uuid | FieldType::Xid8 | FieldType::TimestampTz => {
             return Err(ServerActionError::Unsupported {
                 feature: format!(
                     "Update Record of native {} field {}",

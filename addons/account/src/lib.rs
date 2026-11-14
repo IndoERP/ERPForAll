@@ -11,4 +11,7 @@ erp_sdk::addon!(
 pub mod fiscal;
 pub mod journal;
 pub mod ledger;
+pub mod locking;
 pub mod numbering;
+
+pub mod tax;

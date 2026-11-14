@@ -8,7 +8,7 @@ import { expect, test } from "vitest";
 const clientCss = readFileSync(resolve(process.cwd(), "..", "addons/web/static/src/client/client.css"), "utf8");
 const normal = (text: string): string => text.replace(/\s+/g, " ").trim();
 /** Bodies of the top-level rules whose selector list names `selector` (later rules last). */
-const rulesFor = (selector: string): string[] => {
+const rulesFor = (selector: string, required = true): string[] => {
   const wanted = normal(selector);
   const bodies: string[] = [];
   const css = clientCss.replace(/\/\*[\s\S]*?\*\//g, "");
@@ -20,7 +20,7 @@ const rulesFor = (selector: string): string[] => {
     const selectors = chunk.slice(0, open).split("{").pop()!.split(",").map(normal);
     if (selectors.includes(wanted)) bodies.push(chunk.slice(open + 1));
   }
-  if (bodies.length === 0) throw new Error(`client.css has no top-level rule for ${selector}`);
+  if (required && bodies.length === 0) throw new Error(`client.css has no top-level rule for ${selector}`);
   return bodies;
 };
 const last = (selector: string): string => rulesFor(selector).at(-1)!;
@@ -64,11 +64,17 @@ test("every form title uses one borderless treatment and labels are not bold", (
   expect(title).toMatch(/font-size:\s*26px/);
   expect(title).toMatch(/border:\s*0 solid transparent/);
   expect(title).toMatch(/border-bottom:\s*1px solid var\(--line\)/);
-  expect(last(".record-form .form-title-heading .field-label > span")).toBe(last(".record-form .form-title-field .field-label > span"));
+  expect(last(".record-form .form-title-heading .field-label > span:first-child")).toBe(last(".record-form .form-title-field .field-label > span:first-child"));
   // Slice D: the caption is visually hidden (still read by assistive technology); the empty title shows it as placeholder.
-  expect(last(".record-form .form-title-heading .field-label > span")).toMatch(/clip-path:\s*inset\(50%\)/);
-  expect(last(".record-form .form-title-heading .field-label > span")).toMatch(/position:\s*absolute/);
+  expect(last(".record-form .form-title-heading .field-label > span:first-child")).toMatch(/clip-path:\s*inset\(50%\)/);
+  expect(last(".record-form .form-title-heading .field-label > span:first-child")).toMatch(/position:\s*absolute/);
   expect(last(".record-form:not(.settings-form) .field-label > span")).toMatch(/font-weight:\s*500/);
+  // fieldShell puts the caption first; a readonly value and validation/help spans are siblings.
+  // Hiding/styling every span made the tax's readonly name disappear in the real browser.
+  for (const selector of [".record-form .form-title-heading .field-label > span", ".record-form .form-title-field .field-label > span"]) {
+    expect(rulesFor(selector, false).join(" ")).not.toMatch(/clip-path|font-size:\s*11px|text-transform:\s*uppercase/);
+  }
+
 });
 
 test("list rows are compact and breadcrumb links have no button frame", () => {

@@ -157,7 +157,10 @@ fn committed_revocation_reaches_both_warm_processes_and_survives_peer_loss() {
             "Product Category",
             CATEGORY,
             "access",
-            &["Product Administrator", "Settings Administration"],
+            &[
+                "Products / Product Administrator",
+                "Settings Administration",
+            ],
         );
         for port in [f.native.port, peer.port] {
             error(

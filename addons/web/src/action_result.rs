@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Normalization of an object-method result into a typed [`wire::ActionResult`].
 //!
 //! The value a method returned is data: this module validates it against a closed vocabulary
@@ -420,6 +421,90 @@ fn context(
             result.insert(key.clone(), value.clone());
             continue;
         }
+        if current_window && model == "product.uom" {
+            // Browser integer identities must remain exactly representable.
+            let positive_id = |value: &Json| {
+                value
+                    .as_i64()
+                    .is_some_and(|id| id > 0 && id <= 9_007_199_254_740_991)
+            };
+            let valid = match key.as_str() {
+                "product_id" => {
+                    if !positive_id(value) {
+                        return Err(fail(
+                            "Packaging product_id must be a positive safe integer.",
+                        ));
+                    }
+                    true
+                }
+                "product_ids" => {
+                    if !value
+                        .as_array()
+                        .is_some_and(|ids| ids.iter().all(positive_id))
+                    {
+                        return Err(fail(
+                            "Packaging product_ids must be a list of positive safe integers.",
+                        ));
+                    }
+                    true
+                }
+                "active_model" => {
+                    if !matches!(
+                        value.as_str(),
+                        Some("product.template" | "product.product" | "uom.uom")
+                    ) {
+                        return Err(fail(
+                            "Packaging active_model must name a product or unit model.",
+                        ));
+                    }
+                    true
+                }
+                // These keys describe the originating environment and caller selection.
+                // Native actions retain them; the browser keeps its own invocation metadata.
+                "active_ids" | "allowed_company_ids" => {
+                    if !value
+                        .as_array()
+                        .is_some_and(|ids| ids.iter().all(positive_id))
+                    {
+                        return Err(fail(format!(
+                            "Packaging environment {key} must contain positive safe integers."
+                        )));
+                    }
+                    continue;
+                }
+                "active_id" | "company_id" => {
+                    if !positive_id(value) {
+                        return Err(fail(format!(
+                            "Packaging environment {key} must be a positive safe integer."
+                        )));
+                    }
+                    continue;
+                }
+                "lang" | "tz" => {
+                    if !value.is_string() {
+                        return Err(fail(
+                            "Packaging environment language and timezone must be strings.",
+                        ));
+                    }
+                    literal(value)?;
+                    continue;
+                }
+                "prefetch_fields" | "prefetch_langs" => {
+                    if !value.is_boolean() {
+                        return Err(fail(
+                            "Packaging environment prefetch flags must be booleans.",
+                        ));
+                    }
+                    continue;
+                }
+                // Other keys still pass through the ordinary closed-context validator below.
+                _ => false,
+            };
+            if valid {
+                result.insert(key.clone(), value.clone());
+                continue;
+            }
+        }
         let Some(field) = key.strip_prefix("default_").filter(|name| !name.is_empty()) else {
             return Err(fail(format!(
                 "Context key '{}' is not admitted: only default_<field> literals pass.",
@@ -517,7 +602,7 @@ mod tests {
     struct Fixture;
     impl ModelLookup for Fixture {
         fn has_model(&self, model: &str) -> bool {
-            model == "library.loan"
+            matches!(model, "library.loan" | "product.uom")
         }
         fn has_field(&self, model: &str, field: &str) -> bool {
             model == "library.loan" && matches!(field, "book_id" | "borrower_id" | "due_date")
@@ -927,5 +1012,69 @@ mod tests {
             to_json(&nested, 1).unwrap_err().to_string(),
             "Method result nests deeper than 6 levels."
         );
+    }
+    #[test]
+    fn packaging_product_context_is_typed_and_scoped() {
+        let base = json!({"type": ACT_WINDOW, "name":"Packaging", "res_model":"product.uom", "target":"current", "views":[[false,"list"]], "domain":[], "context":{"product_id":7,"product_ids":[7,8],"active_model":"uom.uom"}});
+        let result = serde_json::to_value(run(base.clone()).unwrap()).unwrap();
+        assert_eq!(result["context"]["product_ids"], json!([7, 8]));
+        for (key, value, message) in [
+            (
+                "product_id",
+                json!(0),
+                "Packaging product_id must be a positive safe integer.",
+            ),
+            (
+                "product_ids",
+                json!([7, "8"]),
+                "Packaging product_ids must be a list of positive safe integers.",
+            ),
+            (
+                "active_model",
+                json!("res.users"),
+                "Packaging active_model must name a product or unit model.",
+            ),
+        ] {
+            let mut bad = base.clone();
+            bad["context"][key] = value;
+            let err = run(bad).unwrap_err();
+            assert_eq!(err.kind(), erp_sdk::ErrorKind::Validation);
+            assert_eq!(err.message(), message);
+        }
+        let mut other = base;
+        other["res_model"] = json!("library.loan");
+        other["context"] = json!({"product_id":7});
+        let err = run(other).unwrap_err();
+        assert_eq!(err.kind(), erp_sdk::ErrorKind::Validation);
+        assert_eq!(
+            err.message(),
+            "Context key 'product_id' is not admitted: only default_<field> literals pass."
+        );
+    }
+
+    #[test]
+    fn packaging_environment_context_does_not_travel_to_the_browser() {
+        let value = json!({"type": ACT_WINDOW, "name":"Packaging", "res_model":"product.uom", "target":"current", "views":[[false,"list"]], "domain":[],
+            "context":{"product_ids":[7],"active_id":7,"active_ids":[7],"allowed_company_ids":[1],"company_id":1,"lang":"en_US","tz":"UTC","prefetch_fields":false}});
+        let result = serde_json::to_value(run(value.clone()).unwrap()).unwrap();
+        assert_eq!(result["context"], json!({"product_ids":[7]}));
+        for (key, invalid, message) in [
+            (
+                "active_id",
+                json!(0),
+                "Packaging environment active_id must be a positive safe integer.",
+            ),
+            (
+                "active_ids",
+                json!(["7"]),
+                "Packaging environment active_ids must contain positive safe integers.",
+            ),
+        ] {
+            let mut bad = value.clone();
+            bad["context"][key] = invalid;
+            let err = run(bad).unwrap_err();
+            assert_eq!(err.kind(), erp_sdk::ErrorKind::Validation);
+            assert_eq!(err.message(), message);
+        }
     }
 }

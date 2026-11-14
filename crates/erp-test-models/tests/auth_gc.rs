@@ -345,6 +345,7 @@ async fn gc_reads_expired_rows_through_the_expiry_index() {
 async fn gc_sweeps_idle_rows() {
     let w = world().await;
     let bob = user_with_password(&w.h, "bob", "pw").await;
+    set_param(&w.h, "sessions.touch_interval_seconds", "1").await;
     set_param(&w.h, "sessions.max_inactivity_seconds", "60").await;
     sessions(&w.h, bob, 3_000, "a").await;
     sql(
@@ -1124,6 +1125,7 @@ async fn an_idle_batch_reads_only_the_pages_up_to_its_last_row() {
 async fn the_idle_sweep_counts_the_pages_it_reads() {
     let w = world().await;
     let bob = user_with_password(&w.h, "bob", "pw").await;
+    set_param(&w.h, "sessions.touch_interval_seconds", "1").await;
     set_param(&w.h, "sessions.max_inactivity_seconds", "60").await;
     idle_sessions(&w.h, bob, 3_500, "dense").await;
     sessions(&w.h, bob, 200, "fresh").await;

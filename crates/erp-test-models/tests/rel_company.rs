@@ -115,12 +115,13 @@ async fn spec_crud_059_company_check_on_create() {
         assert_eq!(err.kind(), ErrorKind::UserError, "{err}");
         assert!(
             err.message()
-                .starts_with("Uh-oh! You’ve got some company inconsistencies here:"),
+                .starts_with("These values link records of different companies:"),
             "{err}"
         );
         assert!(
-            err.message()
-                .ends_with("To avoid a mess, no company crossover is allowed!"),
+            err.message().ends_with(
+                "Choose records of the same company, or records shared by all companies."
+            ),
             "{err}"
         );
     }
@@ -143,10 +144,9 @@ async fn spec_crud_059_company_check_on_create() {
     assert_eq!(err.kind(), ErrorKind::UserError);
     assert_eq!(
         err.message(),
-        "Uh-oh! You’ve got some company inconsistencies here:\n\
-         - “N0” belongs to company “Company B” while “Parent” (parent_id: 'PA') belongs to \
-         another company.\n\
-         To avoid a mess, no company crossover is allowed!"
+        "These values link records of different companies:\n\
+         - “N0” is in company “Company B”, and “Parent” (parent_id: 'PA') points to a record of another company.\n\
+         Choose records of the same company, or records shared by all companies."
     );
     // the model without the auto check accepts the inconsistency
     let nocheck = tx.env().records("test_rel.model_child_nocheck").unwrap();
@@ -249,8 +249,7 @@ async fn spec_crud_061_company_check_message_forms() {
     );
     assert_eq!(
         lines[1],
-        "- “C0” belongs to company “Company B” while “Parent” (parent_id: 'PA') belongs to another \
-         company."
+        "- “C0” is in company “Company B”, and “Parent” (parent_id: 'PA') points to a record of another company."
     );
     // form (a): a company is its own company
     let companies = tx.env().records("res.company").unwrap();
@@ -271,10 +270,9 @@ async fn spec_crud_061_company_check_message_forms() {
     assert_eq!(err.kind(), ErrorKind::UserError);
     assert_eq!(
         err.message(),
-        "Uh-oh! You’ve got some company inconsistencies here:\n\
-         - Record is company “Self” while “Parent Record” (model_parent_id: 'PB') belongs to \
-         another company.\n\
-         To avoid a mess, no company crossover is allowed!"
+        "These values link records of different companies:\n\
+         - The record is company “Self”, and “Parent Record” (model_parent_id: 'PB') points to a record of another company.\n\
+         Choose records of the same company, or records shared by all companies."
     );
     drop(tx);
     h.cleanup().await.unwrap();
@@ -285,12 +283,12 @@ fn assert_inconsistent(err: &erp_sdk::Error) {
     assert_eq!(err.kind(), ErrorKind::UserError, "{err}");
     assert!(
         err.message()
-            .starts_with("Uh-oh! You’ve got some company inconsistencies here:"),
+            .starts_with("These values link records of different companies:"),
         "{err}"
     );
     assert!(
         err.message()
-            .ends_with("To avoid a mess, no company crossover is allowed!"),
+            .ends_with("Choose records of the same company, or records shared by all companies."),
         "{err}"
     );
 }
@@ -393,8 +391,7 @@ async fn spec_crud_067_check_toward_delegated_company() {
     assert_eq!(
         lines.get(1).copied(),
         Some(
-            "- “LB” belongs to company “Company A” while “Variant” (variant_id: 'TB') belongs to \
-             another company."
+            "- “LB” is in company “Company A”, and “Variant” (variant_id: 'TB') points to a record of another company."
         ),
         "{err}"
     );

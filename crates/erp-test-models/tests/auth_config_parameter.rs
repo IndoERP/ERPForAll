@@ -299,7 +299,8 @@ async fn setters_authorize_before_reading_previous_values() {
     set_param(&h, "review.private", "sentinel-private-text").await;
     set_param(&h, "review.numeric", "7").await;
     set_param(&h, "review.empty", "").await;
-    let expected = "You are not allowed to write 'System Parameter' (ir.config_parameter) records.";
+    let expected =
+        "Your access rights do not let you write 'System Parameter' (ir.config_parameter) records.";
     for rpc in [false, true] {
         for (method, key, value) in [
             ("set_int", "review.private", Value::Int(0)),
@@ -433,7 +434,7 @@ async fn setters_authorize_record_before_parsing_or_returning() {
     let id = row_of(&mut tx, "review.private").await.ids()[0];
     tx.rollback().await.unwrap();
     let expected = format!(
-        "You are not allowed to modify 'System Parameter' (ir.config_parameter) records.\n\nRecords: ir.config_parameter({id},), User: {bob}"
+        "Your access rights do not let you modify 'System Parameter' (ir.config_parameter) records.\n\nRecords: ir.config_parameter({id},), User: {bob}"
     );
     for no_op in [false, true] {
         let mut tx = h.begin_as(bob).await.unwrap();
@@ -946,4 +947,277 @@ async fn hashing_parameters_over_the_pool_reservation_stop_auth_new() {
             over_reservation(w.pool.config().memory_kib()).as_str()
         )
     );
+}
+
+#[test]
+fn session_policy_rejects_invalid_parameters_by_key() {
+    for (key, value, min, max) in [
+        ("sessions.touch_interval_seconds", "0", 1, 3600),
+        ("sessions.rotation_interval_seconds", "86401", 60, 86400),
+        ("sessions.rotation_grace_seconds", "garbage", 5, 600),
+    ] {
+        let e = erp_security::auth::validate_setting(key, Some(value)).unwrap_err();
+        assert_eq!(e.kind(), ErrorKind::Validation);
+        assert_eq!(
+            e.message(),
+            format!("ir.config_parameter {key} = '{value}' is not a whole number in {min}..={max}")
+        );
+    }
+}
+
+#[test]
+fn session_policy_rejects_invalid_relationships_at_read() {
+    use std::collections::HashMap;
+    for (rows, message) in [
+        (
+            vec![
+                ("sessions.touch_interval_seconds", "60"),
+                ("sessions.max_inactivity_seconds", "60"),
+            ],
+            "ir.config_parameter sessions.touch_interval_seconds = 60 must be shorter than sessions.max_inactivity_seconds = 60",
+        ),
+        (
+            vec![
+                ("sessions.rotation_grace_seconds", "120"),
+                ("sessions.rotation_interval_seconds", "60"),
+            ],
+            "ir.config_parameter sessions.rotation_grace_seconds = 120 must be shorter than sessions.rotation_interval_seconds = 60",
+        ),
+    ] {
+        let rows: HashMap<_, _> = rows
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), Some(v.to_owned())))
+            .collect();
+        let error = erp_security::auth::AuthSettings::from_rows(&rows).unwrap_err();
+        assert_eq!(
+            (error.kind(), error.message()),
+            (ErrorKind::Validation, message)
+        );
+    }
+}
+
+#[tokio::test]
+async fn session_policy_cross_bounds_are_checked_on_model_writes() {
+    let w = world().await;
+    set_param(&w.h, "sessions.max_inactivity_seconds", "120").await;
+    for (key, value, message) in [
+        (
+            "sessions.touch_interval_seconds",
+            "120",
+            "ir.config_parameter sessions.touch_interval_seconds = 120 must be shorter than sessions.max_inactivity_seconds = 120",
+        ),
+        (
+            "sessions.max_inactivity_seconds",
+            "60",
+            "ir.config_parameter sessions.touch_interval_seconds = 60 must be shorter than sessions.max_inactivity_seconds = 60",
+        ),
+    ] {
+        let mut tx = w.h.begin().await.unwrap();
+        let error = set_str(&mut tx, key, Some(value)).await.unwrap_err();
+        assert_eq!(
+            (error.kind(), error.message()),
+            (ErrorKind::Validation, message)
+        );
+        tx.rollback().await.unwrap();
+    }
+    set_param(&w.h, "sessions.rotation_grace_seconds", "5").await;
+    set_param(&w.h, "sessions.rotation_interval_seconds", "60").await;
+    let mut tx = w.h.begin().await.unwrap();
+    let error = set_str(&mut tx, "sessions.rotation_grace_seconds", Some("60"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (error.kind(), error.message()),
+        (
+            ErrorKind::Validation,
+            "ir.config_parameter sessions.rotation_grace_seconds = 60 must be shorter than sessions.rotation_interval_seconds = 60"
+        )
+    );
+    tx.rollback().await.unwrap();
+}
+
+#[test]
+fn session_policy_defaults_bounds_and_undefined_values() {
+    use erp_security::auth::{AuthSettings, SessionPolicy};
+    use std::collections::HashMap;
+    let defaults = SessionPolicy::from_rows(&HashMap::new()).unwrap();
+    assert_eq!(defaults.touch_interval().as_secs(), 60);
+    assert_eq!(defaults.rotation_interval().as_secs(), 10800);
+    assert_eq!(defaults.rotation_grace().as_secs(), 120);
+    for value in [None, Some(String::new())] {
+        let rows = [
+            "sessions.touch_interval_seconds",
+            "sessions.rotation_interval_seconds",
+            "sessions.rotation_grace_seconds",
+        ]
+        .into_iter()
+        .map(|k| (k.to_owned(), value.clone()))
+        .collect();
+        assert_eq!(SessionPolicy::from_rows(&rows).unwrap(), defaults);
+    }
+    for (touch, rotation, grace) in [(1, 60, 5), (3600, 86400, 600)] {
+        let rows = [
+            ("sessions.touch_interval_seconds", touch.to_string()),
+            ("sessions.rotation_interval_seconds", rotation.to_string()),
+            ("sessions.rotation_grace_seconds", grace.to_string()),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), Some(v)))
+        .collect();
+        let parsed = AuthSettings::from_rows(&rows).unwrap();
+        assert_eq!(parsed.session_policy().touch_interval().as_secs(), touch);
+        assert_eq!(
+            parsed.session_policy().rotation_interval().as_secs(),
+            rotation
+        );
+        assert_eq!(parsed.session_policy().rotation_grace().as_secs(), grace);
+        assert_eq!(parsed.max_inactivity().as_secs(), 604800);
+        assert_eq!(parsed.max_lifetime().as_secs(), 7776000);
+        assert_eq!(parsed.address_cooldown().after(), 5);
+    }
+    for (key, min, max) in [
+        ("sessions.touch_interval_seconds", 1, 3600),
+        ("sessions.rotation_interval_seconds", 60, 86400),
+        ("sessions.rotation_grace_seconds", 5, 600),
+    ] {
+        for value in [
+            "-1".to_owned(),
+            "4294967296".to_owned(),
+            "１".to_owned(),
+            "1.5".to_owned(),
+            " 5".to_owned(),
+            (min - 1).to_string(),
+            (max + 1).to_string(),
+        ] {
+            let rows = HashMap::from([(key.to_owned(), Some(value.clone()))]);
+            let error = SessionPolicy::from_rows(&rows).unwrap_err();
+            assert_eq!((error.kind(), error.message()), (ErrorKind::Validation, format!("ir.config_parameter {key} = '{value}' is not a whole number in {min}..={max}").as_str()));
+        }
+    }
+}
+
+#[tokio::test]
+async fn session_policy_parallel_changes_refuse_write_skew() {
+    let w = world().await;
+    set_param(&w.h, "sessions.touch_interval_seconds", "30").await;
+    set_param(&w.h, "sessions.max_inactivity_seconds", "120").await;
+    let mut a = w.h.begin().await.unwrap();
+    let mut b = w.h.begin().await.unwrap();
+    a.query("SELECT 1", &[]).await.unwrap();
+    b.query("SELECT 1", &[]).await.unwrap();
+    let write = async |mut tx: Transaction, key: &str, value: &str| -> Result<(), Error> {
+        match set_str(&mut tx, key, Some(value)).await {
+            Ok(_) => tx.commit().await,
+            Err(error) => {
+                tx.rollback().await.unwrap();
+                Err(error)
+            }
+        }
+    };
+    let (a, b) = tokio::join!(
+        write(a, "sessions.touch_interval_seconds", "90"),
+        write(b, "sessions.max_inactivity_seconds", "60")
+    );
+    assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
+    let error = a.err().or_else(|| b.err()).unwrap();
+    if error.kind() == ErrorKind::Concurrency {
+        assert_eq!(error.sqlstate(), Some("40001"));
+        // Driver-added detail/context is not stable across PostgreSQL versions; the precise
+        // SQLSTATE and concurrency kind establish the serialization boundary.
+        assert!(!error.message().is_empty());
+    } else {
+        assert_eq!(error.kind(), ErrorKind::Validation);
+        assert!(matches!(
+            error.message(),
+            "ir.config_parameter sessions.touch_interval_seconds = 90 must be shorter than sessions.max_inactivity_seconds = 60"
+        ));
+    }
+    let mut tx = w.h.begin().await.unwrap();
+    let rows = tx
+        .query(
+            "SELECT key,value FROM ir_config_parameter WHERE key=ANY($1::text[])",
+            &[&&keys::SESSION_POLICY[..]],
+        )
+        .await
+        .unwrap();
+    let map = rows
+        .into_iter()
+        .map(|row| (row.get::<_, String>(0), row.get::<_, Option<String>>(1)))
+        .collect();
+    erp_security::auth::SessionPolicy::from_rows(&map).unwrap();
+    tx.rollback().await.unwrap();
+}
+
+#[tokio::test]
+async fn session_policy_mixed_create_preserves_managed_setting_audit() {
+    async fn audit_count(tx: &mut Transaction) -> i64 {
+        tx.query("SELECT count(*)::int8 FROM ir_config_setting_audit WHERE setting_key='base.attachment_max_bytes'", &[])
+            .await.unwrap()[0].try_get::<_, i64>(0).unwrap()
+    }
+    let w = world().await;
+    let mut tx = w.h.begin().await.unwrap();
+    let before = audit_count(&mut tx).await;
+    params(&tx)
+        .create_values(
+            &mut tx,
+            &[
+                map(&[("key", s("base.attachment_max_bytes")), ("value", s("9"))]),
+                map(&[
+                    ("key", s("sessions.touch_interval_seconds")),
+                    ("value", s("17")),
+                ]),
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        get_str(&mut tx, "sessions.touch_interval_seconds", None)
+            .await
+            .unwrap(),
+        "17"
+    );
+    assert_eq!(
+        get_str(&mut tx, "base.attachment_max_bytes", None)
+            .await
+            .unwrap(),
+        "9"
+    );
+    assert_eq!(audit_count(&mut tx).await, before + 1);
+    tx.commit().await.unwrap();
+
+    let mut tx = w.h.begin().await.unwrap();
+    let error = params(&tx)
+        .create_values(
+            &mut tx,
+            &[
+                map(&[("key", s("base.attachment_max_bytes")), ("value", s("11"))]),
+                map(&[
+                    ("key", s("sessions.touch_interval_seconds")),
+                    ("value", s("0")),
+                ]),
+            ],
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (error.kind(), error.message()),
+        (
+            ErrorKind::Validation,
+            "ir.config_parameter sessions.touch_interval_seconds = '0' is not a whole number in 1..=3600"
+        )
+    );
+    assert_eq!(
+        get_str(&mut tx, "sessions.touch_interval_seconds", None)
+            .await
+            .unwrap(),
+        "17"
+    );
+    assert_eq!(
+        get_str(&mut tx, "base.attachment_max_bytes", None)
+            .await
+            .unwrap(),
+        "9"
+    );
+    assert_eq!(audit_count(&mut tx).await, before + 1);
+    tx.rollback().await.unwrap();
 }

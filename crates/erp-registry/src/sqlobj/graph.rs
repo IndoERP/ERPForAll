@@ -9,10 +9,11 @@ use std::fmt;
 use erp_fields::{Error, Result};
 
 use super::decl::{
-    SqlBinding, SqlColumnSet, SqlCompareColumn, SqlConditionDecl, SqlDeferral, SqlDep,
-    SqlFunctionDecl, SqlLanguage, SqlObjectDecl, SqlObjectKindDecl, SqlObjectManifest, SqlResult,
-    SqlSecurity, SqlTableOp, SqlType, SqlVolatility,
+    SqlBinding, SqlColumnSet, SqlCompareColumn, SqlConditionDecl, SqlConditionKind, SqlDeferral,
+    SqlDep, SqlFunctionDecl, SqlLanguage, SqlObjectDecl, SqlObjectKindDecl, SqlObjectManifest,
+    SqlResult, SqlSecurity, SqlTableOp, SqlType, SqlVolatility,
 };
+use super::integrity::{SqlForeignKey, SqlTableOptions};
 use super::validate::{Who, check, check_key, decl_bytes, describe_dep};
 use super::{SqlObjectLimits, within};
 use crate::spec::Registry;
@@ -171,6 +172,10 @@ pub enum SqlObjectKind {
     Condition(SqlCondition),
     /// A restricted table grant policy.
     TableGrant(SqlTableGrant),
+    /// A native composite foreign key.
+    ForeignKey(SqlForeignKey),
+    /// Owning native table persistence.
+    TableOptions(SqlTableOptions),
 }
 
 /// A validated function.
@@ -316,11 +321,16 @@ pub enum SqlTransition {
     },
 }
 
-/// A validated condition: SQLSTATE, identifier and static public message.
+/// A validated condition: SQLSTATE, identifier, explicit kind and declared static text.
 #[derive(Debug)]
-pub struct SqlCondition(SqlConditionDecl);
+pub struct SqlCondition(SqlConditionDecl, SqlConditionKind);
 
 impl SqlCondition {
+    /// Explicit validated classification; no retry kind is representable.
+    pub fn kind(&self) -> SqlConditionKind {
+        self.1
+    }
+
     /// Five-character SQLSTATE in the `ERP` namespace.
     pub fn sqlstate(&self) -> &'static str {
         self.0.sqlstate
@@ -329,7 +339,7 @@ impl SqlCondition {
     pub fn identifier(&self) -> &'static str {
         self.0.identifier
     }
-    /// Static public message.
+    /// Declared static text; public only for Validation.
     pub fn message(&self) -> &'static str {
         self.0.message
     }
@@ -523,7 +533,9 @@ fn resolve_one(
                 }
                 SqlObjectKindDecl::Trigger(_)
                 | SqlObjectKindDecl::Condition(_)
-                | SqlObjectKindDecl::TableGrant(_) => {
+                | SqlObjectKindDecl::TableGrant(_)
+                | SqlObjectKindDecl::ForeignKey(_)
+                | SqlObjectKindDecl::TableOptions(_) => {
                     return Err(err!(
                         id.who(),
                         "trigger function '{function}' is not a function"
@@ -544,9 +556,111 @@ fn resolve_one(
             };
             (references, SqlObjectKind::Trigger(trigger))
         }
-        SqlObjectKindDecl::Condition(c) => (Vec::new(), SqlObjectKind::Condition(SqlCondition(c))),
+        SqlObjectKindDecl::ForeignKey(f) => {
+            let model = model_ref(registry, reach, id, f.model)?;
+            let target = model_ref(registry, reach, id, f.target)?;
+            let column_shapes = super::integrity::resolve(registry, id, &f)?;
+            if let super::integrity::SqlForeignKeyTarget::Key(name) = f.target_key {
+                let spec = registry
+                    .model(f.target)
+                    .ok_or_else(|| err!(id.who(), "target model is missing"))?;
+                // A compatible key may have several owners. A reachable declaration is enough;
+                // an unrelated override of its message must not create an accidental dependency.
+                let mut contributors = spec.mro.iter().filter(|d| d.table_objects.iter().any(|o|
+                    o.name == name && matches!(o.kind, crate::TableObjectKind::Key(k) if k.fields == f.target_columns)));
+                let contributor = contributors.next().ok_or_else(|| {
+                    err!(
+                        id.who(),
+                        "target key '{name}' has no declaration provenance"
+                    )
+                })?;
+                if !reaches(reach, id.addon, contributor.addon)
+                    && !contributors.any(|d| reaches(reach, id.addon, d.addon))
+                {
+                    return Err(err!(
+                        id.who(),
+                        "target key '{name}' is contributed by addon '{}', but addon '{}' does not depend on it",
+                        contributor.addon,
+                        id.addon
+                    ));
+                }
+            }
+
+            let spec = registry
+                .model(f.model)
+                .ok_or_else(|| err!(id.who(), "source model is missing"))?;
+            let collides = spec.table_objects.iter().any(|o| o.full_name == f.name)
+                || f.name == crate::ident::shorten_identifier(&format!("{}_pkey", spec.table))
+                || spec.fields.iter().any(|c| {
+                    matches!(c.ty, erp_fields::FieldType::Many2one { .. })
+                        && crate::ident::shorten_identifier(&format!(
+                            "{}_{}_fkey",
+                            spec.table, c.name
+                        )) == f.name
+                });
+            if collides {
+                return Err(err!(
+                    id.who(),
+                    "constraint '{}' collides with a model table object",
+                    f.name
+                ));
+            }
+            let references = vec![
+                SqlReference::Model(model.clone()),
+                SqlReference::Model(target.clone()),
+            ];
+            (
+                references,
+                SqlObjectKind::ForeignKey(SqlForeignKey {
+                    decl: f,
+                    column_shapes,
+                    model,
+                    target,
+                }),
+            )
+        }
+        SqlObjectKindDecl::TableOptions(o) => {
+            let model = model_ref(registry, reach, id, o.model)?;
+            super::integrity::table_options(
+                registry,
+                id.who(),
+                o,
+                by_id.values().map(|(d, _)| d.kind),
+            )?;
+            (
+                vec![SqlReference::Model(model.clone())],
+                SqlObjectKind::TableOptions(SqlTableOptions {
+                    model,
+                    persistence: o.persistence,
+                }),
+            )
+        }
+        SqlObjectKindDecl::Condition(c) => (
+            Vec::new(),
+            SqlObjectKind::Condition(SqlCondition(
+                c,
+                c.kind.ok_or_else(|| {
+                    err!(
+                        id.who(),
+                        "condition kind is missing; declare Validation or Programming"
+                    )
+                })?,
+            )),
+        ),
         SqlObjectKindDecl::TableGrant(g) => {
             let model = model_ref(registry, reach, id, g.model)?;
+            // INSERT through `DEFAULT nextval(..)` needs USAGE on the sequence
+            if let Some(seq) = registry.model(g.model).and_then(|m| m.id_sequence)
+                && g.ops.contains(&SqlTableOp::Insert)
+            {
+                return Err(err!(
+                    id.who(),
+                    "model '{}' takes its ids from the shared sequence '{seq}', and table \
+                     grants do not cover sequences yet; an INSERT policy needs a model with its \
+                     own identity id",
+                    g.model
+                ));
+            }
             let grant = SqlTableGrant {
                 model: model.clone(),
                 binding: g.binding,
@@ -652,6 +766,8 @@ fn check_collisions(objects: &[SqlObject]) -> Result<()> {
     let mut functions: BTreeMap<(&str, &str, &[SqlType]), SqlObjectId> = BTreeMap::new();
     let mut triggers: BTreeMap<(&str, &str), SqlObjectId> = BTreeMap::new();
     let mut conditions: BTreeMap<(&str, &str), SqlObjectId> = BTreeMap::new();
+    let mut constraints = BTreeMap::new();
+    let mut options = BTreeMap::new();
     let mut grants: BTreeMap<(&str, SqlBinding), SqlObjectId> = BTreeMap::new();
     for object in objects {
         let (what, previous) = match &object.kind {
@@ -666,9 +782,17 @@ fn check_collisions(objects: &[SqlObject]) -> Result<()> {
                 format!("trigger '{}' on table '{}'", t.name, t.model.table),
                 triggers.insert((t.model.table.as_str(), t.name), object.id),
             ),
-            SqlObjectKind::Condition(SqlCondition(c)) => (
+            SqlObjectKind::Condition(SqlCondition(c, _)) => (
                 format!("condition {} '{}'", c.sqlstate, c.identifier),
                 conditions.insert((c.sqlstate, c.identifier), object.id),
+            ),
+            SqlObjectKind::ForeignKey(f) => (
+                format!("constraint '{}' on table '{}'", f.name(), f.model().table()),
+                constraints.insert((f.model().table(), f.name()), object.id),
+            ),
+            SqlObjectKind::TableOptions(o) => (
+                format!("table options for '{}'", o.model().table()),
+                options.insert(o.model().table(), object.id),
             ),
             SqlObjectKind::TableGrant(g) => (
                 format!(

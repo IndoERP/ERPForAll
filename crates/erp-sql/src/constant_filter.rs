@@ -290,7 +290,8 @@ fn condition_sql(field: &FieldSpec, positive: bool, values: &[&Value]) -> Result
 fn scalar_kind(field: &FieldSpec) -> Result<ScalarKind, String> {
     let allowed = matches!(
         field.ty,
-        FieldType::Integer
+        FieldType::BigInt
+            | FieldType::Integer
             | FieldType::Float { .. }
             | FieldType::Monetary { .. }
             | FieldType::Char { .. }
@@ -318,6 +319,7 @@ fn scalar_kind(field: &FieldSpec) -> Result<ScalarKind, String> {
 /// A parameter value as an SQL literal of its type.
 fn scalar_literal(scalar: &Scalar) -> Result<String, String> {
     Ok(match scalar {
+        Scalar::BigInt(i) => i.to_string(),
         Scalar::Int8(i) => i.to_string(),
         Scalar::Float8(f) if f.is_finite() => format!("'{f:?}'::float8"),
         Scalar::Float8(f) => return Err(format!("{f} is not a finite number")),

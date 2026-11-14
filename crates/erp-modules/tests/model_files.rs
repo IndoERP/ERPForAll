@@ -232,7 +232,7 @@ fn unknown_keys_are_refused_with_file_and_line() {
         refused("[[model]]\nname = \"my.tag\"\ncolour = \"red\"\n"),
         "Model file 'models/test.toml:3': unknown field `colour`, expected one of `name`, \
          `extend`, `inherit`, `description`, `table`, `order`, `rec_name`, `check_company_auto`, `company_match`, `company_access`, `eventful`, `audit_reads`, `transient`, \
-         `abstract`, `transient_max_age_seconds`, `transient_max_count`, `field`, `index`, `partition`, `exclude`, `key`, `sql_function`, `sql_trigger`, `sql_condition`, `sql_grant`, `persistence`"
+         `abstract`, `transient_max_age_seconds`, `transient_max_count`, `field`, `index`, `partition`, `exclude`, `key`, `sql_function`, `sql_foreign_key`, `sql_table_options`, `sql_trigger`, `sql_condition`, `sql_grant`, `persistence`"
     );
     assert_eq!(
         refused(
@@ -242,12 +242,12 @@ fn unknown_keys_are_refused_with_file_and_line() {
          `string`, `help`, `required`, `readonly`, `store`, `copy`, `index`, `default`, \
          `related`, `groups`, `domain`, `context`, `check_company`, `digits`, `size`, \
          `currency_field`, `selection`, `selection_add`, `comodel`, `inverse`, `relation`, \
-         `column1`, `column2`, `ondelete`, `bounds`, `generated`, `generated_storage`, `compute`, `depends`"
+         `column1`, `column2`, `ondelete`, `bounds`, `generated`, `generated_storage`, `input_adapted`, `collation`, `compute`, `depends`"
     );
     assert_eq!(
         refused("[unknown]\n"),
         "Model file 'models/test.toml:1': unknown field `unknown`, expected one of `model`, \
-         `sql_function`, `sql_trigger`, `sql_condition`, `sql_grant`, `persistence`"
+         `sql_function`, `sql_foreign_key`, `sql_table_options`, `sql_trigger`, `sql_condition`, `sql_grant`, `persistence`"
     );
 }
 
@@ -1038,7 +1038,7 @@ method = "brin"
     assert_eq!(err.kind(), erp_fields::ErrorKind::Programming);
     assert_eq!(
         err.message(),
-        "index '_by_state' of 'ix.booking': method = \"brin\" is for date, datetime and integer \
+        "index '_by_state' of 'ix.booking': method = \"brin\" is for date, datetime, integer and bigint \
          fields ('state' is char)"
     );
 }
@@ -1100,8 +1100,8 @@ fn spec_ormx_021_model_file_index_refusals() {
         refused(
             "[[model]]\nname = \"ix.t\"\n\n[[model.field]]\nname = \"a\"\ntype = \"char\"\nindex = \"brin\"\n"
         ),
-        "Model file 'models/test.toml:4': field ix.t.a: index = \"brin\" is for date, datetime \
-         and integer fields (this field is char)"
+        "Model file 'models/test.toml:4': field ix.t.a: index = \"brin\" is for date, datetime, \
+         integer and bigint fields (this field is char)"
     );
     // brin and gin need a stored field, like the registry says
     assert_eq!(
@@ -1653,7 +1653,7 @@ fn eventful_wrong_types_and_tableless_attributes_are_refused() {
                 "[[model]]\nname = 'test.eventful'\n{key} = false\n"
             )),
             format!(
-                "Model file 'models/test.toml:3': unknown field `{key}`, expected one of `name`, `extend`, `inherit`, `description`, `table`, `order`, `rec_name`, `check_company_auto`, `company_match`, `company_access`, `eventful`, `audit_reads`, `transient`, `abstract`, `transient_max_age_seconds`, `transient_max_count`, `field`, `index`, `partition`, `exclude`, `key`, `sql_function`, `sql_trigger`, `sql_condition`, `sql_grant`, `persistence`"
+                "Model file 'models/test.toml:3': unknown field `{key}`, expected one of `name`, `extend`, `inherit`, `description`, `table`, `order`, `rec_name`, `check_company_auto`, `company_match`, `company_access`, `eventful`, `audit_reads`, `transient`, `abstract`, `transient_max_age_seconds`, `transient_max_count`, `field`, `index`, `partition`, `exclude`, `key`, `sql_function`, `sql_foreign_key`, `sql_table_options`, `sql_trigger`, `sql_condition`, `sql_grant`, `persistence`"
             )
         );
     }
@@ -1693,6 +1693,8 @@ static MY_ADDON: AddonDescriptor = AddonDescriptor {
 fn spec_ormx_039_runtime_inputs_cannot_declare_sql_objects() {
     for key in [
         "sql_function",
+        "sql_foreign_key",
+        "sql_table_options",
         "sql_trigger",
         "sql_condition",
         "sql_grant",
@@ -1760,4 +1762,80 @@ fn spec_ormx_039_runtime_inputs_cannot_declare_sql_objects() {
         .build()
         .unwrap();
     assert!(registry.model("my.tag").unwrap().field("label").is_some());
+}
+
+#[test]
+fn generated_input_flag_is_parsed_without_becoming_an_assignment() {
+    let defs = parse_model_file(
+        &my_addon(),
+        FILE,
+        r#"
+[[model]]
+name = "my.doc"
+[[model.field]]
+name = "source"
+type = "integer"
+[[model.field]]
+name = "total"
+type = "integer"
+generated = "source + 1"
+input_adapted = true
+"#,
+    )
+    .unwrap();
+    let total = defs[0]
+        .fields
+        .iter()
+        .find(|field| field.name == "total")
+        .unwrap();
+    assert_eq!(total.input_adapted, Some(true));
+    let declaration = defs[0].to_decl().unwrap();
+    assert_eq!(
+        declaration
+            .fields
+            .iter()
+            .find(|field| field.name == "total")
+            .unwrap()
+            .input_adapted,
+        Some(true)
+    );
+}
+
+#[test]
+fn field_collation_model_file_is_preserved_and_strict() {
+    let source = "[[model]]\nname='my_addon.item'\n[[model.field]]\nname='code'\ntype='char'\ncollation='C'\n";
+    let defs = parse_model_file(&my_addon(), FILE, source).unwrap();
+    let mut overlay = Overlay::new();
+    overlay.add_addon_defs(defs).unwrap();
+    static A: AddonDescriptor = AddonDescriptor {
+        name: "my_addon",
+        depends: &["base"],
+        exact_only: false,
+    };
+    let r = RegistryBuilder::new([&A])
+        .linked(false)
+        .overlay(&overlay)
+        .build()
+        .unwrap();
+    assert_eq!(
+        r.model("my_addon.item")
+            .unwrap()
+            .field("code")
+            .unwrap()
+            .collation,
+        erp_fields::TextCollation::C
+    );
+    let error = parse_model_file(
+        &my_addon(),
+        FILE,
+        &source.replace("collation='C'", "collation=42"),
+    )
+    .unwrap_err();
+    let Error::ModelFile { message, .. } = error else {
+        panic!("expected ModelFile, got {error:?}")
+    };
+    assert_eq!(
+        message,
+        "field my_addon.item.code: field 'code': collation: expected a string, got 42"
+    );
 }

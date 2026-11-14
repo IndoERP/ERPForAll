@@ -510,7 +510,7 @@ async fn authorized_upgrade_audit_failure_rolls_back_all_effects() {
             assert_eq!(source.sqlstate(), Some("23514"));
             assert_eq!(
                 source.message(),
-                "The operation cannot be completed: new row for relation \"erp_module_lifecycle_audit\" violates check constraint \"fixture_reject_upgrade\""
+                "The database refused the change: new row for relation \"erp_module_lifecycle_audit\" violates check constraint \"fixture_reject_upgrade\""
             );
         }
         other => panic!("expected audit constraint failure, got {other:?}"),

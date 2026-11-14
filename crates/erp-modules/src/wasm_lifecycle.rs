@@ -1057,6 +1057,7 @@ fn field_def(addon: &ModuleName, model: &str, field: &Value) -> Result<FieldDef>
     };
     let kind = match kind_name {
         "boolean" => KindDef::Boolean,
+        "bigint" => KindDef::BigInt,
         "integer" => KindDef::Integer,
         "float" => KindDef::Float { digits: None },
         "char" => KindDef::Char { size },
@@ -1137,6 +1138,12 @@ fn field_def(addon: &ModuleName, model: &str, field: &Value) -> Result<FieldDef>
                 }
             }
             "translate" => out.translate = Some(flag(addon, &what, value)?),
+            "collation" => {
+                let raw = value
+                    .as_str()
+                    .ok_or_else(|| unsupported(format!("field {what}: expected a string")))?;
+                out.collation = Some(unquote(addon, &what, raw)?);
+            }
             "sanitize" if kind_name == "html" => {
                 if let Value::String(preset) = value
                     && preset != "true"
@@ -2668,6 +2675,28 @@ mod tests {
             {"addon": "w", "kind": "model", "model": "w.wiz", "name": "Wiz",
              "detail": {"args": args, "fields": fields}},
         ]))
+    }
+
+    #[test]
+    fn field_collation_description_is_preserved() {
+        let describe = |value: Value| {
+            one_model(
+                serde_json::json!({}),
+                serde_json::json!([
+                    {"name":"code", "kind":"char", "attrs":{"collation": value}}
+                ]),
+            )
+        };
+        let defs =
+            models_from_describe(&manifest(""), &describe(serde_json::json!("\"C\""))).unwrap();
+        assert_eq!(defs[0].fields[0].collation.as_deref(), Some("C"));
+        let error =
+            models_from_describe(&manifest(""), &describe(serde_json::json!(42))).unwrap_err();
+        assert!(matches!(error, Error::WasmAddon { .. }), "{error:?}");
+        assert_eq!(
+            error.to_string(),
+            "WebAssembly addon 'w': not supported in this build: field w.wiz.code: collation: expected a string"
+        );
     }
 
     #[test]

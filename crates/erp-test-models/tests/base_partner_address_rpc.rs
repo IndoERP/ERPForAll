@@ -196,7 +196,7 @@ async fn parent_onchange_refuses_a_parent_outside_the_read_rule() {
         403,
         "erp.exceptions.AccessError",
         &format!(
-            "You are not allowed to access 'Contact' (res.partner) records.\n\nRecords: res.partner({parent},), User: 2"
+            "Your access rights do not let you access 'Contact' (res.partner) records.\n\nRecords: res.partner({parent},), User: 2"
         ),
     );
     assert_eq!(count(&h, "res_partner").await, count_before);

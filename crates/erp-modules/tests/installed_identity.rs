@@ -495,7 +495,7 @@ async fn identity_audit_failure_rolls_back_enrollment_and_activation() {
                 assert_eq!(source.sqlstate(), Some("23514"));
                 assert_eq!(
                     source.message(),
-                    "The operation cannot be completed: new row for relation \"installed_addon_identity_audit\" violates check constraint \"fixture_reject_identity_audit\""
+                    "The database refused the change: new row for relation \"installed_addon_identity_audit\" violates check constraint \"fixture_reject_identity_audit\""
                 );
             }
             other => panic!("expected identity audit constraint failure, got {other:?}"),
@@ -589,7 +589,7 @@ async fn failed_first_receipt_write_rolls_back_the_installation() {
             assert_eq!(source.sqlstate(), Some("23514"));
             assert_eq!(
                 source.message(),
-                "The operation cannot be completed: new row for relation \"installed_addon_identity\" violates check constraint \"fixture_reject_identity_receipt\""
+                "The database refused the change: new row for relation \"installed_addon_identity\" violates check constraint \"fixture_reject_identity_receipt\""
             );
         }
         other => panic!("expected receipt constraint failure, got {other:?}"),
@@ -736,7 +736,7 @@ async fn failed_forward_migration_proof_write_rolls_back_upgrade_and_refuses_act
             assert_eq!(source.sqlstate(), Some("23514"));
             assert_eq!(
                 source.message(),
-                "The operation cannot be completed: new row for relation \"installed_addon_identity_audit\" violates check constraint \"fixture_reject_forward_migration\""
+                "The database refused the change: new row for relation \"installed_addon_identity_audit\" violates check constraint \"fixture_reject_forward_migration\""
             );
         }
         other => panic!("expected forward migration audit constraint failure, got {other:?}"),

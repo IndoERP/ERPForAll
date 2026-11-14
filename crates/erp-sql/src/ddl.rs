@@ -13,6 +13,8 @@ pub struct ColumnDef {
     pub name: String,
     /// Type.
     pub ty: ColumnType,
+    /// Validated textual column collation.
+    pub collation: erp_fields::TextCollation,
     /// `NOT NULL`.
     pub not_null: bool,
     /// Column comment (the field label).
@@ -27,10 +29,30 @@ impl ColumnDef {
         Self {
             name: name.into(),
             ty,
+            collation: erp_fields::TextCollation::DatabaseDefault,
             not_null: false,
             comment: String::new(),
             generated: None,
         }
+    }
+
+    /// Select the collation of a textual column.
+    pub fn collation(mut self, collation: erp_fields::TextCollation) -> Self {
+        self.collation = collation;
+        self
+    }
+
+    /// Render the column type and optional explicit collation.
+    pub(crate) fn type_sql(&self) -> String {
+        let mut sql = self.ty.sql();
+        if self.collation != erp_fields::TextCollation::DatabaseDefault {
+            sql.push_str(&format!(
+                " COLLATE {}.{}",
+                quote("pg_catalog"),
+                quote(self.collation.as_str())
+            ));
+        }
+        sql
     }
 
     /// Set `NOT NULL`.
@@ -61,6 +83,25 @@ pub fn create_table(
     fillfactor: Option<u8>,
     id_sequence: Option<&str>,
 ) -> Vec<String> {
+    create_table_with_persistence(
+        table,
+        comment,
+        columns,
+        fillfactor,
+        id_sequence,
+        erp_registry::SqlTablePersistence::Logged,
+    )
+}
+
+/// Create a model table with explicit native persistence; all other table metadata is unchanged.
+pub fn create_table_with_persistence(
+    table: &str,
+    comment: &str,
+    columns: &[ColumnDef],
+    fillfactor: Option<u8>,
+    id_sequence: Option<&str>,
+    persistence: erp_registry::SqlTablePersistence,
+) -> Vec<String> {
     let mut cols: Vec<&ColumnDef> = columns.iter().collect();
     cols.sort_by_key(|c| c.ty.rank());
     let id = match id_sequence {
@@ -77,7 +118,7 @@ pub fn create_table(
             format!(
                 "{} {} GENERATED ALWAYS AS ({}) {}{}",
                 quote(&c.name),
-                c.ty.sql(),
+                c.type_sql(),
                 col_gen.expression,
                 col_gen.storage.as_str().to_uppercase(),
                 if c.not_null { " NOT NULL" } else { "" }
@@ -86,7 +127,7 @@ pub fn create_table(
             format!(
                 "{} {}{}",
                 quote(&c.name),
-                c.ty.sql(),
+                c.type_sql(),
                 if c.not_null { " NOT NULL" } else { "" }
             )
         };
@@ -94,8 +135,12 @@ pub fn create_table(
     }
     parts.push(format!("PRIMARY KEY({})", quote("id")));
     let storage = fillfactor.map_or_else(String::new, |ff| format!(" WITH (fillfactor = {ff})"));
+    let persistence = match persistence {
+        erp_registry::SqlTablePersistence::Logged => "",
+        erp_registry::SqlTablePersistence::Unlogged => "UNLOGGED ",
+    };
     let mut out = vec![format!(
-        "CREATE TABLE {} ({}){storage}",
+        "CREATE {persistence}TABLE {} ({}){storage}",
         quote(table),
         parts.join(", ")
     )];
@@ -149,7 +194,7 @@ pub fn add_column(table: &str, column: &ColumnDef, default: Option<&str>) -> Vec
         return vec![
             format!(
                 "ALTER TABLE {t} ADD COLUMN {c} {} GENERATED ALWAYS AS ({}) {}{}",
-                column.ty.sql(),
+                column.type_sql(),
                 col_gen.expression,
                 col_gen.storage.as_str().to_uppercase(),
                 if column.not_null { " NOT NULL" } else { "" }
@@ -159,13 +204,13 @@ pub fn add_column(table: &str, column: &ColumnDef, default: Option<&str>) -> Vec
     }
     match default {
         None => vec![
-            format!("ALTER TABLE {t} ADD COLUMN {c} {}", column.ty.sql()),
+            format!("ALTER TABLE {t} ADD COLUMN {c} {}", column.type_sql()),
             comment_on_column(table, &column.name, &column.comment),
         ],
         Some(lit) => vec![
             format!(
                 "ALTER TABLE {t} ADD COLUMN {c} {} DEFAULT {lit}{}",
-                column.ty.sql(),
+                column.type_sql(),
                 if column.not_null { " NOT NULL" } else { "" }
             ),
             format!("ALTER TABLE {t} ALTER COLUMN {c} DROP DEFAULT"),
@@ -182,7 +227,7 @@ pub fn add_column_keeping_default(table: &str, column: &ColumnDef, default: &str
     vec![
         format!(
             "ALTER TABLE {t} ADD COLUMN {c} {} DEFAULT {default}{}",
-            column.ty.sql(),
+            column.type_sql(),
             if column.not_null { " NOT NULL" } else { "" }
         ),
         comment_on_column(table, &column.name, &column.comment),
@@ -225,6 +270,41 @@ pub fn alter_column_type(table: &str, column: &str, ty: ColumnType) -> String {
         t = quote(table),
         c = quote(column),
         ty = ty.sql()
+    )
+}
+
+/// Change textual column collation without dropping defaults or changing values.
+/// The caller supplies the admitted target type, retaining the installed varchar width.
+pub fn alter_column_collation(
+    table: &str,
+    column: &str,
+    ty: ColumnType,
+    collation: erp_fields::TextCollation,
+) -> String {
+    format!(
+        "ALTER TABLE {} ALTER COLUMN {} TYPE {} COLLATE {}.{}",
+        quote(table),
+        quote(column),
+        ty.sql(),
+        quote("pg_catalog"),
+        quote(collation.as_str())
+    )
+}
+
+/// Convert a textual column type and set its validated collation in the same ALTER.
+/// Keeps the ordinary type-conversion cast and default-removal contract.
+pub fn alter_column_type_collated(
+    table: &str,
+    column: &str,
+    ty: ColumnType,
+    collation: erp_fields::TextCollation,
+) -> String {
+    let (t, c) = (quote(table), quote(column));
+    format!(
+        "ALTER TABLE {t} ALTER COLUMN {c} DROP DEFAULT, ALTER COLUMN {c} TYPE {ty} COLLATE {schema}.{collation} USING {c}::{ty}",
+        ty = ty.sql(),
+        schema = quote("pg_catalog"),
+        collation = quote(collation.as_str())
     )
 }
 
@@ -911,6 +991,8 @@ fn foreign_key_statement(
 
 /// Serializes schema changes between processes for the rest of the transaction (taken before the
 /// catalog is read, so two workers never plan DDL from the same stale catalog).
+/// Existing schema advisory identity; shared by the lock-first lifecycle handoff.
+pub const SCHEMA_LOCK_KEY: i64 = 4_207_351_906;
 pub const SCHEMA_LOCK: &str = "SELECT pg_advisory_xact_lock(4207351906)";
 
 /// One catalog query describing tables, columns, constraints, indexes and installed extensions,
@@ -950,6 +1032,15 @@ SELECT 'column', c.relname::text, a.attname::text, t.typname::text,
   FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
   JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_type t ON t.oid = a.atttypid
  WHERE n.nspname = current_schema() AND c.relname::text = ANY($1) AND a.attnum > 0 AND NOT a.attisdropped
+UNION ALL
+SELECT 'column_collation', c.relname::text, a.attname::text,
+       json_build_array(cn.nspname, col.collname)::text, NULL, NULL
+  FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_collation col ON col.oid = a.attcollation
+  JOIN pg_namespace cn ON cn.oid = col.collnamespace
+ WHERE n.nspname = current_schema() AND c.relname::text = ANY($1)
+   AND a.attnum > 0 AND NOT a.attisdropped
 UNION ALL
 SELECT 'constraint', c.relname::text, k.conname::text, pg_get_constraintdef(k.oid),
        obj_description(k.oid, 'pg_constraint'),
@@ -1228,6 +1319,7 @@ mod tests {
     fn spec_field_078_column_order_on_table_creation() {
         let cols = [
             ColumnDef {
+                collation: erp_fields::TextCollation::DatabaseDefault,
                 name: "float".into(),
                 ty: ColumnType::Float8,
                 not_null: false,
@@ -1235,6 +1327,7 @@ mod tests {
                 generated: None,
             },
             ColumnDef {
+                collation: erp_fields::TextCollation::DatabaseDefault,
                 name: "bool".into(),
                 ty: ColumnType::Bool,
                 not_null: false,
@@ -1242,6 +1335,7 @@ mod tests {
                 generated: None,
             },
             ColumnDef {
+                collation: erp_fields::TextCollation::DatabaseDefault,
                 name: "char".into(),
                 ty: ColumnType::Varchar(None),
                 not_null: true,
@@ -1249,6 +1343,7 @@ mod tests {
                 generated: None,
             },
             ColumnDef {
+                collation: erp_fields::TextCollation::DatabaseDefault,
                 name: "integer".into(),
                 ty: ColumnType::Int4,
                 not_null: false,
@@ -1256,6 +1351,7 @@ mod tests {
                 generated: None,
             },
             ColumnDef {
+                collation: erp_fields::TextCollation::DatabaseDefault,
                 name: "date".into(),
                 ty: ColumnType::Date,
                 not_null: false,
@@ -1263,6 +1359,7 @@ mod tests {
                 generated: None,
             },
             ColumnDef {
+                collation: erp_fields::TextCollation::DatabaseDefault,
                 name: "text".into(),
                 ty: ColumnType::Text,
                 not_null: false,
@@ -1270,6 +1367,7 @@ mod tests {
                 generated: None,
             },
             ColumnDef {
+                collation: erp_fields::TextCollation::DatabaseDefault,
                 name: "numeric".into(),
                 ty: ColumnType::Numeric,
                 not_null: false,
@@ -1277,6 +1375,7 @@ mod tests {
                 generated: None,
             },
             ColumnDef {
+                collation: erp_fields::TextCollation::DatabaseDefault,
                 name: "json".into(),
                 ty: ColumnType::Jsonb,
                 not_null: false,
@@ -1284,6 +1383,7 @@ mod tests {
                 generated: None,
             },
             ColumnDef {
+                collation: erp_fields::TextCollation::DatabaseDefault,
                 name: "datetime".into(),
                 ty: ColumnType::Timestamp,
                 not_null: false,

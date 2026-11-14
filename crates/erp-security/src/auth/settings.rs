@@ -1,6 +1,6 @@
 //! The settings of authentication.
 //!
-//! - [`AuthConfig`]: per process, from the server's configuration (style keys), validated
+//! - [`AuthConfig`]: node-local admission and execution bounds, from the server's configuration (style keys), validated
 //!   when built; a value outside its floor and hard bound is an error naming the setting.
 //! - [`AuthSettings`]: per database, from `ir.config_parameter` rows.
 
@@ -31,11 +31,24 @@ pub mod keys {
     pub const MAX_INACTIVITY: &str = "sessions.max_inactivity_seconds";
     /// Absolute lifetime of a session, seconds (D-AUTH-5).
     pub const MAX_LIFETIME: &str = "sessions.max_lifetime_seconds";
+    /// Minimum age before a shared session touch, seconds.
+    pub const TOUCH_INTERVAL: &str = "sessions.touch_interval_seconds";
+    /// Shared session rotation interval, seconds.
+    pub const ROTATION_INTERVAL: &str = "sessions.rotation_interval_seconds";
+    /// Positive predecessor overlap window, seconds.
+    pub const ROTATION_GRACE: &str = "sessions.rotation_grace_seconds";
+    /// The four parameters whose relationships are checked as one policy.
+    pub const SESSION_POLICY: [&str; 4] = [
+        TOUCH_INTERVAL,
+        ROTATION_INTERVAL,
+        ROTATION_GRACE,
+        MAX_INACTIVITY,
+    ];
     /// The database secret.
     pub const SECRET: &str = "database.secret";
 
     /// Every key, in the order the settings statement asks for them.
-    pub const ALL: [&str; 10] = [
+    pub const ALL: [&str; 13] = [
         SCHEME,
         ROUNDS,
         ARGON2_MEMORY,
@@ -46,6 +59,9 @@ pub mod keys {
         MAX_INACTIVITY,
         MAX_LIFETIME,
         SECRET,
+        TOUCH_INTERVAL,
+        ROTATION_INTERVAL,
+        ROTATION_GRACE,
     ];
 }
 
@@ -89,9 +105,90 @@ impl Cooldown {
     }
 }
 
+/// Validated database-wide session timing. Never process configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SessionPolicy {
+    touch_interval: Duration,
+    rotation_interval: Duration,
+    rotation_grace: Duration,
+}
+impl SessionPolicy {
+    /// Parse the session keys and effective inactivity limit, validating both relationships.
+    /// Missing, null and empty parameters retain their documented defaults.
+    ///
+    /// ```
+    /// use std::collections::HashMap;
+    /// use erp_security::auth::SessionPolicy;
+    /// let policy = SessionPolicy::from_rows(&HashMap::new())?;
+    /// assert_eq!(policy.touch_interval().as_secs(), 60);
+    /// # Ok::<(), erp_fields::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Validation naming the malformed key or both conflicting keys and their values.
+    pub fn from_rows(rows: &HashMap<String, Option<String>>) -> Result<Self> {
+        let number = |key: &str, default, min, max| {
+            rows.get(key)
+                .and_then(|v| v.as_deref())
+                .filter(|v| !v.is_empty())
+                .map_or(Ok(default), |value| parse_u32(key, value, min, max))
+        };
+        let touch = number(keys::TOUCH_INTERVAL, 60, 1, 3600)?;
+        let rotation = number(keys::ROTATION_INTERVAL, 10800, 60, 86400)?;
+        let grace = number(keys::ROTATION_GRACE, 120, 5, 600)?;
+        let inactivity = number(keys::MAX_INACTIVITY, MAX_INACTIVITY_DEFAULT, 60, 31_536_000)?;
+        for (short_key, short, long_key, long) in [
+            (
+                keys::TOUCH_INTERVAL,
+                touch,
+                keys::MAX_INACTIVITY,
+                inactivity,
+            ),
+            (
+                keys::ROTATION_GRACE,
+                grace,
+                keys::ROTATION_INTERVAL,
+                rotation,
+            ),
+        ] {
+            if short >= long {
+                return Err(Error::validation(format!(
+                    "ir.config_parameter {short_key} = {short} must be shorter than {long_key} = {long}"
+                )));
+            }
+        }
+        Ok(Self {
+            touch_interval: Duration::from_secs(u64::from(touch)),
+            rotation_interval: Duration::from_secs(u64::from(rotation)),
+            rotation_grace: Duration::from_secs(u64::from(grace)),
+        })
+    }
+    /// Minimum age before last_seen is touched.
+    pub const fn touch_interval(&self) -> Duration {
+        self.touch_interval
+    }
+    /// Age after which the current session secret is rotated.
+    pub const fn rotation_interval(&self) -> Duration {
+        self.rotation_interval
+    }
+    /// How long a predecessor secret remains valid after rotation.
+    pub const fn rotation_grace(&self) -> Duration {
+        self.rotation_grace
+    }
+}
+
+/// Load only the bounded, non-secret session policy in the caller's primary transaction.
+/// # Errors
+/// As SessionPolicy::from_rows and the parameter query; pending model writes are flushed first.
+pub async fn load_session_policy(tx: &mut Transaction) -> Result<SessionPolicy> {
+    SessionPolicy::from_rows(&read_rows(tx, &keys::SESSION_POLICY).await?)
+}
+
 /// The settings of one database (`ir.config_parameter`), validated.
 #[derive(Debug)]
 pub struct AuthSettings {
+    session_policy: SessionPolicy,
     params: HashParams,
     address_cooldown: Cooldown,
     login_cooldown: Cooldown,
@@ -100,6 +197,10 @@ pub struct AuthSettings {
 }
 
 impl AuthSettings {
+    /// Database timing snapshot used for session checks, rotation and cleanup.
+    pub fn session_policy(&self) -> &SessionPolicy {
+        &self.session_policy
+    }
     /// The hashing parameters of new hashes.
     pub fn hash_params(&self) -> &HashParams {
         &self.params
@@ -151,6 +252,7 @@ impl AuthSettings {
         let max_lifetime =
             int(keys::MAX_LIFETIME, 3_600, 31_536_000)?.unwrap_or(MAX_LIFETIME_DEFAULT);
         Ok(Self {
+            session_policy: SessionPolicy::from_rows(rows)?,
             params,
             address_cooldown: Cooldown { after, duration },
             login_cooldown: Cooldown {
@@ -237,10 +339,13 @@ pub fn validate_setting(key: &str, value: Option<&str>) -> Result<()> {
         keys::SECRET => DatabaseSecret::from_stored(value)
             .map(drop)
             .map_err(|e| Error::validation(e.to_string()).with_source(e)),
+        keys::TOUCH_INTERVAL => parse_u32(key, value, 1, 3600).map(drop),
+        keys::ROTATION_INTERVAL => parse_u32(key, value, 60, 86400).map(drop),
+        keys::ROTATION_GRACE => parse_u32(key, value, 5, 600).map(drop),
+        keys::MAX_INACTIVITY => parse_u32(key, value, 60, 31_536_000).map(drop),
         keys::COOLDOWN_AFTER
         | keys::COOLDOWN_DURATION
         | keys::COOLDOWN_AFTER_LOGIN
-        | keys::MAX_INACTIVITY
         | keys::MAX_LIFETIME => {
             let rows = HashMap::from([(key.to_owned(), Some(value.to_owned()))]);
             AuthSettings::from_rows(&rows).map(drop)
@@ -296,7 +401,17 @@ pub(crate) struct GcPolicy {
 }
 
 pub(crate) async fn load_gc_policy(tx: &mut Transaction) -> Result<GcPolicy> {
-    let rows = read_rows(tx, &[keys::COOLDOWN_DURATION, keys::MAX_INACTIVITY]).await?;
+    let rows = read_rows(
+        tx,
+        &[
+            keys::COOLDOWN_DURATION,
+            keys::MAX_INACTIVITY,
+            keys::TOUCH_INTERVAL,
+            keys::ROTATION_INTERVAL,
+            keys::ROTATION_GRACE,
+        ],
+    )
+    .await?;
     // The existing parser owns validation/defaults. Only the two requested fields escape
     // this helper; unrelated defaults are not exposed as a complete settings snapshot.
     let parsed = AuthSettings::from_rows(&rows)?;
@@ -501,17 +616,11 @@ pub async fn check_stored(orm: &erp_orm::Orm) -> Result<Loaded> {
 /// use erp_security::auth::settings::AuthConfig;
 /// let c = AuthConfig::DEFAULT.with_credential_bytes(64)?;
 /// assert_eq!(c.credential_bytes(), 64);
-/// assert_eq!(
-///     AuthConfig::DEFAULT.with_rotation_grace_secs(601).unwrap_err().to_string(),
-///     "session.rotation_grace_secs = 601 is outside 0..=600"
-/// );
 /// # Ok::<(), erp_security::auth::settings::ConfigError>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct AuthConfig {
-    touch_interval: Duration,
-    rotation_interval: Duration,
-    rotation_grace: Duration,
     credential_bytes: usize,
     login_burst: u32,
     login_rate_per_sec: f64,
@@ -523,9 +632,6 @@ pub struct AuthConfig {
 impl AuthConfig {
     /// The defaults of the design note (§4.1, §4.3, §14.5).
     pub const DEFAULT: Self = Self {
-        touch_interval: Duration::from_secs(60),
-        rotation_interval: Duration::from_secs(10_800),
-        rotation_grace: Duration::from_secs(120),
         credential_bytes: 1_024,
         login_burst: 20,
         login_rate_per_sec: 2.0,
@@ -533,44 +639,6 @@ impl AuthConfig {
         cooldown_hook_deadline: Duration::from_secs(5),
         token_plan_hook_deadline: Duration::from_secs(10),
     };
-
-    /// `session.touch_interval_secs` (1 – 3,600).
-    ///
-    /// # Errors
-    ///
-    /// [`ConfigError`] naming the setting.
-    pub fn with_touch_interval_secs(mut self, secs: u32) -> Result<Self, ConfigError> {
-        bound("session.touch_interval_secs", f64::from(secs), 1.0, 3_600.0)?;
-        self.touch_interval = Duration::from_secs(u64::from(secs));
-        Ok(self)
-    }
-
-    /// `session.rotation_interval_secs` (60 – 86,400).
-    ///
-    /// # Errors
-    ///
-    /// [`ConfigError`] naming the setting.
-    pub fn with_rotation_interval_secs(mut self, secs: u32) -> Result<Self, ConfigError> {
-        bound(
-            "session.rotation_interval_secs",
-            f64::from(secs),
-            60.0,
-            86_400.0,
-        )?;
-        self.rotation_interval = Duration::from_secs(u64::from(secs));
-        Ok(self)
-    }
-
-    /// `session.rotation_grace_secs` (0 – 600).
-    ///
-    /// # Errors
-    ///
-    /// [`ConfigError`] naming the setting.
-    pub fn with_rotation_grace_secs(mut self, secs: u32) -> Result<Self, ConfigError> {
-        bound("session.rotation_grace_secs", f64::from(secs), 0.0, 600.0)?;
-        self.rotation_grace = Duration::from_secs(u64::from(secs));
-        Ok(self)
-    }
 
     /// `limits.credential_bytes` (64 – 4,096).
     ///
@@ -648,21 +716,6 @@ impl AuthConfig {
         )?;
         self.token_plan_hook_deadline = Duration::from_millis(u64::from(ms));
         Ok(self)
-    }
-
-    /// How often a session's `last_seen_at` is written at most.
-    pub const fn touch_interval(&self) -> Duration {
-        self.touch_interval
-    }
-
-    /// Age after which a session's secret is rotated.
-    pub const fn rotation_interval(&self) -> Duration {
-        self.rotation_interval
-    }
-
-    /// How long the previous secret keeps working after a rotation.
-    pub const fn rotation_grace(&self) -> Duration {
-        self.rotation_grace
     }
 
     /// Longest login or password accepted, bytes.

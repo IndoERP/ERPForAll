@@ -223,6 +223,8 @@ struct Catalog {
     fillfactors: FxHashMap<String, u8>,
     /// table → column → (udt name, varchar length, not null)
     columns: FxHashMap<String, FxHashMap<String, ColumnInfo>>,
+    /// Qualified catalog identities of collatable columns; never durable OIDs.
+    collations: FxHashMap<String, FxHashMap<String, String>>,
     /// table → constraint name → (definition, comment, "type:columns")
     constraints: FxHashMap<String, FxHashMap<String, ConstraintInfo>>,
     /// table → index name → comment, valid indexes only
@@ -341,14 +343,22 @@ fn sql_default(field: &FieldSpec, ty: ColumnType) -> Option<String> {
         }
         (
             StaticValue::Int(i),
-            ColumnType::Int4 | ColumnType::Int8 | ColumnType::Float8 | ColumnType::Numeric,
+            ColumnType::Int4
+            | ColumnType::Int8
+            | ColumnType::BigInt
+            | ColumnType::Float8
+            | ColumnType::Numeric,
         ) => Some(cast(i.to_string())),
         (StaticValue::Float(f), ColumnType::Float8 | ColumnType::Numeric) if f.is_finite() => {
             Some(cast(format!("{f:?}")))
         }
         (
             StaticValue::Str(s),
-            ColumnType::Varchar(_) | ColumnType::Text | ColumnType::Date | ColumnType::Timestamp,
+            ColumnType::BigInt
+            | ColumnType::Varchar(_)
+            | ColumnType::Text
+            | ColumnType::Date
+            | ColumnType::Timestamp,
         ) => Some(cast(literal(s))),
         // JSON (and, later, translated text) columns take a JSON document.
         (value, ColumnType::Jsonb) => Some(cast(literal(&static_json(value).to_string()))),
@@ -385,6 +395,12 @@ struct Replan<'a> {
     table: &'a str,
     /// The stored computed fields the queued backfill recorded.
     recorded: &'a [&'a str],
+}
+
+/// Full sync is strict; a lifecycle subset may wait for a later module's table.
+struct SchemaPlanMode<'a> {
+    replan: Option<&'a Replan<'a>>,
+    sql_objects: crate::schema_sqlobj::SqlObjectScope,
 }
 
 /// A relation table to create and the foreign keys its columns should have.
@@ -504,6 +520,52 @@ fn check_name_collisions(specs: &[&ModelSpec]) -> Result<()> {
     Ok(())
 }
 
+/// Decode names structurally: identifiers can themselves contain punctuation/separators.
+fn decode_column_collation(payload: &str) -> Result<String> {
+    let (schema, name): (String, String) = serde_json::from_str(payload).map_err(|source| {
+        Error::new(
+            erp_fields::ErrorKind::Database,
+            "unreadable column collation identity",
+        )
+        .with_source(source)
+    })?;
+    if schema.is_empty() || name.is_empty() || schema.contains('\0') || name.contains('\0') {
+        return Err(Error::new(
+            erp_fields::ErrorKind::Database,
+            "invalid column collation identity",
+        ));
+    }
+    Ok(format!(
+        "{}.{}",
+        erp_sql::quote(&schema),
+        erp_sql::quote(&name)
+    ))
+}
+
+fn declared_collation(field: &FieldSpec) -> String {
+    format!(
+        "{}.{}",
+        erp_sql::quote("pg_catalog"),
+        erp_sql::quote(field.collation.as_str())
+    )
+}
+
+fn catalog_collation<'a>(cat: &'a Catalog, spec: &ModelSpec, field: &FieldSpec) -> Result<&'a str> {
+    cat.collations
+        .get(&spec.table)
+        .and_then(|columns| columns.get(field.name))
+        .map(String::as_str)
+        .ok_or_else(|| {
+            Error::new(
+                erp_fields::ErrorKind::Database,
+                format!(
+                    "missing catalog collation of '{}.{}'",
+                    spec.name, field.name
+                ),
+            )
+        })
+}
+
 impl Catalog {
     /// Forget everything about `table` (it is dropped and created again in phase 1).
     fn forget(&mut self, table: &str) {
@@ -511,6 +573,7 @@ impl Catalog {
         self.partitioned.remove(table);
         self.fillfactors.remove(table);
         self.columns.remove(table);
+        self.collations.remove(table);
         self.constraints.remove(table);
         self.indexes.remove(table);
         self.defaults.retain(|(t, _), _| t != table);
@@ -642,6 +705,16 @@ fn check_generated_columns(specs: &[&ModelSpec], cat: &Catalog) -> Result<()> {
                         )));
                     };
 
+                    if field.collation_declared
+                        && matches!(declared_ty, ColumnType::Varchar(_) | ColumnType::Text)
+                        && actual_info.collation.as_deref()
+                            != Some(declared_collation(field).as_str())
+                    {
+                        return Err(Error::programming(format!(
+                            "Generated field '{}.{}': collation change requires an explicit migration",
+                            spec.name, field.name
+                        )));
+                    }
                     let matches_storage = declared_storage.attgenerated() == actual_info.kind;
                     if !matches_storage {
                         return Err(Error::programming(format!(
@@ -840,6 +913,19 @@ impl Transaction {
                         cat.views.insert(table.clone());
                     }
                     cat.tables.insert(table);
+                }
+                "column_collation" => {
+                    let payload = text(row, 3)?.ok_or_else(|| {
+                        Error::new(
+                            erp_fields::ErrorKind::Database,
+                            "missing column collation identity",
+                        )
+                    })?;
+                    let identity = decode_column_collation(&payload)?;
+                    cat.collations
+                        .entry(table)
+                        .or_default()
+                        .insert(name, identity);
                 }
                 "column" => {
                     let udt = text(row, 3)?.unwrap_or_default();
@@ -1832,7 +1918,20 @@ impl Transaction {
         // Serialize schema changes, then read the catalog under the lock.
         self.take_schema_lock(&lock_timeout).await?;
         let steps = self
-            .init_models_locked(&specs, &relations, &registry, options, None)
+            .init_models_locked(
+                &specs,
+                &relations,
+                &registry,
+                options,
+                SchemaPlanMode {
+                    replan: None,
+                    sql_objects: if models.is_empty() {
+                        crate::schema_sqlobj::SqlObjectScope::Full
+                    } else {
+                        crate::schema_sqlobj::SqlObjectScope::Subset
+                    },
+                },
+            )
             .await?;
         self.set_timeouts(&saved.0, &saved.1).await?;
         Ok(SchemaSync { steps })
@@ -1953,7 +2052,16 @@ impl Transaction {
         self.note_limits_changed(Some(SCHEMA_STATEMENT_TIMEOUT_DURATION));
         let target = Replan { table, recorded };
         let steps = self
-            .init_models_locked(&specs, &relations, &registry, options, Some(&target))
+            .init_models_locked(
+                &specs,
+                &relations,
+                &registry,
+                options,
+                SchemaPlanMode {
+                    replan: Some(&target),
+                    sql_objects: crate::schema_sqlobj::SqlObjectScope::Full,
+                },
+            )
             .await?;
         if let Some(step) = steps
             .into_iter()
@@ -2141,7 +2249,7 @@ impl Transaction {
 
     /// The tables of `tables` with more rows than `threshold` (`None`: no table is large). One
     /// query; each count stops at `threshold + 1` rows.
-    async fn large_tables(
+    pub(crate) async fn large_tables(
         &mut self,
         tables: &[String],
         threshold: Option<u64>,
@@ -2351,8 +2459,9 @@ impl Transaction {
         relations: &RelationTables,
         registry: &erp_registry::Registry,
         options: &SchemaSyncOptions,
-        replan: Option<&Replan<'_>>,
+        mode: SchemaPlanMode<'_>,
     ) -> Result<Vec<SchemaStep>> {
+        let replan = mode.replan;
         let mut tables: Vec<String> = specs.iter().map(|m| m.table.clone()).collect();
         tables.extend(relations.tables.iter().map(|(r, _, _)| r.table.clone()));
         // the shared id sequences: the catalog says whether each exists, and as what
@@ -2523,6 +2632,7 @@ impl Transaction {
         }
         let mut pending_provenance: Vec<PendingProvenance> = Vec::new();
         let mut pending_stored_checks: Vec<(&'static str, &'static str, String)> = Vec::new();
+        let mut pending_collation_checks: Vec<(&'static str, &'static str, String)> = Vec::new();
         let mut pending_analyzes: Vec<(String, String)> = Vec::new();
         for spec in specs {
             let columns: Vec<(&FieldSpec, ColumnDef)> = spec
@@ -2532,6 +2642,7 @@ impl Transaction {
                         (
                             f,
                             ColumnDef {
+                                collation: f.collation,
                                 name: f.name.to_owned(),
                                 ty,
                                 // the partition key is in the primary key
@@ -2567,12 +2678,25 @@ impl Transaction {
                             &defs,
                             partition.key_name(),
                         ),
-                        None => ddl::create_table(
+                        None => ddl::create_table_with_persistence(
                             &spec.table,
                             &spec.description,
                             &defs,
                             spec.fillfactor,
                             spec.id_sequence,
+                            registry
+                                .sql_objects()
+                                .objects()
+                                .iter()
+                                .find_map(|o| match o.kind() {
+                                    erp_registry::SqlObjectKind::TableOptions(t)
+                                        if t.model().table() == spec.table =>
+                                    {
+                                        Some(t.persistence())
+                                    }
+                                    _ => None, // absence preserves the default logged model table
+                                })
+                                .unwrap_or(erp_registry::SqlTablePersistence::Logged),
                         ),
                     }
                     .into_iter()
@@ -2601,6 +2725,16 @@ impl Transaction {
                 continue;
             }
             if cat.views.contains(&spec.table) {
+                for (field, _) in &columns {
+                    if field.collation_declared
+                        && catalog_collation(&cat, spec, field)? != declared_collation(field)
+                    {
+                        return Err(Error::programming(format!(
+                            "view field '{}.{}': collation mismatch; explicit view migration required",
+                            spec.name, field.name
+                        )));
+                    }
+                }
                 let missing = missing_view_columns(
                     columns.iter().map(|(_, c)| c.name.as_str()),
                     cat.columns.get(&spec.table),
@@ -2754,6 +2888,30 @@ impl Transaction {
                             _ => false,
                         };
                         let converted = udt != col.ty.udt_name() || wider;
+                        let textual = matches!(col.ty, ColumnType::Varchar(_) | ColumnType::Text);
+                        let collation_changed = textual
+                            && matches!(udt.as_str(), "varchar" | "text" | "bpchar")
+                            && catalog_collation(&cat, spec, field)? != declared_collation(field);
+                        if collation_changed {
+                            pending_collation_checks.push((
+                                spec.name,
+                                field.name,
+                                spec.table.clone(),
+                            ));
+                        }
+                        if !converted && collation_changed {
+                            // Ordinary schema sync never narrows varchar: retain the installed width.
+                            let retained = match col.ty {
+                                ColumnType::Varchar(_) => ColumnType::Varchar(*len),
+                                _ => col.ty,
+                            };
+                            phase1.push(Work::Sql(ddl::alter_column_collation(
+                                &spec.table,
+                                &col.name,
+                                retained,
+                                field.collation,
+                            )));
+                        }
                         if converted {
                             if field.company_dependent {
                                 self.batch(&format!(
@@ -2815,6 +2973,20 @@ impl Transaction {
                                         .map(Work::Sql),
                                 );
                             }
+                            if col.ty == ColumnType::BigInt
+                                && !matches!(udt.as_str(), "int4" | "int8")
+                            {
+                                return Err(Error::programming(format!(
+                                    "{}.{}: automatic conversion from '{}' to bigint requires an explicit migration; existing column is unchanged",
+                                    spec.name, field.name, udt
+                                )));
+                            }
+                            if udt == "int8" && col.ty == ColumnType::Int4 {
+                                return Err(Error::programming(format!(
+                                    "{}.{}: narrowing int8 to int4 requires an explicit migration; existing column is unchanged",
+                                    spec.name, field.name
+                                )));
+                            }
                             // These scalars carry identity, an unsigned transaction id or an
                             // absolute instant. PostgreSQL casts may accept legacy text or
                             // reinterpret a naive timestamp in the session timezone. Neither
@@ -2869,11 +3041,17 @@ impl Transaction {
                                     &col.name,
                                 )));
                             } else {
-                                phase1.push(Work::Sql(ddl::alter_column_type(
-                                    &spec.table,
-                                    &col.name,
-                                    col.ty,
-                                )));
+                                let alter = if textual {
+                                    ddl::alter_column_type_collated(
+                                        &spec.table,
+                                        &col.name,
+                                        col.ty,
+                                        field.collation,
+                                    )
+                                } else {
+                                    ddl::alter_column_type(&spec.table, &col.name, col.ty)
+                                };
+                                phase1.push(Work::Sql(alter));
                             }
                         }
                         if col.not_null && *not_null != NotNull::Yes {
@@ -3479,6 +3657,7 @@ impl Transaction {
             })
             .chain(backfills.iter().map(|b| b.table.clone()))
             .chain(pending_stored_checks.iter().map(|(_, _, t)| t.clone()))
+            .chain(pending_collation_checks.iter().map(|(_, _, t)| t.clone()))
             .collect();
         candidates.sort();
         candidates.dedup();
@@ -3487,6 +3666,13 @@ impl Transaction {
             None => self.large_tables(&candidates, options.large_rows()).await?,
         };
         if options.large_rows().is_some() {
+            for (model, field, table) in &pending_collation_checks {
+                if large.contains(table) {
+                    return Err(Error::programming(format!(
+                        "field '{model}.{field}': collation change requires a maintenance window"
+                    )));
+                }
+            }
             for (model, field, table) in &pending_stored_checks {
                 if large.contains(table) {
                     return Err(Error::programming(format!(
@@ -3556,8 +3742,30 @@ impl Transaction {
         // S0 of the addon-owned SQL objects: every refusal before any DDL
         let has_provenance = cat.tables.contains(crate::schema_sqlobj::OBJECT_TABLE);
         let mut sql_objects = self
-            .plan_sql_objects(registry, has_provenance, specs, options)
+            .plan_sql_objects(registry, has_provenance, specs, options, mode.sql_objects)
             .await?;
+        sql_objects.refuse_integrity_recreation(partitions.recreated())?;
+        // No B6 integrity is published with deferred work (is a later slice).
+        for object in registry.sql_objects().objects() {
+            if sql_objects.is_deferred(object.id()) {
+                continue;
+            }
+            if let erp_registry::SqlObjectKind::ForeignKey(f) = object.kind() {
+                let missing = !cat
+                    .constraints
+                    .get(f.model().table())
+                    .is_some_and(|c| c.contains_key(f.name()));
+                if missing
+                    && (large.contains(f.model().table())
+                        || steps.iter().any(|s| s.table == f.target().table()))
+                {
+                    return Err(Error::programming(format!(
+                        "SQL object '{}': deferred integrity installation requires in a later release",
+                        object.id()
+                    )));
+                }
+            }
+        }
 
         self.check_not_null(&not_null_checks).await?;
         self.check_reverse_translations(&reverse_translation_checks)
@@ -3630,6 +3838,8 @@ impl Transaction {
         self.run_phase(phase5, None).await?;
         // S3: triggers, after the functions they execute
         self.install_sql_objects_triggers(&mut sql_objects).await?;
+        self.install_sql_object_constraints(&mut sql_objects)
+            .await?;
         // a batch larger than the address space is one batch
         let batch = usize::try_from(options.backfill_records().get()).unwrap_or(usize::MAX);
         self.backfill_inline(registry, &inline_backfills, batch)
@@ -4696,5 +4906,36 @@ mod tests {
             "t",
             OnDelete::Restrict
         ));
+    }
+}
+
+#[cfg(test)]
+mod collation_tests {
+    use super::*;
+    #[test]
+    fn field_collation_catalog_decoder_is_strict() {
+        assert_eq!(
+            decode_column_collation(r#"["odd.schema","quote\"name"]"#).unwrap(),
+            "\"odd.schema\".\"quote\"\"name\""
+        );
+        for payload in [
+            "null",
+            "[]",
+            r#"["a"]"#,
+            r#"[1,"C"]"#,
+            r#"["a","C",0]"#,
+            r#"["","C"]"#,
+        ] {
+            let e = decode_column_collation(payload).unwrap_err();
+            assert_eq!(e.kind(), erp_fields::ErrorKind::Database);
+            assert_eq!(
+                e.message(),
+                if payload == r#"["","C"]"# {
+                    "invalid column collation identity"
+                } else {
+                    "unreadable column collation identity"
+                }
+            );
+        }
     }
 }

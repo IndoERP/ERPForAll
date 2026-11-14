@@ -190,7 +190,7 @@ async fn install_on_base_and_product() {
     let error = master.unlink(&mut tx).await.unwrap_err();
     assert!(
         error.message().contains(
-            "You cannot delete this account tag (Operating Activities), it is used on the chart of account definition."
+            "Tag Operating Activities is part of the chart of accounts the accounting app installs, so it cannot be deleted."
         ),
         "{:?}",
         error.message()
@@ -221,6 +221,17 @@ async fn install_on_base_and_product() {
         .await
         .unwrap()[0]
         .get(0);
+    // Lock-policy foundation: fresh installations do not close any specialized soft date.
+    let defaults = tx
+        .query(
+            "SELECT tax_lock_date,sale_lock_date,purchase_lock_date FROM res_company WHERE id=$1",
+            &[&main],
+        )
+        .await
+        .unwrap();
+    for column in 0..3 {
+        assert_eq!(defaults[0].get::<_, Option<erp_sdk::Date>>(column), None);
+    }
     let calendar = erp_addon_account::fiscal::settings::FiscalCalendar::read(&mut tx, main)
         .await
         .unwrap();

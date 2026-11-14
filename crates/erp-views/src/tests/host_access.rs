@@ -785,3 +785,25 @@ fn typed_panel_category_group_denial_removes_dependent_filters_and_preserves_ord
     assert_eq!(panel.children().count(), 1);
     assert_eq!(panel.source_child_count(), 3);
 }
+
+#[test]
+fn dashboard_denied_domain_or_measure_removes_whole_region() {
+    for (xml, denied) in [
+        (
+            r#"<list><dashboard><count name="s" string="Secret" domain="[('secret', '=', 'x')]"/><count name="n" string="Other" domain="[]"/></dashboard><field name="name"/></list>"#,
+            "secret",
+        ),
+        (
+            r#"<list><dashboard><kpi name="s" string="Secret" field="secret" date_field="name" aggregate="sum"/></dashboard><field name="name"/></list>"#,
+            "secret",
+        ),
+    ] {
+        let ga = capture(xml);
+        let mut verdict = Fake::allow_all(&ga);
+        verdict.deny(ROOT, denied);
+        let result = decide(&ga, &verdict).unwrap();
+        let xml = result.to_xml();
+        assert!(!xml.contains("dashboard"), "{xml}");
+        assert!(xml.contains("name=\"name\""), "{xml}");
+    }
+}

@@ -72,3 +72,6 @@ pub use wire::{MessageCounts, WireCounter};
 /// Re-exported so tests use the same driver and pool versions as the testkit.
 pub use deadpool_postgres;
 pub use tokio_postgres;
+
+/// Schema options for an explicitly authorized lifecycle installation fixture.
+pub use erp_orm::SchemaSyncOptions;

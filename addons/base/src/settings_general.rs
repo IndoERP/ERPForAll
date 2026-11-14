@@ -102,8 +102,8 @@ fn resolve<'a>(
 ) -> erp_sdk::BoxFuture<'a, Result<PanelItemValue>> {
     Box::pin(async move {
         match key {
-            "base.jobs_configuration_status" => PanelItemValue::info(Value::str("Stored configuration"))?
-                .detail("Values saved here are stored configuration. Running jobs use process configuration until live settings integration is delivered."),
+            "base.jobs_configuration_status" => PanelItemValue::info(Value::str("Live configuration"))?
+                .detail("Saved limits apply to new job admissions without restart. Running jobs keep their admitted limits."),
             "base.active_users" => {
                 count(env, tx, "res.users", true, ("Active User", "Active Users")).await
             }

@@ -16,11 +16,12 @@ pub use rt::{
     to_boundary,
 };
 
+pub use erp_fields::TextCollation;
 pub use erp_fields::money;
 pub use erp_fields::{
-    Cell, ColumnType, Condition, Date, DateRange, DateTime, DatetimeRange, Decimal, Digits, Error,
-    ErrorKind, FieldType, FieldValue, IndexKind, OnDelete, Range, RangeBounds, RangeValue, RealId,
-    RecId, Result, TimestampTz, Uuid, Value, ValueMap, Xid8, serde_json,
+    BigInt, Cell, ColumnType, Condition, Date, DateRange, DateTime, DatetimeRange, Decimal, Digits,
+    Error, ErrorKind, FieldType, FieldValue, IndexKind, OnDelete, Range, RangeBounds, RangeValue,
+    RealId, RecId, Result, TimestampTz, Uuid, Value, ValueMap, Xid8, serde_json,
 };
 use erp_fields::{IntoFieldValue, RefType, ValueFor, kinds};
 pub use erp_macros::{addon, extend, methods, model, model_ref};
@@ -786,9 +787,10 @@ pub mod prelude {
     pub use std::sync::Arc;
 
     pub use crate::{
-        Assign, Batch, Cell, ComputeSuper, Date, DateRange, DateTime, DatetimeRange, Decimal, Env,
-        Error, Field, Many2one, OnchangeResult, RawVals, ReadTx, RecId, RecordSet, Records, Result,
-        Super, TimestampTz, Transaction, Uuid, Vals, Value, X2many, Xid8, extend, methods, model,
+        Assign, Batch, BigInt, Cell, ComputeSuper, Date, DateRange, DateTime, DatetimeRange,
+        Decimal, Env, Error, Field, Many2one, OnchangeResult, RawVals, ReadTx, RecId, RecordSet,
+        Records, Result, Super, TimestampTz, Transaction, Uuid, Vals, Value, X2many, Xid8, extend,
+        methods, model,
     };
 }
 

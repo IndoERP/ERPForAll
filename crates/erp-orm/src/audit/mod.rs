@@ -60,9 +60,10 @@ pub use buffer::AttemptEvidence;
 pub(crate) use buffer::AuditBuffer;
 pub use elevation::{ElevationReason, SuperuserAction};
 pub use event::{
-    ApiKeyIssued, ApiKeyRevoked, ApiKeysCollected, AttachmentProbeRecorded, AuthEvent,
-    EmergencyReason, EmergencyRevocation, IdentityLink, KeyRouteScope, LinkedBy, PasswordChanged,
-    ProbeOutcome, RevokeCause, SecretRotated, SessionCause, SessionRevoked, UserSessionsRevoked,
+    AccountLockDateChanged, AccountLockField, ApiKeyIssued, ApiKeyRevoked, ApiKeysCollected,
+    AttachmentProbeRecorded, AuthEvent, EmergencyReason, EmergencyRevocation, IdentityLink,
+    KeyRouteScope, LinkedBy, PasswordChanged, ProbeOutcome, RevokeCause, SecretRotated,
+    SessionCause, SessionRevoked, UserSessionsRevoked,
 };
 pub use persist::AuditAttempt;
 /// Isolated reader transport; authorization and projection remain separate from raw storage.

@@ -900,7 +900,7 @@ mod wizard_browser;
 /// Hand the live installed component fixture to the compiled-client browser lane.
 fn installed_browser(port: u16, db: &str, dir: &Path, book: i64, borrower: i64) {
     let contract = serde_json::json!({
-        "deniedError": {"status":403,"name":"erp.exceptions.AccessError","message":"You are not allowed to access 'Library Book' (sample_library.book) records.\n\nThis operation is allowed for the following groups:\n\t- Access Administration\n\t- Internal User\n\t- Regular User\n\t- Settings Administration\n\nContact your administrator to request access if necessary."},
+        "deniedError": {"status":403,"name":"erp.exceptions.AccessError","message":"Your access rights do not let you access 'Library Book' (sample_library.book) records.\n\nGroups that may do this:\n\t- Access Administration\n\t- Internal User\n\t- Regular User\n\t- Settings Administration\n\nAsk an administrator if you need this access."},
         "fixtureKind":"wasm", "schema": 1, "url": format!("http://127.0.0.1:{port}"), "database": db,
         "login": "reader", "password": "reader-password",
         "deniedLogin": "outsider", "deniedPassword": "outsider-password",
@@ -1434,7 +1434,7 @@ fn a_package_brings_its_screens_and_buttons_to_the_browser() {
         );
         assert_eq!(
             denied["message"],
-            "You are not allowed to access 'Library Book' (sample_library.book) records.\n\nThis operation is allowed for the following groups:\n\t- Access Administration\n\t- Internal User\n\t- Regular User\n\t- Settings Administration\n\nContact your administrator to request access if necessary."
+            "Your access rights do not let you access 'Library Book' (sample_library.book) records.\n\nGroups that may do this:\n\t- Access Administration\n\t- Internal User\n\t- Regular User\n\t- Settings Administration\n\nAsk an administrator if you need this access."
         );
         assert_eq!(
             client

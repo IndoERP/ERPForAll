@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The `product` addon installed into a real database: its data, security rows, views,
 //! actions and menus load from the manifest, and company and branch scoping holds for a real user.
 #![allow(
@@ -36,6 +37,13 @@ const MODELS: [&str; 14] = [
 ];
 
 fn system(db: &TestDb) -> ModuleSystem {
+    system_with_migrations(db, &[])
+}
+
+fn system_with_migrations(
+    db: &TestDb,
+    migrations: &[&'static erp_modules::migrations::MigrationImpl],
+) -> ModuleSystem {
     let mut index = AddonIndex::new(true);
     index.add_dev_path(
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -59,8 +67,10 @@ fn system(db: &TestDb) -> ModuleSystem {
         })
         .collect();
     ModuleSystem::builder(db.pool().clone(), index)
+        .require_sql_objects([&erp_addon_stock::schema_guards::MANIFEST])
         .native_artifact_identities(identities)
         .view_types(erp_addon_web::view_type_contributions())
+        .migrations(migrations.iter().copied())
         .require_core_tables(erp_security::auth::core_tables())
         .require_core_tables(erp_addon_base::partner_hierarchy::core_tables())
         .code([
@@ -472,10 +482,88 @@ fn company_and_branch_scoping_for_a_real_user() {
                 .unwrap();
             supplier_ids.push(row.ids()[0]);
         }
+        let attribute = tx
+            .env()
+            .records("product.attribute")
+            .unwrap()
+            .create(
+                &mut tx,
+                vec![
+                    RawVals::new()
+                        .set_cell("name", Cell::Str("Company scope option".into()))
+                        .set_cell("create_variant", Cell::Str("no_variant".into())),
+                ],
+            )
+            .await
+            .unwrap();
+        let value = tx
+            .env()
+            .records("product.attribute.value")
+            .unwrap()
+            .create(
+                &mut tx,
+                vec![
+                    RawVals::new()
+                        .set_cell("name", Cell::Str("Selected".into()))
+                        .set_cell("attribute_id", Cell::Id(attribute.ids()[0])),
+                ],
+            )
+            .await
+            .unwrap();
+        let configured = templates
+            .search(
+                &mut tx,
+                &erp_sdk::Domain::condition(
+                    "name",
+                    erp_sdk::Operator::In,
+                    vec![
+                        "Parent product",
+                        "Branch product",
+                        "Shared product",
+                        "Secret X Product",
+                    ],
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(configured.len(), 4);
+        tx.env()
+            .records("product.template.attribute.line")
+            .unwrap()
+            .create(
+                &mut tx,
+                configured
+                    .ids()
+                    .iter()
+                    .map(|id| {
+                        RawVals::new()
+                            .set_cell("product_tmpl_id", Cell::Id(*id))
+                            .set_cell("attribute_id", Cell::Id(attribute.ids()[0]))
+                            .set_cell("value_ids", Cell::Ids(value.rec_ids().to_vec().into()))
+                    })
+                    .collect(),
+            )
+            .await
+            .unwrap();
         tx.commit().await.unwrap();
         drop(tx);
 
         let mut utx = orm.begin(UserId::new(user).unwrap()).await.unwrap();
+        // while the unrelated company's line remains outside the count.
+        let scoped_attribute = utx
+            .env()
+            .records("product.attribute")
+            .unwrap()
+            .browse(attribute.ids().iter().copied())
+            .unwrap();
+        assert_eq!(
+            scoped_attribute
+                .cell(&mut utx, "number_related_products")
+                .await
+                .unwrap(),
+            Cell::Int(3)
+        );
         let visible = utx.env().records("product.template").unwrap();
         let found = visible
             .search(&mut utx, &erp_sdk::Domain::constant(true))
@@ -698,7 +786,24 @@ fn supplier_unit_upgrade_preserves_terms_and_refuses_invalid_sources() {
                     "{:?}",
                     upgraded.post_commit
                 );
+                for module in modules {
+                    assert!(
+                        upgraded.upgraded.iter().any(|m| m.as_str() == *module),
+                        "{module} upgraded in {:?}",
+                        upgraded.upgraded
+                    );
+                }
                 let mut tx = upgraded.orm.begin(SUPERUSER_ID).await.unwrap();
+                let required: String = tx
+                    .query(
+                        "SELECT is_nullable::text FROM information_schema.columns \
+                         WHERE table_name = 'product_supplierinfo' AND column_name = 'uom_id'",
+                        &[],
+                    )
+                    .await
+                    .unwrap()[0]
+                    .get(0);
+                assert_eq!(required, "NO", "uom_id ends NOT NULL");
                 let row = tx
                     .env()
                     .records("product.supplierinfo")
@@ -1275,6 +1380,7 @@ fn product_and_stock_install_together() {
             })
             .collect();
         let system = ModuleSystem::builder(db.pool().clone(), index)
+            .require_sql_objects([&erp_addon_stock::schema_guards::MANIFEST])
             .native_artifact_identities(identities)
             .view_types(erp_addon_web::view_type_contributions())
             .require_core_tables(erp_security::auth::core_tables())
@@ -1330,6 +1436,15 @@ fn product_and_stock_install_together() {
         db.cleanup().await.unwrap();
     });
 }
+
+#[path = "product_install/packaging_units.rs"]
+mod packaging_units;
+
+#[path = "product_install/access.rs"]
+mod access;
+
+#[path = "product_install/upgrade_from_main.rs"]
+mod upgrade_from_main;
 
 #[test]
 fn installed_product_labels_respect_supplier_acl_on_rpc_and_relations() {
@@ -1799,4 +1914,790 @@ async fn product_policy_orm(installed: &Orm, db: &TestDb) -> Orm {
         .unlink_hook(erp_data::model_data::UNLINK_HOOK)
         .build()
         .unwrap()
+}
+
+/// custom text of a foreign product)
+#[test]
+fn custom_attribute_values_enforce_creator_access() {
+    custom_attribute_access_case(false);
+}
+
+#[test]
+fn attribute_counts_preserve_parent_company_policy() {
+    custom_attribute_access_case(true);
+}
+
+fn custom_attribute_access_case(check_count: bool) {
+    big_stack(async move {
+        let db = TestDb::create().await.unwrap();
+        let (_system, installed) = install(&db).await;
+        let source = PolicySource::build(Arc::clone(installed.registry()), db.pool().clone())
+            .await
+            .unwrap();
+        let orm = Orm::builder(Arc::clone(installed.registry()), db.pool().clone())
+            .require_core_tables(erp_security::auth::core_tables())
+            .require_core_tables(erp_addon_base::partner_hierarchy::core_tables())
+            .resolver(Resolver::for_registry(installed.registry()).unwrap())
+            .policy(Arc::new(source) as Arc<dyn erp_orm::PolicyProvider>)
+            .impls(erp_modules::base_models::IMPLS.iter().copied())
+            .constraints(erp_modules::base_models::CONSTRAINTS.iter().copied())
+            .unlink_hook(erp_data::model_data::UNLINK_HOOK)
+            .build()
+            .unwrap();
+        let company = xid(&orm, "base", "main_company").await;
+        let system_group = xid(&orm, "base", "group_system").await;
+        let user_group = xid(&orm, "base", "group_user").await;
+        let manager_group = xid(&orm, "product", "group_product_manager").await;
+        let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+        let env = tx.env().clone();
+        let mut user_ids = Vec::new();
+        for (name, group) in [
+            ("custom-admin", system_group),
+            ("custom-reader", user_group),
+            ("custom-manager", manager_group),
+        ] {
+            let user = env
+                .records("res.users")
+                .unwrap()
+                .create(
+                    &mut tx,
+                    vec![
+                        RawVals::new()
+                            .set_cell("name", Cell::Str(name.into()))
+                            .set_cell("login", Cell::Str(name.into()))
+                            .set_cell("company_id", Cell::Id(company))
+                            .set_commands(
+                                "company_ids",
+                                [Command::Set(vec![RecId::from_real(company).unwrap()])],
+                            )
+                            .set_commands(
+                                "group_ids",
+                                [Command::Set(vec![RecId::from_real(group).unwrap()])],
+                            ),
+                    ],
+                )
+                .await
+                .unwrap();
+            user_ids.push(user.ids()[0]);
+        }
+        let a = env
+            .records("product.attribute")
+            .unwrap()
+            .create(
+                &mut tx,
+                vec![RawVals::new().set_cell("name", Cell::Str("Engraving".into()))],
+            )
+            .await
+            .unwrap();
+        let v = env
+            .records("product.attribute.value")
+            .unwrap()
+            .create(
+                &mut tx,
+                vec![
+                    RawVals::new()
+                        .set_cell("name", Cell::Str("Text".into()))
+                        .set_cell("attribute_id", Cell::Id(a.ids()[0])),
+                ],
+            )
+            .await
+            .unwrap();
+        let template = env
+            .records("product.template")
+            .unwrap()
+            .create(
+                &mut tx,
+                vec![RawVals::new().set_cell("name", Cell::Str("Ring".into()))],
+            )
+            .await
+            .unwrap();
+        let line = env
+            .records("product.template.attribute.line")
+            .unwrap()
+            .create(
+                &mut tx,
+                vec![
+                    RawVals::new()
+                        .set_cell("product_tmpl_id", Cell::Id(template.ids()[0]))
+                        .set_cell("attribute_id", Cell::Id(a.ids()[0]))
+                        .set_cell("value_ids", Cell::Ids(v.rec_ids().to_vec().into())),
+                ],
+            )
+            .await
+            .unwrap();
+        let ptav = line
+            .related(&mut tx, "product_template_value_ids")
+            .await
+            .unwrap()
+            .ids()[0];
+        let currency = env
+            .records("res.company")
+            .unwrap()
+            .browse([company])
+            .unwrap()
+            .cell(&mut tx, "currency_id")
+            .await
+            .unwrap();
+        let foreign = env
+            .records("res.company")
+            .unwrap()
+            .create(
+                &mut tx,
+                vec![
+                    RawVals::new()
+                        .set_cell("name", Cell::Str("Foreign company".into()))
+                        .set_cell("currency_id", currency),
+                ],
+            )
+            .await
+            .unwrap()
+            .ids()[0];
+        let private_attribute = env
+            .records("product.attribute")
+            .unwrap()
+            .create(
+                &mut tx,
+                vec![RawVals::new().set_cell("name", Cell::Str("Private option".into()))],
+            )
+            .await
+            .unwrap()
+            .ids()[0];
+        let private_value = env
+            .records("product.attribute.value")
+            .unwrap()
+            .create(
+                &mut tx,
+                vec![
+                    RawVals::new()
+                        .set_cell("name", Cell::Str("Private value".into()))
+                        .set_cell("attribute_id", Cell::Id(private_attribute)),
+                ],
+            )
+            .await
+            .unwrap();
+        let private_template = env
+            .with_company(foreign)
+            .unwrap()
+            .records("product.template")
+            .unwrap()
+            .create(
+                &mut tx,
+                vec![
+                    RawVals::new()
+                        .set_cell("name", Cell::Str("Hidden product name".into()))
+                        .set_cell("company_id", Cell::Id(foreign)),
+                ],
+            )
+            .await
+            .unwrap()
+            .ids()[0];
+        let private_line = env
+            .with_company(foreign)
+            .unwrap()
+            .records("product.template.attribute.line")
+            .unwrap()
+            .create(
+                &mut tx,
+                vec![
+                    RawVals::new()
+                        .set_cell("product_tmpl_id", Cell::Id(private_template))
+                        .set_cell("attribute_id", Cell::Id(private_attribute))
+                        .set_cell(
+                            "value_ids",
+                            Cell::Ids(private_value.rec_ids().to_vec().into()),
+                        ),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let mut custom_ids = Vec::new();
+        for uid in [user_ids[1], user_ids[2]] {
+            // Fixture-only elevation retains each creator identity; ordinary users cannot create.
+            let actor = env.with_user(UserId::new(uid).unwrap()).sudo(true);
+            let custom = actor
+                .records("product.attribute.custom.value")
+                .unwrap()
+                .create(
+                    &mut tx,
+                    vec![
+                        RawVals::new()
+                            .set_cell("custom_product_template_attribute_value_id", Cell::Id(ptav))
+                            .set_cell("custom_value", Cell::Str("Owned".into())),
+                    ],
+                )
+                .await
+                .unwrap();
+            custom_ids.push(custom.ids()[0]);
+        }
+        // Custom text on the foreign company's product follows that product's company.
+        let private_ptav = private_line
+            .related(&mut tx, "product_template_value_ids")
+            .await
+            .unwrap()
+            .ids()[0];
+        let foreign_custom = env
+            .with_company(foreign)
+            .unwrap()
+            .records("product.attribute.custom.value")
+            .unwrap()
+            .create(
+                &mut tx,
+                vec![
+                    RawVals::new()
+                        .set_cell(
+                            "custom_product_template_attribute_value_id",
+                            Cell::Id(private_ptav),
+                        )
+                        .set_cell("custom_value", Cell::Str("Foreign text".into())),
+                ],
+            )
+            .await
+            .unwrap()
+            .ids()[0];
+        tx.commit().await.unwrap();
+        drop(tx);
+        let mut reader = orm.begin(UserId::new(user_ids[1]).unwrap()).await.unwrap();
+        let model = reader
+            .env()
+            .records("product.attribute.custom.value")
+            .unwrap();
+        assert_eq!(
+            model
+                .search(&mut reader, &erp_sdk::Domain::constant(true))
+                .await
+                .unwrap()
+                .ids(),
+            [custom_ids[0]]
+        );
+        let denied = model
+            .browse([custom_ids[0]])
+            .unwrap()
+            .write(
+                &mut reader,
+                RawVals::new().set_cell("custom_value", Cell::Str("Denied".into())),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(denied.kind(), erp_fields::ErrorKind::Access);
+        assert_eq!(
+            denied.message(),
+            "Your access rights do not let you modify 'Custom Attribute Value' (product.attribute.custom.value) records.\n\nGroups that may do this:\n\t- Products / Product Administrator\n\t- Settings Administration\n\nAsk an administrator if you need this access."
+        );
+        reader.rollback().await.unwrap();
+        drop(reader);
+        let mut manager = orm.begin(UserId::new(user_ids[2]).unwrap()).await.unwrap();
+        let model = manager
+            .env()
+            .records("product.attribute.custom.value")
+            .unwrap();
+        let guarded = manager
+            .env()
+            .records("product.attribute")
+            .unwrap()
+            .browse([private_attribute])
+            .unwrap();
+        if check_count {
+            let visible = manager
+                .env()
+                .records("product.attribute")
+                .unwrap()
+                .browse(a.ids().iter().copied())
+                .unwrap();
+            assert_eq!(
+                visible
+                    .cell(&mut manager, "number_related_products")
+                    .await
+                    .unwrap(),
+                Cell::Int(1)
+            );
+            let duplicate = manager
+                .env()
+                .records("product.template.attribute.line")
+                .unwrap()
+                .create(
+                    &mut manager,
+                    vec![
+                        RawVals::new()
+                            .set_cell("product_tmpl_id", Cell::Id(template.ids()[0]))
+                            .set_cell("attribute_id", Cell::Id(a.ids()[0]))
+                            .set_cell("value_ids", Cell::Ids(v.rec_ids().to_vec().into())),
+                    ],
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                visible
+                    .cell(&mut manager, "number_related_products")
+                    .await
+                    .unwrap(),
+                Cell::Int(2)
+            );
+            let template = manager
+                .env()
+                .records("product.template")
+                .unwrap()
+                .browse(template.ids().iter().copied())
+                .unwrap();
+            template
+                .write(
+                    &mut manager,
+                    RawVals::new().set_cell("active", Cell::Bool(false)),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                visible
+                    .cell(&mut manager, "number_related_products")
+                    .await
+                    .unwrap(),
+                Cell::Int(0)
+            );
+            template
+                .write(
+                    &mut manager,
+                    RawVals::new().set_cell("active", Cell::Bool(true)),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                visible
+                    .cell(&mut manager, "number_related_products")
+                    .await
+                    .unwrap(),
+                Cell::Int(2)
+            );
+            duplicate
+                .write(
+                    &mut manager,
+                    RawVals::new().set_cell("active", Cell::Bool(false)),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                visible
+                    .cell(&mut manager, "number_related_products")
+                    .await
+                    .unwrap(),
+                Cell::Int(1)
+            );
+            assert_eq!(
+                guarded
+                    .cell(&mut manager, "number_related_products")
+                    .await
+                    .unwrap(),
+                Cell::Int(0)
+            );
+        }
+        let error = manager
+            .savepoint(async |tx| {
+                guarded
+                    .write(
+                        tx,
+                        RawVals::new().set_cell("create_variant", Cell::Str("dynamic".into())),
+                    )
+                    .await
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), erp_fields::ErrorKind::UserError);
+        assert_eq!(
+            error.message(),
+            "Cannot change variant creation mode for attribute Private option while active products use it: restricted products."
+        );
+
+        assert_eq!(
+            model
+                .search(&mut manager, &erp_sdk::Domain::constant(true))
+                .await
+                .unwrap()
+                .ids(),
+            custom_ids
+        );
+        for op in [
+            erp_orm::Operation::Read,
+            erp_orm::Operation::Write,
+            erp_orm::Operation::Unlink,
+        ] {
+            let hidden = model.browse([foreign_custom]).unwrap();
+            let error = manager
+                .savepoint(async |tx| match op {
+                    erp_orm::Operation::Read => hidden.cell(tx, "custom_value").await.map(drop),
+                    erp_orm::Operation::Write => {
+                        hidden
+                            .write(
+                                tx,
+                                RawVals::new().set_cell("custom_value", Cell::Str("Taken".into())),
+                            )
+                            .await
+                    }
+                    _ => hidden.unlink(tx).await,
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.kind(),
+                erp_fields::ErrorKind::Access,
+                "{op:?}: {error}"
+            );
+        }
+        let rows = model.browse(custom_ids).unwrap();
+        rows.write(
+            &mut manager,
+            RawVals::new().set_cell("custom_value", Cell::Str("Managed".into())),
+        )
+        .await
+        .unwrap();
+        rows.unlink(&mut manager).await.unwrap();
+        assert!(
+            model
+                .search(&mut manager, &erp_sdk::Domain::constant(true))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        manager.rollback().await.unwrap();
+        drop(manager);
+        db.cleanup().await.unwrap();
+    });
+}
+
+fn attribute_upgrade_end<'a>(
+    tx: &'a mut erp_sdk::Transaction,
+    _from: &'a erp_modules::version::SemverVersion,
+) -> erp_sdk::BoxFuture<'a, erp_sdk::Result<()>> {
+    Box::pin(async move {
+        let refuse: bool = tx
+            .query(
+                "UPDATE attribute_upgrade_fixture SET reached=true RETURNING refuse",
+                &[],
+            )
+            .await?[0]
+            .get(0);
+        if refuse {
+            return Err(erp_sdk::Error::validation(
+                "Fixture refused after attribute activity migration.",
+            ));
+        }
+        Ok(())
+    })
+}
+
+static ATTRIBUTE_UPGRADE_END: erp_modules::migrations::MigrationImpl =
+    erp_modules::migrations::MigrationImpl::new(
+        "product",
+        "1.4",
+        erp_modules::migrations::MigrationStage::End,
+        "fixture-attribute-upgrade-end",
+        attribute_upgrade_end,
+    );
+
+/// Current-schema fixture with legacy-shaped columns and a standalone packaging 1.3 marker.
+/// Proves lifecycle selection and atomicity, not a genuine previous-binary install.
+#[test]
+fn installed_attribute_activity_upgrade_is_selected_atomic_and_repeatable() {
+    big_stack(async {
+        let db = TestDb::create().await.unwrap();
+        let (installed_system, installed) = install(&db).await;
+        let mut tx = installed.begin(SUPERUSER_ID).await.unwrap();
+        let env = tx.env().clone();
+        let attribute = env
+            .records("product.attribute")
+            .unwrap()
+            .create(
+                &mut tx,
+                vec![
+                    RawVals::new()
+                        .set_cell("name", Cell::Str("Legacy configured attribute".into()))
+                        .set_cell("sequence", Cell::Int(42)),
+                ],
+            )
+            .await
+            .unwrap()
+            .ids()[0];
+        let values = env
+            .records("product.attribute.value")
+            .unwrap()
+            .create(
+                &mut tx,
+                vec![
+                    RawVals::new()
+                        .set_cell("name", Cell::Str("Archived legacy value".into()))
+                        .set_cell("attribute_id", Cell::Id(attribute))
+                        .set_cell("active", Cell::Bool(false))
+                        .set_cell(
+                            "default_extra_price",
+                            Cell::Decimal(erp_sdk::Decimal::new(1234, 2)),
+                        ),
+                    RawVals::new()
+                        .set_cell("name", Cell::Str("Visible legacy value".into()))
+                        .set_cell("attribute_id", Cell::Id(attribute)),
+                ],
+            )
+            .await
+            .unwrap()
+            .ids()
+            .to_vec();
+        tx.flush().await.unwrap();
+        tx.batch("ALTER TABLE product_attribute DROP COLUMN active;
+            ALTER TABLE product_attribute_value ALTER COLUMN active DROP NOT NULL;
+            CREATE TABLE attribute_upgrade_fixture(refuse boolean NOT NULL, reached boolean NOT NULL);
+            INSERT INTO attribute_upgrade_fixture VALUES (true,false);
+            UPDATE ir_module_module SET latest_version='1.3.0' WHERE name='product';").await.unwrap();
+        tx.execute(
+            "UPDATE product_attribute_value SET active=NULL WHERE id=$1",
+            &[&values[1]],
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        drop(tx);
+        drop(installed_system);
+        drop(installed);
+        let system = system_with_migrations(&db, &[&ATTRIBUTE_UPGRADE_END]);
+        let env = system.system_env(Context::new());
+        let failure = match system
+            .button_immediate_upgrade(&env, &[ModuleName::new("product").unwrap()])
+            .await
+        {
+            Err(error) => error,
+            Ok(_) => panic!("injected end migration must refuse upgrade"),
+        };
+        let failure = match failure {
+            erp_modules::Error::StepFailed { source, .. } => *source,
+            other => other,
+        };
+        match failure {
+            erp_modules::Error::MigrationFailed { stage, source, .. } => {
+                assert_eq!(stage, erp_modules::migrations::MigrationStage::End);
+                assert_eq!(source.kind(), erp_sdk::ErrorKind::Validation);
+                assert_eq!(
+                    source.message(),
+                    "Fixture refused after attribute activity migration."
+                );
+            }
+            other => panic!("unexpected upgrade refusal: {other:?}"),
+        }
+        let client = db.pool().get().await.unwrap();
+        assert!(!client.query_one("SELECT EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid='product_attribute'::regclass AND attname='active' AND NOT attisdropped)", &[]).await.unwrap().get::<_, bool>(0));
+        assert_eq!(
+            client
+                .query_one(
+                    "SELECT latest_version FROM ir_module_module WHERE name='product'",
+                    &[]
+                )
+                .await
+                .unwrap()
+                .get::<_, String>(0),
+            "1.3.0"
+        );
+        assert!(
+            !client
+                .query_one("SELECT reached FROM attribute_upgrade_fixture", &[])
+                .await
+                .unwrap()
+                .get::<_, bool>(0)
+        );
+        assert_eq!(
+            client
+                .query_one(
+                    "SELECT active FROM product_attribute_value WHERE id=$1",
+                    &[&values[1]]
+                )
+                .await
+                .unwrap()
+                .get::<_, Option<bool>>(0),
+            None
+        );
+        client
+            .execute("UPDATE attribute_upgrade_fixture SET refuse=false", &[])
+            .await
+            .unwrap();
+        for _ in 0..2 {
+            let upgraded = system
+                .button_immediate_upgrade(&env, &[ModuleName::new("product").unwrap()])
+                .await
+                .unwrap();
+            assert!(
+                upgraded.post_commit.is_clean(),
+                "{:?}",
+                upgraded.post_commit
+            );
+            let row = client
+                .query_one(
+                    "SELECT sequence,active FROM product_attribute WHERE id=$1",
+                    &[&attribute],
+                )
+                .await
+                .unwrap();
+            assert_eq!((row.get::<_, i32>(0), row.get::<_, bool>(1)), (42, true));
+            let row = client.query_one("SELECT active,default_extra_price::text,attribute_id FROM product_attribute_value WHERE id=$1", &[&values[0]]).await.unwrap();
+            assert!(!row.get::<_, bool>(0));
+            assert_eq!(row.get::<_, String>(1), "12.34");
+            assert_eq!(row.get::<_, i64>(2), attribute);
+            assert!(
+                client
+                    .query_one(
+                        "SELECT active FROM product_attribute_value WHERE id=$1",
+                        &[&values[1]]
+                    )
+                    .await
+                    .unwrap()
+                    .get::<_, bool>(0)
+            );
+            assert!(
+                client
+                    .query_one("SELECT reached FROM attribute_upgrade_fixture", &[])
+                    .await
+                    .unwrap()
+                    .get::<_, bool>(0)
+            );
+        }
+        drop(client);
+        drop(system);
+        db.cleanup().await.unwrap();
+    });
+}
+
+/// Installed product upgrades rebuild barcode claims and refuse duplicate legacy rows atomically.
+#[test]
+fn product_barcode_claims_upgrade_validates_legacy_rows() {
+    big_stack(async {
+        for duplicate in [false, true] {
+            let db = TestDb::create().await.unwrap();
+            let (system, orm) = install(&db).await;
+            assert_eq!(
+                strings(&orm, "SELECT count(*)::text FROM product_barcode_claim").await,
+                ["0"]
+            );
+            assert_eq!(
+                strings(&orm, "SELECT count(*)::text FROM product_barcode_scope").await,
+                ["0"]
+            );
+            let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+            let templates = tx
+                .env()
+                .records("product.template")
+                .unwrap()
+                .create(
+                    &mut tx,
+                    vec![
+                        erp_orm::RawVals::new()
+                            .set_cell("name", Cell::Str("Barcode legacy one".into()))
+                            .set_cell("barcode", Cell::Str("UPGRADE-A".into())),
+                        erp_orm::RawVals::new()
+                            .set_cell("name", Cell::Str("Barcode legacy two".into()))
+                            .set_cell("barcode", Cell::Str("UPGRADE-B".into())),
+                    ],
+                )
+                .await
+                .unwrap();
+            let second = templates.rec_ids()[1].get();
+            tx.flush().await.unwrap();
+            if duplicate {
+                // Schema-owner fixture emulates data stored by the old bypass-capable writer.
+                tx.execute(
+                    "UPDATE product_product SET barcode='UPGRADE-A' WHERE product_tmpl_id=$1",
+                    &[&second],
+                )
+                .await
+                .unwrap();
+                tx.execute(
+                    "UPDATE product_template SET barcode='UPGRADE-A' WHERE id=$1",
+                    &[&second],
+                )
+                .await
+                .unwrap();
+            }
+            tx.batch(
+                "DROP TABLE product_barcode_claim; DROP TABLE product_barcode_scope;
+                UPDATE ir_module_module SET latest_version='1.4.0' WHERE name='product';",
+            )
+            .await
+            .unwrap();
+            tx.commit().await.unwrap();
+            let result = system
+                .button_immediate_upgrade(
+                    &system.system_env(Context::new()),
+                    &[ModuleName::new("product").unwrap()],
+                )
+                .await;
+            if duplicate {
+                let error = match result {
+                    Err(erp_modules::Error::StepFailed { source, .. }) => *source,
+                    Err(error) => error,
+                    Ok(_) => panic!("invalid legacy barcodes must refuse upgrade"),
+                };
+                match error {
+                    erp_modules::Error::MigrationFailed { source, .. } => {
+                        assert_eq!(source.kind(), erp_sdk::ErrorKind::Validation);
+                        assert!(source.message().contains("UPGRADE-A"), "{source}");
+                        assert!(source.message().contains("product.product row"), "{source}");
+                    }
+                    other => panic!("unexpected upgrade error: {other}"),
+                }
+                assert_eq!(
+                    strings(
+                        &orm,
+                        "SELECT latest_version FROM ir_module_module WHERE name='product'"
+                    )
+                    .await,
+                    ["1.4.0"]
+                );
+                assert_eq!(
+                    strings(
+                        &orm,
+                        "SELECT (to_regclass('product_barcode_claim') IS NULL)::text"
+                    )
+                    .await,
+                    ["true"]
+                );
+            } else {
+                let upgraded = result.unwrap();
+                assert!(upgraded.post_commit.is_clean());
+                assert_eq!(strings(&upgraded.orm, "SELECT count(*)::text FROM product_barcode_claim WHERE barcode IN ('UPGRADE-A','UPGRADE-B')").await, ["2"]);
+                assert_eq!(
+                    strings(
+                        &upgraded.orm,
+                        "SELECT latest_version FROM ir_module_module WHERE name='product'"
+                    )
+                    .await,
+                    [upgrade_from_main::manifest_version()]
+                );
+                let mut tx = upgraded.orm.begin(SUPERUSER_ID).await.unwrap();
+                for name in ["product.barcode.claim", "product.barcode.scope"] {
+                    let model_id: i64 = tx
+                        .query("SELECT id FROM ir_model WHERE model=$1", &[&name])
+                        .await
+                        .unwrap()[0]
+                        .get(0);
+                    assert_eq!(
+                        tx.query(
+                            "SELECT count(*) FROM ir_access WHERE model_id=$1",
+                            &[&model_id]
+                        )
+                        .await
+                        .unwrap()[0]
+                            .get::<_, i64>(0),
+                        0
+                    );
+                }
+                tx.rollback().await.unwrap();
+                drop(tx);
+                let removed = system
+                    .button_immediate_uninstall(
+                        &system.system_env(Context::new()),
+                        &[ModuleName::new("product").unwrap()],
+                    )
+                    .await
+                    .unwrap();
+                assert!(
+                    removed
+                        .uninstalled
+                        .contains(&ModuleName::new("product").unwrap())
+                );
+                assert_eq!(strings(&removed.orm, "SELECT (to_regclass('product_barcode_claim') IS NULL AND to_regclass('product_barcode_scope') IS NULL)::text").await, ["true"]);
+            }
+        }
+    });
 }

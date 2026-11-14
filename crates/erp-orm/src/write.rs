@@ -73,26 +73,33 @@ impl Records {
     /// `create(vals_list)` through the method chain (`base` implements it).
     /// A `Validation` error, or any error once rows were inserted or values written (parents of
     /// `_inherits`, lines of x2many commands), poisons the transaction: commit refuses until
-    /// rollback (decision E1, F1). Database-generated output values (NULL included)
-    /// and context defaults are refused before dispatching method overrides.
+    /// rollback (decision E1, F1). Unadapted database-generated inputs (NULL included)
+    /// and generated context defaults are refused before ordinary create overrides.
+    /// Declared generated inputs first pass their authorized adapter and output checks.
     pub async fn create(&self, tx: &mut Transaction, vals_list: Vec<RawVals>) -> Result<Records> {
+        tx.refuse_adapter_effect()?;
         tx.admit_records(self).await?;
         tx.check_capture_create(self, &vals_list)?;
         crate::event_namespace::check_create_capture(self, &vals_list)?;
         let before = tx.mutations();
-        let result = match crate::database_generated::check_write_names(
-            tx,
-            self.spec(),
-            vals_list
-                .iter()
-                .flat_map(|v| v.names())
-                .chain(self.env().context().default_field_names()),
-        ) {
-            Ok(()) => {
-                call_method::<(Vec<RawVals>,), Records>(tx, self, "create", (vals_list,)).await
+        let result = async {
+            let vals_list = crate::generated_input::create(tx, self, vals_list).await?;
+            tx.check_capture_create(self, &vals_list)?;
+            match crate::database_generated::check_write_names(
+                tx,
+                self.spec(),
+                vals_list
+                    .iter()
+                    .flat_map(|v| v.names())
+                    .chain(self.env().context().default_field_names()),
+            ) {
+                Ok(()) => {
+                    call_method::<(Vec<RawVals>,), Records>(tx, self, "create", (vals_list,)).await
+                }
+                Err(error) => Err(error),
             }
-            Err(error) => Err(error),
-        };
+        }
+        .await;
         if let Err(error) = &result {
             tx.poison_after(before, error);
         }
@@ -101,20 +108,39 @@ impl Records {
 
     /// `write(vals)` through the method chain (`base` implements it). A `Validation` error, or any
     /// error once values were written (in the cache or the database), poisons the transaction
-    /// (decision E1, F1). Explicit database-generated output assignments are refused
-    /// before method overrides, including on new or empty recordsets.
+    /// (decision E1, F1). Unadapted database-generated inputs are refused before write
+    /// overrides. Declared inputs on persisted records first pass their authorized
+    /// adapter; new and empty recordsets retain the explicit assignment refusal.
     /// Event-relevant writes require an [`crate::OperationIdentity`]; deferred captures keep the
     /// writer's actor and effective companies when another environment flushes them. Nested
     /// event-relevant side effects during a mutation or compute are refused by S7.
     pub async fn write(&self, tx: &mut Transaction, vals: RawVals) -> Result<()> {
+        tx.refuse_adapter_effect()?;
         tx.admit_records(self).await?;
         tx.check_capture_write(self, &vals)?;
         let before = tx.mutations();
-        let result =
-            match crate::database_generated::check_write_names(tx, self.spec(), vals.names()) {
-                Ok(()) => call_method::<(RawVals,), ()>(tx, self, "write", (vals,)).await,
-                Err(error) => Err(error),
-            };
+        let result = async {
+            if let Some(rows) = crate::generated_input::write(tx, self, &vals).await? {
+                for row in &rows {
+                    crate::database_generated::check_write_names(tx, self.spec(), row.names())?;
+                    tx.check_capture_write(self, row)?;
+                }
+                if let Some(first) = rows.first()
+                    && rows.iter().all(|row| row == first)
+                {
+                    return call_method::<(RawVals,), ()>(tx, self, "write", (first.clone(),))
+                        .await;
+                }
+                for (id, row) in self.rec_ids().iter().zip(rows) {
+                    let record = self.browse_ids(vec![*id]);
+                    call_method::<(RawVals,), ()>(tx, &record, "write", (row,)).await?;
+                }
+                return Ok(());
+            }
+            crate::database_generated::check_write_names(tx, self.spec(), vals.names())?;
+            call_method::<(RawVals,), ()>(tx, self, "write", (vals,)).await
+        }
+        .await;
         if let Err(error) = &result {
             tx.poison_after(before, error);
         }
@@ -143,6 +169,7 @@ impl Records {
     /// the writer runs, including generated assignments on empty records. A `Validation` error,
     /// or any error after mutation, poisons the transaction until rollback.
     pub async fn write_base(&self, tx: &mut Transaction, vals: RawVals) -> Result<()> {
+        tx.refuse_adapter_effect()?;
         tx.admit_records(self).await?;
         let before = tx.mutations();
         let result =
@@ -161,6 +188,8 @@ impl Records {
     }
 
     /// Convert dynamic values with the one converter.
+    /// Declared adapted inputs can be represented here for create/write; conversion
+    /// grants no assignment eligibility to defaults, new records, write_base or upsert.
     pub fn vals_from_values<'v>(
         &self,
         values: impl IntoIterator<Item = (&'v String, &'v Value)>,
@@ -172,7 +201,9 @@ impl Records {
                 continue;
             }
             let field = spec.field(name).ok_or_else(|| invalid_field(spec, name))?;
-            crate::database_generated::check_assignment(spec, field)?;
+            if !field.is_input_adapted() {
+                crate::database_generated::check_assignment(spec, field)?;
+            }
             if let Some(comodel) = field.ty.comodel().filter(|_| field.ty.is_x2many()) {
                 let comodel = self.env().records(comodel)?;
                 let commands = self.commands_from_value(&comodel, name, value)?;
@@ -223,6 +254,7 @@ impl Records {
         tx: &mut Transaction,
         values: &[BTreeMap<String, Value>],
     ) -> Result<Records> {
+        tx.refuse_adapter_effect()?;
         // a value refused here changed nothing yet, so the transaction stays usable
         let vals = values
             .iter()
@@ -231,13 +263,15 @@ impl Records {
         self.create(tx, vals).await
     }
 
-    /// `write` with dynamic values. Generated output targets are always refused.
+    /// `write` with dynamic values. Unadapted generated targets are refused;
+    /// declared adapted inputs use the same persisted-write boundary as typed values.
     /// On an empty set other names and values are not checked.
     pub async fn write_values<'v>(
         &self,
         tx: &mut Transaction,
         values: impl IntoIterator<Item = (&'v String, &'v Value)>,
     ) -> Result<()> {
+        tx.refuse_adapter_effect()?;
         tx.admit_records(self).await?;
         if self.is_empty() {
             crate::database_generated::check_write_names(
@@ -279,6 +313,7 @@ impl Records {
         field_name: &str,
         translations: impl IntoIterator<Item = (K, Value)>,
     ) -> Result<bool> {
+        tx.refuse_adapter_effect()?;
         tx.admit_records(self).await?;
         self.ensure_one()?;
         // Authorize before capture settlement can flush earlier permitted work.
@@ -2169,6 +2204,12 @@ pub(crate) fn array_param(
             Cell::Bool(b) => Some(Some(b)),
             _ => None,
         })?),
+        // collect refuses mismatched cells; only explicit Cell::Null becomes None.
+        Storage::BigInt => Box::new(collect(cells, |c| match c {
+            Cell::Null => Some(None),
+            Cell::BigInt(i) => Some(Some(i.get())),
+            _ => None,
+        })?),
         Storage::Int => Box::new(collect(cells, |c| match c {
             Cell::Null => Some(None),
             Cell::Int(i) => Some(Some(i)),
@@ -2259,6 +2300,7 @@ impl Transaction {
     /// rounds, instead of committing a half-computed state (COMP §7 D5). A `Validation` error
     /// (a constraint, a database constraint) poisons the transaction (commit refuses).
     pub async fn flush(&mut self) -> Result<()> {
+        self.refuse_adapter_effect()?;
         self.require_record_scope()?;
         self.check_not_cancelled()?;
         let result = self.flush_rounds().await;
@@ -2303,6 +2345,7 @@ impl Transaction {
     /// Only the requested fields are written (per-field flush), with the pending
     /// audit values of the records written.
     pub async fn flush_fields(&mut self, model: ModelId, fields: &[FieldId]) -> Result<()> {
+        self.refuse_adapter_effect()?;
         self.require_record_scope()?;
         self.check_not_cancelled()?;
         let registry = Arc::clone(self.registry());
@@ -2340,6 +2383,7 @@ impl Transaction {
 
     /// Recompute every pending field of `model`, then write all its pending values.
     pub async fn flush_model(&mut self, model: ModelId) -> Result<()> {
+        self.refuse_adapter_effect()?;
         self.require_record_scope()?;
         self.check_not_cancelled()?;
         let env = self.env();

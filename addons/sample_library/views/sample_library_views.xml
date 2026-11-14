@@ -46,6 +46,11 @@
         <field name="model">sample_library.book</field>
         <field name="arch" type="xml">
             <list string="Books">
+                <dashboard>
+                    <count name="available" string="Available books" filter="available" color="success"/>
+                    <count name="unavailable" string="Unavailable books" domain="[('available', '=', False)]"/>
+                    <kpi name="pages_added" string="Pages added" field="pages" aggregate="sum" date_field="create_date"/>
+                </dashboard>
                 <field name="favorite" widget="boolean_favorite"/>
                 <field name="title"/>
                 <field name="author_id"/>

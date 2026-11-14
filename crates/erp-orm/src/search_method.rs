@@ -794,7 +794,7 @@ fn validate_operand_for_field(
                 | FieldType::Reference { .. } => matches!(v, Value::Str(_) | Value::Bool(false)),
                 FieldType::Date => matches!(v, Value::Date(_) | Value::Bool(false)),
                 FieldType::Datetime => matches!(v, Value::Datetime(_) | Value::Bool(false)),
-                FieldType::Uuid | FieldType::Xid8 | FieldType::TimestampTz => {
+                FieldType::BigInt | FieldType::Uuid | FieldType::Xid8 | FieldType::TimestampTz => {
                     matches!(v, Value::Bool(false))
                         || erp_sql::param::ScalarKind::of_field(ty)
                             .is_some_and(|kind| erp_sql::param::to_scalar(kind, v).is_ok())

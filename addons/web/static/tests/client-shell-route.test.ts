@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { expect, test } from "vitest";
-import { parseRoute, routeUrl, type Route, decimalId } from "../src/client/route.js";
+import { isAddressSizeRefusal, parseRoute, routeUrl, type Route, decimalId } from "../src/client/route.js";
 
 interface ContractCase {
   name: string;
@@ -119,4 +119,26 @@ test("browser diagnostics name only closed navigation parameters", () => {
 test("browser refuses registered-server-only renderers explicitly", () => {
   expect(() => parseRoute(new URL("/erp/action-42?view_type=addon_view", "https://erp.example.test")))
     .toThrowError(invalid("view_type"));
+});
+
+
+/// (partial: the address tells a state that is too large for it from a malformed parameter, so a caller can word the first as size)
+test("a value or an address past its length is a size refusal, and a malformed pivot parameter is not", () => {
+  const base = parseRoute(new URL("/erp/action-20?view_type=pivot", "https://erp.example.test"));
+  const refusal = (extra: Partial<Route>): unknown => { try { routeUrl({ ...base, ...extra }); } catch (error) { return error; } throw new Error(`admitted: ${JSON.stringify(extra).slice(0, 80)}`); };
+  const open = (count: number): string => JSON.stringify({ r: Array.from({ length: count }, (_, index) => [`k${index}`]) });
+  expect(open(400).length).toBeGreaterThan(2048);
+  expect(isAddressSizeRefusal(refusal({ pivot_open: open(400) }))).toBe(true); // one value past 2,048 characters
+  expect(open(150).length).toBeLessThan(2048);
+  expect(isAddressSizeRefusal(refusal({ pivot_open: open(150) }))).toBe(true); // each value fits, the encoded address does not
+  expect(isAddressSizeRefusal(refusal({ pivot_open: JSON.stringify({ r: [["x".repeat(300)]] }) }))).toBe(true); // one header value past 256 characters
+  expect(isAddressSizeRefusal(refusal({ pivot_open: JSON.stringify({ c: [Array.from({ length: 17 }, () => 1)] }) }))).toBe(true); // a header deeper than 16
+  expect(isAddressSizeRefusal(refusal({ pivot_sort: JSON.stringify(["__count", "asc", ["x".repeat(300)]]) }))).toBe(true); // a sort under such a header
+  expect(isAddressSizeRefusal(refusal({ pivot_sort: '["__count","sideways",[]]' }))).toBe(false);
+  for (const extra of [{ pivot_open: '{"x":[]}' }, { pivot_open: "not json" }, { pivot_rows: "priority,priority" }, { pivot_rows: "Bad Field" }] as Partial<Route>[]) {
+    const error = refusal(extra);
+    expect(error, JSON.stringify(extra)).toEqual(expect.objectContaining({ kind: "validation" }));
+    expect(isAddressSizeRefusal(error), JSON.stringify(extra)).toBe(false);
+  }
+  expect(isAddressSizeRefusal(new Error("Invalid navigation parameter: url."))).toBe(false); // the text is not the signal
 });

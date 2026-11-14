@@ -87,7 +87,7 @@ fn builder_validates_companies_against_the_resolution() {
         orm_error(outside),
         (
             ErrorKind::Access,
-            "Access to unauthorized or invalid companies.".to_owned()
+            "One of the selected companies does not exist or is not one of yours.".to_owned()
         )
     );
     let unresolved = PrincipalBuilder::user(uid(7))
@@ -404,7 +404,7 @@ fn with_companies_defaults_validates_and_trusts_system() {
         orm_error(user.with_companies(vec![company(4)]).unwrap_err()),
         (
             ErrorKind::Access,
-            "Access to unauthorized or invalid companies.".to_owned()
+            "One of the selected companies does not exist or is not one of yours.".to_owned()
         )
     );
     assert_eq!(

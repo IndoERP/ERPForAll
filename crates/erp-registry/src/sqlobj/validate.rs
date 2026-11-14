@@ -33,7 +33,7 @@ pub(crate) fn check_key(who: Who<'_>) -> Result<()> {
 }
 
 /// A physical identifier component: a valid PostgreSQL name of at most 63 bytes.
-fn check_ident(who: Who<'_>, what: &str, value: &str) -> Result<()> {
+pub(super) fn check_ident(who: Who<'_>, what: &str, value: &str) -> Result<()> {
     within(
         who,
         &format!("{what} bytes"),
@@ -68,6 +68,8 @@ pub(crate) fn check(
 ) -> Result<Option<SqlTriggerShape>> {
     let who = (decl.addon, decl.key);
     match &decl.kind {
+        SqlObjectKindDecl::ForeignKey(f) => super::integrity::check(who, f, limits).map(|()| None),
+        SqlObjectKindDecl::TableOptions(_) => Ok(None),
         SqlObjectKindDecl::Function(f) => check_function(who, f, limits).map(|()| None),
         SqlObjectKindDecl::Trigger(t) => check_trigger(who, t).map(Some),
         SqlObjectKindDecl::Condition(c) => check_condition(who, c, limits).map(|()| None),
@@ -312,6 +314,12 @@ fn check_condition(who: Who<'_>, c: &SqlConditionDecl, limits: &SqlObjectLimits)
     if c.message.trim().is_empty() {
         return Err(err!(who, "condition message is empty"));
     }
+    if c.kind.is_none() {
+        return Err(err!(
+            who,
+            "condition kind is missing; declare Validation or Programming"
+        ));
+    }
     Ok(())
 }
 
@@ -357,6 +365,8 @@ pub(crate) fn decl_bytes(decl: &SqlObjectDecl) -> Option<usize> {
             sum(&[c.sqlstate.len(), c.identifier.len(), c.message.len()])?
         }
         SqlObjectKindDecl::TableGrant(g) => g.model.len(),
+        SqlObjectKindDecl::ForeignKey(f) => super::integrity::bytes(f)?,
+        SqlObjectKindDecl::TableOptions(o) => o.model.len(),
     };
     own.checked_add(decl.key.len())
 }

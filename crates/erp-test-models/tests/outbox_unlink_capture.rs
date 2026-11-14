@@ -763,10 +763,10 @@ async fn model_and_record_denials_precede_destructive_delete() {
         assert_eq!(error.kind(), ErrorKind::Access);
         let description = &h.registry().model(ROOT).unwrap().description;
         let expected = if model_denial {
-            format!("You are not allowed to unlink '{description}' ({ROOT}) records.")
+            format!("Your access rights do not let you unlink '{description}' ({ROOT}) records.")
         } else {
             format!(
-                "You are not allowed to delete '{description}' ({ROOT}) records.\n\nRecords: {ROOT}({},), User: 7",
+                "Your access rights do not let you delete '{description}' ({ROOT}) records.\n\nRecords: {ROOT}({},), User: 7",
                 ids[0]
             )
         };
@@ -965,7 +965,7 @@ async fn restrict_fk_failure_keeps_root_and_has_no_event() {
     assert_eq!(
         error.message(),
         format!(
-            "The operation cannot be completed: Another model is using the record you are trying to delete.\n\nThe troublemaker is: '{}' ({RESTRICT_CHILD})\nThanks to the following constraint: '{}' ({})\nHow about archiving the record instead?",
+            "The database refused the change: Other records still point to the record you want to delete.\n\nReferring model: '{}' ({RESTRICT_CHILD})\nConstraint: '{}' ({})\nArchive the record instead of deleting it.",
             child.description, field.string, field.name
         )
     );

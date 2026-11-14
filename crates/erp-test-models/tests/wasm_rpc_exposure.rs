@@ -330,7 +330,7 @@ async fn a_caller_without_rights_gets_the_access_error() {
         body["message"]
             .as_str()
             .unwrap()
-            .contains("You are not allowed"),
+            .contains("Your access rights do not let you"),
         "{text}"
     );
     assert_eq!(qty(&h, id).await, 10, "nothing was stored");

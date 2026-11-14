@@ -41,6 +41,18 @@ impl erp_orm::Refresh for OwnerRefresh {
     }
 }
 
+/// A refusal of the installed registry keeps its own kind for the node's admission (a
+/// [`Concurrency`](erp_fields::ErrorKind::Concurrency) refusal stays one); every other module
+/// error is a module operation error.
+fn admission_error(error: erp_modules::Error) -> CliError {
+    match error {
+        erp_modules::Error::Orm(error) if error.kind() == erp_fields::ErrorKind::Concurrency => {
+            CliError::from(error)
+        }
+        other => CliError::ModuleOperation(Box::new(other)),
+    }
+}
+
 /// The module system of one database with the lifecycle of its WebAssembly package addons.
 pub struct Node {
     system: Arc<ModuleSystem>,
@@ -67,7 +79,78 @@ impl Node {
         addons: &[PathBuf],
         baseline: Option<Generations>,
     ) -> Result<Self> {
-        Self::open_composed(pool, addons, baseline, true)
+        Self::open_composed(
+            pool,
+            addons,
+            baseline,
+            true,
+            erp_orm::SchemaSyncOptions::new(),
+        )
+    }
+
+    /// Compose a node with the operator's SQL-object role bindings.
+    pub(crate) fn open_configured(
+        config: &erp_server::config::ServerConfig,
+        baseline: Option<Generations>,
+    ) -> Result<Self> {
+        Self::open_composed(
+            crate::access::pool_with_size(config.owner_connection(), 4)?,
+            config.addons(),
+            baseline,
+            true,
+            crate::sql_object_publication::options(config)?,
+        )
+    }
+
+    /// Read the installed set without loading hooks or recovering pending work.
+    pub(crate) async fn registry_for_publication(
+        &self,
+        tx: &mut erp_orm::Transaction,
+    ) -> Result<Arc<erp_registry::Registry>> {
+        let rows = tx
+            .query(
+                "SELECT pg_try_advisory_xact_lock($1,$2)",
+                &[
+                    &erp_modules::OPERATION_LOCK.0,
+                    &erp_modules::OPERATION_LOCK.1,
+                ],
+            )
+            .await?;
+        let locked: bool = rows
+            .first()
+            .ok_or_else(|| erp_fields::Error::programming("publication lock state missing"))?
+            .try_get(0)
+            .map_err(|e| erp_fields::Error::db("invalid publication lock state").with_source(e))?;
+        if !locked {
+            return Err(CliError::ModuleOperation(Box::new(
+                erp_modules::Error::OperationInProgress,
+            )));
+        }
+        self.life
+            .admit_installed_packages()
+            .await
+            .map_err(|e| CliError::ModuleOperation(Box::new(e)))?;
+        self.system
+            .registry_for_publication(tx)
+            .await
+            .map_err(|e| CliError::ModuleOperation(Box::new(e)))
+    }
+
+    /// The installed registry for a serving node's admission: as [`Self::registry_for_publication`]
+    /// but without the operation lock, so nodes that start or refresh together, or during a module
+    /// operation, do not refuse each other.
+    pub(crate) async fn registry_for_admission(
+        &self,
+        tx: &mut erp_orm::Transaction,
+    ) -> Result<Arc<erp_registry::Registry>> {
+        self.life
+            .admit_installed_packages()
+            .await
+            .map_err(|e| CliError::ModuleOperation(Box::new(e)))?;
+        self.system
+            .installed_registry(tx)
+            .await
+            .map_err(admission_error)
     }
 
     /// Owner-only enrollment composition: admit old folder/package bytes without claiming that
@@ -76,7 +159,7 @@ impl Node {
         pool: deadpool_postgres::Pool,
         addons: &[PathBuf],
     ) -> Result<Self> {
-        Self::open_composed(pool, addons, None, false)
+        Self::open_composed(pool, addons, None, false, erp_orm::SchemaSyncOptions::new())
     }
 
     fn open_composed(
@@ -84,6 +167,7 @@ impl Node {
         addons: &[PathBuf],
         baseline: Option<Generations>,
         native: bool,
+        options: erp_orm::SchemaSyncOptions,
     ) -> Result<Self> {
         let mut index = AddonIndex::new(true);
         for path in addons {
@@ -96,11 +180,14 @@ impl Node {
             WasmPackages::new(Arc::new(HostLoader::new(Arc::new(host), Limits::default())));
         let builder = ModuleSystem::builder(pool, index)
             .require_core_tables(erp_security::auth::core_tables())
-            .package_runtime(packages.clone());
+            .package_runtime(packages.clone())
+            .schema_sync_options(options);
         let builder = if native {
             builder
+                .require_sql_objects(crate::native_addons::SQL_MANIFESTS.iter().copied())
                 .native_artifact_identities(crate::identity::native_artifact_identities()?)
                 .code(crate::native_addons::DESCRIPTORS.iter().copied())
+                .not_linked(crate::native_addons::NOT_LINKED.iter().copied())
                 .view_types(erp_addon_web::view_type_contributions())
                 .lifecycle_hook(Arc::new(crate::ui_assets::AssetLifecycle::new(
                     crate::ui_assets::host_options()?,
@@ -281,6 +368,28 @@ impl RefreshBackoff {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A node's admission refusal keeps the Concurrency kind and its sentence; another module
+    /// error stays a module operation error (cycle 13 r3).
+    #[test]
+    fn an_admission_refusal_keeps_its_kind_and_sentence() {
+        let refusal = erp_fields::Error::new(
+            erp_fields::ErrorKind::Concurrency,
+            "Pending module operations require operator recovery",
+        );
+        let CliError::Access(kept) = admission_error(erp_modules::Error::Orm(refusal)) else {
+            panic!("not passed through");
+        };
+        assert_eq!(kept.kind(), erp_fields::ErrorKind::Concurrency);
+        assert_eq!(
+            kept.message(),
+            "Pending module operations require operator recovery"
+        );
+        assert!(matches!(
+            admission_error(erp_modules::Error::OperationInProgress),
+            CliError::ModuleOperation(_)
+        ));
+    }
 
     /// A failed rebuild blocks the next one for a delay that doubles up to the cap, a rebuild
     /// after the delay is allowed, and a success resets the schedule (review r1 M3).

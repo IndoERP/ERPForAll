@@ -101,7 +101,7 @@ pub(crate) async fn authorize_company(tx: &mut Transaction, env: &Env, company: 
         Ok(())
     } else {
         Err(Error::access(
-            "Access to unauthorized or invalid companies.",
+            "One of the selected companies does not exist or is not one of yours.",
         ))
     }
 }

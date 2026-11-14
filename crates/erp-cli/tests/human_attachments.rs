@@ -329,6 +329,16 @@ async fn the_deployed_server_stores_an_uploaded_file_posts_it_and_loads_it_back(
         )
     };
 
+    let shell = request(port, "GET", "/erp", &[("cookie", &cookies)], "");
+    assert_eq!(shell.status, 200, "{}", shell.body);
+    let boot = embedded(&shell, "erp-bootstrap");
+    assert_eq!(boot["attachment_limits"]["max_file_bytes"], 134217728);
+    assert_eq!(boot["attachment_limits"]["inline_max_bytes"], 2048);
+    let policy = call("/erp/json/2/ir.attachment/erp_upload_limits", "{}");
+    assert_eq!(policy.status, 200, "{}", policy.body);
+    let policy: serde_json::Value = serde_json::from_str(&policy.body).unwrap();
+    assert_eq!(policy, boot["attachment_limits"]);
+
     let install = call("/erp/module/install", r#"{"modules":["mail"]}"#);
     assert_eq!(install.status, 200, "install: {}", install.body);
     // a deployment installs its addons and restarts: serve from the installed registry

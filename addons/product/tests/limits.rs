@@ -118,7 +118,7 @@ async fn test_template_with_too_many_combinations_is_refused() {
         .await
         .expect_err("10 000 combinations are above the limit");
     assert!(
-        err.message().contains("above allowed limit (1000)"),
+        err.message().contains("more than 1000 variants"),
         "unexpected error: {}",
         err.message()
     );

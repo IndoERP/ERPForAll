@@ -32,6 +32,7 @@ pub fn supports(ty: &FieldType) -> bool {
             | FieldType::Text
             | FieldType::Html
             | FieldType::Boolean
+            | FieldType::BigInt
             | FieldType::Integer
             | FieldType::Float { .. }
             | FieldType::Monetary { .. }
@@ -54,6 +55,7 @@ pub fn encode(ty: &FieldType, cell: &Cell) -> Result<Json> {
     match cell {
         Cell::Null => Ok(match ty.storage() {
             Storage::Bool => Json::Bool(false),
+            Storage::BigInt => Json::String("0".into()),
             Storage::Int => Json::from(0),
             Storage::Float => Json::from(0.0),
             Storage::Decimal => Json::String("0".into()),
@@ -111,6 +113,8 @@ pub fn decode(ty: &FieldType, value: &Json) -> Result<Cell> {
     }
     let result = match (ty.storage(), value) {
         (Storage::Bool, Json::Bool(v)) => Some(Cell::Bool(*v)),
+        // Parse failure becomes the storage-corruption error below, never NULL/zero.
+        (Storage::BigInt, Json::String(v)) => erp_fields::BigInt::parse(v).ok().map(Cell::BigInt),
         (Storage::Int, Json::Number(v)) => v
             .as_i64()
             .and_then(|n| i32::try_from(n).ok())
@@ -289,4 +293,25 @@ pub fn delta(before: &Cell, after: &Cell) -> Result<Cell> {
         }
     }
     Ok(Cell::Json(Arc::new(Json::Object(patch))))
+}
+
+#[cfg(test)]
+mod bigint_tests {
+    #![allow(clippy::unwrap_used, reason = "tests")]
+    use super::*;
+    #[test]
+    fn bigint_company_map_scalar_preserves_full_width_and_zero() {
+        for n in [i64::MIN, 0, i64::MAX] {
+            let cell = Cell::BigInt(erp_fields::BigInt::from_i64(n));
+            let json = encode(&FieldType::BigInt, &cell).unwrap();
+            assert_eq!(json, Json::String(n.to_string()));
+            assert_eq!(decode(&FieldType::BigInt, &json).unwrap(), cell);
+        }
+        let error = decode(&FieldType::BigInt, &Json::from(9007199254740992_i64)).unwrap_err();
+        assert_eq!(error.kind(), erp_fields::ErrorKind::Programming);
+        assert_eq!(
+            error.message(),
+            "invalid company-dependent bigint storage value"
+        );
+    }
 }

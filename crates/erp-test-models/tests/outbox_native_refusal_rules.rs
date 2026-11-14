@@ -98,7 +98,7 @@ fn root(tx: &Transaction, id: i64) -> Records {
 /// The text of the record-rule refusal for user 4.
 fn denied(verb: &str, model: &str, id: i64) -> String {
     format!(
-        "You are not allowed to {verb} '{model}' ({model}) records.\n\nRecords: {model}({id},), User: 4"
+        "Your access rights do not let you {verb} '{model}' ({model}) records.\n\nRecords: {model}({id},), User: 4"
     )
 }
 

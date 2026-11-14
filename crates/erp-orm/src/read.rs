@@ -69,6 +69,12 @@ pub(crate) fn decode<R: CellSource + ?Sized>(row: &R, idx: usize, ty: ColumnType
                 .map_err(map)?
                 .map_or(Cell::Null, Cell::Int),
         },
+        ColumnType::BigInt => row
+            .cell::<Option<i64>>(idx)
+            .map_err(map)?
+            .map_or(Cell::Null, |v| {
+                Cell::BigInt(erp_fields::BigInt::from_i64(v))
+            }),
         ColumnType::Int8 => row
             .cell::<Option<i64>>(idx)
             .map_err(map)?
@@ -163,6 +169,7 @@ pub enum Load {
 /// of ids.
 pub fn read_value(ty: &FieldType, cell: &Cell) -> Value {
     match (ty, cell) {
+        (FieldType::BigInt, Cell::Null) => Value::BigInt(erp_fields::BigInt::from_i64(0)),
         (FieldType::Boolean, Cell::Null) => Value::Bool(false),
         (FieldType::Integer | FieldType::Many2oneReference { .. }, Cell::Null) => Value::Int(0),
         (FieldType::One2many { .. } | FieldType::Many2many { .. }, Cell::Null) => Value::list([]),
@@ -287,6 +294,9 @@ impl Transaction {
             None if field.prefetch && records.env().context().prefetch_fields() => {
                 let mask = self.field_mask(records.env(), model)?;
                 let mut group = spec.prefetch_fields.clone();
+                if self.in_generated_input() {
+                    group.retain(|f| !spec.field_by_id(*f).is_generated());
+                }
                 if !mask.is_all() {
                     group.retain(|f| mask.readable(*f));
                     if !group.contains(&fid) {
@@ -471,6 +481,7 @@ impl Transaction {
                     Cell::Str(Arc::from(d.to_timezone(&tz).unwrap_or(d).to_string()))
                 }
                 Cell::Uuid(v) => Cell::Str(Arc::from(v.to_string())),
+                Cell::BigInt(v) => Cell::Str(Arc::from(v.to_string())),
                 Cell::Xid8(v) => Cell::Str(Arc::from(v.to_string())),
                 Cell::TimestampTz(v) => Cell::Str(Arc::from(v.to_string())),
                 Cell::Int(i) => Cell::Str(Arc::from(i.to_string())),
@@ -629,6 +640,21 @@ impl Transaction {
         }
         // attribute access, `mapped`, `read`: every read of a field's value passes here
         self.check_field(records.env(), records.model_id(), fid, FieldOp::Read)?;
+        if self.in_generated_input() {
+            let field = records.spec().field_by_id(fid);
+            if field.is_generated()
+                || (field.is_computed()
+                    && records.rec_ids().iter().any(|id| {
+                        !self.cache.contains(records.model_id(), fid, *id)
+                            || self
+                                .cache
+                                .model(records.model_id())
+                                .is_some_and(|cache| cache.is_pending(fid, *id))
+                    }))
+            {
+                return self.refuse_adapter_read(records.model_id(), fid);
+            }
+        }
         crate::database_generated::check_persisted(
             records.spec(),
             records.spec().field_by_id(fid),

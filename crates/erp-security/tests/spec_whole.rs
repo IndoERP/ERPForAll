@@ -271,10 +271,7 @@ fn cond(field: &str, op: Operator, value: impl Into<DomainValue>) -> Domain {
 
 fn refused(user: &str, uid: i64, label: &str) -> String {
     format!(
-        "Uh-oh! Looks like you have stumbled upon some top-secret records.\n\nSorry, {user} \
-         (id={uid}) doesn't have 'read' access to:\n- {label}\n\nIf you really, really need \
-         access, perhaps you can win over your friendly administrator with a batch of freshly \
-         baked cookies."
+        "Access rules protect some of these records.\n\n{user} (id={uid}) has no 'read' access to:\n- {label}\n\nAsk an administrator if you need access to these records."
     )
 }
 

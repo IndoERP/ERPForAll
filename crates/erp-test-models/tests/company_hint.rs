@@ -296,24 +296,18 @@ async fn begin_bob(
 
 fn head(w: &World, op: &str) -> String {
     format!(
-        "Uh-oh! Looks like you have stumbled upon some top-secret records.\n\nSorry, Bob Bobman \
-         (id={}) doesn't have '{op}' access to:",
+        "Access rules protect some of these records.\n\nBob Bobman (id={}) has no '{op}' access to:",
         w.bob
     )
 }
 
-const COOKIES: &str = "If you really, really need access, perhaps you can win over your friendly \
-                       administrator with a batch of freshly baked cookies.";
-const OUTSIDE: &str = "This seems to be a multi-company issue, but you do not have access to the \
-                       proper company to access the record anyhow.";
-const AMBIGUOUS: &str = "Note: this might be a multi-company issue. Switching company may help - \
-                         in the reference ERP, not in real life!";
+const COOKIES: &str = "Ask an administrator if you need access to these records.";
+const OUTSIDE: &str = "The record belongs to a company outside your allowed companies.";
+const AMBIGUOUS: &str =
+    "The records belong to several companies: switching the current company may help.";
 
 fn switch_to(name: &str) -> String {
-    format!(
-        "This seems to be a multi-company issue, you might be able to access the record by \
-         switching to the company: {name}."
-    )
+    format!("To open the record, switch to its company: {name}.")
 }
 
 fn records(tx: &Transaction, model: &str, ids: &[i64]) -> Records {
@@ -390,8 +384,7 @@ async fn spec_sec_010_multi_company_hint() {
         assert_eq!(err.kind(), ErrorKind::Access, "{err}");
         let expected = if debug {
             format!(
-                "{}\n- Company Document, In B ({DOC}: {in_b}, company=Company B)\n\nBlame the \
-                 following accesses:\n- rule 0\n\n{}",
+                "{}\n- Company Document, In B ({DOC}: {in_b}, company=Company B)\n\nRules that refused it:\n- rule 0\n\n{}",
                 head(&w, "read"),
                 cookies_hint(&switch_to("Company B"))
             )
@@ -428,8 +421,7 @@ async fn spec_sec_010_multi_company_hint() {
         assert_eq!(err.kind(), ErrorKind::Access, "{err}");
         let expected = if debug {
             format!(
-                "{}\n- Company Document ({DOC}: {in_b}, company=Company B)\n\nBlame the \
-                 following accesses:\n- rule 0\n\n{}",
+                "{}\n- Company Document ({DOC}: {in_b}, company=Company B)\n\nRules that refused it:\n- rule 0\n\n{}",
                 head(&w, "read"),
                 cookies_hint(&switch_to("Company B"))
             )
@@ -465,8 +457,7 @@ async fn spec_sec_010_multi_company_hint() {
         let err = denied(&mut tx, DOC, &[none], Operation::Write).await;
         let expected = if debug {
             format!(
-                "{}\n- Company Document, No company ({DOC}: {none})\n\nBlame the following \
-                 accesses:\n- rule 0\n\n{COOKIES}",
+                "{}\n- Company Document, No company ({DOC}: {none})\n\nRules that refused it:\n- rule 0\n\n{COOKIES}",
                 head(&w, "write")
             )
         } else {
@@ -497,8 +488,7 @@ async fn spec_sec_010_multi_company_hint() {
         let expected = if debug {
             format!(
                 "{}\n- Company Document, In B again ({DOC}: {in_b2}, company=Company B)\n- \
-                 Company Document, In Root ({DOC}: {in_root}, company=Company Root)\n\nBlame the \
-                 following accesses:\n- rule 0\n\n{}",
+                 Company Document, In Root ({DOC}: {in_root}, company=Company Root)\n\nRules that refused it:\n- rule 0\n\n{}",
                 head(&w, "read"),
                 cookies_hint(AMBIGUOUS)
             )
@@ -540,7 +530,7 @@ async fn spec_sec_010_multi_company_hint() {
     assert_eq!(
         err.message(),
         format!(
-            "{}\n- Company Child, Kid ({CHILD}: {child})\n\nBlame the following accesses:\n- rule \
+            "{}\n- Company Child, Kid ({CHILD}: {child})\n\nRules that refused it:\n- rule \
              0\n\n{COOKIES}",
             head(&w, "read")
         )
@@ -675,7 +665,7 @@ async fn spec_sec_054_multi_company_rules() {
             assert_eq!(err.kind(), ErrorKind::Access, "{err}");
             let expected = if debug {
                 format!(
-                    "{}\n{}\n\nBlame the following accesses:\n- Company rule\n\n{COOKIES}\n\n{}",
+                    "{}\n{}\n\nRules that refused it:\n- Company rule\n\n{COOKIES}\n\n{}",
                     head(&w, verb),
                     line(in_b, "Company B"),
                     switch_to("Company B")
@@ -694,7 +684,7 @@ async fn spec_sec_054_multi_company_rules() {
             let expected = if debug {
                 // C is not Bob's company: the line carries neither its name nor its company
                 format!(
-                    "{}\n- Company Document ({DOC}: {in_c})\n\nBlame the following accesses:\n- \
+                    "{}\n- Company Document ({DOC}: {in_c})\n\nRules that refused it:\n- \
                      Company rule\n\n{COOKIES}\n\n{OUTSIDE}",
                     head(&w, verb)
                 )
@@ -791,8 +781,7 @@ async fn debug_listing_redacts_foreign_names() {
         format!(
             "{}\n- Company Document, Active record ({DOC}: {active}, company=Company Root)\n- \
              Company Document ({DOC}: {other_member}, company=Company B)\n- Company Document \
-             ({DOC}: {foreign})\n- Company Document, Nobody record ({DOC}: {nobody})\n\nBlame the \
-             following accesses:\n- Company rule\n\n{COOKIES}\n\n{AMBIGUOUS}",
+             ({DOC}: {foreign})\n- Company Document, Nobody record ({DOC}: {nobody})\n\nRules that refused it:\n- Company rule\n\n{COOKIES}\n\n{AMBIGUOUS}",
             head(&w, "read")
         )
     );

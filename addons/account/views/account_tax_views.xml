@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<erp>
+  <record id="view_tax_group_list" model="ir.ui.view">
+    <field name="name">account.tax.group.list</field><field name="model">account.tax.group</field>
+    <field name="arch" type="xml"><list><field name="sequence"/><field name="name"/><field name="country_id"/><field name="company_id"/></list></field>
+  </record>
+  <record id="view_tax_group_form" model="ir.ui.view">
+    <field name="name">account.tax.group.form</field><field name="model">account.tax.group</field>
+    <field name="arch" type="xml"><form record_mode="record"><sheet>
+      <div class="oe_title"><h1><field name="name"/></h1></div>
+      <group><group><field name="company_id"/><field name="country_id"/><field name="sequence"/></group>
+      <group><field name="preceding_subtotal"/><field name="pos_receipt_label"/></group></group>
+    </sheet></form></field>
+  </record>
+  <record id="view_tax_list" model="ir.ui.view">
+    <field name="name">account.tax.list</field><field name="model">account.tax</field>
+    <field name="arch" type="xml"><list><field name="sequence"/><field name="name"/><field name="type_tax_use"/><field name="amount_type"/><field name="amount"/><field name="tax_group_id"/><field name="country_id"/><field name="company_id"/><field name="active"/></list></field>
+  </record>
+  <record id="view_tax_form" model="ir.ui.view">
+    <field name="name">account.tax.form</field><field name="model">account.tax</field>
+    <field name="arch" type="xml"><form record_mode="record"><sheet>
+      <div class="oe_title"><h1><field name="name"/></h1></div>
+      <group><group><field name="type_tax_use"/><field name="amount_type"/><field name="amount"/><field name="tax_scope"/></group>
+      <group><field name="company_id"/><field name="country_id"/><field name="tax_group_id"/><field name="active"/></group></group>
+      <notebook>
+        <page name="definition" string="Definition">
+          <group><group><field name="price_include_override"/><field name="company_price_include"/><field name="include_base_amount"/><field name="is_base_affected"/></group>
+          <group><field name="invoice_label"/><field name="sequence"/><field name="analytic"/></group></group>
+          <group string="Invoice distribution"><field name="invoice_repartition_line_ids" nolabel="1" context="{'default_document_type': 'invoice'}"/></group>
+          <group string="Refund distribution"><field name="refund_repartition_line_ids" nolabel="1" context="{'default_document_type': 'refund'}"/></group>
+        </page>
+        <page name="notes" string="Notes"><field name="description"/><field name="invoice_legal_notes"/></page>
+      </notebook>
+    </sheet></form></field>
+  </record>
+  <record id="view_tax_repartition_list" model="ir.ui.view">
+    <field name="name">account.tax.repartition.line.list</field><field name="model">account.tax.repartition.line</field>
+    <field name="arch" type="xml"><list><field name="sequence"/><field name="document_type" invisible="1"/><field name="repartition_type"/><field name="factor_percent"/><field name="account_id"/><field name="tag_ids"/><field name="use_in_tax_closing"/></list></field>
+  </record>
+  <record id="view_tax_repartition_form" model="ir.ui.view">
+    <field name="name">account.tax.repartition.line.form</field><field name="model">account.tax.repartition.line</field>
+    <field name="arch" type="xml"><form record_mode="record"><sheet><group><field name="tax_id" invisible="1"/><field name="document_type" invisible="1"/><field name="sequence"/><field name="repartition_type"/><field name="factor_percent"/><field name="account_id"/><field name="tag_ids"/><field name="use_in_tax_closing"/></group></sheet></form></field>
+  </record>
+  <record id="action_tax_groups" model="ir.actions.act_window"><field name="name">Tax groups</field><field name="res_model">account.tax.group</field><field name="view_mode">list,form</field></record>
+  <record id="action_taxes" model="ir.actions.act_window"><field name="name">Taxes</field><field name="res_model">account.tax</field><field name="view_mode">list,form</field></record>
+  <record id="view_company_tax_settings" model="ir.ui.view">
+    <field name="name">res.company.tax.settings</field><field name="model">res.company</field>
+    <field name="inherit_id" ref="base.settings_companies_form"/>
+    <field name="arch" type="xml"><xpath expr="//notebook" position="inside"><page name="tax_settings" string="Taxes"><group><field name="account_fiscal_country_id"/><field name="account_price_include"/></group></page></xpath></field>
+  </record>
+</erp>

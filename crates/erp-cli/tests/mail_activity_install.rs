@@ -526,9 +526,9 @@ async fn only_an_internal_user_gets_the_activity_menu() {
             .unwrap_err();
         assert_eq!(direct.kind(), erp_fields::ErrorKind::Access, "{label}");
         assert!(
-            direct
-                .message()
-                .starts_with("You are not allowed to access 'Activity' (mail.activity) records."),
+            direct.message().starts_with(
+                "Your access rights do not let you access 'Activity' (mail.activity) records."
+            ),
             "{label}: {}",
             direct.message()
         );

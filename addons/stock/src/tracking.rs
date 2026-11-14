@@ -117,8 +117,17 @@ pub async fn check_tracking_change(tx: &mut Transaction, changes: &[TrackingChan
         if ids.is_empty() {
             continue;
         }
-        // the read is SQL: pending ORM writes of lots or serial rows are flushed first
+        // the read is SQL: pending ORM writes of lots or serial rows are flushed first; the product
+        // rows are locked so a concurrent insert naming them (its foreign-key share lock) retries
+        // the check instead of passing it unseen
         tx.flush().await?;
+        crate::quant_guards::lock_guarded(
+            tx,
+            "SELECT FROM product_product WHERE id = ANY($1) ORDER BY id FOR UPDATE NOWAIT",
+            &ids,
+            "products",
+        )
+        .await?;
         let mut counts = BTreeMap::new();
         for row in tx.query(sql, &[&ids]).await? {
             let decode = |e| Error::internal(format!("tracking change read: {e}"));

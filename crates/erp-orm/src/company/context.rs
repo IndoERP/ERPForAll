@@ -31,7 +31,7 @@ impl Transaction {
     ///
     /// # Errors
     ///
-    /// `Access` ("Access to unauthorized or invalid companies.") when a company is not one of the
+    /// `Access` ("One of the selected companies does not exist or is not one of yours.") when a company is not one of the
     /// subject's; `Validation` for a malformed or duplicated list; `Programming` for an environment
     /// outside its elevation block or widened; the resolver's and the policy
     /// refresh's errors.
@@ -84,7 +84,7 @@ impl Transaction {
         let all = newest.all_companies();
         if allowed.iter().any(|c| all.binary_search(c).is_err()) {
             return Err(Error::access(
-                "Access to unauthorized or invalid companies.",
+                "One of the selected companies does not exist or is not one of yours.",
             ));
         }
         Ok(allowed)

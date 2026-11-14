@@ -74,7 +74,7 @@ async fn harness_as_user_switches_begin_and_run() {
     assert_eq!(err.kind(), ErrorKind::Access);
     assert_eq!(
         err.message(),
-        "You are not allowed to read 'Test ORM Partner' (test_orm.partner) records."
+        "Your access rights do not let you read 'Test ORM Partner' (test_orm.partner) records."
     );
     drop(tx);
     let mut tx = h.begin().await.unwrap();

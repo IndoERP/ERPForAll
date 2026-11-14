@@ -18,6 +18,7 @@ macro_rules! err {
 
 pub(crate) mod decl;
 pub(crate) mod graph;
+pub(crate) mod integrity;
 pub(crate) mod validate;
 
 use erp_fields::{Error, Result};
@@ -37,6 +38,8 @@ pub struct SqlObjectLimits {
     pub arguments: usize,
     /// Bytes of one condition message.
     pub condition_message_bytes: usize,
+    /// Columns of one foreign key (node admission configuration, at most 1024).
+    pub foreign_key_columns: usize,
     /// Objects of one addon.
     pub addon_objects: usize,
     /// Body and metadata bytes of one addon.
@@ -54,6 +57,7 @@ impl SqlObjectLimits {
         body_bytes: 256 * 1024,
         dependencies: 256,
         arguments: 32,
+        foreign_key_columns: 1024,
         condition_message_bytes: 4096,
         addon_objects: 4096,
         addon_bytes: 16 * 1024 * 1024,
@@ -62,12 +66,17 @@ impl SqlObjectLimits {
     };
 
     /// `(name, value, default)` of every bound; the name is the one errors use.
-    fn entries(&self) -> [(&'static str, usize, usize); 8] {
+    fn entries(&self) -> [(&'static str, usize, usize); 9] {
         let d = Self::DEFAULT;
         [
             ("body bytes", self.body_bytes, d.body_bytes),
             ("dependencies", self.dependencies, d.dependencies),
             ("arguments", self.arguments, d.arguments),
+            (
+                "foreign key columns",
+                self.foreign_key_columns,
+                d.foreign_key_columns,
+            ),
             (
                 "condition message bytes",
                 self.condition_message_bytes,

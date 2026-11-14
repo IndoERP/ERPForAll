@@ -211,8 +211,7 @@ impl Transaction {
             above.push(target.get());
             if moved.iter().any(|m| above.contains(&m.get())) {
                 return Err(Error::user(format!(
-                    "You are creating a loop in your '{}' records. A record cannot be a child of \
-                     itself or one of its own sub-items. Please select a different parent.",
+                    "This parent would make a loop in the '{}' records: a record cannot sit under itself or under one of its own children. Choose another parent.",
                     spec.description
                 )));
             }

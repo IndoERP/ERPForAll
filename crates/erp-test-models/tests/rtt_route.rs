@@ -653,7 +653,7 @@ async fn the_record_rules_apply_to_a_routed_transaction() {
     assert_eq!(
         on_primary.refused.1,
         format!(
-            "You are not allowed to access 'Object For Test Access Right' \
+            "Your access rights do not let you access 'Object For Test Access Right' \
              (test_access.some_obj) records.\n\nRecords: test_access.some_obj({},), User: 2",
             ids[3]
         )

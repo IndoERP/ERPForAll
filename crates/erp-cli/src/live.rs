@@ -16,6 +16,7 @@ use erp_orm::{Context, SUPERUSER_ID, Signal};
 use erp_wasm_host::{Limits, WasmHost};
 
 use crate::access::{connection_config, pool_with_size};
+use crate::args::DatabaseName;
 use crate::error::{CliError, Result};
 use crate::module::{ExecutionReport, LifecycleRequest, ModuleLifecycleExecutor, ModuleOperation};
 
@@ -92,8 +93,11 @@ async fn run(
     let host = WasmHost::new()
         .map_err(|e| CliError::Execution(format!("could not start the WebAssembly host: {e}")))?;
     let packages = WasmPackages::new(Arc::new(HostLoader::new(Arc::new(host), Limits::default())));
+    let demo_pool = pool.clone();
     let builder = ModuleSystem::builder(pool, index)
+        .require_sql_objects(crate::native_addons::SQL_MANIFESTS.iter().copied())
         .code(crate::native_addons::DESCRIPTORS.iter().copied())
+        .not_linked(crate::native_addons::NOT_LINKED.iter().copied())
         .view_types(erp_addon_web::view_type_contributions())
         // Native lifecycle operations must retain and validate authentication's framework DDL
         // at this composition site, just as the serving node does.
@@ -122,7 +126,31 @@ async fn run(
         .load()
         .await
         .map_err(operation_error)?;
-    let caller = loaded.orm.env(SUPERUSER_ID, Context::new());
+    let mut caller = loaded.orm.env(SUPERUSER_ID, Context::new());
+    let mut demo_loaded = None;
+    if let Some(asked) = request.demo {
+        // the database's choice is `base`'s demo flag, set when it was initialized
+        let stored = base_demo(&demo_pool, request.database).await?;
+        match (asked, stored) {
+            // a database without demo data becomes a demo database first
+            (true, false) => {
+                let outcome = system.force_demo(&caller).await.map_err(operation_error)?;
+                refuse_without_demo(&demo_pool, request.database, "the demo data load").await?;
+                caller = outcome.orm.env(SUPERUSER_ID, Context::new());
+                demo_loaded = Some(outcome);
+            }
+            (false, true) => {
+                return Err(CliError::InvalidInput {
+                    arg: "--without-demo".into(),
+                    reason: format!(
+                        "database {} has demo data, and demo data cannot be switched off; install without --without-demo",
+                        request.database
+                    ),
+                });
+            }
+            _ => {}
+        }
+    }
     let outcome = match operation {
         ModuleOperation::Install => {
             system
@@ -147,7 +175,80 @@ async fn run(
         }
     }
     .map_err(operation_error)?;
-    Ok(report_of(&outcome))
+    if request.demo == Some(true) {
+        refuse_without_demo(&demo_pool, request.database, "the install").await?;
+    }
+    let mut report = report_of(&outcome);
+    if let Some(loaded) = demo_loaded {
+        // the demo data load committed before the install: its post-commit work is reported too
+        let before = report_of(&loaded);
+        report.post_commit_done += before.post_commit_done;
+        report.post_commit_failed.extend(before.post_commit_failed);
+        report.post_commit_stopped = report.post_commit_stopped.or(before.post_commit_stopped);
+    }
+    Ok(report)
+}
+
+/// The demo data choice of `database`: `base`'s demo flag, set when it was initialized.
+async fn base_demo(pool: &deadpool_postgres::Pool, database: &DatabaseName) -> Result<bool> {
+    let client = pool.get().await.map_err(|error| {
+        erp_fields::Error::db("could not acquire a connection to read the demo data choice")
+            .with_source(error)
+    })?;
+    let row = client
+        .query_one("SELECT demo FROM ir_module_module WHERE name = 'base'", &[])
+        .await
+        .map_err(|error| {
+            erp_fields::Error::db(format!("could not read the demo data choice of {database}"))
+                .with_source(error)
+        })?;
+    // the column allows NULL: an empty flag is an error by name, not a panic
+    let demo: bool = row.try_get(0).map_err(|error| {
+        erp_fields::Error::db(format!(
+            "the demo data choice of {database} cannot be read: base's demo flag is empty or not a boolean"
+        ))
+        .with_source(error)
+    })?;
+    Ok(demo)
+}
+
+/// The installed modules of `database` without demo data, by name.
+async fn without_demo(
+    pool: &deadpool_postgres::Pool,
+    database: &DatabaseName,
+) -> Result<Vec<String>> {
+    let client = pool.get().await.map_err(|error| {
+        erp_fields::Error::db("could not acquire a connection to read the demo data choice")
+            .with_source(error)
+    })?;
+    let rows = client
+        .query(
+            "SELECT name FROM ir_module_module WHERE state = 'installed' AND NOT demo ORDER BY name",
+            &[],
+        )
+        .await
+        .map_err(|error| {
+            erp_fields::Error::db(format!("could not read the demo data choice of {database}"))
+                .with_source(error)
+        })?;
+    Ok(rows.iter().map(|row| row.get(0)).collect())
+}
+
+/// Fail when an installed module of `database` has no demo data after `step` asked for it (its
+/// demo files failed and were rolled back; the step itself committed).
+async fn refuse_without_demo(
+    pool: &deadpool_postgres::Pool,
+    database: &DatabaseName,
+    step: &str,
+) -> Result<()> {
+    let missing = without_demo(pool, database).await?;
+    if missing.is_empty() {
+        return Ok(());
+    }
+    Err(CliError::Execution(format!(
+        "{step} committed, but these installed modules of {database} have no demo data (their demo files failed): {}",
+        missing.join(", ")
+    )))
 }
 
 fn report_of(outcome: &OperationOutcome) -> ExecutionReport {

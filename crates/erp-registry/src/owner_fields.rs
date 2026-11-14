@@ -70,6 +70,7 @@ struct Shape {
     ty: FieldType,
     store: bool,
     translate: bool,
+    collation: erp_fields::TextCollation,
     company_dependent: bool,
     generated: Option<crate::generated::GeneratedSpec>,
     relation: (
@@ -473,6 +474,7 @@ fn outcome(spec: Result<Option<FieldSpec>>, entries: &[&Entry<'_>]) -> Outcome {
         ty,
         store: spec.store,
         translate: spec.translate,
+        collation: spec.collation,
         company_dependent: spec.company_dependent,
         generated: spec.generated().cloned(),
         relation,

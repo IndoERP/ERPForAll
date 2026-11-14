@@ -529,7 +529,7 @@ pub async fn clean_staging(tx: &mut Transaction, env: &Env, limit: i64) -> Resul
             "DELETE FROM ir_attachment WHERE id IN ( \
                  SELECT id FROM ir_attachment \
                  WHERE res_model = ANY($1::text[]) AND coalesce(res_id, 0) = 0 AND res_field IS NULL \
-                   AND create_date < now() - make_interval(secs=>$3::float8) \
+                   AND create_date < (now() AT TIME ZONE 'UTC') - make_interval(secs=>$3::float8) \
                  ORDER BY id LIMIT $2 FOR UPDATE SKIP LOCKED)",
             &[&placeholders, &limit, &retention],
         )

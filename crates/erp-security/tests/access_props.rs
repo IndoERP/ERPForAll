@@ -445,7 +445,7 @@ fn p1b_full() {
 static NULL_ROWS: AtomicUsize = AtomicUsize::new(0);
 
 /// The first line of a record-level refusal (SEC-009, `explain::RecordMessage`).
-const RECORD_HEADER: &str = "Uh-oh! Looks like you have stumbled upon some top-secret records.";
+const RECORD_HEADER: &str = "Access rules protect some of these records.";
 
 /// Whether `error` is a refusal of `op` on `model`: the SEC-009 record message, or the model-level
 /// message when no ACL row of the principal's groups grants the operation (the model check comes
@@ -459,7 +459,7 @@ fn is_refusal(tx: &Transaction, model: &str, op: Operation, error: &erp_fields::
         Operation::Unlink => "delete",
     };
     let model_header = format!(
-        "You are not allowed to {verb} '{}' ({}) records.",
+        "Your access rights do not let you {verb} '{}' ({}) records.",
         spec.description, spec.name
     );
     is_access(error)

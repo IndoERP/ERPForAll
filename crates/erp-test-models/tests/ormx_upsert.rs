@@ -541,7 +541,7 @@ async fn spec_ormx_004_accumulate_floor_never_stores_below_the_floor() {
     // an integer whose accumulated value leaves int4: Validation naming the field
     let field = spec.field("move_count").unwrap();
     let message = format!(
-        "The operation cannot be completed: the new value of '{}' ({}) on '{}' is out of range",
+        "The database refused the change: the new value of '{}' ({}) on '{}' is out of range",
         field.string, field.name, spec.description
     );
     // ... in the batch (two rows of one key): refused before any statement
@@ -627,7 +627,7 @@ async fn spec_ormx_004_accumulate_floor_never_stores_below_the_floor() {
         (
             ErrorKind::Validation,
             format!(
-                "The operation cannot be completed: the new value of '{}' ({}) on '{}' is out of \
+                "The database refused the change: the new value of '{}' ({}) on '{}' is out of \
                  range",
                 hits.string, hits.name, serial_spec.description
             )
@@ -674,7 +674,7 @@ async fn spec_ormx_004_accumulate_floor_never_stores_below_the_floor() {
     assert_eq!(
         err.message(),
         format!(
-            "The operation cannot be completed: a new '{}' record would start with '{}' ({}) = \
+            "The database refused the change: a new '{}' record would start with '{}' ({}) = \
              {} below its floor {}",
             spec.description,
             reserved.string,
@@ -840,7 +840,7 @@ async fn spec_ormx_006_null_key_parts_conflict() {
     );
     // a plain create of the same (P, L, NULL) violates the key
     let message = format!(
-        "The operation cannot be completed: {}",
+        "The database refused the change: {}",
         quant_key(&tx).message
     );
     let err = tx
@@ -1694,7 +1694,7 @@ async fn a_required_key_field_refuses_null() {
         (
             ErrorKind::Validation,
             format!(
-                "The operation cannot be completed: the key field '{}' ({}) of '{}' is required \
+                "The database refused the change: the key field '{}' ({}) of '{}' is required \
                  and row 0 gives no value for it",
                 field.string, field.name, spec.description
             )

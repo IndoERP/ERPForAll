@@ -554,7 +554,7 @@ async fn directly_denied_input_and_ancestor_return_access_instead_of_fallback() 
         assert_eq!(
             error.message(),
             format!(
-                "You are not allowed to access 'Contact' (res.partner) records.\n\nRecords: res.partner({hidden},), User: 2"
+                "Your access rights do not let you access 'Contact' (res.partner) records.\n\nRecords: res.partner({hidden},), User: 2"
             )
         );
         drop(tx);

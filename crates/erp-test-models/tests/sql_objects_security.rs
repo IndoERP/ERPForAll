@@ -139,10 +139,14 @@ fn objects(listed: &'static [SqlBinding]) -> Vec<SqlObjectDecl> {
 }
 
 fn build(decls: Vec<SqlObjectDecl>) -> Arc<Registry> {
+    build_model(token_model(), decls)
+}
+
+fn build_model(model: ModelDecl, decls: Vec<SqlObjectDecl>) -> Arc<Registry> {
     let decls: Vec<&'static SqlObjectDecl> = decls.into_iter().map(leak).collect();
     let keys: Vec<&'static str> = decls.iter().map(|d| d.key()).collect();
     let manifest = leak(SqlObjectManifest::new(ADDON, leak_slice(keys)));
-    let model: &'static ModelDecl = leak(token_model());
+    let model: &'static ModelDecl = leak(model);
     Arc::new(
         RegistryBuilder::new([&base_users::ADDON, &SQLOBJ])
             .with_decls([model])
@@ -221,6 +225,7 @@ struct Fixture {
     maintenance: &'static str,
     definer: &'static str,
     password: String,
+    owner: &'static str,
 }
 
 impl Fixture {
@@ -244,6 +249,7 @@ impl Fixture {
         let request = leak_str(roles.add(format!("{tag}_{request}")));
         let maintenance = leak_str(roles.add(format!("{tag}_maint")));
         let definer = leak_str(roles.add(format!("{tag}_definer")));
+        let owner = leak_str(roles.add(format!("{tag}_schema")));
         let password = format!("{tag}-login");
         let pw = erp_sql::literal(&password);
         let (r, m, d) = (quote(request), quote(maintenance), quote(definer));
@@ -254,6 +260,7 @@ impl Fixture {
             maintenance,
             definer,
             password,
+            owner,
         };
         f.admin(&format!(
             "CREATE ROLE {r} LOGIN PASSWORD {pw}; CREATE ROLE {m} LOGIN PASSWORD {pw}; \
@@ -261,6 +268,9 @@ impl Fixture {
              NOBYPASSRLS; GRANT USAGE ON SCHEMA public TO {r}, {m}"
         ))
         .await;
+        let database = quote(f.h.db().name());
+        let o = quote(owner);
+        f.admin(&format!("CREATE ROLE {o} NOLOGIN; ALTER DATABASE {database} OWNER TO {o}; ALTER SCHEMA public OWNER TO pg_database_owner; GRANT {d} TO {o} WITH INHERIT TRUE, SET TRUE; {}", reown_public(owner))).await;
         f
     }
 
@@ -306,10 +316,24 @@ impl Fixture {
         registry: Arc<Registry>,
         roles: SqlRoleBindings,
     ) -> erp_fields::Result<()> {
+        self.sync_on(None, registry, roles).await
+    }
+
+    /// [`Self::sync_with`] on connections made with `config`, else the harness pool.
+    async fn sync_on(
+        &self,
+        config: Option<tokio_postgres::Config>,
+        registry: Arc<Registry>,
+        roles: SqlRoleBindings,
+    ) -> erp_fields::Result<()> {
+        let pool = match config {
+            Some(config) => erp_orm::pool::create_pool(config, 2).unwrap(),
+            None => erp_orm::pool::create_pool(self.owner_config(), 2).unwrap(),
+        };
         let client = self.h.db().client().await.unwrap();
         let applied = Signal::read(&client).await.unwrap();
         drop(client);
-        let orm = Orm::builder(registry, self.h.db().pool().clone())
+        let orm = Orm::builder(registry, pool)
             .policy(StaticPolicy::AllowAll)
             .signal(Signal::new(applied))
             .build()
@@ -336,7 +360,18 @@ impl Fixture {
         .await
     }
 
+    fn owner_config(&self) -> tokio_postgres::Config {
+        let mut config = self.h.db().config();
+        config.options(format!("-c role={}", self.owner));
+        config
+    }
+
     async fn finish(self) {
+        self.admin(&format!(
+            "ALTER DATABASE {} OWNER TO current_user",
+            quote(self.h.db().name())
+        ))
+        .await;
         let Self { roles, h, .. } = self;
         drop(roles);
         h.cleanup().await.unwrap();
@@ -374,7 +409,7 @@ async fn spec_ormx_051_restricted_grants_are_effective() {
     f.sync(build(objects(&[SqlBinding::Request])))
         .await
         .unwrap();
-    let owner = f.admin_rows("SELECT current_user::text").await[0][0].clone();
+    let owner = Some(f.owner.to_owned());
     let catalog = f
         .admin_rows(
             "SELECT p.proname::text, pg_get_userbyid(p.proowner)::text, EXISTS (SELECT FROM \
@@ -474,7 +509,7 @@ async fn spec_ormx_051_a_late_grant_failure_rolls_everything_back() {
         f.sync(build(objects(&[SqlBinding::Request]))).await,
         ErrorKind::Access,
         &format!(
-            "SQL object role binding 'definer': role '{}' has forbidden SELECT on table \
+            "SQL object role binding 'definer': role {:?} has forbidden SELECT on table \
              \"sqlr_other\"",
             f.definer
         ),
@@ -561,8 +596,8 @@ async fn spec_ormx_052_effective_privileges_through_membership() {
     let (r, x) = (quote(f.request), quote(&helper));
     let leak = |object: &str, what: &str| {
         format!(
-            "SQL object 'test_sqlobj/{object}': role '{}' has forbidden {what} (held by role \
-             '{helper}', which it reaches through membership)",
+            "SQL object 'test_sqlobj/{object}': role {:?} has forbidden {what} (held by role \
+             {helper:?}, which it reaches through membership)",
             f.request
         )
     };
@@ -656,6 +691,25 @@ async fn spec_ormx_052_unsafe_bindings_fail_before_any_ddl() {
         .await,
         ErrorKind::Programming,
         "SQL object 'test_sqlobj/fn_post': role binding 'definer' is not configured; the \
+         operator names its database role in the schema sync role bindings",
+    );
+    // restricted objects are proven against the request role, so it is needed even when no
+    // object names it
+    refused(
+        f.sync_with(
+            build(vec![function(
+                "fn_def",
+                int_fn("sqlobj_def", "SELECT 1")
+                    .security(SqlSecurity::Definer)
+                    .grant_execute(&[SqlBinding::Maintenance]),
+            )]),
+            SqlRoleBindings::new()
+                .definer(f.definer)
+                .maintenance(f.maintenance),
+        )
+        .await,
+        ErrorKind::Programming,
+        "SQL object 'test_sqlobj/fn_def': role binding 'request' is not configured; the \
          operator names its database role in the schema sync role bindings",
     );
     let hint = "; the definer is a role the operator creates NOLOGIN NOSUPERUSER NOCREATEDB \
@@ -914,5 +968,518 @@ async fn spec_ormx_052_definer_transfer_needs_membership_and_schema_create() {
         .await
         .unwrap();
     drop(client);
+    f.finish().await;
+}
+
+/// column grant held by a reached role, and grants to PUBLIC the reconciliation cannot revoke)
+/// Each excess fails Access after the reconciliation, naming the object, the bound role, the
+/// privilege and where it comes from; the sync then commits nothing of itself.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spec_ormx_052_schema_column_and_public_leaks_are_refused() {
+    let mut f = Fixture::new("request").await;
+    let registry = build(objects(&[SqlBinding::Request]));
+    f.sync(Arc::clone(&registry)).await.unwrap();
+    let clean = f.acls().await;
+    let helper = f.role("helper");
+    let (r, x) = (quote(f.request), quote(&helper));
+    f.admin(&format!("CREATE ROLE {x} NOLOGIN")).await;
+    let cases = [
+        (
+            format!("GRANT CREATE ON SCHEMA public TO {r}"),
+            format!("REVOKE CREATE ON SCHEMA public FROM {r}"),
+            format!(
+                "SQL object role binding 'request': role {:?} has forbidden CREATE on schema \
+                 \"public\"",
+                f.request
+            ),
+        ),
+        (
+            format!("GRANT SELECT (note) ON test_sqlobj_token TO {x}; GRANT {x} TO {r}"),
+            format!("REVOKE {x} FROM {r}; REVOKE SELECT (note) ON test_sqlobj_token FROM {x}"),
+            format!(
+                "SQL object 'test_sqlobj/grant_token_request': role {:?} has forbidden SELECT on \
+                 table \"test_sqlobj_token\" (held by role {helper:?}, which it reaches through \
+                 membership)",
+                f.request
+            ),
+        ),
+        // granted to PUBLIC by another grantor: the owner's REVOKE does not reach it
+        (
+            format!(
+                "GRANT SELECT ON test_sqlobj_token TO {x} WITH GRANT OPTION; SET ROLE {x}; \
+                 GRANT SELECT ON test_sqlobj_token TO PUBLIC; RESET ROLE"
+            ),
+            format!("REVOKE SELECT ON test_sqlobj_token FROM {x} CASCADE"),
+            // PUBLIC has no policy of its own: the table's first policy names it
+            "SQL object 'test_sqlobj/grant_token_definer': PUBLIC has forbidden SELECT on table \
+             \"test_sqlobj_token\""
+                .to_owned(),
+        ),
+        // another relation PUBLIC may read: the definer reaches it through PUBLIC
+        (
+            "CREATE TABLE sqlr_pub (x int); GRANT SELECT ON sqlr_pub TO PUBLIC".to_owned(),
+            "DROP TABLE sqlr_pub".to_owned(),
+            format!(
+                "SQL object role binding 'definer': role {:?} has forbidden SELECT on table \
+                 \"sqlr_pub\" (granted to PUBLIC)",
+                f.definer
+            ),
+        ),
+    ];
+    for (setup, undo, message) in cases {
+        f.admin(&setup).await;
+        let before = f.acls().await;
+        refused(
+            f.sync(Arc::clone(&registry)).await,
+            ErrorKind::Access,
+            &message,
+        );
+        assert_eq!(
+            f.acls().await,
+            before,
+            "{message}: a refused sync changes no grant"
+        );
+        f.admin(&undo).await;
+    }
+    f.sync(registry).await.unwrap();
+    assert_eq!(f.acls().await, clean);
+    f.finish().await;
+}
+
+/// OWNER)
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spec_ormx_051_a_hostile_definer_name_is_quoted() {
+    let mut f = Fixture::new("request").await;
+    let definer = leak_str(f.role("d\"x; DROP TABLE res_users; --"));
+    f.admin(&format!(
+        "CREATE ROLE {} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS",
+        quote(definer)
+    ))
+    .await;
+    f.admin(&format!(
+        "GRANT {} TO {} WITH INHERIT TRUE, SET TRUE",
+        quote(definer),
+        quote(f.owner)
+    ))
+    .await;
+    f.sync_with(
+        build(objects(&[SqlBinding::Request])),
+        f.bindings().definer(definer),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        f.admin_rows(
+            "SELECT pg_get_userbyid(proowner)::text, (to_regclass('res_users') IS NOT NULL)::text \
+             FROM pg_proc WHERE proname = 'sqlobj_post'"
+        )
+        .await,
+        vec![vec![Some(definer.to_owned()), Some("true".to_owned())]]
+    );
+    let request = f.login(f.request).await;
+    assert_eq!(
+        text(&request, "SELECT public.sqlobj_post('Q')").await,
+        format!("{definer}/q")
+    );
+    drop(request);
+    f.finish().await;
+}
+
+/// Every relation, sequence and routine of `public` the test administrator owns, given to
+/// `owner`, so `owner` can run schema sync on the database the harness built.
+fn reown_public(owner: &str) -> String {
+    let owner = erp_sql::literal(owner);
+    format!(
+        "DO $$ DECLARE r record; me oid := (SELECT oid FROM pg_roles WHERE rolname = current_user);
+         BEGIN
+           FOR r IN SELECT c.oid::regclass AS t, c.relkind FROM pg_class c
+                     WHERE c.relnamespace = 'public'::regnamespace AND c.relowner = me
+                       AND c.relkind IN ('r', 'p', 'v', 'm', 'f') LOOP
+             EXECUTE format('ALTER %s %s OWNER TO %I', CASE r.relkind WHEN 'v' THEN 'VIEW'
+               WHEN 'm' THEN 'MATERIALIZED VIEW' WHEN 'f' THEN 'FOREIGN TABLE' ELSE 'TABLE' END,
+               r.t, {owner});
+           END LOOP;
+           FOR r IN SELECT c.oid::regclass AS t FROM pg_class c
+                     WHERE c.relnamespace = 'public'::regnamespace AND c.relowner = me
+                       AND c.relkind = 'S' LOOP
+             EXECUTE format('ALTER SEQUENCE %s OWNER TO %I', r.t, {owner});
+           END LOOP;
+           FOR r IN SELECT p.oid::regprocedure AS f FROM pg_proc p
+                     WHERE p.pronamespace = 'public'::regnamespace AND p.proowner = me LOOP
+             EXECUTE format('ALTER ROUTINE %s OWNER TO %I', r.f, {owner});
+           END LOOP;
+         END $$"
+    )
+}
+
+/// Run as a schema owner that is not a superuser, the sync refuses by name while the owner lacks
+/// the definer membership; with it, the sync hands the definer function over (CREATE on the
+/// schema for that statement only), reconciles its grants through the INHERIT membership, and a
+/// second sync leaves every owner and ACL as it was.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spec_ormx_052_a_non_superuser_owner_syncs_through_its_definer_membership() {
+    let mut f = Fixture::new("request").await;
+    let owner = f.role("owner");
+    let (o, d) = (quote(&owner), quote(f.definer));
+    let database = quote(f.h.db().name());
+    f.admin(&format!(
+        "CREATE ROLE {o} NOLOGIN; ALTER DATABASE {database} OWNER TO {o}; \
+         ALTER SCHEMA public OWNER TO pg_database_owner; {}",
+        reown_public(&owner).replace(
+            "rolname = current_user",
+            &format!("rolname = {}", erp_sql::literal(f.owner))
+        )
+    ))
+    .await;
+    let mut config = f.h.db().config();
+    // the harness login, acting as the owner for the whole session (role names here are plain)
+    config.options(format!("-c role={owner}"));
+    let registry = build(objects(&[SqlBinding::Request]));
+    refused(
+        f.sync_on(Some(config.clone()), Arc::clone(&registry), f.bindings())
+            .await,
+        ErrorKind::Access,
+        &format!(
+            "SQL object role binding 'definer': the schema owner {owner:?} cannot act as role \
+             {:?}; the operator runs GRANT {d} TO {o} WITH INHERIT TRUE, SET TRUE",
+            f.definer
+        ),
+    );
+    f.admin(&format!("GRANT {d} TO {o} WITH INHERIT TRUE, SET TRUE"))
+        .await;
+    f.sync_on(Some(config.clone()), Arc::clone(&registry), f.bindings())
+        .await
+        .unwrap();
+    let first = f.acls().await;
+    let owners: Vec<(Option<String>, Option<String>)> = first
+        .iter()
+        .map(|row| (row[0].clone(), row[1].clone()))
+        .collect();
+    let mine = |name: &str, who: &str| (Some(name.to_owned()), Some(who.to_owned()));
+    assert_eq!(
+        owners,
+        vec![
+            mine("sqlobj_listed", &owner),
+            mine("sqlobj_maint", &owner),
+            mine("sqlobj_post", f.definer),
+            mine("sqlobj_stamp", &owner),
+            mine("sqlobj_unlisted", &owner),
+            mine("test_sqlobj_token", &owner),
+        ]
+    );
+    assert_eq!(
+        f.admin_rows(&format!(
+            "SELECT has_schema_privilege({}, 'public', 'CREATE')::text",
+            erp_sql::literal(f.definer)
+        ))
+        .await,
+        vec![vec![Some("false".to_owned())]]
+    );
+    f.sync_on(Some(config), Arc::clone(&registry), f.bindings())
+        .await
+        .unwrap();
+    assert_eq!(f.acls().await, first);
+    let request = f.login(f.request).await;
+    assert_eq!(
+        text(&request, "SELECT public.sqlobj_post('ABC')").await,
+        format!("{}/abc", f.definer)
+    );
+    denied(&request, "SELECT public.sqlobj_unlisted()").await;
+    drop(request);
+    f.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn b6_unlogged_table_preserves_insert_only_policy() {
+    use erp_registry::{SqlTableOptionsDecl, SqlTablePersistence};
+    let f = Fixture::new("b6_request").await;
+    let declarations = |persistence| {
+        vec![
+            SqlObjectDecl::table_options(
+                ADDON,
+                "table",
+                SqlTableOptionsDecl::new(TOKEN, persistence),
+            ),
+            SqlObjectDecl::table_grant(
+                ADDON,
+                "grant",
+                SqlTableGrantDecl::new(TOKEN, SqlBinding::Request, &[SqlTableOp::Insert]),
+            ),
+        ]
+    };
+    let model = || {
+        ModelDecl::new(ADDON, TOKEN)
+            .fields(
+                const {
+                    &[
+                        FieldDecl::char("name"),
+                        FieldDecl::char("note"),
+                        FieldDecl::boolean("enabled")
+                            .required(true)
+                            .default(erp_registry::StaticValue::Bool(true))
+                            .db_default(true),
+                    ]
+                },
+            )
+            .table_objects(
+                const {
+                    &[erp_registry::TableObjectDecl {
+                        name: "_safe_name",
+                        kind: erp_registry::TableObjectKind::Constraint {
+                            definition: "CHECK (name <> 'bad')",
+                            message: "This token name is refused.",
+                        },
+                    }]
+                },
+            )
+    };
+    let r = build_model(model(), declarations(SqlTablePersistence::Unlogged));
+    f.sync(r.clone()).await.unwrap();
+    assert_eq!(
+        f.admin_rows(
+            "SELECT relpersistence::text FROM pg_class WHERE oid='test_sqlobj_token'::regclass"
+        )
+        .await,
+        vec![vec![Some("u".to_owned())]]
+    );
+    let request = f.login(f.request).await;
+    request
+        .batch_execute("INSERT INTO test_sqlobj_token(name) VALUES('kept')")
+        .await
+        .unwrap();
+    for sql in [
+        "SELECT * FROM test_sqlobj_token",
+        "UPDATE test_sqlobj_token SET name='changed'",
+        "DELETE FROM test_sqlobj_token",
+        "TRUNCATE test_sqlobj_token",
+    ] {
+        denied(&request, sql).await;
+    }
+    let orm = Orm::builder(r.clone(), f.h.db().pool().clone())
+        .policy(StaticPolicy::AllowAll)
+        .build()
+        .unwrap();
+    let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+    let e = tx
+        .execute(
+            "INSERT INTO test_sqlobj_token(name,note) VALUES('bad','SENSITIVE_ROW_VALUE')",
+            &[],
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e.kind(), ErrorKind::Validation);
+    assert_eq!(e.sqlstate(), Some("23514"));
+    assert_eq!(
+        e.message(),
+        "The database refused the change: This token name is refused."
+    );
+    tx.rollback().await.unwrap();
+    drop(tx);
+    f.sync(r).await.unwrap();
+    assert_eq!(
+        f.admin_rows("SELECT enabled::text FROM test_sqlobj_token")
+            .await,
+        vec![vec![Some("true".to_owned())]]
+    );
+    assert_eq!(
+        f.admin_rows("SELECT name FROM test_sqlobj_token").await,
+        vec![vec![Some("kept".to_owned())]]
+    );
+    refused(
+        f.sync(build_model(
+            model(),
+            declarations(SqlTablePersistence::Logged),
+        ))
+        .await,
+        ErrorKind::Programming,
+        "SQL object 'test_sqlobj/table': table persistence changed; explicit migration required",
+    );
+    drop(request);
+    f.finish().await;
+}
+
+#[tokio::test]
+async fn deferred_objects_and_table_policies_receive_grants_when_their_table_is_ready() {
+    let f = Fixture::new("deferred").await;
+    let registry = build(objects(&[SqlBinding::Request]));
+    let users = registry.model("res.users").unwrap().id;
+    let token = registry.model(TOKEN).unwrap().id;
+    let orm = Orm::builder(
+        registry,
+        erp_orm::pool::create_pool(f.owner_config(), 2).unwrap(),
+    )
+    .policy(StaticPolicy::AllowAll)
+    .build()
+    .unwrap();
+    let options = SchemaSyncOptions::inline()
+        .lifecycle(true)
+        .sql_roles(f.bindings());
+    let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+    assert!(
+        tx.init_models_with(&[users], &options)
+            .await
+            .unwrap()
+            .is_complete()
+    );
+    assert!(
+        tx.query("SELECT to_regclass('test_sqlobj_token')::text", &[])
+            .await
+            .unwrap()[0]
+            .get::<_, Option<String>>(0)
+            .is_none()
+    );
+    assert_eq!(
+        tx.query(
+            "SELECT count(*) FROM erp_schema_sql_object WHERE key='fn_post'",
+            &[]
+        )
+        .await
+        .unwrap()[0]
+            .get::<_, i64>(0),
+        0
+    );
+    assert!(
+        tx.init_models_with(&[token], &options)
+            .await
+            .unwrap()
+            .is_complete()
+    );
+    tx.refuse_deferred_sql_objects(&options).await.unwrap();
+    tx.commit().await.unwrap();
+    drop(tx);
+    let request = f.login(f.request).await;
+    assert_eq!(text(&request, "SELECT sqlobj_listed()::text").await, "1");
+    let posted = text(&request, "SELECT sqlobj_post('DEFERRED')").await;
+    assert_eq!(posted, format!("{}/deferred", f.definer));
+    denied(&request, "UPDATE test_sqlobj_token SET name='bad'").await;
+    drop(request);
+    f.finish().await;
+}
+
+#[tokio::test]
+async fn deferral_does_not_hide_a_missing_role_binding() {
+    let f = Fixture::new("missing_deferred").await;
+    let registry = build(vec![function(
+        "fn_def",
+        int_fn("sqlobj_def", "SELECT 1")
+            .security(SqlSecurity::Definer)
+            .deps(&[SqlDep::Model(TOKEN)]),
+    )]);
+    let users = registry.model("res.users").unwrap().id;
+    let orm = Orm::builder(
+        registry,
+        erp_orm::pool::create_pool(f.owner_config(), 2).unwrap(),
+    )
+    .policy(StaticPolicy::AllowAll)
+    .build()
+    .unwrap();
+    let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+    tx.capture_statements(true);
+    let error = tx
+        .init_models_with(
+            &[users],
+            &SchemaSyncOptions::inline()
+                .lifecycle(true)
+                .sql_roles(SqlRoleBindings::new().request(f.request)),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Programming);
+    assert_eq!(
+        error.message(),
+        "SQL object 'test_sqlobj/fn_def': role binding 'definer' is not configured; the operator names its database role in the schema sync role bindings"
+    );
+    assert!(
+        !tx.captured()
+            .iter()
+            .any(|s| s.trim_start().starts_with("CREATE "))
+    );
+    tx.rollback().await.unwrap();
+    drop(tx);
+    f.finish().await;
+}
+
+#[tokio::test]
+async fn schema_owner_superuser_is_refused_before_mutation() {
+    let f = Fixture::new("owner_refusal").await;
+    let registry = build(objects(&[SqlBinding::Request]));
+    let error = f
+        .sync_on(Some(f.h.db().config()), registry, f.bindings())
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Access);
+    assert!(
+        error
+            .message()
+            .contains("SQL object role binding 'schema_owner'"),
+        "{error}"
+    );
+    assert!(error.message().contains("forbidden SUPERUSER"), "{error}");
+    for (flag, clear) in [
+        ("CREATEROLE", "NOCREATEROLE"),
+        ("REPLICATION", "NOREPLICATION"),
+        ("BYPASSRLS", "NOBYPASSRLS"),
+    ] {
+        f.admin(&format!("ALTER ROLE {} {flag}", quote(f.owner)))
+            .await;
+        let error = f
+            .sync(build(objects(&[SqlBinding::Request])))
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Access);
+        assert!(
+            error.message().contains(&format!("forbidden {flag}")),
+            "{error}"
+        );
+        f.admin(&format!("ALTER ROLE {} {clear}", quote(f.owner)))
+            .await;
+    }
+
+    assert_eq!(
+        f.admin_rows("SELECT (to_regclass('test_sqlobj_token') IS NULL)::text")
+            .await[0][0]
+            .as_deref(),
+        Some("true")
+    );
+    f.finish().await;
+}
+
+#[tokio::test]
+async fn grants_only_publication_restores_policy_and_final_check_detects_widening() {
+    let f = Fixture::new("publisher").await;
+    let registry = build(objects(&[SqlBinding::Request]));
+    f.sync(Arc::clone(&registry)).await.unwrap();
+    let orm = Orm::builder(
+        Arc::clone(&registry),
+        erp_orm::pool::create_pool(f.owner_config(), 2).unwrap(),
+    )
+    .policy(StaticPolicy::AllowAll)
+    .build()
+    .unwrap();
+    let options = SchemaSyncOptions::new().sql_roles(f.bindings());
+    let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+    tx.reconcile_sql_object_grants(&registry, &options)
+        .await
+        .unwrap();
+    tx.verify_sql_object_publication(&registry, &options)
+        .await
+        .unwrap();
+    tx.batch(&format!(
+        "GRANT SELECT ON test_sqlobj_token TO {}",
+        quote(f.request)
+    ))
+    .await
+    .unwrap();
+    let error = tx
+        .verify_sql_object_publication(&registry, &options)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Access);
+    assert!(error.message().contains("forbidden SELECT"), "{error}");
+    tx.rollback().await.unwrap();
+    drop(tx);
+    let request = f.login(f.request).await;
+    denied(&request, "SELECT * FROM test_sqlobj_token").await;
+    drop(request);
     f.finish().await;
 }

@@ -79,8 +79,8 @@ pub use retry::DeadlockRetries;
 pub use schema::{check_orm, core_tables};
 pub use session::{CheckedSession, Refusal, SessionId, SessionSecret, Touch};
 pub use settings::{
-    AuthConfig, AuthSettings, ConfigError, check_reservation, check_stored, load_hash_params,
-    validate_setting, validate_setting_in,
+    AuthConfig, AuthSettings, ConfigError, SessionPolicy, check_reservation, check_stored,
+    load_hash_params, load_session_policy, validate_setting, validate_setting_in,
 };
 pub use store::{end_sessions, end_user_sessions};
 pub use throttle::{ThrottleHasher, ThrottleKey};

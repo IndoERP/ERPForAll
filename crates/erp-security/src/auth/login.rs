@@ -2417,7 +2417,6 @@ impl Auth {
                 sql: &self.check_sql,
                 digest,
                 cached,
-                config: &self.config,
             };
             match self.orm.begin_credential(options.clone(), &check).await? {
                 CredentialBegin::Open { tx, value } => {
@@ -2474,7 +2473,6 @@ impl Auth {
             sql: &self.check_sql,
             digest: secret.digest(),
             cached,
-            config: &self.config,
         };
         let digest = session::hex(&check.digest);
         let rows = tx.query(&self.check_sql, &[&digest]).await?;
@@ -2550,9 +2548,10 @@ impl Auth {
     }
 
     /// Write `last_seen_at`, the address and the user agent of `touches` not seen within
-    /// `session.touch_interval_secs`, and drop predecessors past their grace; returns the rows
-    /// written. Rows another transaction holds are skipped (the next request touches them). One
-    /// READ COMMITTED flight. When `touches` names one session twice, the first entry's address
+    /// `sessions.touch_interval_seconds`, and drop predecessors past their grace; returns the rows
+    /// written. Rows another transaction holds are skipped (the next request touches them). The
+    /// READ COMMITTED transaction loads the current database policy before updating. When
+    /// `touches` names one session twice, the first entry's address
     /// and agent are written (type design N7).
     ///
     /// # Errors
@@ -2572,18 +2571,27 @@ impl Auth {
             .map(|t| t.address().map(|a| a.to_string()))
             .collect();
         let agents: Vec<Option<&str>> = sorted.iter().map(|t| t.user_agent()).collect();
-        let interval = self.config.touch_interval().as_secs_f64();
-        let grace = self.config.rotation_grace().as_secs_f64();
-        let params: [(&(dyn ToSql + Sync), Type); 5] = [
-            (&ids, Type::TEXT_ARRAY),
-            (&addrs, Type::TEXT_ARRAY),
-            (&agents, Type::TEXT_ARRAY),
-            (&interval, Type::FLOAT8),
-            (&grace, Type::FLOAT8),
-        ];
         let absorbed = &self.counters.retries.touch;
-        let rows = retry(DEADLOCK, absorbed, "touch", || {
-            one_flight(&self.orm, read_committed(), session::TOUCH_SQL, &params)
+        let rows = retry(DEADLOCK, absorbed, "touch", || async {
+            let mut tx = self.orm.begin_opts(read_committed()).await?;
+            let outcome = async {
+                let policy = settings::load_session_policy(&mut tx).await?;
+                let interval = policy.touch_interval().as_secs_f64();
+                let grace = policy.rotation_grace().as_secs_f64();
+                tx.query(
+                    session::TOUCH_SQL,
+                    &[&ids, &addrs, &agents, &interval, &grace],
+                )
+                .await
+            }
+            .await;
+            match outcome {
+                Ok(rows) => {
+                    tx.commit().await?;
+                    Ok(rows)
+                }
+                Err(error) => Err(abandon(&mut tx, error).await),
+            }
         })
         .await?;
         Ok(rows.len() as u64)
@@ -4253,7 +4261,6 @@ impl Auth {
                 legacy,
                 request: &request,
                 cached,
-                config: &self.config,
                 address_hash,
                 #[cfg(feature = "test-support")]
                 verdict_gate: &self.api_key_verdict_gate,

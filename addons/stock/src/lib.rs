@@ -6,8 +6,8 @@
 //!
 //! Installed so far: the topology tables (locations with their policy rows,
 //! warehouses, operation types, routes, rules, storage categories, package types, removal
-//! strategies and the topology version row), without behaviour beyond the stored complete name
-//! of a location and the policy row created with each location; the tracking tables of
+//! strategies and the topology version row), with immutable warehouse/operation-type company
+//! ownership, stored location complete names and nearest-warehouse ownership, and a policy row created with each location; the tracking tables of
 //! (lots, lot-name scope rows, packages, quants, serial positions), schema only;
 //! the operations tables (references, transfers with their move counter
 //! vector, moves with their product-unit conversion inputs), schema only; the move line tables of
@@ -17,6 +17,10 @@
 //!
 //! Behaviour so far: the quant engine ([`quant_engine`]: signed balance changes in
 //! key order, availability reads) with the quant model and location quant guards (`quant_guards`).
+//! Company stock lookups and company-dependent contact/user preferences are declared by stock.
+//! Provisioning remains a separate delivery; reading an empty company does not create topology.
+//! Operation types resolve location defaults, configure standard sequences, maintain per-user favorites,
+//! reschedule eligible move dates on method changes, and expose authorized basic transfer counts.
 
 erp_sdk::addon!(
     name = "stock",
@@ -26,15 +30,28 @@ erp_sdk::addon!(
 
 mod barcode;
 pub mod error;
+mod link_defaults;
 pub mod location;
 pub mod lot;
+mod migrations;
+mod operation_type;
+mod operation_type_counters;
+mod operation_type_reservation;
 pub mod orderpoint;
 pub mod package;
 pub mod picking;
 pub mod putaway;
 pub mod quant;
 pub mod reference;
+mod res_company;
+mod res_groups;
+mod res_partner;
+mod res_users;
 pub mod route;
+mod route_behavior;
+mod route_onchange;
+mod settings;
+mod settings_panel;
 pub mod stock_move;
 pub mod stock_move_line;
 pub mod storage;
@@ -62,8 +79,13 @@ pub use warehouse::{StockPickingType, StockWarehouse};
 // the availability reads, and the location usage and archive guards over stock.
 pub mod quant_engine;
 mod quant_guards;
+// Engine-owned move and line columns (done time, membership, correction counter), lead ruling L6'.
+mod move_guards;
 
 pub use quant_engine::{
     QuantBalance, QuantChange, QuantError, QuantFilter, QuantKey, apply_quant_changes,
     available_quantity, gather_quants,
 };
+
+/// Required SQL-object expectations for native registry/module composition.
+pub mod schema_guards;

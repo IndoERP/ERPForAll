@@ -95,7 +95,7 @@ async fn spec_base_057_currency_code_uniqueness_constraint() {
     assert_eq!(err.kind(), ErrorKind::Validation);
     assert_eq!(
         err.message(),
-        "The operation cannot be completed: The currency code must be unique!"
+        "The database refused the change: The currency code must be unique!"
     );
 }
 
@@ -124,7 +124,7 @@ async fn spec_base_058_currency_rounding_factor_strictly_positive() {
         assert_eq!(err.kind(), ErrorKind::Validation);
         assert_eq!(
             err.message(),
-            "The operation cannot be completed: The rounding factor must be greater than 0!"
+            "The database refused the change: The rounding factor must be greater than 0!"
         );
     }
 
@@ -149,7 +149,7 @@ async fn spec_base_058_currency_rounding_factor_strictly_positive() {
         assert_eq!(error.kind(), ErrorKind::Validation);
         assert_eq!(
             error.message(),
-            "The operation cannot be completed: The rounding factor must be greater than 0!"
+            "The database refused the change: The rounding factor must be greater than 0!"
         );
         assert_eq!(
             currency.values(&mut tx, "rounding").await.unwrap(),
@@ -202,7 +202,7 @@ async fn test_res_company_currency_id_required_and_default() {
     assert_eq!(error.kind(), ErrorKind::Validation);
     assert_eq!(
         error.message(),
-        "The operation cannot be completed: Missing required field 'Currency' (currency_id) for model 'Company' (res.company)"
+        "The database refused the change: Missing required field 'Currency' (currency_id) for model 'Company' (res.company)"
     );
 
     let usd_id = create_currency(&mut tx, "USD", "$", 0.01).await;
@@ -281,7 +281,7 @@ async fn company_without_currency_is_rejected() {
     assert_eq!(err.kind(), ErrorKind::Validation);
     assert_eq!(
         err.message(),
-        "The operation cannot be completed: Missing required field 'Currency' (currency_id) for model 'Company' (res.company)"
+        "The database refused the change: Missing required field 'Currency' (currency_id) for model 'Company' (res.company)"
     );
 }
 

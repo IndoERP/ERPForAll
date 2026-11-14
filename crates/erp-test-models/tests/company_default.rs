@@ -15,8 +15,8 @@ use erp_sdk::{Command, CompanyError, ErrorKind, RawVals, RecId, Records, Transac
 use erp_testkit::{Harness, assert_query_count};
 use support::map;
 
-const HEADER: &str = "Uh-oh! You’ve got some company inconsistencies here:";
-const FOOTER: &str = "To avoid a mess, no company crossover is allowed!";
+const HEADER: &str = "These values link records of different companies:";
+const FOOTER: &str = "Choose records of the same company, or records shared by all companies.";
 
 async fn company_orm() -> Harness {
     Harness::builder([
@@ -181,8 +181,8 @@ async fn accepted_create(tx: &mut Transaction, model: &str, vals: &[(&str, Value
 /// The message of one inconsistency of a record of the model whose field has `label`.
 fn line(record: &str, companies: &str, label: &str, field: &str, values: &str) -> String {
     format!(
-        "- “{record}” belongs to company “{companies}” while “{label}” ({field}: {values}) \
-         belongs to another company."
+        "- “{record}” is in company “{companies}”, and “{label}” ({field}: {values}) \
+         points to a record of another company."
     )
 }
 
@@ -1034,8 +1034,8 @@ async fn a_company_checks_its_declared_fields_against_itself() {
     assert_refused(
         &err,
         &format!(
-            "{HEADER}\n- Record is company “Self” while “Default Tag” (default_tag_id: 'TagO') \
-             belongs to another company.\n{FOOTER}"
+            "{HEADER}\n- The record is company “Self”, and “Default Tag” (default_tag_id: 'TagO') \
+             points to a record of another company.\n{FOOTER}"
         ),
     );
     drop(tx);
@@ -1250,6 +1250,56 @@ async fn company_dependent_fields_are_checked_against_the_current_company() {
         .set_value(&mut tx, "pref_tag_id", Value::Int(w.tag_r))
         .await
         .unwrap();
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+/// The verdict of a company-dependent link depends on the current company only, so moving the
+/// record to another company needs no current company; writing the property still does.
+#[tokio::test]
+async fn company_field_writes_do_not_recheck_company_dependent_links() {
+    let h = company_orm().await;
+    let mut tx = h.begin().await.unwrap();
+    let w = world(&mut tx).await;
+    let in_root = tx.env().with_company(w.r).unwrap();
+    let dep = in_root
+        .records("test_company.dep")
+        .unwrap()
+        .create_values(
+            &mut tx,
+            &[map(&[
+                ("company_id", Value::Int(w.r)),
+                ("pref_tag_id", Value::Int(w.tag_r)),
+            ])],
+        )
+        .await
+        .unwrap()
+        .ids()[0];
+    tx.flush().await.unwrap();
+    tx.invalidate_all().await.unwrap();
+    let without_company = tx
+        .env()
+        .records("test_company.dep")
+        .unwrap()
+        .browse_ids([rid(dep)]);
+    without_company
+        .set_value(&mut tx, "company_id", Value::Int(w.o))
+        .await
+        .unwrap();
+    tx.flush().await.unwrap();
+    let err = tx
+        .savepoint(async |tx| {
+            without_company
+                .set_value(tx, "pref_tag_id", Value::Int(w.tag_o))
+                .await
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Validation);
+    assert_eq!(
+        err.message(),
+        "company-dependent fields require a current company"
+    );
     drop(tx);
     h.cleanup().await.unwrap();
 }

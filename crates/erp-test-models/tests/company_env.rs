@@ -33,7 +33,7 @@ use erp_testkit::{DomainPolicy, Harness, Otherwise, assert_query_count};
 
 const OBJ: &str = "test_access.some_obj";
 const DEMO: i64 = 2;
-const UNAUTHORIZED: &str = "Access to unauthorized or invalid companies.";
+const UNAUTHORIZED: &str = "One of the selected companies does not exist or is not one of yours.";
 
 fn company(id: i64) -> CompanyId {
     CompanyId::new(id).unwrap()

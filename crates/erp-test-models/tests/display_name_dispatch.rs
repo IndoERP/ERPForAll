@@ -594,7 +594,7 @@ async fn custom_label_preserves_reader_company_bound_after_sudo_warm(consumer: B
         "You cannot read “Leaf Name” (test_display_name_dispatch.bound.leaf_name) of Bound Label \
          (test_display_name_dispatch.bound: {label_id}): it is read through Label Leaf \
          (test_display_name_dispatch.leaf), which belongs to a company outside your active companies.\n\n\
-         This seems to be a multi-company issue, but you do not have access to the proper company to access the record anyhow."
+         The record belongs to a company outside your allowed companies."
     );
     let labels = tx.env().model::<BoundLabel>().unwrap();
     let error = consume_bound_label(consumer, &mut tx, &holder, &labels)
@@ -617,7 +617,7 @@ async fn custom_label_preserves_reader_company_bound_after_sudo_warm(consumer: B
             "You cannot read “Leaf Name” (test_display_name_dispatch.bound.leaf_name) of Bound Label \
              (test_display_name_dispatch.bound: {label_id}): it is read through Label Leaf \
              (test_display_name_dispatch.leaf: {}), which belongs to a company outside your active companies.\n\n\
-             This seems to be a multi-company issue, but you do not have access to the proper company to access the record anyhow.",
+             The record belongs to a company outside your allowed companies.",
             leaf.ids()[0]
         )
     );
@@ -858,7 +858,7 @@ async fn refuses_sudo_warm_computed_intermediary(cross_model: bool) {
         "You cannot read “Leaf Name” ({input_model}.leaf_name) of {input_description} \
          ({input_model}: {label_id}): it is read through Label Leaf \
          (test_display_name_dispatch.leaf), which belongs to a company outside your active companies.\n\n\
-         This seems to be a multi-company issue, but you do not have access to the proper company to access the record anyhow."
+         The record belongs to a company outside your allowed companies."
     );
     assert_eq!(error.message(), expected);
     let error = target.name_search(&mut tx, "Public").await.unwrap_err();
@@ -873,7 +873,7 @@ async fn refuses_sudo_warm_computed_intermediary(cross_model: bool) {
             "You cannot read “Leaf Name” ({input_model}.leaf_name) of {input_description} \
              ({input_model}: {label_id}): it is read through Label Leaf \
              (test_display_name_dispatch.leaf: {}), which belongs to a company outside your active companies.\n\n\
-             This seems to be a multi-company issue, but you do not have access to the proper company to access the record anyhow.",
+             The record belongs to a company outside your allowed companies.",
             leaf.ids()[0]
         )
     );

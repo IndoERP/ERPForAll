@@ -125,7 +125,7 @@ impl TestRules for Rights {
     ) -> erp_sdk::Result<()> {
         if self.access_domain(b, model, op)?.is_false() {
             return Err(erp_sdk::Error::access(format!(
-                "You are not allowed to {} '{}' ({}) records.",
+                "Your access rights do not let you {} '{}' ({}) records.",
                 op.as_str(),
                 model.description,
                 model.name
@@ -493,7 +493,7 @@ async fn spec_dom_049_access_domain_merged_into_search() {
     assert_eq!(
         err.message(),
         format!(
-            "You are not allowed to access 'Object For Test Access Right' \
+            "Your access rights do not let you access 'Object For Test Access Right' \
              (test_access.some_obj) records.\n\nRecords: test_access.some_obj({},), User: {DEMO}",
             ids[1]
         )
@@ -506,7 +506,7 @@ async fn spec_dom_049_access_domain_merged_into_search() {
     assert_eq!(err.kind(), ErrorKind::Access);
     assert_eq!(
         err.message(),
-        "You are not allowed to read 'Access Category' (test_access.categ) records."
+        "Your access rights do not let you read 'Access Category' (test_access.categ) records."
     );
     drop(tx);
     h.cleanup().await.unwrap();
@@ -1050,7 +1050,7 @@ async fn spec_comp_040_related_sudo() {
     assert_eq!(
         err.message(),
         format!(
-            "You are not allowed to access 'Access Related Foo' (test_access.related_foo) \
+            "Your access rights do not let you access 'Access Related Foo' (test_access.related_foo) \
              records.\n\nRecords: test_access.related_foo({},), User: {DEMO}",
             foos[1]
         )

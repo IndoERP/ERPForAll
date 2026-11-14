@@ -10,9 +10,11 @@ pub mod settings;
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use erp_sdk::Operation;
 use erp_sdk::prelude::*;
 use erp_sdk::sequence::{MAX_PATTERN_PADDING, SequencePattern, SequenceReset};
 
+use crate::fiscal::ensure::require_company_or_ancestor_access;
 use settings::{CODE_MAX_LENGTH, JournalSettings};
 
 /// Journal types whose default account is a liquidity account (bank, cash, credit card).
@@ -26,7 +28,7 @@ fn numbered_per_year(journal_type: &str) -> bool {
 }
 
 /// The refusal of the unique key on (company, code).
-const CODE_UNIQUE: &str = "Journal codes must be unique per company.";
+const CODE_UNIQUE: &str = "Each journal code can be used once per company.";
 
 /// The task that creates a liquidity journal's default account from the company's code prefix.
 pub const DEFAULT_ACCOUNT_TASK: &str = "a later release";
@@ -40,7 +42,7 @@ pub const DEFAULT_ACCOUNT_TASK: &str = "a later release";
     keys = [key(
         name = "_uniq_name",
         fields = ["name"],
-        message = "A Ledger group name must be unique."
+        message = "Another ledger already has this name."
     )],
 )]
 pub struct AccountJournalGroup {
@@ -74,7 +76,7 @@ pub struct AccountJournalGroup {
         (
             "_code_company_uniq",
             "UNIQUE (company_id, code)",
-            "Journal codes must be unique per company."
+            "Each journal code can be used once per company."
         ),
         (
             "_sequence_padding_range",
@@ -108,13 +110,14 @@ pub struct AccountJournal {
         string = "Type"
     )]
     pub r#type: Option<Arc<str>>,
-    /// The journal's company; the active company when none is given. No index of its own: the
-    /// unique key on (company, code) leads with it.
+    /// The journal's company; the active company when none is given. No index of its own (a
+    /// many2one gets one by default): the unique key on (company, code) leads with it.
     #[field(
         many2one,
         comodel = "res.company",
         required = true,
         readonly = true,
+        index = false,
         string = "Company"
     )]
     pub company_id: Option<RecId>,
@@ -267,6 +270,8 @@ impl AccountJournal {
     ) -> Result<Records> {
         let mut companies = Vec::with_capacity(vals_list.len());
         let mut taken: BTreeMap<i64, Vec<String>> = BTreeMap::new();
+        let mut typed = false;
+        let mut unproposed = Vec::new();
         for vals in &mut vals_list {
             let company = match vals.get("company_id") {
                 Some(Cell::Id(id)) => *id,
@@ -288,10 +293,22 @@ impl AccountJournal {
                     )));
                 }
             };
-            if let Some(Cell::Str(code)) = vals.get("code") {
-                taken.entry(company).or_default().push(code.to_string());
+            match vals.get("code") {
+                Some(Cell::Str(code)) if !code.is_empty() => {
+                    typed = true;
+                    taken.entry(company).or_default().push(code.to_string());
+                }
+                _ => unproposed.push(company),
             }
             companies.push(company);
+        }
+        if !unproposed.is_empty() && !this.env().su() {
+            // the code proposal reads every journal of the company elevated: only for a caller who
+            // may create journals there (the model check, then the journal company rule)
+            this.as_records()
+                .check_access(tx, Operation::Create)
+                .await?;
+            require_company_or_ancestor_access(tx, this.env(), &unproposed).await?;
         }
         let mut settings = None;
         let mut allocated = false;
@@ -321,7 +338,8 @@ impl AccountJournal {
             allocated = true;
         }
         // the insert reaches the unique key at the flush; a concurrent create that proposed the same
-        // code first wins, and this one is told why a code nobody typed is "not unique"
+        // code first wins, and this one is told why a code nobody typed is "not unique" (a typed
+        // code in the batch may be the duplicate itself: saving again would not help)
         let created = async {
             let created = sup.call(tx, this.as_records(), (vals_list,)).await?;
             tx.flush().await?;
@@ -329,7 +347,7 @@ impl AccountJournal {
         }
         .await
         .map_err(|error: Error| {
-            if allocated && error.message().contains(CODE_UNIQUE) {
+            if allocated && !typed && error.message().contains(CODE_UNIQUE) {
                 Error::conflict(
                     "Another journal of the company took the proposed code at the same time. \
                      Save again to get the next free code.",
@@ -581,9 +599,9 @@ async fn next_code(
     )))
 }
 
-const JOURNAL_SIDE: &str = "The type of the journal's default credit/debit account shouldn't be 'receivable' or 'payable'.";
-const ACCOUNT_SIDE: &str = "The account is already in use in a 'sale' or 'purchase' journal. This \
-     means that the account's type couldn't be 'receivable' or 'payable'.";
+const JOURNAL_SIDE: &str = "A sale or purchase journal cannot take a receivable or payable account as its default account.";
+const ACCOUNT_SIDE: &str = "This account is the default account of a sale or purchase journal, so its \
+     type cannot be receivable or payable.";
 
 /// Each `(journal type, default account)` pair: a sale or purchase journal never defaults to a
 /// receivable or payable account,
@@ -598,26 +616,48 @@ async fn check_default_account_types(
         return Ok(());
     }
     let ids: BTreeSet<i64> = pairs.iter().map(|(_, account)| *account).collect();
+    // An account the caller may not read is refused before its type is read, with one sentence
+    // whatever that type is: a type-dependent outcome would tell the type (the type is read
+    // below with the framework's rights).
+    let mut checked = BTreeSet::new();
+    for (journal_type, account) in pairs {
+        if checked.insert(*account) && !readable(tx, env, "account.account", *account).await? {
+            return Err(Error::validation(format!(
+                "The account #{account} cannot be the default account of a {journal_type} journal."
+            )));
+        }
+    }
     let accounts = env
         .records("account.account")?
         .sudo(true)
         .with_context([("active_test", Value::Bool(false))])
         .browse(ids.into_iter().collect::<Vec<_>>())?;
-    let types: BTreeMap<i64, String> = accounts
+    let mut types: BTreeMap<i64, String> = BTreeMap::new();
+    for (id, cell) in accounts
         .ids()
         .into_iter()
         .zip(accounts.cells(tx, "account_type").await?)
-        .filter_map(|(id, cell)| match cell {
-            Cell::Str(t) => Some((id, t.to_string())),
-            _ => None,
-        })
-        .collect();
+    {
+        match cell {
+            Cell::Str(t) => types.insert(id, t.to_string()),
+            other => {
+                return Err(Error::internal(format!(
+                    "account {id} has the account type {other:?}"
+                )));
+            }
+        };
+    }
     let settings = JournalSettings::read(tx).await?;
     for (journal_type, account) in pairs {
-        let account_type = types.get(account).map(String::as_str).unwrap_or_default();
-        if matches!(journal_type.as_str(), "sale" | "purchase")
-            && matches!(account_type, "asset_receivable" | "liability_payable")
-        {
+        let account_type = types
+            .get(account)
+            .ok_or_else(|| Error::internal(format!("account {account} was not read")))?;
+        let side = matches!(journal_type.as_str(), "sale" | "purchase")
+            && matches!(
+                account_type.as_str(),
+                "asset_receivable" | "liability_payable"
+            );
+        if side {
             return Err(Error::validation(if account_side {
                 ACCOUNT_SIDE
             } else {
@@ -658,14 +698,16 @@ pub async fn check_accounts_as_default(
     }
     let types = found.cells(tx, "type").await?;
     let defaults = found.cells(tx, "default_account_id").await?;
-    let pairs: Vec<(String, i64)> = types
+    let pairs = types
         .into_iter()
         .zip(defaults)
-        .filter_map(|pair| match pair {
-            (Cell::Str(t), Cell::Id(account)) => Some((t.to_string(), account)),
-            _ => None,
+        .map(|pair| match pair {
+            (Cell::Str(t), Cell::Id(account)) => Ok((t.to_string(), account)),
+            other => Err(Error::internal(format!(
+                "a journal found by its default account reads as {other:?}"
+            ))),
         })
-        .collect();
+        .collect::<Result<Vec<(String, i64)>>>()?;
     check_default_account_types(tx, env, &pairs, true).await
 }
 
@@ -676,7 +718,7 @@ pub async fn check_accounts_as_default(
 ///
 /// # Errors
 ///
-/// `Validation` "The foreign currency set on the journal ... and the account ... must be the same."
+/// `Validation` "Journal ... and account ... must use the same foreign currency."
 pub async fn check_currency_consistency(
     tx: &mut Transaction,
     env: &Env,
@@ -710,7 +752,7 @@ pub async fn check_currency_consistency(
     let journal = visible_name(tx, env, "account.journal", journal).await?;
     let account = visible_name(tx, env, "account.account", account).await?;
     Err(Error::validation(format!(
-        "The foreign currency set on the journal '{journal}' and the account '{account}' must be the same."
+        "Journal '{journal}' and account '{account}' must use the same foreign currency."
     )))
 }
 
@@ -788,22 +830,39 @@ pub async fn check_journal_companies(
 }
 
 /// The name of record `id` of `model` when the caller may read it, else `#<id>`: a refusal never
-/// shows the name of a record the caller cannot see (archived records count as visible).
+/// shows the name of a record the caller cannot see (archived records count as visible), and a
+/// caller who may not read `model` at all still gets the refusal, not an access error.
 ///
 /// # Errors
 ///
-/// Search and read errors, an access error when the caller may not read `model` at all.
+/// Read errors that are not refusals.
 async fn visible_name(tx: &mut Transaction, env: &Env, model: &str, id: i64) -> Result<String> {
-    let found = env
-        .records(model)?
-        .with_context([("active_test", Value::Bool(false))])
-        .search(tx, &Domain::condition("id", Operator::Eq, id)?)
-        .await?;
-    if found.is_empty() {
+    if !readable(tx, env, model, id).await? {
         return Ok(format!("#{id}"));
     }
-    match found.cell(tx, "name").await? {
+    match env
+        .sudo(false)
+        .records(model)?
+        .browse(vec![id])?
+        .cell(tx, "name")
+        .await?
+    {
         Cell::Str(name) => Ok(name.to_string()),
         other => Err(Error::internal(format!("{model} name is {other:?}"))),
     }
+}
+
+/// Whether the caller of `env` may read record `id` of `model` (the model check and the record
+/// rules; a missing record is not readable). Constraints run elevated: the caller is `env`
+/// without the elevation (the superuser stays one).
+///
+/// # Errors
+///
+/// Failures that are not refusals.
+async fn readable(tx: &mut Transaction, env: &Env, model: &str, id: i64) -> Result<bool> {
+    let record = env.sudo(false).records(model)?.browse(vec![id])?;
+    Ok(!record
+        .filtered_access(tx, Operation::Read)
+        .await?
+        .is_empty())
 }

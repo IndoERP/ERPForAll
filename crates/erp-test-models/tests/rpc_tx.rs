@@ -153,7 +153,7 @@ async fn conflicts_are_retried_and_integrity_errors_are_not() {
         &second,
         422,
         "erp.exceptions.ValidationError",
-        "The operation cannot be completed: The name must be unique",
+        "The database refused the change: The name must be unique",
     );
     assert_eq!(second.attempts(), 1, "integrity errors are not retried");
     assert_eq!(count(&h, "test_rpc_model_a").await, 1);
@@ -197,10 +197,7 @@ async fn database_ondelete_through_rpc() {
             422,
             "erp.exceptions.ValidationError",
             &format!(
-                "The operation cannot be completed: Another model is using the record you are \
-                 trying to delete.\n\nThe troublemaker is: 'Model A' (test_rpc.model_a)\nThanks \
-                 to the following constraint: {constraint}\nHow about archiving the record \
-                 instead?"
+                "The database refused the change: Other records still point to the record you want to delete.\n\nReferring model: 'Model A' (test_rpc.model_a)\nConstraint: {constraint}\nArchive the record instead of deleting it."
             ),
         );
         assert_eq!(r.attempts(), 1);

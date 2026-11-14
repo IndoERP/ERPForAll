@@ -684,7 +684,8 @@ async fn load_records_with(
 ) -> Result<Records> {
     let spec = records.spec();
     // Validate every output target before an earlier row can update records or external ids.
-    // Generated outputs are database-owned even when this batch is only updating existing rows.
+    // Unadapted outputs stay database-owned. Flagged inputs reach the same checked create/write
+    // adapter as direct callers; they never become assignments to generated columns.
     for name in batch.iter().flat_map(|item| {
         item.values
             .iter()
@@ -693,6 +694,7 @@ async fn load_records_with(
     }) {
         if let Some(field) = spec.field(name)
             && field.is_generated()
+            && !field.is_input_adapted()
         {
             return Err(Error::validation(format!(
                 "Generated field '{}.{}' is read-only",

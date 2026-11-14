@@ -53,6 +53,8 @@ pub use correlation::{CorrelationId, OperationId, OperationIdentity};
 pub(crate) mod copy;
 mod core_ddl;
 mod database_generated;
+mod generated_input;
+pub use generated_input::GeneratedInput;
 mod dberror;
 pub(crate) mod defaults;
 /// Transactional deltas: the synchronous guarded apply.
@@ -126,6 +128,7 @@ mod schema_company;
 pub mod schema_generated;
 mod schema_index;
 mod schema_sqlobj;
+pub use schema_sqlobj::SqlObjectRemoval;
 mod schema_sqlobj_roles;
 pub use schema_sqlobj_roles::SqlRoleBindings;
 mod schema_steps;

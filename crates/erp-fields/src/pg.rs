@@ -1,5 +1,7 @@
 //! PostgreSQL binary conversions for dates, datetimes and cells (feature `pg`).
 
+mod numeric;
+
 use std::error::Error as StdError;
 
 use bytes::{BufMut, BytesMut};
@@ -207,6 +209,7 @@ impl ToSql for Cell {
             Cell::Bool(b) if *ty == Type::BOOL => b.to_sql(ty, out),
             Cell::Int(i) if *ty == Type::INT4 => i.to_sql(ty, out),
             Cell::Id(i) if *ty == Type::INT8 => i.to_sql(ty, out),
+            Cell::BigInt(i) if *ty == Type::INT8 => i.get().to_sql(ty, out),
             Cell::Float(f) if *ty == Type::FLOAT8 => f.to_sql(ty, out),
             Cell::Decimal(d) if *ty == Type::NUMERIC => d.to_sql(ty, out),
             Cell::Str(s) if *ty == Type::VARCHAR || *ty == Type::TEXT => s.as_ref().to_sql(ty, out),

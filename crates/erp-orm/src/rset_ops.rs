@@ -593,6 +593,7 @@ fn compare_cells(a: &Cell, b: &Cell) -> Ordering {
         (Cell::Date(a), Cell::Date(b)) => a.cmp(b),
         (Cell::DateTime(a), Cell::DateTime(b)) => a.cmp(b),
         (Cell::Uuid(a), Cell::Uuid(b)) => a.cmp(b),
+        (Cell::BigInt(a), Cell::BigInt(b)) => a.cmp(b),
         (Cell::Xid8(a), Cell::Xid8(b)) => a.cmp(b),
         (Cell::TimestampTz(a), Cell::TimestampTz(b)) => a.cmp(b),
         // PostgreSQL's range order: by lower end (unbounded first), then upper end (unbounded last)

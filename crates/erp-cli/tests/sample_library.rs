@@ -322,7 +322,7 @@ async fn install_use_upgrade_uninstall() {
     let candidate_manifest = fs::read_to_string(&manifest_path).unwrap();
     fs::write(
         &manifest_path,
-        candidate_manifest.replace("version = \"1.0.8\"", "version = \"1.0.1\""),
+        candidate_manifest.replace("version = \"1.0.9\"", "version = \"1.0.1\""),
     )
     .unwrap();
     let db = TestDb::create().await.unwrap();
@@ -490,7 +490,7 @@ async fn install_use_upgrade_uninstall() {
     let text = fs::read_to_string(&manifest).unwrap();
     fs::write(
         &manifest,
-        text.replace("version = \"1.0.8\"", "version = \"1.1.0\""),
+        text.replace("version = \"1.0.9\"", "version = \"1.1.0\""),
     )
     .unwrap();
     let candidate = system_builder(&db, work.path())
@@ -711,5 +711,401 @@ fn sample_library_added_after_database_creation_installs() {
             .await
             .unwrap();
         assert_eq!(installed.installed, name());
+    });
+}
+
+#[test]
+fn sample_library_dashboard_reads_installed_declaration_and_scoped_records() {
+    big_stack(async {
+        let db = TestDb::create().await.unwrap();
+        let system = system(&db, &repo_addons());
+        let initialized = system.initialize(InitOptions::new()).await.unwrap();
+        drop(initialized);
+        let env = system.system_env(erp_orm::Context::new());
+        let orm = system
+            .button_immediate_install(&env, &name())
+            .await
+            .unwrap()
+            .orm;
+        let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+        let books = tx.env().records("sample_library.book").unwrap();
+        books
+            .create(
+                &mut tx,
+                vec![
+                    RawVals::new()
+                        .set_cell("title", Cell::Str("Dashboard A".into()))
+                        .set_cell("available", Cell::Bool(true))
+                        .set_cell("pages", Cell::Int(12)),
+                    RawVals::new()
+                        .set_cell("title", Cell::Str("Dashboard B".into()))
+                        .set_cell("available", Cell::Bool(false))
+                        .set_cell("pages", Cell::Int(30)),
+                ],
+            )
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        drop(tx);
+        let metadata = book_view(&orm, "list").await;
+        let list = &metadata["views"][0];
+        let dashboard = list["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["kind"] == "dashboard")
+            .unwrap();
+        assert_eq!(dashboard["items"].as_array().unwrap().len(), 3);
+        let action_id: i64 = scalar(&orm,"SELECT res_id::text FROM ir_model_data WHERE module='sample_library' AND name='book_action'").await.parse().unwrap();
+        let view_id = list["identity"]["id"].as_i64().unwrap();
+        let revision = dashboard["revision"].as_str().unwrap();
+        let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+        let records = tx.env().records("sample_library.book").unwrap();
+        let Exposure::Exposed(method) = tx
+            .exposure()
+            .get(records.model_id(), "erp_read_dashboard")
+            .unwrap()
+            .clone()
+        else {
+            panic!("dashboard is exposed")
+        };
+        let args = |view_id, revision: &str| {
+            erp_fields::ValueMap::from_iter([
+                ("action_id".into(), Value::Int(action_id)),
+                ("view_id".into(), Value::Int(view_id)),
+                ("revision".into(), Value::str(revision)),
+                ("period".into(), Value::str("last_7_days")),
+                (
+                    "domain_scope".into(),
+                    Value::List(
+                        vec![Value::List(
+                            vec![
+                                Value::str("title"),
+                                Value::str("="),
+                                Value::str("Dashboard A"),
+                            ]
+                            .into(),
+                        )]
+                        .into(),
+                    ),
+                ),
+            ])
+        };
+        let value = method
+            .call(
+                &mut tx,
+                records.clone(),
+                RpcArgs::new(args(view_id, revision)),
+            )
+            .await
+            .unwrap();
+        let answer = erp_fields::convert::value_to_json(&value).unwrap();
+        let values = answer["values"].as_array().unwrap();
+        assert_eq!(
+            values.iter().find(|v| v["name"] == "available").unwrap()["value"],
+            "1"
+        );
+        assert_eq!(
+            values.iter().find(|v| v["name"] == "unavailable").unwrap()["value"],
+            "0"
+        );
+        assert_eq!(
+            values.iter().find(|v| v["name"] == "pages_added").unwrap()["value"],
+            "12"
+        );
+        assert_eq!(
+            values.iter().find(|v| v["name"] == "pages_added").unwrap()["change"],
+            serde_json::Value::Null
+        );
+        let error = method
+            .call(
+                &mut tx,
+                records.clone(),
+                RpcArgs::new(args(view_id, &"0".repeat(64))),
+            )
+            .await
+            .unwrap_err();
+        let erp_orm::rpc::BindError::Call(error) = error else {
+            panic!("expected method refusal")
+        };
+        assert_eq!(error.kind(), erp_fields::ErrorKind::Validation);
+        assert_eq!(
+            error.message(),
+            "Dashboard declaration changed. Reload this view."
+        );
+        let error = method
+            .call(&mut tx, records, RpcArgs::new(args(view_id + 1, revision)))
+            .await
+            .unwrap_err();
+        let erp_orm::rpc::BindError::Call(error) = error else {
+            panic!("expected method refusal")
+        };
+        assert_eq!(error.kind(), erp_fields::ErrorKind::Validation);
+        assert_eq!(
+            error.message(),
+            "Dashboard view does not belong to the selected action."
+        );
+        let today = erp_fields::Date::from_ymd(2024, 3, 10).unwrap();
+        let (current, previous) = erp_addon_web::test_dashboard_ranges(
+            &mut tx,
+            "rolling",
+            Some(7),
+            "America/New_York",
+            true,
+            today,
+            366,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            current,
+            (
+                "2024-03-04 05:00:00".to_owned(),
+                "2024-03-11 04:00:00".to_owned()
+            )
+        );
+        assert_eq!(
+            previous,
+            (
+                "2024-02-26 05:00:00".to_owned(),
+                "2024-03-04 05:00:00".to_owned()
+            )
+        );
+        let (current, previous) = erp_addon_web::test_dashboard_ranges(
+            &mut tx,
+            "month",
+            None,
+            "UTC",
+            false,
+            erp_fields::Date::from_ymd(2024, 3, 31).unwrap(),
+            366,
+        )
+        .await
+        .unwrap();
+        assert_eq!(current, ("2024-03-01".to_owned(), "2024-04-01".to_owned()));
+        assert_eq!(previous, ("2024-02-01".to_owned(), "2024-03-01".to_owned()));
+        let error =
+            erp_addon_web::test_dashboard_ranges(&mut tx, "month", None, "UTC", false, today, 1)
+                .await
+                .unwrap_err();
+        assert_eq!(error.kind(), erp_fields::ErrorKind::Validation);
+        assert_eq!(
+            error.message(),
+            "Dashboard period exceeds web.dashboard_max_period_days."
+        );
+        let error = erp_addon_web::test_dashboard_ranges(
+            &mut tx,
+            "month",
+            None,
+            "Not/A_Timezone",
+            false,
+            today,
+            366,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.kind(), erp_fields::ErrorKind::Validation);
+        assert_eq!(
+            error.message(),
+            "Dashboard timezone 'Not/A_Timezone' is not recognized."
+        );
+        tx.rollback().await.unwrap();
+        drop(tx);
+        let mut setup = orm.begin(SUPERUSER_ID).await.unwrap();
+        let company: i64 = setup
+            .query("SELECT id FROM res_company ORDER BY id LIMIT 1", &[])
+            .await
+            .unwrap()[0]
+            .get(0);
+        let group: i64 = setup
+            .query(
+                "SELECT res_id FROM ir_model_data WHERE module='base' AND name='group_user'",
+                &[],
+            )
+            .await
+            .unwrap()[0]
+            .get(0);
+        let model_id: i64 = setup
+            .query(
+                "SELECT id FROM ir_model WHERE model='sample_library.book'",
+                &[],
+            )
+            .await
+            .unwrap()[0]
+            .get(0);
+        let partner = setup
+            .env()
+            .records("res.partner")
+            .unwrap()
+            .create(
+                &mut setup,
+                vec![RawVals::new().set_cell("name", Cell::Str("Dashboard reader".into()))],
+            )
+            .await
+            .unwrap();
+        let admin_group: i64 = setup
+            .query(
+                "SELECT res_id FROM ir_model_data WHERE module='base' AND name='group_system'",
+                &[],
+            )
+            .await
+            .unwrap()[0]
+            .get(0);
+        let admin_partner = setup
+            .env()
+            .records("res.partner")
+            .unwrap()
+            .create(
+                &mut setup,
+                vec![RawVals::new().set_cell("name", Cell::Str("Dashboard administrator".into()))],
+            )
+            .await
+            .unwrap();
+        setup
+            .env()
+            .records("res.users")
+            .unwrap()
+            .create(
+                &mut setup,
+                vec![
+                    RawVals::new()
+                        .set_cell("name", Cell::Str("Dashboard administrator".into()))
+                        .set_cell("login", Cell::Str("dashboard-administrator".into()))
+                        .set_cell("partner_id", Cell::Id(admin_partner.ids()[0]))
+                        .set_cell("company_id", Cell::Id(company))
+                        .set_commands(
+                            "company_ids",
+                            [erp_orm::Command::set([erp_fields::RecId::from_real(
+                                company,
+                            )
+                            .unwrap()])],
+                        )
+                        .set_commands(
+                            "group_ids",
+                            [erp_orm::Command::set([erp_fields::RecId::from_real(
+                                admin_group,
+                            )
+                            .unwrap()])],
+                        ),
+                ],
+            )
+            .await
+            .unwrap();
+        let user = setup
+            .env()
+            .records("res.users")
+            .unwrap()
+            .create(
+                &mut setup,
+                vec![
+                    RawVals::new()
+                        .set_cell("name", Cell::Str("Dashboard reader".into()))
+                        .set_cell("login", Cell::Str("dashboard-reader".into()))
+                        .set_cell("partner_id", Cell::Id(partner.ids()[0]))
+                        .set_cell("company_id", Cell::Id(company))
+                        .set_commands(
+                            "company_ids",
+                            [erp_orm::Command::set([erp_fields::RecId::from_real(
+                                company,
+                            )
+                            .unwrap()])],
+                        )
+                        .set_commands(
+                            "group_ids",
+                            [erp_orm::Command::set([
+                                erp_fields::RecId::from_real(group).unwrap()
+                            ])],
+                        ),
+                ],
+            )
+            .await
+            .unwrap();
+        let user_id = user.ids()[0];
+        setup
+            .env()
+            .records("ir.access")
+            .unwrap()
+            .create(
+                &mut setup,
+                vec![
+                    RawVals::new()
+                        .set_cell("name", Cell::Str("Dashboard test restriction".into()))
+                        .set_cell("model_id", Cell::Id(model_id))
+                        .set_cell("operation", Cell::Str("r".into()))
+                        .set_cell("domain", Cell::Str("[('available', '=', True)]".into())),
+                ],
+            )
+            .await
+            .unwrap();
+        setup.commit().await.unwrap();
+        drop(setup);
+        let registry = Arc::clone(orm.registry());
+        let provider: Arc<dyn erp_orm::PolicyProvider> = Arc::new(
+            erp_security::source::PolicySource::build(Arc::clone(&registry), db.pool().clone())
+                .await
+                .unwrap(),
+        );
+        let restricted = Orm::builder(Arc::clone(&registry), db.pool().clone())
+            .generation_attachment(erp_orm::GenerationAttachment::new(
+                Arc::clone(&registry),
+                orm.env(SUPERUSER_ID, erp_orm::Context::new())
+                    .generation_attachment::<erp_views::PublishedViewTypes>()
+                    .unwrap(),
+            ))
+            .require_core_tables(erp_security::auth::core_tables())
+            .resolver(erp_security::resolver::Resolver::for_registry(&registry).unwrap())
+            .policy(provider)
+            .impls(erp_modules::base_models::IMPLS.iter().copied())
+            .constraints(erp_modules::base_models::CONSTRAINTS.iter().copied())
+            .unlink_hook(erp_data::model_data::UNLINK_HOOK)
+            .build()
+            .unwrap();
+        let mut user_tx = restricted
+            .begin(erp_orm::UserId::new(user_id).unwrap())
+            .await
+            .unwrap();
+        let user_books = user_tx.env().records("sample_library.book").unwrap();
+        let Exposure::Exposed(user_method) = user_tx
+            .exposure()
+            .get(user_books.model_id(), "erp_read_dashboard")
+            .unwrap()
+            .clone()
+        else {
+            panic!("dashboard is exposed")
+        };
+        let mut user_args = args(view_id, revision);
+        user_args.insert(
+            "domain_scope".to_owned(),
+            Value::List(
+                vec![Value::List(
+                    vec![
+                        Value::str("title"),
+                        Value::str("ilike"),
+                        Value::str("Dashboard"),
+                    ]
+                    .into(),
+                )]
+                .into(),
+            ),
+        );
+        let answer = user_method
+            .call(&mut user_tx, user_books, RpcArgs::new(user_args))
+            .await
+            .unwrap();
+        let answer = erp_fields::convert::value_to_json(&answer).unwrap();
+        let values = answer["values"].as_array().unwrap();
+        assert_eq!(
+            values.iter().find(|v| v["name"] == "available").unwrap()["value"],
+            "1"
+        );
+        assert_eq!(
+            values.iter().find(|v| v["name"] == "unavailable").unwrap()["value"],
+            "0"
+        );
+        assert_eq!(
+            values.iter().find(|v| v["name"] == "pages_added").unwrap()["value"],
+            "12"
+        );
+        user_tx.rollback().await.unwrap();
     });
 }

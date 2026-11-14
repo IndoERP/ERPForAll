@@ -500,7 +500,7 @@ async fn generated_restrictions_apply_to_search_read_and_create() {
         .unwrap_err();
     assert_eq!(err.kind(), ErrorKind::Access, "{err}");
     assert!(
-        err.to_string().contains("multi-company issue"),
+        err.to_string().contains("switch to its company"),
         "company hint: {err}"
     );
     assert!(err.context().is_some(), "the suggested company rides along");
@@ -656,7 +656,7 @@ async fn moving_a_record_checks_its_new_state() {
             "{short}.{field} -> {to}: {err}"
         );
         assert!(
-            err.to_string().contains("doesn't have 'write' access"),
+            err.to_string().contains("has no 'write' access"),
             "{short}.{field} -> {to}: {err}"
         );
         tx.rollback().await.unwrap();
@@ -749,10 +749,7 @@ async fn a_related_company_chain_moves_with_its_anchor() {
         .await
         .unwrap_err();
     assert_eq!(err.kind(), ErrorKind::Access, "{err}");
-    assert!(
-        err.to_string().contains("doesn't have 'write' access"),
-        "{err}"
-    );
+    assert!(err.to_string().contains("has no 'write' access"), "{err}");
     tx.rollback().await.unwrap();
     // a move to another record of an active company passes
     let mut tx = begin().await.unwrap();

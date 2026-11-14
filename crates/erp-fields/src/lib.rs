@@ -11,6 +11,8 @@
 //!   [`Value::Rows`].
 
 pub mod base64;
+mod bigint;
+pub use bigint::BigInt;
 mod cell;
 pub mod convert;
 mod error;
@@ -45,6 +47,6 @@ pub use serde_json;
 pub use temporal::{Date, DateTime};
 pub use types::{
     ColumnGenerated, ColumnType, Digits, FieldType, GeneratedStorage, IndexKind, M2mRelation,
-    OnDelete, ParseSelectionOnDeleteError, SelectionOnDelete, Storage,
+    OnDelete, ParseSelectionOnDeleteError, SelectionOnDelete, Storage, TextCollation,
 };
 pub use value::{Value, ValueMap};

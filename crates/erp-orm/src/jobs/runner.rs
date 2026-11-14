@@ -138,6 +138,7 @@ impl KindSelection {
 
 pub(crate) struct Inner {
     pub orm: Orm,
+    pub settings: Mutex<Arc<JobSettings>>,
     selection: KindSelection,
     excluded: Vec<&'static str>,
     pub resolver: Arc<dyn JobPrincipalResolver>,
@@ -217,9 +218,25 @@ impl JobRunner {
         }
     }
 
-    /// The settings the runner works under.
-    pub fn settings(&self) -> &JobSettings {
-        self.inner.orm.job_settings()
+    /// Last successfully read policy, for scheduling hints only. Claims always refresh authority.
+    pub fn settings(&self) -> Arc<JobSettings> {
+        Arc::clone(
+            &self
+                .inner
+                .settings
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        )
+    }
+
+    pub(crate) async fn refresh_settings(&self) -> Result<Arc<super::JobSettingsSnapshot>> {
+        let snapshot = self.inner.orm.job_settings_snapshot().await?;
+        *self
+            .inner
+            .settings
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Arc::new(snapshot.settings().clone());
+        Ok(snapshot)
     }
 
     /// The identity written to `lease_owner` by this runner's claims.
@@ -255,7 +272,8 @@ impl JobRunner {
         }
     }
 
-    /// Jobs this process may run at once for this database: `jobs.workers_per_db`, and the
+    /// Last-read scheduling share for this database; claims refresh authority before admission.
+    /// Uses `jobs.workers_per_db`, and the
     /// share of `jobs.max_running_per_db` the live workers leave it.
     pub fn slot_limit(&self) -> u32 {
         let settings = self.settings();
@@ -302,10 +320,10 @@ impl JobRunner {
     }
 
     /// The lease each kind of `kinds` is granted, in seconds.
-    fn leases(&self, kinds: &[&'static JobKindDecl]) -> Vec<f64> {
+    fn leases(&self, kinds: &[&'static JobKindDecl], settings: &JobSettings) -> Vec<f64> {
         kinds
             .iter()
-            .map(|k| self.settings().lease_for(k.timeouts).as_secs_f64())
+            .map(|k| settings.lease_for(k.timeouts).as_secs_f64())
             .collect()
     }
 
@@ -319,7 +337,17 @@ impl JobRunner {
     /// short transaction).
     #[doc(hidden)]
     pub async fn claim(&self, limit: u32) -> Result<Vec<ClaimedJob>> {
-        let limit = limit.min(self.settings().claim_batch());
+        let snapshot = self.refresh_settings().await?;
+        let settings = snapshot.settings();
+        let in_use = (settings.workers_per_db() as usize)
+            .saturating_sub(self.inner.db_slots.available_permits());
+        let in_use = u32::try_from(in_use)
+            .map_err(|_| Error::internal("Job slot count exceeds its validated range."))?;
+        let limit = limit.min(settings.claim_batch()).min(
+            settings
+                .per_process_share(self.live_workers())
+                .saturating_sub(in_use),
+        );
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -327,7 +355,7 @@ impl JobRunner {
         if kinds.is_empty() {
             return Ok(Vec::new());
         }
-        let leases = self.leases(&kinds);
+        let leases = self.leases(&kinds, settings);
         self.inner
             .counters
             .claim_statements
@@ -338,12 +366,16 @@ impl JobRunner {
             &leases,
             i64::from(limit),
             self.inner.owner,
+            Arc::clone(&snapshot),
         )
         .await?;
         let wanted = usize::try_from(limit).unwrap_or(usize::MAX);
         if claimed.len() < wanted {
             let rest = i64::try_from(wanted - claimed.len()).unwrap_or(i64::MAX);
-            claimed.extend(self.claim_singletons(&kinds, &leases, rest).await?);
+            claimed.extend(
+                self.claim_singletons(&kinds, &leases, rest, &snapshot)
+                    .await?,
+            );
         }
         self.inner
             .counters
@@ -358,6 +390,7 @@ impl JobRunner {
         kinds: &[&'static JobKindDecl],
         leases: &[f64],
         limit: i64,
+        snapshot: &Arc<super::JobSettingsSnapshot>,
     ) -> Result<Vec<ClaimedJob>> {
         let names: Vec<&str> = kinds.iter().map(|k| k.name).collect();
         let mut tx = self.inner.orm.begin_opts(claim::claim_options()?).await?;
@@ -411,7 +444,7 @@ impl JobRunner {
                         .ok_or_else(|| {
                             Error::internal("a claimed kind is not in the claim list")
                         })?;
-                    claim::decode(row, lease)
+                    claim::decode(row, lease, Arc::clone(snapshot))
                 })
                 .collect::<Result<Vec<_>>>()
         }
@@ -463,7 +496,8 @@ impl JobRunner {
     /// The database's errors.
     #[doc(hidden)]
     pub async fn reap(&self, batch: u32) -> Result<ReapReport> {
-        let settings = self.settings();
+        let snapshot = self.refresh_settings().await?;
+        let settings = snapshot.settings();
         let (only, excluded): (Option<Vec<&str>>, Vec<&str>) = match &self.inner.selection {
             KindSelection::All => (None, self.inner.excluded.clone()),
             KindSelection::Maintenance(kinds) => (
@@ -704,7 +738,7 @@ impl JobRunnerBuilder {
                 Uuid::parse(id.as_str())?
             }
         };
-        let settings = self.orm.job_settings();
+        let settings = self.orm.job_node_settings();
         let process_slots = self
             .process_slots
             .unwrap_or_else(|| Arc::new(Semaphore::new(settings.workers() as usize)));
@@ -719,6 +753,7 @@ impl JobRunnerBuilder {
         };
         let orm_id = self.orm.id();
         let inner = Arc::new(Inner {
+            settings: Mutex::new(Arc::new(self.orm.job_node_settings().clone())),
             orm: self.orm,
             selection: self.selection,
             excluded: self.excluded,

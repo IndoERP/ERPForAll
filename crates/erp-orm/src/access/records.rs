@@ -247,14 +247,19 @@ fn relational_path<'r>(
     Some((head, rest, comodel))
 }
 
-/// The comodel a sub-domain of `field_expr` on `model` is on, when the registry knows it (an
-/// unknown field fails in the optimizer that sees the domain next).
+/// The model a sub-domain of `field_expr` on `model` is on, when the registry knows it (an
+/// unknown field fails in the optimizer that sees the domain next): the comodel of a relational
+/// field, `model` itself for `id` (a hierarchy seed `('id', 'child_of', <domain>)`).
 fn sub_model<'r>(
     registry: &'r erp_registry::Registry,
     model: &ModelSpec,
     field_expr: &str,
 ) -> Option<&'r ModelSpec> {
-    registry.model(model.field(field_expr)?.ty.comodel()?)
+    let field = model.field(field_expr)?;
+    if matches!(field.ty, FieldType::Id) {
+        return Some(registry.model_by_id(model.id));
+    }
+    registry.model(field.ty.comodel()?)
 }
 
 fn bypass_condition(
@@ -576,7 +581,7 @@ impl Transaction {
     /// `Programming`: an unknown model; a model whose `company_access` declares no generated
     /// restriction; a policy answering `None` for one that does; an elevated or `System`
     /// principal; a non-positive id. `Access`: a company outside the principal's companies
-    /// ("Access to unauthorized or invalid companies."); the policy's drift refusal. The
+    /// ("One of the selected companies does not exist or is not one of yours."); the policy's drift refusal. The
     /// statements' errors.
     pub async fn visible_under_company_restriction(
         &mut self,

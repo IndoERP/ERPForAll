@@ -161,7 +161,6 @@ fn startup_limits_reject_zero_out_of_bounds_and_unknowns() {
         "admission.ws_inflight_bytes",
         "ws.message_read_secs",
         "ws.min_bytes_per_sec",
-        "session.touch_interval_secs",
     ] {
         fs::write(&path, format!("{text}[startup_limits]\n\"{name}\"=0\n")).unwrap();
         let error = ServerConfig::load(&path).unwrap_err();
@@ -179,7 +178,6 @@ fn startup_limits_reject_zero_out_of_bounds_and_unknowns() {
         "\"buffers.thread_cache_bytes\"=268435457",
         "\"http.body_read_secs\"=601",
         "\"limits.header_count\"=1001",
-        "\"session.touch_interval_secs\"=3601",
         "\"limits.header_bytes\"=8191",
         "\"assets.memory_bytes\"=16777215",
     ] {
@@ -326,6 +324,18 @@ fn server_configuration_identity_distinguishes_shared_and_node_settings() {
     fs::write(&path, text.replace("127.0.0.1:18069", "127.0.0.1:18070")).unwrap();
     let local = SectionDigest::of(&ServerConfig::load(&path).unwrap()).unwrap();
     assert_eq!(original.digest(), local.digest());
+    fs::write(
+        &path,
+        format!("{text}[auth]\n\"limits.credential_bytes\"=64\n\"throttle.table_entries\"=128\n"),
+    )
+    .unwrap();
+    let auth_local = SectionDigest::of(&ServerConfig::load(&path).unwrap()).unwrap();
+    assert_eq!(
+        original.digest(),
+        auth_local.digest(),
+        "node auth capacity must not become shared policy"
+    );
+
     fs::write(
         &path,
         text.replace("https://erp.example.test", "https://node-b.example.test"),
@@ -702,4 +712,174 @@ fn read_audit_policy_configuration_is_strict_and_additive() {
         error.to_string(),
         "audit_read_policy.user_groups must contain positive qualified group XML IDs without expression syntax (maximum 256 UTF-8 bytes each)"
     );
+}
+
+#[test]
+fn auth_configuration_accepts_operator_options() {
+    let (dir, text) = fixture();
+    let path = dir.path().join("server.toml");
+    fs::write(&path, format!("{text}[auth]\n\"limits.credential_bytes\"=64\n\"throttle.login_burst\"=5\n\"throttle.login_rate_per_sec\"=0.5\n\"throttle.table_entries\"=64\n\"limits.cooldown_hook_deadline_ms\"=20\n\"limits.token_plan_hook_deadline_ms\"=30\n")).unwrap();
+    let auth = ServerConfig::load(&path)
+        .expect("bounded operator auth options must reach server configuration")
+        .auth();
+    assert_eq!(auth.credential_bytes(), 64);
+    assert_eq!(auth.login_burst(), 5);
+    assert_eq!(auth.login_rate_per_sec(), 0.5);
+    assert_eq!(auth.throttle_entries(), 64);
+    assert_eq!(auth.cooldown_hook_deadline().as_millis(), 20);
+    assert_eq!(auth.token_plan_hook_deadline().as_millis(), 30);
+}
+
+#[test]
+fn auth_configuration_rejects_retired_startup_touch_key() {
+    let (dir, text) = fixture();
+    let path = dir.path().join("server.toml");
+    fs::write(
+        &path,
+        format!("{text}[startup_limits]\n\"session.touch_interval_secs\"=60\n"),
+    )
+    .unwrap();
+    let error = ServerConfig::load(&path).unwrap_err();
+    assert!(matches!(
+        error,
+        erp_server::config::ConfigError::RetiredTouchInterval
+    ));
+    assert_eq!(
+        error.to_string(),
+        "startup_limits.session.touch_interval_secs was replaced by ir.config_parameter sessions.touch_interval_seconds"
+    );
+}
+
+#[test]
+fn auth_configuration_refuses_types_bounds_and_unknowns_without_input() {
+    use erp_server::config::ConfigError;
+    let (dir, text) = fixture();
+    let path = dir.path().join("server.toml");
+    for (name, min, max) in [
+        ("limits.credential_bytes", 64, 4096),
+        ("throttle.login_burst", 5, 1000),
+        ("throttle.table_entries", 64, 1_048_576),
+        ("limits.cooldown_hook_deadline_ms", 10, 60_000),
+        ("limits.token_plan_hook_deadline_ms", 10, 60_000),
+    ] {
+        for number in [min, max] {
+            fs::write(&path, format!("{text}[auth]\n\"{name}\"={number}\n")).unwrap();
+            ServerConfig::load(&path).unwrap();
+        }
+        for number in [0, min - 1, max + 1] {
+            fs::write(&path, format!("{text}[auth]\n\"{name}\"={number}\n")).unwrap();
+            let error = ServerConfig::load(&path).unwrap_err();
+            assert!(matches!(error, ConfigError::Auth(_)));
+            assert_eq!(
+                error.to_string(),
+                format!("{name} = {number} is outside {min}..={max}")
+            );
+        }
+        for value in [
+            "'SENTINEL-PRIVATE'",
+            "false",
+            "1.5",
+            "-1",
+            "4294967296",
+            "[]",
+        ] {
+            fs::write(&path, format!("{text}[auth]\n\"{name}\"={value}\n")).unwrap();
+            let error = ServerConfig::load(&path).unwrap_err();
+            assert!(matches!(error, ConfigError::Auth(_)));
+            assert_eq!(
+                error.to_string(),
+                format!("auth {name} must be an unsigned 32-bit integer")
+            );
+        }
+    }
+    for value in ["0.1", "1000", "1000.0"] {
+        fs::write(
+            &path,
+            format!("{text}[auth]\n\"throttle.login_rate_per_sec\"={value}\n"),
+        )
+        .unwrap();
+        ServerConfig::load(&path).unwrap();
+    }
+    for (value, rendered) in [
+        ("0", "0"),
+        ("0.09", "0.09"),
+        ("1001", "1001"),
+        ("inf", "inf"),
+        ("nan", "NaN"),
+    ] {
+        fs::write(
+            &path,
+            format!("{text}[auth]\n\"throttle.login_rate_per_sec\"={value}\n"),
+        )
+        .unwrap();
+        let error = ServerConfig::load(&path).unwrap_err();
+        assert!(matches!(error, ConfigError::Auth(_)));
+        assert_eq!(
+            error.to_string(),
+            format!("throttle.login_rate_per_sec = {rendered} is outside 0.1..=1000")
+        );
+    }
+    for (input, message) in [
+        ("auth='SENTINEL-PRIVATE'\n", "auth must be a table"),
+        (
+            "[auth]\nunknown='SENTINEL-PRIVATE'\n",
+            "auth contains unknown keys",
+        ),
+        (
+            "[auth]\n\"throttle.login_rate_per_sec\"='SENTINEL-PRIVATE'\n",
+            "auth throttle.login_rate_per_sec must be a finite number in 0.1..=1000",
+        ),
+    ] {
+        fs::write(&path, format!("{text}{input}")).unwrap();
+        let error = ServerConfig::load(&path).unwrap_err();
+        assert!(matches!(error, ConfigError::Auth(_)));
+        assert_eq!(error.to_string(), message);
+    }
+    fs::write(&path, &text).unwrap();
+    assert_eq!(
+        ServerConfig::load(&path).unwrap().auth(),
+        erp_security::auth::AuthConfig::DEFAULT
+    );
+}
+
+#[test]
+fn sql_object_role_configuration_is_explicit_and_bounded() {
+    let (dir, text) = fixture();
+    let path = dir.path().join("server.toml");
+    fs::write(&path, &text).unwrap();
+    let config = ServerConfig::load(&path).unwrap();
+    assert_eq!(config.sql_object_definer_role(), None);
+    assert_eq!(config.sql_object_maintenance_role(), None);
+    fs::write(
+        &path,
+        format!(
+            "{text}sql_object_definer_role='definer \"é'\nsql_object_maintenance_role='maint'\n"
+        ),
+    )
+    .unwrap();
+    let config = ServerConfig::load(&path).unwrap();
+    assert_eq!(config.sql_object_definer_role(), Some("definer \"é"));
+    assert_eq!(config.sql_object_maintenance_role(), Some("maint"));
+    for key in ["sql_object_definer_role", "sql_object_maintenance_role"] {
+        for value in [
+            "''".to_owned(),
+            format!("'{}'", "é".repeat(32)),
+            "'runtime'".to_owned(),
+            "42".to_owned(),
+            "\"a\\u0000b\"".to_owned(),
+        ] {
+            fs::write(&path, format!("{text}{key}={value}\n")).unwrap();
+            let error = ServerConfig::load(&path).unwrap_err();
+            assert!(
+                matches!(error, erp_server::config::ConfigError::SqlObjectRole(_)),
+                "{error}"
+            );
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "server setting {key} requires a distinct PostgreSQL role name of 1..=63 bytes without NUL"
+                )
+            );
+        }
+    }
 }

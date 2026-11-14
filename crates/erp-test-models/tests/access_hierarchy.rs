@@ -962,3 +962,127 @@ async fn a_dotted_path_in_a_rule_does_not_apply_the_comodel_rule() {
     }
     h.cleanup().await.unwrap();
 }
+
+/// A rule that inlines another model's rule through the `access` operator, where that rule
+/// starts a `child_of` from a name: the start set is found by a search, so a record decision
+/// made with it is not remembered. Renaming the start organisation in the same transaction
+/// changes the next decision (review S2, cycle 12).
+#[tokio::test]
+async fn an_inlined_rule_with_a_searched_start_set_is_never_remembered() {
+    let policy = DomainPolicy::builder(Otherwise::Allow)
+        .rule(DOC, Operation::Read, cond("org_id", Operator::ChildOf, "A"))
+        .rule(
+            FOLDER,
+            Operation::Read,
+            cond("main_doc_id", Operator::Access, "read"),
+        )
+        .build()
+        .unwrap();
+    let h = harness(policy).await;
+    let o = orgs(&h).await;
+    let f = folders(&h, &o).await;
+    let mut tx = begin_as(&h, DEMO, &[]).await;
+    let folder_c = records(&tx, FOLDER, &f.by_doc[2..3]);
+    folder_c
+        .check_access(&mut tx, Operation::Read)
+        .await
+        .unwrap();
+    // A is renamed: the rule's start set is empty now, C's document and its folder are hidden
+    records(&tx, ORG, &[o.a])
+        .sudo(true)
+        .write_values(&mut tx, &row(&[("name", Value::str("Q"))]))
+        .await
+        .unwrap();
+    let err = records(&tx, DOC, &o.docs[2..3])
+        .check_access(&mut tx, Operation::Read)
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Access, "the document: {err}");
+    let err = folder_c
+        .check_access(&mut tx, Operation::Read)
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Access, "the folder: {err}");
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+/// Where nothing resolves hierarchy conditions beforehand (`optimize_domain_in`, the public
+/// optimizer), an inlined rule's `parent_of` still reaches FULL unresolved and is refused,
+/// naming the model and field (review S4, cycle 12).
+#[tokio::test]
+async fn an_unresolved_hierarchy_condition_is_refused_by_model_and_field() {
+    let h = harness(rule(DOC, doc_company_rule())).await;
+    let o = orgs(&h).await;
+    let tx = begin_as(&h, DEMO, &[o.c]).await;
+    let err = tx
+        .env()
+        .records(FOLDER)
+        .unwrap()
+        .optimize_domain_in(
+            &tx,
+            &cond("main_doc_id", Operator::Access, "read"),
+            erp_sdk::OptimizationLevel::Full,
+            None,
+        )
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Programming, "{err}");
+    assert_eq!(
+        err.message(),
+        "the hierarchy condition ('org_id', 'parent_of', company_ids) on test_access.org_doc.org_id \
+         reached FULL optimization unresolved"
+    );
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+/// The folders a case admits, from the fixture.
+type ExpectedFolders = fn(&Folders) -> BTreeSet<i64>;
+
+/// A negative operator on a rule path and a `not any` in a rule traverse as the rule's own
+/// (`any!` / `not any!`): the comodel's rule does not apply inside them (review N5, cycle 12).
+/// `main_doc_id.name not ilike 'of C'` admits the folders whose main document is not C's, also
+/// those whose document the user cannot read, and none without a main document;
+/// `main_doc_id not any (name ilike 'of D')` admits every folder but D's, those without a main
+/// document included.
+#[tokio::test]
+async fn negative_rule_paths_and_not_any_in_a_rule_bypass_the_comodel_rule() {
+    let cases: [(Domain, ExpectedFolders, &str); 2] = [
+        (
+            cond("main_doc_id.name", Operator::NotILike, "of C"),
+            |f| by_doc(f, &[0, 1, 3, 4]),
+            "negative path",
+        ),
+        (
+            cond(
+                "main_doc_id",
+                Operator::NotAny,
+                cond("name", Operator::ILike, "of D"),
+            ),
+            |f| &f.all() - &by_doc(f, &[3]),
+            "not any",
+        ),
+    ];
+    for (folder_rule, expected, label) in cases {
+        let policy = DomainPolicy::builder(Otherwise::Allow)
+            .rule(DOC, Operation::Read, doc_company_rule())
+            .rule(FOLDER, Operation::Read, folder_rule)
+            .build()
+            .unwrap();
+        let h = harness(policy).await;
+        let o = orgs(&h).await;
+        let f = folders(&h, &o).await;
+        for (uid, visible, who) in USERS {
+            let company = if uid == DEMO { o.c } else { o.a };
+            let mut tx = begin_as(&h, uid, &[company]).await;
+            assert!(!visible.contains(&3), "{who}: D's document is hidden");
+            assert_eq!(
+                search(&mut tx, FOLDER).await,
+                expected(&f),
+                "{label}, {who}"
+            );
+            drop(tx);
+        }
+        h.cleanup().await.unwrap();
+    }
+}

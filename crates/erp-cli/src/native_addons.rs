@@ -6,8 +6,8 @@ use erp_registry::AddonDescriptor;
 mod names;
 pub use names::{DECLARED_ONLY, LINKED, NOT_LINKED};
 
-/// The descriptors of [`LINKED`], in the same order; every composition site passes these to
-/// `ModuleSystem::builder(..).code(..)`.
+/// The descriptors of [`LINKED`], in the same order. Every native composition site passes
+/// these and [`SQL_MANIFESTS`] to the module-system builder.
 pub static DESCRIPTORS: &[&AddonDescriptor] = &[
     &erp_addon_base::ADDON,
     &erp_addon_barcodes::ADDON,
@@ -24,11 +24,6 @@ pub static DESCRIPTORS: &[&AddonDescriptor] = &[
     &erp_addon_stock::ADDON,
 ];
 
-/// Why an addon of `addons/` with a Rust crate is not linked, if it is in [`NOT_LINKED`].
-#[must_use]
-pub fn not_linked_reason(name: &str) -> Option<&'static str> {
-    NOT_LINKED
-        .iter()
-        .find(|(listed, _)| *listed == name)
-        .map(|(_, reason)| *reason)
-}
+/// Expected SQL registrations of native addons; independent of the linked declarations.
+pub static SQL_MANIFESTS: &[&erp_registry::SqlObjectManifest] =
+    &[&erp_addon_stock::schema_guards::MANIFEST];

@@ -13,7 +13,10 @@
 //!   is refused with a `Validation` error naming the key and the type (round 1 decision 5).
 
 use erp_sdk::access::{AccessCtx, AccessSuper, ElevationKind, Operation};
-use erp_sdk::auth::{CACHE_NAME, DatabaseSecret, keys, random_uuid_text, validate_setting_in};
+use erp_sdk::auth::{
+    CACHE_NAME, DatabaseSecret, SessionPolicy, Zeroizing, keys, random_uuid_text,
+    validate_setting_in,
+};
 use erp_sdk::prelude::*;
 
 pub const DEFAULT_KEYS: [&str; 6] = [
@@ -227,18 +230,124 @@ fn refuse_attachment_location(key: &str) -> Result<()> {
     Ok(())
 }
 
+// Any parameter may be renamed into a policy key, so existing-row mutations share this lock.
+async fn lock_parameter_changes(tx: &mut Transaction) -> Result<()> {
+    tx.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended('erp.auth.session-policy', 0))",
+        &[],
+    )
+    .await?;
+    Ok(())
+}
+
+async fn parameter_rows_for_change(
+    this: &RecordSet<IrConfigParameter>,
+    tx: &mut Transaction,
+) -> Result<Vec<(String, Zeroizing<Option<String>>)>> {
+    this.as_records().check_access(tx, Operation::Read).await?;
+    lock_parameter_changes(tx).await?;
+    tx.flush_model(this.as_records().model_id()).await?;
+    let rows = tx.query("SELECT key,value FROM ir_config_parameter WHERE id=ANY($1::int8[]) ORDER BY id FOR UPDATE", &[&this.as_records().ids()]).await?;
+    rows.into_iter()
+        .map(|row| {
+            let key = row.try_get(0).map_err(|e| {
+                Error::db("invalid parameter key during policy validation").with_source(e)
+            })?;
+            let value = row.try_get(1).map_err(|e| {
+                Error::db("invalid parameter value during policy validation").with_source(e)
+            })?;
+            Ok((key, Zeroizing::new(value)))
+        })
+        .collect()
+}
+
+/// Serialize related parameter changes across nodes, including absent rows (A1).
+/// Validate the proposed final state before mutating any parameter or cache generation.
+async fn check_session_policy_changes(
+    tx: &mut Transaction,
+    changes: Vec<(String, Option<String>)>,
+) -> Result<()> {
+    if changes.is_empty() {
+        return Ok(());
+    }
+    tx.env()
+        .records("ir.config_parameter")?
+        .check_access(tx, Operation::Read)
+        .await?;
+    lock_parameter_changes(tx).await?;
+    // A lock alone does not advance a REPEATABLE READ snapshot. Version the existing
+    // protected default row without changing its value: overlapping old snapshots receive
+    // PostgreSQL's serialization refusal instead of admitting write skew on absent keys.
+    let fence = tx
+        .query(
+            "UPDATE ir_config_parameter SET value=value WHERE key='database.uuid' RETURNING id",
+            &[],
+        )
+        .await?;
+    if fence.len() != 1 {
+        return Err(Error::programming(
+            "session policy requires initialized database.uuid",
+        ));
+    }
+    let model = tx
+        .env()
+        .registry()
+        .model_id("ir.config_parameter")
+        .ok_or_else(|| Error::programming("session policy requires ir.config_parameter"))?;
+    tx.flush_model(model).await?;
+    let rows = tx
+        .query(
+            "SELECT key,value,id::int8 FROM ir_config_parameter WHERE key=ANY($1::text[]) ORDER BY key",
+            &[&&keys::SESSION_POLICY[..]],
+        )
+        .await?;
+    let ids = rows
+        .iter()
+        .map(|row| {
+            row.try_get::<_, i64>(2)
+                .map_err(|e| Error::db("invalid session policy row identity").with_source(e))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    tx.env()
+        .records("ir.config_parameter")?
+        .browse(ids)?
+        .check_access(tx, Operation::Read)
+        .await?;
+    let mut proposed = std::collections::HashMap::new();
+    for row in rows {
+        let key: String = row
+            .try_get(0)
+            .map_err(|e| Error::db("invalid session policy key").with_source(e))?;
+        let value: Option<String> = row
+            .try_get(1)
+            .map_err(|e| Error::db("invalid session policy value").with_source(e))?;
+        proposed.insert(key, value);
+    }
+    for (key, value) in changes {
+        proposed.insert(key, value);
+    }
+    SessionPolicy::from_rows(&proposed).map(drop)
+}
+
 /// Check the settings of authentication among `vals_list` before they are created (a hashing
 /// memory value also against the database's hashing pool, security review round 2 M1).
-fn check_created_settings(tx: &Transaction, vals_list: &[RawVals]) -> Result<()> {
+async fn check_created_settings(tx: &mut Transaction, vals_list: &[RawVals]) -> Result<()> {
     let env = tx.env();
+    let mut changes = Vec::new();
     for vals in vals_list {
         if let Some(Some(key)) = written(vals, "key")? {
             refuse_attachment_location(key)?;
             validate_setting_in(&env, key, written(vals, "value")?.flatten())?;
             crate::attachments::settings::validate(key, written(vals, "value")?.flatten())?;
+            if keys::SESSION_POLICY.contains(&key) {
+                changes.push((
+                    key.to_owned(),
+                    written(vals, "value")?.flatten().map(str::to_owned),
+                ));
+            }
         }
     }
-    Ok(())
+    check_session_policy_changes(tx, changes).await
 }
 
 /// Check the settings of authentication `vals` would leave on the records of `this` (a new value,
@@ -256,28 +365,28 @@ async fn check_written_settings(
     if new_key.is_none() && new_value.is_none() {
         return Ok(());
     }
-    for rec in this.iter() {
-        // the first read prefetches the set
-        let key: Option<Arc<str>> = match new_key {
-            Some(key) => key.map(Arc::from),
-            None => rec.get(tx, IrConfigParameter::KEY).await?,
-        };
-        if let Some(key) = &key {
-            refuse_attachment_location(key)?;
+    let mut changes = Vec::new();
+    for (old_key, stored_value) in parameter_rows_for_change(this, tx).await? {
+        if keys::SESSION_POLICY.contains(&old_key.as_str())
+            && new_key.is_some_and(|key| key != Some(old_key.as_str()))
+        {
+            changes.push((old_key.clone(), None));
         }
-        let Some(key) =
-            key.filter(|k| keys::ALL.contains(&&**k) || crate::attachments::settings::contains(k))
-        else {
+        let Some(key) = new_key.unwrap_or(Some(old_key.as_str())) else {
             continue;
         };
-        let value: Option<Arc<str>> = match new_value {
-            Some(value) => value.map(Arc::from),
-            None => rec.get(tx, IrConfigParameter::VALUE).await?,
-        };
-        validate_setting_in(&tx.env(), &key, value.as_deref())?;
-        crate::attachments::settings::validate(&key, value.as_deref())?;
+        refuse_attachment_location(key)?;
+        if !keys::ALL.contains(&key) && !crate::attachments::settings::contains(key) {
+            continue;
+        }
+        let value = new_value.unwrap_or(stored_value.as_deref());
+        validate_setting_in(&tx.env(), key, value)?;
+        crate::attachments::settings::validate(key, value)?;
+        if keys::SESSION_POLICY.contains(&key) {
+            changes.push((key.to_owned(), value.map(str::to_owned)));
+        }
     }
-    Ok(())
+    check_session_policy_changes(tx, changes).await
 }
 
 /// The keys of `this` that are default keys, sorted.
@@ -289,7 +398,8 @@ async fn default_keys_of(
     for rec in this.iter() {
         // the first read prefetches the key of every record of the set
         if let Some(key) = rec.get(tx, IrConfigParameter::KEY).await?
-            && DEFAULT_KEYS.contains(&&*key)
+            && (DEFAULT_KEYS.contains(&&*key)
+                || &*key == crate::attachments::settings::MAX_FILE_KEY)
         {
             found.push(key.to_string());
         }
@@ -435,8 +545,29 @@ impl IrConfigParameter {
         vals_list: Vec<RawVals>,
         sup: Super,
     ) -> Result<Records> {
-        check_created_settings(tx, &vals_list)?;
-        let created: Records = sup.call(tx, this.as_records(), (vals_list,)).await?;
+        this.as_records()
+            .check_access(tx, Operation::Create)
+            .await?;
+        let mut managed = false;
+        for vals in &vals_list {
+            managed |=
+                written(vals, "key")?.flatten() == Some(crate::attachments::settings::MAX_FILE_KEY);
+        }
+        let created: Records = if managed {
+            tx.savepoint(async |tx| {
+                // Match managed writes: acquire the settings scope before the auth-policy
+                // lock, and roll back the entire mixed batch if either validator refuses it.
+                let edit = crate::ir_config_setting::begin_parameter_edit(tx).await?;
+                check_created_settings(tx, &vals_list).await?;
+                let rows: Records = sup.call(tx, this.as_records(), (vals_list,)).await?;
+                crate::ir_config_setting::finish_parameter_edit(tx, edit).await?;
+                Ok(rows)
+            })
+            .await?
+        } else {
+            check_created_settings(tx, &vals_list).await?;
+            sup.call(tx, this.as_records(), (vals_list,)).await?
+        };
         tx.invalidate_ormcache(CACHE_NAME);
         Ok(created)
     }
@@ -449,6 +580,7 @@ impl IrConfigParameter {
         vals: RawVals,
         sup: Super,
     ) -> Result<()> {
+        this.as_records().check_access(tx, Operation::Write).await?;
         if vals.contains("key") {
             let illegal = default_keys_of(this, tx).await?;
             if !illegal.is_empty() {
@@ -458,8 +590,28 @@ impl IrConfigParameter {
                 )));
             }
         }
-        check_written_settings(this, tx, &vals).await?;
-        sup.call(tx, this.as_records(), (vals,)).await?;
+        let key = crate::attachments::settings::MAX_FILE_KEY;
+        let renames_to_managed = written(&vals, "key")?.flatten() == Some(key);
+        let ids = this.as_records().ids();
+        let rows = tx.query("SELECT EXISTS(SELECT 1 FROM ir_config_parameter WHERE id=ANY($1::int8[]) AND key=$2)", &[&ids,&key]).await?;
+        let row = rows
+            .first()
+            .ok_or_else(|| Error::db("Missing managed parameter result."))?;
+        let managed: bool = row
+            .try_get(0)
+            .map_err(|e| Error::db(format!("managed parameter: {e}")))?;
+        if managed || renames_to_managed {
+            tx.savepoint(async |tx| {
+                let edit = crate::ir_config_setting::begin_parameter_edit(tx).await?;
+                check_written_settings(this, tx, &vals).await?;
+                sup.call(tx, this.as_records(), (vals,)).await?;
+                crate::ir_config_setting::finish_parameter_edit(tx, edit).await
+            })
+            .await?;
+        } else {
+            check_written_settings(this, tx, &vals).await?;
+            sup.call(tx, this.as_records(), (vals,)).await?;
+        }
         tx.invalidate_ormcache(CACHE_NAME);
         Ok(())
     }
@@ -471,11 +623,21 @@ impl IrConfigParameter {
         tx: &mut Transaction,
         sup: Super,
     ) -> Result<()> {
+        this.as_records()
+            .check_access(tx, Operation::Unlink)
+            .await?;
         if let Some(key) = default_keys_of(this, tx).await?.first() {
             return Err(Error::validation(format!(
                 "You cannot delete the {key} record."
             )));
         }
+        let mut changes = Vec::new();
+        for (key, _) in parameter_rows_for_change(this, tx).await? {
+            if keys::SESSION_POLICY.contains(&key.as_str()) {
+                changes.push((key, None));
+            }
+        }
+        check_session_policy_changes(tx, changes).await?;
         sup.call(tx, this.as_records(), ()).await?;
         tx.invalidate_ormcache(CACHE_NAME);
         Ok(())
