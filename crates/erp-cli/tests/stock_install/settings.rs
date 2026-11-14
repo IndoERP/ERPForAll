@@ -671,3 +671,73 @@ fn inventory_settings_upgrade_preserves_scoped_values_and_actions() {
         }
     });
 }
+
+#[test]
+fn stock_unit_policy_is_in_system_parameters_not_on_the_settings_page() {
+    run(async {
+        let db = TestDb::create().await.unwrap();
+        let orm = install(&db).await;
+        let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+        let env = tx.env();
+        let description = describe(&env, &mut tx, SettingsScope::Global {})
+            .await
+            .unwrap();
+        let json = serde_json::to_value(&description).unwrap();
+        assert!(
+            !json.to_string().contains("stock.quant_"),
+            "no policy key is described on the Settings page"
+        );
+        let rows = tx
+            .query(
+                "SELECT key, value FROM ir_config_parameter WHERE key LIKE 'stock.quant\\_%' ORDER BY key",
+                &[],
+            )
+            .await
+            .unwrap();
+        let stored: BTreeMap<String, String> =
+            rows.iter().map(|row| (row.get(0), row.get(1))).collect();
+        assert_eq!(
+            stored,
+            BTreeMap::from([
+                (
+                    "stock.quant_idle_transaction_timeout_ms".to_owned(),
+                    "60000".to_owned()
+                ),
+                ("stock.quant_lock_timeout_ms".into(), "1000".into()),
+                ("stock.quant_max_attempts".into(), "5".into()),
+                ("stock.quant_retry_base_ms".into(), "50".into()),
+                ("stock.quant_retry_cap_ms".into(), "2000".into()),
+                ("stock.quant_tcp_keepalives_count".into(), "3".into()),
+                ("stock.quant_tcp_keepalives_idle_s".into(), "30".into()),
+                ("stock.quant_tcp_keepalives_interval_s".into(), "10".into()),
+            ])
+        );
+        tx.rollback().await.unwrap();
+        drop(tx);
+        // Even the superuser gets the unknown-key refusal from the Settings service.
+        for key in stored.keys() {
+            let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+            let env = tx.env();
+            let read = read_values(&env, &mut tx, SettingsScope::Global {}, vec![key.clone()])
+                .await
+                .unwrap_err();
+            let write = write_values(
+                &env,
+                &mut tx,
+                SettingsScope::Global {},
+                "0".into(),
+                vec![(key.clone(), Value::Int(20))],
+            )
+            .await
+            .unwrap_err();
+            for error in [read, write] {
+                assert_eq!(error.kind(), ErrorKind::Access);
+                assert_eq!(
+                    error.message(),
+                    format!("Setting {key} is unavailable or access is denied.")
+                );
+            }
+            tx.rollback().await.unwrap();
+        }
+    });
+}

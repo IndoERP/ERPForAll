@@ -50,6 +50,8 @@ export function lineCommands(field: Field, value: unknown, initial: unknown): un
     if (changed.length) commands.push([1, id, lineVals(subview, line, changed)]);
   }
   for (const line of lines(initial, "stored one2many lines")) {
+    // a new form's default lines were never stored: nothing to delete
+    if (line["id"] === undefined) continue;
     const id = integer(line["id"], "line id");
     if (!kept.has(id)) commands.push([2, id, 0]);
   }
@@ -269,7 +271,8 @@ export class RecordState {
     for (const [key, value] of Object.entries(update)) {
       if (!this.fields.some(field => field.name === key)) throw new ClientError("server", "Onchange returned an unrequested field.");
       const field = this.fields.find(candidate => candidate.name === key)!;
-      const resolved = field.kind === "many2many" ? relationDiff(this.values[key], value) : field.kind === "one2many" ? lineDiff(this.values[key], value) : value;
+      const previous = name.length === 0 ? undefined : this.values[key];
+      const resolved = field.kind === "many2many" ? relationDiff(previous, value) : field.kind === "one2many" ? lineDiff(previous, value) : value;
       this.values = { ...this.values, [key]: resolved };
       if (name) this.changes.add(key);
     }

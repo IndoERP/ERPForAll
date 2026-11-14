@@ -35,6 +35,17 @@ struct FposCompany {
     #[field(many2one, comodel = "account.fiscal.position", check_company = true)]
     pub account_purchase_receipt_fiscal_position_id: Option<RecId>,
 }
+/// Refusal for a supplied fence value: superuser mode skips the field mask, so account's company
+/// create and write overrides refuse the column by name. Only `validation::fence` moves it, by SQL.
+pub(crate) const FENCE_REFUSED: &str =
+    "fpos_revision is internal to fiscal position writes and cannot be set.";
+/// Called by account's company create and write overrides before any mutation (A1).
+pub(crate) fn reject_fence_value(vals: &RawVals) -> Result<()> {
+    if vals.contains("fpos_revision") {
+        return Err(Error::validation(FENCE_REFUSED));
+    }
+    Ok(())
+}
 #[methods(ResCompany, addon = "account")]
 impl FposCompany {
     #[field_access]

@@ -55,26 +55,23 @@ pub(super) async fn complete(
             }
         }
     }
-    if tax {
-        for (field, document) in [
-            ("invoice_repartition_line_ids", "invoice"),
-            ("refund_repartition_line_ids", "refund"),
-        ] {
-            if names.iter().any(|n| n == field) && !values.contains_key(field) {
-                values.insert(
-                    field.to_owned(),
-                    Value::list(["base", "tax"].into_iter().map(|kind| {
-                        Command::create(
-                            RawVals::new()
-                                .set_cell("document_type", Cell::Str(document.into()))
-                                .set_cell("repartition_type", Cell::Str(kind.into()))
-                                // the field default, proposed explicitly: the form checks required line fields
-                                .set_cell("factor_percent", Cell::Decimal(Decimal::from(100))),
-                        )
-                        .to_value()
-                    })),
-                );
-            }
+    let distributions: Vec<_> = [
+        ("invoice_repartition_line_ids", "invoice"),
+        ("refund_repartition_line_ids", "refund"),
+    ]
+    .into_iter()
+    .filter(|(field, _)| tax && names.iter().any(|n| n == field) && !values.contains_key(*field))
+    .collect();
+    if !distributions.is_empty() {
+        // the line's declared percentage, proposed explicitly: the form checks required line fields
+        let lines = model.env().records("account.tax.repartition.line")?;
+        let line = lines.vals_from_values(&lines.default_get(tx, &["factor_percent"]).await?)?;
+        for (field, document) in distributions {
+            let commands = super::repartition::default_lines(document, &line);
+            values.insert(
+                field.to_owned(),
+                Value::list(commands.iter().map(Command::to_value)),
+            );
         }
     }
     values.retain(|name, _| names.contains(name));

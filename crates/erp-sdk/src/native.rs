@@ -27,6 +27,10 @@ pub mod sql_objects {
 /// Typed native settings declarations; lifecycle composition binds addon ownership.
 pub mod settings;
 
+/// Declared technical system parameters: registration ([`crate::system_parameters!`]) and typed
+/// reads limited to the caller's dependency closure.
+pub mod params;
+
 /// The durable job queue: declare job kinds, enqueue jobs inside the business
 /// transaction, write handlers. The `System` principal is not
 /// part of this surface: a kind runs as the principal that enqueued it, and the registry refuses
@@ -411,8 +415,12 @@ pub mod auth {
     pub use erp_security::auth::apikey_store::{
         IssueRequest, IssuedApiKey, IssuedSecret, KeyKind, KeyScope, issue,
     };
+    pub use erp_security::auth::password::limits as hash_limits;
     pub use erp_security::auth::secret::{DatabaseSecret, random_uuid_text};
-    pub use erp_security::auth::settings::{CACHE_NAME, SessionPolicy, keys};
+    pub use erp_security::auth::settings::{
+        CACHE_NAME, COOLDOWN_AFTER_FALLBACK, COOLDOWN_DURATION_FALLBACK, MAX_INACTIVITY_DEFAULT,
+        MAX_LIFETIME_DEFAULT, SessionPolicy, keys,
+    };
     pub use erp_security::auth::{
         ACCESS_DENIED, AuthInfo, AuthMethod, CheckEnv, Credential, EndReason, EndedSession,
         HashParams, HashPool, LoginCooldownContext, LoginCooldownPolicy, LoginDomain, LoginLookup,

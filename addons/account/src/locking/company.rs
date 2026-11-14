@@ -201,6 +201,7 @@ impl AccountLockPolicy {
     ) -> Result<()> {
         this.as_records().check_access(tx, Operation::Write).await?;
         erp_sdk::__private::base_check_write_fields(tx, this.as_records(), &vals)?;
+        crate::fpos::reject_fence_value(&vals)?;
         let configuration =
             crate::company::validation::prepare_write(this.as_records(), tx, &vals).await?;
         let patch = patch_from(&vals)?;
@@ -251,8 +252,12 @@ impl AccountLockPolicy {
                  without lock dates, then change them through the lock policy."
             )));
         }
+        if context.contains("default_fpos_revision") {
+            return Err(Error::validation(crate::fpos::FENCE_REFUSED));
+        }
         for vals in &mut vals_list {
             erp_sdk::__private::base_check_write_fields(tx, this.as_records(), vals)?;
+            crate::fpos::reject_fence_value(vals)?;
             crate::company::validation::prepare_create(this.as_records(), tx, vals).await?;
             let patch = patch_from(vals)?;
             if patch.dates.iter().any(|d| matches!(d, Some(Some(_)))) {

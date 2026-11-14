@@ -183,6 +183,40 @@ async fn default_keys_cannot_be_renamed_or_deleted() {
 }
 
 #[tokio::test]
+async fn declared_keys_cannot_be_renamed_or_deleted_even_in_superuser_mode() {
+    let h = harness(false).await;
+    for key in [
+        "sessions.touch_interval_seconds",
+        "base.partition_upkeep_interval_secs",
+    ] {
+        let mut tx = h.begin().await.unwrap();
+        sudo_set(&mut tx, key, Some("600")).await.unwrap();
+        let row = row_of(&mut tx, key).await;
+        let e = row.unlink(&mut tx).await.unwrap_err();
+        assert_eq!(
+            (e.kind(), e.message()),
+            (
+                ErrorKind::Validation,
+                format!("You cannot delete the {key} record.").as_str()
+            )
+        );
+        let e = row
+            .write_values(&mut tx, &map(&[("key", s("integrator.renamed"))]))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.kind(), e.message()),
+            (
+                ErrorKind::Validation,
+                format!("You cannot rename config parameters with keys {key}").as_str()
+            )
+        );
+        assert_eq!(stored(&mut tx, key).await, Some(Some("600".to_owned())));
+        tx.rollback().await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn typed_str() {
     let h = harness(false).await;
     let mut tx = h.begin().await.unwrap();
@@ -470,6 +504,7 @@ async fn database_secret_is_hidden_outside_superuser_mode() {
         keys.push(rec.value(&mut tx, "key").await.unwrap());
     }
     assert!(!keys.contains(&Value::str("database.secret")), "{keys:?}");
+    assert!(!keys.contains(&Value::str("database.uuid")), "{keys:?}");
     for result in [
         get_str(&mut tx, "database.secret", None).await,
         set_str(&mut tx, "database.secret", Some("mine")).await,
@@ -483,7 +518,8 @@ async fn database_secret_is_hidden_outside_superuser_mode() {
         .search(&mut tx, &Domain::TRUE)
         .await
         .unwrap();
-    assert_eq!(all.len(), visible.len() + 1, "superuser mode sees it");
+    // `database.secret` and `database.uuid`
+    assert_eq!(all.len(), visible.len() + 2, "superuser mode sees them");
     tx.rollback().await.unwrap();
 }
 

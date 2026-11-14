@@ -24,6 +24,7 @@ access_server_actions_system,Read server actions,base.model_ir_actions_server,ba
 access_client_actions_system,Read client actions,base.model_ir_actions_client,base.group_system,r,
 access_url_actions_system,Read URL actions,base.model_ir_actions_act_url,base.group_system,r,
 access_defaults_system,Read user-defined defaults,base.model_ir_default,base.group_system,r,
+access_config_parameter_system,Manage system parameters,base.model_ir_config_parameter,base.group_system,crud,
 access_partner_internal,Read contacts,base.model_res_partner,base.group_user,r,
 access_company_internal,Read allowed companies,base.model_res_company,base.group_user,r,"[('id', 'in', company_ids)]"
 access_currency_internal,Read currencies,base.model_res_currency,base.group_user,r,

@@ -404,6 +404,7 @@ pub const MANIFEST: &[ModelCase] = &[
     ir("ir.model.fields"),
     ir("ir.model.fields.selection"),
     ir("ir.model.relation"),
+    ir("ir.config_parameter"),
     ir("ir.module.module"),
     ir("ir.sequence"),
     ir("ir.sequence.date_range"),
@@ -418,7 +419,6 @@ pub const MANIFEST: &[ModelCase] = &[
     mail("mail.scheduled.message"),
     // models without an access row, and transients
     service("ir.capability", "base"),
-    service("ir.config_parameter", "base"),
     service("ir.config.setting.scope", "base"),
     service("ir.config.setting.value", "base"),
     service("ir.cron", "base"),

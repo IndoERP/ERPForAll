@@ -4,8 +4,6 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
-use erp_addon_base::ir_config_setting::read_values;
-use erp_sdk::views::wire::{SettingValue, SettingsScope};
 use erp_sdk::{
     BeginOptions, Context, Error, ErrorKind, OperationIdentity, Orm, PrincipalHint, Result,
     RetryPolicy, RunOptions, Transaction, require_top_level_unit,
@@ -116,37 +114,17 @@ impl Policy {
         let mut tx = orm
             .begin_opts(unit.begin().read_only("stock.quant_unit.policy"))
             .await?;
-        let env = tx.env();
-        let snapshot = read_values(
-            &env,
-            &mut tx,
-            SettingsScope::Global {},
-            QUANT_KEYS.iter().map(|key| (*key).to_owned()).collect(),
-        )
-        .await?;
-        // Settings validates declared domains, groups and access in one snapshot. Missing or
-        // malformed cells are errors, not a second source of defaults.
+        // Declared parameters: bounds and kind are checked on every write and again
+        // on this read; invalid stored text is an error naming the key, never a default.
         let mut values = [0_u64; 8];
         for (index, key) in QUANT_KEYS.iter().enumerate() {
-            let entry = snapshot
-                .values
-                .iter()
-                .find(|entry| entry.key == *key)
-                .ok_or_else(|| Error::programming(format!("Stock unit policy omitted {key}.")))?;
-            let SettingValue::Integer(value) = entry.value else {
-                return Err(Error::validation(format!(
-                    "{key} requires a positive whole number."
-                )));
-            };
-            let value = u64::try_from(value).map_err(|_| {
-                Error::validation(format!("{key} requires a positive whole number."))
-            })?;
-            if value == 0 {
-                return Err(Error::validation(format!(
-                    "{key} requires a positive whole number."
-                )));
-            }
-            values[index] = value;
+            let value = erp_sdk::params::get_int(&mut tx, &crate::ADDON, key).await?;
+            values[index] = u64::try_from(value)
+                .ok()
+                .filter(|value| *value > 0)
+                .ok_or_else(|| {
+                    Error::validation(format!("{key} requires a positive whole number."))
+                })?;
         }
         let attempts = u32::try_from(values[1])
             .map_err(|_| Error::validation("stock.quant_max_attempts is outside its bound."))?;
@@ -182,7 +160,7 @@ impl Policy {
 /// This top-level native entry refuses an enclosing ORM/RPC unit. It does not implement durable
 /// idempotency and must not run the separate, non-retrying negative-stock policy unit.
 /// # Errors
-/// Settings/access/validation failures propagate. Eligible contention retries the whole callback,
+/// Parameter/validation failures propagate. Eligible contention retries the whole callback,
 /// then returns a Lock error sourced by [`QuantRetryExhausted`]. Uncertain commit outcomes and
 /// all non-contention errors remain terminal and preserve their original kind and diagnostic.
 pub async fn run_quant_unit<T, F>(orm: &Orm, unit: QuantUnit, mut work: F) -> Result<T>

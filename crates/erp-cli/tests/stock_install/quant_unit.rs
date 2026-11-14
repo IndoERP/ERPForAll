@@ -134,29 +134,31 @@ fn stock_runner_refuses_outer_transaction_before_policy_or_work() {
     });
 }
 
+// The stock unit policy is a set of declared system parameters: written through
+// `ir.config_parameter.set_int`, the path of the System Parameters screen.
+async fn set_parameter(
+    tx: &mut erp_orm::Transaction,
+    key: &str,
+    value: i64,
+) -> erp_sdk::Result<i64> {
+    let params = tx.env().records("ir.config_parameter")?;
+    params
+        .call::<(String, Option<i64>), i64>(tx, "set_int", (key.to_owned(), Some(value)))
+        .await
+}
+
+async fn get_parameter(tx: &mut erp_orm::Transaction, key: &str) -> erp_sdk::Result<i64> {
+    let params = tx.env().records("ir.config_parameter")?;
+    params
+        .call::<(String, Option<i64>), i64>(tx, "get_int", (key.to_owned(), None))
+        .await
+}
+
 async fn policy(orm: &Orm, values: Vec<(&str, i64)>) {
     let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
-    let env = tx.env();
-    let snapshot = read_values(
-        &env,
-        &mut tx,
-        SettingsScope::Global {},
-        vec!["stock.quant_max_attempts".into()],
-    )
-    .await
-    .unwrap();
-    write_values(
-        &env,
-        &mut tx,
-        SettingsScope::Global {},
-        snapshot.revision,
-        values
-            .into_iter()
-            .map(|(key, value)| (key.to_owned(), Value::Int(value)))
-            .collect(),
-    )
-    .await
-    .unwrap();
+    for (key, value) in values {
+        set_parameter(&mut tx, key, value).await.unwrap();
+    }
     tx.commit().await.unwrap();
 }
 
@@ -422,30 +424,49 @@ fn policy_access_validation_and_work_principal() {
         let stock_user = erp_orm::UserId::new(actors[2]).unwrap();
         let mut tx = orm.begin(stock_user).await.unwrap();
         let env = tx.env();
-        let snapshot = read_values(
+        let unknown = "Setting stock.quant_lock_timeout_ms is unavailable or access is denied.";
+        let error = read_values(
             &env,
             &mut tx,
             SettingsScope::Global {},
             vec!["stock.quant_lock_timeout_ms".into()],
         )
         .await
-        .unwrap();
+        .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Access);
+        assert_eq!(error.message(), unknown);
         let error = write_values(
             &env,
             &mut tx,
             SettingsScope::Global {},
-            snapshot.revision,
+            "0".into(),
             vec![("stock.quant_lock_timeout_ms".into(), Value::Int(20))],
         )
         .await
         .unwrap_err();
         assert_eq!(error.kind(), ErrorKind::Access);
+        assert_eq!(error.message(), unknown);
+        tx.rollback().await.unwrap();
+        drop(tx);
+        // System Parameters are administrators' only; a stock user reads none of them.
+        let mut tx = orm.begin(stock_user).await.unwrap();
+        let error = get_parameter(&mut tx, "stock.quant_lock_timeout_ms")
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Access);
         assert_eq!(
             error.message(),
-            "Setting stock.quant_lock_timeout_ms is unavailable or access is denied."
+            super::security::model_denial_message(
+                &orm,
+                "ir.config_parameter",
+                erp_orm::Operation::Read
+            )
+            .await
         );
         tx.rollback().await.unwrap();
         drop(tx);
+        // The runner reads its parameters elevated: a stock user's unit gets the policy applied
+        // and its work still runs as that user.
         let work_calls = AtomicUsize::new(0);
         let error = run_quant_unit(
             &orm,
@@ -453,6 +474,12 @@ fn policy_access_validation_and_work_principal() {
             async |tx| {
                 work_calls.fetch_add(1, Ordering::SeqCst);
                 assert!(!tx.env().su());
+                assert_eq!(
+                    tx.query("SELECT current_setting('lock_timeout')", &[])
+                        .await?[0]
+                        .get::<_, String>(0),
+                    "1s"
+                );
                 Err::<(), _>(Error::validation("work refusal"))
             },
         )
@@ -462,56 +489,82 @@ fn policy_access_validation_and_work_principal() {
         assert_eq!(error.kind(), ErrorKind::Validation);
         assert_eq!(error.message(), "work refusal");
         let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
-        let env = tx.env();
-        let before = read_values(
-            &env,
-            &mut tx,
-            SettingsScope::Global {},
-            vec![
-                "stock.quant_retry_base_ms".into(),
-                "stock.quant_retry_cap_ms".into(),
-            ],
-        )
-        .await
-        .unwrap();
-        let error = write_values(
-            &env,
-            &mut tx,
-            SettingsScope::Global {},
-            before.revision.clone(),
-            vec![
-                ("stock.quant_retry_base_ms".into(), Value::Int(100)),
-                ("stock.quant_retry_cap_ms".into(), Value::Int(99)),
-            ],
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::Validation);
+        let stored = async |tx: &mut erp_orm::Transaction, key: &str| -> Option<String> {
+            tx.query(
+                "SELECT value FROM ir_config_parameter WHERE key=$1",
+                &[&key],
+            )
+            .await
+            .unwrap()[0]
+                .get(0)
+        };
         assert_eq!(
-            error.message(),
-            "stock.quant_retry_base_ms cannot exceed stock.quant_retry_cap_ms."
+            stored(&mut tx, "stock.quant_retry_cap_ms").await.as_deref(),
+            Some("2000")
         );
-        let after = read_values(
-            &env,
-            &mut tx,
-            SettingsScope::Global {},
-            vec![
-                "stock.quant_retry_base_ms".into(),
-                "stock.quant_retry_cap_ms".into(),
-            ],
-        )
-        .await
-        .unwrap();
         assert_eq!(
-            serde_json::to_value(&before).unwrap(),
-            serde_json::to_value(&after).unwrap()
+            set_parameter(&mut tx, "stock.quant_retry_cap_ms", 99)
+                .await
+                .unwrap(),
+            2000
+        );
+        for (key, value, message) in [
+            (
+                "stock.quant_retry_base_ms",
+                100,
+                "stock.quant_retry_base_ms cannot exceed stock.quant_retry_cap_ms.",
+            ),
+            (
+                "stock.quant_max_attempts",
+                6,
+                "stock.quant_max_attempts takes a whole number from 1 to 5.",
+            ),
+            (
+                "stock.quant_lock_timeout_ms",
+                0,
+                "stock.quant_lock_timeout_ms takes a whole number from 10 to 10000.",
+            ),
+        ] {
+            let error = set_parameter(&mut tx, key, value).await.unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::Validation);
+            assert_eq!(error.message(), message);
+        }
+        assert_eq!(
+            stored(&mut tx, "stock.quant_retry_base_ms")
+                .await
+                .as_deref(),
+            Some("50")
+        );
+        assert_eq!(
+            stored(&mut tx, "stock.quant_max_attempts").await.as_deref(),
+            Some("5")
+        );
+        assert_eq!(
+            stored(&mut tx, "stock.quant_lock_timeout_ms")
+                .await
+                .as_deref(),
+            Some("1000")
         );
         tx.rollback().await.unwrap();
         drop(tx);
         policy(&orm, vec![("stock.quant_max_attempts", 2)]).await;
         let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
-        // Simulate corrupt storage without using the validated Settings writer.
-        assert_eq!(tx.execute("UPDATE ir_config_setting_value SET value_text='0' WHERE setting_key='stock.quant_max_attempts'", &[]).await.unwrap(), 1);
+        assert_eq!(
+            get_parameter(&mut tx, "stock.quant_max_attempts")
+                .await
+                .unwrap(),
+            2
+        );
+        // Simulate corrupt storage without using the validated parameter writer.
+        assert_eq!(
+            tx.execute(
+                "UPDATE ir_config_parameter SET value='0' WHERE key='stock.quant_max_attempts'",
+                &[]
+            )
+            .await
+            .unwrap(),
+            1
+        );
         tx.commit().await.unwrap();
         drop(tx);
         let error = run_quant_unit(&orm, unit(), async |_tx| {
@@ -523,7 +576,7 @@ fn policy_access_validation_and_work_principal() {
         assert_eq!(error.kind(), ErrorKind::Validation);
         assert_eq!(
             error.message(),
-            "Stored setting stock.quant_max_attempts is invalid."
+            "Stored parameter stock.quant_max_attempts is invalid."
         );
         assert_eq!(
             work_calls.load(Ordering::SeqCst),
@@ -621,6 +674,180 @@ fn client_process_death_releases_quant_lock() {
         tx.rollback().await.unwrap();
         drop(tx);
         drop(orm);
+        db.cleanup().await.unwrap();
+    });
+}
+
+/// What the stock unit policy move touches: the parameter rows, the global Settings revision, the
+/// policy audit rows and the source rows.
+async fn policy_store(
+    client: &erp_testkit::tokio_postgres::Client,
+) -> (Vec<String>, String, Vec<String>, i64) {
+    let lines = async |sql: &str| -> Vec<String> {
+        client
+            .query(sql, &[])
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| row.get(0))
+            .collect()
+    };
+    let parameters = lines("SELECT key || '=' || COALESCE(value, '') FROM ir_config_parameter WHERE key LIKE 'stock.quant\\_%' ORDER BY key").await;
+    let revision = client
+        .query_one(
+            "SELECT revision::text FROM ir_config_setting_scope WHERE identity='global'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let audits = lines("SELECT actor || ' ' || setting_key || ' ' || old_value || '>' || new_value || ' @' || revision FROM ir_config_setting_audit WHERE setting_key LIKE 'stock.quant\\_%' ORDER BY id").await;
+    let sources = client
+        .query_one(
+            "SELECT count(*) FROM ir_config_setting_value WHERE setting_key LIKE 'stock.quant\\_%'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    (parameters, revision, audits, sources)
+}
+
+fn migration_source(error: erp_modules::Error) -> erp_fields::Error {
+    match error {
+        erp_modules::Error::StepFailed { source, .. } => migration_source(*source),
+        erp_modules::Error::MigrationFailed { source, .. } => *source,
+        erp_modules::Error::Orm(source) => source,
+        other => panic!("unexpected migration wrapper: {other:?}"),
+    }
+}
+
+#[test]
+fn upgrade_moves_stored_policy_to_parameters() {
+    run_local(|| async {
+        let db = TestDb::create().await.unwrap();
+        let installed = install_unit(&db).await;
+        drop(installed);
+        let client = db.client().await.unwrap();
+        // The stock 1.4 shape: the policy lives in the global Settings store (three stored values),
+        // no policy parameter rows, except one an integrator wrote with another text.
+        client
+            .batch_execute(
+                "DELETE FROM ir_config_parameter WHERE key LIKE 'stock.quant\\_%';
+                 INSERT INTO ir_config_setting_scope(identity,revision) VALUES ('global','3')
+                   ON CONFLICT (identity) DO UPDATE SET revision='3';
+                 INSERT INTO ir_config_setting_value(scope_id,setting_key,value_text)
+                   SELECT s.id, t.k, t.v FROM ir_config_setting_scope s,
+                   (VALUES ('stock.quant_max_attempts','2'), ('stock.quant_retry_base_ms','7'),
+                           ('stock.quant_idle_transaction_timeout_ms','1000')) AS t(k,v)
+                   WHERE s.identity='global';
+                 INSERT INTO ir_config_parameter(key,value) VALUES ('stock.quant_retry_base_ms','9');
+                 UPDATE ir_module_module SET latest_version='1.4.0' WHERE name='stock';",
+            )
+            .await
+            .unwrap();
+        let sys = super::system(&db);
+        let modules = [ModuleName::new("stock").unwrap()];
+        let upgraded = sys
+            .button_immediate_upgrade(&sys.system_env(Context::new()), &modules)
+            .await
+            .unwrap();
+        assert!(
+            upgraded.post_commit.is_clean(),
+            "{:?}",
+            upgraded.post_commit
+        );
+        let moved = policy_store(&client).await;
+        assert_eq!(
+            moved,
+            (
+                vec![
+                    "stock.quant_idle_transaction_timeout_ms=1000".to_owned(),
+                    "stock.quant_lock_timeout_ms=1000".into(),
+                    "stock.quant_max_attempts=2".into(),
+                    "stock.quant_retry_base_ms=7".into(),
+                    "stock.quant_retry_cap_ms=2000".into(),
+                    "stock.quant_tcp_keepalives_count=3".into(),
+                    "stock.quant_tcp_keepalives_idle_s=30".into(),
+                    "stock.quant_tcp_keepalives_interval_s=10".into(),
+                ],
+                "3".to_owned(),
+                vec!["migration:stock@1.5 stock.quant_retry_base_ms 9>7 @3".to_owned()],
+                3,
+            )
+        );
+        // The runner applies the moved values.
+        let calls = AtomicUsize::new(0);
+        let error = run_quant_unit(&upgraded.orm, unit(), async |tx| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            let rows = tx
+                .query(
+                    "SELECT current_setting('idle_in_transaction_session_timeout')",
+                    &[],
+                )
+                .await?;
+            assert_eq!(rows[0].get::<_, String>(0), "1s");
+            Err::<(), _>(
+                Error::new(ErrorKind::Concurrency, "retry fixture")
+                    .with_sqlstate(Some("40001".into())),
+            )
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            error.message(),
+            "Stock of P is being changed by other operations. The operation was tried 2 times and stopped; nothing was saved. Try again."
+        );
+        drop(upgraded);
+        // Running the move again where the parameters already equal the source changes nothing.
+        client
+            .execute(
+                "UPDATE ir_module_module SET latest_version='1.4.0' WHERE name='stock'",
+                &[],
+            )
+            .await
+            .unwrap();
+        let again = sys
+            .button_immediate_upgrade(&sys.system_env(Context::new()), &modules)
+            .await
+            .unwrap();
+        assert!(again.post_commit.is_clean(), "{:?}", again.post_commit);
+        assert_eq!(policy_store(&client).await, moved);
+        drop(again);
+        // A stored value outside its declaration stops the upgrade by key; nothing moves.
+        client
+            .batch_execute(
+                "UPDATE ir_config_setting_value SET value_text='9' WHERE setting_key='stock.quant_max_attempts';
+                 UPDATE ir_config_setting_value SET value_text='5' WHERE setting_key='stock.quant_idle_transaction_timeout_ms';
+                 UPDATE ir_module_module SET latest_version='1.4.0' WHERE name='stock';",
+            )
+            .await
+            .unwrap();
+        let error = sys
+            .button_immediate_upgrade(&sys.system_env(Context::new()), &modules)
+            .await
+            .unwrap_err();
+        let inner = migration_source(error);
+        assert_eq!(inner.kind(), ErrorKind::Validation);
+        assert_eq!(
+            inner.message(),
+            "stock.quant_idle_transaction_timeout_ms takes a whole number from 1000 to 600000."
+        );
+        assert_eq!(policy_store(&client).await, moved);
+        assert_eq!(
+            client
+                .query_one(
+                    "SELECT latest_version FROM ir_module_module WHERE name='stock'",
+                    &[]
+                )
+                .await
+                .unwrap()
+                .get::<_, String>(0),
+            "1.4.0"
+        );
+        drop(client);
+        drop(sys);
         db.cleanup().await.unwrap();
     });
 }

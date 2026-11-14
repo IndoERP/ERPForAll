@@ -229,6 +229,63 @@ async fn foreign_vat_normalization_allows_same_identity_and_refuses_conflicts() 
 }
 
 #[tokio::test]
+async fn foreign_vat_conflicts_follow_the_ancestor_scope_of_the_written_company() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    let be = country(&mut tx, "BE").await;
+    let fr = country(&mut tx, "FR").await;
+    let parent = company(&mut tx, be, None).await;
+    let branch = company(&mut tx, be, Some(parent)).await;
+    let french = |vat: &str| {
+        RawVals::new()
+            .set_cell("country_id", Cell::Id(fr))
+            .set_cell("foreign_vat", text(vat))
+    };
+    let parent_rule = position(&mut tx, parent, "Parent French", french("FR1234")).await;
+    // A branch writer sees the parent's identity through the ancestor domain.
+    let error = tx
+        .savepoint(async |tx| {
+            model(tx, branch, "account.fiscal.position")
+                .create(
+                    tx,
+                    vec![french("FR5678").set_cell("name", text("Branch other"))],
+                )
+                .await
+        })
+        .await
+        .unwrap_err();
+    refused(
+        error,
+        "Fiscal position \"Parent French\" already uses a different foreign_vat for this country.",
+    );
+    let branch_rule = position(&mut tx, branch, "Branch French", french("FR1234")).await;
+    refused(
+        write(
+            &mut tx,
+            &branch_rule,
+            RawVals::new().set_cell("foreign_vat", text("FR5678")),
+        )
+        .await
+        .unwrap_err(),
+        "Fiscal position \"Parent French\" already uses a different foreign_vat for this country.",
+    );
+    // The parent's own scope has no descendants: changing its identity checks ancestors only.
+    write(
+        &mut tx,
+        &parent_rule,
+        RawVals::new().set_cell("foreign_vat", text("FR9999")),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        parent_rule.cell(&mut tx, "foreign_vat").await.unwrap(),
+        text("FR9999")
+    );
+    tx.rollback().await.unwrap();
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
 async fn address_manual_and_group_exclusions_compose() {
     let h = harness().await;
     let mut tx = h.begin().await.unwrap();

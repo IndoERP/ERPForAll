@@ -643,23 +643,17 @@ async fn partition_upkeep_default_and_technical_help(
     admin: erp_orm::UserId,
 ) {
     use erp_orm::rpc::{Exposure, RpcArgs};
-    // Existing parameter access is deliberately still closed. The separate security task owns
-    // its opening; this slice must not add a broad read grant to secret-bearing rows.
-    let mut denied = request.begin(admin).await.unwrap();
-    let error = denied
+    // Administrators read System Parameters since (secret keys stay hidden).
+    let mut granted = request.begin(admin).await.unwrap();
+    granted
         .env()
         .records("ir.config_parameter")
         .unwrap()
-        .check_access(&mut denied, erp_orm::Operation::Read)
+        .check_access(&mut granted, erp_orm::Operation::Read)
         .await
-        .unwrap_err();
-    assert_eq!(error.kind(), ErrorKind::Access);
-    assert_eq!(
-        error.message(),
-        "Your access rights do not let you access 'System Parameter' (ir.config_parameter) records.\n\nNo group may do this.\n\nAsk an administrator if you need this access."
-    );
-    denied.rollback().await.unwrap();
-    drop(denied);
+        .unwrap();
+    granted.rollback().await.unwrap();
+    drop(granted);
     let mut tx = owner.begin(SUPERUSER_ID).await.unwrap();
     let rows = tx
         .query(

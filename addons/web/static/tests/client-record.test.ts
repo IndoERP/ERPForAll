@@ -159,7 +159,30 @@ test("malformed relation defaults fail before onchange or create and retain the 
   expect(calls).toHaveLength(2);
 });
 
-test.each(["many2one", "char", "text", "selection", "date", "datetime", "integer", "float", "boolean"] as const)("empty %s uses the RPC null sentinel without changing boolean false", async kind => {
+test("the first onchange of a new form replaces its one2many default lines instead of appending to them", async () => {
+  // The first onchange answers the complete value (every line as a create), not a diff against
+  // the defaults the client sent: a new tax form showed each default distribution line twice.
+  const kind: Field = { name: "repartition_type", kind: "char", label: "Type", readonly: false, required: true, selection: null, relation: null, relationField: null };
+  const subview = { model: "test.line", list: [kind], form: undefined, fields: new Map([[kind.name, kind]]) };
+  const lineField: Field = { name: "line_ids", kind: "one2many", label: "Lines", readonly: false, required: false, selection: null, relation: "test.line", relationField: "parent_id", subview };
+  const calls: { path: string; args: Record<string, unknown> }[] = [];
+  const rpc = new RpcClient(async (path, init) => {
+    calls.push({ path: String(path), args: JSON.parse(String(init?.body)) });
+    const value = String(path).endsWith("default_get") ? { line_ids: [[0, 0, { repartition_type: "base" }], [0, 0, { repartition_type: "tax" }]] }
+      : String(path).endsWith("onchange") ? { value: { line_ids: [[0, "virtual_1", { repartition_type: "base", sequence: 1 }], [0, "virtual_2", { repartition_type: "tax", sequence: 1 }]] } }
+      : [{ id: 3, line_ids: [] }];
+    return new Response(JSON.stringify(value));
+  }, () => {});
+  const state = new RecordState(rpc, "test.parent", [lineField], {});
+  await state.load();
+  expect(calls[1]?.args["values"]).toEqual({ line_ids: [[0, 0, { repartition_type: "base" }], [0, 0, { repartition_type: "tax" }]] });
+  expect((state.values["line_ids"] as Record<string, unknown>[]).map(line => [line["repartition_type"], line["sequence"]])).toEqual([["base", 1], ["tax", 1]]);
+  expect(state.dirty).toBe(false);
+  await state.save();
+  expect(calls[2]?.args["vals"]).toEqual({ line_ids: [[0, 0, { repartition_type: "base" }], [0, 0, { repartition_type: "tax" }]] });
+});
+
+test.each(["many2one", "char","text", "selection", "date", "datetime", "integer", "float", "boolean"] as const)("empty %s uses the RPC null sentinel without changing boolean false", async kind => {
   const field: Field = { name: "optional", kind, label: "Optional", readonly: false, required: false, relation: kind === "many2one" ? "res.company" : null, relationField: null, selection: kind === "selection" ? [["a", "A"]] : null };
   const calls: Record<string, unknown>[] = [];
   const rpc = new RpcClient(async (path, init) => {

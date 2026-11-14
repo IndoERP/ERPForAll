@@ -162,7 +162,7 @@ pub(super) async fn roles(orm: &Orm) -> Vec<i64> {
     users
 }
 
-async fn model_denial_message(orm: &Orm, model: &str, op: Operation) -> String {
+pub(super) async fn model_denial_message(orm: &Orm, model: &str, op: Operation) -> String {
     let (letter, verb) = match op {
         Operation::Read => ("r", "access"),
         Operation::Create => ("c", "create"),

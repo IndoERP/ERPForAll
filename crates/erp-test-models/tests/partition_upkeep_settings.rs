@@ -123,7 +123,13 @@ async fn upkeep_cadence_accepts_boundaries_and_parameter_resets() {
                 .await
                 .unwrap();
         }
-        row.unlink(&mut tx).await.unwrap();
+        // a declared key is protected: clearing the value resets it, deleting is refused
+        let refusal = row.unlink(&mut tx).await.unwrap_err();
+        assert_eq!(refusal.kind(), ErrorKind::Validation);
+        assert_eq!(
+            refusal.message(),
+            format!("You cannot delete the {KEY} record.")
+        );
         let rows = tx
             .query(
                 "SELECT count(*)::int8 FROM ir_config_parameter WHERE key=$1",
@@ -131,7 +137,7 @@ async fn upkeep_cadence_accepts_boundaries_and_parameter_resets() {
             )
             .await
             .unwrap();
-        assert_eq!(rows[0].get::<_, i64>(0), 0);
+        assert_eq!(rows[0].get::<_, i64>(0), 1);
         tx.rollback().await.unwrap();
     }
     h.cleanup().await.unwrap();

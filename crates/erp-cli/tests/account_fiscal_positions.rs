@@ -9,6 +9,8 @@
 use erp_modules::{AddonIndex, InitOptions, ModuleName, ModuleSystem};
 use erp_sdk::{Context, ErrorKind, Orm, SUPERUSER_ID, prelude::*};
 use erp_testkit::TestDb;
+#[path = "support/fpos.rs"]
+mod support;
 use std::path::{Path, PathBuf};
 fn addons() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -282,6 +284,86 @@ async fn installed() {
         .await
         .unwrap()
         .ids()[0];
+    // A sibling branch and records the branch user cannot see; a rule the parent user cannot see.
+    let sibling = env
+        .records("res.company")
+        .unwrap()
+        .create(
+            &mut tx,
+            vec![
+                RawVals::new()
+                    .set_cell("name", text("Sibling fixture"))
+                    .set_cell("parent_id", Cell::Id(company)),
+            ],
+        )
+        .await
+        .unwrap()
+        .ids()[0];
+    let sibling_partner = env
+        .records("res.partner")
+        .unwrap()
+        .create(
+            &mut tx,
+            vec![
+                RawVals::new()
+                    .set_cell("name", text("Sibling customer"))
+                    .set_cell("country_id", Cell::Id(country))
+                    .set_cell("company_id", Cell::Id(sibling)),
+            ],
+        )
+        .await
+        .unwrap()
+        .ids()[0];
+    let sibling_tax = support::tax(&mut tx, sibling, country, "Sibling tax")
+        .await
+        .ids()[0];
+    // Account codes live on the root company, so the unreadable account belongs to another root.
+    let currency: i64 = tx
+        .query(
+            "SELECT currency_id::int8 FROM res_company WHERE id=$1",
+            &[&company],
+        )
+        .await
+        .unwrap()[0]
+        .get(0);
+    let other_root = env
+        .records("res.company")
+        .unwrap()
+        .create(
+            &mut tx,
+            vec![
+                RawVals::new()
+                    .set_cell("name", text("Other root fixture"))
+                    .set_cell("currency_id", Cell::Id(currency)),
+            ],
+        )
+        .await
+        .unwrap()
+        .ids()[0];
+    let hidden_account = support::model(&tx, other_root, "account.account")
+        .create(
+            &mut tx,
+            vec![
+                RawVals::new()
+                    .set_cell("name", text("Sibling income"))
+                    .set_cell("code", text("4999"))
+                    .set_cell("account_type", text("income")),
+            ],
+        )
+        .await
+        .unwrap()
+        .ids()[0];
+    let branch_rule = model
+        .create(
+            &mut tx,
+            vec![
+                RawVals::new()
+                    .set_cell("name", text("Branch rule"))
+                    .set_cell("company_id", Cell::Id(branch)),
+            ],
+        )
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
     drop(tx);
     let source =
@@ -380,21 +462,27 @@ async fn installed() {
             ids[1]
         )
     );
-    let error = manage
+    let proposer = manage
         .env()
         .with_company(company)
         .unwrap()
         .records("account.fiscal.position")
-        .unwrap()
-        .create(
-            &mut manage,
-            vec![
-                RawVals::new()
-                    .set_cell("name", text("Visible proposed"))
-                    .set_cell("country_id", Cell::Id(germany))
-                    .set_cell("foreign_vat", text("DE5678")),
-            ],
-        )
+        .unwrap();
+    // A refused mutation poisons its transaction; the savepoint keeps the session usable.
+    let error = manage
+        .savepoint(async |tx| {
+            proposer
+                .create(
+                    tx,
+                    vec![
+                        RawVals::new()
+                            .set_cell("name", text("Visible proposed"))
+                            .set_cell("country_id", Cell::Id(germany))
+                            .set_cell("foreign_vat", text("DE5678")),
+                    ],
+                )
+                .await
+        })
         .await
         .unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Validation);
@@ -402,6 +490,47 @@ async fn installed() {
         error.message(),
         "Another fiscal position in the company tree already uses a different foreign_vat for this country."
     );
+    // A parent-only manager cannot reach down into a branch: no create, move or read there.
+    let positions = manage
+        .env()
+        .with_company(company)
+        .unwrap()
+        .records("account.fiscal.position")
+        .unwrap();
+    let error = manage
+        .savepoint(async |tx| {
+            positions
+                .create(
+                    tx,
+                    vec![
+                        RawVals::new()
+                            .set_cell("name", text("Parent user branch rule"))
+                            .set_cell("company_id", Cell::Id(branch)),
+                    ],
+                )
+                .await
+        })
+        .await
+        .unwrap_err();
+    outside_tree(&error);
+    let error = manage
+        .savepoint(async |tx| {
+            positions
+                .browse(fp.ids())
+                .unwrap()
+                .write(tx, RawVals::new().set_cell("company_id", Cell::Id(branch)))
+                .await
+        })
+        .await
+        .unwrap_err();
+    outside_tree(&error);
+    let error = positions
+        .browse(branch_rule.ids())
+        .unwrap()
+        .check_access(&mut manage, erp_sdk::Operation::Read)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Access);
     manage.rollback().await.unwrap();
     drop(manage);
     let mut child = secured
@@ -432,9 +561,201 @@ async fn installed() {
         )
         .await
         .unwrap();
+    // A branch manager cannot place a rule in a sibling branch, nor map or resolve with
+    // records of companies outside its tree.
+    let positions = child
+        .env()
+        .with_company(branch)
+        .unwrap()
+        .records("account.fiscal.position")
+        .unwrap();
+    let error = child
+        .savepoint(async |tx| {
+            positions
+                .create(
+                    tx,
+                    vec![
+                        RawVals::new()
+                            .set_cell("name", text("Branch user sibling rule"))
+                            .set_cell("company_id", Cell::Id(sibling)),
+                    ],
+                )
+                .await
+        })
+        .await
+        .unwrap_err();
+    outside_tree(&error);
+    let error = child
+        .savepoint(async |tx| {
+            positions
+                .browse(fp.ids())
+                .unwrap()
+                .write(tx, RawVals::new().set_cell("company_id", Cell::Id(sibling)))
+                .await
+        })
+        .await
+        .unwrap_err();
+    outside_tree(&error);
+    let rule = positions.browse(fp.ids()).unwrap();
+    let error = rule
+        .call::<_, Vec<i64>>(&mut child, "map_tax", (vec![sibling_tax],))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Access);
+    let error = rule
+        .call::<_, i64>(&mut child, "map_account", (hidden_account,))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Access);
+    let error = positions
+        .call::<_, Option<i64>>(
+            &mut child,
+            "_get_fiscal_position",
+            (sibling_partner, None::<i64>),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Access);
     child.rollback().await.unwrap();
     drop(child);
+    // A settings administrator (not superuser mode) can neither write nor search the fence.
+    let mut admin = secured
+        .begin(erp_sdk::UserId::new(ids[0]).unwrap())
+        .await
+        .unwrap();
+    let companies = admin
+        .env()
+        .with_company(company)
+        .unwrap()
+        .records("res.company")
+        .unwrap();
+    let error = admin
+        .savepoint(async |tx| {
+            companies
+                .browse([company])
+                .unwrap()
+                .write(tx, RawVals::new().set_cell("fpos_revision", Cell::Int(7)))
+                .await
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Access);
+    assert_eq!(
+        error.message(),
+        "You do not have enough rights to access the field \"fpos_revision\" on Company (res.company). Please contact your system administrator.\n\nOperation: write"
+    );
+    let error = companies
+        .search(&mut admin, &Domain::field("fpos_revision").unwrap().eq(0))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Access);
+    assert_eq!(
+        error.message(),
+        "You do not have enough rights to access the field \"fpos_revision\" on Company (res.company). Please contact your system administrator.\n\nOperation: read"
+    );
+    admin.rollback().await.unwrap();
+    drop(admin);
     drop(secured);
+    // Superuser mode skips field groups; the account company override still refuses the
+    // fence column by name, while the fence's own increment keeps working.
+    let mut su = orm.begin(SUPERUSER_ID).await.unwrap();
+    let revision = async |tx: &mut Transaction| -> i32 {
+        tx.query(
+            "SELECT fpos_revision FROM res_company WHERE id=$1",
+            &[&company],
+        )
+        .await
+        .unwrap()[0]
+            .get(0)
+    };
+    let before = revision(&mut su).await;
+    su.env()
+        .with_company(company)
+        .unwrap()
+        .records("account.fiscal.position")
+        .unwrap()
+        .create(
+            &mut su,
+            vec![RawVals::new().set_cell("name", text("Fence step"))],
+        )
+        .await
+        .unwrap();
+    assert_eq!(revision(&mut su).await, before + 1);
+    let companies = su
+        .env()
+        .with_company(company)
+        .unwrap()
+        .records("res.company")
+        .unwrap();
+    let fence_refused = |error: Error| {
+        assert_eq!(error.kind(), ErrorKind::Validation);
+        assert_eq!(
+            error.message(),
+            "fpos_revision is internal to fiscal position writes and cannot be set."
+        );
+    };
+    fence_refused(
+        su.savepoint(async |tx| {
+            companies
+                .browse([company])
+                .unwrap()
+                .write(
+                    tx,
+                    RawVals::new().set_cell("fpos_revision", Cell::Int(i32::MAX)),
+                )
+                .await
+        })
+        .await
+        .unwrap_err(),
+    );
+    fence_refused(
+        su.savepoint(async |tx| {
+            companies
+                .create(
+                    tx,
+                    vec![
+                        RawVals::new()
+                            .set_cell("name", text("Fence supplied"))
+                            .set_cell("parent_id", Cell::Id(company))
+                            .set_cell("fpos_revision", Cell::Int(i32::MAX)),
+                    ],
+                )
+                .await
+        })
+        .await
+        .unwrap_err(),
+    );
+    let defaulted =
+        companies.with_context([("default_fpos_revision", Value::Int(i64::from(i32::MAX)))]);
+    fence_refused(
+        su.savepoint(async |tx| {
+            defaulted
+                .create(
+                    tx,
+                    vec![
+                        RawVals::new()
+                            .set_cell("name", text("Fence defaulted"))
+                            .set_cell("parent_id", Cell::Id(company)),
+                    ],
+                )
+                .await
+        })
+        .await
+        .unwrap_err(),
+    );
+    assert_eq!(revision(&mut su).await, before + 1);
+    su.rollback().await.unwrap();
+    drop(su);
     drop(orm);
     db.cleanup().await.unwrap();
+}
+#[track_caller]
+fn outside_tree(error: &Error) {
+    assert_eq!(
+        (error.kind(), error.message()),
+        (
+            ErrorKind::Access,
+            "The fiscal position company is outside the active company hierarchy."
+        )
+    );
 }

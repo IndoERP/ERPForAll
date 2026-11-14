@@ -1120,6 +1120,16 @@ const SUDO_SITES: &[(&str, usize, &str)] = &[
         "creates the missing default parameters, `database.secret` among them, when base is installed or updated (the reference ERP's `init` writes them as the superuser); `database.secret` is visible only with full elevation",
     ),
     (
+        "base/ir_config_parameter.rs::create_default_rows",
+        1,
+        "writes the default row of each declared technical parameter that has none when the registry is published; keys only, never a caller value",
+    ),
+    (
+        "base/ir_config_parameter.rs::erp_replace_secret",
+        1,
+        "after the caller's write and create access is checked and the key is a non-identity secret, the secret row is replaced as the system without reading its value back",
+    ),
+    (
         "base/decimal_precision.rs::precision_defined",
         1,
         "reads the digits of one named decimal precision, whoever asks: the table is administrator-only but a usage name and its digit count are what `fields_get` shows every user, and the reference ERP's `precision_get` reads it with a raw statement (`decimal_precision.py:24-28`); one bounded name in, one integer out",

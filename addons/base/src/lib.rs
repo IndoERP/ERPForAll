@@ -78,6 +78,7 @@ pub mod res_users_preferences;
 pub mod res_users_settings;
 pub mod server_action;
 mod settings_general;
+mod system_parameters;
 
 pub use dated_parameter::IrDatedParameter;
 pub use decimal_precision::*;

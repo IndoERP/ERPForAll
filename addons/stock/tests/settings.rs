@@ -6,8 +6,10 @@
     clippy::panic,
     reason = "test assertions"
 )]
+use erp_sdk::params::PARAMETER_CONTRIBUTIONS;
 use erp_sdk::settings::{
-    CONTRIBUTIONS, GROUP_CONTRIBUTIONS, ScopeKind, SettingDecl, SettingsRegistry,
+    CONTRIBUTIONS, GROUP_CONTRIBUTIONS, ParameterDecl, ParameterRegistry, ScopeKind, SettingDecl,
+    SettingKind, SettingsRegistry,
 };
 use erp_sdk::{ErrorKind, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -44,7 +46,7 @@ fn registry() -> SettingsRegistry {
 #[test]
 fn scalar_domains_are_typed_bounded_and_named() {
     let declarations = declarations();
-    assert_eq!(declarations.len(), 16);
+    assert_eq!(declarations.len(), 8);
     let cases = [
         (
             "stock.horizon_days",
@@ -126,9 +128,39 @@ fn scalar_domains_are_typed_bounded_and_named() {
     );
 }
 
+fn parameters() -> ParameterRegistry {
+    let stock: Vec<_> = PARAMETER_CONTRIBUTIONS
+        .iter()
+        .filter(|c| c.addon.name == erp_addon_stock::ADDON.name)
+        .collect();
+    assert_eq!(
+        stock.len(),
+        1,
+        "stock parameter registration must be linked"
+    );
+    ParameterRegistry::build(
+        vec![(
+            "stock".into(),
+            (stock[0].declarations)().unwrap(),
+            (stock[0].groups)().unwrap(),
+        )],
+        &BTreeSet::from(["stock".into(), "base".into()]),
+        BTreeSet::new(),
+    )
+    .unwrap()
+}
+
 #[test]
-fn quant_unit_settings_are_global_bounded_and_readable_by_stock_users() {
-    let declarations = declarations();
+fn quant_unit_policy_is_declared_as_bounded_system_parameters() {
+    assert!(
+        declarations()
+            .iter()
+            .all(|d| !d.key().starts_with("stock.quant_")),
+        "the stock unit policy is not a Settings row"
+    );
+    let registry = parameters();
+    let declared: Vec<&ParameterDecl> = registry.iter().collect();
+    assert_eq!(declared.len(), 8);
     for (suffix, default, floor, bound) in [
         ("lock_timeout_ms", 1000, 10, 10000),
         ("max_attempts", 5, 1, 5),
@@ -140,47 +172,47 @@ fn quant_unit_settings_are_global_bounded_and_readable_by_stock_users() {
         ("tcp_keepalives_count", 3, 1, 10),
     ] {
         let key = format!("stock.quant_{suffix}");
-        let declaration = declarations
-            .iter()
-            .find(|d| d.key() == key)
-            .expect("quant unit setting declared");
-        assert_eq!(declaration.scope(), ScopeKind::Global);
+        let declaration = registry.get(&key).expect("quant unit parameter declared");
         assert_eq!(declaration.default_value(), &Value::Int(default));
-        assert!(
-            declaration
-                .read_groups()
-                .iter()
-                .any(|group| group == "stock.group_stock_user")
-        );
-        assert_eq!(declaration.write_groups(), &["base.group_system"]);
-        for value in [
-            Value::Int(floor - 1),
-            Value::Int(bound + 1),
-            Value::Int(0),
-            Value::Bool(true),
-            Value::Int(i64::MAX),
+        assert_eq!(declaration.default_text(), default.to_string());
+        assert!(!declaration.is_secret());
+        assert!(matches!(
+            declaration.kind(),
+            SettingKind::Integer { min, max } if *min == floor && *max == bound
+        ));
+        for text in [
+            (floor - 1).to_string(),
+            (bound + 1).to_string(),
+            "0".into(),
+            "true".into(),
+            i64::MAX.to_string(),
         ] {
-            let error = declaration.validate(&value).unwrap_err();
+            let error = declaration.check_text(Some(&text)).unwrap_err();
             assert_eq!(error.kind(), ErrorKind::Validation);
             assert_eq!(
                 error.message(),
                 format!("{key} takes a whole number from {floor} to {bound}.")
             );
+            assert_eq!(
+                declaration.read_text(Some(&text)).unwrap_err().message(),
+                format!("Stored parameter {key} is invalid.")
+            );
         }
         for value in [floor, default, bound] {
-            declaration.validate(&Value::Int(value)).unwrap();
+            assert_eq!(
+                declaration.check_text(Some(&value.to_string())).unwrap(),
+                Value::Int(value)
+            );
         }
+        assert_eq!(declaration.check_text(None).unwrap(), Value::Int(default));
     }
 }
 
 #[test]
 fn quant_backoff_base_cannot_exceed_cap() {
-    let registry = registry();
-    let keys = registry
-        .expanded_keys(&["stock.quant_retry_base_ms".into()])
-        .unwrap();
+    let registry = parameters();
     assert_eq!(
-        keys,
+        registry.group_members(["stock.quant_retry_base_ms"]),
         vec!["stock.quant_retry_base_ms", "stock.quant_retry_cap_ms"]
     );
     let mut values = BTreeMap::from([

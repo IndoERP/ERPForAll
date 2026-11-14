@@ -249,20 +249,23 @@ pub(crate) fn defaults(vals: &mut RawVals) {
         if vals.commands(field).is_some() || vals.contains(field) {
             continue;
         }
-        vals.insert_commands(
-            field.into(),
-            ["base", "tax"]
-                .into_iter()
-                .map(|kind| {
-                    Command::create(
-                        RawVals::new()
-                            .set_cell("document_type", Cell::Str(doc.into()))
-                            .set_cell("repartition_type", Cell::Str(kind.into())),
-                    )
-                })
-                .collect(),
-        );
+        vals.insert_commands(field.into(), default_lines(doc, &RawVals::new()));
     }
+}
+
+/// The default distribution of one document kind, one base and one tax line (the reference's
+/// `_compute_invoice_repartition_line_ids`), each carrying `line` as further proposed values.
+pub(crate) fn default_lines(document: &str, line: &RawVals) -> Vec<Command> {
+    ["base", "tax"]
+        .into_iter()
+        .map(|kind| {
+            Command::create(
+                line.clone()
+                    .set_cell("document_type", Cell::Str(document.into()))
+                    .set_cell("repartition_type", Cell::Str(kind.into())),
+            )
+        })
+        .collect()
 }
 
 // Refuse oversized creation commands before the ORM materializes child rows. Complete final-state

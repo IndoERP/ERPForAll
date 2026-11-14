@@ -1,6 +1,10 @@
-//! Native, addon-owned settings declarations.
+//! Native, addon-owned settings declarations and declared technical system
+//! parameters ([`ParameterDecl`]).
 use erp_fields::{Error, RecId, Result, Value};
 use std::collections::{BTreeMap, BTreeSet};
+
+mod parameter;
+pub use parameter::{BASE_KEY_FAMILIES, ParameterContributions, ParameterDecl, ParameterRegistry};
 
 /// Scope vocabulary. Permission checks are independent of this declaration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,7 +83,8 @@ impl SettingKind {
         }
     }
 }
-/// Additional pure native validation after intrinsic kind/range validation.
+/// Additional pure native validation after intrinsic kind/range validation, for a [`SettingDecl`]
+/// or a [`ParameterDecl`].
 pub type Validator = fn(&Value) -> Result<()>;
 /// Validated declaration. A registry binds its owner to the contributing installed addon.
 #[derive(Clone)]

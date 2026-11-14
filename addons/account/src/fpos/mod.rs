@@ -9,6 +9,7 @@ mod matcher;
 mod partner;
 mod tax;
 mod validation;
+pub(crate) use company::{FENCE_REFUSED, reject_fence_value};
 use erp_sdk::{Operation, ValueMap, prelude::*};
 
 /// A company-owned rule for selecting tax and account substitutions.

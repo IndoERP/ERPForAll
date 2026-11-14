@@ -141,15 +141,7 @@ async fn groups_company_and_explicit_acl_only() {
         let model: String = row.get(0);
         let operation: String = row.get(1);
         let group: String = row.get(2);
-        assert!(
-            ![
-                "ir.config_parameter",
-                "res.users.log",
-                "ir.session",
-                "ir.audit"
-            ]
-            .contains(&model.as_str())
-        );
+        assert!(!["res.users.log", "ir.session", "ir.audit"].contains(&model.as_str()));
         assert!(["group_system", "group_user", "group_erp_manager"].contains(&group.as_str()));
         if group == "group_erp_manager" {
             assert!(["change.password.wizard", "change.password.user"].contains(&model.as_str()));
@@ -182,6 +174,16 @@ async fn groups_company_and_explicit_acl_only() {
         rows.iter().any(
             |row| row.get::<_, String>(0) == "res.partner" && row.get::<_, String>(1) == "crud"
         )
+    );
+    // System Parameters: the system group alone, full access
+    let parameter_rows: Vec<(String, String)> = rows
+        .iter()
+        .filter(|row| row.get::<_, String>(0) == "ir.config_parameter")
+        .map(|row| (row.get(1), row.get(2)))
+        .collect();
+    assert_eq!(
+        parameter_rows,
+        [("crud".to_owned(), "group_system".to_owned())]
     );
     assert_eq!(
         client
@@ -584,9 +586,9 @@ enum AdminRead {
     /// Read only, granted in revision r3 (lead decision 2026-10-25): the screen opens, and the
     /// test checks that create, write and unlink are refused.
     ReadOnly,
-    /// No row at all: `ir.config_parameter`, deliberately (see
-    /// `real_base_manifest_initializes_groups_company_and_explicit_acl_only`).
-    NoAcl,
+    /// Full access for the system group, granted: `ir.config_parameter`,
+    /// whose secret keys stay hidden (probed separately).
+    Managed,
 }
 
 /// One Technical screen of `addons/base/data/technical_views.xml`: menu, its category, window
@@ -612,7 +614,7 @@ const TECHNICAL_CATEGORIES: [&str; 8] = [
 ];
 
 const TECHNICAL_SCREENS: [Screen; 20] = {
-    use AdminRead::{Granted, NoAcl, ReadOnly};
+    use AdminRead::{Granted, Managed, ReadOnly};
     const fn s(
         menu: &'static str,
         category: &'static str,
@@ -757,7 +759,7 @@ const TECHNICAL_SCREENS: [Screen; 20] = {
             "technical_config_param_action",
             "ir.config_parameter",
             "technical_config_param",
-            NoAcl,
+            Managed,
         ),
         s(
             "technical_privilege_menu",
@@ -874,6 +876,286 @@ fn model_denial(verb: &str, description: &str, model: &str, groups: &[&str]) -> 
         "Your access rights do not let you {verb} '{description}' ({model}) records.\n\n{group_info}\n\n\
          Ask an administrator if you need this access."
     )
+}
+
+/// The value of the provider credential the Technical test stores (never in a response).
+const PROVIDER_SECRET: &str = "provider-sentinel-7f3a-credential";
+/// The secret rows the Technical test probes: two created by `init`, one provider credential.
+const SECRET_PROBE_KEYS: [&str; 3] = ["database.secret", "database.uuid", "recaptcha_private_key"];
+
+/// The administrator never sees a secret parameter by any read path, replaces one without reading
+/// it, and is refused the identity keys; the internal user cannot replace one (
+async fn secret_parameter_probes(
+    call: &impl AsyncFn(String, serde_json::Value, &erp_orm::Principal) -> (u16, serde_json::Value),
+    admin: &erp_orm::Principal,
+    ordinary: &erp_orm::Principal,
+    secrets: &[(String, i64, String)],
+    orm: &erp_orm::Orm,
+) {
+    use serde_json::json;
+    let keys: Vec<&str> = secrets.iter().map(|(k, _, _)| k.as_str()).collect();
+    let ids: Vec<i64> = secrets.iter().map(|(_, id, _)| *id).collect();
+    let values: Vec<&str> = secrets.iter().map(|(_, _, v)| v.as_str()).collect();
+    let path = |method: &str| format!("/json/2/ir.config_parameter/{method}");
+    // nothing a response carries may name a secret key or hold a secret value
+    let leaks = |body: &serde_json::Value| -> Vec<String> {
+        let text = body.to_string();
+        keys.iter()
+            .chain(values.iter())
+            .filter(|needle| text.contains(**needle))
+            .map(|needle| (*needle).to_owned())
+            .collect()
+    };
+    let mut searches = vec![
+        (
+            "search_read",
+            json!({"domain": [], "fields": ["key", "value"]}),
+        ),
+        (
+            "web_search_read",
+            json!({"domain": [], "specification": {"key": {}, "value": {}, "display_name": {}}}),
+        ),
+        ("name_search", json!({"name": "", "limit": 1000})),
+        ("name_search", json!({"name": "recaptcha", "limit": 1000})),
+        (
+            "formatted_read_group",
+            json!({"domain": [], "groupby": ["key"], "aggregates": ["__count"]}),
+        ),
+    ];
+    let mut empty_domains = vec![json!([["key", "in", keys]])];
+    for value in &values {
+        empty_domains.push(json!([["value", "=", value]]));
+        empty_domains.push(json!([["value", "ilike", &value[..value.len() / 2]]]));
+    }
+    for domain in &empty_domains {
+        searches.push(("search_read", json!({"domain": domain, "fields": ["key"]})));
+        searches.push((
+            "web_search_read",
+            json!({"domain": domain, "specification": {"key": {}}}),
+        ));
+    }
+    for (method, body) in searches {
+        let (status, rows) = call(path(method), body.clone(), admin).await;
+        assert_eq!(status, 200, "{method} {body}: {rows}");
+        assert!(
+            leaks(&rows).is_empty(),
+            "{method} {body} leaks {:?}",
+            leaks(&rows)
+        );
+    }
+    for domain in &empty_domains {
+        let (status, n) = call(path("search_count"), json!({"domain": domain}), admin).await;
+        assert_eq!(
+            (status, n.clone()),
+            (200, json!(0)),
+            "search_count {domain}"
+        );
+        let (_, rows) = call(
+            path("search_read"),
+            json!({"domain": domain, "fields": ["key"]}),
+            admin,
+        )
+        .await;
+        assert_eq!(
+            rows,
+            json!([]),
+            "a domain matching a secret returns nothing: {domain}"
+        );
+    }
+    // reading a secret's id or its value by key is refused
+    for (method, body) in [
+        ("read", json!({"ids": ids, "fields": ["key", "value"]})),
+        (
+            "web_read",
+            json!({"ids": ids, "specification": {"key": {}, "value": {}}}),
+        ),
+    ] {
+        let (status, error) = call(path(method), body, admin).await;
+        assert_eq!(status, 403, "{method}: {error}");
+        assert_eq!(error["name"], "erp.exceptions.AccessError", "{method}");
+        assert!(
+            leaks(&error).iter().all(|l| keys.contains(&l.as_str())),
+            "{method} {error}"
+        );
+    }
+    for key in &keys {
+        let (status, error) = call(
+            path("get_str"),
+            json!({"key": key, "default": "absent"}),
+            admin,
+        )
+        .await;
+        assert_eq!(status, 403, "get_str {key}: {error}");
+        assert_eq!(error["name"], "erp.exceptions.AccessError", "get_str {key}");
+    }
+    // a provider credential is replaced, never read back; plain writes onto a secret key refused
+    let replaced = "provider-replaced-91c2-credential";
+    let refusal = "ir.config_parameter recaptcha_private_key is a secret: its value is never \
+                   returned; replace it with erp_replace_secret.";
+    let (status, created) = call(
+        path("create"),
+        json!({"vals_list": [{"key": "integrator.note", "value": "plain"}]}),
+        admin,
+    )
+    .await;
+    assert_eq!(
+        status, 200,
+        "an administrator creates a parameter: {created}"
+    );
+    let note = created[0]
+        .as_i64()
+        .unwrap_or_else(|| panic!("create: {created}"));
+    for (method, body) in [
+        (
+            "set_str",
+            json!({"key": "recaptcha_private_key", "value": replaced}),
+        ),
+        (
+            "create",
+            json!({"vals_list": [{"key": "recaptcha_private_key", "value": replaced}]}),
+        ),
+        (
+            "write",
+            json!({"ids": [note], "vals": {"key": "recaptcha_private_key"}}),
+        ),
+    ] {
+        let (status, error) = call(path(method), body, admin).await;
+        assert_eq!(status, 403, "{method}: {error}");
+        assert_eq!(
+            (&error["name"], &error["message"]),
+            (&json!("erp.exceptions.AccessError"), &json!(refusal)),
+            "{method}"
+        );
+    }
+    // a key or value from a context default would skip every key check: refused first
+    for context in [
+        json!({"default_key": "recaptcha_private_key"}),
+        json!({"default_value": "file"}),
+    ] {
+        let (status, error) = call(
+            path("create"),
+            json!({"vals_list": [{"key": "ir_attachment.location", "value": "x"}], "context": context}),
+            admin,
+        )
+        .await;
+        assert_eq!(status, 422, "{context}: {error}");
+        assert_eq!(
+            (&error["name"], &error["message"]),
+            (
+                &json!("erp.exceptions.ValidationError"),
+                &json!(
+                    "A system parameter takes its key and value from the record, never from a \
+                     default in the context."
+                )
+            ),
+            "{context}"
+        );
+    }
+    let (status, done) = call(
+        path("erp_replace_secret"),
+        json!({"key": "recaptcha_private_key", "value": replaced}),
+        admin,
+    )
+    .await;
+    assert_eq!(status, 200, "erp_replace_secret: {done}");
+    assert!(!done.to_string().contains(PROVIDER_SECRET), "{done}");
+    let mut tx = orm.begin(erp_orm::SUPERUSER_ID).await.unwrap();
+    let stored: String = tx
+        .query(
+            "SELECT value FROM ir_config_parameter WHERE key='recaptcha_private_key'",
+            &[],
+        )
+        .await
+        .unwrap()[0]
+        .get(0);
+    tx.rollback().await.unwrap();
+    assert_eq!(stored, replaced);
+    let (_, rows) = call(
+        path("search_read"),
+        json!({"domain": [["value", "=", replaced]], "fields": ["key"]}),
+        admin,
+    )
+    .await;
+    assert_eq!(rows, json!([]), "the replaced value is not searchable");
+    for (key, name, message) in [
+        (
+            "database.secret",
+            "erp.exceptions.AccessError",
+            "Parameter database.secret is created with the database and cannot be replaced over \
+             RPC (rotate it with erp db rotate-secret).",
+        ),
+        (
+            "database.uuid",
+            "erp.exceptions.AccessError",
+            "Parameter database.uuid is created with the database and cannot be replaced over \
+             RPC.",
+        ),
+        (
+            "integrator.note",
+            "erp.exceptions.ValidationError",
+            "Parameter integrator.note is not a secret; change it in System Parameters.",
+        ),
+    ] {
+        let (_, error) = call(
+            path("erp_replace_secret"),
+            json!({"key": key, "value": "x".repeat(40)}),
+            admin,
+        )
+        .await;
+        assert_eq!(
+            (&error["name"], &error["message"]),
+            (&json!(name), &json!(message)),
+            "erp_replace_secret {key}"
+        );
+    }
+    let (status, error) = call(
+        path("erp_replace_secret"),
+        json!({"key": "recaptcha_private_key", "value": "internal-user-try"}),
+        ordinary,
+    )
+    .await;
+    assert_eq!(
+        status, 403,
+        "an internal user cannot replace a secret: {error}"
+    );
+    assert_eq!(error["name"], "erp.exceptions.AccessError");
+    // protected keys: a declared key and a default key are neither deleted nor renamed
+    let protected = [
+        "base.partition_upkeep_interval_secs",
+        "base.login_cooldown_after",
+    ];
+    let (_, rows) = call(
+        path("search_read"),
+        json!({"domain": [["key", "in", protected]], "fields": ["key"], "order": "key"}),
+        admin,
+    )
+    .await;
+    let rows = rows
+        .as_array()
+        .unwrap_or_else(|| panic!("protected rows: {rows}"));
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    for row in rows {
+        let (id, key) = (row["id"].clone(), row["key"].as_str().unwrap().to_owned());
+        let (_, error) = call(path("unlink"), json!({"ids": [id]}), admin).await;
+        assert_eq!(
+            error["message"],
+            json!(format!("You cannot delete the {key} record.")),
+            "unlink {key}"
+        );
+        let (_, error) = call(
+            path("write"),
+            json!({"ids": [id], "vals": {"key": "integrator.renamed"}}),
+            admin,
+        )
+        .await;
+        assert_eq!(
+            error["message"],
+            json!(format!(
+                "You cannot rename config parameters with keys {key}"
+            )),
+            "rename {key}"
+        );
+    }
 }
 
 /// Ids the read-only probes refer to.
@@ -1395,6 +1677,26 @@ async fn technical_menu_and_views() {
             ),
     )
     .await;
+    // a provider credential of the closed secret list
+    create(
+        &mut tx,
+        "ir.config_parameter",
+        RawVals::new()
+            .set_cell("key", Cell::Str("recaptcha_private_key".into()))
+            .set_cell("value", Cell::Str(PROVIDER_SECRET.into())),
+    )
+    .await;
+    let mut secrets: Vec<(String, i64, String)> = Vec::new();
+    for key in SECRET_PROBE_KEYS {
+        let row = tx
+            .query(
+                "SELECT id::int8, value FROM ir_config_parameter WHERE key = $1",
+                &[&key],
+            )
+            .await
+            .unwrap();
+        secrets.push((key.to_owned(), row[0].get(0), row[0].get(1)));
+    }
     tx.commit().await.unwrap();
     let probe_ids = ProbeIds {
         partner_model,
@@ -1455,16 +1757,9 @@ async fn technical_menu_and_views() {
     assert_eq!(status, 200, "{tree}");
     let admin_menus = menu_nodes(&tree);
     assert_eq!(admin_menus[&technical_menu]["parent_id"], settings_menu);
+    // every category has a reachable entry for the administrator, Parameters included
     for (category, id) in &category_ids {
-        if *category == "technical_params_menu" {
-            // A category left empty by ACL pruning is omitted by the server.
-            assert!(
-                !admin_menus.contains_key(id),
-                "{category} is empty and must be pruned"
-            );
-        } else {
-            assert_eq!(admin_menus[id]["parent_id"], technical_menu, "{category}");
-        }
+        assert_eq!(admin_menus[id]["parent_id"], technical_menu, "{category}");
     }
     assert_eq!(admin_menus[&access_menu_id]["action_id"], access_action_id);
 
@@ -1476,34 +1771,7 @@ async fn technical_menu_and_views() {
         )
         .await;
         match screen.admin {
-            AdminRead::NoAcl => {
-                assert!(
-                    !admin_menus.contains_key(&ids.menu),
-                    "{}: hidden without read access on {}",
-                    screen.menu,
-                    screen.model
-                );
-                assert_eq!(status, 403, "{}: {action}", screen.action);
-                let (status, body) = call(
-                    format!("/json/2/{}/web_search_read", screen.model),
-                    serde_json::json!({"domain": [], "specification": {}, "limit": 2}),
-                    &admin,
-                )
-                .await;
-                assert_eq!(status, 403, "{} admin read: {body}", screen.model);
-                assert_eq!(
-                    body["name"], "erp.exceptions.AccessError",
-                    "{} admin read",
-                    screen.model
-                );
-                assert_eq!(
-                    body["message"],
-                    model_denial("access", &model_label(screen.model), screen.model, &[]),
-                    "{} admin read",
-                    screen.model
-                );
-            }
-            AdminRead::Granted | AdminRead::ReadOnly => {
+            AdminRead::Granted | AdminRead::ReadOnly | AdminRead::Managed => {
                 let node = &admin_menus[&ids.menu];
                 assert_eq!(node["action_id"], ids.action, "{}", screen.menu);
                 assert_eq!(
@@ -1662,6 +1930,8 @@ async fn technical_menu_and_views() {
         }
     }
 
+    secret_parameter_probes(&call, &admin, &ordinary, &secrets, &orm).await;
+
     // 3. An internal user without base.group_system: no Technical menu, and the actions are
     //    refused even when called directly.
     let (status, tree) = call(
@@ -1697,8 +1967,7 @@ async fn technical_menu_and_views() {
         let groups: &[&str] = match screen.admin {
             // granted before r3, some also to internal users (menus, window actions): not probed here
             AdminRead::Granted => continue,
-            AdminRead::ReadOnly => &["Settings Administration"],
-            AdminRead::NoAcl => &[],
+            AdminRead::ReadOnly | AdminRead::Managed => &["Settings Administration"],
         };
         let (status, body) = call(
             format!("/json/2/{}/web_search_read", screen.model),
@@ -1720,7 +1989,7 @@ async fn technical_menu_and_views() {
         );
         read_probes += 1;
     }
-    // the ten read-only models of the lead's r3 decision plus `ir.config_parameter`
+    // the ten read-only models of the lead's r3 decision plus `ir.config_parameter` (Managed)
     assert_eq!(read_probes, 11, "internal-user read probes");
 
     drop(service);

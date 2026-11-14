@@ -214,9 +214,12 @@ async fn authorize_scope(env: &Env, tx: &mut Transaction, scope: &SettingsScope)
 /// This is also called by the model's existing precommit `_register_hook` lifecycle seam.
 /// # Errors
 /// Invalid ownership/dependency closure, duplicate keys, unavailable groups, unresolved item links
-/// ("Setting item references an unavailable action or menu.") or invalid declarations.
+/// ("Setting item references an unavailable action or menu.") or invalid declarations, including
+/// the declared technical parameters (`Parameter <key> ...`).
 pub async fn validate_declarations(env: &Env, tx: &mut Transaction) -> Result<()> {
-    published(env, tx).await.map(|_| ())
+    published(env, tx).await?;
+    // One key space with the declared technical parameters.
+    crate::system_parameters::published(env).map(drop)
 }
 
 fn installed_addons(env: &Env) -> BTreeSet<String> {
