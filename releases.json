@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "latest_stable": null,
+  "releases": [
+    {
+      "version": "next",
+      "status": "development",
+      "manifest_path": "docs/manifest.json",
+      "release_date": null,
+      "banner_notice": "Documentation reflects unreleased development."
+    }
+  ]
+}

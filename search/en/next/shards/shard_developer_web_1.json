@@ -1,0 +1,182 @@
+{
+  "shard_id": "shard_developer_web_1",
+  "lang": "en",
+  "version": "next",
+  "audience": "developer",
+  "modules": [
+    "web",
+    "web",
+    "web",
+    "web",
+    "web"
+  ],
+  "docs": [
+    {
+      "page_id": "developer/addon-guide/calendar-view",
+      "title": "Calendar view",
+      "module": "web",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "A calendar view places a model's records on a day, week, month or year grid by a start and an optional stop field. An addon declares it in a view file and adds calendar to the action's view_mode; no code is needed. <record id=\"loan_calendar\" model=\"ir.ui.view\"> <field name=\"name\">sample_library.loan.calendar</field> <field name=\"model\">sample_library.loan</field> <field name=\"arch\" type=\"xml\"> <calendar string=\"Loans\" date_start=\"loan_date\" date_stop=\"due_date\" color=\"borrower_id\" mode=\"month\"> <field name=\"book_id\"/> <field name=\"borrower_id\" filters=\"1\"/> <field name=\"state\" filters=\"1\"/> <field name=\"return_date\"/> </calendar> </field> </record> <record id=\"loan_action\" model=\"ir.actions.act_window\"> <field name=\"res_model\">sample_library.loan</field> <field name=\"view_mode\">list,form,calendar</field> </record>"
+        },
+        {
+          "anchor": "root-attributes",
+          "text": "| Attribute | Meaning | Default | |---|---|---| | date_start | Required. A stored date or datetime field: where an event starts | none (refused when absent) | | date_stop | A field of the same type: where it stops | the event stops where it starts | | all_day | A boolean field: the event covers whole days | events of a date field are always all-day | | color | A many2one or integer field: events with the same value share a palette colour (11 colours, cycled) | no colour | | mode | The scale shown first: day, week, month or year | week when offered, else the first scale | | scales | The scales offered, comma separated, in toolbar order | all four | | create, edit, delete, quick_create, month_overflow | Static booleans (0/1, True/False) | on | | hide_date, hide_time | Leave the date or the time out of an event's \"When\" line | off | | event_limit | Events shown in one month cell before \"+n more\" (1 to 50) | 5 | edit=\"0\" labels the popover button Open instead of Edit; delete=\"0\" removes Delete. create and quick_create are carried in the description for later; creating, moving and resizing events from the calendar is not available yet."
+        },
+        {
+          "anchor": "field-children",
+          "text": "Each <field name=\"...\"/> is shown in the event popover, labelled with string or the field's label; invisible=\"1\" leaves it out. filters=\"1\" on a many2one or selection field adds a side-panel section with one checkbox per value found in the visible range; its values are filtered in memory, without a read. When the filter field is also the colour field, each value shows its colour."
+        },
+        {
+          "anchor": "what-is-refused-by-name",
+          "text": "Everything the first calendar slices do not carry is refused when the view loads, never ignored (SPEC-VIEW-241): a missing or wrongly typed date field, an unknown or repeated scale, a mode outside scales, an event_limit outside 1 to 50, an expression in a flag, other child elements, a field named twice. These reference attributes are refused with a message saying they are not available yet: aggregate, event_open_popup, form_view_id, create_name_field, quick_create_view_id, multi_create_view, show_unusual_days, show_date_picker, schedule, js_class, <popover>, and on fields widget, options, color, avatar_field, write_model, write_field, filter_field, and filters on other field kinds. Odoo 20 has no date_delay; it is an unknown attribute here too."
+        },
+        {
+          "anchor": "access",
+          "text": "The calendar's root fields are needed to place an event: a user who cannot read one of them gets an access error for the whole calendar. A <field> child the user cannot read is left out of the popover and the side panel (SPEC-VIEW-243)."
+        },
+        {
+          "anchor": "reading-the-range",
+          "text": "The client reads the records of the visible range with web_search_read: the search domain, then a range domain \"starts on or before the last moment of the range, and stops on or after its first moment (or has no stop and starts in the range)\". Datetime bounds are computed in the user's time zone and sent in UTC; date bounds are plain days. Weeks start on Monday. The read asks for one record more than the setting web.calendar_max_events (Settings, database-wide; default 1,000, floor 50, hard bound 20,000); when that record comes back the range is refused with a message naming the setting, and nothing is drawn (SPEC-VIEW-242)."
+        },
+        {
+          "anchor": "address",
+          "text": "The page address keeps calendar_scale (day, week, month, year) and calendar_date (YYYY-MM-DD). Both are checked by the server's address policy and by the client; a malformed value, or a scale the calendar does not offer, is refused by name (SPEC-VIEW-244). Behaviour matrix: docs/design/m4-calendar-matrix.md. User guide: docs/user/calendar-view.md."
+        }
+      ]
+    },
+    {
+      "page_id": "developer/addon-guide/dashboard-headers",
+      "title": "Declarative dashboard headers",
+      "module": "web",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "An addon depending on web can declare one dashboard directly under a list root. It needs no custom client code: <list string=\"Books\"> <dashboard> <count name=\"available\" string=\"Available books\" domain=\"[('available', '=', True)]\" color=\"success\"/> <kpi name=\"pages_added\" string=\"Pages added\" field=\"pages\" aggregate=\"sum\" date_field=\"create_date\"/> </dashboard> <field name=\"title\"/> <field name=\"pages\"/> </list> Item names are unique within the owning view and contain letters, digits or underscores. Captions belong to the view record. A count has exactly one domain or filter; filter names a filter in the selected action's companion search view. A named filter cannot change context. Count colors are optional semantic roles: info, success, warning or danger. A KPI declares a stored integer/float field, an aggregate (sum, avg, min or max), and a stored date/datetime field. Monetary and relational measures are refused. Optional KPI domains further narrow the current search. Dashboard domain evaluation accepts literal criteria and uid; it does not execute calls or record expressions. Row fields remain independent from dashboard measures. All reads use current caller access and record rules. An unreadable metric reference removes the complete strip. Unknown input is refused, including unknown attributes, malformed expressions, duplicate identities and unsupported versions. The server resolves the saved action and combined view again on each data request; clients cannot submit new executable metric definitions. A revision mismatch requires reloading the view. The shared renderer and declaration are view-neutral; this delivery attaches the strip to lists. Kanban attachment is separate. See the Library example for an installed data-only addon declaration."
+        },
+        {
+          "anchor": "runtime-settings",
+          "text": "The database-scoped keys are web.dashboard_max_items, web.dashboard_max_period_days and web.dashboard_periods. The period list is bounded UTF-8 JSON text, at most 4096 bytes, containing 1–16 choices. A rolling choice has id, label, kind: \"rolling\" and days; calendar choices use kind: \"month\" or \"year\" and omit days. IDs are unique and at most 64 bytes; labels are at most 256 bytes. The group validator refuses choices beyond the configured horizon. Zero never means unlimited. Counts and totals are returned as decimal text so browser numeric precision does not change them. Missing aggregate values and unavailable comparisons remain explicit nulls. No new persistence model, background job or shared result cache is needed."
+        }
+      ]
+    },
+    {
+      "page_id": "developer/addon-guide/graph-view",
+      "title": "Graph view",
+      "module": "web",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "A graph view draws one measure of a model as a bar, line or pie chart over the values of one or two fields. An addon declares it in a view file; no code is needed. The manifest must list web in depends: graph is owned by web. <record id=\"book_graph\" model=\"ir.ui.view\"> <field name=\"name\">sample_library.book.graph</field> <field name=\"model\">sample_library.book</field> <field name=\"arch\" type=\"xml\"> <graph string=\"Books\" type=\"bar\"> <field name=\"published_on\" interval=\"year\"/> <field name=\"book_format\"/> <field name=\"price\" type=\"measure\"/> <field name=\"pages\" type=\"measure\"/> </graph> </field> </record> The server admits and delivers the view through get_views (renderer web.graph); list graph in the action's view_mode and the web client draws it (plain SVG, no chart library) with a Graph button in the view switcher. The user guide is docs/user/graph-view.md."
+        },
+        {
+          "anchor": "what-it-supports",
+          "text": "| Declaration | Meaning | |---|---| | <graph type> | bar (the default), line or pie: the chart drawn first. | | <graph stacked cumulated> | stacked (default on) stacks the series of a bar or line chart; cumulated (default off) adds the values up along the first grouping. Literal 1/0/True/False only. | | <graph order> | asc or desc (upper case is accepted and delivered in lower case): the groups are sorted by their total. Absent: in grouping order. | | <graph disable_linking> | 1 turns off opening the records of a bar or slice. | | <field name=\"f\"/>, type=\"row\", type=\"col\" | A grouping. All three mean the same: the first grouping declared is the axis (the slices of a pie), the second the series. A stored boolean, char, integer, selection, many2one, date or datetime field. | | interval=\"month\" | On a date or datetime grouping: day, week, month, quarter or year. | | <field name=\"f\" type=\"measure\"/> | A measure: a stored integer, float or monetary field that adds up (not sequence). Declare several; the last one is drawn first, the others are offered to switch to. With none, the chart counts records. | The delivered root carries mode, stacked, cumulated, disable_linking and, when declared, order; each field carries its role (group or measure), its label (string, or the field's label) and its interval when declared."
+        },
+        {
+          "anchor": "what-is-refused",
+          "text": "The reference ignores an unknown chart type or order and skips a field it cannot group by. Here the server refuses the view when it is read, naming the attribute, the field or the limit. | Declared | Result | |---|---| | type other than bar, line, pie; order other than asc, desc | refused, naming the value | | a third grouping | refused: the chart groups by at most two fields (the axis, then the series) | | the same field twice as a grouping, even with different intervals | refused (the reference keeps only the finest interval) | | a text, html, float, one2many or many2many field, or a field without a column, as a grouping | refused | | interval on a field that is not a date or datetime, on a measure, or with another value | refused | | a measure that is not a stored integer, float or monetary field, or the same measure twice | refused | | widget, invisible, options on a field; sample, cumulated_start, class, js_class on the root | refused by name | | a stacked, cumulated or disable_linking that is an expression | refused |"
+        },
+        {
+          "anchor": "bounds",
+          "text": "web.graph_max_groups (Settings, the web addon's panel; read by internal users, written by administrators): the most groups one chart read may return, both groupings crossed. Default 1,000, floor 50, hard bound 20,000; a value outside them is refused by name. The web client reads it when it opens a graph and refuses a larger answer by name rather than drawing part of it."
+        },
+        {
+          "anchor": "server-calls",
+          "text": "The chart reads its data with the grouped read the pivot already uses, formatted_read_grouping_sets (each grouping alone and both crossed, in one call, with each group's domain for opening its records); the graph view adds no RPC method."
+        },
+        {
+          "anchor": "client",
+          "text": "| Piece | Where | What it does | |---|---|---| | decode | addons/web/static/src/client/metadata.ts | Reads the delivered graph and graph_field nodes; an unknown mode, order or role is refused. | | model | addons/web/static/src/client/graph.ts | readGraphView (arch and field list to a config), GraphModel (one read per change of measure, groupings or search; chart type, stacking, cumulation and order change nothing on the server), the address parameters. | | chart | addons/web/static/src/client/graph-view.ts | mountGraph: the toolbar, the SVG chart, the legend and the data table. Colours are the --accent and --palette-1 to --palette-11 tokens, so both themes apply. | The search's Group By sets the groupings, at most two; with none, the arch's are drawn. Cards of the list's dashboard kept in the address narrow the chart as they narrow the list. The page address keeps what differs from the arch: graph_mode (bar, line, pie), graph_measure (a field or __count), graph_groupby (one or two field or field:interval, comma separated), graph_order (asc, desc, or none when the arch declares an order and the user cleared it), graph_stacked and graph_cumulated (0 or 1). The server's address check (crates/erp-server/src/redirect.rs) admits the same shapes, so a reload of a graph never fails. The action context keys graph_measure, graph_mode, graph_groupbys, graph_order, graph_stacked and graph_cumulated are not read yet: declare the chart in the arch."
+        }
+      ]
+    },
+    {
+      "page_id": "developer/addon-guide/kanban-view",
+      "title": "Kanban view",
+      "module": "web",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "A kanban view shows records as cards. An addon declares it in a view file with the same shape the reference uses: a <kanban> root and one card template, <templates><t t-name=\"card\">. No code is needed. <record id=\"book_kanban\" model=\"ir.ui.view\"> <field name=\"name\">sample_library.book.kanban</field> <field name=\"model\">sample_library.book</field> <field name=\"arch\" type=\"xml\"> <kanban string=\"Books\"> <progressbar field=\"book_format\" colors='{\"hardcover\": \"success\", \"paperback\": \"info\", \"ebook\": \"warning\"}'/> <templates> <t t-name=\"card\"> <main> <field name=\"title\"/> <field name=\"author_id\"/> <field name=\"website\" widget=\"url\"/> </main> <aside> <field name=\"title\"/> </aside> <footer> <field name=\"genre_ids\" widget=\"many2many_tags\"/> <field name=\"rating\" widget=\"priority\"/> <field name=\"favorite\" widget=\"boolean_favorite\"/> </footer> </t> </templates> </kanban> </field> </record> The addon's manifest must list web in depends: kanban is owned by web."
+        },
+        {
+          "anchor": "the-card",
+          "text": "A card is a declaration, not free markup. It holds <field> nodes and at most one each of three regions, in any order: | Region | What the client does with it | |---|---| | fields directly in the card, or <main> | the first field is the card's title; the others are lines under it | | <aside> | the leading tile. Image fields are not available yet (ADR 0089 is Proposed), so put a character field here: the card shows an initials tile from its value. When images exist, the image widget goes here without a syntax change. | | <footer> | the bottom row: tags, priority stars, a favourite flag, counters | Each card field is an ordinary field node: any registered widget (the ones forms and lists use) and its options, a string, a static invisible and groups. A many2many without a widget is shown as tags."
+        },
+        {
+          "anchor": "in-the-client",
+          "text": "Add kanban to the window action's view_mode (the sample library's Books action has list,kanban,form,pivot) and the view switcher shows a Kanban button. The client draws the cards ungrouped, one page at a time (limit, else 40), through web_search_read with the card fields. Each card field is drawn by the field widget its widget names, read-only, looked up first under the card.<widget> key of the field widget registry, so an addon can register a card-specific variant (for example card.priority) without changing forms or lists. A field with a static invisible=\"1\" is read but not drawn. A card opens its record when the arch allows it (can_open) and the action has a form view. Grouped columns, drag and drop, quick creation and the drawing of the progress bar are not available yet. A view with default_group_by is shown ungrouped with a sentence that says so."
+        },
+        {
+          "anchor": "root",
+          "text": "| Attribute | Meaning (default) | |---|---| | limit | cards per page, a positive whole number (the list's page size when absent) | | default_group_by | one stored boolean, char, integer, selection, many2one, date or datetime field the board opens grouped by. A user who cannot read that field gets the cards ungrouped. | | quick_create | inline creation in a column (true; always false when create=\"0\") | | records_draggable, groups_draggable | cards and columns may be dragged (true) | | archivable | column records may be archived (true) | | can_open | a click on a card opens its record (true) | | create, edit, delete | as on a list |"
+        },
+        {
+          "anchor": "progress-bar",
+          "text": "<progressbar field colors sum_field help>, at most one, directly under <kanban>: field is a selection or char field; colors is a literal dictionary from a value of that field to one of success, warning, danger, info or muted (for a selection, every key must be one of its values; at most 64 entries, no key twice); sum_field is an integer, float or monetary field summed per column; help is a short text. The bar is drawn on grouped columns. A user who cannot read field or sum_field gets the view without the bar."
+        },
+        {
+          "anchor": "what-is-refused",
+          "text": "Installation fails with a message that names the element or attribute; nothing is silently ignored. | Declared | Result | |---|---| | markup in the card (<div>, <span>, <a>, <img>, <widget>), t-if, t-att-*, t-esc, or a template other than card | refused: free template markup needs the restricted template compiler, which is not available yet | | class or any other unlisted attribute on a card node | refused by name | | a <field> directly under <kanban> (the reference loads such fields for template expressions) | refused: declare it inside the card | | no card, two cards, a card outside <templates>, a region twice, two progress bars | refused | | a dynamic invisible on a card field (invisible=\"not email\") | refused: per-card modifiers are not available yet | | a one2many field on a card | refused | | default_group_by with several fields, an unknown field, or a float, text, many2many or one2many field | refused | | group_create, group_delete, group_edit, on_create, quick_create_view, highlight_color, default_order, sample, examples, <header>, <control> | refused by name: each comes with the slice that uses it |"
+        },
+        {
+          "anchor": "server-calls",
+          "text": "The view adds no method: cards load through web_search_read (ungrouped) and web_read_group (grouped), the bar through read_progress_bar, quick creation through name_create, reordering through web_resequence. Each is the ordinary ORM method with its access checks."
+        }
+      ]
+    },
+    {
+      "page_id": "developer/addon-guide/pivot-view",
+      "title": "Pivot view",
+      "module": "web",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "A pivot view totals one or more measures across the values of a row field and a column field. An addon declares it in a view file and adds pivot to the action's view_mode; no code is needed. <record id=\"book_pivot\" model=\"ir.ui.view\"> <field name=\"name\">sample_library.book.pivot</field> <field name=\"model\">sample_library.book</field> <field name=\"arch\" type=\"xml\"> <pivot string=\"Books\"> <field name=\"author_id\" type=\"row\"/> <field name=\"book_format\" type=\"col\"/> <field name=\"pages\" type=\"measure\"/> </pivot> </field> </record> <record id=\"book_action\" model=\"ir.actions.act_window\"> <field name=\"res_model\">sample_library.book</field> <field name=\"view_mode\">list,form,pivot</field> </record>"
+        },
+        {
+          "anchor": "what-it-supports",
+          "text": "| Declaration | Meaning | |---|---| | <pivot string disable_linking display_quantity default_order> | display_quantity=\"1\" shows Count first even when measures are declared; with no measure at all, Count is the measure. disable_linking=\"1\" turns the cell links off. default_order=\"pages desc\" sorts the rows by that measure's Total column at the start; the name is a declared measure or __count, the direction is asc (the default) or desc. | | <field name=\"f\" type=\"row\">, type=\"col\" | A grouping. Declare several, in order, up to six per axis: the first is the first level, the next opens inside it. A boolean, char, integer, selection, many2one, date or datetime field. The same field may appear twice only with different intervals. | | interval=\"year\" | On a date or datetime row or column field: day, week, month, quarter or year. A date field with no interval groups by month. Refused on any other field and on measures. | | <field name=\"f\" type=\"measure\"> | A measure, summed. An integer, float or monetary field (a monetary measure is shown as a plain number; its currency is not handled yet). | The table has a Total row and a Total column. Every header is a button. A click on an open header folds it with everything below it; a click on a folded header expands it by the next declared grouping, or, when none is left, opens a menu of the search view's group-by items and the model's groupable fields (a date field offers Year, Quarter, Month, Week, Day), to any depth. The toolbar offers Measures (Count and every summable field of the model, not only the declared ones), Flip axis, Expand all and Collapse all; a click on a measure header sorts the rows (ascending, descending, none); a click on a value cell opens the list of its records, and the breadcrumb comes back to the pivot as it was left. The groupings, expanded headers, measures and sort are kept in the page address, so a reload or a shared link restores the table. Every header is a node (a plus square closed, a minus square opened; the whole cell is the click target, the button inside carries aria-expanded). The search menu offers its Group By section: the <filter context=\"{'group_by': 'field'}\"> items of the model's default search view (a date field may carry an interval: {'group_by': 'published_on:month'}), a custom group over every groupable field, and the date fields by interval. The choices set the pivot's row groupings, in the order chosen, fully expanded, replacing what header clicks added; removing the facet returns to the arch's rows; the columns are never changed by the search. The facet is not kept in the page address, the resulting rows are (pivot_rows, pivot_open). The client asks for the model's default search view (get_views with [null, \"search\"]); the action's search_view_id is not part of the action it receives, so a model with no default search view makes the server answer 422 \"No default view of type 'search'\", which the pivot treats as \"no declared items\" and still offers the custom group. A model that wants a Group By menu ships a search view (the Sample Library books do: sample_library.book.search). The context keys pivot_measures, pivot_row_groupby and pivot_column_groupby replace the arch's measures and groupings in the client's pivot configuration. The shell cannot carry them from a window action today (it refuses an action's own context for every view), so they take effect only from the user context. The addon's manifest must list web in depends: pivot is owned by web (an install without it is refused with \"View-type key \"pivot\" belongs to addon \"web\"\"). The Sample Library addon ships a two-level pivot (author, then the year published, by format, in pages and price): Library, Books, then the Pivot button."
+        },
+        {
+          "anchor": "what-is-refused",
+          "text": "The server names the attribute, the field or the limit when the view is read; nothing is silently ignored. | Declared | Result | |---|---| | a seventh row or col field | refused: at most six fields per axis | | interval on a field that is not a date or datetime, on a measure, or with a value other than the five | refused, naming the field and the interval | | a float or text field as a row or column | refused: the table groups by boolean, char, integer, selection, many2one, date and datetime fields | | widget, invisible, options on a pivot field | refused by name | | default_order naming anything but a declared measure or __count, or a direction other than asc or desc | refused | | a measure that is not integer, float or monetary | refused | | the same measure, or the same grouping with the same interval, twice | refused | | count distinct, currency aggregates | not available yet |"
+        },
+        {
+          "anchor": "bounds",
+          "text": "Settings (Settings, the web addon's panel; read by internal users, written by administrators), each with a default, a floor and a hard bound: web.pivot_max_groups (2,000; 100 to 50,000: the most groups one grouping may return), web.pivot_max_open_headers (200; 10 to 2,000: the most headers that may stay expanded) and web.pivot_max_cells (20,000; 1,000 to 1,000,000). A change that would pass one is refused with a message that names the setting, and the table stays as it was."
+        },
+        {
+          "anchor": "server-calls",
+          "text": "Opening reads the three settings, the model's field list, the search view and then makes one formatted_read_grouping_sets call (every depth of the rows crossed with every depth of the columns). Expanding a header reads one call narrowed to that header, only for the sets not held yet. Folding, flipping, sorting, collapsing all and turning a read measure off or on send nothing. Expand all, a measure never read and a new search read the whole table once."
+        },
+        {
+          "anchor": "address",
+          "text": "A pivot whose state differs from the arch adds pivot_rows, pivot_cols (comma lists of field or field:interval), pivot_measures, pivot_open (the expanded headers by axis) and pivot_sort to the address. Each has a closed, bounded shape: the server's redirect policy and the client refuse a malformed value, a state too large for the address is refused with a message when it is made, and leaving the pivot for another view drops them."
+        },
+        {
+          "anchor": "download",
+          "text": "Every pivot has a Download button (label \"Download\", accessible name \"Download xlsx\") that saves the table on screen as an .xlsx file: no declaration is needed. The browser posts the table as it is drawn; the server formats what it receives and never re-reads the data. It checks the session, the same origin (as every state-changing route does), the caller's read access to the document's model (the ordinary access refusal otherwise) and the bounds below, then answers the workbook. Unit tests of the writer: addons/web/src/pivot_xlsx.rs; of the parser: addons/web/src/pivot_export.rs; the route through the real binary: crates/erp-cli/tests/human_pivot_export.rs."
+        },
+        {
+          "anchor": "download-workbook",
+          "text": "One sheet named after the action title (at most 31 characters, without [ ] : * ? / \\); the file is named after the title too, with path and control characters replaced, plus .xlsx. Header cells are merged as on screen (the corner cell over all header rows, a group header over its measure columns, the Total column over two rows); the totals (the Total row, the Total column, the Total header) are bold; row labels carry the spreadsheet's own indent, not spaces. Integers have the format #,##0; floats and monetary values #,##0 followed by the measure's digits. Empty cells are left empty. Column widths follow the content, between 10 and 60 characters. **Formula injection.** The rule applied is OWASP's CSV-injection rule: a text cell whose first character is =, +, -, @, a tab or a carriage return is written as an explicit string cell with the spreadsheet's quote-prefix flag (the stored apostrophe: the cell is text and no apostrophe is shown), and its characters are kept as posted. Every text cell, header or row label, is a string cell, and no cell of the file is a formula. The reference writes strings through a call that turns a text starting with = into a formula (docs/compare/odoo-bugs.md, BUG-120); ERPForAll does not. **Who may download.** Only an internal user (base.group_user) downloads a table. Any other session is refused with an access error before the posted document is parsed, and the read check on the table's model runs after it with the caller's rights. The reference route asks for a signed-in user (odoo/addons/web/controllers/pivot.py:17)."
+        },
+        {
+          "anchor": "download-document",
+          "text": "POST /erp/pivot/export, Content-Type: application/json, a browser session, Sec-Fetch-Site: same-origin (a bearer key is refused). The body is closed: an unknown key or a value of the wrong type is refused with 422 naming its path ($.rows[1].cells[2].kind). { \"model\": \"library.book\", \"title\": \"Books\", \"headers\": [[{\"label\": \"Author\", \"rowspan\": 3}, {\"label\": \"Total\", \"colspan\": 4, \"bold\": true}, {\"label\": \"Total\", \"colspan\": 2, \"rowspan\": 2, \"bold\": true}], [{\"label\": \"Draft\", \"colspan\": 2}, {\"label\": \"Done\", \"colspan\": 2}], [{\"label\": \"Count\"}, {\"label\": \"Pages\"}, {\"label\": \"Count\"}, {\"label\": \"Pages\"}, {\"label\": \"Count\", \"bold\": true}, {\"label\": \"Pages\", \"bold\": true}]], \"rows\": [{\"label\": \"Total\", \"bold\": true, \"cells\": [{\"kind\": \"integer\", \"value\": 3, \"bold\": true}, {\"kind\": \"float\", \"value\": 1.5, \"digits\": 2, \"bold\": true}]}, {\"label\": \"Ada\", \"indent\": 1, \"cells\": [{\"kind\": \"integer\", \"value\": 2}, {\"kind\": \"empty\"}]}] } - headers is a list of header rows of any depth. Each cell goes to the next free column of its row (a cell above with a rowspan has already taken its place), exactly like an HTML table; colspan and rowspan default to 1, bold to false. Column 0 is the label column. Every row must be completely covered, and no two cells may overlap. - rows are the body rows; every row has the same number of cells (the data columns). indent (0 to 64) defaults to 0. - A cell has a kind: integer (a whole number a spreadsheet keeps exactly, up to 2^53 - 1), float or monetary (a finite value and digits, 0 to 10), or empty (no value). bold defaults to false. - The client builds it with pivotExportDocument(model, { model, title }) in addons/web/static/src/client/pivot.ts from the same table it draws, so a nested table (several header levels) posts the same way as slice 1's flat one. The client test compares the result with the fixtures addons/web/static/tests/fixtures/pivot-export-*.json, which the Rust test posts to the real binary."
+        },
+        {
+          "anchor": "download-settings",
+          "text": "Five database-scope settings of the web addon, in Settings under \"Pivot download\", readable by internal users and writable by administrators (base.group_system). Each is refused below its floor and above its hard bound, and a document over a bound is refused by the name of the setting. | Setting | Default | Floor | Hard bound | Refusal | |---|---|---|---|---| | web.pivot_export_max_cells (cells of the sheet: header rows and body rows times the data columns plus the label column) | 100,000 | 100 | 500,000 | 422 | | web.pivot_export_max_header_depth (header rows) | 16 | 2 | 64 | 422 | | web.pivot_export_max_columns (data columns, besides the label column) | 16,383 | 2 | 16,383 | 422 | | web.pivot_export_max_label_bytes (one label or the title) | 1,024 | 64 | 4,096 | 422 | | web.pivot_export_max_request_bytes (the whole document) | 8 MiB | 64 KiB | 32 MiB | 413, before the document is parsed | The column hard bound is the spreadsheet format's limit of 16,384 columns less the label column. The cell bound counts the whole sheet, so a header cannot be made large for free, and it is checked before the header grid is built or a merge is written. The cell and byte hard bounds keep one export inside the memory of a request: the document is parsed whole and the workbook built in memory. An administrator changes them with the settings service (ir.config.setting, erp_write_values) or the Settings page. The document is parsed and the workbook built on the server's blocking pool, never on its async executor; the request's own deadline still applies to the whole call."
+        }
+      ]
+    }
+  ]
+}

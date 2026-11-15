@@ -1,0 +1,816 @@
+<!DOCTYPE html><html lang="en" dir="ltr" data-theme="dark" data-has-toc data-has-sidebar class="astro-6cjqtku2"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>Authentication for addon authors | ERPForAll Docs</title><link rel="canonical" href="https://indoerp.github.io/ERPForAll/en/next/developer/addon-guide/auth/"/><link rel="sitemap" href="/ERPForAll/sitemap-index.xml"/><link rel="shortcut icon" href="/ERPForAll/favicon.svg" type="image/svg+xml"/><meta name="generator" content="Astro v7.4.2"/><meta name="generator" content="Starlight v0.42.7"/><meta property="og:title" content="Authentication for addon authors"/><meta property="og:type" content="article"/><meta property="og:url" content="https://indoerp.github.io/ERPForAll/en/next/developer/addon-guide/auth/"/><meta property="og:locale" content="en"/><meta property="og:description" content="erp_security::auth::apikey provides the native format and keyed-digest building blocks defined by ADR 0037. GeneratedApiKey::generate() returns redacted, zeroizing secret text; expose() explicitly borrows that text for the eventual one-time response."/><meta property="og:site_name" content="ERPForAll Docs"/><meta name="twitter:card" content="summary_large_image"/><meta name="description" content="erp_security::auth::apikey provides the native format and keyed-digest building blocks defined by ADR 0037. GeneratedApiKey::generate() returns redacted, zeroizing secret text; expose() explicitly borrows that text for the eventual one-time response."/><script>
+	window.StarlightThemeProvider = (() => {
+		const storedTheme =
+			typeof localStorage !== 'undefined' && localStorage.getItem('starlight-theme');
+		const theme =
+			storedTheme ||
+			(window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+		document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
+		return {
+			updatePickers(theme = storedTheme || 'auto') {
+				document.querySelectorAll('starlight-theme-select').forEach((picker) => {
+					const select = picker.querySelector('select');
+					if (select) select.value = theme;
+					/** @type {HTMLTemplateElement | null} */
+					const tmpl = document.querySelector(`#theme-icons`);
+					const newIcon = tmpl && tmpl.content.querySelector('.' + theme);
+					if (newIcon) {
+						const oldIcon = picker.querySelector('svg.label-icon');
+						if (oldIcon) {
+							oldIcon.replaceChildren(...newIcon.cloneNode(true).childNodes);
+						}
+					}
+				});
+			},
+		};
+	})();
+</script><template id="theme-icons"><svg aria-hidden="true" class="light astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M5 12a1 1 0 0 0-1-1H3a1 1 0 0 0 0 2h1a1 1 0 0 0 1-1Zm.64 5-.71.71a1 1 0 0 0 0 1.41 1 1 0 0 0 1.41 0l.71-.71A1 1 0 0 0 5.64 17ZM12 5a1 1 0 0 0 1-1V3a1 1 0 0 0-2 0v1a1 1 0 0 0 1 1Zm5.66 2.34a1 1 0 0 0 .7-.29l.71-.71a1 1 0 1 0-1.41-1.41l-.66.71a1 1 0 0 0 0 1.41 1 1 0 0 0 .66.29Zm-12-.29a1 1 0 0 0 1.41 0 1 1 0 0 0 0-1.41l-.71-.71a1.004 1.004 0 1 0-1.43 1.41l.73.71ZM21 11h-1a1 1 0 0 0 0 2h1a1 1 0 0 0 0-2Zm-2.64 6A1 1 0 0 0 17 18.36l.71.71a1 1 0 0 0 1.41 0 1 1 0 0 0 0-1.41l-.76-.66ZM12 6.5a5.5 5.5 0 1 0 5.5 5.5A5.51 5.51 0 0 0 12 6.5Zm0 9a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Zm0 3.5a1 1 0 0 0-1 1v1a1 1 0 0 0 2 0v-1a1 1 0 0 0-1-1Z"/></svg><svg aria-hidden="true" class="dark astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21.64 13a1 1 0 0 0-1.05-.14 8.049 8.049 0 0 1-3.37.73 8.15 8.15 0 0 1-8.14-8.1 8.59 8.59 0 0 1 .25-2A1 1 0 0 0 8 2.36a10.14 10.14 0 1 0 14 11.69 1 1 0 0 0-.36-1.05Zm-9.5 6.69A8.14 8.14 0 0 1 7.08 5.22v.27a10.15 10.15 0 0 0 10.14 10.14 9.784 9.784 0 0 0 2.1-.22 8.11 8.11 0 0 1-7.18 4.32v-.04Z"/></svg><svg aria-hidden="true" class="auto astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg></template><link rel="stylesheet" href="/ERPForAll/_astro/print.ehPL0gv-.css" media="print"><link rel="stylesheet" href="/ERPForAll/_astro/common.DD1vW0WO.css"><script type="module" src="/ERPForAll/_astro/page.cNngjUgL.js"></script></head><body class="astro-6cjqtku2"><a class="sl-skip-link astro-kisk6kzb" href="#_top">Skip to content</a><div class="page sl-flex astro-3a7n2yso"><header class="header astro-3a7n2yso"><div class="header astro-fcwmdtoc"><div class="title-wrapper sl-flex astro-fcwmdtoc"><div class="site-title-group"><a href="/ERPForAll/en" class="site-title sl-flex astro-qrttq3z6"><img class="astro-qrttq3z6" alt src="/ERPForAll/_astro/logo.C9qnaaRe.svg" width="32" height="32"><span class="astro-qrttq3z6" translate="no">ERPForAll Docs</span></a><span class="site-version" title="These pages describe unreleased development code (version next).">Development</span></div></div><div class="sl-flex print:hidden astro-fcwmdtoc"><doc-search class="doc-search"><button type="button" class="doc-search-open" data-search-open disabled aria-label="Search the documentation" aria-keyshortcuts="Control+K Meta+K /"><svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M10.5 3a7.5 7.5 0 0 1 5.9 12.1l4.8 4.8-1.4 1.4-4.8-4.8A7.5 7.5 0 1 1 10.5 3Zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11Z"></path></svg><span class="doc-search-label">Search the docs</span><kbd class="doc-search-key" aria-hidden="true">/</kbd></button><dialog class="doc-search-dialog" aria-label="Search the documentation"><div class="doc-search-panel"><div class="doc-search-field"><svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M10.5 3a7.5 7.5 0 0 1 5.9 12.1l4.8 4.8-1.4 1.4-4.8-4.8A7.5 7.5 0 1 1 10.5 3Zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11Z"></path></svg><input type="search" placeholder="Search titles, headings and page text" aria-label="Search query" autocomplete="off" spellcheck="false" maxlength="256"><button type="button" class="doc-search-close" data-search-close>Close</button></div><p class="doc-search-status" data-search-status role="status" aria-live="polite"></p><ul class="doc-search-results" data-search-results></ul></div></dialog></doc-search><script type="module" src="/ERPForAll/_astro/DocSearch.astro_astro_type_script_index_0_lang.C9sK9ufE.js"></script></div><div class="sl-hidden md:sl-flex print:hidden right-group astro-fcwmdtoc"><div class="sl-flex social-icons astro-fcwmdtoc"></div><starlight-theme-select><label style="--sl-select-width: 6.25em" class="astro-3hi4jykp"><span class="sr-only astro-3hi4jykp">Select theme</span><svg aria-hidden="true" class="icon label-icon astro-3hi4jykp astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg><select autocomplete="off" class="astro-3hi4jykp"><option value="dark" class="astro-3hi4jykp">Dark</option><option value="light" class="astro-3hi4jykp">Light</option><option value="auto" selected class="astro-3hi4jykp">Auto</option></select><svg aria-hidden="true" class="icon caret astro-3hi4jykp astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg></label></starlight-theme-select><script>
+	StarlightThemeProvider.updatePickers();
+</script><script type="module">var e=`starlight-theme`,t=e=>e===`auto`||e===`dark`||e===`light`?e:`auto`,n=()=>t(typeof localStorage<`u`&&localStorage.getItem(e));function r(t){typeof localStorage<`u`&&localStorage.setItem(e,t===`light`||t===`dark`?t:``)}var i=()=>matchMedia(`(prefers-color-scheme: light)`).matches?`light`:`dark`;function a(e){StarlightThemeProvider.updatePickers(e),document.documentElement.dataset.theme=e===`auto`?i():e,r(e)}matchMedia(`(prefers-color-scheme: light)`).addEventListener(`change`,()=>{n()===`auto`&&a(`auto`)});var o=class extends HTMLElement{constructor(){super(),a(n()),this.querySelector(`select`)?.addEventListener(`change`,e=>{e.currentTarget instanceof HTMLSelectElement&&a(t(e.currentTarget.value))})}};customElements.define(`starlight-theme-select`,o);</script><script type="module">var e=class extends HTMLElement{constructor(){super();let e=this.querySelector(`select`);e&&(e.addEventListener(`change`,e=>{e.currentTarget instanceof HTMLSelectElement&&(window.location.pathname=e.currentTarget.value)}),window.addEventListener(`pageshow`,t=>{if(!t.persisted)return;let n=e.querySelector(`option[selected]`)?.index;n!==e.selectedIndex&&(e.selectedIndex=n??0)}))}};customElements.define(`starlight-lang-select`,e);</script></div></div></header><nav class="sidebar print:hidden astro-3a7n2yso" aria-label="Main"><button popovertarget="starlight__sidebar" class="sl-menu-button sl-flex md:sl-hidden print:hidden astro-6tq7w653"><svg aria-hidden="true" class="open-menu astro-6tq7w653 astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M3 8h18a1 1 0 1 0 0-2H3a1 1 0 0 0 0 2Zm18 8H3a1 1 0 0 0 0 2h18a1 1 0 0 0 0-2Zm0-5H3a1 1 0 0 0 0 2h18a1 1 0 0 0 0-2Z"/></svg><svg aria-hidden="true" class="close-menu astro-6tq7w653 astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="m13.41 12 6.3-6.29a1.004 1.004 0 1 0-1.42-1.42L12 10.59l-6.29-6.3a1.004 1.004 0 0 0-1.42 1.42l6.3 6.29-6.3 6.29a1 1 0 0 0 0 1.42.998.998 0 0 0 1.42 0l6.29-6.3 6.29 6.3a.999.999 0 0 0 1.42 0 1 1 0 0 0 0-1.42L13.41 12Z"/></svg><span class="sr-only astro-6tq7w653">Menu</span></button><script type="module">var e=class extends HTMLElement{constructor(){super();let e=matchMedia(`(min-width: 50em)`),t=()=>{this.popover=e.matches?null:`auto`};t(),e.addEventListener(`change`,()=>t()),this.addEventListener(`toggle`,({newState:e})=>this.trapFocus(e===`open`))}trapFocus(e){document.querySelectorAll(`.main-frame, .sl-skip-link`).forEach(t=>{t.toggleAttribute(`inert`,e)})}};customElements.define(`sl-sidebar-pane`,e);</script><sl-sidebar-pane popover id="starlight__sidebar" class="sidebar-pane astro-3a7n2yso"><div class="sidebar-content sl-flex astro-3a7n2yso"><sl-sidebar-state-persist data-hash="1fmxlah" class="astro-vfvcyd7p"><script aria-hidden="true">
+		(() => {
+			try {
+				if (!matchMedia('(min-width: 50em)').matches) return;
+				/** @type {HTMLElement | null} */
+				const target = document.querySelector('sl-sidebar-state-persist');
+				const state = JSON.parse(sessionStorage.getItem('sl-sidebar-state') || '0');
+				if (!target || !state || target.dataset.hash !== state.hash) return;
+				window._starlightScrollRestore = state.scroll;
+				customElements.define(
+					'sl-sidebar-restore',
+					class SidebarRestore extends HTMLElement {
+						connectedCallback() {
+							try {
+								const idx = parseInt(this.dataset.index || '');
+								const details = this.closest('details');
+								if (details && typeof state.open[idx] === 'boolean') details.open = state.open[idx];
+							} catch {}
+						}
+					}
+				);
+			} catch {}
+		})();
+	</script><ul class="top-level astro-vryn2zkq"><li class="astro-vryn2zkq"><a href="/ERPForAll/en/" class="large astro-vryn2zkq"><span class="astro-vryn2zkq">Overview</span></a></li><li class="astro-vryn2zkq"><details open class="astro-vryn2zkq"><summary class="astro-vryn2zkq"><span class="group-label astro-vryn2zkq"><span class="large astro-vryn2zkq">Get started</span></span><svg aria-hidden="true" class="caret astro-vryn2zkq astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="0"></sl-sidebar-restore><ul class="astro-vryn2zkq"><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/installation/postgresql-providers/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">PostgreSQL setup</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/cli/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">The erp command</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/server-lifecycle/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Server lifecycle</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/modules/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Install, upgrade, uninstall</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/installation/background-jobs/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Background jobs</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/installation/sql-object-roles/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">SQL-object roles</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/installation/attachment-store/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Attachment store</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/installation/transient-vacuum/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Transient record cleanup</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/data-only-addon/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">A data-only addon</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/two-addon-tutorial/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Two-addon tutorial</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/odoo-compatibility/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Odoo compatibility</span></a></li></ul></details></li><li class="astro-vryn2zkq"><details open class="astro-vryn2zkq"><summary class="astro-vryn2zkq"><span class="group-label astro-vryn2zkq"><span class="large astro-vryn2zkq">Models and data</span></span><svg aria-hidden="true" class="caret astro-vryn2zkq astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="1"></sl-sidebar-restore><ul class="astro-vryn2zkq"><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/models/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Models and fields</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/search-methods/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Nonstored field search</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/translated-fields/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Translated fields</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/tracking/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Field tracking</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/money-currency/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Money and currencies</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/country/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Countries and localization</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/uom/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Units of measure</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/barcodes/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Barcode parsing</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/product/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Product catalog</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/stock-read-models/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Stock read models (proposal)</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/stock-quant-engine/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Stock quant engine</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/stock-tracking-change/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Changing a product&#39;s tracking</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/mail/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Chatter storage</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/attachments/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Attachments</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/store-wire/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Store wire</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/store-topic/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Add a store topic</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/sequences/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Sequences</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/keys-upsert-versions/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Keys, upsert and versions</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/generated-columns/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Generated columns</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/index-kinds/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Index kinds</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/exclusions/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Exclusion constraints</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/query-ast/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Saved queries</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/migrations/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Migrations</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/accounting-mappings/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Accounting mappings (proposal)</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/accounting-addons/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Accounting addon set</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/accounting-numbering/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Journal entry numbering</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/accounting-fiscal-periods/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Fiscal periods and lock statuses</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/account-ledger-config/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Accounting ledger configuration</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/account-moves/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Journal entries in draft</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/account-taxes/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Tax definitions</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/fiscal-positions/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Fiscal-position rules</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/localization-packs/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Localization pack format</span></a></li></ul></details></li><li class="astro-vryn2zkq"><details open class="astro-vryn2zkq"><summary class="astro-vryn2zkq"><span class="group-label astro-vryn2zkq"><span class="large astro-vryn2zkq">Addons and packaging</span></span><svg aria-hidden="true" class="caret astro-vryn2zkq astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="2"></sl-sidebar-restore><ul class="astro-vryn2zkq"><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/data-files/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">XML and CSV data files</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/data-functions/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Functions and deletes in data</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/expressions/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Python expressions in data</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/cross-addon-extension/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Extending other addons</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/settings/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Declared settings</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/rpc/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Methods over RPC</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/luau-scripts/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Luau scripts</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/wasm-addons/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">WASM addons</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/erpaddon-package/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">The .erpaddon package</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/human-lifecycle-engine/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Lifecycle engine</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/demo-data/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Demo data</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/load-demo-data/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Load demo data</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/ai-providers/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">AI providers and tool calling</span></a></li></ul></details></li><li class="astro-vryn2zkq"><details open class="astro-vryn2zkq"><summary class="astro-vryn2zkq"><span class="group-label astro-vryn2zkq"><span class="large astro-vryn2zkq">Security and access</span></span><svg aria-hidden="true" class="caret astro-vryn2zkq astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="3"></sl-sidebar-restore><ul class="astro-vryn2zkq"><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/security/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Security overview</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/access-rules/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Access rules</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/access/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Record access</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/field-access/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Field access</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/capabilities/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Capabilities</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/auth/" aria-current="page" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Authentication</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/audit/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">The audit trail</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/installation/login-selection-rollout/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Login selection rollout</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/bootstrap-identities/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Bootstrap identities</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/company-consistency/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Multi-company</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/user-company-scope/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">User and company links</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/html-sanitize-report/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">HTML sanitising reports</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/installation/html-field-admission/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">HTML field admission rollout</span></a></li></ul></details></li><li class="astro-vryn2zkq"><details open class="astro-vryn2zkq"><summary class="astro-vryn2zkq"><span class="group-label astro-vryn2zkq"><span class="large astro-vryn2zkq">Views and web client</span></span><svg aria-hidden="true" class="caret astro-vryn2zkq astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="4"></sl-sidebar-restore><ul class="astro-vryn2zkq"><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/views/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Views and inheritance</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/actions-menus/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Actions and menus</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/human-form-layout/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Form layout</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/pivot-view/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Pivot view</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/calendar-view/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Calendar view</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/graph-view/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Graph view</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/kanban-view/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Kanban view</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/dashboard-headers/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Dashboard headers</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/jobs/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Background jobs</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/wizard-dialogs/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Wizard dialogs</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/templates/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Client templates</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/ui-assets/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Client asset bundles</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/client-extensions/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Registries and patches</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/human-client-extensions/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Human client extensions</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/messaging-store/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Messaging store</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/mail-thread-view/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Thread, message and composer</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/expression-host-values/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Host values in expressions</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/expression-transport/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Expression transport</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/restricted-card-host/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Restricted card host types</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/accessibility/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Accessibility</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/component-testing/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Component tests</span></a></li></ul></details></li></ul><script aria-hidden="true">
+		(() => {
+			const scroller = document.getElementById('starlight__sidebar');
+			if (!window._starlightScrollRestore || !scroller) return;
+			scroller.scrollTop = window._starlightScrollRestore;
+			delete window._starlightScrollRestore;
+		})();
+	</script></sl-sidebar-state-persist><div class="md:sl-hidden"><div class="mobile-preferences sl-flex astro-25vxztcf"><div class="social-icons astro-25vxztcf"></div><starlight-theme-select><label style="--sl-select-width: 6.25em" class="astro-3hi4jykp"><span class="sr-only astro-3hi4jykp">Select theme</span><svg aria-hidden="true" class="icon label-icon astro-3hi4jykp astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg><select autocomplete="off" class="astro-3hi4jykp"><option value="dark" class="astro-3hi4jykp">Dark</option><option value="light" class="astro-3hi4jykp">Light</option><option value="auto" selected class="astro-3hi4jykp">Auto</option></select><svg aria-hidden="true" class="icon caret astro-3hi4jykp astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg></label></starlight-theme-select><script>
+	StarlightThemeProvider.updatePickers();
+</script></div></div></div></sl-sidebar-pane></nav><div class="main-frame astro-3a7n2yso"><script type="module">var e=document.getElementById(`starlight__sidebar`),t=e?.querySelector(`sl-sidebar-state-persist`),n=`sl-sidebar-state`,r=()=>{let r=[],i=t?.dataset.hash||``;try{let e=sessionStorage.getItem(n),t=JSON.parse(e||`{}`);Array.isArray(t.open)&&t.hash===i&&(r=t.open)}catch{}return{hash:i,open:r,scroll:e?.scrollTop||0}},i=e=>{try{sessionStorage.setItem(n,JSON.stringify(e))}catch{}},a=()=>i(r()),o=(e,t)=>{let n=r();n.open[t]=e,i(n)};t?.addEventListener(`click`,e=>{if(!(e.target instanceof Element))return;let t=e.target.closest(`summary`)?.closest(`details`);if(!t)return;let n=t.querySelector(`sl-sidebar-restore`),r=parseInt(n?.dataset.index||``);isNaN(r)||o(!t.open,r)}),addEventListener(`visibilitychange`,()=>{document.visibilityState===`hidden`&&a()});</script><div class="lg:sl-flex astro-o35kqrak"><aside class="right-sidebar-container print:hidden astro-o35kqrak"><div class="right-sidebar astro-o35kqrak"><div class="lg:sl-hidden astro-dsdb6pyi"><mobile-starlight-toc data-min-h="2" data-max-h="3" class="astro-nkhnjgo3"><nav aria-labelledby="starlight__on-this-page--mobile" class="astro-nkhnjgo3"><details id="starlight__mobile-toc" class="astro-nkhnjgo3"><summary id="starlight__on-this-page--mobile" class="sl-flex astro-nkhnjgo3"><span class="toggle sl-flex astro-nkhnjgo3">On this page<svg aria-hidden="true" class="caret astro-nkhnjgo3 astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></span><span class="display-current astro-nkhnjgo3"></span></summary><div class="dropdown astro-nkhnjgo3"><ul class="isMobile astro-hvjckixu" style="--depth: 0;"><li style="--depth: 0;" class="astro-hvjckixu"><a href="#_top" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Overview</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#native-api-key-primitives" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Native API key primitives</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#what-base-provides" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">What base provides</span></a><ul class="isMobile astro-hvjckixu" style="--depth: 1;"><li style="--depth: 1;" class="astro-hvjckixu"><a href="#what-the-server-and-anyone-calling-authenticate-must-know" style="--depth: 1;" class="astro-hvjckixu"><span style="--depth: 1;" class="astro-hvjckixu">What the server (and anyone calling authenticate) must know</span></a></li></ul></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#overriding-check-credentials" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Overriding _check_credentials</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#adding-a-login-cooldown-rule-on-login-cooldown" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Adding a login cooldown rule: _on_login_cooldown</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#extending-user-login-lookup" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Extending user login lookup: _get_login_domain and _get_login_order</span></a><ul class="isMobile astro-hvjckixu" style="--depth: 1;"><li style="--depth: 1;" class="astro-hvjckixu"><a href="#candidate-selection-domain-get-login-domain" style="--depth: 1;" class="astro-hvjckixu"><span style="--depth: 1;" class="astro-hvjckixu">Candidate selection domain: _get_login_domain</span></a></li><li style="--depth: 1;" class="astro-hvjckixu"><a href="#resolution-ordering-get-login-order" style="--depth: 1;" class="astro-hvjckixu"><span style="--depth: 1;" class="astro-hvjckixu">Resolution ordering: _get_login_order</span></a></li><li style="--depth: 1;" class="astro-hvjckixu"><a href="#phase-b-witness-validation-and-restart-semantics" style="--depth: 1;" class="astro-hvjckixu"><span style="--depth: 1;" class="astro-hvjckixu">Phase B witness validation and restart semantics</span></a></li></ul></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#adding-fields-to-the-session-token" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Adding fields to the session token: _get_session_token_fields</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#hashing-a-password-yourself" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Hashing a password yourself</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#ending-sessions-the-session-end-hook" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Ending sessions: the session-end hook</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#irconfig-parameter" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">ir.config_parameter</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#checking-rotating-and-touching-sessions" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Checking, rotating and touching sessions</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#sessions-in-tests" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Sessions in tests</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#native-lifecycle-authorization" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Native lifecycle authorization</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#identity-confirmation-and-a-self-service-password-change" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Identity confirmation and a self-service password change</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#native-api-key-issuance" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Native API key issuance</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#native-api-key-verification" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Native API key verification</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#password-change-integration" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Password-change integration (ADR 0138)</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#native-api-key-management" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Native API key management</span></a><ul class="isMobile astro-hvjckixu" style="--depth: 1;"><li style="--depth: 1;" class="astro-hvjckixu"><a href="#key-lifecycle-audit-events" style="--depth: 1;" class="astro-hvjckixu"><span style="--depth: 1;" class="astro-hvjckixu">Lifecycle audit events (ADR 0151)</span></a></li></ul></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#authentication-configuration" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Operator configuration and session policy (ADR 0200)</span></a></li></ul></div></details></nav></mobile-starlight-toc><script type="module" src="/ERPForAll/_astro/MobileTableOfContents.astro_astro_type_script_index_0_lang.C3fM4Kra.js"></script></div><div class="right-sidebar-panel sl-hidden lg:sl-block astro-dsdb6pyi"><div class="sl-container astro-dsdb6pyi"><starlight-toc data-min-h="2" data-max-h="3"><nav aria-labelledby="starlight__on-this-page"><h2 id="starlight__on-this-page">On this page</h2><ul class="astro-hvjckixu" style="--depth: 0;"><li style="--depth: 0;" class="astro-hvjckixu"><a href="#_top" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Overview</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#native-api-key-primitives" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Native API key primitives</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#what-base-provides" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">What base provides</span></a><ul class="astro-hvjckixu" style="--depth: 1;"><li style="--depth: 1;" class="astro-hvjckixu"><a href="#what-the-server-and-anyone-calling-authenticate-must-know" style="--depth: 1;" class="astro-hvjckixu"><span style="--depth: 1;" class="astro-hvjckixu">What the server (and anyone calling authenticate) must know</span></a></li></ul></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#overriding-check-credentials" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Overriding _check_credentials</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#adding-a-login-cooldown-rule-on-login-cooldown" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Adding a login cooldown rule: _on_login_cooldown</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#extending-user-login-lookup" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Extending user login lookup: _get_login_domain and _get_login_order</span></a><ul class="astro-hvjckixu" style="--depth: 1;"><li style="--depth: 1;" class="astro-hvjckixu"><a href="#candidate-selection-domain-get-login-domain" style="--depth: 1;" class="astro-hvjckixu"><span style="--depth: 1;" class="astro-hvjckixu">Candidate selection domain: _get_login_domain</span></a></li><li style="--depth: 1;" class="astro-hvjckixu"><a href="#resolution-ordering-get-login-order" style="--depth: 1;" class="astro-hvjckixu"><span style="--depth: 1;" class="astro-hvjckixu">Resolution ordering: _get_login_order</span></a></li><li style="--depth: 1;" class="astro-hvjckixu"><a href="#phase-b-witness-validation-and-restart-semantics" style="--depth: 1;" class="astro-hvjckixu"><span style="--depth: 1;" class="astro-hvjckixu">Phase B witness validation and restart semantics</span></a></li></ul></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#adding-fields-to-the-session-token" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Adding fields to the session token: _get_session_token_fields</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#hashing-a-password-yourself" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Hashing a password yourself</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#ending-sessions-the-session-end-hook" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Ending sessions: the session-end hook</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#irconfig-parameter" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">ir.config_parameter</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#checking-rotating-and-touching-sessions" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Checking, rotating and touching sessions</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#sessions-in-tests" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Sessions in tests</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#native-lifecycle-authorization" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Native lifecycle authorization</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#identity-confirmation-and-a-self-service-password-change" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Identity confirmation and a self-service password change</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#native-api-key-issuance" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Native API key issuance</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#native-api-key-verification" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Native API key verification</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#password-change-integration" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Password-change integration (ADR 0138)</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#native-api-key-management" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Native API key management</span></a><ul class="astro-hvjckixu" style="--depth: 1;"><li style="--depth: 1;" class="astro-hvjckixu"><a href="#key-lifecycle-audit-events" style="--depth: 1;" class="astro-hvjckixu"><span style="--depth: 1;" class="astro-hvjckixu">Lifecycle audit events (ADR 0151)</span></a></li></ul></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#authentication-configuration" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Operator configuration and session policy (ADR 0200)</span></a></li></ul></nav></starlight-toc><script type="module" src="/ERPForAll/_astro/TableOfContents.astro_astro_type_script_index_0_lang.BpJaGz7G.js"></script></div></div></div></aside><div class="main-pane astro-o35kqrak"><main data-pagefind-body class="astro-6cjqtku2" lang="en" dir="ltr"><div class="content-panel astro-ejbg54ye"><div class="sl-container astro-ejbg54ye"><aside id="release-status-landmark" aria-label="Release status"><div id="release-status-banner" role="status" hidden></div><div id="release-navigation-error" role="alert" hidden></div><div id="release-navigation-notice" role="status" hidden></div></aside><h1 id="_top" class="astro-nt5eciic">Authentication for addon authors</h1></div></div><div class="content-panel astro-ejbg54ye"><div class="sl-container astro-ejbg54ye"><div class="sl-markdown-content">
+
+<div class="sl-heading-wrapper level-h2"><h2 id="native-api-key-primitives">Native API key primitives</h2><a class="sl-anchor-link" href="#native-api-key-primitives"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Native API key primitives”</span></a></div>
+<p><code dir="auto">erp_security::auth::apikey</code> provides the native format and keyed-digest building
+blocks defined by ADR 0037. <code dir="auto">GeneratedApiKey::generate()</code> returns redacted,
+zeroizing secret text; <code dir="auto">expose()</code> explicitly borrows that text for the eventual
+one-time response. <code dir="auto">NativeApiKey::parse()</code> validates a borrowed canonical token.
+<code dir="auto">ApiKeyHasher</code>, derived from <code dir="auto">DatabaseSecret</code>, produces the digest and key id for
+storage. These primitives do not authenticate a user, grant access or persist a
+key. Addon business code uses the authorized <code dir="auto">erp_sdk::auth::apikey_manage</code> API,
+rather than inserting key rows directly.</p>
+<p>The <code dir="auto">apikey</code> module’s rustdoc contains a compiling example of generation and
+digest preparation. Never log the exposed text or serialize the hasher. A display
+prefix is only a label; it cannot identify or authenticate a credential.</p>
+<p>What an addon can use and extend in password login and sessions (design:
+<code dir="auto">docs/design/m3-auth.md</code> §14). Everything is in <code dir="auto">erp_sdk::auth</code>. Native API key verification and browser HTTP routes are described here; programmatic native key management is described below; MFA and SSO remain separate deliveries.</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="what-base-provides">What <code dir="auto">base</code> provides</h2><a class="sl-anchor-link" href="#what-base-provides"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “What base provides”</span></a></div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Piece</th><th>Where</th><th>What it does</th></tr></thead><tbody><tr><td><code dir="auto">res.users.password</code></td><td><code dir="auto">addons/base/src/res_users_auth.rs</code></td><td>write it in clear, it is stored hashed (Argon2id by default), it always reads empty. An empty password and one over 1,024 bytes (“A password may have at most 1024 bytes.”) are refused. Setting it ends every session of the user at once, with the session-end hooks.</td></tr><tr><td><code dir="auto">res.users.login</code></td><td>same</td><td>unique (“You can not have two users with the same login!”)</td></tr><tr><td><code dir="auto">res.users._check_credentials(credential, env)</code></td><td>same</td><td>verifies a credential for one user; the base implementation checks the password</td></tr><tr><td><code dir="auto">res.users.context_get()</code></td><td>same</td><td><code dir="auto">{lang, tz, uid}</code> of the calling user (JSON-2, read effect)</td></tr><tr><td><code dir="auto">res.users.log</code></td><td><code dir="auto">addons/base/src/res_users_log.rs</code></td><td>one row per successful login (<code dir="auto">create_uid</code>, <code dir="auto">create_date</code>)</td></tr><tr><td><code dir="auto">ir.config_parameter</code></td><td><code dir="auto">addons/base/src/ir_config_parameter.rs</code></td><td>database-wide settings with a typed API</td></tr></tbody></table>
+<p>Logins themselves run in the framework (<code dir="auto">Auth::authenticate</code>, <code dir="auto">erp-security</code>), not in an addon: the server
+calls it, and it calls <code dir="auto">_check_credentials</code> through dispatch, so an addon override takes part.</p>
+<p>A login is two short transactions with no database connection held in between: one flight reads the
+throttle rows, the user and the installed languages; the password is hashed on the hashing pool; one flight
+writes the verdict (the failure count, or the session). The success is written only if the user’s stored
+password and active flag are still the ones the first flight read: a password changed while the login was
+verified makes it fail with “Access Denied”, and nothing is written.</p>
+
+<div class="sl-heading-wrapper level-h3"><h3 id="what-the-server-and-anyone-calling-authenticate-must-know">What the server (and anyone calling <code dir="auto">authenticate</code>) must know</h3><a class="sl-anchor-link" href="#what-the-server-and-anyone-calling-authenticate-must-know"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “What the server (and anyone calling authenticate) must know”</span></a></div>
+<ul>
+<li><strong>Cancellation.</strong> Dropping the <code dir="auto">authenticate</code> future (a client that hangs up, a deadline) is safe: after the
+first flight the rest runs in a task of its own, so a guess is verified and counted even when its caller is
+gone, and a success leaves a session row nobody holds (idle collection ends it). Call it inside a Tokio
+runtime.</li>
+<li><strong>Client address.</strong> <code dir="auto">LoginRequest::new(login, password, client)</code> takes the address explicitly:
+<code dir="auto">ClientAddr::Known(addr)</code> (the address after the trusted-proxy rule) from every HTTP route,
+<code dir="auto">ClientAddr::InProcess("reason")</code> only for tools, jobs and tests. In process there is no address cooldown, no
+pre-filter and no trusted pair, so an HTTP route must never use it. <code dir="auto">Debug</code> of a request prints neither the
+login nor its length (users type passwords into the login field).</li>
+<li><strong>Admission.</strong> At most <code dir="auto">min(2 × hashing permits, primary pool size / 2)</code> logins are in progress per ORM
+lineage, shared by every <code dir="auto">Auth</code> handle and retained through detached work. The half-pool reservation also
+applies before an addon installs a credential override. A login that waits longer than the hashing pool’s
+queue wait fails with <code dir="auto">LoginError::Overloaded { retry_after }</code> (503 with <code dir="auto">Retry-After</code>). A login can wait
+for the admission, for the settings (only after they changed: another request’s reload, or its own; both
+share one deadline of the queue wait, and the reload’s statement carries the same limit), and for its hashing
+permit, each up to the queue wait: three queue waits and one hash, and four queue waits and two hashes when
+the credential changed while it was verified (the login reads phase A again and verifies once more, once). A
+rehash of a correct password, or the cost floor’s dummy after a wrong one, adds one queue wait and one hash to
+the verify it follows (so up to six waits and four hashes for a login restarted between two rehashes). The
+database statements of the login are bounded by the ORM’s transaction limits, not by the
+queue wait: per try, and the failure count and the success statement each run up to three tries after a
+deadlock (5 – 25 ms apart), with the admission permit held. A session check that cannot read the settings within
+the queue wait fails with <code dir="auto">ResourceExhausted</code> and <code dir="auto">Condition::Overloaded</code> (503 too); a check whose keys changed
+while it ran reads them a second time, so it waits up to two queue waits for them. The hashing pool refusing one attempt’s hash before it was
+verified (its own wait expired) answers “Access Denied” and is not counted; once the stored hash was
+verified, a wrong password is always counted.</li>
+<li><strong>Denial cost.</strong> A wrong password on a hash cheaper than the current parameters, or of another scheme
+(an imported Odoo PBKDF2 hash), also runs a dummy verify at the current parameters, so no denial is
+cheaper than an unknown login’s. It is a floor: such a denial may take longer, which is accepted (BUG-082’s
+residual; a later change may close it).</li>
+<li><strong>Hashing settings.</strong> <code dir="auto">password.hashing.argon2_memory_kib</code> above what a hashing permit reserves
+(<code dir="auto">admission.hash_memory_kib</code>) is refused when written (checked against the writing node’s pool) and stops
+<code dir="auto">Auth::new</code>. It can still reach a running node: one whose <code dir="auto">admission.hash_memory_kib</code> is smaller than the
+writing node’s, or any node after <code dir="auto">password.hashing.scheme</code> is switched to <code dir="auto">argon2id</code> over a larger memory value
+written earlier. That node logs the settings at <code dir="auto">error</code> once per settings generation
+(<code dir="auto">AuthStats::settings_over_reservation</code>) and keeps answering: unknown and inactive logins still verify a dummy
+(made within its reservation) and are counted; a correct password whose stored hash fits logs in without the
+rehash (<code dir="auto">AuthStats::rehash_skipped</code>); a user whose stored hash another node made over this node’s reservation
+is refused through this node like a wrong password, “Access Denied” and counted, logged at <code dir="auto">error</code> naming
+<code dir="auto">admission.hash_memory_kib</code>. Give every node the same <code dir="auto">admission.hash_memory_kib</code>.</li>
+<li><strong>Sessions per user.</strong> A user keeps at most 100 sessions; the login past that ends the oldest, with the
+session-end hooks.</li>
+<li><strong>Trusted address.</strong> The per-login cooldown (failures of one login from any address) never refuses the
+correct password from an (address, login) pair that logged in successfully within the last 30 days; any
+other address stays under the cooldown, and wrong passwords from the trusted pair still count. The address
+cooldown applies to everyone. A login keeps at most 16 trusted pairs: the oldest go first. A success clears
+no failure counter: they decay.</li>
+<li><strong>Throttle rows.</strong> Their keys are an HMAC under a key derived from <code dir="auto">database.secret</code>, never a plain hash of
+the login or the address; <code dir="auto">Auth::throttle_key</code> gives the key of a row. Rotating the secret resets the
+counters.</li>
+<li><strong>Password and login changes end sessions.</strong> Setting a password, or renaming the user’s <code dir="auto">login</code>, ends every
+session of the user at once, with the hooks, the caller’s own included (a planned <code dir="auto">change_password</code> will keep
+the current one). A login that rehashes the stored password (an imported Odoo hash, or raised hashing
+parameters) sweeps obsolete tokens against the current user fields and trusted key source in
+independently committed batches of at most 1,000 sessions. Concurrent valid sessions survive,
+including credentials that cycle back to a previous value. Each batch locks user, key source,
+then sessions; malformed tokens, missing/malformed keys or an unknown key id stop that batch
+without deleting any of its rows. Earlier batches may already have committed. The sweep stops
+with a counted/logged error after 100 full batches; token validation still governs access. Writing passwords for many users hashes them on
+every permit of the pool but one at once (the one left keeps logins going), inside the writing transaction.</li>
+<li><strong>Logout takes an id, which is not a secret.</strong> <code dir="auto">Auth::logout(id)</code> ends the session <code dir="auto">id</code>. Session ids appear in
+CSRF tokens and audit rows, so pass only the id of the session the request just checked, or, on a devices
+page, an id you have checked belongs to the requesting user; never an id the client merely sends.</li>
+</ul>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="overriding-check-credentials">Overriding <code dir="auto">_check_credentials</code></h2><a class="sl-anchor-link" href="#overriding-check-credentials"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Overriding _check_credentials”</span></a></div>
+<p>Override it to add a condition to every login of a user, and call <code dir="auto">super</code> for the check itself. The method
+runs as the user being logged in, in superuser mode, in a REPEATABLE READ transaction of its own that the login
+keeps open through the check (it commits with a success, so the override’s writes stand, and rolls back with a
+refusal); return an error to refuse. Without an override the login checks the password with no transaction at
+all, so an override costs a held connection for the length of the hash: keep the check itself cheap.</p>
+<div class="expressive-code"><link rel="stylesheet" href="/ERPForAll/_astro/ec.w36nc.css"><script type="module" src="/ERPForAll/_astro/ec.0vx5m.js"></script><figure class="frame not-content"><figcaption class="header"></figcaption><pre data-language="rust"><code><div class="ec-line"><div class="code"><span style="--0:#C792EA;--1:#8844AE">use</span><span style="--0:#D6DEEB;--1:#403F53"> erp_sdk</span><span style="--0:#7FDBCA;--1:#096E72">::</span><span style="--0:#D6DEEB;--1:#403F53">auth</span><span style="--0:#7FDBCA;--1:#096E72">::</span><span style="--0:#D6DEEB;--1:#403F53">{AuthInfo, CheckEnv, Credential, access_denied};</span></div></div><div class="ec-line"><div class="code"><span style="--0:#C792EA;--1:#8844AE">use</span><span style="--0:#D6DEEB;--1:#403F53"> erp_sdk</span><span style="--0:#7FDBCA;--1:#096E72">::</span><span style="--0:#D6DEEB;--1:#403F53">prelude</span><span style="--0:#7FDBCA;--1:#096E72">::*</span><span style="--0:#D6DEEB;--1:#403F53">;</span></div></div><div class="ec-line"><div class="code">
+</div></div><div class="ec-line"><div class="code"><span style="--0:#D6DEEB;--1:#403F53">#[methods(ResUsers)]</span></div></div><div class="ec-line"><div class="code"><span style="--0:#C792EA;--1:#8844AE">impl</span><span style="--0:#D6DEEB;--1:#403F53"> ResUsersLoginHours {</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#D6DEEB;--1:#403F53">    </span></span><span style="--0:#D6DEEB;--1:#403F53">#[method(</span><span style="--0:#C792EA;--1:#8844AE">override</span><span style="--0:#D6DEEB;--1:#403F53">)]</span></div></div><div class="ec-line"><div class="code"><span class="indent">    </span><span style="--0:#C792EA;--1:#8844AE">async</span><span style="--0:#D6DEEB;--1:#403F53"> </span><span style="--0:#C792EA;--1:#8844AE">fn</span><span style="--0:#D6DEEB;--1:#403F53"> </span><span style="--0:#82AAFF;--1:#3B61B0">_check_credentials</span><span style="--0:#D6DEEB;--1:#403F53">(</span></div></div><div class="ec-line"><div class="code"><span class="indent">        </span><span style="--0:#C5E478;--1:#3B61B0">this</span><span style="--0:#7FDBCA;--1:#096E72">:</span><span style="--0:#D6DEEB;--1:#403F53"> </span><span style="--0:#7FDBCA;--1:#096E72">&#x26;</span><span style="--0:#D6DEEB;--1:#403F53">RecordSet&#x3C;ResUsers>,</span></div></div><div class="ec-line"><div class="code"><span class="indent">        </span><span style="--0:#C5E478;--1:#3B61B0">tx</span><span style="--0:#7FDBCA;--1:#096E72">:</span><span style="--0:#D6DEEB;--1:#403F53"> </span><span style="--0:#7FDBCA;--1:#096E72">&#x26;</span><span style="--0:#C792EA;--1:#8844AE">mut</span><span style="--0:#D6DEEB;--1:#403F53"> Transaction,</span></div></div><div class="ec-line"><div class="code"><span class="indent">        </span><span style="--0:#C5E478;--1:#3B61B0">credential</span><span style="--0:#7FDBCA;--1:#096E72">:</span><span style="--0:#D6DEEB;--1:#403F53"> Arc&#x3C;Credential>,</span></div></div><div class="ec-line"><div class="code"><span class="indent">        </span><span style="--0:#C5E478;--1:#3B61B0">env</span><span style="--0:#7FDBCA;--1:#096E72">:</span><span style="--0:#D6DEEB;--1:#403F53"> CheckEnv,</span></div></div><div class="ec-line"><div class="code"><span class="indent">        </span><span style="--0:#C5E478;--1:#3B61B0">sup</span><span style="--0:#7FDBCA;--1:#096E72">:</span><span style="--0:#D6DEEB;--1:#403F53"> Super,</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#D6DEEB;--1:#403F53">    </span></span><span style="--0:#D6DEEB;--1:#403F53">) </span><span style="--0:#7FDBCA;--1:#096E72">-></span><span style="--0:#D6DEEB;--1:#403F53"> Result&#x3C;AuthInfo> {</span></div></div><div class="ec-line"><div class="code"><span class="indent">        </span><span style="--0:#C792EA;--1:#8844AE">let</span><span style="--0:#D6DEEB;--1:#403F53"> </span><span style="--0:#C5E478;--1:#3B61B0">info</span><span style="--0:#7FDBCA;--1:#096E72">:</span><span style="--0:#D6DEEB;--1:#403F53"> AuthInfo </span><span style="--0:#C792EA;--1:#8844AE">=</span><span style="--0:#D6DEEB;--1:#403F53"> </span><span style="--0:#C5E478;--1:#3B61B0">sup</span><span style="--0:#7FDBCA;--1:#096E72">.</span><span style="--0:#82AAFF;--1:#3B61B0">call</span><span style="--0:#D6DEEB;--1:#403F53">(</span><span style="--0:#C5E478;--1:#3B61B0">tx</span><span style="--0:#D6DEEB;--1:#403F53">, </span><span style="--0:#C5E478;--1:#3B61B0">this</span><span style="--0:#7FDBCA;--1:#096E72">.</span><span style="--0:#82AAFF;--1:#3B61B0">as_records</span><span style="--0:#D6DEEB;--1:#403F53">(), (</span><span style="--0:#C5E478;--1:#3B61B0">credential</span><span style="--0:#D6DEEB;--1:#403F53">, </span><span style="--0:#C5E478;--1:#3B61B0">env</span><span style="--0:#D6DEEB;--1:#403F53">))</span><span style="--0:#7FDBCA;--1:#096E72">.</span><span style="--0:#C792EA;--1:#8844AE">await</span><span style="--0:#7FDBCA;--1:#096E72">?</span><span style="--0:#D6DEEB;--1:#403F53">;</span></div></div><div class="ec-line"><div class="code"><span class="indent">        </span><span style="--0:#C792EA;--1:#8844AE">if</span><span style="--0:#D6DEEB;--1:#403F53"> </span><span style="--0:#C792EA;--1:#8844AE">!</span><span style="--0:#82AAFF;--1:#3B61B0">within_login_hours</span><span style="--0:#D6DEEB;--1:#403F53">(</span><span style="--0:#C5E478;--1:#3B61B0">tx</span><span style="--0:#D6DEEB;--1:#403F53">, </span><span style="--0:#C5E478;--1:#3B61B0">info</span><span style="--0:#7FDBCA;--1:#096E72">.</span><span style="--0:#82AAFF;--1:#3B61B0">uid</span><span style="--0:#D6DEEB;--1:#403F53">())</span><span style="--0:#7FDBCA;--1:#096E72">.</span><span style="--0:#C792EA;--1:#8844AE">await</span><span style="--0:#7FDBCA;--1:#096E72">?</span><span style="--0:#D6DEEB;--1:#403F53"> {</span></div></div><div class="ec-line"><div class="code"><span class="indent">            </span><span style="--0:#919F9F;--1:#5D6376">// the same refusal as a wrong password: the client cannot tell them apart</span></div></div><div class="ec-line"><div class="code"><span class="indent">            </span><span style="--0:#C792EA;--1:#8844AE">return</span><span style="--0:#D6DEEB;--1:#403F53"> Err(</span><span style="--0:#82AAFF;--1:#3B61B0">access_denied</span><span style="--0:#D6DEEB;--1:#403F53">());</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#D6DEEB;--1:#403F53">        </span></span><span style="--0:#D6DEEB;--1:#403F53">}</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#D6DEEB;--1:#403F53">        </span></span><span style="--0:#D6DEEB;--1:#403F53">Ok(</span><span style="--0:#C5E478;--1:#3B61B0">info</span><span style="--0:#D6DEEB;--1:#403F53">)</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#D6DEEB;--1:#403F53">    </span></span><span style="--0:#D6DEEB;--1:#403F53">}</span></div></div><div class="ec-line"><div class="code"><span style="--0:#D6DEEB;--1:#403F53">}</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="use erp_sdk::auth::{AuthInfo, CheckEnv, Credential, access_denied};use erp_sdk::prelude::*;#[methods(ResUsers)]impl ResUsersLoginHours {    #[method(override)]    async fn _check_credentials(        this: &#x26;RecordSet<ResUsers>,        tx: &#x26;mut Transaction,        credential: Arc<Credential>,        env: CheckEnv,        sup: Super,    ) -> Result<AuthInfo> {        let info: AuthInfo = sup.call(tx, this.as_records(), (credential, env)).await?;        if !within_login_hours(tx, info.uid()).await? {            // the same refusal as a wrong password: the client cannot tell them apart            return Err(access_denied());        }        Ok(info)    }}"><div></div></button></div></figure></div>
+<p>Rules:</p>
+<ul>
+<li>Refuse with <code dir="auto">access_denied()</code> (kind <code dir="auto">AccessDenied</code>, text “Access Denied”): the attempt counts as a failure
+for the cooldown. Any other error fails the login with that error and rolls its transaction back; it is not
+counted as a failed attempt.</li>
+<li>Never log or put into an error the password, the stored hash or the <code dir="auto">Credential</code> (its <code dir="auto">Debug</code> is redacted).</li>
+<li><code dir="auto">Credential</code> is <code dir="auto">#[non_exhaustive]</code>: match it with a <code dir="auto">_</code> arm. Only <code dir="auto">Credential::Password</code> exists today; other
+credential types are planned.</li>
+<li>The failure counting, the cooldown and the timing of unknown logins are the framework’s; an override does not
+need to (and cannot) change them.</li>
+</ul>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="adding-a-login-cooldown-rule-on-login-cooldown">Adding a login cooldown rule: <code dir="auto">_on_login_cooldown</code></h2><a class="sl-anchor-link" href="#adding-a-login-cooldown-rule-on-login-cooldown"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Adding a login cooldown rule: _on_login_cooldown”</span></a></div>
+<p>Override <code dir="auto">res.users._on_login_cooldown(context)</code> to ask for a <em>stricter</em> cooldown than the
+<code dir="auto">base.login_cooldown_*</code> settings (ADR 0076). Call <code dir="auto">super</code>, then add rules to the policy it returns:</p>
+<div class="expressive-code"><figure class="frame not-content"><figcaption class="header"></figcaption><pre data-language="ignore"><code><div class="ec-line"><div class="code"><span style="--0:#d6deeb;--1:#403f53">#[method(override)]</span></div></div><div class="ec-line"><div class="code"><span style="--0:#d6deeb;--1:#403f53">async fn _on_login_cooldown(this: &#x26;RecordSet&#x3C;ResUsers>, tx: &#x26;mut Transaction,</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#d6deeb;--1:#403f53">    </span></span><span style="--0:#d6deeb;--1:#403f53">context: LoginCooldownContext, sup: Super) -> Result&#x3C;LoginCooldownPolicy> {</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#d6deeb;--1:#403f53">    </span></span><span style="--0:#d6deeb;--1:#403f53">let policy: LoginCooldownPolicy = sup.call(tx, this.as_records(), (context,)).await?;</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#d6deeb;--1:#403f53">    </span></span><span style="--0:#d6deeb;--1:#403f53">policy.with_login_rule(3, Duration::from_secs(300))</span></div></div><div class="ec-line"><div class="code"><span style="--0:#d6deeb;--1:#403f53">}</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="#[method(override)]async fn _on_login_cooldown(this: &#x26;RecordSet<ResUsers>, tx: &#x26;mut Transaction,    context: LoginCooldownContext, sup: Super) -> Result<LoginCooldownPolicy> {    let policy: LoginCooldownPolicy = sup.call(tx, this.as_records(), (context,)).await?;    policy.with_login_rule(3, Duration::from_secs(300))}"><div></div></button></div></figure></div>
+<ul>
+<li>The attempt is refused when the core rule <strong>or</strong> an added rule is in force, using the same shared
+failure counters; a policy cannot disable a core rule, accept a credential or keep a counter.
+Rules combine along a <code dir="auto">super</code> chain by keeping the stricter threshold and the longer duration.
+Bounds: address threshold <code dir="auto">1..=1_000_000</code>, login threshold <code dir="auto">1..=4_000_000</code>, whole seconds
+<code dir="auto">1..=604_800</code>; anything else is a <code dir="auto">Validation</code> error naming the field.</li>
+<li>An added login rule keeps the trusted-pair exception; an added address rule applies only with an
+actual client address.</li>
+<li>The hook runs once per attempt (and again before a restart), before any credential work, as the
+superuser in a <strong>read-only</strong> transaction that is always rolled back. It is told only the
+submitted login (which may name no user), the client address and the current settings, never a
+user id, hash or password. A hook that looks the login up in the database makes known and unknown
+logins take different times: that is yours to avoid. Do not make external calls and keep it short: it holds a login admission permit and a
+connection while it runs. One call has a deadline (<code dir="auto">AuthConfig::cooldown_hook_deadline</code>, default
+5 s, 10 – 60,000 ms): past it the task is aborted and the attempt refused like any hook failure.
+Await, do not block the thread: a blocking call is not interrupted.</li>
+<li>A hook error, panic or invalid rule refuses the attempt (<code dir="auto">LoginError::Failed</code>); nothing is
+verified or counted. The caller gets a fixed text; your error goes to the <code dir="auto">erp::auth</code> log.</li>
+<li>The pre-filter and over-long credentials are refused before any database work and never call the hook.</li>
+</ul>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="extending-user-login-lookup">Extending user login lookup: <code dir="auto">_get_login_domain</code> and <code dir="auto">_get_login_order</code></h2><a class="sl-anchor-link" href="#extending-user-login-lookup"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Extending user login lookup: _get_login_domain and _get_login_order”</span></a></div>
+<p>ADR 0075 defines these hooks; <code dir="auto">docs/adr/0126-login-rollout-admission.md</code> (ADR 0126) defines
+serving admission. <code dir="auto">Auth::new</code> refuses a registry that overrides either selection hook with
+<code dir="auto">ErrorKind::Programming</code> and <code dir="auto">custom login selection requires an active membership-bound rollout</code>.
+There is no exact-login fallback. Served composition uses <code dir="auto">Auth::with_membership(orm, config, pool, member.admission())</code>, derived from an actual registered membership. It validates helper
+publication, schema, database, binary declaration and registry association. Starting membership
+may compose Auth; authentication still requires live serving admission and an enabled rollout.</p>
+<p>The native binary declares <code dir="auto">auth.login_principal</code>, version 1, as part of its combined identity.
+Registration precedes composition, and a changed catalogue requires membership restart. Operators
+follow the <a href="/ERPForAll/en/next/developer/installation/login-selection-rollout/">rollout procedure</a> to publish isolated
+NOLOGIN-owned helpers, approve exact eligible digests and confirm legacy-service fencing.
+An ordinary node rollout window never enables this feature.</p>
+<p>Every attempt retains its original feature generation through hashing, restart and detached
+verdicts. Successful finalization revalidates it under protection held through session commit;
+disable waits for earlier protected commits. New custom authentication refuses while disabled.
+While enabled, a bound base-only peer also applies principal accounting, and an unbound base
+service refuses before real verification. Failed guesses remain counted after disable/disconnect;
+pre-disable sessions retain normal session semantics.</p>
+<p>Selection plus credential overrides preserve the SESSION refusal. Membership-bound credential
+overrides also refuse until SESSION, including when disabled, to avoid acquiring feature protection
+after an override’s user locks. This is an explicit native compatibility limit; the existing
+unbound inactive base path retains its query/flight contract.</p>
+<p>Integration fixtures can explicitly call
+<code dir="auto">erp_security::auth::test_support::login_selection_auth</code> when the default-off
+<code dir="auto">test-support</code> feature is enabled. This helper bypasses only the rollout
+refusal; model, schema, settings, pool and unsupported credential-composition checks
+still apply. Enabling that feature alone does not change <code dir="auto">Auth::new</code>. The helper is
+fixture-only, is not re-exported through the SDK and is not an activation mechanism.
+Plan construction and candidate execution are internal to the service; addon hooks produce
+raw domain/order values which the framework admits before compiling or executing them.</p>
+
+<div class="sl-heading-wrapper level-h3"><h3 id="candidate-selection-domain-get-login-domain">Candidate selection domain: <code dir="auto">_get_login_domain</code></h3><a class="sl-anchor-link" href="#candidate-selection-domain-get-login-domain"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Candidate selection domain: _get_login_domain”</span></a></div>
+<p>The hook receives <code dir="auto">LoginLookup</code>, not a String. It returns <code dir="auto">LoginDomain</code>; the
+framework admits the returned AST against the pinned registry before compiling
+SQL. Native hooks are trusted deterministic metadata functions. ORM database,
+record, transaction and changed-environment effects are forbidden in their scope;
+this does not sandbox native Rust’s direct I/O.</p>
+<p>The following integration fragment uses the checkpoint’s actual API. The addon
+must declare <code dir="auto">login_alias</code> as a stored char field on <code dir="auto">res.users</code>; imports and its
+model declaration are omitted. This fragment has not independently been compiled
+as a guide example; the executable alias/super fixtures are in
+<code dir="auto">crates/erp-test-models/src/test_login_selection.rs</code>.</p>
+<div class="expressive-code"><figure class="frame not-content"><figcaption class="header"></figcaption><pre data-language="rust,ignore"><code><div class="ec-line"><div class="code"><span style="--0:#d6deeb;--1:#403f53">#[method(override)]</span></div></div><div class="ec-line"><div class="code"><span style="--0:#d6deeb;--1:#403f53">async fn _get_login_domain(</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#d6deeb;--1:#403f53">    </span></span><span style="--0:#d6deeb;--1:#403f53">this: &#x26;RecordSet&#x3C;ResUsers>, tx: &#x26;mut Transaction,</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#d6deeb;--1:#403f53">    </span></span><span style="--0:#d6deeb;--1:#403f53">lookup: LoginLookup, sup: Super,</span></div></div><div class="ec-line"><div class="code"><span style="--0:#d6deeb;--1:#403f53">) -> Result&#x3C;LoginDomain> {</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#d6deeb;--1:#403f53">    </span></span><span style="--0:#d6deeb;--1:#403f53">let base: LoginDomain = sup.call(tx, this.as_records(), (lookup.clone(),)).await?;</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#d6deeb;--1:#403f53">    </span></span><span style="--0:#d6deeb;--1:#403f53">let alias = Domain::condition("login_alias", Operator::Eq, lookup.as_str())</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#d6deeb;--1:#403f53">        </span></span><span style="--0:#d6deeb;--1:#403f53">.map_err(|_| Error::validation("invalid alias selection domain"))?;</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#d6deeb;--1:#403f53">    </span></span><span style="--0:#d6deeb;--1:#403f53">Ok(LoginDomain::custom(Domain::or([base.domain().clone(), alias])))</span></div></div><div class="ec-line"><div class="code"><span style="--0:#d6deeb;--1:#403f53">}</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="#[method(override)]async fn _get_login_domain(    this: &#x26;RecordSet<ResUsers>, tx: &#x26;mut Transaction,    lookup: LoginLookup, sup: Super,) -> Result<LoginDomain> {    let base: LoginDomain = sup.call(tx, this.as_records(), (lookup.clone(),)).await?;    let alias = Domain::condition(&#x22;login_alias&#x22;, Operator::Eq, lookup.as_str())        .map_err(|_| Error::validation(&#x22;invalid alias selection domain&#x22;))?;    Ok(LoginDomain::custom(Domain::or([base.domain().clone(), alias])))}"><div></div></button></div></figure></div>
+<p>Supported fields are physical local stored id/integer, boolean, char and static
+selection columns. Related/computed/search-callback, inherited, translated,
+company-dependent and relational fields are refused. Supported operators are
+<code dir="auto">=</code>, <code dir="auto">!=</code>, <code dir="auto">&#x3C;</code>, <code dir="auto">&#x3C;=</code>, <code dir="auto">></code>, <code dir="auto">>=</code>, <code dir="auto">in</code>, <code dir="auto">not in</code> with scalar operands; membership
+requires a collection. The ordinary domain optimizer/compiler supplies null and
+Boolean semantics. No raw SQL, dynamic time/context expression or pattern operator
+is admitted. Base domain construction is fallible: <code dir="auto">LoginDomain::exact_login(...)</code>
+returns <code dir="auto">Result&#x3C;LoginDomain></code>.</p>
+<p>Default ceilings derive from <code dir="auto">QueryLimits</code>: 65,536 plan bytes, depth 16,
+512 conditions, 128 distinct fields and 8 effective order terms; auth also bounds
+AST nodes at 1,024 and membership elements at 512. Core predicates and ordering
+share the aggregate admission budget. Witness transfer is independently bounded.
+Exact aggregate-boundary proof is still pending. Normal ORM transaction deadlines
+apply; this checkpoint does not establish a separate 500 ms selection deadline.</p>
+<p>Core selection always enforces <code dir="auto">active = true</code>, total ordering and <code dir="auto">LIMIT 1</code>.
+Constant/empty domains retain domain semantics and the core active filter. An
+unknown/inactive candidate uses dummy password verification; malformed hook
+results return an error rather than silently selecting through the base path.
+No timing-equality or identical-accounting claim is made.</p>
+
+<div class="sl-heading-wrapper level-h3"><h3 id="resolution-ordering-get-login-order">Resolution ordering: <code dir="auto">_get_login_order</code></h3><a class="sl-anchor-link" href="#resolution-ordering-get-login-order"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Resolution ordering: _get_login_order”</span></a></div>
+<p>An addon with a stored integer <code dir="auto">login_priority</code> may return this order. As above,
+this is an integration fragment whose omitted model/import context must be supplied.</p>
+<div class="expressive-code"><figure class="frame not-content"><figcaption class="header"></figcaption><pre data-language="rust,ignore"><code><div class="ec-line"><div class="code"><span style="--0:#d6deeb;--1:#403f53">#[method(override)]</span></div></div><div class="ec-line"><div class="code"><span style="--0:#d6deeb;--1:#403f53">async fn _get_login_order(</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#d6deeb;--1:#403f53">    </span></span><span style="--0:#d6deeb;--1:#403f53">_this: &#x26;RecordSet&#x3C;ResUsers>, _tx: &#x26;mut Transaction, _sup: Super,</span></div></div><div class="ec-line"><div class="code"><span style="--0:#d6deeb;--1:#403f53">) -> Result&#x3C;LoginOrder> {</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#d6deeb;--1:#403f53">    </span></span><span style="--0:#d6deeb;--1:#403f53">Ok(LoginOrder::custom(vec![LoginOrderTerm::desc("login_priority")]))</span></div></div><div class="ec-line"><div class="code"><span style="--0:#d6deeb;--1:#403f53">}</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="#[method(override)]async fn _get_login_order(    _this: &#x26;RecordSet<ResUsers>, _tx: &#x26;mut Transaction, _sup: Super,) -> Result<LoginOrder> {    Ok(LoginOrder::custom(vec![LoginOrderTerm::desc(&#x22;login_priority&#x22;)]))}"><div></div></button></div></figure></div>
+<p>The framework validates the fields, refuses duplicate/empty ordering and appends
+<code dir="auto">id ASC</code> when id is absent. An explicit id direction is retained. The effective
+order, including that tie-breaker, must fit the ceiling of eight terms.</p>
+
+<div class="sl-heading-wrapper level-h3"><h3 id="phase-b-witness-validation-and-restart-semantics">Phase B witness validation and restart semantics</h3><a class="sl-anchor-link" href="#phase-b-witness-validation-and-restart-semantics"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Phase B witness validation and restart semantics”</span></a></div>
+<p>Password hashing runs outside a database transaction. After a successful verify,
+custom selection opens a READ COMMITTED finalization transaction, protects its
+original active rollout generation, then takes <code dir="auto">SHARE ROW EXCLUSIVE</code> on <code dir="auto">res_users</code>,
+reruns the hooks and ordered selection,
+compares the complete plan/winner witness, and retains the guard through
+rehash/session persistence and commit. A mismatch restarts the entire attempt
+once; a second mismatch denies it. Tokens use canonical stored login, not alias.
+The checkpoint’s focused tests prove the guard exists at session insertion and
+exercise a competitor reordered while hashing; broader race cases remain open.</p>
+<p>Failed guesses write address, submitted-login and selected UID counters atomically.
+A wrong password creates no trusted UID/address pair. The UID cooldown is checked
+before password verification and survives alias/address changes; only exact
+UID/address trust can exempt that dimension. Existing address protection remains.
+Old counters are retained during schema migration, and bounded GC now covers both
+principal kinds. The rollout report records process-level shared-budget and disable
+coverage; native alias HTTP acceptance, broader trust-expiry/cap coverage and
+whole-case certification remain open.</p>
+<p>Both constructors refuse selection overrides combined with <code dir="auto">_check_credentials</code>
+overrides for now; that composition error takes precedence over
+the unbound custom-selection refusal. Digest-bound membership and activation are
+implemented. Remaining race coverage, boundary and type matrices, the full mapping,
+parity regeneration and compiled examples are still open. The functional page is
+<code dir="auto">docs/user/login-selection.md</code>. The operator procedure is available at
+<a href="/ERPForAll/en/next/developer/installation/login-selection-rollout/">Custom login selection rollout</a>.
+This checkpoint does not establish whole-LOGIN acceptance or deployment readiness.</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="adding-fields-to-the-session-token">Adding fields to the session token: <code dir="auto">_get_session_token_fields</code></h2><a class="sl-anchor-link" href="#adding-fields-to-the-session-token"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Adding fields to the session token: _get_session_token_fields”</span></a></div>
+<p>A session’s token covers <code dir="auto">id</code>, <code dir="auto">login</code>, <code dir="auto">password</code> and <code dir="auto">active</code> of its user, so changing any of them
+ends the user’s sessions at their next check. An addon that adds a credential factor (a TOTP secret,
+a linked account’s token) adds the <strong>name</strong> of the user field to that set (H58 TOKEN, SPEC-AUTH-041
+and SPEC-AUTH-042; decision: ADR 0155). Override
+<code dir="auto">res.users._get_session_token_fields</code>, call <code dir="auto">super</code>, and add names:</p>
+<div class="expressive-code"><figure class="frame not-content"><figcaption class="header"></figcaption><pre data-language="ignore"><code><div class="ec-line"><div class="code"><span style="--0:#d6deeb;--1:#403f53">#[method(override)]</span></div></div><div class="ec-line"><div class="code"><span style="--0:#d6deeb;--1:#403f53">async fn _get_session_token_fields(this: &#x26;RecordSet&#x3C;ResUsers>, tx: &#x26;mut Transaction,</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#d6deeb;--1:#403f53">    </span></span><span style="--0:#d6deeb;--1:#403f53">sup: Super) -> Result&#x3C;SessionTokenFields> {</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#d6deeb;--1:#403f53">    </span></span><span style="--0:#d6deeb;--1:#403f53">let fields: SessionTokenFields = sup.call(tx, this.as_records(), ()).await?;</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#d6deeb;--1:#403f53">    </span></span><span style="--0:#d6deeb;--1:#403f53">fields.with_field("totp_secret")</span></div></div><div class="ec-line"><div class="code"><span style="--0:#d6deeb;--1:#403f53">}</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="#[method(override)]async fn _get_session_token_fields(this: &#x26;RecordSet<ResUsers>, tx: &#x26;mut Transaction,    sup: Super) -> Result<SessionTokenFields> {    let fields: SessionTokenFields = sup.call(tx, this.as_records(), ()).await?;    fields.with_field(&#x22;totp_secret&#x22;)}"><div></div></button></div></figure></div>
+<ul>
+<li><strong>Names only.</strong> The result is a bounded set of names: at most 16 added fields, each
+<code dir="auto">[a-z_][a-z0-9_]*</code> of at most 63 bytes. The hook returns no SQL, no value and no per-user decision;
+the framework reads the values in the statements that already read the base fields (no extra round
+trip) and encodes them. The type cannot remove a base field, and a duplicate (a base field, or a
+name added twice along the chain) is a <code dir="auto">Validation</code> error, not a silent merge.</li>
+<li><strong>Resolved once per registry.</strong> The hook runs once, when the <code dir="auto">Auth</code> service of the registry is built, as the superuser in a
+read-only transaction that is always rolled back, where any query or write is refused, with a
+bound (<code dir="auto">AuthConfig::with_token_plan_hook_deadline_ms</code>, default 10 s, 10 – 60,000 ms). It is not called per login or per request. The service is not built, and nothing is
+issued or checked, when the plan is refused. There is no fallback to the base fields: a hook
+error or panic, a name that is no field of <code dir="auto">res.users</code>, a field that is not stored or is
+translated or company dependent, a type other than boolean, integer, selection, many2one (the id)
+and <code dir="auto">char</code> with a <code dir="auto">size</code> of at most 16,384 (so <code dir="auto">float</code>, <code dir="auto">monetary</code>, <code dir="auto">date</code>, <code dir="auto">datetime</code>, <code dir="auto">text</code> and a
+<code dir="auto">char</code> without a size are refused: their text form depends on session settings or their size is
+not bounded), and any <code dir="auto">one2many</code> or <code dir="auto">many2many</code> field, give a <code dir="auto">Programming</code> error naming the field.
+Odoo’s <code dir="auto">auth_totp</code> declares <code dir="auto">totp_secret</code> as a non-stored computed <code dir="auto">Char</code> over a hand-made column
+(<code dir="auto">odoo/addons/auth_totp/models/res_users.py:33</code>, <code dir="auto">:40-41</code>); that shape is refused, a native TOTP
+addon declares a stored, sized <code dir="auto">char</code>. An install-time check of the plan is
+planned. Relation fields (a passkey list) are <strong>not supported yet</strong>.</li>
+<li><strong>What changes a token.</strong> A change of an added field’s value, including <code dir="auto">NULL</code> to a value and back,
+ends the user’s sessions at their next check, on any node, with the same <code dir="auto">SessionExpired</code> answer
+(“user is not connected”) as any other mismatch. A field that is <code dir="auto">NULL</code> adds nothing to the token
+(Odoo’s rule), so installing an addon does not log anyone out until a value is set. Values are read
+from the primary at every check; nothing caches them, so another node sees a change at its next
+request. A value over 64 KiB is refused with an error, never cut.</li>
+<li><strong>Everywhere the same plan.</strong> Login issuance (a factor changed while the password was being
+verified makes the login restart and read it again), the session check (also the cookie checked
+beside an API key), the current session after the user’s own password change or an
+administrator reset, and the cleanup after a password rehash all use it.</li>
+<li><strong>Who may write the field.</strong> Anyone allowed to write an added field can end that user’s sessions
+(and a write by the session’s own user changes the token under it). Give the field restrictive
+<code dir="auto">groups</code>, as Odoo does for its secrets. Do not add a field the framework updates on every write, such
+as <code dir="auto">write_uid</code>: any write to the user, by anyone, would then end all of that user’s sessions.</li>
+<li><strong>Not combined with custom login selection yet.</strong> An addon that overrides <code dir="auto">_get_login_domain</code> or
+<code dir="auto">_get_login_order</code> together with a plan that adds fields makes the service refuse to start
+with an error saying that token fields and custom login selection cannot be combined yet.</li>
+<li><strong>Mixed versions.</strong> A node whose plan differs from the one a session was issued under computes a
+different token for users whose added fields are not <code dir="auto">NULL</code> and refuses the session like any
+mismatch (the row is deleted; the user logs in again). Upgrade all nodes of a database together.</li>
+</ul>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="hashing-a-password-yourself">Hashing a password yourself</h2><a class="sl-anchor-link" href="#hashing-a-password-yourself"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Hashing a password yourself”</span></a></div>
+<p>Writing <code dir="auto">password</code> on <code dir="auto">res.users</code> hashes it. When an addon stores another secret the same way, use
+<code dir="auto">hash_password(tx, password)</code> (the database’s current parameters, on the database’s hashing pool: the one
+handed to its <code dir="auto">Auth</code>, so every hash of the ORM lineage shares one bound). For direct verification, retain
+<code dir="auto">auth::pool::for_env(env)</code> and use its <code dir="auto">PoolBinding::run</code> around <code dir="auto">StoredHash::parse(..)?.verify(..)</code>.
+That lease survives cancellation until the blocking hash finishes, including data loading before the
+first <code dir="auto">Auth</code>. Never hash on the async runtime; the pool bounds concurrent CPU and memory use.</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="ending-sessions-the-session-end-hook">Ending sessions: the session-end hook</h2><a class="sl-anchor-link" href="#ending-sessions-the-session-end-hook"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Ending sessions: the session-end hook”</span></a></div>
+<p>An addon that keeps rows per session (push subscriptions, devices, websocket presence) registers a hook. It
+runs in the transaction that deletes the session rows, for every reason: logout, archiving or deleting the
+user, setting the user’s password, a rehash at login (sessions with obsolete tokens), the per-user cap of 100, a
+refused check, collection of expired sessions. Delete your rows there; returning an error fails the
+whole deletion, so the session survives with your rows. Use raw statements only (<code dir="auto">query</code>, <code dir="auto">execute</code>,
+<code dir="auto">batch</code>), never the record API. The dispatcher enforces this for every caller with
+<code dir="auto">Transaction::raw_statements_only()</code>, including user changes inside REPEATABLE READ
+transactions. Record access fails with <code dir="auto">Programming</code>; READ COMMITTED retains its existing
+isolation-specific diagnostic. Cached reads, prebuilt query execution, stream advancement,
+method continuations and explicit ORM flushes are restricted too. The caller’s prior
+restriction is restored when the hook returns, errors or is cancelled; existing transaction
+cancellation and rollback requirements still apply. Transaction metadata and projections of
+values already held by native code remain available. This is a consistency contract for
+trusted native addons, not a Rust or SQL sandbox (ADR 0078).</p>
+<div class="expressive-code"><figure class="frame not-content"><figcaption class="header"></figcaption><pre data-language="rust"><code><div class="ec-line"><div class="code"><span style="--0:#C792EA;--1:#8844AE">use</span><span style="--0:#D6DEEB;--1:#403F53"> erp_sdk</span><span style="--0:#7FDBCA;--1:#096E72">::</span><span style="--0:#D6DEEB;--1:#403F53">BoxFuture;</span></div></div><div class="ec-line"><div class="code"><span style="--0:#C792EA;--1:#8844AE">use</span><span style="--0:#D6DEEB;--1:#403F53"> erp_sdk</span><span style="--0:#7FDBCA;--1:#096E72">::</span><span style="--0:#D6DEEB;--1:#403F53">auth</span><span style="--0:#7FDBCA;--1:#096E72">::</span><span style="--0:#D6DEEB;--1:#403F53">SessionEnd;</span></div></div><div class="ec-line"><div class="code"><span style="--0:#C792EA;--1:#8844AE">use</span><span style="--0:#D6DEEB;--1:#403F53"> erp_sdk</span><span style="--0:#7FDBCA;--1:#096E72">::</span><span style="--0:#D6DEEB;--1:#403F53">prelude</span><span style="--0:#7FDBCA;--1:#096E72">::*</span><span style="--0:#D6DEEB;--1:#403F53">;</span></div></div><div class="ec-line"><div class="code">
+</div></div><div class="ec-line"><div class="code"><span style="--0:#D6DEEB;--1:#403F53">erp_sdk</span><span style="--0:#7FDBCA;--1:#096E72">::</span><span style="--0:#D6DEEB;--1:#403F53">auth</span><span style="--0:#7FDBCA;--1:#096E72">::</span><span style="--0:#82AAFF;--1:#3B61B0">session_end_hook!</span><span style="--0:#D6DEEB;--1:#403F53">(</span><span style="--0:#82AAFF;--1:#3B61B0">DROP_DEVICES</span><span style="--0:#D6DEEB;--1:#403F53">, </span><span style="--0:#C5E478;--1:#3B61B0">addon</span><span style="--0:#D6DEEB;--1:#403F53"> </span><span style="--0:#C792EA;--1:#8844AE">=</span><span style="--0:#D6DEEB;--1:#403F53"> </span><span style="--0:#D9F5DD;--1:#111111">"</span><span style="--0:#ECC48D;--1:#984E4D">my_addon</span><span style="--0:#D9F5DD;--1:#111111">"</span><span style="--0:#D6DEEB;--1:#403F53">, </span><span style="--0:#C5E478;--1:#3B61B0">run</span><span style="--0:#D6DEEB;--1:#403F53"> </span><span style="--0:#C792EA;--1:#8844AE">=</span><span style="--0:#D6DEEB;--1:#403F53"> </span><span style="--0:#C5E478;--1:#3B61B0">drop_devices</span><span style="--0:#D6DEEB;--1:#403F53">);</span></div></div><div class="ec-line"><div class="code">
+</div></div><div class="ec-line"><div class="code"><span style="--0:#C792EA;--1:#8844AE">fn</span><span style="--0:#D6DEEB;--1:#403F53"> </span><span style="--0:#82AAFF;--1:#3B61B0">drop_devices</span><span style="--0:#D6DEEB;--1:#403F53">&#x3C;'a>(</span><span style="--0:#C5E478;--1:#3B61B0">tx</span><span style="--0:#7FDBCA;--1:#096E72">:</span><span style="--0:#D6DEEB;--1:#403F53"> </span><span style="--0:#7FDBCA;--1:#096E72">&#x26;</span><span style="--0:#D6DEEB;--1:#403F53">'a </span><span style="--0:#C792EA;--1:#8844AE">mut</span><span style="--0:#D6DEEB;--1:#403F53"> Transaction, </span><span style="--0:#C5E478;--1:#3B61B0">ended</span><span style="--0:#7FDBCA;--1:#096E72">:</span><span style="--0:#D6DEEB;--1:#403F53"> </span><span style="--0:#7FDBCA;--1:#096E72">&#x26;</span><span style="--0:#D6DEEB;--1:#403F53">'a SessionEnd) </span><span style="--0:#7FDBCA;--1:#096E72">-></span><span style="--0:#D6DEEB;--1:#403F53"> BoxFuture&#x3C;'a, Result&#x3C;()>> {</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#D6DEEB;--1:#403F53">    </span></span><span style="--0:#D6DEEB;--1:#403F53">Box</span><span style="--0:#7FDBCA;--1:#096E72">::</span><span style="--0:#82AAFF;--1:#3B61B0">pin</span><span style="--0:#D6DEEB;--1:#403F53">(</span><span style="--0:#C792EA;--1:#8844AE">async</span><span style="--0:#D6DEEB;--1:#403F53"> </span><span style="--0:#C792EA;--1:#8844AE">move</span><span style="--0:#D6DEEB;--1:#403F53"> {</span></div></div><div class="ec-line"><div class="code"><span class="indent">        </span><span style="--0:#C792EA;--1:#8844AE">let</span><span style="--0:#D6DEEB;--1:#403F53"> </span><span style="--0:#C5E478;--1:#3B61B0">ids</span><span style="--0:#7FDBCA;--1:#096E72">:</span><span style="--0:#D6DEEB;--1:#403F53"> Vec&#x3C;String> </span><span style="--0:#C792EA;--1:#8844AE">=</span><span style="--0:#D6DEEB;--1:#403F53"> </span><span style="--0:#C5E478;--1:#3B61B0">ended</span><span style="--0:#7FDBCA;--1:#096E72">.</span><span style="--0:#82AAFF;--1:#3B61B0">sessions</span><span style="--0:#D6DEEB;--1:#403F53">()</span><span style="--0:#7FDBCA;--1:#096E72">.</span><span style="--0:#82AAFF;--1:#3B61B0">iter</span><span style="--0:#D6DEEB;--1:#403F53">()</span><span style="--0:#7FDBCA;--1:#096E72">.</span><span style="--0:#82AAFF;--1:#3B61B0">map</span><span style="--0:#D6DEEB;--1:#403F53">(</span><span style="--0:#C792EA;--1:#8844AE">|</span><span style="--0:#C5E478;--1:#3B61B0">s</span><span style="--0:#C792EA;--1:#8844AE">|</span><span style="--0:#D6DEEB;--1:#403F53"> </span><span style="--0:#C5E478;--1:#3B61B0">s</span><span style="--0:#7FDBCA;--1:#096E72">.</span><span style="--0:#82AAFF;--1:#3B61B0">id</span><span style="--0:#D6DEEB;--1:#403F53">()</span><span style="--0:#7FDBCA;--1:#096E72">.</span><span style="--0:#82AAFF;--1:#3B61B0">to_text</span><span style="--0:#D6DEEB;--1:#403F53">())</span><span style="--0:#7FDBCA;--1:#096E72">.</span><span style="--0:#82AAFF;--1:#3B61B0">collect</span><span style="--0:#D6DEEB;--1:#403F53">();</span></div></div><div class="ec-line"><div class="code"><span class="indent">        </span><span style="--0:#C5E478;--1:#3B61B0">tx</span><span style="--0:#7FDBCA;--1:#096E72">.</span><span style="--0:#82AAFF;--1:#3B61B0">execute</span><span style="--0:#D6DEEB;--1:#403F53">(</span><span style="--0:#D9F5DD;--1:#111111">"</span><span style="--0:#ECC48D;--1:#984E4D">DELETE FROM my_addon_device WHERE session_id = ANY($1)</span><span style="--0:#D9F5DD;--1:#111111">"</span><span style="--0:#D6DEEB;--1:#403F53">, </span><span style="--0:#7FDBCA;--1:#096E72">&#x26;</span><span style="--0:#D6DEEB;--1:#403F53">[</span><span style="--0:#7FDBCA;--1:#096E72">&#x26;</span><span style="--0:#C5E478;--1:#3B61B0">ids</span><span style="--0:#D6DEEB;--1:#403F53">])</span></div></div><div class="ec-line"><div class="code"><span class="indent">            </span><span style="--0:#7FDBCA;--1:#096E72">.</span><span style="--0:#C792EA;--1:#8844AE">await</span><span style="--0:#7FDBCA;--1:#096E72">?</span><span style="--0:#D6DEEB;--1:#403F53">;</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#D6DEEB;--1:#403F53">        </span></span><span style="--0:#D6DEEB;--1:#403F53">Ok(())</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#D6DEEB;--1:#403F53">    </span></span><span style="--0:#D6DEEB;--1:#403F53">})</span></div></div><div class="ec-line"><div class="code"><span style="--0:#D6DEEB;--1:#403F53">}</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="use erp_sdk::BoxFuture;use erp_sdk::auth::SessionEnd;use erp_sdk::prelude::*;erp_sdk::auth::session_end_hook!(DROP_DEVICES, addon = &#x22;my_addon&#x22;, run = drop_devices);fn drop_devices<&#x27;a>(tx: &#x26;&#x27;a mut Transaction, ended: &#x26;&#x27;a SessionEnd) -> BoxFuture<&#x27;a, Result<()>> {    Box::pin(async move {        let ids: Vec<String> = ended.sessions().iter().map(|s| s.id().to_text()).collect();        tx.execute(&#x22;DELETE FROM my_addon_device WHERE session_id = ANY($1)&#x22;, &#x26;[&#x26;ids])            .await?;        Ok(())    })}"><div></div></button></div></figure></div>
+<p><code dir="auto">ended.reason()</code> tells why (<code dir="auto">EndReason::Logout</code>, <code dir="auto">Revoked</code>, <code dir="auto">Expired</code>, <code dir="auto">CredentialChanged</code> for a password
+set or a rehash at login, <code dir="auto">OverCap</code> for the per-user cap). The hook of an addon that is not
+installed in the database never runs. Keep the work set-based: one statement for all ended sessions, never a
+loop of per-session queries (collection ends up to 1,000 sessions per transaction).</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="irconfig-parameter"><code dir="auto">ir.config_parameter</code></h2><a class="sl-anchor-link" href="#irconfig-parameter"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “ir.config_parameter”</span></a></div>
+<p>Use the typed API, as Odoo 20 does: <code dir="auto">get_str</code>, <code dir="auto">get_int</code>, <code dir="auto">get_float</code>, <code dir="auto">get_bool</code> and <code dir="auto">set_str</code>, <code dir="auto">set_int</code>,
+<code dir="auto">set_float</code>, <code dir="auto">set_bool</code>, from Rust (<code dir="auto">records("ir.config_parameter")?.call(tx, "get_int", (key, default))</code>)
+or over JSON-2. A missing key or an empty value gives the default; a value of the wrong type is a
+<code dir="auto">Validation</code> error naming the key (Odoo returns the default and logs a warning; we fail loudly, BUG-083 for
+the setter). Setters return the previous value only after model and existing-row write <strong>and read</strong>
+authorization, including a no-op. Missing keys still require normal create permission. Malformed-value
+errors name the key and expected type and never include the stored value.</p>
+<ul>
+<li><code dir="auto">database.secret</code> cannot be read, searched, exported or written by any caller without full elevation,
+whatever the groups (ADR 0037 decision 8): it signs the session tokens. In-process code that needs it runs
+in superuser mode. Never copy it into another record, a log or a response.</li>
+<li>The keys <code dir="auto">base</code> creates (<code dir="auto">database.secret</code>, <code dir="auto">database.uuid</code>, <code dir="auto">database.create_date</code>,
+<code dir="auto">base.login_cooldown_after</code>, <code dir="auto">base.login_cooldown_duration</code>) cannot be renamed or deleted.</li>
+<li>Every write invalidates the authentication settings cache on every node, so a changed cooldown or session
+limit applies to the next login or check without a restart.</li>
+</ul>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="checking-rotating-and-touching-sessions">Checking, rotating and touching sessions</h2><a class="sl-anchor-link" href="#checking-rotating-and-touching-sessions"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Checking, rotating and touching sessions”</span></a></div>
+<p><code dir="auto">Auth::begin_session(&#x26;secret, CredentialOptions::new())</code> (<code dir="auto">erp_orm::CredentialOptions</code>, re-exported) opens the request’s transaction with the session
+check in its opening flight (<code dir="auto">CredentialOptions</code> carries the context, limits and read intent; nothing else
+is accepted). <code dir="auto">Auth::rotate</code> and <code dir="auto">Auth::touch(&#x26;[Touch::new(id).addr(ip).agent(ua)])</code> are one READ COMMITTED
+round trip each, outside the request’s transaction; a touch skips rows another transaction holds, and two
+rotations of one secret converge on one successor (the second returns <code dir="auto">None</code>). A row whose key id this node
+does not hold is refused but kept (another node may hold the key during a rollout).</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="sessions-in-tests">Sessions in tests</h2><a class="sl-anchor-link" href="#sessions-in-tests"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Sessions in tests”</span></a></div>
+<p><code dir="auto">erp_testkit::Harness</code> creates the core tables of the crates linked into the test, the session and
+throttle tables among them, as <code dir="auto">Orm::sync_schema</code> does on a real server. The helpers in
+<code dir="auto">crates/erp-test-models/tests/auth_support/mod.rs</code> show a database ready for logins (the <code dir="auto">init</code> hooks of
+<code dir="auto">ir.config_parameter</code> and <code dir="auto">res.users</code>, an administrator, users with passwords).</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="native-lifecycle-authorization">Native lifecycle authorization</h2><a class="sl-anchor-link" href="#native-lifecycle-authorization"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Native lifecycle authorization”</span></a></div>
+<p>Trusted composition can call <code dir="auto">Auth::check_session_in(&#x26;mut tx, &#x26;secret)</code> when ModuleSystem owns the
+primary transaction. Its opaque <code dir="auto">SessionAuthorization</code> exposes the current human principal/session
+and <code dir="auto">has_groups</code>; the policy is compiled from that transaction’s rows, even when the engine’s root
+policy is System-only. It does not change transaction authority. Only the native lifecycle engine
+binds the validated actor before schema/data effects. Addon RPC code must use its existing caller
+transaction and must never use this seam as an elevation or install API.</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="identity-confirmation-and-a-self-service-password-change">Identity confirmation and a self-service password change</h2><a class="sl-anchor-link" href="#identity-confirmation-and-a-self-service-password-change"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Identity confirmation and a self-service password change”</span></a></div>
+<p><code dir="auto">Auth::check_identity(Some(cookie_secret))</code> checks the current HTTP session’s identity window.
+<code dir="auto">IdentityCheck::Required.action()</code> returns the typed <code dir="auto">res.users.identitycheck</code> window descriptor;
+the adapter renders confirmation and resubmits its fixed operation. <code dir="auto">None</code> is refused with the
+SEC-041 no-HTTP error. An identity observation is never authority to skip the operation’s own check.</p>
+<p><code dir="auto">Auth::confirm_identity(cookie_secret, password, client)</code> verifies that session’s user through the
+existing credential-dispatch and shared-throttle path and stores confirmation in PostgreSQL. Pass
+<code dir="auto">ClientAddr::Known</code> from an HTTP adapter. Confirmation is per session, not per user, and expires at
+ten minutes; future timestamps are not accepted. It does not create a login session or upgrade a
+legacy hash. Failed guesses are recorded even when the caller disconnects during verification.</p>
+<p><code dir="auto">Auth::change_password(Some(cookie_secret), new_password)</code> takes the same admission before opening
+any transaction. A stale identity returns <code dir="auto">IdentityCheck::Required</code> without mutation. Success returns
+<code dir="auto">Verified</code> after committing the password, the current session’s refreshed token and the revocation of
+other sessions together. The cookie and stable session id survive. A session-end hook failure rolls
+all of that back. Concurrency errors require retrying the complete service operation.</p>
+<p>This service owns its transactions: invoke it before opening an ordinary RPC transaction. It is a
+dedicated self-service path, not a call to the password field’s inverse. Credential-check overrides
+participate in confirmation and session-end hooks participate in revocation; password-field inverse
+overrides do not participate. Ordinary password-field writes retain their revoke-all behavior.
+The HTTP/RPC adapter, transient wizard model and rendered UI are not supplied by this typed API.</p>
+<p>Identity confirmation and password change reject more than 100 stored sessions for the current
+user with <code dir="auto">Validation</code>, including expired/pending rows. End excess sessions and retry. The bound
+is checked under the user lock before confirmation/password/token mutation; password change
+revokes every other admitted session and runs its hooks in the same transaction.</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="native-api-key-issuance">Native API key issuance</h2><a class="sl-anchor-link" href="#native-api-key-issuance"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Native API key issuance”</span></a></div>
+<p><code dir="auto">erp_sdk::auth::IssueRequest::new</code> validates a typed subject, name, kind, scope
+and optional naive-UTC expiry. The store currently admits only <code dir="auto">KeyKind::User</code>
+and <code dir="auto">KeyScope::Rpc</code>: unrestricted models and methods, writable access, subject
+capabilities. There is no JSON-to-authority deserializer. Agent and service
+requests return the ADR 0037 principal gate; MCP user requests are refused.
+Labels are nonempty after trimming and at most 128 bytes.</p>
+<p>Addons that renew or create keys for the current user should call
+<code dir="auto">erp_sdk::auth::apikey_manage::generate</code>, which validates the presented key,
+scope and policy and then delegates here. <code dir="auto">erp_sdk::auth::issue</code> itself audits in the
+caller’s transaction: it writes one <code dir="auto">api_key.issued</code> event built from the inserted row, and
+the transaction needs an <code dir="auto">OperationIdentity</code>, otherwise the commit fails with an audit
+error and no key survives. There is no unaudited issuance path.</p>
+<p>Pass the tenant’s <code dir="auto">ApiKeyHasher</code> to <code dir="auto">erp_sdk::auth::issue</code> in the caller’s
+transaction. Rebuild the hasher after database.secret rotation; never reuse
+another tenant’s material. A subject-row version fence precedes policy/count
+reads. The database supplies the clock and effective groups. Non-system subjects
+must supply an expiry within their groups’ maximum duration (one day when the
+maximum is zero or absent). Persistent keys are reserved for system subjects.
+The native store handles issuance. Programmatic management delegates to it after
+validating the current user and the supplied key; native verification and scheduled
+collection use the same database expiry semantics.</p>
+<p>Use <code dir="auto">Orm::run</code> for whole-transaction serialization/deadlock retry. Construct the
+one-time secret inside each attempt; never produce a response, log or external
+effect within that retryable closure. Only return the <code dir="auto">IssuedApiKey</code> from the
+committed attempt. Explicit transactions surface <code dir="auto">Concurrency</code> unchanged: roll
+back and retry the complete unit of work, never only its INSERT.</p>
+<p>The issuance result and its secret have no Debug, Display, Clone or serialization
+implementation. After commit succeeds, consume the result with <code dir="auto">into_secret()</code>,
+then explicitly borrow <code dir="auto">expose()</code> for the one-time response. Do not expose any
+secret before successful commit. Rollback or connection loss revokes pending
+issuance automatically. Secret storage zeroizes on drop.</p>
+<p><code dir="auto">base.programmatic_api_keys_limit</code> imposes a tenant-local active-key cap per
+subject, defaulting to 10 when absent; a present value must be positive.
+The predicate includes persistent keys and <code dir="auto">expiration_date >=</code> database time. Malformed configuration
+refuses issuance. The caller must belong to <code dir="auto">base.group_system</code>, or the strictly
+parsed <code dir="auto">base.enable_programmatic_api_keys</code> setting must be true. Delegation requires actual system
+group membership; sudo/core elevation alone does not grant it.
+Public management endpoints and credential checks are planned.
+Generic ORM create/write cannot bypass issuance.</p>
+<p>Issuance, revocation and expired-key collection are recorded in the audit trail with typed events
+(<code dir="auto">erp_sdk::audit::AuthEvent</code>) in the same transaction as the change; see <a href="/ERPForAll/en/next/developer/addon-guide/audit/">the audit trail</a>. The
+events carry key ids and enums, never a key, a digest, a display prefix or a key name.</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="native-api-key-verification">Native API key verification</h2><a class="sl-anchor-link" href="#native-api-key-verification"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Native API key verification”</span></a></div>
+<p>Transport integrations authenticate with <code dir="auto">Auth::begin_api_key(ApiKeyRequest, CredentialOptions)</code>.
+Construct the request with the submitted credential, exact <code dir="auto">KeyScope</code> and the client IP resolved
+by the trusted proxy boundary. Optional <code dir="auto">.uid(...)</code> constrains the expected subject; optional
+<code dir="auto">.session(...)</code> checks cookie precedence. Keep the input out of diagnostics and retain it only
+for the request and its bounded RPC retries. The returned transaction is authorized by the key
+row and the current subject’s groups and companies. Finish it with commit or rollback.</p>
+<p>A user key’s validated scope also supplies <code dir="auto">Actor::ApiKey</code>; a human session without a key has
+no key actor. Native user keys currently use the subject’s capabilities and unrestricted model
+and method scope. Agent and service keys are refused until scoped principals exist. Imported legacy
+40-hex credentials (rows carrying <code dir="auto">legacy_index</code> and <code dir="auto">legacy_hash</code>, ADR 0037 decision 5) verify
+with their original PBKDF2-SHA512 hash under the same route audience, expiry, active-user, uid and
+kind rules as native keys. Re-issue a native key to stop paying the hash cost; deleting the row
+(<code dir="auto">erp auth emergency-revoke --key &#x3C;id></code>) refuses the key on the next request on every node.</p>
+<p><code dir="auto">res.users.apikeys.last_used_at</code> records when a key was last accepted. It is a coarse signal,
+not an access log: it moves at most once an hour per key across the whole cluster, using the
+database clock (naive UTC), and a key never used has it empty. The write is bookkeeping. It
+runs outside the request transaction, never touches <code dir="auto">write_date</code>, and a failure is logged at
+<code dir="auto">warn</code> with the key id and counted, never raised to the request.</p>
+<p><code dir="auto">ApiKeyBegin.last_use</code> carries the work for a caller of <code dir="auto">begin_api_key</code>. It is <code dir="auto">Some</code> only when
+the key is due, and it is an <code dir="auto">ApiKeyLastUse</code> ticket: <strong>dropping it launches the write</strong>, so hold
+it until the request transaction has ended (commit or rollback), then drop it. Dropping it
+earlier is safe except for one case: the request transaction is REPEATABLE READ, so any such
+transaction that took its snapshot before a write of this key committed, and then updates,
+deletes or locks (<code dir="auto">FOR UPDATE</code>) that key row, gets a serialization failure (<code dir="auto">40001</code>). That is the
+same request when it dropped the ticket early (a key revoking itself), and also another request
+that revokes or changes this key while a write from a different request commits in between; the
+RPC layer retries such a failure as a whole attempt. If you call <code dir="auto">begin_api_key</code> more than once
+for one request (a preflight, then the real opening), keep the first ticket and call
+<code dir="auto">ApiKeyLastUse::discard</code> on the others: it throws a ticket away without writing. A ticket
+dropped while the runtime shuts down may record nothing. Ignoring the field entirely is also fine; the ticket is
+dropped with the <code dir="auto">ApiKeyBegin</code>. One write per process and ORM lineage runs at a time; a ticket
+dropped while another write runs is skipped (<code dir="auto">AuthStats::last_use_skipped</code>) and the key’s next
+use is due again. Outcomes are in <code dir="auto">AuthStats::last_use_writes</code>, <code dir="auto">last_use_noops</code> (not due any
+more, row locked or deleted) and <code dir="auto">last_use_errors</code>.</p>
+<p>Verification reads tenant-primary PostgreSQL in the opening transaction flight. Acceptance is
+never cached: revocation, expiry and user deactivation apply to the next transaction on another
+node too. Only tenant settings and cryptographic derivation are cached by settings generation.
+A stale or invalid optional cookie does not grant authority and does not extend or delete its
+session. A valid cookie belonging to another user raises <code dir="auto">Access</code> with
+<code dir="auto">Session user does not match the used apikey.</code> A failed key never falls back to cookie access.</p>
+<p>The HTTP adapter first uses the existing bounded process address prefilter once per external bearer request; RPC rechecks do not consume additional flood tokens. The shared tenant address throttle covers invalid native bearer attempts. Cooldown and database
+failures propagate; they cannot turn into authorization. <code dir="auto">ApiKeyCooldown</code> is the typed error source
+used by the HTTP adapter to return 429 and <code dir="auto">Retry-After</code>. Malformed, unknown, revoked, inactive-user,
+expired and wrong-scope native keys return <code dir="auto">AccessDenied</code> with <code dir="auto">Invalid apikey</code>. The HTTP adapter
+returns 401 and <code dir="auto">WWW-Authenticate: bearer</code>. Submitted credentials are never included in errors.</p>
+<p>The canonical HTTP entry point is <code dir="auto">POST /erp/json/2/&#x3C;model>/&#x3C;method></code> with a single Bearer
+Authorization header. Native bearer requests are stateless. Cookie JSON-2 requests retain their
+same-origin checks. Bearer requests with an Origin must name the configured public origin; no
+cross-origin allowlist is configured by this slice. Module installation continues to require a
+human session and its existing CSRF checks. No legacy XML-RPC or JSON-RPC endpoint is added.</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="password-change-integration">Password-change integration (ADR 0138)</h2><a class="sl-anchor-link" href="#password-change-integration"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Password-change integration (ADR 0138)”</span></a></div>
+<p>The browser password operations are a closed, request-local interface. They run after RPC parsing,
+exposure and binding but own their sensitive authentication transactions. Never call the Auth
+service from an ordinary model transaction. Identity authority is the presented browser cookie;
+<code dir="auto">context</code>, caller-supplied user IDs, API keys and a prior principal snapshot do not replace it.</p>
+<p>Own changes call <code dir="auto">Auth::change_password</code> after <code dir="auto">Auth::confirm_identity</code> when required. The legacy
+<code dir="auto">res.users.change_password(old_passwd, new_passwd)</code> explicitly verifies its old password on every
+call. Administrator resets use validated <code dir="auto">PasswordReset</code> inputs and a fresh manager authorization.
+They do not grant general user-write permission. Every target must be visible to the actor under
+<code dir="auto">res.users</code>’ generated company restriction with all of the actor’s companies active (through its
+<code dir="auto">share</code> escape this scopes portal users only); an actor without <code dir="auto">base.group_system</code> also needs every
+target, internal users included, to share one of its companies; a target holding <code dir="auto">base.group_system</code>
+needs an actor holding it; the superuser row is never a target (ADR 0138 Amendment 1). These run
+through <code dir="auto">SessionAuthorization::check_reset_targets</code> when the wizard opens, in Auth’s preflight and
+after the final locks; a refused target answers like a missing one
+(<code dir="auto">erp_security::auth::missing_reset_target</code>). Reset lines (<code dir="auto">change.password.user</code>) are created only
+by the wizard open, in superuser mode: the line model’s <code dir="auto">create</code> refuses every other creation with the
+same answer, so addon code cannot add a line through <code dir="auto">create</code>. The visibility call underneath,
+<code dir="auto">Transaction::visible_under_company_restriction</code> (ADR 0190), takes an explicit policy, principal and
+company set; it is a check for core services, not an addon API. An empty administrator line skips mutation;
+password byte and selected-user/session limits fail before partial effects. The current actor’s
+cookie is retained when its own password changes; affected other sessions end through the existing
+transactional hooks.</p>
+<p>Wizard secret fields are nonstored and read empty. Do not generically save them: send only the
+fixed operation parameters documented in ADR 0138. No password enters a persisted replay request,
+action context, tracking or debug output. Managed submissions refuse Idempotency-Key explicitly;
+a missing commit answer is uncertain and must never trigger automatic replay.</p>
+<p>The web client implements this in <code dir="auto">addons/web/static/src/client/password-flow.ts</code>. The
+three submissions (<code dir="auto">res.users.identitycheck.run_check</code>, <code dir="auto">change.password.own.change_password</code>,
+<code dir="auto">change.password.wizard.change_password_button</code>) skip the save: the wizard dialog validates the form and
+sends the typed values as operation parameters (<code dir="auto">password</code>; <code dir="auto">new_password</code> and <code dir="auto">confirm_password</code>; <code dir="auto">changes</code>
+as <code dir="auto">{line_id, new_passwd}</code> per selected-user line). The four password models never send an edit to <code dir="auto">onchange</code>.
+When an operation answers with the identity confirmation, the client keeps that operation in memory and sends
+it again, once, after the confirmation succeeds; the server stores no callback. The set is closed: an addon
+cannot add a password submission to it.</p>
+<p>Native base-only managed entry implementations are the initial supported composition. A hidden
+entry stays hidden; additional implementation overrides are refused explicitly, rather than
+silently skipped. Credential and session-end hooks retain their current dispatch. As in the
+existing self-change service, Auth-owned password mutation does not dispatch <code dir="auto">_set_password</code>
+overrides. No broader addon parity is claimed.</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="native-api-key-management">Native API key management</h2><a class="sl-anchor-link" href="#native-api-key-management"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Native API key management”</span></a></div>
+<p><code dir="auto">erp_sdk::auth::apikey_manage::generate(tx, key, scope, name, expiry)</code> verifies an
+active native user key owned by the transaction’s current user, with the requested
+scope, then returns <code dir="auto">IssuedApiKey</code>. Commit before exposing its secret. It creates
+a replacement without deleting the old key: store the new credential securely,
+verify it, then call <code dir="auto">revoke(tx, old_key)</code>. Revocation deletes the row atomically;
+every replica rejects it on its next authenticated transaction. Deletion invalidates
+the <code dir="auto">apikeys</code> named cache; signal-enabled commits publish that generation atomically. Generic create,
+write and unlink cannot bypass these APIs, including under sudo. Only native
+unrestricted user keys with <code dir="auto">rpc</code> scope are admitted in this slice. Agent/service
+and imported legacy credential support retain their existing future-task gates.</p>
+<p>The public model methods are <code dir="auto">res.users.apikeys.generate(key, scope, name, expiration_date)</code> and <code dir="auto">res.users.apikeys.revoke(key)</code>. Generation returns the new
+credential string once; revoke returns <code dir="auto">true</code>. A refused key answers <code dir="auto">AccessDenied</code>:
+“The provided API key is invalid or does not belong to the current user.” from generation (Odoo’s
+text), “The provided API key is invalid.” from revoke. Revoke deletes only an <code dir="auto">rpc</code> key of the
+current user and gives that one answer for an unknown, foreign, expired, wrongly scoped or malformed
+key. This differs from Odoo on purpose (ADR 0037 decision 5): Odoo lets a system user revoke any key,
+ignores the scope and answers a foreign key with a different error; one uniform answer tells a
+caller nothing about other users’ keys. Generation also checks the presented key before the
+active-key limit, where Odoo checks the limit first. <code dir="auto">expiration_date</code> accepts a UTC
+Odoo date/datetime string, or null for a system subject’s persistent key. Invalid
+dates, wrong argument types, unknown arguments and invalid metadata fail. Body
+size, argument binding, authenticated principal scope and write-effect admission
+remain the normal RPC boundaries. <code dir="auto">Idempotency-Key</code> is explicitly refused for
+generation before execution: the generic replay store must never persist a
+credential response. Other methods retain their existing replay behavior.</p>
+<p>Management requires <code dir="auto">base.enable_programmatic_api_keys</code> unless the actual current
+user belongs to <code dir="auto">base.group_system</code>. Malformed present configuration fails loudly.
+The tenant-wide active-key limit and subject lifetime policy apply to replacements
+as they do to issuance; renewal therefore needs one free slot before revoking the
+old key. Possession of another user’s credential does not confer ownership. A user
+may revoke their current key; its current request commits and subsequent requests
+fail. No accepted-credential cache or plaintext key store is introduced. Never log
+request bodies or credential responses; server responses use <code dir="auto">Cache-Control: no-store</code>.</p>
+<p><code dir="auto">collect_expired(tx, limit)</code> is a core-System-only raw-SQL primitive, with a bound
+of 1 through 1000 rows. The existing authentication collector invokes one batch per
+run, under its durable scheduling fence, and reports <code dir="auto">GcReport.api_keys</code>. A partial
+expiration index supports selection. Concurrent collectors skip locked rows;
+rollback makes work available to a later collector. Persistent keys and keys at
+or after the inclusive database expiry boundary remain untouched. No additional
+service or per-node accepted-key cache is needed. Product performance evidence is
+<code dir="auto">DEFERRED_PERFORMANCE</code> under ADR 0065.</p>
+
+<div class="sl-heading-wrapper level-h3"><h3 id="key-lifecycle-audit-events">Lifecycle audit events (ADR 0151)</h3><a class="sl-anchor-link" href="#key-lifecycle-audit-events"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Lifecycle audit events (ADR 0151)”</span></a></div>
+<p>Every key lifecycle change writes a typed event into the transaction’s audit row
+(<code dir="auto">erp_event.ir_audit_entry</code>), so the event commits or rolls back with the key itself
+and never needs a hand-written audit statement. The events are built only from ids,
+closed enums, flags and counts (<code dir="auto">erp_orm::audit::AuthEvent</code>); no constructor takes a
+key string, digest, display prefix or key name, so none of them can reach the trail.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Operation</th><th>Event</th><th>Notes</th></tr></thead><tbody><tr><td><code dir="auto">apikey_store::issue</code> (so also <code dir="auto">apikey_manage::generate</code>)</td><td><code dir="auto">api_key.issued</code></td><td>key id, owner, creating user, kind, route, expiry, built from the inserted row; allowlist lengths are <code dir="auto">null</code> for user keys; exactly one event per key</td></tr><tr><td><code dir="auto">apikey_manage::revoke</code></td><td><code dir="auto">api_key.revoked</code></td><td><code dir="auto">cause</code> is <code dir="auto">self</code> when the transaction’s own key is the revoked one, <code dir="auto">programmatic</code> (naming the revoking key) when another key revoked it, <code dir="auto">owner</code> for a session without a key actor (an impersonation chain is looked through to the original actor)</td></tr><tr><td><code dir="auto">apikey_manage::collect_expired</code></td><td><code dir="auto">api_keys.collected</code></td><td>one event per committed batch naming exactly the deleted ids (at most <code dir="auto">MAX_COLLECTED_KEYS</code>, 1000), row origin <code dir="auto">auth</code>; an empty batch writes nothing. The collector loops batches until a short one, bounded by its per-run row cap</td></tr></tbody></table>
+<p>An operator can also end keys and sessions on the owner connection with <code dir="auto">erp auth emergency-revoke</code>
+(<a href="/ERPForAll/en/next/developer/addon-guide/cli/#auth-emergency-revoke">cli.md</a>). That path writes an <code dir="auto">emergency.revocation</code> header and one
+<code dir="auto">api_key.revoked</code> event per key with cause <code dir="auto">emergency</code>, in its own <code dir="auto">cli</code> row, and it works while the runtime role
+cannot write audit rows; every revocation made through the runtime role still fails when audit is unavailable.
+See <a href="/ERPForAll/en/next/developer/addon-guide/audit/#emergency-revocation-by-the-owner">the audit trail</a>.</p>
+<p>A renewal is two operations and therefore two events: <code dir="auto">generate</code> records the issuance,
+and the later <code dir="auto">revoke</code> of the old key records its own event (cause <code dir="auto">self</code> or
+<code dir="auto">programmatic</code>; the <code dir="auto">renewed</code> cause is reserved for a single-call replacement flow
+that this slice does not provide). Audited writes need an <code dir="auto">OperationIdentity</code> on the transaction (RPC and the
+collector supply one; test harnesses opt in with <code dir="auto">identify_transactions</code>). If the audit store is not ready or the audit row cannot be
+written, the operation fails as a whole and the key change rolls back; there is no
+silent fallback. Collection keeps its cluster-wide exclusion from the existing
+authentication collector’s durable PostgreSQL fence plus <code dir="auto">FOR UPDATE SKIP LOCKED</code>;
+the audit event is written in the same batch transaction. Missing functional page:
+<code dir="auto">docs/user/api-keys.md</code> (the audit trail reader is separate planned work).</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="authentication-configuration">Operator configuration and session policy (ADR 0200)</h2><a class="sl-anchor-link" href="#authentication-configuration"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Operator configuration and session policy (ADR 0200)”</span></a></div>
+<p><code dir="auto">AuthConfig</code> now holds six node admission/execution options, loaded from server <code dir="auto">[auth]</code> TOML.
+The actual served constructor and registry rebuilds receive the validated node configuration.
+The three former session timing builders/getters are removed: use the database’s validated
+<code dir="auto">AuthSettings::session_policy()</code> snapshot, with <code dir="auto">SessionPolicy</code> timing getters. Do not construct a
+node-specific session policy or cache one beyond its <code dir="auto">config_parameter</code> generation.</p>
+<p>Database System Parameters (whole seconds, changed by a Settings administrator in Technical → System Parameters):</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Key</th><th align="right">Default</th><th align="right">Minimum</th><th align="right">Maximum</th></tr></thead><tbody><tr><td><code dir="auto">sessions.touch_interval_seconds</code></td><td align="right">60</td><td align="right">1</td><td align="right">3600</td></tr><tr><td><code dir="auto">sessions.rotation_interval_seconds</code></td><td align="right">10800</td><td align="right">60</td><td align="right">86400</td></tr><tr><td><code dir="auto">sessions.rotation_grace_seconds</code></td><td align="right">120</td><td align="right">5</td><td align="right">600</td></tr></tbody></table>
+<p>Touch must be shorter than effective <code dir="auto">sessions.max_inactivity_seconds</code>; grace must be shorter than
+rotation. A refusal names both keys and values. Missing, null and empty values restore defaults;
+clearing or deleting a key also checks the resulting pair. Change the longer interval first when
+increasing both, or the shorter one first when decreasing both.</p>
+<p>Node settings (quoted dotted keys in server <code dir="auto">[auth]</code> TOML, applied after restart):</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Key</th><th align="right">Default</th><th align="right">Minimum</th><th align="right">Maximum</th></tr></thead><tbody><tr><td><code dir="auto">limits.credential_bytes</code></td><td align="right">1024</td><td align="right">64</td><td align="right">4096</td></tr><tr><td><code dir="auto">throttle.login_burst</code></td><td align="right">20</td><td align="right">5</td><td align="right">1000</td></tr><tr><td><code dir="auto">throttle.login_rate_per_sec</code></td><td align="right">2.0</td><td align="right">0.1</td><td align="right">1000</td></tr><tr><td><code dir="auto">throttle.table_entries</code></td><td align="right">4096</td><td align="right">64</td><td align="right">1048576</td></tr><tr><td><code dir="auto">limits.cooldown_hook_deadline_ms</code></td><td align="right">5000</td><td align="right">10</td><td align="right">60000</td></tr><tr><td><code dir="auto">limits.token_plan_hook_deadline_ms</code></td><td align="right">10000</td><td align="right">10</td><td align="right">60000</td></tr></tbody></table>
+<p>Only the refill rate may be fractional. These values bound input before database work, local
+prefilter memory/work and local hook execution; they may differ across nodes. Shared database
+cooldown remains authoritative. Wrong types, unknown keys, non-finite rates and out-of-range
+values stop startup by name, without raw input in diagnostics. Zero never means unlimited.</p>
+<p>Upgrade: remove <code dir="auto">startup_limits."session.touch_interval_secs"</code> from every node file before the
+restart. Use the database touch parameter instead; there is no automatic import. Restart nodes
+together; mixed-version policy compatibility is not claimed. Restore the previous binary and
+configuration together if admission fails. Existing auth hooks and hash parameters are unchanged. Standalone <code dir="auto">Auth</code> callers still supply <code dir="auto">AuthConfig</code> for local admission;
+session timing is read from the database even for these callers. Scalar <code dir="auto">validate_setting</code> checks
+individual ranges; the base parameter model additionally validates the effective correlated policy
+under a transaction advisory lock and repeatable-read conflict fence, including create batches, writes, renames, clearing and unlink.
+Direct SQL bypasses write validation but invalid stored values are refused at startup/reload/touch.</p>
+<p>Touch loads the four non-secret policy parameters in its update transaction. Normal session checks
+reuse the existing validated settings cache and generation retry; lifecycle and identity checks use
+their transaction’s policy. This changes touch batch query work; latency and allocation evidence is
+deferred to milestone end. The grace floor is five seconds so overlapping requests have a positive
+predecessor window. The database remains authoritative when a node dies.</p></div><footer class="sl-flex astro-iffdjxxj"><div class="meta sl-flex astro-iffdjxxj"></div><div class="pagination-links print:hidden astro-xgt7gz3a" dir="ltr"><a href="/ERPForAll/en/next/developer/addon-guide/capabilities/" rel="prev" class="astro-xgt7gz3a"><svg aria-hidden="true" class="astro-xgt7gz3a astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.5rem;"><path d="M17 11H9.41l3.3-3.29a1.004 1.004 0 1 0-1.42-1.42l-5 5a1 1 0 0 0-.21.33 1 1 0 0 0 0 .76 1 1 0 0 0 .21.33l5 5a1.002 1.002 0 0 0 1.639-.325 1 1 0 0 0-.219-1.095L9.41 13H17a1 1 0 0 0 0-2Z"/></svg><span class="astro-xgt7gz3a">Previous<br class="astro-xgt7gz3a"><span class="link-title astro-xgt7gz3a">Capabilities</span></span></a><a href="/ERPForAll/en/next/developer/addon-guide/audit/" rel="next" class="astro-xgt7gz3a"><svg aria-hidden="true" class="astro-xgt7gz3a astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.5rem;"><path d="M17.92 11.62a1.001 1.001 0 0 0-.21-.33l-5-5a1.003 1.003 0 1 0-1.42 1.42l3.3 3.29H7a1 1 0 0 0 0 2h7.59l-3.3 3.29a1.002 1.002 0 0 0 .325 1.639 1 1 0 0 0 1.095-.219l5-5a1 1 0 0 0 .21-.33 1 1 0 0 0 0-.76Z"/></svg><span class="astro-xgt7gz3a">Next<br class="astro-xgt7gz3a"><span class="link-title astro-xgt7gz3a">The audit trail</span></span></a></div></footer></div></div></main></div></div><div id="unavailable-page" role="status" hidden></div></div></div><script type="module" src="/ERPForAll/_astro/ReleasePageFrame.astro_astro_type_script_index_0_lang.V6XQiZN7.js"></script></body></html>

@@ -1,0 +1,181 @@
+{
+  "lang": "en",
+  "version": "next",
+  "total_shards": 9,
+  "shards": [
+    {
+      "shard_id": "shard_developer_account_1",
+      "audience": "developer",
+      "modules": [
+        "account"
+      ],
+      "doc_count": 8,
+      "byte_size": 74030
+    },
+    {
+      "shard_id": "shard_developer_barcodes_1",
+      "audience": "developer",
+      "modules": [
+        "barcodes"
+      ],
+      "doc_count": 1,
+      "byte_size": 5535
+    },
+    {
+      "shard_id": "shard_developer_base_1",
+      "audience": "developer",
+      "modules": [
+        "base"
+      ],
+      "doc_count": 2,
+      "byte_size": 82503
+    },
+    {
+      "shard_id": "shard_developer_core_1",
+      "audience": "developer",
+      "modules": [
+        "core"
+      ],
+      "doc_count": 68,
+      "byte_size": 1160140
+    },
+    {
+      "shard_id": "shard_developer_mail_1",
+      "audience": "developer",
+      "modules": [
+        "mail"
+      ],
+      "doc_count": 2,
+      "byte_size": 62668
+    },
+    {
+      "shard_id": "shard_developer_product_1",
+      "audience": "developer",
+      "modules": [
+        "product"
+      ],
+      "doc_count": 1,
+      "byte_size": 29051
+    },
+    {
+      "shard_id": "shard_developer_stock_1",
+      "audience": "developer",
+      "modules": [
+        "stock"
+      ],
+      "doc_count": 3,
+      "byte_size": 20957
+    },
+    {
+      "shard_id": "shard_developer_uom_1",
+      "audience": "developer",
+      "modules": [
+        "uom"
+      ],
+      "doc_count": 1,
+      "byte_size": 15736
+    },
+    {
+      "shard_id": "shard_developer_web_1",
+      "audience": "developer",
+      "modules": [
+        "web"
+      ],
+      "doc_count": 5,
+      "byte_size": 32189
+    }
+  ],
+  "page_to_shard": {
+    "developer/addon-guide/account-ledger-config": "shard_developer_account_1",
+    "developer/addon-guide/account-moves": "shard_developer_account_1",
+    "developer/addon-guide/account-taxes": "shard_developer_account_1",
+    "developer/addon-guide/accounting-addons": "shard_developer_account_1",
+    "developer/addon-guide/accounting-fiscal-periods": "shard_developer_account_1",
+    "developer/addon-guide/accounting-numbering": "shard_developer_account_1",
+    "developer/addon-guide/fiscal-positions": "shard_developer_account_1",
+    "developer/addon-guide/localization-packs": "shard_developer_account_1",
+    "developer/addon-guide/barcodes": "shard_developer_barcodes_1",
+    "developer/addon-guide/attachments": "shard_developer_base_1",
+    "developer/installation/attachment-store": "shard_developer_base_1",
+    "index": "shard_developer_core_1",
+    "developer/addon-guide/access-rules": "shard_developer_core_1",
+    "developer/addon-guide/access": "shard_developer_core_1",
+    "developer/addon-guide/accessibility": "shard_developer_core_1",
+    "developer/addon-guide/accounting-mappings": "shard_developer_core_1",
+    "developer/addon-guide/actions-menus": "shard_developer_core_1",
+    "developer/addon-guide/ai-providers": "shard_developer_core_1",
+    "developer/addon-guide/audit": "shard_developer_core_1",
+    "developer/addon-guide/auth": "shard_developer_core_1",
+    "developer/addon-guide/bootstrap-identities": "shard_developer_core_1",
+    "developer/addon-guide/capabilities": "shard_developer_core_1",
+    "developer/addon-guide/cli": "shard_developer_core_1",
+    "developer/addon-guide/client-extensions": "shard_developer_core_1",
+    "developer/addon-guide/company-consistency": "shard_developer_core_1",
+    "developer/addon-guide/component-testing": "shard_developer_core_1",
+    "developer/addon-guide/country": "shard_developer_core_1",
+    "developer/addon-guide/cross-addon-extension": "shard_developer_core_1",
+    "developer/addon-guide/data-files": "shard_developer_core_1",
+    "developer/addon-guide/data-functions": "shard_developer_core_1",
+    "developer/addon-guide/data-only-addon": "shard_developer_core_1",
+    "developer/addon-guide/demo-data": "shard_developer_core_1",
+    "developer/addon-guide/erpaddon-package": "shard_developer_core_1",
+    "developer/addon-guide/exclusions": "shard_developer_core_1",
+    "developer/addon-guide/expression-host-values": "shard_developer_core_1",
+    "developer/addon-guide/expression-transport": "shard_developer_core_1",
+    "developer/addon-guide/expressions": "shard_developer_core_1",
+    "developer/addon-guide/field-access": "shard_developer_core_1",
+    "developer/addon-guide/generated-columns": "shard_developer_core_1",
+    "developer/addon-guide/html-sanitize-report": "shard_developer_core_1",
+    "developer/addon-guide/human-client-extensions": "shard_developer_core_1",
+    "developer/addon-guide/human-form-layout": "shard_developer_core_1",
+    "developer/addon-guide/human-lifecycle-engine": "shard_developer_core_1",
+    "developer/addon-guide/index-kinds": "shard_developer_core_1",
+    "developer/addon-guide/jobs": "shard_developer_core_1",
+    "developer/addon-guide/keys-upsert-versions": "shard_developer_core_1",
+    "developer/addon-guide/load-demo-data": "shard_developer_core_1",
+    "developer/addon-guide/luau-scripts": "shard_developer_core_1",
+    "developer/addon-guide/mail-thread-view": "shard_developer_core_1",
+    "developer/addon-guide/messaging-store": "shard_developer_core_1",
+    "developer/addon-guide/migrations": "shard_developer_core_1",
+    "developer/addon-guide/models": "shard_developer_core_1",
+    "developer/addon-guide/modules": "shard_developer_core_1",
+    "developer/addon-guide/money-currency": "shard_developer_core_1",
+    "developer/addon-guide/odoo-compatibility": "shard_developer_core_1",
+    "developer/addon-guide/query-ast": "shard_developer_core_1",
+    "developer/addon-guide/restricted-card-host": "shard_developer_core_1",
+    "developer/addon-guide/rpc": "shard_developer_core_1",
+    "developer/addon-guide/search-methods": "shard_developer_core_1",
+    "developer/addon-guide/security": "shard_developer_core_1",
+    "developer/addon-guide/sequences": "shard_developer_core_1",
+    "developer/addon-guide/server-lifecycle": "shard_developer_core_1",
+    "developer/addon-guide/settings": "shard_developer_core_1",
+    "developer/addon-guide/store-wire": "shard_developer_core_1",
+    "developer/addon-guide/templates": "shard_developer_core_1",
+    "developer/addon-guide/tracking": "shard_developer_core_1",
+    "developer/addon-guide/translated-fields": "shard_developer_core_1",
+    "developer/addon-guide/two-addon-tutorial": "shard_developer_core_1",
+    "developer/addon-guide/ui-assets": "shard_developer_core_1",
+    "developer/addon-guide/user-company-scope": "shard_developer_core_1",
+    "developer/addon-guide/views": "shard_developer_core_1",
+    "developer/addon-guide/wasm-addons": "shard_developer_core_1",
+    "developer/addon-guide/wizard-dialogs": "shard_developer_core_1",
+    "developer/installation/background-jobs": "shard_developer_core_1",
+    "developer/installation/html-field-admission": "shard_developer_core_1",
+    "developer/installation/login-selection-rollout": "shard_developer_core_1",
+    "developer/installation/postgresql-providers": "shard_developer_core_1",
+    "developer/installation/sql-object-roles": "shard_developer_core_1",
+    "developer/installation/transient-vacuum": "shard_developer_core_1",
+    "developer/addon-guide/mail": "shard_developer_mail_1",
+    "developer/addon-guide/store-topic": "shard_developer_mail_1",
+    "developer/addon-guide/product": "shard_developer_product_1",
+    "developer/addon-guide/stock-quant-engine": "shard_developer_stock_1",
+    "developer/addon-guide/stock-read-models": "shard_developer_stock_1",
+    "developer/addon-guide/stock-tracking-change": "shard_developer_stock_1",
+    "developer/addon-guide/uom": "shard_developer_uom_1",
+    "developer/addon-guide/calendar-view": "shard_developer_web_1",
+    "developer/addon-guide/dashboard-headers": "shard_developer_web_1",
+    "developer/addon-guide/graph-view": "shard_developer_web_1",
+    "developer/addon-guide/kanban-view": "shard_developer_web_1",
+    "developer/addon-guide/pivot-view": "shard_developer_web_1"
+  }
+}

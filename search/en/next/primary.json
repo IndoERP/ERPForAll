@@ -1,0 +1,5263 @@
+{
+  "lang": "en",
+  "version": "next",
+  "doc_count": 91,
+  "docs": [
+    {
+      "id": "index",
+      "title": "ERPForAll Documentation",
+      "description": "Guides and reference for building ERPForAll addons: models, data, security, views and packaging.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "start-here",
+          "depth": 2,
+          "text": "Start here"
+        },
+        {
+          "id": "browse",
+          "depth": 2,
+          "text": "Browse by topic"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/access-rules",
+      "title": "Writing ir.access rules",
+      "description": "How rows combine (permissions OR, restrictions AND, _inherits parents) is in security.md §1. This page is about the domain column.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "a-rule-is-compiled-once-not-evaluated-per-user",
+          "depth": 2,
+          "text": "A rule is compiled once, not evaluated per user"
+        },
+        {
+          "id": "what-a-rule-may-use",
+          "depth": 2,
+          "text": "What a rule may use"
+        },
+        {
+          "id": "operators-an-addon-declares",
+          "depth": 2,
+          "text": "Operators an addon declares"
+        },
+        {
+          "id": "what-is-refused-and-what-to-write-instead",
+          "depth": 2,
+          "text": "What is refused, and what to write instead"
+        },
+        {
+          "id": "when-a-rule-does-not-compile",
+          "depth": 2,
+          "text": "When a rule does not compile"
+        },
+        {
+          "id": "differences-from-odoo-you-may-notice",
+          "depth": 2,
+          "text": "Differences from Odoo you may notice"
+        },
+        {
+          "id": "multi-user-acceptance",
+          "depth": 2,
+          "text": "Multi-user acceptance"
+        },
+        {
+          "id": "inventory-operation-grants",
+          "depth": 2,
+          "text": "Inventory operation grants"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/access",
+      "title": "Record access in addons: access domains, parameters and checks",
+      "description": "Every Rust example on this page is compiled and run as a doctest of erp-test-models, like the examples of models.md.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "how-a-decision-is-made",
+          "depth": 2,
+          "text": "How a decision is made"
+        },
+        {
+          "id": "principal-parameters",
+          "depth": 2,
+          "text": "Principal parameters"
+        },
+        {
+          "id": "access-domain-changing-the-predicate-in-code",
+          "depth": 2,
+          "text": "`#[access_domain]`: changing the predicate in code"
+        },
+        {
+          "id": "delegation-inherits-and-the-parents-access",
+          "depth": 2,
+          "text": "Delegation (`_inherits`) and the parent's access"
+        },
+        {
+          "id": "checking-access-from-your-code",
+          "depth": 2,
+          "text": "Checking access from your code"
+        },
+        {
+          "id": "scoped-elevation-blocks",
+          "depth": 2,
+          "text": "Scoped elevation blocks"
+        },
+        {
+          "id": "data-the-policy-itself-is-built-from",
+          "depth": 2,
+          "text": "Data the policy itself is built from"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/accessibility",
+      "title": "Accessibility and runtime strings",
+      "description": "Import DOM controllers from @erpforall/elang. Create them after mounting, and release them when the owning view closes. Controllers do not infer roles, labels, selection or business actions. Native controls keep their own Enter/Space behavior.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "accessible-menu-dropdowns",
+          "depth": 3,
+          "text": "Accessible menu dropdowns"
+        },
+        {
+          "id": "shared-shortcuts",
+          "depth": 2,
+          "text": "Shared shortcuts (ADR 0130)"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/account-ledger-config",
+      "title": "Ledger configuration models of the account addon",
+      "description": "Accounts, tags, roots, per-company codes, journals and journal groups: fields, rules, settings, how to extend them, and what later slices add.",
+      "audience": "developer",
+      "module": "account",
+      "models": [
+        "res.company",
+        "account.account",
+        "account.account.tag",
+        "account.root",
+        "account.code.mapping",
+        "account.journal",
+        "account.journal.group"
+      ],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-ACCLED-001",
+        "SPEC-ACCLED-002",
+        "SPEC-ACCLED-003",
+        "SPEC-ACCLED-004",
+        "SPEC-ACCLED-005",
+        "SPEC-ACCLED-006",
+        "SPEC-ACCLED-009",
+        "SPEC-ACCLED-010",
+        "SPEC-ACCLED-015",
+        "SPEC-ACCLED-017",
+        "SPEC-ACCLED-018",
+        "SPEC-ACCLED-028",
+        "SPEC-ACCLED-029",
+        "SPEC-ACCLED-030",
+        "SPEC-ACCLED-037",
+        "SPEC-ACCLED-051",
+        "SPEC-ACCLED-052",
+        "SPEC-ACCLED-053",
+        "SPEC-ACCLED-011",
+        "SPEC-ACCLED-012",
+        "SPEC-ACCLED-013",
+        "SPEC-ACCLED-056",
+        "SPEC-ACCLED-059",
+        "SPEC-ACCLED-061",
+        "SPEC-ACCLED-065",
+        "SPEC-ACCLED-097",
+        "SPEC-ACCLED-098",
+        "SPEC-ACCLED-099",
+        "SPEC-ACCLED-100",
+        "SPEC-ACCLED-101",
+        "SPEC-ACCLED-102",
+        "SPEC-ACCLED-105",
+        "SPEC-ACCLED-106",
+        "SPEC-ACCLED-107",
+        "SPEC-ACCLED-108"
+      ],
+      "headings": [
+        {
+          "id": "the-models",
+          "depth": 2,
+          "text": "The models"
+        },
+        {
+          "id": "codes-live-in-a-table",
+          "depth": 3,
+          "text": "Codes live in a table"
+        },
+        {
+          "id": "type-rules",
+          "depth": 3,
+          "text": "Type rules"
+        },
+        {
+          "id": "extending",
+          "depth": 2,
+          "text": "Extending"
+        },
+        {
+          "id": "journals",
+          "depth": 2,
+          "text": "Journals"
+        },
+        {
+          "id": "journal-numbering",
+          "depth": 3,
+          "text": "The numbering declaration"
+        },
+        {
+          "id": "journal-settings",
+          "depth": 3,
+          "text": "Journal settings"
+        },
+        {
+          "id": "journal-groups",
+          "depth": 3,
+          "text": "Journal groups"
+        },
+        {
+          "id": "data-and-security",
+          "depth": 2,
+          "text": "Data and security"
+        },
+        {
+          "id": "company-accounting",
+          "depth": 2,
+          "text": "Company accounting configuration"
+        },
+        {
+          "id": "company-installation-and-upgrade",
+          "depth": 3,
+          "text": "Installation and upgrade"
+        },
+        {
+          "id": "not-in-this-slice",
+          "depth": 2,
+          "text": "Not in this slice"
+        },
+        {
+          "id": "account-tax-choices",
+          "depth": 2,
+          "text": "Account tax choices"
+        }
+      ],
+      "shard_id": "shard_developer_account_1"
+    },
+    {
+      "id": "developer/addon-guide/account-moves",
+      "title": "Journal entries and journal items in draft",
+      "description": "The account.move and account.move.line models of the account addon: stored fields, defaults, how debit and credit become the balance, the balance check of drafts, the line rules and why nothing posts yet.",
+      "audience": "developer",
+      "module": "account",
+      "models": [
+        "account.move",
+        "account.move.line"
+      ],
+      "rpc": [
+        "account.move.action_post"
+      ],
+      "spec_ids": [
+        "SPEC-ACCMOVE-001",
+        "SPEC-ACCMOVE-009",
+        "SPEC-ACCMOVE-022",
+        "SPEC-ACCMOVE-031",
+        "SPEC-ACCMOVE-035",
+        "SPEC-ACCMOVE-036",
+        "SPEC-ACCMOVE-074",
+        "SPEC-ACCMOVE-094",
+        "SPEC-ACCMOVE-118"
+      ],
+      "headings": [
+        {
+          "id": "stored-fields",
+          "depth": 2,
+          "text": "Stored fields"
+        },
+        {
+          "id": "defaults-of-a-new-draft",
+          "depth": 2,
+          "text": "Defaults of a new draft"
+        },
+        {
+          "id": "debit-credit-and-balance",
+          "depth": 2,
+          "text": "Debit, credit and balance"
+        },
+        {
+          "id": "foreign-currency",
+          "depth": 2,
+          "text": "Lines in another currency"
+        },
+        {
+          "id": "balance-check",
+          "depth": 2,
+          "text": "Balance check"
+        },
+        {
+          "id": "line-rules",
+          "depth": 2,
+          "text": "Line rules"
+        },
+        {
+          "id": "nothing-posts",
+          "depth": 2,
+          "text": "Nothing posts"
+        },
+        {
+          "id": "access",
+          "depth": 2,
+          "text": "Access"
+        },
+        {
+          "id": "rules-the-database-takes-over-with-posting",
+          "depth": 2,
+          "text": "Rules the database takes over with posting"
+        }
+      ],
+      "shard_id": "shard_developer_account_1"
+    },
+    {
+      "id": "developer/addon-guide/account-taxes",
+      "title": "Tax definitions",
+      "description": "Tax groups, exact decimal distributions, company defaults, uniqueness and extension boundaries.",
+      "audience": "developer",
+      "module": "account",
+      "models": [
+        "account.tax",
+        "account.tax.group",
+        "account.tax.repartition.line",
+        "res.company"
+      ],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-ACCTAX-004",
+        "SPEC-ACCTAX-005",
+        "SPEC-ACCTAX-006",
+        "SPEC-ACCTAX-017",
+        "SPEC-ACCTAX-326"
+      ],
+      "headings": [
+        {
+          "id": "installation-and-upgrade",
+          "depth": 2,
+          "text": "Installation and upgrade"
+        },
+        {
+          "id": "extension-boundaries",
+          "depth": 2,
+          "text": "Extension boundaries"
+        },
+        {
+          "id": "default-tax-links",
+          "depth": 2,
+          "text": "Default tax links"
+        },
+        {
+          "id": "not-yet-available",
+          "depth": 2,
+          "text": "Not yet available"
+        }
+      ],
+      "shard_id": "shard_developer_account_1"
+    },
+    {
+      "id": "developer/addon-guide/accounting-addons",
+      "title": "The accounting addon set",
+      "description": "Which addon owns which accounting tables, and the data order of the account manifest.",
+      "audience": "developer",
+      "module": "account",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "data-order",
+          "depth": 2,
+          "text": "Data order in the `account` manifest"
+        },
+        {
+          "id": "source-layout",
+          "depth": 2,
+          "text": "Source layout"
+        }
+      ],
+      "shard_id": "shard_developer_account_1"
+    },
+    {
+      "id": "developer/addon-guide/accounting-fiscal-periods",
+      "title": "Fiscal periods and lock statuses",
+      "description": "How the account addon stores one fiscal period row per company and month, creates them on demand with ensure_periods, answers whether a dated row may be written, and moves period statuses for the lock operations.",
+      "audience": "developer",
+      "module": "account",
+      "models": [
+        "account.fiscal.period"
+      ],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-ACCLOCK-023",
+        "SPEC-ACCLOCK-099",
+        "SPEC-ACCLOCK-100",
+        "SPEC-ACCLOCK-101",
+        "SPEC-ACCLOCK-102",
+        "SPEC-ACCLOCK-103"
+      ],
+      "headings": [
+        {
+          "id": "rows",
+          "depth": 2,
+          "text": "Period rows"
+        },
+        {
+          "id": "ensure",
+          "depth": 2,
+          "text": "Creating periods: `ensure_periods`"
+        },
+        {
+          "id": "settings",
+          "depth": 2,
+          "text": "The fiscal calendar settings"
+        },
+        {
+          "id": "admission",
+          "depth": 2,
+          "text": "Before writing a dated row: `period_admission`"
+        },
+        {
+          "id": "status",
+          "depth": 2,
+          "text": "Status operations: `status`"
+        },
+        {
+          "id": "lock-policy-foundation",
+          "depth": 2,
+          "text": "Accounting lock-policy foundation"
+        }
+      ],
+      "shard_id": "shard_developer_account_1"
+    },
+    {
+      "id": "developer/addon-guide/accounting-mappings",
+      "title": "Company-specific accounting mappings: proposed contract",
+      "description": "Design guidance for future company-specific account properties; implementation is pending.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "company-specific-account-properties",
+          "depth": 2,
+          "text": "Company-specific account properties"
+        },
+        {
+          "id": "resolution-and-history",
+          "depth": 2,
+          "text": "Resolution and history"
+        },
+        {
+          "id": "access-and-integration",
+          "depth": 2,
+          "text": "Access and integration"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/accounting-numbering",
+      "title": "Journal entry numbering: number chains and the allocation point",
+      "description": "How the account addon gives gap-free numbers to journal entries: one chain row per journal, kind and period, locked in a fixed order in the last step of posting, with a configured wait and no retry loop.",
+      "audience": "developer",
+      "module": "account",
+      "models": [
+        "account.sequence.chain"
+      ],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-ACCSEQ-059",
+        "SPEC-ACCSEQ-061",
+        "SPEC-ACCSEQ-065",
+        "SPEC-ACCSEQ-066",
+        "SPEC-ACCSEQ-068"
+      ],
+      "headings": [
+        {
+          "id": "chains",
+          "depth": 2,
+          "text": "Number chains"
+        },
+        {
+          "id": "assign-numbers",
+          "depth": 2,
+          "text": "Numbering a batch"
+        },
+        {
+          "id": "concurrency",
+          "depth": 2,
+          "text": "Concurrency, rollback and the wait"
+        },
+        {
+          "id": "setting",
+          "depth": 2,
+          "text": "The lock-wait setting"
+        },
+        {
+          "id": "not-yet",
+          "depth": 2,
+          "text": "Not in this slice"
+        }
+      ],
+      "shard_id": "shard_developer_account_1"
+    },
+    {
+      "id": "developer/addon-guide/actions-menus",
+      "title": "Actions and menus",
+      "description": "Field names are Odoo's, so the data files you port from Odoo load unchanged:",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "one-id-space-for-every-action-type",
+          "depth": 2,
+          "text": "One id space for every action type"
+        },
+        {
+          "id": "paths",
+          "depth": 2,
+          "text": "Paths"
+        },
+        {
+          "id": "window-actions-views-and-view-mode",
+          "depth": 2,
+          "text": "Window actions: `views` and `view_mode`"
+        },
+        {
+          "id": "contextual-actions-get-bindings",
+          "depth": 2,
+          "text": "Contextual actions: `get_bindings`"
+        },
+        {
+          "id": "menus",
+          "depth": 2,
+          "text": "Menus"
+        },
+        {
+          "id": "scaling-out",
+          "depth": 2,
+          "text": "Scaling out"
+        },
+        {
+          "id": "running-server-actions",
+          "depth": 2,
+          "text": "Running server actions"
+        },
+        {
+          "id": "adding-an-action-type",
+          "depth": 3,
+          "text": "Adding an action type"
+        },
+        {
+          "id": "method-results-opening-a-related-list",
+          "depth": 2,
+          "text": "Method results opening a related list (ADR 0107)"
+        },
+        {
+          "id": "web-client-menus-and-visibility",
+          "depth": 2,
+          "text": "Web Client Menus and Visibility"
+        },
+        {
+          "id": "menu-tree-evaluation-and-bounds",
+          "depth": 3,
+          "text": "Menu Tree Evaluation and Bounds"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/ai-providers",
+      "title": "AI providers and tool calling",
+      "description": "Implement a model provider in an addon, add tool calling with typed content parts, and test it with the scripted mock provider.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-AIA-001",
+        "SPEC-AIA-002"
+      ],
+      "headings": [
+        {
+          "id": "tool-turns",
+          "depth": 2,
+          "text": "Tool turns"
+        },
+        {
+          "id": "limits",
+          "depth": 2,
+          "text": "Limits"
+        },
+        {
+          "id": "implementing-a-provider",
+          "depth": 2,
+          "text": "Implementing a provider"
+        },
+        {
+          "id": "testing-with-the-scripted-provider",
+          "depth": 2,
+          "text": "Testing with the scripted provider"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/attachments",
+      "title": "Attachments",
+      "description": "Attach, list, open, move, copy and unlink files by record with the base attachments API: staged uploads, deduplicated content-addressed blobs, access that follows the record, and what is different from Odoo.",
+      "audience": "developer",
+      "module": "base",
+      "models": [
+        "ir.attachment"
+      ],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-BASE-088",
+        "SPEC-BASE-089",
+        "SPEC-BASE-096",
+        "SPEC-BASE-135",
+        "SPEC-BASE-173",
+        "SPEC-MAIL-373",
+        "SPEC-MAIL-374"
+      ],
+      "headings": [
+        {
+          "id": "database-maximum-attachment-size",
+          "depth": 2,
+          "text": "Database maximum attachment size"
+        },
+        {
+          "id": "what-is-delivered",
+          "depth": 2,
+          "text": "What is delivered"
+        },
+        {
+          "id": "stage-an-upload",
+          "depth": 2,
+          "text": "Stage an upload"
+        },
+        {
+          "id": "attach-in-your-transaction",
+          "depth": 2,
+          "text": "Attach inside your transaction"
+        },
+        {
+          "id": "claim-composer-files",
+          "depth": 2,
+          "text": "Claim a composer's files for a record"
+        },
+        {
+          "id": "list-and-open",
+          "depth": 2,
+          "text": "List and open"
+        },
+        {
+          "id": "content-route",
+          "depth": 3,
+          "text": "The content route: `GET|HEAD /erp/content/<id>`"
+        },
+        {
+          "id": "move-copy-and-unlink",
+          "depth": 2,
+          "text": "Move, copy and unlink by record"
+        },
+        {
+          "id": "access",
+          "depth": 2,
+          "text": "Who may see a file"
+        },
+        {
+          "id": "errors",
+          "depth": 2,
+          "text": "Errors you will meet"
+        },
+        {
+          "id": "porting-from-odoo",
+          "depth": 2,
+          "text": "Porting from Odoo"
+        },
+        {
+          "id": "better-than-odoo",
+          "depth": 2,
+          "text": "What is different from Odoo, as behaviour"
+        },
+        {
+          "id": "planned-streaming-http",
+          "depth": 2,
+          "text": "Planned streaming HTTP contract — not available yet"
+        },
+        {
+          "id": "owner-marker-primitives",
+          "depth": 2,
+          "text": "Owner marker primitives for native composition"
+        },
+        {
+          "id": "durable-ownership-coordinator",
+          "depth": 2,
+          "text": "Durable ownership coordinator"
+        },
+        {
+          "id": "shared-local-peer-evidence",
+          "depth": 3,
+          "text": "Shared-local peer evidence"
+        },
+        {
+          "id": "fenced-cleanup",
+          "depth": 2,
+          "text": "Fenced cleanup for native maintenance"
+        },
+        {
+          "id": "bounded-pending-batches",
+          "depth": 2,
+          "text": "Bounded pending batches"
+        },
+        {
+          "id": "owner-recovery-api",
+          "depth": 2,
+          "text": "Owner recovery API"
+        },
+        {
+          "id": "bounded-policy-and-owner-execution",
+          "depth": 3,
+          "text": "Bounded policy and owner execution"
+        }
+      ],
+      "shard_id": "shard_developer_base_1"
+    },
+    {
+      "id": "developer/addon-guide/audit",
+      "title": "The audit trail",
+      "description": "Every call that changes data, every auth lifecycle change and every audited elevation leaves one append-only row that commits with the change it describes. This page says what is recorded automatically, how core code records a typed auth event, why addons cannot write free-form audit text, and what.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "what-is-recorded-without-you-doing-anything",
+          "depth": 2,
+          "text": "What is recorded without you doing anything"
+        },
+        {
+          "id": "typed-auth-events-core-code",
+          "depth": 2,
+          "text": "Typed auth events (core code)"
+        },
+        {
+          "id": "emergency-revocation-by-the-owner",
+          "depth": 2,
+          "text": "Emergency revocation by the owner"
+        },
+        {
+          "id": "why-there-is-no-free-text-event-api",
+          "depth": 2,
+          "text": "Why there is no free-text event API"
+        },
+        {
+          "id": "server-actions-that-run-as-superuser",
+          "depth": 2,
+          "text": "Server actions that run as superuser"
+        },
+        {
+          "id": "the-hook-scoped-elevation-blocks-call-m3-principal",
+          "depth": 2,
+          "text": "The hook scoped elevation blocks call"
+        },
+        {
+          "id": "what-an-operator-keeps-in-place",
+          "depth": 2,
+          "text": "What an operator keeps in place"
+        },
+        {
+          "id": "in-tests",
+          "depth": 2,
+          "text": "In tests"
+        },
+        {
+          "id": "canonical-seal-codec",
+          "depth": 2,
+          "text": "Canonical seal codec"
+        },
+        {
+          "id": "reader-contract-not-yet-implemented",
+          "depth": 2,
+          "text": "Reader engine and serving contract"
+        },
+        {
+          "id": "operator-read-selection",
+          "depth": 2,
+          "text": "Operator read selection"
+        },
+        {
+          "id": "reader-database-authority",
+          "depth": 2,
+          "text": "Reader database authority"
+        },
+        {
+          "id": "external-witness-storage",
+          "depth": 2,
+          "text": "External witness storage"
+        },
+        {
+          "id": "optional-owner-side-chain-storage",
+          "depth": 2,
+          "text": "Optional owner-side chain storage"
+        },
+        {
+          "id": "safe-prefix-batch-sealing",
+          "depth": 2,
+          "text": "Stage an owner-side batch seal"
+        },
+        {
+          "id": "verify-the-chain",
+          "depth": 2,
+          "text": "Verify the chain against a witness inventory"
+        },
+        {
+          "id": "accounting-lock-date-events",
+          "depth": 2,
+          "text": "Accounting lock-date events"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/auth",
+      "title": "Authentication for addon authors",
+      "description": "erp_security::auth::apikey provides the native format and keyed-digest building blocks defined by ADR 0037. GeneratedApiKey::generate() returns redacted, zeroizing secret text; expose() explicitly borrows that text for the eventual one-time response.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "native-api-key-primitives",
+          "depth": 2,
+          "text": "Native API key primitives"
+        },
+        {
+          "id": "what-base-provides",
+          "depth": 2,
+          "text": "What `base` provides"
+        },
+        {
+          "id": "what-the-server-and-anyone-calling-authenticate-must-know",
+          "depth": 3,
+          "text": "What the server (and anyone calling `authenticate`) must know"
+        },
+        {
+          "id": "overriding-check-credentials",
+          "depth": 2,
+          "text": "Overriding `_check_credentials`"
+        },
+        {
+          "id": "adding-a-login-cooldown-rule-on-login-cooldown",
+          "depth": 2,
+          "text": "Adding a login cooldown rule: `_on_login_cooldown`"
+        },
+        {
+          "id": "extending-user-login-lookup",
+          "depth": 2,
+          "text": "Extending user login lookup: `_get_login_domain` and `_get_login_order`"
+        },
+        {
+          "id": "candidate-selection-domain-get-login-domain",
+          "depth": 3,
+          "text": "Candidate selection domain: `_get_login_domain`"
+        },
+        {
+          "id": "resolution-ordering-get-login-order",
+          "depth": 3,
+          "text": "Resolution ordering: `_get_login_order`"
+        },
+        {
+          "id": "phase-b-witness-validation-and-restart-semantics",
+          "depth": 3,
+          "text": "Phase B witness validation and restart semantics"
+        },
+        {
+          "id": "adding-fields-to-the-session-token",
+          "depth": 2,
+          "text": "Adding fields to the session token: `_get_session_token_fields`"
+        },
+        {
+          "id": "hashing-a-password-yourself",
+          "depth": 2,
+          "text": "Hashing a password yourself"
+        },
+        {
+          "id": "ending-sessions-the-session-end-hook",
+          "depth": 2,
+          "text": "Ending sessions: the session-end hook"
+        },
+        {
+          "id": "irconfig-parameter",
+          "depth": 2,
+          "text": "`ir.config_parameter`"
+        },
+        {
+          "id": "checking-rotating-and-touching-sessions",
+          "depth": 2,
+          "text": "Checking, rotating and touching sessions"
+        },
+        {
+          "id": "sessions-in-tests",
+          "depth": 2,
+          "text": "Sessions in tests"
+        },
+        {
+          "id": "native-lifecycle-authorization",
+          "depth": 2,
+          "text": "Native lifecycle authorization"
+        },
+        {
+          "id": "identity-confirmation-and-a-self-service-password-change",
+          "depth": 2,
+          "text": "Identity confirmation and a self-service password change"
+        },
+        {
+          "id": "native-api-key-issuance",
+          "depth": 2,
+          "text": "Native API key issuance"
+        },
+        {
+          "id": "native-api-key-verification",
+          "depth": 2,
+          "text": "Native API key verification"
+        },
+        {
+          "id": "password-change-integration",
+          "depth": 2,
+          "text": "Password-change integration (ADR 0138)"
+        },
+        {
+          "id": "native-api-key-management",
+          "depth": 2,
+          "text": "Native API key management"
+        },
+        {
+          "id": "key-lifecycle-audit-events",
+          "depth": 3,
+          "text": "Lifecycle audit events (ADR 0151)"
+        },
+        {
+          "id": "authentication-configuration",
+          "depth": 2,
+          "text": "Operator configuration and session policy (ADR 0200)"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/barcodes",
+      "title": "Barcode configuration and parsing",
+      "description": "Use one bounded barcode engine from native addons and browser WebAssembly.",
+      "audience": "developer",
+      "module": "barcodes",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "install",
+          "depth": 2,
+          "text": "Install and configure"
+        },
+        {
+          "id": "engine",
+          "depth": 2,
+          "text": "Portable engine"
+        },
+        {
+          "id": "limits",
+          "depth": 2,
+          "text": "Admission and state"
+        },
+        {
+          "id": "browser",
+          "depth": 2,
+          "text": "Browser WebAssembly build"
+        },
+        {
+          "id": "extensions",
+          "depth": 2,
+          "text": "Addon boundaries"
+        }
+      ],
+      "shard_id": "shard_developer_barcodes_1"
+    },
+    {
+      "id": "developer/addon-guide/bootstrap-identities",
+      "title": "Native base bootstrap identities",
+      "description": "base supplies res.partner with name, email, active and optional company, and the nullable res.users.partner_id relation. New administrator activation must create a real contact and link it in the same ORM transaction; base seed files contain no credentials or active default administrator.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/calendar-view",
+      "title": "Calendar view",
+      "description": "Declare a calendar (start, stop, colour, scales, popover and filter fields) for a model in a view file; what it supports, what it refuses, its bound and its address.",
+      "audience": "developer",
+      "module": "web",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-VIEW-111",
+        "SPEC-VIEW-113",
+        "SPEC-VIEW-114",
+        "SPEC-VIEW-115",
+        "SPEC-VIEW-125",
+        "SPEC-VIEW-240",
+        "SPEC-VIEW-241",
+        "SPEC-VIEW-242",
+        "SPEC-VIEW-243",
+        "SPEC-VIEW-244"
+      ],
+      "headings": [
+        {
+          "id": "root-attributes",
+          "depth": 2,
+          "text": "Root attributes"
+        },
+        {
+          "id": "field-children",
+          "depth": 2,
+          "text": "Field children"
+        },
+        {
+          "id": "what-is-refused-by-name",
+          "depth": 2,
+          "text": "What is refused, by name"
+        },
+        {
+          "id": "access",
+          "depth": 2,
+          "text": "Access"
+        },
+        {
+          "id": "reading-the-range",
+          "depth": 2,
+          "text": "Reading the range"
+        },
+        {
+          "id": "address",
+          "depth": 2,
+          "text": "Address"
+        }
+      ],
+      "shard_id": "shard_developer_web_1"
+    },
+    {
+      "id": "developer/addon-guide/capabilities",
+      "title": "Capabilities: naming an admin check",
+      "description": "Some checks are not about records but about who may do an admin action: switching to another user, explaining another user's access, approving above a limit. Odoo writes these as hard-coded group checks (user.has_group('base.group_system')). In ERPForAll you give the check a name, a capability.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "declaring-a-capability",
+          "depth": 2,
+          "text": "Declaring a capability"
+        },
+        {
+          "id": "mapping-and-checking",
+          "depth": 2,
+          "text": "Mapping and checking"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/cli",
+      "title": "Command-Line Interface (erp)",
+      "description": "The erp CLI tool provides developer utilities for scaffolding new addons, managing module installation, upgrade, and uninstallation, and running the local development environment.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "installation",
+          "depth": 2,
+          "text": "Installation"
+        },
+        {
+          "id": "scaffolding-new-addons",
+          "depth": 2,
+          "text": "Scaffolding New Addons"
+        },
+        {
+          "id": "native-compiled-addons",
+          "depth": 3,
+          "text": "Native Compiled Addons"
+        },
+        {
+          "id": "data-only-addons",
+          "depth": 3,
+          "text": "Data-Only Addons"
+        },
+        {
+          "id": "module-operations",
+          "depth": 2,
+          "text": "Module Operations"
+        },
+        {
+          "id": "exit-codes",
+          "depth": 3,
+          "text": "Exit codes"
+        },
+        {
+          "id": "installing-modules",
+          "depth": 3,
+          "text": "Installing Modules"
+        },
+        {
+          "id": "upgrading-modules",
+          "depth": 3,
+          "text": "Upgrading Modules"
+        },
+        {
+          "id": "uninstallation",
+          "depth": 3,
+          "text": "Uninstallation"
+        },
+        {
+          "id": "installed-addon-identity",
+          "depth": 3,
+          "text": "Installed addon identity administration"
+        },
+        {
+          "id": "dependency-resolution-and-safety",
+          "depth": 3,
+          "text": "Dependency Resolution and Safety"
+        },
+        {
+          "id": "developer-environment",
+          "depth": 2,
+          "text": "Developer Environment"
+        },
+        {
+          "id": "cluster-nodes-and-rollouts-erp-cluster",
+          "depth": 2,
+          "text": "Cluster nodes and rollouts (`erp cluster`)"
+        },
+        {
+          "id": "access-policy-erp-access",
+          "depth": 2,
+          "text": "Access Policy (`erp access`)"
+        },
+        {
+          "id": "large-table-objects-erp-db-build-object",
+          "depth": 2,
+          "text": "Large-table objects (`erp db build-object`)"
+        },
+        {
+          "id": "initialize-a-database",
+          "depth": 2,
+          "text": "Initialize a database: `erp db init`"
+        },
+        {
+          "id": "database-copies",
+          "depth": 2,
+          "text": "Database copies: `erp db drop`, `dump`, `restore`, `neutralize`"
+        },
+        {
+          "id": "exit-codes-2",
+          "depth": 2,
+          "text": "Exit Codes"
+        },
+        {
+          "id": "serving-the-native-application",
+          "depth": 2,
+          "text": "Serving the native application"
+        },
+        {
+          "id": "audit-maintain",
+          "depth": 2,
+          "text": "Refresh the audit table: `erp audit maintain`"
+        },
+        {
+          "id": "auth-emergency-revoke",
+          "depth": 2,
+          "text": "End keys or sessions in an emergency: `erp auth emergency-revoke`"
+        },
+        {
+          "id": "publish-native-runtime-grants-after-module-operations",
+          "depth": 2,
+          "text": "Publish native runtime grants after module operations"
+        },
+        {
+          "id": "resident-ui-asset-admission",
+          "depth": 3,
+          "text": "Resident UI asset admission"
+        },
+        {
+          "id": "audit-reader-role-publication",
+          "depth": 2,
+          "text": "Audit reader role publication"
+        },
+        {
+          "id": "attachment-peer-probe",
+          "depth": 3,
+          "text": "Attachment peer probe"
+        },
+        {
+          "id": "publishing-runtime-privileges",
+          "depth": 2,
+          "text": "Publishing runtime privileges"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/client-extensions",
+      "title": "Client registries, environments, services and patches",
+      "description": "UI4 BASE API under ADR 0030; implementation and validation evidence is in the slice review report. Register contributions from an addon's exported synchronous register(ctx) callback. The assembler supplies callbacks in the server module load order;",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/company-consistency",
+      "title": "Companies in addons: the active companies and company consistency",
+      "description": "Every Rust example on this page is compiled as a doctest of erp-test-models.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "1-active-companies-envcompany-envcompanies-and-with-company",
+          "depth": 2,
+          "text": "1. Active companies: `env.company()`, `env.companies()` and `with_company`"
+        },
+        {
+          "id": "2-company-scoped-models-and-company-match",
+          "depth": 2,
+          "text": "2. Company-scoped models and `company_match`"
+        },
+        {
+          "id": "3-what-is-checked-by-default-and-the-two-opt-outs",
+          "depth": 2,
+          "text": "3. What is checked by default, and the two opt-outs"
+        },
+        {
+          "id": "4-messages-and-cost",
+          "depth": 2,
+          "text": "4. Messages and cost"
+        },
+        {
+          "id": "5-related-fields-and-companies",
+          "depth": 2,
+          "text": "5. Related fields and companies"
+        },
+        {
+          "id": "6-the-multi-company-hint",
+          "depth": 2,
+          "text": "6. The multi-company hint"
+        },
+        {
+          "id": "7-company-access-restrictions",
+          "depth": 2,
+          "text": "7. Company access restrictions"
+        },
+        {
+          "id": "the-four-forms",
+          "depth": 3,
+          "text": "The four forms"
+        },
+        {
+          "id": "the-escape-records-of-one-user-type-are-always-visible",
+          "depth": 3,
+          "text": "The escape: records of one user type are always visible"
+        },
+        {
+          "id": "declaring-on-another-addons-model-and-mixins",
+          "depth": 3,
+          "text": "Declaring on another addon's model, and mixins"
+        },
+        {
+          "id": "model-files",
+          "depth": 3,
+          "text": "Model files"
+        },
+        {
+          "id": "limits-while-core-models-are-undeclared",
+          "depth": 3,
+          "text": "Extending a declared core model"
+        },
+        {
+          "id": "what-the-registry-refuses",
+          "depth": 3,
+          "text": "What the registry refuses"
+        },
+        {
+          "id": "generated-access-rows-are-not-editable-addon-data",
+          "depth": 3,
+          "text": "Generated access rows are not editable addon data"
+        },
+        {
+          "id": "8-generated-restrictions-during-installation-and-updates",
+          "depth": 2,
+          "text": "8. Generated restrictions during installation and updates"
+        },
+        {
+          "id": "company-branch-lifecycle-base-1-5",
+          "depth": 2,
+          "text": "Company branch lifecycle (base 1.5)"
+        },
+        {
+          "id": "native-company-tree-queries",
+          "depth": 2,
+          "text": "Native company-tree queries"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/component-testing",
+      "title": "Component tests with Elang",
+      "description": "Mount real components with isolated services, typed RPC handlers and reversible runtime mutations.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-UI-117",
+        "SPEC-UI-118",
+        "SPEC-UI-119",
+        "SPEC-UI-120",
+        "SPEC-UI-121",
+        "SPEC-UI-122"
+      ],
+      "headings": [
+        {
+          "id": "typed-contract-mock-rpc",
+          "depth": 2,
+          "text": "Typed contract mock RPC"
+        },
+        {
+          "id": "running-and-diagnosing-tests",
+          "depth": 2,
+          "text": "Running and diagnosing tests"
+        },
+        {
+          "id": "compiled-client-browser-fixture",
+          "depth": 2,
+          "text": "Compiled-client browser fixture"
+        },
+        {
+          "id": "testing-addon-extensions",
+          "depth": 2,
+          "text": "Testing addon extensions"
+        },
+        {
+          "id": "checking-a-view-against-odoo",
+          "depth": 2,
+          "text": "Checking a view against Odoo"
+        },
+        {
+          "id": "native-shell-url-regression",
+          "depth": 2,
+          "text": "Native shell URL regression"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/country",
+      "title": "Countries, Federal States, and Country Groups",
+      "description": "base supplies res.country, res.country.state, and res.country.group models, Odoo Community default localization data, and address fields synchronization on res.partner.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-COUNTRY-001"
+      ],
+      "headings": [
+        {
+          "id": "country-records",
+          "depth": 2,
+          "text": "Country records (`res.country`)"
+        },
+        {
+          "id": "state-records",
+          "depth": 2,
+          "text": "State records (`res.country.state`)"
+        },
+        {
+          "id": "country-groups",
+          "depth": 2,
+          "text": "Country Groups (`res.country.group`)"
+        },
+        {
+          "id": "partner-address-integration",
+          "depth": 2,
+          "text": "Partner Address Integration"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/cross-addon-extension",
+      "title": "Extending other addons, data-only models and custom fields",
+      "description": "Every example here is taken from code that builds and runs in CI: crates/erp-test-models/addons/test_ext_ (native crates), crates/erp-modules/tests/fixtures/test_data_only (data-only addon) and the tests crates/erp-test-models/tests/cross_addon.rs, crates/erp-registry/tests/overlay.rs,...",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "extending-a-model-from-another-addon-crate",
+          "depth": 2,
+          "text": "Extending a model from another addon crate"
+        },
+        {
+          "id": "adding-selection-values-and-ondelete-policies",
+          "depth": 2,
+          "text": "Adding selection values and `ondelete` policies"
+        },
+        {
+          "id": "uninstall-behavior-and-failure-safety",
+          "depth": 3,
+          "text": "Uninstall behavior and failure safety"
+        },
+        {
+          "id": "data-only-addons-modelstoml",
+          "depth": 2,
+          "text": "Data-only addons: `models/*.toml`"
+        },
+        {
+          "id": "model-keys",
+          "depth": 3,
+          "text": "Model keys"
+        },
+        {
+          "id": "field-keys",
+          "depth": 3,
+          "text": "Field keys"
+        },
+        {
+          "id": "rules",
+          "depth": 3,
+          "text": "Rules"
+        },
+        {
+          "id": "loading-them-platform-code",
+          "depth": 3,
+          "text": "Loading them (platform code)"
+        },
+        {
+          "id": "custom-x-models-and-fields",
+          "depth": 2,
+          "text": "Custom `x_` models and fields"
+        },
+        {
+          "id": "broken-custom-fields-after-an-addon-upgrade",
+          "depth": 3,
+          "text": "Broken custom fields after an addon upgrade"
+        },
+        {
+          "id": "one-registry-per-addon-set-and-overlay",
+          "depth": 2,
+          "text": "One registry per addon set and overlay"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/dashboard-headers",
+      "title": "Declarative dashboard headers",
+      "description": "Declare list counts and period aggregates in addon views, with caller access checks and configurable periods.",
+      "audience": "developer",
+      "module": "web",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-DASH-001",
+        "SPEC-DASH-002",
+        "SPEC-DASH-003",
+        "SPEC-DASH-004",
+        "SPEC-DASH-005",
+        "SPEC-DASH-006"
+      ],
+      "headings": [
+        {
+          "id": "runtime-settings",
+          "depth": 2,
+          "text": "Runtime settings"
+        }
+      ],
+      "shard_id": "shard_developer_web_1"
+    },
+    {
+      "id": "developer/addon-guide/data-files",
+      "title": "Data files (XML and CSV)",
+      "description": "ERP data files retain Odoo input compatibility: an addon written for Odoo reads the same way, with the stricter checks below (ADR 0019). Every rule here is enforced when the file is read, before anything reaches the database.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "default-data",
+          "depth": 2,
+          "text": "Default seed data for every model"
+        },
+        {
+          "id": "xml-files",
+          "depth": 2,
+          "text": "XML files"
+        },
+        {
+          "id": "csv-files",
+          "depth": 2,
+          "text": "CSV files"
+        },
+        {
+          "id": "reading-errors",
+          "depth": 2,
+          "text": "Reading errors"
+        },
+        {
+          "id": "loading-into-the-database",
+          "depth": 2,
+          "text": "Loading into the database"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/data-functions",
+      "title": "Calling methods and deleting from data files (<function>, <delete>, CSV)",
+      "description": "Odoo lets a <function> call any attribute of a model. ERPForAll lets it call only methods that say so (ADR 0009 §8): a method is data-callable when it carries #[data_callable] or #[rpc(effect = …)] (every RPC method is data-callable).",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "methods-a-data-file-may-call",
+          "depth": 2,
+          "text": "Methods a data file may call"
+        },
+        {
+          "id": "mistakes-the-compiler-catches",
+          "depth": 3,
+          "text": "Mistakes the compiler catches"
+        },
+        {
+          "id": "arguments",
+          "depth": 2,
+          "text": "Arguments"
+        },
+        {
+          "id": "delete",
+          "depth": 2,
+          "text": "`<delete>`"
+        },
+        {
+          "id": "csv-files",
+          "depth": 2,
+          "text": "CSV files"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/data-only-addon",
+      "title": "A data-only addon: no Rust, no compilation",
+      "description": "A data-only addon is a folder with a manifest, model declarations in TOML and data files in XML or CSV. It has no Cargo.toml and no src/, so there is nothing to compile: put the folder in an addons path and install it (ADR 0009 §1).",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "planned-customization",
+          "depth": 2,
+          "text": "Planned customization through conversation"
+        },
+        {
+          "id": "existing-addon-support",
+          "depth": 2,
+          "text": "Existing addon support"
+        },
+        {
+          "id": "the-manifest",
+          "depth": 2,
+          "text": "The manifest"
+        },
+        {
+          "id": "models-modelstoml",
+          "depth": 2,
+          "text": "Models: `models/*.toml`"
+        },
+        {
+          "id": "views-actions-menus-access-demo-data",
+          "depth": 2,
+          "text": "Views, actions, menus, access, demo data"
+        },
+        {
+          "id": "installing",
+          "depth": 2,
+          "text": "Installing"
+        },
+        {
+          "id": "what-still-needs-native-code-or-the-wasm-track-m2b",
+          "depth": 2,
+          "text": "What still needs native code, or the WASM track (M2b)"
+        },
+        {
+          "id": "field-widgets-in-the-sample",
+          "depth": 2,
+          "text": "Field widgets in the sample"
+        },
+        {
+          "id": "loan-header-state-and-package-upgrades",
+          "depth": 2,
+          "text": "Loan header state and package upgrades"
+        },
+        {
+          "id": "a-second-example-the-contacts-addon",
+          "depth": 2,
+          "text": "A second example: the `contacts` addon"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/demo-data",
+      "title": "Demo data",
+      "description": "How an addon ships demo records in its demo/ folder, how they load only when a database is created with demo data, and which demo data the base and product addons ship.",
+      "audience": "developer",
+      "module": "core",
+      "models": [
+        "ir.module.module"
+      ],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-MOD-033"
+      ],
+      "headings": [
+        {
+          "id": "declare-demo-files",
+          "depth": 2,
+          "text": "Declare demo files"
+        },
+        {
+          "id": "when-demo-data-loads",
+          "depth": 2,
+          "text": "When demo data loads"
+        },
+        {
+          "id": "write-good-demo-data",
+          "depth": 2,
+          "text": "Write good demo data"
+        },
+        {
+          "id": "what-the-shipped-addons-contain",
+          "depth": 2,
+          "text": "What the shipped addons contain"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/erpaddon-package",
+      "title": "The .erpaddon package",
+      "description": "SHA256SUMS lines are <64 lowercase hex> + two spaces (or a space and ) + the path, separated by \\n. No blank lines, comments or duplicates; paths follow the archive path rules below. It detects corruption and tampering of individual files.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "layout",
+          "depth": 2,
+          "text": "Layout"
+        },
+        {
+          "id": "path-rules-reader-and-sha256sums-use-the-same-ones",
+          "depth": 2,
+          "text": "Path rules (reader and `SHA256SUMS` use the same ones)"
+        },
+        {
+          "id": "bounds",
+          "depth": 2,
+          "text": "Bounds"
+        },
+        {
+          "id": "capabilities",
+          "depth": 2,
+          "text": "Capabilities"
+        },
+        {
+          "id": "making-one",
+          "depth": 2,
+          "text": "Making one"
+        },
+        {
+          "id": "install-path-in-code",
+          "depth": 2,
+          "text": "Install path in code"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/exclusions",
+      "title": "Exclusion constraints and range fields",
+      "description": "Every Rust example in this guide is compiled and run as a doctest of erp-test-models (cargo test --doc): the declarations go through the registry and ORM checks a server runs at startup. Lines starting with #  are hidden setup.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "no-two-records-may-overlap-exclude",
+          "depth": 2,
+          "text": "No two records may overlap: `exclude(...)`"
+        },
+        {
+          "id": "what-schema-sync-creates",
+          "depth": 3,
+          "text": "What schema sync creates"
+        },
+        {
+          "id": "tables-above-large-table-rows-erp-db-build-object",
+          "depth": 3,
+          "text": "Tables above `large_table_rows`: `erp db build-object`"
+        },
+        {
+          "id": "the-filter",
+          "depth": 3,
+          "text": "The filter"
+        },
+        {
+          "id": "adding-a-rule-to-a-model-you-do-not-own",
+          "depth": 2,
+          "text": "Adding a rule to a model you do not own"
+        },
+        {
+          "id": "range-fields",
+          "depth": 2,
+          "text": "Range fields"
+        },
+        {
+          "id": "raw-constraints-that-need-an-extension",
+          "depth": 2,
+          "text": "Raw constraints that need an extension"
+        },
+        {
+          "id": "in-modelstoml",
+          "depth": 2,
+          "text": "In `models/*.toml`"
+        },
+        {
+          "id": "mistakes-the-compiler-catches",
+          "depth": 2,
+          "text": "Mistakes the compiler catches"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/expression-host-values",
+      "title": "Host values in browser expressions",
+      "description": "@erpforall/expr evaluates a ValidatedAst from the bounded AST reader/decoder. Host record and context bindings use tagged ExprValue values, not raw JS primitives. Use intVal, strVal, listVal and the other value constructors. Integers crossing the evaluator boundary must fit i64;",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/expression-transport",
+      "title": "Expression AST transport",
+      "description": "Rust owns the expression syntax and wire declarations. The AST transport in erp_expr::wire is schema version 1: an ordered node arena with the root last. An edge refers to an earlier node, every other node has exactly one parent, and no unused node is admitted.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "generator-and-test-only-producer-boundaries",
+          "depth": 2,
+          "text": "Generator and test-only producer boundaries"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/expressions",
+      "title": "Python Expressions in Data and Views",
+      "description": "The erp-expr crate provides a sandboxed Python-compatible expression evaluator for XML data files, domain expressions, and view modifiers with bounded execution and checked 64-bit arithmetic.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "where-expressions-are-used",
+          "depth": 2,
+          "text": "Where expressions are used"
+        },
+        {
+          "id": "supported-syntax-and-operators",
+          "depth": 2,
+          "text": "Supported syntax and operators"
+        },
+        {
+          "id": "built-in-functions-and-names",
+          "depth": 2,
+          "text": "Built-in functions and names"
+        },
+        {
+          "id": "view-modifiers-and-dynamic-attributes",
+          "depth": 2,
+          "text": "View modifiers and dynamic attributes"
+        },
+        {
+          "id": "sandboxing-and-security-limits",
+          "depth": 2,
+          "text": "Sandboxing and security limits"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/field-access",
+      "title": "Field access: hiding and protecting single fields",
+      "description": "Every Rust example in this guide is compiled and run as a doctest of erp-test-models.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "declaring-who-may-use-a-field",
+          "depth": 2,
+          "text": "Declaring who may use a field"
+        },
+        {
+          "id": "what-a-groups-text-means",
+          "depth": 3,
+          "text": "What a `groups` text means"
+        },
+        {
+          "id": "asking-about-groups-yourself",
+          "depth": 3,
+          "text": "Asking about groups yourself"
+        },
+        {
+          "id": "what-the-engine-checks",
+          "depth": 2,
+          "text": "What the engine checks"
+        },
+        {
+          "id": "narrowing-a-models-field-access-with-code",
+          "depth": 2,
+          "text": "Narrowing a model's field access with code"
+        },
+        {
+          "id": "testing",
+          "depth": 2,
+          "text": "Testing"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/fiscal-positions",
+      "title": "Fiscal-position resolution",
+      "description": "Company-aware address selection, tax and account substitution, and extension boundaries.",
+      "audience": "developer",
+      "module": "account",
+      "models": [
+        "account.fiscal.position",
+        "account.fiscal.position.account"
+      ],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "native-methods",
+          "depth": 2,
+          "text": "Native methods"
+        },
+        {
+          "id": "derived-state-and-installation",
+          "depth": 2,
+          "text": "Derived state and installation"
+        },
+        {
+          "id": "not-yet-available",
+          "depth": 2,
+          "text": "Not yet available"
+        }
+      ],
+      "shard_id": "shard_developer_account_1"
+    },
+    {
+      "id": "developer/addon-guide/generated-columns",
+      "title": "Generated columns",
+      "description": "Declare generated columns and understand guarded schema changes and maintenance windows.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "declaring",
+          "depth": 2,
+          "text": "Declaring"
+        },
+        {
+          "id": "expression-language",
+          "depth": 2,
+          "text": "Expression language"
+        },
+        {
+          "id": "resulting-field",
+          "depth": 2,
+          "text": "Resulting field"
+        },
+        {
+          "id": "schema-changes",
+          "depth": 2,
+          "text": "Schema changes"
+        },
+        {
+          "id": "maintenance-window",
+          "depth": 2,
+          "text": "STORED rewrites and maintenance windows"
+        },
+        {
+          "id": "runtime-contract",
+          "depth": 2,
+          "text": "Runtime contract"
+        },
+        {
+          "id": "generated-input-adapter",
+          "depth": 2,
+          "text": "Explicit generated inputs (ADR 0215)"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/graph-view",
+      "title": "Graph view",
+      "description": "Declare a graph (bar, line or pie chart, its groupings and measures) for a model in a view file; what the server admits, what it refuses and the bound an administrator sets.",
+      "audience": "developer",
+      "module": "web",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-VIEW-096",
+        "SPEC-VIEW-097",
+        "SPEC-VIEW-202",
+        "SPEC-VIEW-203"
+      ],
+      "headings": [
+        {
+          "id": "what-it-supports",
+          "depth": 2,
+          "text": "What it supports"
+        },
+        {
+          "id": "what-is-refused",
+          "depth": 2,
+          "text": "What is refused"
+        },
+        {
+          "id": "bounds",
+          "depth": 2,
+          "text": "The bound an administrator sets"
+        },
+        {
+          "id": "server-calls",
+          "depth": 2,
+          "text": "Server calls"
+        },
+        {
+          "id": "client",
+          "depth": 2,
+          "text": "In the web client"
+        }
+      ],
+      "shard_id": "shard_developer_web_1"
+    },
+    {
+      "id": "developer/addon-guide/html-sanitize-report",
+      "title": "HTML sanitising: the removal report and strict mode",
+      "description": "What the erp-html sanitiser reports when it removes content, how strict mode rejects, and the report limits.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-HTML-054",
+        "SPEC-HTML-055"
+      ],
+      "headings": [
+        {
+          "id": "the-report",
+          "depth": 2,
+          "text": "The report"
+        },
+        {
+          "id": "strict-mode",
+          "depth": 2,
+          "text": "Strict mode"
+        },
+        {
+          "id": "report-limits",
+          "depth": 2,
+          "text": "Report limits"
+        },
+        {
+          "id": "model-fields-and-transaction-reports",
+          "depth": 2,
+          "text": "Model fields and transaction reports"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/human-client-extensions",
+      "title": "Human client extensions",
+      "description": "Trusted addon widgets, services and reusable browser editors for the human client.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-EDITOR-001",
+        "SPEC-EDITOR-002",
+        "SPEC-EDITOR-003",
+        "SPEC-EDITOR-004"
+      ],
+      "headings": [
+        {
+          "id": "wizard-action-forms-and-widget-lifetime",
+          "depth": 2,
+          "text": "Wizard action forms and widget lifetime"
+        },
+        {
+          "id": "shared-appearance-tokens",
+          "depth": 2,
+          "text": "Shared appearance tokens"
+        },
+        {
+          "id": "list-category-metadata-and-paging",
+          "depth": 2,
+          "text": "List category metadata and paging"
+        },
+        {
+          "id": "record-header-presentation-ownership",
+          "depth": 2,
+          "text": "Record header presentation ownership"
+        },
+        {
+          "id": "browser-message-services",
+          "depth": 2,
+          "text": "Browser message services"
+        },
+        {
+          "id": "notifications-and-feedback-services",
+          "depth": 2,
+          "text": "Notifications and feedback services"
+        },
+        {
+          "id": "dialog-and-selection-services",
+          "depth": 2,
+          "text": "Dialog and selection services"
+        },
+        {
+          "id": "popover-tooltip-and-declarative-message-boundaries",
+          "depth": 2,
+          "text": "Popover, tooltip and declarative message boundaries"
+        },
+        {
+          "id": "date-and-time-editor-components",
+          "depth": 2,
+          "text": "Date and time editor components"
+        },
+        {
+          "id": "code-editor-components",
+          "depth": 2,
+          "text": "Code editor components"
+        },
+        {
+          "id": "file-editors-and-upload-ownership",
+          "depth": 2,
+          "text": "File editors and upload ownership"
+        },
+        {
+          "id": "reusable-choice-editors",
+          "depth": 2,
+          "text": "Reusable choice editors"
+        },
+        {
+          "id": "bounded-signature-editor",
+          "depth": 2,
+          "text": "Bounded signature editor"
+        },
+        {
+          "id": "structured-domain-and-expression-editors",
+          "depth": 2,
+          "text": "Structured domain and expression editors"
+        },
+        {
+          "id": "reusable-html-editor",
+          "depth": 2,
+          "text": "Reusable HTML editor"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/human-form-layout",
+      "title": "Static form layout",
+      "description": "Human form views support this declared subset under ADR0072 and the supplementary region under ADR 0104:",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "chatter-slot",
+          "depth": 3,
+          "text": "Chatter slot"
+        },
+        {
+          "id": "static-field-modifiers",
+          "depth": 2,
+          "text": "Static field modifiers"
+        },
+        {
+          "id": "explicit-title-region-bounded-subset",
+          "depth": 2,
+          "text": "Explicit title region (bounded subset)"
+        },
+        {
+          "id": "xml-smart-buttons",
+          "depth": 2,
+          "text": "XML smart buttons"
+        },
+        {
+          "id": "authorized-relation-count",
+          "depth": 2,
+          "text": "Authorized relation count RPC"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/human-lifecycle-engine",
+      "title": "Native human lifecycle engine",
+      "description": "Native composition can call ModuleSystem::upgrade_authorized with the same trusted InstallAuthorizer adapter used by installation. The historical adapter name remains for compatibility.",
+      "audience": "developer",
+      "module": "core",
+      "models": [
+        "ir.module.module"
+      ],
+      "rpc": [
+        "ir.module.module.erp_addon_detail",
+        "ir.module.module.erp_preview_uninstall"
+      ],
+      "spec_ids": [
+        "SPEC-HUMAN-024",
+        "SPEC-HUMAN-025",
+        "SPEC-HUMAN-026",
+        "SPEC-HUMAN-036"
+      ],
+      "headings": [
+        {
+          "id": "installed-content-identity",
+          "depth": 2,
+          "text": "Installed content identity (ADR 0097)"
+        },
+        {
+          "id": "web-client-lifecycle-interactions",
+          "depth": 2,
+          "text": "Web client lifecycle interactions (SPEC-HUMAN-036)"
+        },
+        {
+          "id": "multi-node-lifecycle-coordination",
+          "depth": 2,
+          "text": "Multi-node lifecycle coordination and integration (SPEC-HUMAN-024, SPEC-HUMAN-025, SPEC-HUMAN-026, SPEC-HUMAN-028)"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/index-kinds",
+      "title": "Index kinds",
+      "description": "Every Rust example in this page is compiled and run as a doctest of erp-test-models (cargo test --doc, part of scripts/ci.sh), through the same registry checks a server runs at startup. Lines starting with #  are hidden setup.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "field-indexes",
+          "depth": 2,
+          "text": "Field indexes"
+        },
+        {
+          "id": "typed-indexes-on-the-model",
+          "depth": 2,
+          "text": "Typed indexes on the model"
+        },
+        {
+          "id": "in-modelstoml",
+          "depth": 2,
+          "text": "In `models/*.toml`"
+        },
+        {
+          "id": "large-tables",
+          "depth": 2,
+          "text": "Large tables"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/jobs",
+      "title": "Background jobs",
+      "description": "How an addon declares a job kind, enqueues jobs inside its transaction, writes chunked handlers, isolates failing items, and extends another addon's job.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-JOBS-001",
+        "SPEC-JOBS-018"
+      ],
+      "headings": [
+        {
+          "id": "declare-a-kind",
+          "depth": 2,
+          "text": "Declare a kind"
+        },
+        {
+          "id": "enqueue-inside-your-transaction",
+          "depth": 2,
+          "text": "Enqueue inside your transaction"
+        },
+        {
+          "id": "cancel-a-job-you-enqueued",
+          "depth": 2,
+          "text": "Cancel a job you enqueued"
+        },
+        {
+          "id": "failures",
+          "depth": 2,
+          "text": "Failures"
+        },
+        {
+          "id": "native-handlers-and-per-item-isolation",
+          "depth": 2,
+          "text": "Native handlers and per-item isolation"
+        },
+        {
+          "id": "extend-another-addon-s-kind",
+          "depth": 2,
+          "text": "Extend another addon's kind"
+        },
+        {
+          "id": "porting-from-odoo",
+          "depth": 2,
+          "text": "Porting from Odoo"
+        },
+        {
+          "id": "isolated-native-maintenance-runners",
+          "depth": 3,
+          "text": "Isolated native maintenance runners"
+        },
+        {
+          "id": "declared-shared-policy",
+          "depth": 2,
+          "text": "Declared shared policy"
+        },
+        {
+          "id": "admission-policy-snapshots",
+          "depth": 2,
+          "text": "Admission policy snapshots"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/kanban-view",
+      "title": "Kanban view",
+      "description": "Declare a kanban view (a card of fields with main, aside and footer regions, a progress bar, a default grouping) for a model in a view file; what it supports and what it refuses.",
+      "audience": "developer",
+      "module": "web",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-VIEW-041",
+        "SPEC-VIEW-260",
+        "SPEC-VIEW-261",
+        "SPEC-VIEW-262",
+        "SPEC-VIEW-263"
+      ],
+      "headings": [
+        {
+          "id": "the-card",
+          "depth": 2,
+          "text": "The card"
+        },
+        {
+          "id": "in-the-client",
+          "depth": 2,
+          "text": "In the client"
+        },
+        {
+          "id": "root",
+          "depth": 2,
+          "text": "Root attributes"
+        },
+        {
+          "id": "progress-bar",
+          "depth": 2,
+          "text": "Progress bar"
+        },
+        {
+          "id": "what-is-refused",
+          "depth": 2,
+          "text": "What is refused"
+        },
+        {
+          "id": "server-calls",
+          "depth": 2,
+          "text": "Server calls"
+        }
+      ],
+      "shard_id": "shard_developer_web_1"
+    },
+    {
+      "id": "developer/addon-guide/keys-upsert-versions",
+      "title": "Keys, upsert and row versions",
+      "description": "A business key is a named UNIQUE NULLS NOT DISTINCT constraint over columns of the model's own table. A NULL part is a value ('no lot'), so two quants without a lot for the same product and location conflict:",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "business-keys",
+          "depth": 2,
+          "text": "Business keys"
+        },
+        {
+          "id": "upsert",
+          "depth": 2,
+          "text": "Upsert"
+        },
+        {
+          "id": "row-versions",
+          "depth": 2,
+          "text": "Row versions"
+        },
+        {
+          "id": "write-hooks-for-platform-addons",
+          "depth": 2,
+          "text": "Write hooks (for platform addons)"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/load-demo-data",
+      "title": "Load demo data on an existing database",
+      "description": "An administrator can turn a database created without demo data into a demo database: every installed addon's demo files load once, a failing addon is rolled back alone and reported, and the step cannot be undone.",
+      "audience": "developer",
+      "module": "core",
+      "models": [
+        "ir.module.module"
+      ],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-MOD-053",
+        "SPEC-MOD-054",
+        "SPEC-MOD-055",
+        "SPEC-MOD-056",
+        "SPEC-MOD-057"
+      ],
+      "headings": [
+        {
+          "id": "what-it-does",
+          "depth": 2,
+          "text": "What it does"
+        },
+        {
+          "id": "a-demo-file-that-fails",
+          "depth": 2,
+          "text": "A demo file that fails"
+        },
+        {
+          "id": "running-it-again-and-later-installs",
+          "depth": 2,
+          "text": "Running it again and later installs"
+        },
+        {
+          "id": "entry-points",
+          "depth": 2,
+          "text": "Entry points"
+        },
+        {
+          "id": "writing-demo-files-that-survive-this",
+          "depth": 2,
+          "text": "Writing demo files that survive this"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/localization-packs",
+      "title": "Localization pack format",
+      "description": "How to write a localization pack: pack.toml, dated records, CSV rows, translations, child templates, dependencies, account-code padding, origin and licence fields, and what staging refuses.",
+      "audience": "developer",
+      "module": "account",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "pack-toml",
+          "depth": 2,
+          "text": "`pack.toml`"
+        },
+        {
+          "id": "records",
+          "depth": 2,
+          "text": "Records"
+        },
+        {
+          "id": "csv-records",
+          "depth": 2,
+          "text": "CSV record files"
+        },
+        {
+          "id": "translations",
+          "depth": 2,
+          "text": "Translation files"
+        },
+        {
+          "id": "dependencies",
+          "depth": 2,
+          "text": "Packs that build on other packs"
+        },
+        {
+          "id": "child-templates",
+          "depth": 2,
+          "text": "Child templates"
+        },
+        {
+          "id": "account-codes",
+          "depth": 2,
+          "text": "Account-code padding"
+        },
+        {
+          "id": "dated-rows",
+          "depth": 2,
+          "text": "Dated rows"
+        },
+        {
+          "id": "origin-and-licence",
+          "depth": 2,
+          "text": "Origin and licence"
+        },
+        {
+          "id": "limits-system-parameters",
+          "depth": 2,
+          "text": "Limits (system parameters)"
+        },
+        {
+          "id": "staging-twice-and-upgrades",
+          "depth": 2,
+          "text": "Staging twice, and upgrades"
+        },
+        {
+          "id": "not-in-this-release",
+          "depth": 2,
+          "text": "Not in this format release"
+        }
+      ],
+      "shard_id": "shard_developer_account_1"
+    },
+    {
+      "id": "developer/addon-guide/luau-scripts",
+      "title": "Luau scripts: code server actions and data-only addon hooks",
+      "description": "ERPForAll runs the Python bodies of Odoo code server actions, and the hooks and post/end migrations of data-only addons, as Luau (ADR 0001, ADR 0009 §6-§7). Scripts run in a sandbox (crates/erp-script, design: docs/design/m2-script.md) with the rights of the user who triggers them (ADR 0009 §10).",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "what-a-script-can-use",
+          "depth": 2,
+          "text": "What a script can use"
+        },
+        {
+          "id": "results",
+          "depth": 2,
+          "text": "Results"
+        },
+        {
+          "id": "limits",
+          "depth": 2,
+          "text": "Limits"
+        },
+        {
+          "id": "differences-from-plain-luau",
+          "depth": 2,
+          "text": "Differences from plain Luau"
+        },
+        {
+          "id": "server-actions",
+          "depth": 2,
+          "text": "Server actions"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/mail-thread-view",
+      "title": "The shared thread, message and composer: registries and patch points",
+      "description": "How a host mounts the shared Thread and Composer over the messaging store, and how an addon adds message actions, composer actions, message renderers and suggestion providers or patches the components, without forking the package.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-THREADVIEW-021",
+        "SPEC-THREADVIEW-052",
+        "SPEC-THREADVIEW-053"
+      ],
+      "headings": [
+        {
+          "id": "mounting",
+          "depth": 2,
+          "text": "Mounting a thread and a composer"
+        },
+        {
+          "id": "data-contract",
+          "depth": 2,
+          "text": "What the components read, and capabilities"
+        },
+        {
+          "id": "registries",
+          "depth": 2,
+          "text": "Registries"
+        },
+        {
+          "id": "patching",
+          "depth": 2,
+          "text": "Patching the components"
+        },
+        {
+          "id": "mentions",
+          "depth": 2,
+          "text": "Mentions and the post"
+        },
+        {
+          "id": "keyboard",
+          "depth": 2,
+          "text": "Keyboard and accessibility"
+        },
+        {
+          "id": "errors",
+          "depth": 2,
+          "text": "Errors you handle"
+        },
+        {
+          "id": "not-yet",
+          "depth": 2,
+          "text": "Not in this version"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/mail",
+      "title": "Chatter storage: messages and followers",
+      "description": "Give a model its message and follower storage by inheriting the mail.thread mixin.",
+      "audience": "developer",
+      "module": "mail",
+      "models": [
+        "mail.thread",
+        "mail.store"
+      ],
+      "rpc": [
+        "mail.store.store_fetch",
+        "mail.thread.thread_post",
+        "mail.thread.thread_upload",
+        "mail.thread.thread_attach",
+        "mail.thread.thread_follow",
+        "mail.thread.thread_unfollow",
+        "mail.thread.thread_set_subtypes",
+        "mail.thread.thread_followers",
+        "mail.thread.thread_subtypes"
+      ],
+      "spec_ids": [
+        "SPEC-MAIL-344",
+        "SPEC-MAIL-345",
+        "SPEC-MAIL-346",
+        "SPEC-MAIL-347",
+        "SPEC-MAIL-348",
+        "SPEC-MAIL-349",
+        "SPEC-MAIL-350",
+        "SPEC-MAIL-351",
+        "SPEC-MAIL-352",
+        "SPEC-MAIL-353",
+        "SPEC-MAIL-354",
+        "SPEC-MAIL-355",
+        "SPEC-MAIL-356",
+        "SPEC-MAIL-357",
+        "SPEC-MAIL-358",
+        "SPEC-MAIL-359",
+        "SPEC-MAIL-360",
+        "SPEC-MAIL-361",
+        "SPEC-MAIL-362",
+        "SPEC-MAIL-363",
+        "SPEC-MAIL-364",
+        "SPEC-MAIL-365",
+        "SPEC-MAIL-366",
+        "SPEC-MAIL-367",
+        "SPEC-MAIL-368",
+        "SPEC-MAIL-369",
+        "SPEC-MAIL-370",
+        "SPEC-MAIL-371",
+        "SPEC-MAIL-372",
+        "SPEC-MAIL-373",
+        "SPEC-MAIL-374",
+        "SPEC-MAIL-375",
+        "SPEC-MAIL-376",
+        "SPEC-MAIL-377",
+        "SPEC-MAIL-378",
+        "SPEC-MAIL-379",
+        "SPEC-MAIL-380",
+        "SPEC-MAIL-381",
+        "SPEC-MAIL-382",
+        "SPEC-MAIL-383"
+      ],
+      "headings": [
+        {
+          "id": "add-chatter",
+          "depth": 2,
+          "text": "Add chatter to a model"
+        },
+        {
+          "id": "change-what-a-thread-shows",
+          "depth": 3,
+          "text": "Change what a thread shows"
+        },
+        {
+          "id": "load-a-thread",
+          "depth": 3,
+          "text": "Load a thread into the client (store topics)"
+        },
+        {
+          "id": "files-on-messages",
+          "depth": 3,
+          "text": "Files on messages"
+        },
+        {
+          "id": "follower-methods",
+          "depth": 2,
+          "text": "Follower methods"
+        },
+        {
+          "id": "post-a-message",
+          "depth": 2,
+          "text": "Post a message"
+        },
+        {
+          "id": "call-the-thread-from-the-client",
+          "depth": 2,
+          "text": "Call the thread from the client (JSON-2)"
+        },
+        {
+          "id": "the-post-object",
+          "depth": 3,
+          "text": "The post object"
+        },
+        {
+          "id": "who-may-do-what",
+          "depth": 3,
+          "text": "Who may do what"
+        },
+        {
+          "id": "who-can-read-a-message",
+          "depth": 2,
+          "text": "Who can read a message"
+        },
+        {
+          "id": "scheduled-messages",
+          "depth": 2,
+          "text": "Scheduled messages"
+        },
+        {
+          "id": "default-subtypes",
+          "depth": 2,
+          "text": "Default subtypes"
+        },
+        {
+          "id": "add-activities",
+          "depth": 2,
+          "text": "Add activities to a model"
+        },
+        {
+          "id": "adopt-a-streamed-upload",
+          "depth": 2,
+          "text": "Adopt a streamed upload"
+        }
+      ],
+      "shard_id": "shard_developer_mail_1"
+    },
+    {
+      "id": "developer/addon-guide/messaging-store",
+      "title": "The client messaging store: reading records and adding typed fields",
+      "description": "How an addon reads messaging records through typed handles, declares its own fields and models, registers delegation and local models, and patches the handle, without forking the store.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "reading-records",
+          "depth": 2,
+          "text": "Reading records"
+        },
+        {
+          "id": "typing-a-field-or-a-model",
+          "depth": 2,
+          "text": "Typing a field or a model"
+        },
+        {
+          "id": "delegation",
+          "depth": 2,
+          "text": "Delegation"
+        },
+        {
+          "id": "local-records",
+          "depth": 2,
+          "text": "Local records"
+        },
+        {
+          "id": "extending-the-handle-with-patch",
+          "depth": 2,
+          "text": "Extending the handle with `patch()`"
+        },
+        {
+          "id": "holding-what-you-display-and-memory",
+          "depth": 2,
+          "text": "Holding what you display, and memory"
+        },
+        {
+          "id": "errors-you-handle",
+          "depth": 2,
+          "text": "Errors you handle"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/migrations",
+      "title": "Migrations: upgrading an addon's data and schema",
+      "description": "When an installed addon is upgraded to a newer version, its migrations run inside the upgrade's transaction (ADR 0009 §2): a failing migration aborts the whole upgrade and nothing of it is kept.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "which-migrations-run",
+          "depth": 2,
+          "text": "Which migrations run"
+        },
+        {
+          "id": "stages-and-order",
+          "depth": 2,
+          "text": "Stages and order"
+        },
+        {
+          "id": "rust-migrations",
+          "depth": 2,
+          "text": "Rust migrations"
+        },
+        {
+          "id": "sql-migrations",
+          "depth": 2,
+          "text": "SQL migrations"
+        },
+        {
+          "id": "when-a-migration-fails",
+          "depth": 2,
+          "text": "When a migration fails"
+        },
+        {
+          "id": "protect-existing-catalogs-before-data",
+          "depth": 2,
+          "text": "Protect existing catalogs before data"
+        },
+        {
+          "id": "company-dependent-scalar-adoption",
+          "depth": 2,
+          "text": "Adopting a company-dependent scalar"
+        },
+        {
+          "id": "inventory-integrity-upgrade",
+          "depth": 2,
+          "text": "Inventory integrity upgrade"
+        },
+        {
+          "id": "testing-upgrades",
+          "depth": 2,
+          "text": "Testing upgrades"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/models",
+      "title": "Models, fields and method overrides",
+      "description": "Every Rust example in this guide is compiled and run as a doctest of erp-test-models (cargo test --doc, part of scripts/ci.sh): the declarations go through the same registry, method-chain and dependency checks a server runs at startup, so an example that drifts from the API fails CI.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "declaring-an-addon",
+          "depth": 2,
+          "text": "Declaring an addon"
+        },
+        {
+          "id": "declaring-a-model",
+          "depth": 2,
+          "text": "Declaring a model"
+        },
+        {
+          "id": "eventful-models",
+          "depth": 3,
+          "text": "Eventful models"
+        },
+        {
+          "id": "field-kinds-and-rust-types",
+          "depth": 3,
+          "text": "Field kinds and Rust types"
+        },
+        {
+          "id": "default-values-and-default-get",
+          "depth": 2,
+          "text": "Default values and default_get"
+        },
+        {
+          "id": "resolution-order-crud-45",
+          "depth": 3,
+          "text": "Resolution order (CRUD §4.5)"
+        },
+        {
+          "id": "normalization-and-overrides",
+          "depth": 3,
+          "text": "Normalization and overrides"
+        },
+        {
+          "id": "database-default-of-a-fail-closed-flag",
+          "depth": 3,
+          "text": "Database default of a fail-closed flag"
+        },
+        {
+          "id": "searching",
+          "depth": 2,
+          "text": "Searching"
+        },
+        {
+          "id": "deep-pages-keyset-pagination",
+          "depth": 3,
+          "text": "Deep pages: keyset pagination"
+        },
+        {
+          "id": "reading-large-results-in-windows",
+          "depth": 3,
+          "text": "Reading large results in windows"
+        },
+        {
+          "id": "working-with-recordsets-in-memory",
+          "depth": 2,
+          "text": "Working with recordsets in memory"
+        },
+        {
+          "id": "extending-a-model-you-do-not-own",
+          "depth": 2,
+          "text": "Extending a model you do not own"
+        },
+        {
+          "id": "models-whose-columns-only-their-owner-adds",
+          "depth": 3,
+          "text": "Models whose columns only their owner adds"
+        },
+        {
+          "id": "extending-a-table-that-already-holds-many-rows",
+          "depth": 3,
+          "text": "Extending a table that already holds many rows"
+        },
+        {
+          "id": "methods-and-overrides",
+          "depth": 2,
+          "text": "Methods and overrides"
+        },
+        {
+          "id": "declaration-and-override-order",
+          "depth": 2,
+          "text": "Declaration and override order"
+        },
+        {
+          "id": "notify-the-orm-after-external-sql",
+          "depth": 2,
+          "text": "Notify the ORM after external SQL"
+        },
+        {
+          "id": "computed-fields",
+          "depth": 2,
+          "text": "Computed fields"
+        },
+        {
+          "id": "stored-computes-at-create",
+          "depth": 3,
+          "text": "Stored computes at create"
+        },
+        {
+          "id": "errors-that-poison-a-transaction",
+          "depth": 2,
+          "text": "Errors that poison a transaction"
+        },
+        {
+          "id": "constraints",
+          "depth": 2,
+          "text": "Constraints"
+        },
+        {
+          "id": "relational-fields",
+          "depth": 2,
+          "text": "Relational fields"
+        },
+        {
+          "id": "relational-command-protocol",
+          "depth": 3,
+          "text": "Relational command protocol"
+        },
+        {
+          "id": "hierarchies-parent-store",
+          "depth": 2,
+          "text": "Hierarchies: parent store"
+        },
+        {
+          "id": "in-memory-records-and-savepoints",
+          "depth": 2,
+          "text": "In-memory records and savepoints"
+        },
+        {
+          "id": "grouped-reads",
+          "depth": 2,
+          "text": "Grouped reads"
+        },
+        {
+          "id": "the-web-clients-methods",
+          "depth": 2,
+          "text": "The web client's methods"
+        },
+        {
+          "id": "onchange-methods",
+          "depth": 2,
+          "text": "Onchange methods"
+        },
+        {
+          "id": "onchange-on-delegated-inherits-fields",
+          "depth": 3,
+          "text": "Onchange on delegated (`_inherits`) fields"
+        },
+        {
+          "id": "many2many-lines-in-onchange",
+          "depth": 3,
+          "text": "Many2many lines in onchange"
+        },
+        {
+          "id": "x2many-values-inside-lines",
+          "depth": 3,
+          "text": "x2many values inside lines"
+        },
+        {
+          "id": "named-caches-across-processes",
+          "depth": 2,
+          "text": "Named caches across processes"
+        },
+        {
+          "id": "partitioned-leaf-models",
+          "depth": 2,
+          "text": "Partitioned leaf models"
+        },
+        {
+          "id": "bounded-native-selection-providers",
+          "depth": 2,
+          "text": "Bounded native selection providers"
+        },
+        {
+          "id": "search-domains-for-nonstored-fields",
+          "depth": 2,
+          "text": "Search domains for nonstored fields"
+        },
+        {
+          "id": "outbox-checkpoint-upgrade-limitations",
+          "depth": 3,
+          "text": "Outbox checkpoint limitations during schema upgrade"
+        },
+        {
+          "id": "read-audit-models",
+          "depth": 2,
+          "text": "Read-audit model declarations"
+        },
+        {
+          "id": "column-collation",
+          "depth": 2,
+          "text": "Column collation"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/modules",
+      "title": "Installing, upgrading and uninstalling modules",
+      "description": "An install, upgrade or uninstall is one PostgreSQL transaction (ADR 0009 §2): when anything fails (a hook, a data file, a schema change), nothing of the operation is kept, not even the modules that were processed before the failure. Odoo commits each module on its own; ERPForAll does not.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "caller-stack-safety",
+          "depth": 2,
+          "text": "Caller stack safety"
+        },
+        {
+          "id": "authorized-uninstall-with-confirmed-impact",
+          "depth": 2,
+          "text": "Authorized uninstall with confirmed impact"
+        },
+        {
+          "id": "installable-on-a-served-node",
+          "depth": 2,
+          "text": "Making a native addon installable on a served node"
+        },
+        {
+          "id": "what-your-manifest-controls",
+          "depth": 2,
+          "text": "What your manifest controls"
+        },
+        {
+          "id": "one-transaction-per-operation",
+          "depth": 2,
+          "text": "One transaction per operation"
+        },
+        {
+          "id": "data-files",
+          "depth": 2,
+          "text": "Data files"
+        },
+        {
+          "id": "hooks",
+          "depth": 2,
+          "text": "Hooks"
+        },
+        {
+          "id": "migrations",
+          "depth": 2,
+          "text": "Migrations"
+        },
+        {
+          "id": "init-and-register-hook",
+          "depth": 2,
+          "text": "`init()` and `_register_hook()`"
+        },
+        {
+          "id": "slow-schema-work-the-post-commit-phase",
+          "depth": 2,
+          "text": "Slow schema work: the post-commit phase"
+        },
+        {
+          "id": "module-records",
+          "depth": 2,
+          "text": "Module records"
+        },
+        {
+          "id": "exact-numeric-admission",
+          "depth": 2,
+          "text": "Exact numeric admission"
+        },
+        {
+          "id": "native-data-protection-guards-during-uninstall",
+          "depth": 2,
+          "text": "Native data-protection guards during uninstall"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/money-currency",
+      "title": "Money, currency rates and dated parameters",
+      "description": "base supplies the money services of hook H41 and the dated parameter table of hook H35. Everything below is exact decimal arithmetic: no f64 appears on any path. Design and decisions: docs/design/m3-base-c-money.md; contract: ADR 0046 D1-D3.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "exact-arithmetic-and-rounding",
+          "depth": 2,
+          "text": "Exact arithmetic and rounding"
+        },
+        {
+          "id": "rates-and-conversion",
+          "depth": 2,
+          "text": "Rates and conversion"
+        },
+        {
+          "id": "rate-types",
+          "depth": 3,
+          "text": "Rate types"
+        },
+        {
+          "id": "decimal-precision",
+          "depth": 2,
+          "text": "Decimal precision"
+        },
+        {
+          "id": "monetary-field-mutation",
+          "depth": 2,
+          "text": "Monetary field mutation"
+        },
+        {
+          "id": "candidate-currency-computes",
+          "depth": 3,
+          "text": "Candidate currency computes"
+        },
+        {
+          "id": "monetary-staging-bounds",
+          "depth": 3,
+          "text": "Size bounds of one monetary operation"
+        },
+        {
+          "id": "dated-parameters",
+          "depth": 2,
+          "text": "Dated parameters"
+        },
+        {
+          "id": "named-digits-on-writes",
+          "depth": 2,
+          "text": "Named digits on writes"
+        },
+        {
+          "id": "wide-grids-and-canonical-fractions",
+          "depth": 2,
+          "text": "Wide grids and canonical fractions"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/odoo-compatibility",
+      "title": "Odoo compatibility",
+      "description": "ERPForAll is an ERP framework rebuilt in Rust, modeled on Odoo: a faster, leaner ORM, a clean and reactive web client, and modular addons that declare and extend models, views, menus, actions, security, and UI.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "1-concept-map-odoo-to-erpforall",
+          "depth": 2,
+          "text": "1. Concept Map: Odoo to ERPForAll"
+        },
+        {
+          "id": "2-key-differences-in-detail",
+          "depth": 2,
+          "text": "2. Key Differences in Detail"
+        },
+        {
+          "id": "manifest-and-addon-declaration",
+          "depth": 3,
+          "text": "Manifest and Addon Declaration"
+        },
+        {
+          "id": "models-and-extension",
+          "depth": 3,
+          "text": "Models and Extension"
+        },
+        {
+          "id": "methods-and-super-dispatch",
+          "depth": 3,
+          "text": "Methods and `super()` Dispatch"
+        },
+        {
+          "id": "security-and-access-control",
+          "depth": 3,
+          "text": "Security and Access Control"
+        },
+        {
+          "id": "3-worked-example-extending-an-addon-model-and-defining-a-new-model",
+          "depth": 2,
+          "text": "3. Worked Example: Extending an Addon Model and Defining a New Model"
+        },
+        {
+          "id": "step-1-addon-manifest-and-cargo-crate-setup",
+          "depth": 3,
+          "text": "Step 1: Addon Manifest and Cargo Crate Setup"
+        },
+        {
+          "id": "step-2-defining-a-new-model-test-extrental",
+          "depth": 3,
+          "text": "Step 2: Defining a New Model (`test_ext.rental`)"
+        },
+        {
+          "id": "step-3-extending-an-existing-model-test-ext-abook",
+          "depth": 3,
+          "text": "Step 3: Extending an Existing Model (`test_ext_a::Book`)"
+        },
+        {
+          "id": "step-4-overriding-a-method-on-book",
+          "depth": 3,
+          "text": "Step 4: Overriding a Method on `Book`"
+        },
+        {
+          "id": "step-5-view-extension",
+          "depth": 3,
+          "text": "Step 5: View Extension"
+        },
+        {
+          "id": "step-6-security-access-rules",
+          "depth": 3,
+          "text": "Step 6: Security Access Rules"
+        },
+        {
+          "id": "4-company-consistency",
+          "depth": 2,
+          "text": "4. Company consistency"
+        },
+        {
+          "id": "company-contact-fields",
+          "depth": 3,
+          "text": "Company contact fields"
+        },
+        {
+          "id": "5-differences-that-fail-loudly",
+          "depth": 2,
+          "text": "5. Differences That Fail Loudly"
+        },
+        {
+          "id": "6-platform-status-and-slices",
+          "depth": 2,
+          "text": "6. Platform Status and Slices"
+        },
+        {
+          "id": "available-today-on-main",
+          "depth": 3,
+          "text": "Available Today on Main"
+        },
+        {
+          "id": "not-yet-available-roadmap-slices",
+          "depth": 3,
+          "text": "Not Yet Available (Roadmap & Slices)"
+        },
+        {
+          "id": "7-backward-compatibility-and-deprecation-policy",
+          "depth": 2,
+          "text": "7. Backward Compatibility and Deprecation Policy (ADR 0096)"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/pivot-view",
+      "title": "Pivot view",
+      "description": "Declare a pivot (rows, columns, measures, date intervals) for a model in a view file; what it supports, what it refuses, its bounds and its address.",
+      "audience": "developer",
+      "module": "web",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-VIEW-081",
+        "SPEC-VIEW-082",
+        "SPEC-VIEW-083",
+        "SPEC-VIEW-084",
+        "SPEC-VIEW-086",
+        "SPEC-VIEW-087",
+        "SPEC-VIEW-088",
+        "SPEC-VIEW-089",
+        "SPEC-VIEW-090",
+        "SPEC-VIEW-091",
+        "SPEC-VIEW-092",
+        "SPEC-VIEW-093",
+        "SPEC-VIEW-094",
+        "SPEC-VIEW-152",
+        "SPEC-VIEW-190",
+        "SPEC-VIEW-191",
+        "SPEC-VIEW-192",
+        "SPEC-VIEW-095",
+        "SPEC-VIEW-196"
+      ],
+      "headings": [
+        {
+          "id": "what-it-supports",
+          "depth": 2,
+          "text": "What it supports"
+        },
+        {
+          "id": "what-is-refused",
+          "depth": 2,
+          "text": "What is refused"
+        },
+        {
+          "id": "bounds",
+          "depth": 2,
+          "text": "Bounds an administrator sets"
+        },
+        {
+          "id": "server-calls",
+          "depth": 2,
+          "text": "Server calls"
+        },
+        {
+          "id": "address",
+          "depth": 2,
+          "text": "The page address"
+        },
+        {
+          "id": "download",
+          "depth": 2,
+          "text": "Download as a spreadsheet"
+        },
+        {
+          "id": "download-workbook",
+          "depth": 3,
+          "text": "The workbook"
+        },
+        {
+          "id": "download-document",
+          "depth": 3,
+          "text": "The posted document"
+        },
+        {
+          "id": "download-settings",
+          "depth": 3,
+          "text": "Settings"
+        }
+      ],
+      "shard_id": "shard_developer_web_1"
+    },
+    {
+      "id": "developer/addon-guide/product",
+      "title": "Product catalog, variants, and pricing",
+      "description": "Architecture, data models, variant generator, pricelists, and boundary hooks of the product addon.",
+      "audience": "developer",
+      "module": "product",
+      "models": [
+        "product.template",
+        "product.product",
+        "product.category",
+        "product.attribute",
+        "product.attribute.value",
+        "product.attribute.custom.value",
+        "product.template.attribute.line",
+        "product.template.attribute.value",
+        "product.pricelist",
+        "product.pricelist.item",
+        "product.supplierinfo",
+        "product.combo",
+        "product.combo.item",
+        "product.uom"
+      ],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-PRODUCT-001",
+        "SPEC-PRODUCT-002",
+        "SPEC-PRODUCT-004",
+        "SPEC-PRODUCT-006",
+        "SPEC-PRODUCT-007",
+        "SPEC-PRODUCT-008",
+        "SPEC-PRODUCT-035",
+        "SPEC-PRODUCT-154",
+        "SPEC-PRODUCT-157",
+        "SPEC-PRODUCT-158",
+        "SPEC-PRODUCT-013",
+        "SPEC-PRODUCT-014",
+        "SPEC-PRODUCT-018",
+        "SPEC-PRODUCT-019",
+        "SPEC-PRODUCT-021",
+        "SPEC-PRODUCT-026",
+        "SPEC-PRODUCT-028",
+        "SPEC-PRODUCT-029",
+        "SPEC-PRODUCT-030",
+        "SPEC-PRODUCT-034",
+        "SPEC-PRODUCT-036",
+        "SPEC-PRODUCT-047",
+        "SPEC-PRODUCT-048",
+        "SPEC-PRODUCT-049",
+        "SPEC-PRODUCT-050",
+        "SPEC-PRODUCT-051",
+        "SPEC-PRODUCT-052",
+        "SPEC-PRODUCT-053",
+        "SPEC-PRODUCT-056",
+        "SPEC-PRODUCT-057",
+        "SPEC-PRODUCT-058",
+        "SPEC-PRODUCT-066",
+        "SPEC-PRODUCT-067",
+        "SPEC-PRODUCT-068",
+        "SPEC-PRODUCT-069",
+        "SPEC-PRODUCT-070",
+        "SPEC-PRODUCT-071",
+        "SPEC-PRODUCT-072",
+        "SPEC-PRODUCT-073",
+        "SPEC-PRODUCT-074",
+        "SPEC-PRODUCT-075",
+        "SPEC-PRODUCT-076",
+        "SPEC-PRODUCT-083",
+        "SPEC-PRODUCT-084",
+        "SPEC-PRODUCT-085",
+        "SPEC-PRODUCT-086",
+        "SPEC-PRODUCT-087",
+        "SPEC-PRODUCT-163",
+        "SPEC-PRODUCT-164",
+        "SPEC-PRODUCT-165",
+        "SPEC-PRODUCT-166",
+        "SPEC-PRODUCT-167",
+        "SPEC-PRODUCT-088",
+        "SPEC-PRODUCT-091",
+        "SPEC-PRODUCT-097",
+        "SPEC-PRODUCT-098",
+        "SPEC-PRODUCT-099",
+        "SPEC-PRODUCT-100",
+        "SPEC-PRODUCT-101",
+        "SPEC-PRODUCT-102",
+        "SPEC-PRODUCT-103",
+        "SPEC-PRODUCT-027",
+        "SPEC-PRODUCT-042",
+        "SPEC-PRODUCT-055",
+        "SPEC-PRODUCT-130",
+        "SPEC-PRODUCT-131",
+        "SPEC-PRODUCT-132",
+        "SPEC-PRODUCT-134",
+        "SPEC-PRODUCT-135",
+        "SPEC-PRODUCT-136",
+        "SPEC-PRODUCT-138"
+      ],
+      "headings": [
+        {
+          "id": "vendor-terms-and-selection",
+          "depth": 2,
+          "text": "Vendor terms and selection"
+        },
+        {
+          "id": "upgrading-vendor-agreements",
+          "depth": 3,
+          "text": "Upgrading vendor agreements"
+        },
+        {
+          "id": "delegation-inheritance",
+          "depth": 2,
+          "text": "Delegation inheritance (`_inherits`)"
+        },
+        {
+          "id": "categories-hierarchy",
+          "depth": 2,
+          "text": "Category hierarchy"
+        },
+        {
+          "id": "variant-matrix",
+          "depth": 2,
+          "text": "Attribute and variant matrix generation"
+        },
+        {
+          "id": "pricing-engine",
+          "depth": 2,
+          "text": "Customer pricelists"
+        },
+        {
+          "id": "barcode-engine",
+          "depth": 2,
+          "text": "Barcode uniqueness engine"
+        },
+        {
+          "id": "packaging",
+          "depth": 2,
+          "text": "Packaging barcodes (`product.uom`)"
+        },
+        {
+          "id": "defaults",
+          "depth": 2,
+          "text": "Defaults without fallbacks"
+        },
+        {
+          "id": "companies",
+          "depth": 2,
+          "text": "Companies and branches"
+        },
+        {
+          "id": "barcode-integrity-upgrade",
+          "depth": 3,
+          "text": "Installing and upgrading barcode integrity"
+        },
+        {
+          "id": "boundary-hook-n6",
+          "depth": 2,
+          "text": "Boundary Hook N6: the cost method"
+        },
+        {
+          "id": "variant-limit",
+          "depth": 2,
+          "text": "Variant limit and lazy generation"
+        },
+        {
+          "id": "packaging-availability",
+          "depth": 2,
+          "text": "Packaging availability and unit changes"
+        },
+        {
+          "id": "catalog-permissions",
+          "depth": 2,
+          "text": "Catalog permissions and Products privilege"
+        },
+        {
+          "id": "upgrading-product-security",
+          "depth": 3,
+          "text": "Upgrading product security to 1.2"
+        },
+        {
+          "id": "contextual-product-names",
+          "depth": 2,
+          "text": "Contextual names and vendor references"
+        },
+        {
+          "id": "attribute-lifecycle",
+          "depth": 2,
+          "text": "Attribute and value lifecycle"
+        },
+        {
+          "id": "attribute-upgrade-1-2",
+          "depth": 3,
+          "text": "Upgrade to product 1.4"
+        },
+        {
+          "id": "accounting-tax-extension",
+          "depth": 2,
+          "text": "Accounting tax extension"
+        }
+      ],
+      "shard_id": "shard_developer_product_1"
+    },
+    {
+      "id": "developer/addon-guide/query-ast",
+      "title": "Query AST: saving a search and running it later",
+      "description": "Odoo keeps saved filters as three Python-literal text columns and applies them with the rights of whoever opens them; nothing checks them until they run, and nothing bounds them.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "the-document",
+          "depth": 2,
+          "text": "The document"
+        },
+        {
+          "id": "build-it-in-rust",
+          "depth": 2,
+          "text": "Build it in Rust"
+        },
+        {
+          "id": "parse-store-compare",
+          "depth": 2,
+          "text": "Parse, store, compare"
+        },
+        {
+          "id": "limits",
+          "depth": 2,
+          "text": "Limits"
+        },
+        {
+          "id": "run-it",
+          "depth": 2,
+          "text": "Run it"
+        },
+        {
+          "id": "errors",
+          "depth": 2,
+          "text": "Errors"
+        },
+        {
+          "id": "what-is-not-here",
+          "depth": 2,
+          "text": "What is not here"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/restricted-card-host",
+      "title": "Restricted card host types",
+      "description": "Declare readonly record fields, context keys and helper signatures for the versioned restricted card host contract.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "corpus-maintenance",
+          "depth": 2,
+          "text": "Corpus maintenance and evaluation evidence"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/rpc",
+      "title": "Exposing methods over RPC",
+      "description": "The JSON-2 core (erp-rpc) runs in-process; the native HTTP route is /erp/json/2/<model>/<method>. ADR 0073 establishes the product namespace; ADR 0038 and docs/design/m3-rpc.md describe dispatch. Existing /json/2/ callers remain accepted as input aliases without redirecting or replaying POSTs.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "effects",
+          "depth": 2,
+          "text": "Effects"
+        },
+        {
+          "id": "marking-a-method",
+          "depth": 2,
+          "text": "Marking a method"
+        },
+        {
+          "id": "arguments-and-results",
+          "depth": 3,
+          "text": "Arguments and results"
+        },
+        {
+          "id": "mistakes-the-compiler-catches",
+          "depth": 3,
+          "text": "Mistakes the compiler catches"
+        },
+        {
+          "id": "overrides-hide-widen-never-narrow",
+          "depth": 2,
+          "text": "Overrides: hide, widen, never narrow"
+        },
+        {
+          "id": "a-read-method-that-writes-is-a-bug",
+          "depth": 2,
+          "text": "A `read` method that writes is a bug"
+        },
+        {
+          "id": "offering-a-method-to-the-assistant",
+          "depth": 2,
+          "text": "Offering a method to the assistant"
+        },
+        {
+          "id": "the-call-context",
+          "depth": 2,
+          "text": "The call context"
+        },
+        {
+          "id": "idempotency-keys-for-integrators",
+          "depth": 2,
+          "text": "Idempotency keys (for integrators)"
+        },
+        {
+          "id": "errors",
+          "depth": 2,
+          "text": "Errors"
+        },
+        {
+          "id": "import-and-export-methods",
+          "depth": 2,
+          "text": "Import and export methods"
+        },
+        {
+          "id": "native-browser-credential-adapter",
+          "depth": 2,
+          "text": "Native browser credential adapter"
+        },
+        {
+          "id": "action-and-view-metadata-bundle",
+          "depth": 2,
+          "text": "Action and view metadata bundle"
+        },
+        {
+          "id": "search-panel-data-reads",
+          "depth": 2,
+          "text": "Search-panel data reads"
+        },
+        {
+          "id": "html-validation-and-reports",
+          "depth": 2,
+          "text": "HTML validation and reports"
+        },
+        {
+          "id": "exact-bigint-values",
+          "depth": 3,
+          "text": "Exact bigint values"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/search-methods",
+      "title": "Search domains for nonstored fields",
+      "description": "Declare bounded native search-domain providers for nonstored fields, with typed requests, addon overrides and ordinary access checks.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "hierarchy-seeds",
+          "depth": 2,
+          "text": "Hierarchy seeds from a search method"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/security",
+      "title": "Security and Access Control",
+      "description": "Odoo 20 keeps grants and filters in one table, ir.access, and addons ship its rows in security/ir.access.csv (loaded by erp-data like any CSV data file; the file name names the model). The columns are Odoo's own (odoo/odoo/addons/base/security/ir.access.csv):",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "1-access-rows-securityiraccesscsv",
+          "depth": 2,
+          "text": "1. Access rows (`security/ir.access.csv`)"
+        },
+        {
+          "id": "2-field-level-access-control-groups-attribute",
+          "depth": 2,
+          "text": "2. Field-Level Access Control (`groups` attribute)"
+        },
+        {
+          "id": "3-the-access-policy-and-access-domain",
+          "depth": 2,
+          "text": "3. The access policy and `_access_domain`"
+        },
+        {
+          "id": "operation-kinds",
+          "depth": 3,
+          "text": "Operation Kinds"
+        },
+        {
+          "id": "enforcement-rules",
+          "depth": 3,
+          "text": "Enforcement Rules"
+        },
+        {
+          "id": "4-where-the-policy-lives-m3s1",
+          "depth": 2,
+          "text": "4. Where the policy lives"
+        },
+        {
+          "id": "5-users-groups-and-roles-base",
+          "depth": 2,
+          "text": "5. Users, groups and roles (`base`)"
+        },
+        {
+          "id": "adding-a-preference-to-my-preferences",
+          "depth": 3,
+          "text": "Adding a preference to My Preferences"
+        },
+        {
+          "id": "6-coming-in-milestone-3",
+          "depth": 2,
+          "text": "6. Coming in Milestone 3"
+        },
+        {
+          "id": "7-approval-policies",
+          "depth": 2,
+          "text": "7. Approval policies (`ir.approval.policy`, ADR 0169)"
+        },
+        {
+          "id": "approval-operating-limit",
+          "depth": 2,
+          "text": "Approval operating limit"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/sequences",
+      "title": "Sequences: names, period keys and wait modes",
+      "description": "ir.sequence draws numbers from a counter row (H21). An addon that keeps its own counter, such as the accounting chain table, still needs two things H21 knows: how to render a document name such as INV/2026/00001, and which period a date belongs to, so the counter restarts at the right...",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "declaring-a-pattern-and-rendering-names",
+          "depth": 2,
+          "text": "Declaring a pattern and rendering names"
+        },
+        {
+          "id": "fiscal-years",
+          "depth": 2,
+          "text": "Fiscal years"
+        },
+        {
+          "id": "reading-a-pattern-from-an-existing-name",
+          "depth": 2,
+          "text": "Reading a pattern from an existing name"
+        },
+        {
+          "id": "gapless-sequences-the-wait-mode",
+          "depth": 2,
+          "text": "Gapless sequences: the wait mode"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/server-lifecycle",
+      "title": "Server lifecycle",
+      "description": "Registration, readiness, authentication maintenance and bounded shutdown for the native server.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "registration-and-readiness",
+          "depth": 2,
+          "text": "Registration and readiness"
+        },
+        {
+          "id": "authentication-maintenance",
+          "depth": 2,
+          "text": "Authentication maintenance"
+        },
+        {
+          "id": "shutdown",
+          "depth": 2,
+          "text": "Shutdown"
+        },
+        {
+          "id": "browser-primitives-and-limits",
+          "depth": 2,
+          "text": "Browser primitives and limits"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/settings",
+      "title": "Native declared settings",
+      "description": "The SDK exports validated pure declarations in erp_sdk::settings. A native addon registers a factory:",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "addon-settings-page",
+          "depth": 2,
+          "text": "Your addon's own settings page"
+        },
+        {
+          "id": "settings-contributions",
+          "depth": 2,
+          "text": "Contributing settings to another app"
+        },
+        {
+          "id": "information-and-link-rows",
+          "depth": 2,
+          "text": "Information and link rows"
+        },
+        {
+          "id": "office-blue-appearance",
+          "depth": 2,
+          "text": "Optional Office Blue appearance"
+        },
+        {
+          "id": "browser-presentation-and-navigation",
+          "depth": 3,
+          "text": "Browser presentation and navigation"
+        },
+        {
+          "id": "pure-settings-groups",
+          "depth": 2,
+          "text": "Pure settings groups"
+        },
+        {
+          "id": "technical-parameters",
+          "depth": 2,
+          "text": "Technical parameters"
+        },
+        {
+          "id": "inventory-values",
+          "depth": 2,
+          "text": "Inventory values"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/stock-quant-engine",
+      "title": "Stock quant engine",
+      "description": "The one write path of stock balances: signed changes in key order, availability reads, and the guards around stock.quant.",
+      "audience": "developer",
+      "module": "stock",
+      "models": [
+        "stock.quant",
+        "stock.location"
+      ],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "api",
+          "depth": 2,
+          "text": "API"
+        },
+        {
+          "id": "unit-runner",
+          "depth": 2,
+          "text": "Native stock unit runner"
+        },
+        {
+          "id": "lock-order",
+          "depth": 2,
+          "text": "Lock order"
+        },
+        {
+          "id": "availability",
+          "depth": 2,
+          "text": "Availability"
+        },
+        {
+          "id": "access",
+          "depth": 2,
+          "text": "Access"
+        },
+        {
+          "id": "location-guards",
+          "depth": 2,
+          "text": "Location guards"
+        },
+        {
+          "id": "settings",
+          "depth": 2,
+          "text": "Settings"
+        },
+        {
+          "id": "not-yet",
+          "depth": 2,
+          "text": "Not yet available"
+        }
+      ],
+      "shard_id": "shard_developer_stock_1"
+    },
+    {
+      "id": "developer/addon-guide/stock-read-models",
+      "title": "Stock read models: proposed contract",
+      "description": "Future stock-position integration, scope, history, authorization and freshness semantics.",
+      "audience": "developer",
+      "module": "stock",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "one-position-service",
+          "depth": 2,
+          "text": "One position service"
+        },
+        {
+          "id": "dimensions-and-history",
+          "depth": 2,
+          "text": "Dimensions and history"
+        },
+        {
+          "id": "access-and-freshness",
+          "depth": 2,
+          "text": "Access and freshness"
+        },
+        {
+          "id": "reports-and-extensions",
+          "depth": 2,
+          "text": "Reports and extensions"
+        },
+        {
+          "id": "installation-and-operation",
+          "depth": 2,
+          "text": "Installation and operation"
+        }
+      ],
+      "shard_id": "shard_developer_stock_1"
+    },
+    {
+      "id": "developer/addon-guide/stock-tracking-change",
+      "title": "Changing a product's tracking",
+      "description": "The check a product's tracking write calls: which changes pass with stock on hand and which are refused.",
+      "audience": "developer",
+      "module": "stock",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-STOCKLEDGER-031",
+        "SPEC-STOCKLEDGER-037",
+        "SPEC-STOCKLEDGER-038",
+        "SPEC-STOCKOPS-064"
+      ],
+      "headings": [
+        {
+          "id": "the-call",
+          "depth": 2,
+          "text": "The call"
+        },
+        {
+          "id": "what-it-decides",
+          "depth": 2,
+          "text": "What it decides"
+        },
+        {
+          "id": "what-waits",
+          "depth": 2,
+          "text": "What waits"
+        }
+      ],
+      "shard_id": "shard_developer_stock_1"
+    },
+    {
+      "id": "developer/addon-guide/store-topic",
+      "title": "Add a store topic",
+      "description": "How an addon adds a topic to store_fetch: declaring the topic, its parameters, audience, access check and statement budget, staging records, contributing schema, and the errors a caller sees.",
+      "audience": "developer",
+      "module": "mail",
+      "models": [
+        "mail.store"
+      ],
+      "rpc": [
+        "mail.store.store_fetch"
+      ],
+      "spec_ids": [
+        "SPEC-STOREFETCH-001",
+        "SPEC-STOREFETCH-002"
+      ],
+      "headings": [
+        {
+          "id": "the-call",
+          "depth": 2,
+          "text": "The call"
+        },
+        {
+          "id": "declare-a-topic",
+          "depth": 2,
+          "text": "Declare a topic"
+        },
+        {
+          "id": "thread-models",
+          "depth": 2,
+          "text": "Thread models belong in the store schema"
+        }
+      ],
+      "shard_id": "shard_developer_mail_1"
+    },
+    {
+      "id": "developer/addon-guide/store-wire",
+      "title": "Store wire: sending records to the client store",
+      "description": "How records and field values reach the web client's store: payload shape, field kinds and sync classes, the producer obligations A1-A5, wire and schema versions, and the reference applier.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "how-a-store-field-reaches-the-wire",
+          "depth": 2,
+          "text": "How a store field reaches the wire"
+        },
+        {
+          "id": "field-kinds-and-sync-classes",
+          "depth": 2,
+          "text": "Field kinds and sync classes"
+        },
+        {
+          "id": "producer-obligations-a1-a5",
+          "depth": 2,
+          "text": "Producer obligations A1-A5"
+        },
+        {
+          "id": "read-on-the-primary-only",
+          "depth": 3,
+          "text": "Read on the primary only"
+        },
+        {
+          "id": "versions",
+          "depth": 2,
+          "text": "Versions"
+        },
+        {
+          "id": "the-reference-applier",
+          "depth": 2,
+          "text": "The reference applier"
+        },
+        {
+          "id": "related",
+          "depth": 2,
+          "text": "Related"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/templates",
+      "title": "Client templates (QWeb for the web client)",
+      "description": "An addon's client templates live in static/src//.xml, written in OWL's QWeb dialect as in Odoo.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "1-files",
+          "depth": 2,
+          "text": "1. Files"
+        },
+        {
+          "id": "2-names-in-expressions-this-or-a-template-local",
+          "depth": 2,
+          "text": "2. Names in expressions: `this.` or a template local"
+        },
+        {
+          "id": "3-directives",
+          "depth": 2,
+          "text": "3. Directives"
+        },
+        {
+          "id": "4-inheritance",
+          "depth": 2,
+          "text": "4. Inheritance"
+        },
+        {
+          "id": "ui3-base-coverage-and-evidence-boundary",
+          "depth": 3,
+          "text": "UI3 base coverage and evidence boundary"
+        },
+        {
+          "id": "5-limits",
+          "depth": 2,
+          "text": "5. Limits"
+        },
+        {
+          "id": "6-running-the-compiler-yourself",
+          "depth": 2,
+          "text": "6. Running the compiler yourself"
+        },
+        {
+          "id": "compiler-localization",
+          "depth": 2,
+          "text": "Compiler localization and term extraction"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/tracking",
+      "title": "Tracked fields",
+      "description": "A field declared with tracking is captured by the ORM at flush: raw old and new values for chatter, with no extra statements. Covers the attribute, refusals, context keys and the precommit drain.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-MAIL-010",
+        "SPEC-MAIL-049",
+        "SPEC-MAIL-050",
+        "SPEC-MAIL-051",
+        "SPEC-MAIL-052",
+        "SPEC-MAIL-053",
+        "SPEC-MAIL-055",
+        "SPEC-MAIL-056",
+        "SPEC-MAIL-058",
+        "SPEC-MAIL-059",
+        "SPEC-MAIL-060",
+        "SPEC-MAIL-061",
+        "SPEC-MAIL-062"
+      ],
+      "headings": [
+        {
+          "id": "declaring",
+          "depth": 2,
+          "text": "Declaring"
+        },
+        {
+          "id": "what-is-captured",
+          "depth": 2,
+          "text": "What is captured"
+        },
+        {
+          "id": "draining",
+          "depth": 2,
+          "text": "Draining"
+        },
+        {
+          "id": "not-in-this-slice",
+          "depth": 2,
+          "text": "Not in this slice"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/translated-fields",
+      "title": "Translated fields",
+      "description": "Char, Text and Html declarations accept .translate(true) or #[field(translate = true)]. Stored values use JSONB language maps. A translated field cannot also be company-dependent; computed and related translated fields remain refused by ORM construction.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "static-selection-label-translations",
+          "depth": 2,
+          "text": "Static selection label translations"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/two-addon-tutorial",
+      "title": "Writing and extending addons: a two-addon tutorial",
+      "description": "A comprehensive worked tutorial building a base addon and an extension addon: model declaration, cross-addon extension, method overrides with Super, view patching with XPath, and full transactional install, upgrade and uninstall lifecycle.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "overview-and-architecture",
+          "depth": 2,
+          "text": "Overview and architecture"
+        },
+        {
+          "id": "step-1-authoring-the-base-addon",
+          "depth": 2,
+          "text": "Step 1: Authoring the base addon"
+        },
+        {
+          "id": "base-crate-configuration",
+          "depth": 3,
+          "text": "1. Crate configuration (`Cargo.toml`)"
+        },
+        {
+          "id": "base-manifest",
+          "depth": 3,
+          "text": "2. Manifest (`manifest.toml`)"
+        },
+        {
+          "id": "base-addon-registration",
+          "depth": 3,
+          "text": "3. Addon registration (`src/lib.rs`)"
+        },
+        {
+          "id": "base-model-definition",
+          "depth": 3,
+          "text": "4. Model definition (`src/models.rs`)"
+        },
+        {
+          "id": "base-seed-data",
+          "depth": 3,
+          "text": "5. Seed data (`data/books.xml`)"
+        },
+        {
+          "id": "base-views",
+          "depth": 3,
+          "text": "6. Views (`views/book_views.xml`)"
+        },
+        {
+          "id": "step-2-authoring-the-extension-addon",
+          "depth": 2,
+          "text": "Step 2: Authoring the extension addon"
+        },
+        {
+          "id": "extension-crate-configuration",
+          "depth": 3,
+          "text": "1. Crate configuration (`Cargo.toml`)"
+        },
+        {
+          "id": "extension-manifest",
+          "depth": 3,
+          "text": "2. Manifest (`manifest.toml`)"
+        },
+        {
+          "id": "extension-addon-registration",
+          "depth": 3,
+          "text": "3. Addon registration (`src/lib.rs`)"
+        },
+        {
+          "id": "extension-model-definition",
+          "depth": 3,
+          "text": "4. Model extension and method override (`src/models.rs`)"
+        },
+        {
+          "id": "extension-views",
+          "depth": 3,
+          "text": "5. Inherited view patch (`views/book_views.xml`)"
+        },
+        {
+          "id": "step-3-installing-both-addons",
+          "depth": 2,
+          "text": "Step 3: Installing both addons"
+        },
+        {
+          "id": "command-line-installation",
+          "depth": 3,
+          "text": "Command-line installation"
+        },
+        {
+          "id": "programmatic-installation",
+          "depth": 3,
+          "text": "Programmatic installation"
+        },
+        {
+          "id": "verification-of-installed-state",
+          "depth": 3,
+          "text": "Verification of installed state"
+        },
+        {
+          "id": "step-4-upgrading-the-base-addon",
+          "depth": 2,
+          "text": "Step 4: Upgrading the base addon"
+        },
+        {
+          "id": "step-5-uninstalling-and-dependency-constraints",
+          "depth": 2,
+          "text": "Step 5: Uninstalling and dependency constraints"
+        },
+        {
+          "id": "dependency-refusal-check",
+          "depth": 3,
+          "text": "Dependency refusal check"
+        },
+        {
+          "id": "clean-uninstallation-order",
+          "depth": 3,
+          "text": "Clean uninstallation order"
+        },
+        {
+          "id": "key-takeaways-and-best-practices",
+          "depth": 2,
+          "text": "Key takeaways and best practices"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/ui-assets",
+      "title": "Declared UI assets",
+      "description": "Declare, compile and publish an addon's client templates and static files.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "addon-declaration",
+          "depth": 2,
+          "text": "Addon declaration"
+        },
+        {
+          "id": "native-host-composition",
+          "depth": 2,
+          "text": "Native host composition"
+        },
+        {
+          "id": "base-and-completion-boundary",
+          "depth": 2,
+          "text": "Base and completion boundary"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/uom",
+      "title": "Exact units of measure",
+      "description": "Use exact quantity, price, packaging and precision services from the native UoM foundation.",
+      "audience": "developer",
+      "module": "uom",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "feature-group-authority",
+          "depth": 2,
+          "text": "Installed feature group and authority"
+        },
+        {
+          "id": "arithmetic",
+          "depth": 2,
+          "text": "Arithmetic"
+        },
+        {
+          "id": "decimal-admission",
+          "depth": 2,
+          "text": "Decimal admission"
+        },
+        {
+          "id": "integration-responsibilities",
+          "depth": 2,
+          "text": "Integration responsibilities"
+        },
+        {
+          "id": "installed-views-and-menus",
+          "depth": 2,
+          "text": "Installed views, actions and configuration menu"
+        },
+        {
+          "id": "model-services",
+          "depth": 2,
+          "text": "Model services"
+        },
+        {
+          "id": "maintaining-default-records",
+          "depth": 2,
+          "text": "Maintaining default records"
+        },
+        {
+          "id": "transaction-reference-boundary",
+          "depth": 2,
+          "text": "Transaction reference boundary"
+        },
+        {
+          "id": "stock-units",
+          "depth": 2,
+          "text": "Stock units"
+        },
+        {
+          "id": "product-permanent-references",
+          "depth": 2,
+          "text": "Product consumer of permanent references"
+        }
+      ],
+      "shard_id": "shard_developer_uom_1"
+    },
+    {
+      "id": "developer/addon-guide/user-company-scope",
+      "title": "Links to users and company consistency",
+      "description": "A link to res.users is checked against that user's allowed companies (company_ids) when it is a stored many-to-many relation to res.company. The user's company_id selects its default company and does not override the allowed-company scope. Other models keep ADR 0044's usual field precedence.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "links-to-a-model-whose-company-comes-by-delegation",
+          "depth": 2,
+          "text": "Links to a model whose company comes by delegation"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/views",
+      "title": "View Architectures and Inheritance",
+      "description": "The erp-views crate provides the pure architecture parsing, locator, inheritance, and combination engine for ERPForAll.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "1-overview-and-core-data-types",
+          "depth": 2,
+          "text": "1. Overview and Core Data Types"
+        },
+        {
+          "id": "archnode",
+          "depth": 3,
+          "text": "`ArchNode`"
+        },
+        {
+          "id": "viewdescriptor-and-viewmode",
+          "depth": 3,
+          "text": "`ViewDescriptor` and `ViewMode`"
+        },
+        {
+          "id": "2-inheritance-directives-position",
+          "depth": 2,
+          "text": "2. Inheritance Directives (`position`)"
+        },
+        {
+          "id": "positioninside-default",
+          "depth": 3,
+          "text": "`position=\"inside\"` (Default)"
+        },
+        {
+          "id": "positionafter-and-positionbefore",
+          "depth": 3,
+          "text": "`position=\"after\"` and `position=\"before\"`"
+        },
+        {
+          "id": "positionreplace",
+          "depth": 3,
+          "text": "`position=\"replace\"`"
+        },
+        {
+          "id": "positionattributes",
+          "depth": 3,
+          "text": "`position=\"attributes\"`"
+        },
+        {
+          "id": "moving-nodes-positionmove",
+          "depth": 3,
+          "text": "Moving Nodes (`position=\"move\"`)"
+        },
+        {
+          "id": "3-element-locators-and-xpath-grammar",
+          "depth": 2,
+          "text": "3. Element Locators and XPath Grammar"
+        },
+        {
+          "id": "explicit-xpath-support",
+          "depth": 3,
+          "text": "Explicit XPath Support"
+        },
+        {
+          "id": "non-xpath-selectors",
+          "depth": 3,
+          "text": "Non-XPath Selectors"
+        },
+        {
+          "id": "translated-attribute-gate",
+          "depth": 3,
+          "text": "Translated Attribute Gate"
+        },
+        {
+          "id": "4-combining-views",
+          "depth": 2,
+          "text": "4. Combining Views"
+        },
+        {
+          "id": "inheritance-rules",
+          "depth": 3,
+          "text": "Inheritance Rules"
+        },
+        {
+          "id": "5-security-limits-and-hardening",
+          "depth": 2,
+          "text": "5. Security Limits and Hardening"
+        },
+        {
+          "id": "6-view-records-in-the-database-iruiview-m2s3a",
+          "depth": 2,
+          "text": "6. View records in the database (`ir.ui.view`)"
+        },
+        {
+          "id": "fields-filled-for-you",
+          "depth": 3,
+          "text": "Fields filled for you"
+        },
+        {
+          "id": "what-every-write-checks",
+          "depth": 3,
+          "text": "What every write checks"
+        },
+        {
+          "id": "picking-a-view",
+          "depth": 3,
+          "text": "Picking a view"
+        },
+        {
+          "id": "per-user-get-view-and-group-filtering-spec-data-060",
+          "depth": 3,
+          "text": "Per-user `get_view` and Group Filtering (SPEC-DATA-060)"
+        },
+        {
+          "id": "caches-nodes-and-sql",
+          "depth": 3,
+          "text": "Caches, nodes and SQL"
+        },
+        {
+          "id": "uninstall",
+          "depth": 3,
+          "text": "Uninstall"
+        },
+        {
+          "id": "limits",
+          "depth": 3,
+          "text": "Limits"
+        },
+        {
+          "id": "record-header-selection-statusbar",
+          "depth": 2,
+          "text": "Record-header selection statusbar"
+        },
+        {
+          "id": "view-type-registry-and-wire-nodes",
+          "depth": 2,
+          "text": "View Type Registry and Wire Nodes"
+        },
+        {
+          "id": "server-view-description-contract-and-admission",
+          "depth": 2,
+          "text": "Server View Description Contract and Admission"
+        },
+        {
+          "id": "request-and-options-contract",
+          "depth": 3,
+          "text": "Request and options (`get_views`)"
+        },
+        {
+          "id": "search-expression-security",
+          "depth": 3,
+          "text": "Expressions and search metadata"
+        },
+        {
+          "id": "response-admission-and-limits",
+          "depth": 3,
+          "text": "Response admission and limits"
+        },
+        {
+          "id": "bridge-seam-status",
+          "depth": 3,
+          "text": "Checked serving boundary"
+        },
+        {
+          "id": "record-action-buttons",
+          "depth": 2,
+          "text": "Record action buttons"
+        },
+        {
+          "id": "button-attributes-and-targets",
+          "depth": 3,
+          "text": "Button attributes and targets"
+        },
+        {
+          "id": "related-record-button-box",
+          "depth": 3,
+          "text": "Related-record button box"
+        },
+        {
+          "id": "button-declaration-boundaries",
+          "depth": 3,
+          "text": "Button declaration boundaries"
+        },
+        {
+          "id": "record-form-display-widgets",
+          "depth": 3,
+          "text": "Record-form display widgets"
+        },
+        {
+          "id": "form-header-band-and-field-presentation",
+          "depth": 2,
+          "text": "Form header band and field presentation"
+        },
+        {
+          "id": "one2many-lines-without-an-inline-sub-view",
+          "depth": 2,
+          "text": "One2many lines without an inline sub-view"
+        },
+        {
+          "id": "view-action-attributes",
+          "depth": 3,
+          "text": "View action attributes (`create`, `edit`, `delete`)"
+        },
+        {
+          "id": "field-widget-presentation-contract",
+          "depth": 3,
+          "text": "Field widget presentation contract (in progress)"
+        },
+        {
+          "id": "onchange-warning-presentation",
+          "depth": 3,
+          "text": "Onchange warning presentation"
+        },
+        {
+          "id": "text-code-fields",
+          "depth": 2,
+          "text": "Text code fields"
+        },
+        {
+          "id": "rich-html-fields",
+          "depth": 2,
+          "text": "Rich HTML fields"
+        },
+        {
+          "id": "scoped-search-panel-domains",
+          "depth": 2,
+          "text": "Scoped search-panel domains (ADR 0131)"
+        },
+        {
+          "id": "panel-admission-diagnostics-and-raw-wire-invariants",
+          "depth": 3,
+          "text": "Panel admission diagnostics and raw wire invariants"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/wasm-addons",
+      "title": "WASM addons: one source, a native crate and a sandboxed component",
+      "description": "Every example is taken from code that builds in CI: crates/erp-test-models/addons/test_wasm_dual_a and test_wasm_dual_b and test_wasm_dual_c, tested by crates/erp-test-models/tests/wasm_dual_describe.rs, wasm_dispatch_chain.rs and wasm_dispatch_component.rs (CI step wasm-dual-describe).",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "what-stays-the-same",
+          "depth": 2,
+          "text": "What stays the same"
+        },
+        {
+          "id": "making-a-component",
+          "depth": 2,
+          "text": "Making a component"
+        },
+        {
+          "id": "describe",
+          "depth": 2,
+          "text": "`describe()`"
+        },
+        {
+          "id": "methods-in-a-component-m2bdispatch",
+          "depth": 2,
+          "text": "Methods in a component"
+        },
+        {
+          "id": "sealed-methods-for-native-addon-authors",
+          "depth": 3,
+          "text": "Sealed methods (for native addon authors)"
+        },
+        {
+          "id": "creating-writing-and-following-relations-m2bsample-lending-flowguest-create",
+          "depth": 2,
+          "text": "Creating, writing and following relations"
+        },
+        {
+          "id": "naming-fields-another-addon-declares-model-ref-with-fields",
+          "depth": 2,
+          "text": "Naming fields another addon declares (`model_ref!` with fields)"
+        },
+        {
+          "id": "overriding-create-write-and-unlink-m2bk-override",
+          "depth": 2,
+          "text": "Overriding `create`, `write` and `unlink`"
+        },
+        {
+          "id": "computed-fields-and-constraints-m2bk-override",
+          "depth": 2,
+          "text": "Computed fields and constraints"
+        },
+        {
+          "id": "temporal-fields",
+          "depth": 3,
+          "text": "Temporal fields"
+        },
+        {
+          "id": "todays-date-and-the-clock",
+          "depth": 3,
+          "text": "Today's date and the clock"
+        },
+        {
+          "id": "what-does-not-work-in-a-component-yet",
+          "depth": 2,
+          "text": "What does not work in a component yet"
+        },
+        {
+          "id": "installing-upgrading-and-uninstalling-a-package-at-runtime-m2bh-lifecycle",
+          "depth": 2,
+          "text": "Installing, upgrading and uninstalling a package at runtime"
+        },
+        {
+          "id": "field-attributes-keys-and-a-parent-store",
+          "depth": 2,
+          "text": "Field attributes, keys and a parent store"
+        },
+        {
+          "id": "extending-a-data-only-addons-model-model-ref",
+          "depth": 2,
+          "text": "Extending a data-only addon's model (`model_ref!`)"
+        },
+        {
+          "id": "data-files-in-a-package-views-actions-menus-access-rows-m2bk-ui",
+          "depth": 2,
+          "text": "Data files in a package: views, actions, menus, access rows"
+        },
+        {
+          "id": "calling-a-package-method-from-the-web-client-m2bk-ui",
+          "depth": 2,
+          "text": "Calling a package method from the web client"
+        },
+        {
+          "id": "install-a-webassembly-addon-operator",
+          "depth": 2,
+          "text": "Install a WebAssembly addon (operator)"
+        },
+        {
+          "id": "native-membership-and-installed-package-identity",
+          "depth": 2,
+          "text": "Native membership and installed package identity"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/wizard-dialogs",
+      "title": "Wizard dialogs",
+      "description": "Transient forms, bounded action results and native/WASM wizard authoring.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "declare-and-expose-the-wizard",
+          "depth": 2,
+          "text": "Declare and expose the wizard"
+        },
+        {
+          "id": "return-a-bounded-action",
+          "depth": 2,
+          "text": "Return a bounded action"
+        },
+        {
+          "id": "lifetime-errors-and-limitations",
+          "depth": 2,
+          "text": "Lifetime, errors and limitations"
+        },
+        {
+          "id": "cleanup-policy",
+          "depth": 2,
+          "text": "Cleanup policy (operator-run, not scheduled)"
+        },
+        {
+          "id": "operator-section",
+          "depth": 3,
+          "text": "Operator section"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/installation/attachment-store",
+      "title": "Attachment store for operators",
+      "description": "Where attachment bytes live, how to configure an S3-compatible or a shared local store, how several nodes share it, what the garbage collection jobs do, holds, verification, and what to watch.",
+      "audience": "developer",
+      "module": "base",
+      "models": [
+        "ir.attachment"
+      ],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-BASE-105",
+        "SPEC-BASE-158"
+      ],
+      "headings": [
+        {
+          "id": "configure",
+          "depth": 2,
+          "text": "Configure a store"
+        },
+        {
+          "id": "several-nodes",
+          "depth": 2,
+          "text": "Several nodes"
+        },
+        {
+          "id": "garbage-collection",
+          "depth": 2,
+          "text": "Garbage collection and cleanup"
+        },
+        {
+          "id": "holds",
+          "depth": 2,
+          "text": "Holds"
+        },
+        {
+          "id": "limits",
+          "depth": 2,
+          "text": "Limits and what to watch"
+        },
+        {
+          "id": "concurrency",
+          "depth": 2,
+          "text": "Concurrency limits across nodes"
+        },
+        {
+          "id": "clones",
+          "depth": 2,
+          "text": "Restored copies and clones: the shared-prefix hazard"
+        },
+        {
+          "id": "planned-server-activation",
+          "depth": 2,
+          "text": "Planned server activation contract — not an operator switch"
+        },
+        {
+          "id": "ownership-coordinator-delivery-boundary",
+          "depth": 2,
+          "text": "Ownership coordinator delivery boundary"
+        },
+        {
+          "id": "shared-local-filesystem-peer-probe",
+          "depth": 2,
+          "text": "Shared local filesystem peer probe"
+        },
+        {
+          "id": "fenced-cleanup-delivery",
+          "depth": 2,
+          "text": "Fenced cleanup delivery boundary"
+        },
+        {
+          "id": "pending-attachment-schema-upgrade",
+          "depth": 2,
+          "text": "Pending attachment schema upgrade"
+        },
+        {
+          "id": "audited-force-claim",
+          "depth": 2,
+          "text": "Audited operator recovery"
+        },
+        {
+          "id": "isolated-attachment-maintenance",
+          "depth": 2,
+          "text": "Isolated attachment maintenance"
+        }
+      ],
+      "shard_id": "shard_developer_base_1"
+    },
+    {
+      "id": "developer/installation/background-jobs",
+      "title": "Background jobs for operators",
+      "description": "Operator guide to the durable job queue: workers, every jobs.* setting with its bounds, NOTIFY and connection arithmetic, dead letters, retention and what to watch.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-JOBS-020",
+        "SPEC-JOBS-021",
+        "SPEC-JOBS-022",
+        "SPEC-JOBS-023",
+        "SPEC-JOBS-024",
+        "SPEC-JOBS-025"
+      ],
+      "headings": [
+        {
+          "id": "settings",
+          "depth": 2,
+          "text": "Settings"
+        },
+        {
+          "id": "stored-shared-policy",
+          "depth": 2,
+          "text": "Stored shared policy"
+        },
+        {
+          "id": "connections-and-notify",
+          "depth": 2,
+          "text": "Connections and NOTIFY"
+        },
+        {
+          "id": "dead-letters-history-retention",
+          "depth": 2,
+          "text": "Dead letters, history, retention"
+        },
+        {
+          "id": "generic-partition-upkeep",
+          "depth": 2,
+          "text": "Generic partition upkeep"
+        },
+        {
+          "id": "administration-ui",
+          "depth": 2,
+          "text": "Administration UI"
+        },
+        {
+          "id": "privileges",
+          "depth": 2,
+          "text": "Privileges"
+        },
+        {
+          "id": "migrating-process-policy",
+          "depth": 2,
+          "text": "Migrating process policy"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/installation/html-field-admission",
+      "title": "HTML field admission rollout",
+      "description": "Storage compatibility, diagnostic lifetime and verification for the HTML field integration.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-HTML-020",
+        "SPEC-HTML-054",
+        "SPEC-HTML-055"
+      ],
+      "headings": [],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/installation/login-selection-rollout",
+      "title": "Custom login selection rollout",
+      "description": "Operator procedure for digest-bound login admission and rollback.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-AUTHROL-020",
+        "SPEC-AUTHROL-026",
+        "SPEC-AUTHROL-027",
+        "SPEC-AUTHROL-028"
+      ],
+      "headings": [
+        {
+          "id": "roles-and-schema",
+          "depth": 2,
+          "text": "Roles and schema"
+        },
+        {
+          "id": "enrollment-before-first-activation",
+          "depth": 2,
+          "text": "Enrollment before first activation"
+        },
+        {
+          "id": "inspect-approve-and-enable",
+          "depth": 2,
+          "text": "Inspect, approve and enable"
+        },
+        {
+          "id": "disable-and-rollback",
+          "depth": 2,
+          "text": "Disable and rollback"
+        },
+        {
+          "id": "operational-limits",
+          "depth": 2,
+          "text": "Operational limits"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/installation/postgresql-providers",
+      "title": "PostgreSQL 18 Providers and Setup Guide",
+      "description": "ERPForAll requires PostgreSQL 18 as its foundation (ADR 0028 (docs/adr/0028-postgresql-feature-baseline.md, not part of the published documentation)). This document provides requirements, connection pooler architecture, and provider verification details.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "1-version-requirement-postgresql-18-minimum",
+          "depth": 2,
+          "text": "1. Version Requirement: PostgreSQL 18 Minimum"
+        },
+        {
+          "id": "2-extensions-and-server-capabilities-policy",
+          "depth": 2,
+          "text": "2. Extensions and Server Capabilities Policy"
+        },
+        {
+          "id": "3-connection-pooling-and-pgbouncer-configuration",
+          "depth": 2,
+          "text": "3. Connection Pooling and PgBouncer Configuration"
+        },
+        {
+          "id": "31-pgbouncer-version-and-prepared-statements",
+          "depth": 3,
+          "text": "3.1 PgBouncer Version and Prepared Statements"
+        },
+        {
+          "id": "32-bypassing-transaction-mode-pgbouncer-for-listen",
+          "depth": 3,
+          "text": "3.2 Bypassing Transaction-Mode PgBouncer for `LISTEN`"
+        },
+        {
+          "id": "4-managed-postgresql-providers-matrix",
+          "depth": 2,
+          "text": "4. Managed PostgreSQL Providers Matrix"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/installation/sql-object-roles",
+      "title": "SQL-object database roles",
+      "description": "Configure isolated database roles and recover publication of declared SQL-object privileges.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-ORMX-051",
+        "SPEC-ORMX-052",
+        "SPEC-HUMAN-007"
+      ],
+      "headings": [],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/installation/transient-vacuum",
+      "title": "Running the transient cleanup (vacuum)",
+      "description": "Operator guide: what the transient cleanup does, the erp db vacuum-transient command, privileges, scheduling, failure modes and rollback.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "the-command",
+          "depth": 2,
+          "text": "The command"
+        },
+        {
+          "id": "privileges",
+          "depth": 2,
+          "text": "Privileges"
+        },
+        {
+          "id": "scheduling",
+          "depth": 2,
+          "text": "Scheduling"
+        },
+        {
+          "id": "failure-modes",
+          "depth": 2,
+          "text": "Failure modes"
+        },
+        {
+          "id": "rollback",
+          "depth": 2,
+          "text": "Rollback"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    }
+  ]
+}

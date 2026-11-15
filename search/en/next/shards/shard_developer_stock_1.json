@@ -1,0 +1,122 @@
+{
+  "shard_id": "shard_developer_stock_1",
+  "lang": "en",
+  "version": "next",
+  "audience": "developer",
+  "modules": [
+    "stock",
+    "stock",
+    "stock"
+  ],
+  "docs": [
+    {
+      "page_id": "developer/addon-guide/stock-quant-engine",
+      "title": "Stock quant engine",
+      "module": "stock",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "A stock balance (stock.quant) holds the on-hand and reserved quantity of one key: company, product, exact location, and optionally lot, package and owner. Balances are a projection of the stock ledger (ADR 0079, ADR 0139). Only one path writes them: erp_addon_stock::apply_quant_changes. Generic ORM writes of a balance are refused by name. The stock transitions that use the engine (move validation, inventory application) are later slices. Until they exist, nothing user-visible changes a balance."
+        },
+        {
+          "anchor": "api",
+          "text": "All items are re-exported at the crate root of erp-addon-stock. | Item | What it does | |---|---| | QuantKey | The six key parts. The company is the ledger line's company, never derived from the location. Build it with QuantKey::new(company, product, location) and .lot_id(..), .package_id(..), .owner_id(..). | | QuantChange | A signed on-hand delta, a signed reserved delta and the incoming date the stock carries: QuantChange::new(key, quantity, reserved), .in_date(..). | | apply_quant_changes(tx, &[QuantChange]) | Applies a batch in the caller's transaction and returns the new balances, one per distinct stored key, in lock order. | | QuantFilter | Which balances a read covers: broad (the location and its descendants) or strict (exact key parts): QuantFilter::new(company, product, location), then .strict(..), .tracked(..) and the part setters. | | gather_quants(tx, &QuantFilter) | The matching balances, lot-bearing ones first, then by id. One query. | | available_quantity(tx, &QuantFilter, allow_negative) | Free quantity of the filter. One query. | | QuantError | Every refusal, with its message and error kind. | apply_quant_changes needs a REPEATABLE READ transaction, the ORM default. Use the native run_quant_unit entry below for a complete stock unit, including its probe and document changes. The ordinary Orm::run retries serialization failures but does not retry stock lock timeouts. Before it writes, a batch is checked as a whole. It is refused with nothing changed when: - a change has neither quantity nor reserved quantity; - a delta has more decimal digits than the Product Unit precision; - the product is not storable, the location is a view, or the lot belongs to another product; - the product, location, lot or owner belongs to another company than the key (a location of a parent company is accepted); - the company, product, location, lot, package or owner does not exist (a defect of the caller); - a release would take the reserved counter below zero. This is a defect of the caller and is reported, never clamped. The engine reads by SQL. Pending ORM writes of the transaction (a location usage written just before, a storable flag) are flushed before the checks, so the batch is checked against them. A key another transaction deleted after this one started is answered as a serialization failure (40001), which Orm::run retries. Changes at supplier, customer, inventory adjustment and production locations are accepted and store nothing: those balances live in the ledger only. A key whose quantity and reservation reach zero is deleted, unless it has a counted quantity or an assigned user. The incoming date of a key is the earliest of its own date (while it holds positive stock) and the dates its changes carry. With neither, it is the time of the call."
+        },
+        {
+          "anchor": "unit-runner",
+          "text": "run_quant_unit(orm, unit, work) runs a repeatable async callback in a fresh transaction on every eligible retry. Build QuantUnit::new(principal, operation_identity, product_label) with a label that the caller is authorized to see, and use .context(context) when needed. The entry takes its policy snapshot once and keeps the same identity and inputs across attempts. The callback includes the availability probe, document changes and quant changes. It may be called again: keep external effects outside it and register post-commit effects with tx.after_commit. Do not commit manually. The entry owns the whole transaction and refuses a surrounding ORM or RPC unit before reading policy. It is a native entry point, not an RPC method. Serialization failures and deadlocks retry the entire callback. A lock timeout retries only when the ORM classified it as such; a NOWAIT refusal does not. Exhaustion returns QuantRetryExhausted, with a Lock error kind, the product label and actual attempt count. Access, validation and programming refusals are terminal. An uncertain commit result is terminal: inspect the operation's durable idempotency state before retrying it. Operation identity supplies correlation, not durable deduplication; the caller owns that protocol. The engine's apply_quant_changes entry still borrows a transaction and never retries or commits on its own. Negative-stock policy changes use their separate policy-unit contract."
+        },
+        {
+          "anchor": "lock-order",
+          "text": "The engine nets the changes of one call per key. It then sorts the keys ascending over (company, product, location, lot, package, owner), with an absent part after every present one (PostgreSQL's ASC NULLS LAST). It locks them in that order in one statement, inserting a zero row for a key that does not exist yet. Two calls over overlapping keys therefore never wait on each other in opposite orders. The order holds across calls only under one rule: **one engine call per unit of work**, or later calls only with keys above the highest key the transaction already holds. Collect the changes of a unit of work and pass them in one call. The engine keeps the keys each transaction locked; a later call that names a lower key it does not hold yet is refused before any lock, as a Programming error naming both keys. A key the transaction already holds may come again in any order. A key locked inside a savepoint that was rolled back is no longer held, because the rollback released its row lock; the engine notices the rollback and treats such a key as new. Count-state writes through the generic write lock in row order; make them before the engine call or in their own unit of work. Quant keys come third in the lock hierarchy of ADR 0079 D4.1. A caller locks its picking, move and policy rows before it calls the engine, and cost keys after."
+        },
+        {
+          "anchor": "availability",
+          "text": "| Product | allow_negative = false | allow_negative = true | |---|---|---| | Untracked | the signed sum of on hand minus reserved, at least zero | the signed sum | | Tracked (QuantFilter.tracked) | the sum of each lot's free quantity that is positive | the signed sum | A broad filter with a lot also counts stock without a lot. A strict tracked filter with a lot does not. The product's tracking mode is a field added by the lot work (planned); until then the caller states it in the filter."
+        },
+        {
+          "anchor": "access",
+          "text": "The engine checks no model access or record rule, as an internal service. The transition that calls it has already checked access on its own documents. The engine is never an RPC method. On stock.quant: - create is refused, after the model access check (so a user without access still gets the access refusal); - write of a key part, quantity, reserved_quantity or in_date is refused, naming the field's label; the counted quantity and the assigned user stay writable; - copy is refused, after the create access check; - the generic upsert by the declared key is refused, after the create and write access checks (it would run no create or write override); - unlink runs the model access check, then refuses a quant with an on-hand or reserved quantity for every caller, the superuser too. Deleting a zero quant requires the caller's unlink access and record rules to allow it. The engine deletes its own zero keys. These refusals are user errors whose message says that balances change only through stock moves and inventory adjustments; the client's New and Duplicate buttons can reach them. On stock.move and stock.move.line, the done time, and on lines also the membership and the correction counter, are written only by the stock engine: a create or write that names one of them is refused for every caller, after the model access check, with a user error naming the field's label. Correction rows (stock.move.line.correction) and serial positions (stock.serial.position) are read only for stock users and managers; only the engine writes them. available_quantity is a non-stored field: on hand minus reserved, signed."
+        },
+        {
+          "anchor": "location-guards",
+          "text": "A location write is refused when: - it changes the company of a location (archive it and create a new one instead); - it makes a location holding any balance a view; - it changes the usage of a location holding any non-zero on-hand or reserved quantity. The reference blocks only positive stock; here a negative or reserved-only balance blocks too, because a balance at a virtual usage is never stored and would stay frozen there; - it archives a location whose internal locations (itself or below) hold stock. The checks also catch values that convert to a change: an active value other than true (null or 0 from RPC, an empty or integer cell from Rust) is checked as an archive, and a usage value that is not a usage name is checked as a usage change. Pending ORM writes (a child moved to another parent just before) are flushed before the checks read. Concurrent stock changes. The engine takes a share lock on the locations of its keys. A location guard locks the locations it decides on (for an archive, every location below too) without waiting: - while a stock change at those locations is still open, the guard fails as a serialization failure and Orm::run retries it; once the change committed, the retry sees its balance; - a stock change that starts after the guard waits for the guard's transaction, is then retried, and sees the new usage or archive. The tracking check locks the product rows in the same way, so an open insert of a lot, line or quant of the product retries it. Not covered yet: a stock change that committed after the guard's transaction began and before the guard's lock. The guard's snapshot does not show it and no lock is left to meet, so the guard decides without it. Closing that needs the rule as a database constraint that is checked across snapshots."
+        },
+        {
+          "anchor": "settings",
+          "text": "The native unit's limits are declared technical system parameters of stock (ADR 0227), in **Technical, System Parameters**, not on the Settings page. Only system administrators read and change them there; the unit reads them itself (erp_sdk::params::get_int, elevated), so every caller of a stock unit has them applied. Each new invocation reads committed policy; a save does not extend an invocation already in progress. A stored text outside its declaration fails the invocation with Stored parameter <key> is invalid. before any work. Negative stock is allowed. The switch that forbids it per location is the location policy's forbid_negative field; setting it is refused until a later quant slice enforces it. The decimal precision is the Product Unit precision (Settings, Technical, Decimal Accuracy). Every key below begins with stock.quant_. Zero is refused, not treated as unlimited; an empty or deleted row means the default. | Key suffix | Default | Allowed range | |---|---:|---:| | lock_timeout_ms | 1000 ms | 10–10000 ms | | max_attempts | 5 | 1–5 | | retry_base_ms | 50 ms | 1–2000 ms | | retry_cap_ms | 2000 ms | 1–10000 ms | | idle_transaction_timeout_ms | 60000 ms | 1000–600000 ms | | tcp_keepalives_idle_s | 30 s | 1–300 s | | tcp_keepalives_interval_s | 10 s | 1–60 s | | tcp_keepalives_count | 3 | 1–10 | The retry base cannot exceed its cap (parameter group stock.quant_retry_backoff). The lock timeout must be below the transaction's effective statement limit; incompatible values refuse the invocation before business work. Idle-session and TCP keepalive values apply locally to each transaction. Defaults are operational choices; performance calibration is deferred. Before stock 1.5 these keys were global Settings values. The 1.5 upgrade moves each stored value to the parameter of the same key (ADR 0227 §7): the Settings revision does not change, a parameter row that already held another text is replaced by the Settings value and audited with actor migration:stock@1.5, and a stored value outside its range stops the upgrade naming the key. The old rows stay in place, unread, for one release."
+        },
+        {
+          "anchor": "not-yet",
+          "text": "Later quant slices, not yet on the board, add: - forbidding negative stock per location; - serial positions and the one-serial-per-location rule, after the lot work (planned); - compensation of lot-less negative stock when lots arrive; - quant display names, search and grouped reads; - relocating or repacking balances. Removal strategies, counted inventory and the quant list views of the web client are planned."
+        }
+      ]
+    },
+    {
+      "page_id": "developer/addon-guide/stock-read-models",
+      "title": "Stock read models: proposed contract",
+      "module": "stock",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "**Proposal; acceptance and implementation are pending.** The service, fields and projection lifecycle on this page are not available yet. There is no setup command or executable API example for this proposal."
+        },
+        {
+          "anchor": "one-position-service",
+          "text": "The proposed native stock service accepts a validated batch of products, companies, warehouse/location scope, optional dates and dimensions in the caller's transaction. It returns exact on-hand, reserved, incoming, outgoing, free and forecast quantities, plus units and a result identity. Addons consume the service rather than querying its projection tables or maintaining a second supply/demand total. Stock accounting keeps ownership of values; a quantity result is not a valuation approval. Explicit empty scope means zero for permitted products; an empty product list returns an empty batch. Absence of company selection uses the environment's allowed companies. Forbidden explicit companies or locations fail access checks. Warehouse unions classify movements once: a transfer inside the union is neither incoming nor outgoing. Overlapping roots do not duplicate quantities. Legacy context adaptation remains separate from the typed boundary. Location and warehouse name matching keeps substring behavior, with warnings containing only authorized candidates. Strict-name matching is opt-in. Unknown options and invalid types fail; they do not choose a broader default scope."
+        },
+        {
+          "anchor": "dimensions-and-history",
+          "text": "Lot, owner and package restrictions have different meanings for physical stock and open moves. Package filters constrain current quant quantities, not planned move supply. A lot filter counts each qualifying open move once. Nullable owner selectors distinguish unrestricted, ownerless and named owners; an empty legacy owners set means ownerless, not every owner. Past product-field quantities reconstruct exact historical on-hand while reporting **current** reservations. Results label this reservation basis. Historical reservation, lot/package attribution, expiry and warehouse-topology reconstruction are unsupported in the first proposed version. They return an explicit error; a daily checkpoint cannot silently answer a question it lacks the dimensions to cover. Date-only boundaries use UTC days; timestamp queries preserve intraday precision. Backdated movements and corrections can change a later query for an old business date. Sparse checkpoints accelerate the complete ledger fold and cannot replace missing history with zero. Removing acceleration data does not delete source facts."
+        },
+        {
+          "anchor": "access-and-freshness",
+          "text": "Every contributing source must satisfy current model, field, company and record access. A company-filtered total is insufficient when record rules distinguish rows within it. The service uses a declared exact-source plan or refuses an unsupported request when aggregate grain cannot preserve visibility. Operational decisions and post-write product blocks use primary transactions. Analytical browsing may use a bounded-lag replica with visible route and freshness information. Unknown lag is not a fresh result. The service cannot upgrade an already-open replica transaction secretly; the caller must select the required consistency before opening it. Quantity payloads belong to an authorized transaction or report run. Changes to principal, elevation, companies, policy, options or generations require a new identity and authorization decision. Addons must not reuse an earlier quantity payload merely because its products and company IDs match."
+        },
+        {
+          "anchor": "reports-and-extensions",
+          "text": "Forecast display pages contain at most 200 lines, while reconciliation covers the entire admitted demand universe. A refreshed load-more prefix replaces the old prefix and totals together; it cannot append rows from a new snapshot to old totals. Large requests fail a declared limit or use a durable report workflow. Default-scope search, sort and group use the same rounded measures displayed on product fields, including zero for authorized products without stock rows. Extensions for expiry, rental or subscription demand must declare their semantics and version. Missing required providers, unknown options, overflow and exceeded budgets fail with explicit error kinds and messages. Providers cannot relax authorization or admission limits. The legacy quantity-report model name is not a general addon compatibility promise."
+        },
+        {
+          "anchor": "installation-and-operation",
+          "text": "No migration, default record or background job is installed by this design proposal. Future installation must build and validate projection generations before marking them ready. An unavailable generation must use an admitted exact-source plan or fail visibly; missing initialization is not empty stock. Maintenance will use bounded, fenced jobs with explicit source-equivalence checks. Opening a report will not start an unbounded repair or replay. Operational commands and runtime examples will accompany the implementation slices."
+        }
+      ]
+    },
+    {
+      "page_id": "developer/addon-guide/stock-tracking-change",
+      "title": "Changing a product's tracking",
+      "module": "stock",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "Developer page for the tracking conversion check. The decision lives in erp_addon_stock::tracking; the product's tracking field and its write path belong to the lot work (planned), which calls it."
+        },
+        {
+          "anchor": "the-call",
+          "text": "use erp_addon_stock::tracking::{Tracking, TrackingChange, check_tracking_change}; check_tracking_change(tx, &[TrackingChange { product_id, from: Tracking::Serial, to: Tracking::Lot }]).await?; Call it from the write path of tracking, in the transaction of the write, with every product the write touches (one call per write, not one per product: it runs one query per kind for the whole batch). A refusal is a Validation error; the write rolls back with the transaction. Tracking::from_selection reads the stored selection (empty is untracked) and refuses any other value."
+        },
+        {
+          "anchor": "what-it-decides",
+          "text": "| From | To | Result | |---|---|---| | any | the same | allowed | | untracked | lot | allowed; stock already on hand stays without a lot (the client may show the reference's hint) | | lot | untracked | allowed; lots stay on their quants and lines | | serial | untracked, lot | refused while a serial number is on hand or on an open line | | lot, untracked | serial | refused while a lot is on hand or on an open line (checked on the new mode, so lot to untracked to serial cannot get round it) | Counted: serial positions and lot quants of non-zero quantity, open active lines (serial children, or plain lines naming a lot). Not counted: zero quantity rows, done lines, inactive children. A lot or serial number counts once however many rows name it. Cases: SPEC-STOCKLEDGER-031, -037, -038, SPEC-STOCKOPS-064. The refusal text is ADR 0139 D5.6's: it names the product, the number found and says that converting existing stock is not available yet. Words it from StockError::TrackingChangeBlocked, so a caller never builds its own sentence."
+        },
+        {
+          "anchor": "what-waits",
+          "text": "Converting the refused cases needs the writers of serial positions and open serial children (planned). No setting is involved: the decision has no threshold. The count is exact, not capped; it reads the rows of the named products only (unmeasured, DEFERRED_PERFORMANCE)."
+        }
+      ]
+    }
+  ]
+}

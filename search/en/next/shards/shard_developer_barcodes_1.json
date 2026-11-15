@@ -1,0 +1,38 @@
+{
+  "shard_id": "shard_developer_barcodes_1",
+  "lang": "en",
+  "version": "next",
+  "audience": "developer",
+  "modules": [
+    "barcodes"
+  ],
+  "docs": [
+    {
+      "page_id": "developer/addon-guide/barcodes",
+      "title": "Barcode configuration and parsing",
+      "module": "barcodes",
+      "sections": [
+        {
+          "anchor": "install",
+          "text": "Install or upgrade barcodes to version 1.1.0. The native server must link erp-addon-barcodes and its content identity; both CLI composition paths do so. Installation creates a standard nomenclature and a product fallback rule. Existing unassigned companies, archived ones included, receive this default; new companies default to it. Upgrades preserve explicit company choices and edited noupdate rules. Configuration uses ordinary forms under Settings > Barcode rules; company selection is on the company form. Internal users read configuration; ERP managers edit it. Company writes retain the company's existing administration permissions. Deleting a non-default nomenclature clears company selections that referenced it (the optional relation uses set-null). Ordinary deletion of the default stays protected, including when a caller supplies a force-delete context flag. The framework's authorized addon uninstall removes its defaults/extension and retains companies."
+        },
+        {
+          "anchor": "engine",
+          "text": "erp_addon_barcodes::engine::Nomenclature::from_json compiles a strict v1 snapshot. parse_json returns the common result JSON. The snapshot has required version, conversion and rules; each rule requires id, sequence, encoding, kind, pattern and alias. Unknown keys, wrong types, invalid regex and duplicate IDs fail explicitly. Configuration and parser errors have stable kind() and Display messages. Validated compiled state cannot be deserialized directly. {\"version\":1,\"conversion\":\"always\",\"rules\":[{\"id\":1,\"sequence\":90,\"encoding\":\"any\",\"kind\":\"product\",\"pattern\":\".*\",\"alias\":\"0\"}]} Rules run by sequence then ID. Aliases replace the code and continue through remaining rules once. Other semantic types terminate. Patterns match a prefix, including each alternative. One numeric token such as {NNDDD} captures two whole digits and three decimal digits; its consumed span is zeroed in the base code. Supported checked encodings repair that base's checksum. Numeric value is an exact canonical decimal string, while URI items carry string identifiers. No-match is an explicit status retaining original/current codes; it is not a swallowed error. barcode.nomenclature.barcode_snapshot returns caller-visible snapshot JSON, and parse_barcode takes code and returns result JSON. Both require a singleton nomenclature and read access. These methods never resolve product, lot or package records. Browser snapshots confer no authority. Do not duplicate parsing in JavaScript or invoke the private data-loader company initialization method."
+        },
+        {
+          "anchor": "limits",
+          "text": "Limits are 4096 scan/alias bytes, 1024 pattern bytes, 256 rules, 8192 total pattern bytes, 1 MiB snapshot JSON, regex nesting 32 and numeric width 18. Model rule validation admits at most 256 records in one batch; split larger imports. Regex compilation and DFA caches have fixed per-rule bounds. Rust regex syntax is used; look-around, backreferences and unescaped brace quantifiers are rejected. A host cannot request unlimited parsing. Configuration lives in PostgreSQL. Native calls compile a new caller-visible immutable snapshot; there is no configuration cache. Browser callers own their snapshot lifetime and must reload it to observe committed configuration edits. A node restart loses only transient compiled state. Performance has not been measured; product performance work waits for milestone end."
+        },
+        {
+          "anchor": "browser",
+          "text": "Default feature addon enables model/SDK integration. Build browser artifacts with default features disabled and browser enabled. On an approved build host install the matching wasm-bindgen CLI version from the Cargo manifest and the wasm32-unknown-unknown Rust target. The host also needs the project's pinned Node/pnpm toolchain, operator-owned Playwright under ~/.local/share/erpforall-qa, and Google Chrome (or an explicit CHROME_BIN). Then run scripts/barcode-wasm-check.sh. It builds a real WebAssembly library, generates Node and web bindings, and executes the shared corpus in both Node and Chromium. Serve .wasm as application/wasm. Pass barcode_snapshot text directly to the constructor; avoid decoding and re-encoding its 64-bit rule identities through JavaScript floating-point numbers. No compilation or tests run on the editing laptop."
+        },
+        {
+          "anchor": "extensions",
+          "text": "Stock adds weight, location, lot and package rule types and defaults through an ordinary model extension with explicit selection ondelete policies that reset removed stock types to the base default. The native field macro accepts an array of key/policy pairs; supported policies are set null, cascade and set default, with registry validation enforcing required-field/default rules. This native metadata support does not add WASI descriptor-loader support. Barcodes alone has no stock dependency. GS1 fields/rules, record lookup, scan buffering and the operations application are separate deliveries. URI support means textual lgtin, sgtin, sgtin-96/198 and sscc/sscc-96 conversion; it does not decode binary RFID payloads. ADR 0175 and SPEC-STKBAR-201–211 define the core contract. The behavior matrix records actual coverage; neither installation nor a small corpus establishes complete Odoo parity."
+        }
+      ]
+    }
+  ]
+}
