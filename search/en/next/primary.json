@@ -1,7 +1,7 @@
 {
   "lang": "en",
   "version": "next",
-  "doc_count": 91,
+  "doc_count": 93,
   "docs": [
     {
       "id": "index",
@@ -572,6 +572,11 @@
           "id": "menus",
           "depth": 2,
           "text": "Menus"
+        },
+        {
+          "id": "declaring-a-report",
+          "depth": 2,
+          "text": "Declaring a report"
         },
         {
           "id": "scaling-out",
@@ -1367,6 +1372,104 @@
           "id": "native-company-tree-queries",
           "depth": 2,
           "text": "Native company-tree queries"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/company-dependent-fields",
+      "title": "Company-dependent fields",
+      "description": "A field declared company_dependent keeps one value per company. This page covers the declaration, values and fallbacks, the support matrix, what is still refused and by which task, concurrent writers, deletion of referenced records, direct SQL compiler use and the migration of existing data.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "declaring-a-field",
+          "depth": 2,
+          "text": "Declaring a field"
+        },
+        {
+          "id": "values-and-fallbacks",
+          "depth": 2,
+          "text": "Values and fallbacks"
+        },
+        {
+          "id": "without-a-current-company",
+          "depth": 3,
+          "text": "Without a current company"
+        },
+        {
+          "id": "support-matrix",
+          "depth": 2,
+          "text": "Support matrix"
+        },
+        {
+          "id": "what-is-refused",
+          "depth": 2,
+          "text": "What is refused"
+        },
+        {
+          "id": "flush-rollback-and-concurrent-writers",
+          "depth": 2,
+          "text": "Flush, rollback and concurrent writers"
+        },
+        {
+          "id": "drafts-and-onchange",
+          "depth": 2,
+          "text": "Drafts and onchange"
+        },
+        {
+          "id": "deleting-a-referenced-record",
+          "depth": 2,
+          "text": "Deleting a referenced record"
+        },
+        {
+          "id": "a-write-and-a-deletion-at-the-same-time",
+          "depth": 3,
+          "text": "A write and a deletion at the same time"
+        },
+        {
+          "id": "search-order-and-grouping",
+          "depth": 2,
+          "text": "Search, order and grouping"
+        },
+        {
+          "id": "direct-compiler-use",
+          "depth": 3,
+          "text": "Direct compiler use"
+        },
+        {
+          "id": "storage-utilities",
+          "depth": 2,
+          "text": "Storage utilities"
+        },
+        {
+          "id": "existing-data",
+          "depth": 2,
+          "text": "Existing data"
+        },
+        {
+          "id": "explicit-predecessor-migration",
+          "depth": 3,
+          "text": "Explicit predecessor migration"
+        },
+        {
+          "id": "operator-checklist-for-an-adoption-upgrade",
+          "depth": 3,
+          "text": "Operator checklist for an adoption upgrade"
+        },
+        {
+          "id": "costs",
+          "depth": 2,
+          "text": "Costs"
+        },
+        {
+          "id": "tests",
+          "depth": 2,
+          "text": "Tests"
         }
       ],
       "shard_id": "shard_developer_core_1"
@@ -3365,6 +3468,63 @@
       "shard_id": "shard_developer_core_1"
     },
     {
+      "id": "developer/addon-guide/pdf-post-processing",
+      "title": "PDF page operations, attachments, metadata and e-invoices",
+      "description": "Bounded PDF merge, extraction, splitting, rotation, overlays, embedded files, Info/XMP metadata and the PDF/A-3 e-invoice container.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-PDF-001",
+        "SPEC-PDF-010",
+        "SPEC-PDF-011",
+        "SPEC-PDF-012",
+        "SPEC-PDF-013",
+        "SPEC-PDF-015",
+        "SPEC-PDF-016",
+        "SPEC-PDF-017",
+        "SPEC-PDF-018",
+        "SPEC-PDF-019",
+        "SPEC-PDF-023",
+        "SPEC-PDF-024",
+        "SPEC-PDF-025",
+        "SPEC-PDF-026",
+        "SPEC-PDF-027",
+        "SPEC-PDF-028",
+        "SPEC-RPT-089",
+        "SPEC-RPT-090"
+      ],
+      "headings": [
+        {
+          "id": "placement-and-publication",
+          "depth": 2,
+          "text": "Placement and publication"
+        },
+        {
+          "id": "operations",
+          "depth": 2,
+          "text": "Operations"
+        },
+        {
+          "id": "annotations",
+          "depth": 2,
+          "text": "Page annotations"
+        },
+        {
+          "id": "attachments-metadata-einvoice",
+          "depth": 2,
+          "text": "Embedded files, metadata and e-invoices"
+        },
+        {
+          "id": "limits-and-errors",
+          "depth": 2,
+          "text": "Limits and errors"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
+    },
+    {
       "id": "developer/addon-guide/pivot-view",
       "title": "Pivot view",
       "description": "Declare a pivot (rows, columns, measures, date intervals) for a model in a view file; what it supports, what it refuses, its bounds and its address.",
@@ -4775,6 +4935,11 @@
           "id": "view-action-attributes",
           "depth": 3,
           "text": "View action attributes (`create`, `edit`, `delete`)"
+        },
+        {
+          "id": "list-column-widths",
+          "depth": 3,
+          "text": "List column widths (`width`)"
         },
         {
           "id": "field-widget-presentation-contract",

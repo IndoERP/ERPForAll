@@ -36,8 +36,8 @@
       "modules": [
         "core"
       ],
-      "doc_count": 68,
-      "byte_size": 1160140
+      "doc_count": 70,
+      "byte_size": 1202500
     },
     {
       "shard_id": "shard_developer_mail_1",
@@ -111,6 +111,7 @@
     "developer/addon-guide/cli": "shard_developer_core_1",
     "developer/addon-guide/client-extensions": "shard_developer_core_1",
     "developer/addon-guide/company-consistency": "shard_developer_core_1",
+    "developer/addon-guide/company-dependent-fields": "shard_developer_core_1",
     "developer/addon-guide/component-testing": "shard_developer_core_1",
     "developer/addon-guide/country": "shard_developer_core_1",
     "developer/addon-guide/cross-addon-extension": "shard_developer_core_1",
@@ -141,6 +142,7 @@
     "developer/addon-guide/modules": "shard_developer_core_1",
     "developer/addon-guide/money-currency": "shard_developer_core_1",
     "developer/addon-guide/odoo-compatibility": "shard_developer_core_1",
+    "developer/addon-guide/pdf-post-processing": "shard_developer_core_1",
     "developer/addon-guide/query-ast": "shard_developer_core_1",
     "developer/addon-guide/restricted-card-host": "shard_developer_core_1",
     "developer/addon-guide/rpc": "shard_developer_core_1",

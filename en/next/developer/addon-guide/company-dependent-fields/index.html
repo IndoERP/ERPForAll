@@ -1,0 +1,515 @@
+<!DOCTYPE html><html lang="en" dir="ltr" data-theme="dark" data-has-toc data-has-sidebar class="astro-6cjqtku2"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>Company-dependent fields | ERPForAll Docs</title><link rel="canonical" href="https://indoerp.github.io/ERPForAll/en/next/developer/addon-guide/company-dependent-fields/"/><link rel="sitemap" href="/ERPForAll/sitemap-index.xml"/><link rel="shortcut icon" href="/ERPForAll/favicon.svg" type="image/svg+xml"/><meta name="generator" content="Astro v7.4.2"/><meta name="generator" content="Starlight v0.42.7"/><meta property="og:title" content="Company-dependent fields"/><meta property="og:type" content="article"/><meta property="og:url" content="https://indoerp.github.io/ERPForAll/en/next/developer/addon-guide/company-dependent-fields/"/><meta property="og:locale" content="en"/><meta property="og:description" content="A field declared company_dependent keeps one value per company. This page covers the declaration, values and fallbacks, the support matrix, what is still refused and by which task, concurrent writers, deletion of referenced records, direct SQL compiler use and the migration of existing data."/><meta property="og:site_name" content="ERPForAll Docs"/><meta name="twitter:card" content="summary_large_image"/><meta name="description" content="A field declared company_dependent keeps one value per company. This page covers the declaration, values and fallbacks, the support matrix, what is still refused and by which task, concurrent writers, deletion of referenced records, direct SQL compiler use and the migration of existing data."/><script>
+	window.StarlightThemeProvider = (() => {
+		const storedTheme =
+			typeof localStorage !== 'undefined' && localStorage.getItem('starlight-theme');
+		const theme =
+			storedTheme ||
+			(window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+		document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
+		return {
+			updatePickers(theme = storedTheme || 'auto') {
+				document.querySelectorAll('starlight-theme-select').forEach((picker) => {
+					const select = picker.querySelector('select');
+					if (select) select.value = theme;
+					/** @type {HTMLTemplateElement | null} */
+					const tmpl = document.querySelector(`#theme-icons`);
+					const newIcon = tmpl && tmpl.content.querySelector('.' + theme);
+					if (newIcon) {
+						const oldIcon = picker.querySelector('svg.label-icon');
+						if (oldIcon) {
+							oldIcon.replaceChildren(...newIcon.cloneNode(true).childNodes);
+						}
+					}
+				});
+			},
+		};
+	})();
+</script><template id="theme-icons"><svg aria-hidden="true" class="light astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M5 12a1 1 0 0 0-1-1H3a1 1 0 0 0 0 2h1a1 1 0 0 0 1-1Zm.64 5-.71.71a1 1 0 0 0 0 1.41 1 1 0 0 0 1.41 0l.71-.71A1 1 0 0 0 5.64 17ZM12 5a1 1 0 0 0 1-1V3a1 1 0 0 0-2 0v1a1 1 0 0 0 1 1Zm5.66 2.34a1 1 0 0 0 .7-.29l.71-.71a1 1 0 1 0-1.41-1.41l-.66.71a1 1 0 0 0 0 1.41 1 1 0 0 0 .66.29Zm-12-.29a1 1 0 0 0 1.41 0 1 1 0 0 0 0-1.41l-.71-.71a1.004 1.004 0 1 0-1.43 1.41l.73.71ZM21 11h-1a1 1 0 0 0 0 2h1a1 1 0 0 0 0-2Zm-2.64 6A1 1 0 0 0 17 18.36l.71.71a1 1 0 0 0 1.41 0 1 1 0 0 0 0-1.41l-.76-.66ZM12 6.5a5.5 5.5 0 1 0 5.5 5.5A5.51 5.51 0 0 0 12 6.5Zm0 9a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Zm0 3.5a1 1 0 0 0-1 1v1a1 1 0 0 0 2 0v-1a1 1 0 0 0-1-1Z"/></svg><svg aria-hidden="true" class="dark astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21.64 13a1 1 0 0 0-1.05-.14 8.049 8.049 0 0 1-3.37.73 8.15 8.15 0 0 1-8.14-8.1 8.59 8.59 0 0 1 .25-2A1 1 0 0 0 8 2.36a10.14 10.14 0 1 0 14 11.69 1 1 0 0 0-.36-1.05Zm-9.5 6.69A8.14 8.14 0 0 1 7.08 5.22v.27a10.15 10.15 0 0 0 10.14 10.14 9.784 9.784 0 0 0 2.1-.22 8.11 8.11 0 0 1-7.18 4.32v-.04Z"/></svg><svg aria-hidden="true" class="auto astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg></template><link rel="stylesheet" href="/ERPForAll/_astro/print.ehPL0gv-.css" media="print"><link rel="stylesheet" href="/ERPForAll/_astro/common.DD1vW0WO.css"><script type="module" src="/ERPForAll/_astro/page.cNngjUgL.js"></script></head><body class="astro-6cjqtku2"><a class="sl-skip-link astro-kisk6kzb" href="#_top">Skip to content</a><div class="page sl-flex astro-3a7n2yso"><header class="header astro-3a7n2yso"><div class="header astro-fcwmdtoc"><div class="title-wrapper sl-flex astro-fcwmdtoc"><div class="site-title-group"><a href="/ERPForAll/en" class="site-title sl-flex astro-qrttq3z6"><img class="astro-qrttq3z6" alt src="/ERPForAll/_astro/logo.C9qnaaRe.svg" width="32" height="32"><span class="astro-qrttq3z6" translate="no">ERPForAll Docs</span></a><span class="site-version" title="These pages describe unreleased development code (version next).">Development</span></div></div><div class="sl-flex print:hidden astro-fcwmdtoc"><doc-search class="doc-search"><button type="button" class="doc-search-open" data-search-open disabled aria-label="Search the documentation" aria-keyshortcuts="Control+K Meta+K /"><svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M10.5 3a7.5 7.5 0 0 1 5.9 12.1l4.8 4.8-1.4 1.4-4.8-4.8A7.5 7.5 0 1 1 10.5 3Zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11Z"></path></svg><span class="doc-search-label">Search the docs</span><kbd class="doc-search-key" aria-hidden="true">/</kbd></button><dialog class="doc-search-dialog" aria-label="Search the documentation"><div class="doc-search-panel"><div class="doc-search-field"><svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M10.5 3a7.5 7.5 0 0 1 5.9 12.1l4.8 4.8-1.4 1.4-4.8-4.8A7.5 7.5 0 1 1 10.5 3Zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11Z"></path></svg><input type="search" placeholder="Search titles, headings and page text" aria-label="Search query" autocomplete="off" spellcheck="false" maxlength="256"><button type="button" class="doc-search-close" data-search-close>Close</button></div><p class="doc-search-status" data-search-status role="status" aria-live="polite"></p><ul class="doc-search-results" data-search-results></ul></div></dialog></doc-search><script type="module" src="/ERPForAll/_astro/DocSearch.astro_astro_type_script_index_0_lang.C9sK9ufE.js"></script></div><div class="sl-hidden md:sl-flex print:hidden right-group astro-fcwmdtoc"><div class="sl-flex social-icons astro-fcwmdtoc"></div><starlight-theme-select><label style="--sl-select-width: 6.25em" class="astro-3hi4jykp"><span class="sr-only astro-3hi4jykp">Select theme</span><svg aria-hidden="true" class="icon label-icon astro-3hi4jykp astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg><select autocomplete="off" class="astro-3hi4jykp"><option value="dark" class="astro-3hi4jykp">Dark</option><option value="light" class="astro-3hi4jykp">Light</option><option value="auto" selected class="astro-3hi4jykp">Auto</option></select><svg aria-hidden="true" class="icon caret astro-3hi4jykp astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg></label></starlight-theme-select><script>
+	StarlightThemeProvider.updatePickers();
+</script><script type="module">var e=`starlight-theme`,t=e=>e===`auto`||e===`dark`||e===`light`?e:`auto`,n=()=>t(typeof localStorage<`u`&&localStorage.getItem(e));function r(t){typeof localStorage<`u`&&localStorage.setItem(e,t===`light`||t===`dark`?t:``)}var i=()=>matchMedia(`(prefers-color-scheme: light)`).matches?`light`:`dark`;function a(e){StarlightThemeProvider.updatePickers(e),document.documentElement.dataset.theme=e===`auto`?i():e,r(e)}matchMedia(`(prefers-color-scheme: light)`).addEventListener(`change`,()=>{n()===`auto`&&a(`auto`)});var o=class extends HTMLElement{constructor(){super(),a(n()),this.querySelector(`select`)?.addEventListener(`change`,e=>{e.currentTarget instanceof HTMLSelectElement&&a(t(e.currentTarget.value))})}};customElements.define(`starlight-theme-select`,o);</script><script type="module">var e=class extends HTMLElement{constructor(){super();let e=this.querySelector(`select`);e&&(e.addEventListener(`change`,e=>{e.currentTarget instanceof HTMLSelectElement&&(window.location.pathname=e.currentTarget.value)}),window.addEventListener(`pageshow`,t=>{if(!t.persisted)return;let n=e.querySelector(`option[selected]`)?.index;n!==e.selectedIndex&&(e.selectedIndex=n??0)}))}};customElements.define(`starlight-lang-select`,e);</script></div></div></header><nav class="sidebar print:hidden astro-3a7n2yso" aria-label="Main"><button popovertarget="starlight__sidebar" class="sl-menu-button sl-flex md:sl-hidden print:hidden astro-6tq7w653"><svg aria-hidden="true" class="open-menu astro-6tq7w653 astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M3 8h18a1 1 0 1 0 0-2H3a1 1 0 0 0 0 2Zm18 8H3a1 1 0 0 0 0 2h18a1 1 0 0 0 0-2Zm0-5H3a1 1 0 0 0 0 2h18a1 1 0 0 0 0-2Z"/></svg><svg aria-hidden="true" class="close-menu astro-6tq7w653 astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="m13.41 12 6.3-6.29a1.004 1.004 0 1 0-1.42-1.42L12 10.59l-6.29-6.3a1.004 1.004 0 0 0-1.42 1.42l6.3 6.29-6.3 6.29a1 1 0 0 0 0 1.42.998.998 0 0 0 1.42 0l6.29-6.3 6.29 6.3a.999.999 0 0 0 1.42 0 1 1 0 0 0 0-1.42L13.41 12Z"/></svg><span class="sr-only astro-6tq7w653">Menu</span></button><script type="module">var e=class extends HTMLElement{constructor(){super();let e=matchMedia(`(min-width: 50em)`),t=()=>{this.popover=e.matches?null:`auto`};t(),e.addEventListener(`change`,()=>t()),this.addEventListener(`toggle`,({newState:e})=>this.trapFocus(e===`open`))}trapFocus(e){document.querySelectorAll(`.main-frame, .sl-skip-link`).forEach(t=>{t.toggleAttribute(`inert`,e)})}};customElements.define(`sl-sidebar-pane`,e);</script><sl-sidebar-pane popover id="starlight__sidebar" class="sidebar-pane astro-3a7n2yso"><div class="sidebar-content sl-flex astro-3a7n2yso"><sl-sidebar-state-persist data-hash="1sral1i" class="astro-vfvcyd7p"><script aria-hidden="true">
+		(() => {
+			try {
+				if (!matchMedia('(min-width: 50em)').matches) return;
+				/** @type {HTMLElement | null} */
+				const target = document.querySelector('sl-sidebar-state-persist');
+				const state = JSON.parse(sessionStorage.getItem('sl-sidebar-state') || '0');
+				if (!target || !state || target.dataset.hash !== state.hash) return;
+				window._starlightScrollRestore = state.scroll;
+				customElements.define(
+					'sl-sidebar-restore',
+					class SidebarRestore extends HTMLElement {
+						connectedCallback() {
+							try {
+								const idx = parseInt(this.dataset.index || '');
+								const details = this.closest('details');
+								if (details && typeof state.open[idx] === 'boolean') details.open = state.open[idx];
+							} catch {}
+						}
+					}
+				);
+			} catch {}
+		})();
+	</script><ul class="top-level astro-vryn2zkq"><li class="astro-vryn2zkq"><a href="/ERPForAll/en/" class="large astro-vryn2zkq"><span class="astro-vryn2zkq">Overview</span></a></li><li class="astro-vryn2zkq"><details open class="astro-vryn2zkq"><summary class="astro-vryn2zkq"><span class="group-label astro-vryn2zkq"><span class="large astro-vryn2zkq">Get started</span></span><svg aria-hidden="true" class="caret astro-vryn2zkq astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="0"></sl-sidebar-restore><ul class="astro-vryn2zkq"><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/installation/postgresql-providers/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">PostgreSQL setup</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/cli/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">The erp command</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/server-lifecycle/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Server lifecycle</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/modules/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Install, upgrade, uninstall</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/installation/background-jobs/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Background jobs</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/installation/sql-object-roles/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">SQL-object roles</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/installation/attachment-store/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Attachment store</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/installation/transient-vacuum/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Transient record cleanup</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/data-only-addon/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">A data-only addon</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/two-addon-tutorial/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Two-addon tutorial</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/odoo-compatibility/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Odoo compatibility</span></a></li></ul></details></li><li class="astro-vryn2zkq"><details open class="astro-vryn2zkq"><summary class="astro-vryn2zkq"><span class="group-label astro-vryn2zkq"><span class="large astro-vryn2zkq">Models and data</span></span><svg aria-hidden="true" class="caret astro-vryn2zkq astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="1"></sl-sidebar-restore><ul class="astro-vryn2zkq"><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/models/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Models and fields</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/search-methods/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Nonstored field search</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/translated-fields/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Translated fields</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/company-dependent-fields/" aria-current="page" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Company-dependent fields</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/tracking/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Field tracking</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/money-currency/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Money and currencies</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/country/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Countries and localization</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/uom/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Units of measure</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/barcodes/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Barcode parsing</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/product/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Product catalog</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/stock-read-models/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Stock read models (proposal)</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/stock-quant-engine/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Stock quant engine</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/stock-tracking-change/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Changing a product&#39;s tracking</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/mail/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Chatter storage</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/attachments/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Attachments</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/store-wire/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Store wire</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/store-topic/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Add a store topic</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/sequences/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Sequences</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/keys-upsert-versions/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Keys, upsert and versions</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/generated-columns/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Generated columns</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/index-kinds/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Index kinds</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/exclusions/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Exclusion constraints</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/query-ast/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Saved queries</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/migrations/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Migrations</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/accounting-mappings/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Accounting mappings (proposal)</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/accounting-addons/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Accounting addon set</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/accounting-numbering/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Journal entry numbering</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/accounting-fiscal-periods/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Fiscal periods and lock statuses</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/account-ledger-config/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Accounting ledger configuration</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/account-moves/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Journal entries in draft</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/account-taxes/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Tax definitions</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/fiscal-positions/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Fiscal-position rules</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/localization-packs/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Localization pack format</span></a></li></ul></details></li><li class="astro-vryn2zkq"><details open class="astro-vryn2zkq"><summary class="astro-vryn2zkq"><span class="group-label astro-vryn2zkq"><span class="large astro-vryn2zkq">Addons and packaging</span></span><svg aria-hidden="true" class="caret astro-vryn2zkq astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="2"></sl-sidebar-restore><ul class="astro-vryn2zkq"><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/data-files/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">XML and CSV data files</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/data-functions/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Functions and deletes in data</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/expressions/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Python expressions in data</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/cross-addon-extension/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Extending other addons</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/settings/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Declared settings</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/rpc/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Methods over RPC</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/luau-scripts/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Luau scripts</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/wasm-addons/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">WASM addons</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/erpaddon-package/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">The .erpaddon package</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/human-lifecycle-engine/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Lifecycle engine</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/demo-data/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Demo data</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/load-demo-data/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Load demo data</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/ai-providers/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">AI providers and tool calling</span></a></li></ul></details></li><li class="astro-vryn2zkq"><details open class="astro-vryn2zkq"><summary class="astro-vryn2zkq"><span class="group-label astro-vryn2zkq"><span class="large astro-vryn2zkq">Security and access</span></span><svg aria-hidden="true" class="caret astro-vryn2zkq astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="3"></sl-sidebar-restore><ul class="astro-vryn2zkq"><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/security/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Security overview</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/access-rules/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Access rules</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/access/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Record access</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/field-access/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Field access</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/capabilities/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Capabilities</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/auth/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Authentication</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/audit/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">The audit trail</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/installation/login-selection-rollout/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Login selection rollout</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/bootstrap-identities/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Bootstrap identities</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/company-consistency/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Multi-company</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/user-company-scope/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">User and company links</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/html-sanitize-report/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">HTML sanitising reports</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/installation/html-field-admission/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">HTML field admission rollout</span></a></li></ul></details></li><li class="astro-vryn2zkq"><details open class="astro-vryn2zkq"><summary class="astro-vryn2zkq"><span class="group-label astro-vryn2zkq"><span class="large astro-vryn2zkq">Views and web client</span></span><svg aria-hidden="true" class="caret astro-vryn2zkq astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="4"></sl-sidebar-restore><ul class="astro-vryn2zkq"><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/views/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Views and inheritance</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/actions-menus/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Actions and menus</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/human-form-layout/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Form layout</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/pivot-view/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Pivot view</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/calendar-view/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Calendar view</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/graph-view/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Graph view</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/kanban-view/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Kanban view</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/dashboard-headers/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Dashboard headers</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/pdf-post-processing/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">PDF page operations</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/jobs/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Background jobs</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/wizard-dialogs/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Wizard dialogs</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/templates/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Client templates</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/ui-assets/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Client asset bundles</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/client-extensions/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Registries and patches</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/human-client-extensions/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Human client extensions</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/messaging-store/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Messaging store</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/mail-thread-view/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Thread, message and composer</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/expression-host-values/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Host values in expressions</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/expression-transport/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Expression transport</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/restricted-card-host/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Restricted card host types</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/accessibility/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Accessibility</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/component-testing/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Component tests</span></a></li></ul></details></li></ul><script aria-hidden="true">
+		(() => {
+			const scroller = document.getElementById('starlight__sidebar');
+			if (!window._starlightScrollRestore || !scroller) return;
+			scroller.scrollTop = window._starlightScrollRestore;
+			delete window._starlightScrollRestore;
+		})();
+	</script></sl-sidebar-state-persist><div class="md:sl-hidden"><div class="mobile-preferences sl-flex astro-25vxztcf"><div class="social-icons astro-25vxztcf"></div><starlight-theme-select><label style="--sl-select-width: 6.25em" class="astro-3hi4jykp"><span class="sr-only astro-3hi4jykp">Select theme</span><svg aria-hidden="true" class="icon label-icon astro-3hi4jykp astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg><select autocomplete="off" class="astro-3hi4jykp"><option value="dark" class="astro-3hi4jykp">Dark</option><option value="light" class="astro-3hi4jykp">Light</option><option value="auto" selected class="astro-3hi4jykp">Auto</option></select><svg aria-hidden="true" class="icon caret astro-3hi4jykp astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg></label></starlight-theme-select><script>
+	StarlightThemeProvider.updatePickers();
+</script></div></div></div></sl-sidebar-pane></nav><div class="main-frame astro-3a7n2yso"><script type="module">var e=document.getElementById(`starlight__sidebar`),t=e?.querySelector(`sl-sidebar-state-persist`),n=`sl-sidebar-state`,r=()=>{let r=[],i=t?.dataset.hash||``;try{let e=sessionStorage.getItem(n),t=JSON.parse(e||`{}`);Array.isArray(t.open)&&t.hash===i&&(r=t.open)}catch{}return{hash:i,open:r,scroll:e?.scrollTop||0}},i=e=>{try{sessionStorage.setItem(n,JSON.stringify(e))}catch{}},a=()=>i(r()),o=(e,t)=>{let n=r();n.open[t]=e,i(n)};t?.addEventListener(`click`,e=>{if(!(e.target instanceof Element))return;let t=e.target.closest(`summary`)?.closest(`details`);if(!t)return;let n=t.querySelector(`sl-sidebar-restore`),r=parseInt(n?.dataset.index||``);isNaN(r)||o(!t.open,r)}),addEventListener(`visibilitychange`,()=>{document.visibilityState===`hidden`&&a()});</script><div class="lg:sl-flex astro-o35kqrak"><aside class="right-sidebar-container print:hidden astro-o35kqrak"><div class="right-sidebar astro-o35kqrak"><div class="lg:sl-hidden astro-dsdb6pyi"><mobile-starlight-toc data-min-h="2" data-max-h="3" class="astro-nkhnjgo3"><nav aria-labelledby="starlight__on-this-page--mobile" class="astro-nkhnjgo3"><details id="starlight__mobile-toc" class="astro-nkhnjgo3"><summary id="starlight__on-this-page--mobile" class="sl-flex astro-nkhnjgo3"><span class="toggle sl-flex astro-nkhnjgo3">On this page<svg aria-hidden="true" class="caret astro-nkhnjgo3 astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></span><span class="display-current astro-nkhnjgo3"></span></summary><div class="dropdown astro-nkhnjgo3"><ul class="isMobile astro-hvjckixu" style="--depth: 0;"><li style="--depth: 0;" class="astro-hvjckixu"><a href="#_top" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Overview</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#declaring-a-field" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Declaring a field</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#values-and-fallbacks" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Values and fallbacks</span></a><ul class="isMobile astro-hvjckixu" style="--depth: 1;"><li style="--depth: 1;" class="astro-hvjckixu"><a href="#without-a-current-company" style="--depth: 1;" class="astro-hvjckixu"><span style="--depth: 1;" class="astro-hvjckixu">Without a current company</span></a></li></ul></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#support-matrix" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Support matrix</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#what-is-refused" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">What is refused</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#flush-rollback-and-concurrent-writers" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Flush, rollback and concurrent writers</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#drafts-and-onchange" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Drafts and onchange</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#deleting-a-referenced-record" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Deleting a referenced record</span></a><ul class="isMobile astro-hvjckixu" style="--depth: 1;"><li style="--depth: 1;" class="astro-hvjckixu"><a href="#a-write-and-a-deletion-at-the-same-time" style="--depth: 1;" class="astro-hvjckixu"><span style="--depth: 1;" class="astro-hvjckixu">A write and a deletion at the same time</span></a></li></ul></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#search-order-and-grouping" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Search, order and grouping</span></a><ul class="isMobile astro-hvjckixu" style="--depth: 1;"><li style="--depth: 1;" class="astro-hvjckixu"><a href="#direct-compiler-use" style="--depth: 1;" class="astro-hvjckixu"><span style="--depth: 1;" class="astro-hvjckixu">Direct compiler use</span></a></li></ul></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#storage-utilities" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Storage utilities</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#existing-data" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Existing data</span></a><ul class="isMobile astro-hvjckixu" style="--depth: 1;"><li style="--depth: 1;" class="astro-hvjckixu"><a href="#explicit-predecessor-migration" style="--depth: 1;" class="astro-hvjckixu"><span style="--depth: 1;" class="astro-hvjckixu">Explicit predecessor migration</span></a></li><li style="--depth: 1;" class="astro-hvjckixu"><a href="#operator-checklist-for-an-adoption-upgrade" style="--depth: 1;" class="astro-hvjckixu"><span style="--depth: 1;" class="astro-hvjckixu">Operator checklist for an adoption upgrade</span></a></li></ul></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#costs" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Costs</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#tests" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Tests</span></a></li></ul></div></details></nav></mobile-starlight-toc><script type="module" src="/ERPForAll/_astro/MobileTableOfContents.astro_astro_type_script_index_0_lang.C3fM4Kra.js"></script></div><div class="right-sidebar-panel sl-hidden lg:sl-block astro-dsdb6pyi"><div class="sl-container astro-dsdb6pyi"><starlight-toc data-min-h="2" data-max-h="3"><nav aria-labelledby="starlight__on-this-page"><h2 id="starlight__on-this-page">On this page</h2><ul class="astro-hvjckixu" style="--depth: 0;"><li style="--depth: 0;" class="astro-hvjckixu"><a href="#_top" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Overview</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#declaring-a-field" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Declaring a field</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#values-and-fallbacks" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Values and fallbacks</span></a><ul class="astro-hvjckixu" style="--depth: 1;"><li style="--depth: 1;" class="astro-hvjckixu"><a href="#without-a-current-company" style="--depth: 1;" class="astro-hvjckixu"><span style="--depth: 1;" class="astro-hvjckixu">Without a current company</span></a></li></ul></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#support-matrix" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Support matrix</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#what-is-refused" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">What is refused</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#flush-rollback-and-concurrent-writers" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Flush, rollback and concurrent writers</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#drafts-and-onchange" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Drafts and onchange</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#deleting-a-referenced-record" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Deleting a referenced record</span></a><ul class="astro-hvjckixu" style="--depth: 1;"><li style="--depth: 1;" class="astro-hvjckixu"><a href="#a-write-and-a-deletion-at-the-same-time" style="--depth: 1;" class="astro-hvjckixu"><span style="--depth: 1;" class="astro-hvjckixu">A write and a deletion at the same time</span></a></li></ul></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#search-order-and-grouping" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Search, order and grouping</span></a><ul class="astro-hvjckixu" style="--depth: 1;"><li style="--depth: 1;" class="astro-hvjckixu"><a href="#direct-compiler-use" style="--depth: 1;" class="astro-hvjckixu"><span style="--depth: 1;" class="astro-hvjckixu">Direct compiler use</span></a></li></ul></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#storage-utilities" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Storage utilities</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#existing-data" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Existing data</span></a><ul class="astro-hvjckixu" style="--depth: 1;"><li style="--depth: 1;" class="astro-hvjckixu"><a href="#explicit-predecessor-migration" style="--depth: 1;" class="astro-hvjckixu"><span style="--depth: 1;" class="astro-hvjckixu">Explicit predecessor migration</span></a></li><li style="--depth: 1;" class="astro-hvjckixu"><a href="#operator-checklist-for-an-adoption-upgrade" style="--depth: 1;" class="astro-hvjckixu"><span style="--depth: 1;" class="astro-hvjckixu">Operator checklist for an adoption upgrade</span></a></li></ul></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#costs" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Costs</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#tests" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Tests</span></a></li></ul></nav></starlight-toc><script type="module" src="/ERPForAll/_astro/TableOfContents.astro_astro_type_script_index_0_lang.BpJaGz7G.js"></script></div></div></div></aside><div class="main-pane astro-o35kqrak"><main data-pagefind-body class="astro-6cjqtku2" lang="en" dir="ltr"><div class="content-panel astro-ejbg54ye"><div class="sl-container astro-ejbg54ye"><aside id="release-status-landmark" aria-label="Release status"><div id="release-status-banner" role="status" hidden></div><div id="release-navigation-error" role="alert" hidden></div><div id="release-navigation-notice" role="status" hidden></div></aside><h1 id="_top" class="astro-nt5eciic">Company-dependent fields</h1></div></div><div class="content-panel astro-ejbg54ye"><div class="sl-container astro-ejbg54ye"><div class="sl-markdown-content"><!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+
+<p>A company-dependent field keeps one value per company. The same record reads one value in company A
+and another in company B; a company without a value of its own reads the default configured for it.
+Odoo calls these fields properties. The design is ADR 0163.</p>
+<p>Status: the generic ORM support is delivered (storage, create, read and write, defaults, search,
+ordering, grouping, drafts and onchange, deletion of referenced records, migration of existing
+scalar columns). The operations under <a href="#what-is-refused">What is refused</a> return a named error.
+Fields in use today: <code dir="auto">property_account_position_id</code> on contacts (<code dir="auto">account</code>), <code dir="auto">property_stock_customer</code>
+and <code dir="auto">property_stock_supplier</code> on contacts and <code dir="auto">property_warehouse_id</code> on users (<code dir="auto">stock</code>). The product
+cost is not company-dependent yet; its adoption is separate work.</p>
+<p>Do not enable the flag on an existing scalar business field without the migration under
+<a href="#existing-data">Existing data</a>.</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="declaring-a-field">Declaring a field</h2><a class="sl-anchor-link" href="#declaring-a-field"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Declaring a field”</span></a></div>
+<p>Add <code dir="auto">company_dependent = true</code> to the field. The Rust type stays the scalar type:</p>
+<div class="expressive-code"><link rel="stylesheet" href="/ERPForAll/_astro/ec.w36nc.css"><script type="module" src="/ERPForAll/_astro/ec.0vx5m.js"></script><figure class="frame not-content"><figcaption class="header"></figcaption><pre data-language="rust"><code><div class="ec-line"><div class="code"><span style="--0:#D6DEEB;--1:#403F53">#[extend(ResPartner, addon </span><span style="--0:#C792EA;--1:#8844AE">=</span><span style="--0:#D6DEEB;--1:#403F53"> </span><span style="--0:#D9F5DD;--1:#111111">"</span><span style="--0:#ECC48D;--1:#984E4D">stock</span><span style="--0:#D9F5DD;--1:#111111">"</span><span style="--0:#D6DEEB;--1:#403F53">, check_company_auto </span><span style="--0:#C792EA;--1:#8844AE">=</span><span style="--0:#D6DEEB;--1:#403F53"> true)]</span></div></div><div class="ec-line"><div class="code"><span style="--0:#C792EA;--1:#8844AE">pub</span><span style="--0:#D6DEEB;--1:#403F53">(</span><span style="--0:#C792EA;--1:#8844AE">crate</span><span style="--0:#D6DEEB;--1:#403F53">) </span><span style="--0:#C792EA;--1:#8844AE">struct</span><span style="--0:#D6DEEB;--1:#403F53"> StockPartner {</span></div></div><div class="ec-line"><div class="code"><span class="indent">    </span><span style="--0:#919F9F;--1:#5F636F">/// Destination used when shipping goods to this contact in the active company.</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#D6DEEB;--1:#403F53">    </span></span><span style="--0:#D6DEEB;--1:#403F53">#[field(</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#D6DEEB;--1:#403F53">        </span></span><span style="--0:#D6DEEB;--1:#403F53">many2one,</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#D6DEEB;--1:#403F53">        </span></span><span style="--0:#D6DEEB;--1:#403F53">comodel </span><span style="--0:#C792EA;--1:#8844AE">=</span><span style="--0:#D6DEEB;--1:#403F53"> </span><span style="--0:#D9F5DD;--1:#111111">"</span><span style="--0:#ECC48D;--1:#984E4D">stock.location</span><span style="--0:#D9F5DD;--1:#111111">"</span><span style="--0:#D6DEEB;--1:#403F53">,</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#D6DEEB;--1:#403F53">        </span></span><span style="--0:#D6DEEB;--1:#403F53">company_dependent </span><span style="--0:#C792EA;--1:#8844AE">=</span><span style="--0:#D6DEEB;--1:#403F53"> true,</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#D6DEEB;--1:#403F53">        </span></span><span style="--0:#D6DEEB;--1:#403F53">check_company </span><span style="--0:#C792EA;--1:#8844AE">=</span><span style="--0:#D6DEEB;--1:#403F53"> true,</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#D6DEEB;--1:#403F53">        </span></span><span style="--0:#D6DEEB;--1:#403F53">string </span><span style="--0:#C792EA;--1:#8844AE">=</span><span style="--0:#D6DEEB;--1:#403F53"> </span><span style="--0:#D9F5DD;--1:#111111">"</span><span style="--0:#ECC48D;--1:#984E4D">Customer location</span><span style="--0:#D9F5DD;--1:#111111">"</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#D6DEEB;--1:#403F53">    </span></span><span style="--0:#D6DEEB;--1:#403F53">)]</span></div></div><div class="ec-line"><div class="code"><span class="indent">    </span><span style="--0:#C792EA;--1:#8844AE">pub</span><span style="--0:#D6DEEB;--1:#403F53"> </span><span style="--0:#C5E478;--1:#3B61B0">property_stock_customer</span><span style="--0:#7FDBCA;--1:#096E72">:</span><span style="--0:#D6DEEB;--1:#403F53"> Option&#x3C;RecId>,</span></div></div><div class="ec-line"><div class="code"><span style="--0:#D6DEEB;--1:#403F53">}</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="#[extend(ResPartner, addon = &#x22;stock&#x22;, check_company_auto = true)]pub(crate) struct StockPartner {    /// Destination used when shipping goods to this contact in the active company.    #[field(        many2one,        comodel = &#x22;stock.location&#x22;,        company_dependent = true,        check_company = true,        string = &#x22;Customer location&#x22;    )]    pub property_stock_customer: Option<RecId>,}"><div></div></button></div></figure></div>
+<p>Reading and writing use the ordinary record API. Every value is the value of the environment’s
+current company. The public API never accepts or returns the map of all companies.</p>
+<p>A field cannot be both translated and company-dependent.</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="values-and-fallbacks">Values and fallbacks</h2><a class="sl-anchor-link" href="#values-and-fallbacks"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Values and fallbacks”</span></a></div>
+<ul>
+<li>A write stores the value for the current company only. The other companies’ values stay.</li>
+<li>A company without a stored value reads the fallback: the <code dir="auto">ir.default</code> value of that field for the
+company, or the global one. Defaults are looked up by model and company, not by record.</li>
+<li>An explicit null on a nullable field is a value: it suppresses a non-null fallback.</li>
+<li>Writing a value equal to the company’s fallback removes that company’s stored value. A record
+without any stored value has SQL NULL in the column.</li>
+<li>Boolean and numeric nulls follow their normal conversion (false, zero).</li>
+<li>A required company-dependent field is checked on its effective value. The column stays nullable.</li>
+<li>HTML policy, precision and monetary rounding apply to the scalar before it is stored.</li>
+<li>Exact numbers (a Float with digits, Monetary) are stored as decimal text and never pass through a
+binary float.</li>
+</ul>
+<p>Reads of an existing record use the fallback a superuser would see for the caller’s company. This
+grants the caller no access to the record or the field. Ordinary creation defaults (<code dir="auto">default_get</code>)
+keep their usual precedence and the caller’s identity.</p>
+<p>Fallbacks are read in the caller’s transaction and kept for that transaction only; they are never
+shared between transactions, so an older snapshot never receives a newer fallback. A change of an
+<code dir="auto">ir.default</code> row through the ORM clears them and the computed fields that depend on the company
+context; a pending default write is flushed before the lookup.</p>
+<p>The fallbacks of a model for a company are read once per transaction and reused by every later
+create, read, write and query. The first use sends the default lookup, plus one existence statement
+per target model when a many2one fallback names a record. They are read again after any of these in
+the same transaction:</p>
+<ul>
+<li>a change of <code dir="auto">ir.default</code>, <code dir="auto">ir.model.fields</code> or <code dir="auto">decimal.precision</code> records through the ORM, or
+through the <code dir="auto">ir_default</code> functions;</li>
+<li>records created or deleted in a model that a many2one fallback points to;</li>
+<li>a statement that names the table it writes (<code dir="auto">INSERT INTO …</code>, <code dir="auto">UPDATE …</code>, <code dir="auto">DELETE FROM …</code>,
+<code dir="auto">MERGE INTO …</code>) when that table holds defaults or a fallback’s target, including rows a database
+cascade removes; and any raw <code dir="auto">TRUNCATE</code>, <code dir="auto">COPY</code>, <code dir="auto">CALL</code>, <code dir="auto">DO</code>, DDL or <code dir="auto">Transaction::batch</code>;</li>
+<li><code dir="auto">Transaction::invalidate_all</code>, <code dir="auto">invalidate_model</code> of the target model without a field list, a rollback
+to a savepoint.</li>
+</ul>
+<p>An operation that is already running keeps the fallbacks it started with; the next read, write, create
+or query reads them again.</p>
+<p>Raw SQL the ORM cannot read this way owns its invalidation: after a raw data-changing <code dir="auto">WITH</code>
+(<code dir="auto">WITH … INSERT</code>, <code dir="auto">WITH … UPDATE</code>, <code dir="auto">WITH … DELETE</code>), a <code dir="auto">SELECT</code> that calls a writing function, or a
+trigger that changes <code dir="auto">ir_default</code> or a fallback’s target table, call
+<code dir="auto">tx.invalidate_ormcache("ir.default")</code> (defaults changed), <code dir="auto">tx.invalidate_model(&#x3C;target>, None)</code> (target
+rows changed) or <code dir="auto">tx.invalidate_all()</code>.</p>
+
+<div class="sl-heading-wrapper level-h3"><h3 id="without-a-current-company">Without a current company</h3><a class="sl-anchor-link" href="#without-a-current-company"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Without a current company”</span></a></div>
+<p>A System environment without a current company can create a record when every company-dependent
+field stays unset after the creation defaults. The columns stay SQL NULL and no company is inferred.
+A supplied value, including null, false or zero, and a context, field or overridden creation default
+that supplies one, needs a validated company; otherwise the call returns Validation with
+<code dir="auto">company-dependent fields require a current company</code>. Reading or writing such a field needs a
+current company too.</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="support-matrix">Support matrix</h2><a class="sl-anchor-link" href="#support-matrix"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Support matrix”</span></a></div>
+<p>“tested” means at least one test in the binaries listed under <a href="#tests">Tests</a> exercises that kind in
+that column. “untested” means composition admits it and no test in those binaries covers it. No
+cell is a performance statement.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Field kind</th><th>Create, read, write</th><th>Search, order, group</th><th>Drafts and onchange</th><th>Migration helper</th></tr></thead><tbody><tr><td>Char</td><td>tested</td><td>search, order and group key tested</td><td>tested</td><td>tested</td></tr><tr><td>Text</td><td>tested</td><td>untested</td><td>untested</td><td>tested</td></tr><tr><td>Html</td><td>tested</td><td>untested</td><td>tested</td><td>tested</td></tr><tr><td>Boolean</td><td>tested</td><td>search tested</td><td>read from an origin tested</td><td>tested</td></tr><tr><td>Integer</td><td>tested</td><td>search and sum tested</td><td>tested</td><td>tested</td></tr><tr><td>BigInt</td><td>untested</td><td>untested</td><td>untested</td><td>untested</td></tr><tr><td>Float</td><td>tested</td><td>search tested</td><td>untested</td><td>tested</td></tr><tr><td>Float with digits (exact)</td><td>tested</td><td>sum tested</td><td>untested</td><td>tested</td></tr><tr><td>Monetary</td><td>tested</td><td>equality search and sum tested</td><td>untested</td><td>tested</td></tr><tr><td>Selection</td><td>tested</td><td>search and order tested</td><td>untested</td><td>tested</td></tr><tr><td>Date</td><td>tested</td><td>search tested</td><td>untested</td><td>tested</td></tr><tr><td>Datetime</td><td>tested</td><td>search tested</td><td>untested</td><td>tested</td></tr><tr><td>Many2one</td><td>tested</td><td>search, path, hierarchy and group key tested</td><td>tested</td><td>tested</td></tr></tbody></table>
+<p>Every other field kind, and a field that is not stored, computed, related, generated, tracked or has
+an inverse, is refused when the registry is composed.</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="what-is-refused">What is refused</h2><a class="sl-anchor-link" href="#what-is-refused"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “What is refused”</span></a></div>
+<p>Each of these returns an error whose text names the follow-up work that will add it. None is
+silently ignored.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Operation</th><th>Error kind</th></tr></thead><tbody><tr><td>A declaration outside the matrix (other kinds; computed, inverse, related, generated or tracked company-dependent fields)</td><td>Programming</td></tr><tr><td>Upsert on a model that has a company-dependent field</td><td>Programming</td></tr><tr><td>A write hook registered on a company-dependent field</td><td>Programming</td></tr><tr><td>A compute that reads a company-dependent field and is stored, or does not depend on the <code dir="auto">company</code> context</td><td>Programming</td></tr><tr><td>A native selection catalog expression over a company-dependent field</td><td>Programming</td></tr><tr><td>Keyset pagination ordered by a company-dependent field (use offset pagination)</td><td>Programming</td></tr><tr><td>A company-dependent many2one of a draft that points at an unsaved record</td><td>Validation</td></tr></tbody></table>
+<p>A non-stored compute that reads a company-dependent field and declares the <code dir="auto">company</code> context
+dependency is supported. A stored output is refused because it would keep the value of whichever
+company computed it last.</p>
+<p>One further limit is open: the company-setting adapters of SPEC-FIELD-084 (a company field kept in
+step with a company-dependent default) are not built. A <code dir="auto">restrict</code> reference written while its
+target is being deleted is covered, see
+<a href="#a-write-and-a-deletion-at-the-same-time">A write and a deletion at the same time</a>.</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="flush-rollback-and-concurrent-writers">Flush, rollback and concurrent writers</h2><a class="sl-anchor-link" href="#flush-rollback-and-concurrent-writers"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Flush, rollback and concurrent writers”</span></a></div>
+<p>A flush sends only the changed companies’ entries, and the database merges them into the stored
+map in one statement. A mutation keeps the company and the environment it was made in; flushing
+through another environment does not move it to that environment’s company. Changing the origin
+flushes the earlier pending mutation before the new one is staged. A rollback (of the transaction
+or of a savepoint) discards the pending entries and their baselines.</p>
+<p>Two transactions that write the same row conflict, also when they write for different companies:
+the row is one row. The later one fails with kind <code dir="auto">Concurrency</code> and SQLSTATE <code dir="auto">40001</code>, the
+database’s serialization failure. Nothing of it is stored. Retry the complete
+transaction; after the retry both companies’ values are stored. <code dir="auto">Orm::run</code> and
+<code dir="auto">Orm::run_with_options</code> do this: they roll back, discard the cache and run the unit of work again in
+a new transaction, within a bounded number of attempts. Code that opens a transaction by hand
+retries by hand. Writers of different rows do not conflict.</p>
+<p>Nothing here uses a process-local lock, so the rule is the same on one node and on several.</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="drafts-and-onchange">Drafts and onchange</h2><a class="sl-anchor-link" href="#drafts-and-onchange"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Drafts and onchange”</span></a></div>
+<p>New records (<code dir="auto">Transaction::new_record</code>, the records of a form’s <code dir="auto">onchange</code>) support company-dependent
+fields. A draft keeps a company map in its cache, like a stored record, and nothing of it reaches the
+database:</p>
+<ul>
+<li>An explicit value, or a field default, is the environment’s company value. Another company reads
+its own fallback.</li>
+<li>A draft without value or origin reads the company fallback (the <code dir="auto">ir.default</code> value for that
+company). A first <code dir="auto">onchange</code> call returns it as the default, the same value <code dir="auto">default_get</code> gives.</li>
+<li>A draft with an origin (an edit form) reads the origin’s value in every company. Writing on the
+draft, also from an onchange method, changes the writing environment’s company only, in the cache.</li>
+<li>Switching the environment’s company on a draft is allowed: the read projects that company’s entry.</li>
+<li>A non-stored compute over the field that depends on the <code dir="auto">company</code> context recomputes in the draft
+when the value changes. Onchange values have the same wire shape as <code dir="auto">web_read</code> of a stored record.</li>
+<li>Saving goes through <code dir="auto">create</code> or <code dir="auto">write</code>, which store the caller’s company value only. Write
+commands of draft lines (<code dir="auto">x2many_commands</code>) carry that scalar, never a map.</li>
+<li>A draft’s read is checked on its origin like a read of the stored record: an origin the reader may
+not read refuses with the same Access error.</li>
+<li>A company-dependent many2one cannot point at an unsaved record (Validation): a map stores database
+ids only.</li>
+</ul>
+<p>Reading the company-dependent fields of a draft from its origin uses the stored record’s prefetch read;
+the test prints both statement counts.</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="deleting-a-referenced-record">Deleting a referenced record</h2><a class="sl-anchor-link" href="#deleting-a-referenced-record"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Deleting a referenced record”</span></a></div>
+<p>A company-dependent many2one is a reference inside a JSON map, not a foreign key, so the ORM runs
+the referential action itself when it unlinks the target. This happens for every caller, not only
+an elevated one, and it looks at the rows of all companies whatever the caller may see.</p>
+<ul>
+<li>Every refusal is decided first, then every cleanup runs; a refused deletion changes nothing.</li>
+<li>A <code dir="auto">restrict</code> field with a reference stored for any company refuses the deletion. The message
+(“You cannot delete a record used by a company-dependent field”) names neither the holder
+nor the company, because the caller may not be allowed to see either.</li>
+<li>A fallback set in <code dir="auto">ir.default</code> for a company-dependent many2one to the record refuses it too,
+naming the field. An ordinary many2one default does not block: it is discarded with the record.
+The <code dir="auto">force_delete</code> context key skips both refusals and the references are then cleared, but only
+for an elevated environment (the module loader’s purge). Any other caller’s <code dir="auto">force_delete</code> is
+ignored and the refusals apply, and the RPC layer refuses the key from clients outright
+(Odoo honours it from any context; this is deliberate).</li>
+<li>Every other reference is set to null in its map. The other companies’ entries stay. <code dir="auto">cascade</code>
+on a company-dependent field behaves as set null: the holder row is never deleted.</li>
+<li>Fields that depend on a cleared reference recompute on the next read, and cached maps are dropped.</li>
+<li>A target removed by a database cascade (its parent was deleted) does not run these checks, as in
+Odoo. References to it read as empty from then on.</li>
+</ul>
+<p>A reference whose target no longer exists reads as empty (an empty recordset, <code dir="auto">False</code>, <code dir="auto">None</code>), and
+a search for an empty value finds it. It never falls back to the default: a missing override means
+“no value”, not “use the default”. The same holds when the default itself names a missing record.
+A default that names a missing record is not a creation default either: <code dir="auto">default_get</code> does not offer
+it and a create does not store it, so the new record reads like every record without a value of its
+own. When the missing record was a user’s own default, the company’s fallback is offered instead.
+Reads do not rewrite the stored map; a dangling entry is simply not reported. A record rule
+on the target does not change this; existence is checked directly in the database.</p>
+
+<div class="sl-heading-wrapper level-h3"><h3 id="a-write-and-a-deletion-at-the-same-time">A write and a deletion at the same time</h3><a class="sl-anchor-link" href="#a-write-and-a-deletion-at-the-same-time"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “A write and a deletion at the same time”</span></a></div>
+<p>A <code dir="auto">restrict</code> field also holds when one transaction stores a reference while another deletes the
+target (SPEC-CRUD-068; Odoo checks without a lock, BUG-147). Nothing is declared for it: the ORM
+does the work for every company-dependent many2one with <code dir="auto">ondelete = "restrict"</code>.</p>
+<ul>
+<li>Storing a reference (create or write) locks the target row the way a foreign key does and records
+the reference in two ORM tables, <code dir="auto">erp_company_ref_guard</code> and <code dir="auto">erp_company_ref_link</code>. This costs one
+extra statement per such field in each <code dir="auto">INSERT</code> or <code dir="auto">UPDATE</code> batch that changes it. Removing the
+value, or deleting the holder with <code dir="auto">unlink</code>, removes the recorded reference.</li>
+<li>Deleting the target locks it first, so it waits for a write in flight. When a reference was
+committed after the deletion’s snapshot, the deletion fails with a <code dir="auto">Concurrency</code> error
+(SQLSTATE <code dir="auto">40001</code>). <code dir="auto">Orm::run</code> and the RPC layer retry that error; the retry sees the reference
+and returns the usual refusal. Code that opens a transaction by hand handles <code dir="auto">Concurrency</code> as
+for any other statement.</li>
+<li>A write that waits for a deletion which then commits fails with <code dir="auto">Concurrency</code> too. Its retry
+stores the id of a record that no longer exists, unless the code reads the target first; that
+is allowed for any id and reads as empty (above).</li>
+<li>The first reference a record ever gets creates its guard row. A second transaction that stores
+a reference to the same record, and whose snapshot is older than that first commit, fails once
+with <code dir="auto">Concurrency</code> and succeeds on its retry. Later references to the record do not conflict
+with each other.</li>
+<li>Limits: <code dir="auto">set null</code> and <code dir="auto">cascade</code> fields are not guarded; a reference stored there while its
+target is being deleted reads as empty, as after the cleanup. A map written with SQL outside
+the ORM has no link row, so only the scan protects it. A target removed by a database cascade
+runs none of this (above). A default in <code dir="auto">ir.default</code> committed while the record is being
+deleted is not seen by that deletion. Link rows of holders that a database cascade removed
+stay until their target is deleted; they change no result.</li>
+</ul>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="search-order-and-grouping">Search, order and grouping</h2><a class="sl-anchor-link" href="#search-order-and-grouping"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Search, order and grouping”</span></a></div>
+<p>Search and count evaluate the current company’s effective scalar value. Ordering, group keys,
+aggregates and HAVING use the same expression and logical SQL type. Missing company keys inherit
+prepared defaults, while explicit JSON null suppresses them. A missing row on an optional relation
+join stays absent; it does not inherit the missing model’s defaults. Relation traversal and
+principal user paths use the effective many2one ids, and a dangling target compares as absent.
+Exact values cast to PostgreSQL numeric without passing through binary floats. A query that touches
+only ordinary fields prepares nothing.</p>
+<p>The ORM prepares defaults for the models the expression reads and binds company and fallback values
+per query component. Bound values are not stored in shared filter or order caches. Default changes,
+rollback and separate transaction snapshots follow the read rules above. Orders over a
+company-dependent field are compiled per query; ordinary orders keep the existing order memo.</p>
+
+<div class="sl-heading-wrapper level-h3"><h3 id="direct-compiler-use">Direct compiler use</h3><a class="sl-anchor-link" href="#direct-compiler-use"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Direct compiler use”</span></a></div>
+<p>Direct <code dir="auto">erp_sql</code> callers use <code dir="auto">company::CompanyValues</code> with <code dir="auto">compile_where_with_company</code> or the
+context-aware order entry points. Supply normalized typed fallback cells after company authorization
+and the field’s ordinary precision/HTML admission. Positive-ID validation in this pure compiler is
+not authorization. Context-free compiler entry points still support ordinary fields and refuse a
+referenced company-dependent field with a Programming error naming its missing prepared company
+values. Constant DDL predicates also refuse them because they have no current-company context.</p>
+<p>The context and its individual values share a 16 MiB payload admission limit. This is a resource
+limit, not a measured memory cost. Values remain parameters; query text contains registry-derived
+identifiers and fixed logical casts. A <code dir="auto">btree_not_null</code> prefilter is added only when conservative
+fallback evaluation proves it cannot remove matches. Unknown relation visibility or patterns omit
+that prefilter. No index-performance claim is made.</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="storage-utilities">Storage utilities</h2><a class="sl-anchor-link" href="#storage-utilities"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Storage utilities”</span></a></div>
+<p><code dir="auto">erp_orm::company_dependent</code> provides pure scalar <code dir="auto">encode</code>/<code dir="auto">decode</code>, effective <code dir="auto">project</code>, single-company
+<code dir="auto">apply</code> and map <code dir="auto">delta</code> functions. They perform no database access and grant no access to another
+company. Runtime callers must authorize the company, record and field and admit precision/HTML policy
+before encoding. Public record values remain scalar; raw maps are an internal storage format.</p>
+<p>Maps use positive canonical company IDs as keys. Missing keys inherit the supplied fallback;
+explicit JSON null suppresses it. Fallback-equal updates remove their key, and empty maps become
+SQL NULL. Decimal values use normalized decimal text and never pass through f64. Fractional JSON
+numbers are refused for Decimal storage; migrate such legacy values through exact PostgreSQL text.
+Dates use canonical four-digit-year date strings. Datetimes use canonical UTC strings, with a
+six-digit fractional suffix when microseconds are nonzero. Storage decoding rejects abbreviated
+or trailing date/time strings; dynamic input conversion remains the caller’s responsibility.</p>
+<p>A map admits at most <code dir="auto">MAX_COMPANIES</code> entries and <code dir="auto">MAX_MAP_BYTES</code> key/scalar payload bytes, charging
+64 bytes per entry in addition to key and string lengths. These are safety limits, not measured
+memory-use claims. Direct scalar decoding also enforces the byte ceiling. Map mutation validates
+before cloning; a delta can contain removals from the old map plus changes from the new map, so its
+entry/payload upper bound is the sum of two admitted maps. Invalid map keys, nested values and wrong
+scalar kinds return errors without including hidden company values.</p>
+<p><code dir="auto">delta</code> returns <code dir="auto">[value]</code> for a set (including null) and <code dir="auto">[]</code> for removal. Pass these validated deltas
+to <code dir="auto">erp_sql::version::VersionedUpdate::merge_company</code>; translation <code dir="auto">merge_json</code> has different null
+semantics. The statement atomically patches the existing database map and has its own cache identity.
+A SQL NULL patch is empty, not a request to clear every company. Company merge takes precedence if
+a caller names the same column in both merge lists; callers should select exactly one operation.</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="existing-data">Existing data</h2><a class="sl-anchor-link" href="#existing-data"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Existing data”</span></a></div>
+<p>Do not change a populated scalar column to a company map with an implicit type cast. Its adoption
+must define the companies owning the old value. The installer’s current company is not a
+data-ownership policy.</p>
+<p>Existing JSONB columns are not proof of compatible storage. Schema initialization validates
+all non-null values against the field’s map codec before applying schema changes, including on
+repeat initialization. Incompatible shapes, keys, scalar types or exceeded admission limits return
+Validation naming the field and an explicit migration requirement. Values are not included in the
+error. Valid maps and SQL NULL remain unchanged. An operator must migrate incompatible data with
+an explicit ownership policy before retrying; neither a translation marker nor the installer’s
+company establishes that policy.</p>
+
+<div class="sl-heading-wrapper level-h3"><h3 id="explicit-predecessor-migration">Explicit predecessor migration</h3><a class="sl-anchor-link" href="#explicit-predecessor-migration"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Explicit predecessor migration”</span></a></div>
+<p>Changing an existing scalar business field requires a native <strong>pre</strong> migration in a newer addon
+version. Use <code dir="auto">erp_sdk::migrations::CompanyMigrationPolicy</code> with
+<code dir="auto">tx.migrate_company_dependent(model, field, &#x26;policy)</code>. An explicit company set assigns each existing
+non-null scalar to those companies; <code dir="auto">row_company("company_id")</code> uses a stored ordinary Many2one to
+<code dir="auto">res.company</code> on the same table. Shared rows with a non-null scalar and no owner refuse. SQL NULL
+stays SQL NULL. The installer’s active/allowed companies do not select owners.</p>
+<p>The helper is trusted native migration code; it is not an RPC operation. It runs under the upgrade
+transaction and schema/table locks. Never commit inside a migration. Exact numeric values remain
+exact JSON strings; false, zero and empty text remain explicit historical overrides. Conversion does
+not prune values against current defaults. Existing valid maps keep their owners on repeat; explicit
+helper normalization changes an empty map to SQL NULL. Ordinary schema admission keeps valid maps
+unchanged. Invalid maps and populated reverse conversion refuse; there is no automatic conversion
+from a company map back to a scalar.</p>
+
+<div class="sl-heading-wrapper level-h3"><h3 id="operator-checklist-for-an-adoption-upgrade">Operator checklist for an adoption upgrade</h3><a class="sl-anchor-link" href="#operator-checklist-for-an-adoption-upgrade"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Operator checklist for an adoption upgrade”</span></a></div>
+<ol>
+<li>Inventory custom constraints, indexes and dependent views on the column. Known ORM scalar foreign
+keys are removed when a Many2one becomes a company map. Unsupported custom dependencies refuse and
+must be handled by a separately reviewed migration; the helper never drops their rules silently.</li>
+<li>Keep a backup and rehearse the version upgrade on a disposable clone.</li>
+<li>Run the upgrade. A lock or validation failure is an upgrade failure: the previous data and schema
+are kept. Resolve the cause and retry the whole upgrade from the retained predecessor.</li>
+<li>Coordinate runtime activation through the existing deployment procedure; the helper alone cannot
+make an older binary compatible with the new storage format.</li>
+</ol>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="costs">Costs</h2><a class="sl-anchor-link" href="#costs"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Costs”</span></a></div>
+<p>Lookup costs, bytes per row and index gains of this feature are not measured. Performance acceptance
+is DEFERRED_PERFORMANCE until the milestone end (ADR 0065). Tests print statement counts where that
+helps a reader; one count is asserted.</p>
+<p>A create on a model with a company-dependent many2one sends one statement, the INSERT, once one create
+in the same transaction has warmed the caches, with or without an <code dir="auto">ir.default</code> for the field
+(SPEC-FIELD-087, asserted by tests). The first create of a transaction also sends the default lookups,
+and one existence statement per target model when a fallback names a record, because fallbacks are not
+shared between transactions (see <a href="#values-and-fallbacks">Values and fallbacks</a>).</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="tests">Tests</h2><a class="sl-anchor-link" href="#tests"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Tests”</span></a></div>
+<ul>
+<li><code dir="auto">crates/erp-test-models/tests/company_dependent_acceptance.rs</code>: values and fallbacks per company
+(the whole SPEC-FIELD-075 case), product-like exact cost, partner-like relation, a real user’s
+company isolation, concurrent writers with retry, rollback, statements of a create.</li>
+<li><code dir="auto">crates/erp-test-models/tests/company_dependent_create_queries.rs</code>: one statement for a warmed
+create, and every way the prepared fallbacks are read again (defaults changed through the functions,
+the ORM or raw SQL, a target removed by raw SQL or a cascade, savepoint rollback, a second company,
+another transaction’s commit, a restricted read).</li>
+<li><code dir="auto">crates/erp-test-models/tests/company_dependent_runtime.rs</code>: create, read, write, defaults, cache,
+access, drafts and onchange.</li>
+<li><code dir="auto">crates/erp-test-models/tests/company_dependent_query.rs</code> and
+<code dir="auto">crates/erp-sql/tests/company_dependent_query.rs</code>: search, order, grouping, the direct compiler.</li>
+<li><code dir="auto">crates/erp-test-models/tests/company_dependent_relations.rs</code>: deletion and dangling references.</li>
+<li><code dir="auto">crates/erp-test-models/tests/company_dependent_restrict_lock.rs</code>: a <code dir="auto">restrict</code> reference stored
+while its target is deleted.</li>
+<li><code dir="auto">crates/erp-test-models/tests/company_dependent_schema.rs</code>,
+<code dir="auto">crates/erp-test-models/tests/company_dependent_schema_migration.rs</code> and
+<code dir="auto">crates/erp-modules/tests/company_dependent_migration.rs</code>: existing data and migration.</li>
+<li><code dir="auto">crates/erp-orm/tests/company_dependent_codec.rs</code> and
+<code dir="auto">crates/erp-test-models/tests/company_dependent_delta_sql.rs</code>: the codec and the merge statement.</li>
+</ul>
+<p>Spec cases: SPEC-FIELD-075, 076, 085, 086, 106 to 110, SPEC-REL-015, SPEC-CRUD-035, SPEC-CRUD-068 and
+SPEC-COMPMIG-001 to 004. SPEC-FIELD-075, SPEC-FIELD-076, SPEC-FIELD-087, SPEC-FIELD-108,
+SPEC-FIELD-109 and SPEC-CRUD-035 carry a whole-case test tag; the others are covered in part.
+SPEC-FIELD-084 is not implemented.</p></div><footer class="sl-flex astro-iffdjxxj"><div class="meta sl-flex astro-iffdjxxj"></div><div class="pagination-links print:hidden astro-xgt7gz3a" dir="ltr"><a href="/ERPForAll/en/next/developer/addon-guide/translated-fields/" rel="prev" class="astro-xgt7gz3a"><svg aria-hidden="true" class="astro-xgt7gz3a astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.5rem;"><path d="M17 11H9.41l3.3-3.29a1.004 1.004 0 1 0-1.42-1.42l-5 5a1 1 0 0 0-.21.33 1 1 0 0 0 0 .76 1 1 0 0 0 .21.33l5 5a1.002 1.002 0 0 0 1.639-.325 1 1 0 0 0-.219-1.095L9.41 13H17a1 1 0 0 0 0-2Z"/></svg><span class="astro-xgt7gz3a">Previous<br class="astro-xgt7gz3a"><span class="link-title astro-xgt7gz3a">Translated fields</span></span></a><a href="/ERPForAll/en/next/developer/addon-guide/tracking/" rel="next" class="astro-xgt7gz3a"><svg aria-hidden="true" class="astro-xgt7gz3a astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.5rem;"><path d="M17.92 11.62a1.001 1.001 0 0 0-.21-.33l-5-5a1.003 1.003 0 1 0-1.42 1.42l3.3 3.29H7a1 1 0 0 0 0 2h7.59l-3.3 3.29a1.002 1.002 0 0 0 .325 1.639 1 1 0 0 0 1.095-.219l5-5a1 1 0 0 0 .21-.33 1 1 0 0 0 0-.76Z"/></svg><span class="astro-xgt7gz3a">Next<br class="astro-xgt7gz3a"><span class="link-title astro-xgt7gz3a">Field tracking</span></span></a></div></footer></div></div></main></div></div><div id="unavailable-page" role="status" hidden></div></div></div><script type="module" src="/ERPForAll/_astro/ReleasePageFrame.astro_astro_type_script_index_0_lang.V6XQiZN7.js"></script></body></html>
