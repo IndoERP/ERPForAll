@@ -1055,6 +1055,11 @@
           "text": "Write and read"
         },
         {
+          "id": "views-and-bin-size",
+          "depth": 2,
+          "text": "Views and `bin_size`"
+        },
+        {
           "id": "what-an-image-field-checks",
           "depth": 2,
           "text": "What an image field checks"
@@ -3690,6 +3695,7 @@
         "SPEC-PRODUCT-006",
         "SPEC-PRODUCT-007",
         "SPEC-PRODUCT-008",
+        "SPEC-PRODUCT-012",
         "SPEC-PRODUCT-035",
         "SPEC-PRODUCT-154",
         "SPEC-PRODUCT-157",
@@ -3771,6 +3777,11 @@
           "id": "delegation-inheritance",
           "depth": 2,
           "text": "Delegation inheritance (`_inherits`)"
+        },
+        {
+          "id": "product-images",
+          "depth": 2,
+          "text": "Product pictures"
         },
         {
           "id": "categories-hierarchy",
