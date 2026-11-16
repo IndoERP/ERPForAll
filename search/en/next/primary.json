@@ -3492,6 +3492,11 @@
         "SPEC-PDF-026",
         "SPEC-PDF-027",
         "SPEC-PDF-028",
+        "SPEC-PDF-029",
+        "SPEC-PDF-030",
+        "SPEC-PDF-031",
+        "SPEC-PDF-032",
+        "SPEC-PDF-033",
         "SPEC-RPT-089",
         "SPEC-RPT-090"
       ],
@@ -3510,6 +3515,11 @@
           "id": "annotations",
           "depth": 2,
           "text": "Page annotations"
+        },
+        {
+          "id": "layers",
+          "depth": 2,
+          "text": "Layers (optional content)"
         },
         {
           "id": "attachments-metadata-einvoice",
