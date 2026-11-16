@@ -1,7 +1,7 @@
 {
   "lang": "en",
   "version": "next",
-  "doc_count": 93,
+  "doc_count": 94,
   "docs": [
     {
       "id": "index",
@@ -1033,6 +1033,54 @@
         }
       ],
       "shard_id": "shard_developer_barcodes_1"
+    },
+    {
+      "id": "developer/addon-guide/binary-image-fields",
+      "title": "Binary and image fields",
+      "description": "How an addon declares binary and image fields, how values are written and read, what an image field checks and resizes, stored image sizes, the image.mixin and the two image system parameters.",
+      "audience": "developer",
+      "module": "core",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "declare-a-field",
+          "depth": 2,
+          "text": "Declare a field"
+        },
+        {
+          "id": "write-and-read",
+          "depth": 2,
+          "text": "Write and read"
+        },
+        {
+          "id": "what-an-image-field-checks",
+          "depth": 2,
+          "text": "What an image field checks"
+        },
+        {
+          "id": "stored-sizes",
+          "depth": 2,
+          "text": "Stored sizes"
+        },
+        {
+          "id": "the-image-mixin",
+          "depth": 2,
+          "text": "The image mixin"
+        },
+        {
+          "id": "system-parameters",
+          "depth": 2,
+          "text": "System parameters"
+        },
+        {
+          "id": "limits-of-this-slice",
+          "depth": 2,
+          "text": "Limits of this slice"
+        }
+      ],
+      "shard_id": "shard_developer_core_1"
     },
     {
       "id": "developer/addon-guide/bootstrap-identities",
