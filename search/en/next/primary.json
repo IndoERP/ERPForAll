@@ -1,7 +1,7 @@
 {
   "lang": "en",
   "version": "next",
-  "doc_count": 94,
+  "doc_count": 96,
   "docs": [
     {
       "id": "index",
@@ -151,6 +151,58 @@
       "shard_id": "shard_developer_core_1"
     },
     {
+      "id": "developer/addon-guide/account-invoices",
+      "title": "Invoices and bills: the invoice line sync and the tax computation",
+      "description": "How the account addon turns the product lines of a draft customer invoice, vendor bill or credit note into tax lines, a receivable or payable line and header totals, the pure tax computation module, and the checks the posting service calls.",
+      "audience": "developer",
+      "module": "account",
+      "models": [
+        "account.move",
+        "account.move.line",
+        "account.tax"
+      ],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-ACCINV-002",
+        "SPEC-ACCINV-045",
+        "SPEC-ACCINV-055",
+        "SPEC-ACCINV-059",
+        "SPEC-ACCINV-083",
+        "SPEC-ACCINV-154",
+        "SPEC-ACCTAX-034",
+        "SPEC-ACCTAX-041",
+        "SPEC-ACCTAX-052"
+      ],
+      "headings": [
+        {
+          "id": "fields",
+          "depth": 2,
+          "text": "Fields"
+        },
+        {
+          "id": "the-invoice-line-sync",
+          "depth": 2,
+          "text": "The invoice line sync"
+        },
+        {
+          "id": "the-tax-computation",
+          "depth": 2,
+          "text": "The tax computation"
+        },
+        {
+          "id": "posting-checks",
+          "depth": 2,
+          "text": "Posting checks"
+        },
+        {
+          "id": "not-yet",
+          "depth": 2,
+          "text": "Not yet"
+        }
+      ],
+      "shard_id": "shard_developer_account_1"
+    },
+    {
       "id": "developer/addon-guide/account-ledger-config",
       "title": "Ledger configuration models of the account addon",
       "description": "Accounts, tags, roots, per-company codes, journals and journal groups: fields, rules, settings, how to extend them, and what later slices add.",
@@ -240,6 +292,11 @@
           "text": "Journal settings"
         },
         {
+          "id": "journal-dashboard",
+          "depth": 3,
+          "text": "Journal dashboard card"
+        },
+        {
           "id": "journal-groups",
           "depth": 3,
           "text": "Journal groups"
@@ -274,8 +331,8 @@
     },
     {
       "id": "developer/addon-guide/account-moves",
-      "title": "Journal entries and journal items in draft",
-      "description": "The account.move and account.move.line models of the account addon: stored fields, defaults, how debit and credit become the balance, the balance check of drafts, the line rules and why nothing posts yet.",
+      "title": "Journal entries and journal items: drafts and posting",
+      "description": "The account.move and account.move.line models of the account addon: stored fields, defaults, how debit and credit become the balance, the balance check of drafts, the line rules, posting, reset to draft and cancel.",
       "audience": "developer",
       "module": "account",
       "models": [
@@ -283,7 +340,9 @@
         "account.move.line"
       ],
       "rpc": [
-        "account.move.action_post"
+        "account.move.action_post",
+        "account.move.button_draft",
+        "account.move.button_cancel"
       ],
       "spec_ids": [
         "SPEC-ACCMOVE-001",
@@ -294,7 +353,11 @@
         "SPEC-ACCMOVE-036",
         "SPEC-ACCMOVE-074",
         "SPEC-ACCMOVE-094",
-        "SPEC-ACCMOVE-118"
+        "SPEC-ACCMOVE-118",
+        "SPEC-ACCMOVE-043",
+        "SPEC-ACCMOVE-048",
+        "SPEC-ACCMOVE-054",
+        "SPEC-ACCMOVE-129"
       ],
       "headings": [
         {
@@ -328,9 +391,9 @@
           "text": "Line rules"
         },
         {
-          "id": "nothing-posts",
+          "id": "posting",
           "depth": 2,
-          "text": "Nothing posts"
+          "text": "Posting, reset to draft and cancel"
         },
         {
           "id": "access",
@@ -340,7 +403,7 @@
         {
           "id": "rules-the-database-takes-over-with-posting",
           "depth": 2,
-          "text": "Rules the database takes over with posting"
+          "text": "Rules the database takes over with the posted-row guards"
         }
       ],
       "shard_id": "shard_developer_account_1"
@@ -562,6 +625,11 @@
           "id": "window-actions-views-and-view-mode",
           "depth": 2,
           "text": "Window actions: `views` and `view_mode`"
+        },
+        {
+          "id": "window-actions-context",
+          "depth": 2,
+          "text": "Window actions: `context`"
         },
         {
           "id": "contextual-actions-get-bindings",
@@ -1679,6 +1747,51 @@
         }
       ],
       "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/dashboard-cards",
+      "title": "Dashboard cards",
+      "description": "Draw an application's front page as kanban cards with buttons, figures and a small chart, from one computed JSON text field and the dashboard_card widget.",
+      "audience": "developer",
+      "module": "web",
+      "models": [],
+      "rpc": [
+        "ir.actions.act_window.erp_load_web_action_ref"
+      ],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "model-field",
+          "depth": 2,
+          "text": "The model field"
+        },
+        {
+          "id": "contract",
+          "depth": 2,
+          "text": "Contract v1"
+        },
+        {
+          "id": "behaviour",
+          "depth": 2,
+          "text": "What the user sees and does"
+        },
+        {
+          "id": "server-call",
+          "depth": 2,
+          "text": "Server call"
+        },
+        {
+          "id": "refusals",
+          "depth": 2,
+          "text": "Refusals on the card"
+        },
+        {
+          "id": "compared",
+          "depth": 2,
+          "text": "Compared with the reference"
+        }
+      ],
+      "shard_id": "shard_developer_web_1"
     },
     {
       "id": "developer/addon-guide/dashboard-headers",
@@ -3051,6 +3164,11 @@
           "text": "Inventory integrity upgrade"
         },
         {
+          "id": "inventory-move-counters-and-references",
+          "depth": 2,
+          "text": "Inventory move counters and references"
+        },
+        {
           "id": "testing-upgrades",
           "depth": 2,
           "text": "Testing upgrades"
@@ -4122,7 +4240,9 @@
       "description": "ir.sequence draws numbers from a counter row (H21). An addon that keeps its own counter, such as the accounting chain table, still needs two things H21 knows: how to render a document name such as INV/2026/00001, and which period a date belongs to, so the counter restarts at the right...",
       "audience": "developer",
       "module": "core",
-      "models": [],
+      "models": [
+        "ir.sequence"
+      ],
       "rpc": [],
       "spec_ids": [],
       "headings": [
@@ -4145,6 +4265,11 @@
           "id": "gapless-sequences-the-wait-mode",
           "depth": 2,
           "text": "Gapless sequences: the wait mode"
+        },
+        {
+          "id": "drawing-a-number",
+          "depth": 2,
+          "text": "Drawing a number"
         }
       ],
       "shard_id": "shard_developer_core_1"

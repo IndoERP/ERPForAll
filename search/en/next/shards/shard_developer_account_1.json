@@ -11,9 +11,45 @@
     "account",
     "account",
     "account",
+    "account",
     "account"
   ],
   "docs": [
+    {
+      "page_id": "developer/addon-guide/account-invoices",
+      "title": "Invoices and bills: the invoice line sync and the tax computation",
+      "module": "account",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "An invoice is an account.move whose move_type is out_invoice (customer invoice), out_refund (customer credit note), in_invoice (vendor bill) or in_refund (vendor credit note). Code: erp_addon_account::invoice and erp_addon_account::tax::compute."
+        },
+        {
+          "anchor": "fields",
+          "text": "| Model | Field | Meaning | |---|---|---| | account.move | invoice_date | invoice or bill date | | account.move | invoice_date_due | due date: the invoice date unless set later by hand (payment terms are not available yet) | | account.move | invoice_line_ids | the line_ids whose display_type is product, section, subsection or note (a one2many with a domain on the same inverse) | | account.move | amount_untaxed, amount_tax, amount_total | totals in the document currency, positive on an ordinary invoice | | account.move | amount_residual, payment_state | the total and not_paid until payments are available | | account.move.line | product_id, product_uom_id, quantity, price_unit, discount, tax_ids | what the user edits on a product line | | account.move.line | tax_repartition_line_id, tax_line_id | on a tax line: the repartition line it was made from, and its tax | | account.move.line | price_subtotal, price_total | the line amount without and with taxes | display_type gained tax and payment_term (the receivable or payable line)."
+        },
+        {
+          "anchor": "the-invoice-line-sync",
+          "text": "invoice::sync_lines(tx, env, move_ids) runs after every create of an entry and after every write of a draft invoice that changes its lines, partner, currency, type, journal, company or dates. For each draft invoice it: 1. computes the taxes of each product line (tax::compute::compute) and writes the line's amount_currency (subtotal times invoice::direction_sign: credit on a customer invoice, debit on a vendor bill, reversed on credit notes), price_subtotal and price_total; 2. splits each tax amount over the tax's tax repartition lines of the document kind (invoice or refund) and keeps one tax line per repartition line and account (the repartition line's account, else the product line's account); a zero amount makes no line; 3. keeps one receivable (customer documents) or payable (vendor documents) line that balances the entry in both currencies, due at the due date. Its account is the account it already has when that is of the right type, else the company's first account of that type in chart order; without one the save is refused naming what to create; 4. writes the header totals. New product lines without an account take the journal's default account; without one the save is refused (product accounts are not available yet). An invoice without a journal takes the company's first sale or purchase journal. A currency change moves every product, tax and receivable or payable line to the new currency: the amount in currency is written with it, so the balance is converted at the new currency's rate on the accounting date (a currency without a rate is refused naming it). Lines that already match are not written; new and stale lines are created and deleted in one call each. One write per changed line remains (a bulk-write API is a follow-up)."
+        },
+        {
+          "anchor": "the-tax-computation",
+          "text": "tax::compute::compute(&BaseLine) is pure (no database). It takes the unit price, quantity, discount, the line's TaxDefs and the document currency increment, and returns the subtotal, the total and one TaxAmount (base and amount) per evaluated tax. Supported: percent, fixed and division taxes, groups of taxes (their children are evaluated at the group's place), price-included taxes, taxes that affect the base of later ones, ordering by sequence then id, and rounding per line (half away from zero, ADR 0046). Python code taxes and reverse charge are refused with a message that they are not available yet. Groups are supported by the module but the database has no child taxes yet, so a group tax on a line is refused with a message saying so. The company has no \"round globally\" choice yet."
+        },
+        {
+          "anchor": "posting-checks",
+          "text": "The posting service calls invoice::post::check_postable(tx, env, move_ids) and invoice::post::before_post(tx, env, move_ids); both do nothing for plain journal entries. - check_postable refuses, in one error listing every problem: an invoice without customer or vendor, without a product line, with a negative total, or a vendor document without its bill date. - before_post gives customer documents without an invoice date today's date (in the user's timezone); vendor documents keep the date printed by the vendor."
+        },
+        {
+          "anchor": "not-yet",
+          "text": "Receipts, payment terms, product accounts, fiscal positions, cash rounding, payments, the overdue search filter (the client cannot compare with today's date in a domain yet), unit conversion of the product price."
+        }
+      ]
+    },
     {
       "page_id": "developer/addon-guide/account-ledger-config",
       "title": "Ledger configuration models of the account addon",
@@ -56,6 +92,10 @@
           "text": "Declared settings of the accounting app (database scope, block \"Journals\"; read: account.group_account_readonly, write: account.group_account_manager): | Setting | Default | Bounds | |---|---|---| | account.journal_code_max_length | 16 | 1 to 32 characters | | account.journal_code_prefix_<type> | INV, BILL, CSH, BNK, CCD, MISC | one word, at most 16 bytes | | account.journal_account_types_<type> | the reference's default-account domain per type | a comma list of known account types, at most 512 bytes | JournalSettings::read(tx) reads them all in one statement with the framework's rights. A value of the wrong kind or outside its bounds is refused naming the key and its bounds; an empty list of account types is refused. A changed setting applies to the next create or write of a journal or account: existing journals are not checked again."
         },
         {
+          "anchor": "journal-dashboard",
+          "text": "account.journal.dashboard_card is a computed, non-stored text field holding the card contract v1 as JSON (buttons, stats, chart; addons/account/src/journal/dashboard.rs). The kanban account.account_journal_dashboard_kanban_view (action account.open_account_journal_dashboard_kanban, menu Accounting > Dashboard) shows it with the dashboard_card widget for the journals with show_on_dashboard. Each card element and its reference counterpart: docs/design/accounting-dashboard-matrix.md. - One computation serves every requested journal with a fixed set of grouped reads (_read_group on account.move and account.move.line), never one query per journal; the reads run with the reader's rights, so record rules and the company scope apply. A reader without accounting access gets the access error. - A stat appears only when it counts something, as in the reference. - Sales and purchases: button New Invoice or New Bill; \"Drafts\", \"Unpaid\" (sales) or \"To pay\" (purchases) and \"Late\" (posted, due before today in the user's time zone) from the lines on receivable and payable accounts (balance, purchases shown positive, date_maturity); a bar chart of the posted invoiced (billed) amount per month. - Bank, cash and credit card: button Transactions (the journal's entries until statements exist); \"Balance\", the posted balance of the default account in the journal's company, linking to its journal items; a line chart of the running balance per day. - Miscellaneous: button New Entry; \"Drafts\"; no chart. - Until reconciliation exists, \"open\" means posted: the residual replaces the balance when it arrives. - Labels are in the source language (dashboard::labels): the addon has no server-side code-text translation yet. | Setting (database scope, block \"Dashboard\") | Default | Bounds | |---|---|---| | account.dashboard_graph_months | 13 (the current month and the twelve before) | 1 to 36 months | | account.dashboard_balance_days | 30 | 7 to 64 days (one chart point per day; a card shows at most 64) |"
+        },
+        {
           "anchor": "journal-groups",
           "text": "account.journal.group (a \"ledger\"): name unique in the database (\"Another ledger already has this name.\"), sequence (default 10) and included_journal_ids, the journals whose journal_group_id points to it, archived ones included. Like the reference it has no company. A ledger that a journal uses, archived journals included, cannot be deleted (journal_group_id is restrict): the reference empties the ledger of the journals of every company."
         },
@@ -83,7 +123,7 @@
     },
     {
       "page_id": "developer/addon-guide/account-moves",
-      "title": "Journal entries and journal items in draft",
+      "title": "Journal entries and journal items: drafts and posting",
       "module": "account",
       "sections": [
         {
@@ -92,7 +132,7 @@
         },
         {
           "anchor": "top",
-          "text": "erp_addon_account::moves holds the journal entry header account.move ([AccountMove]) and its items account.move.line ([AccountMoveLine]). This first part delivers **drafts only**: an entry can be created, edited, checked for balance and deleted. Posting, the posted-row guards and numbering at posting are not delivered yet; screens (form, list, search) come with the accounting UI tasks."
+          "text": "erp_addon_account::moves holds the journal entry header account.move ([AccountMove]) and its items account.move.line ([AccountMoveLine]). An entry is created, edited, checked for balance and deleted as a draft, then posted, cancelled or returned to draft through the posting service. Screens (form, list, search) come with the accounting UI tasks; the three operations are RPC methods for now."
         },
         {
           "anchor": "stored-fields",
@@ -119,8 +159,8 @@
           "text": "- An accountable line (display_type = product) needs an account; a section, subsection or note line has no amount and no account (named CHECK constraints). - move_id never changes: a write that moves a line to another entry, directly or through line_ids link commands, is refused. Delete the line and add a new one to the other entry. - Account, journal and partner must suit the entry's company (check_company). - Deleting an entry deletes its lines. - is_storno = true is refused until the company's storno setting exists (not delivered yet)."
         },
         {
-          "anchor": "nothing-posts",
-          "text": "action_post and any write of a state other than draft (also parent_state on lines, also as superuser) are refused with a UserError naming the posting task ([POST_TASK]). Two CHECK constraints, _draft_until_posting on both tables, refuse a raw SQL update to another state. The posting work replaces them with its posted-row guards in the same schema change."
+          "anchor": "posting",
+          "text": "The state of an entry changes only through three methods of account.move (module moves::post); a caller-written state (or parent_state on a line) is refused, also as superuser. Each needs account.group_account_user (or superuser mode) and write access to every entry, and is atomic: a refusal leaves every entry as it was. - action_post ([post_moves]) posts draft entries. It collects every refusal of the batch and raises them together as one UserError, one line each: an entry not in draft, an entry without an accountable line, an archived journal, an inactive currency, an archived account, an account none of whose companies is the entry's company or one of its parents, an unbalanced entry. An entry dated where a lock date refuses it is re-dated to the day after the latest violated lock, adjusted to the journal's numbering reset (ADR 0147 D4, the reference's rule); the new date is checked again and a period that is not open refuses it. A missing fiscal period is refused naming ensure_periods. Then one statement sets the entries and their items to posted with the final date, and the entries without a number take the next numbers of their journals' document chains (numbering, ADR 0048 D2.3 step 7). The number of statements does not depend on the batch size. - button_draft ([reset_moves]) returns cancelled entries to draft. A posted entry is refused: every company's posting policy is reversal-only (ADR 0146) until the opt-in policy exists; a posted entry is corrected by a reversal ([REVERSAL_TASK]). - button_cancel ([cancel_moves]) cancels draft entries; a posted one is refused for the same reason. An entry with a line that carries taxes, or with a tax line, reaches the tax report: the tax lock date binds it at posting and re-dates it like the other locks. A posted or cancelled entry keeps everything but its reference (moves::post::POSTED_MOVE_WRITABLE), and its items everything but their label and due date (POSTED_LINE_WRITABLE, both lists from ADR 0048 D3 R1b). Any other field written on one, the invoice fields included (invoice and due dates, totals, payment state, invoice lines, quantity, price, discount, product, subtotals) and state, is refused with a UserError that names the fields. The check runs on the final values of the write, after the invoice date has set the accounting date. Items cannot be added to such an entry or deleted from it, and it cannot be deleted. Adding, changing or deleting an item takes its entry's header row in id order with a version update, the order posting locks headers in. An item change and a posting of the same entry therefore never both commit: whichever commits second fails with a serialization error (40001), and its retry sees the other's result. Not delivered yet: the database guards on posted rows (the balance and line-state triggers of ADR 0048 D3 and the posting batch row), the markers that record a re-dating (ADR 0147 D4), the outbox event per posting batch, hashing, scheduled posting and invoice-specific checks. Upgrading account to 1.2 drops the draft-only CHECK constraints of the earlier version (migrations/1.2/pre-drop-draft-only-checks.sql)."
         },
         {
           "anchor": "access",
@@ -128,7 +168,7 @@
         },
         {
           "anchor": "rules-the-database-takes-over-with-posting",
-          "text": "Checked by the ORM in this part, by triggers once posting is delivered (ADR 0048 D3): company of accounts and journals (R4c), the line's entry never changing (R1a), amount in currency equal to the balance in the company currency (R4d), amounts on the currency increment (R4e)."
+          "text": "Checked by the ORM for now, by triggers once the posted-row guards are delivered (ADR 0048 D3): company of accounts and journals (R4c), the line's entry never changing (R1a), amount in currency equal to the balance in the company currency (R4d), amounts on the currency increment (R4e)."
         }
       ]
     },

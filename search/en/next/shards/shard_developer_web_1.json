@@ -8,6 +8,7 @@
     "web",
     "web",
     "web",
+    "web",
     "web"
   ],
   "docs": [
@@ -43,6 +44,49 @@
         {
           "anchor": "address",
           "text": "The page address keeps calendar_scale (day, week, month, year) and calendar_date (YYYY-MM-DD). Both are checked by the server's address policy and by the client; a malformed value, or a scale the calendar does not offer, is refused by name (SPEC-VIEW-244). Behaviour matrix: docs/design/m4-calendar-matrix.md. User guide: docs/user/calendar-view.md."
+        }
+      ]
+    },
+    {
+      "page_id": "developer/addon-guide/dashboard-cards",
+      "title": "Dashboard cards",
+      "module": "web",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "A dashboard card is a [kanban card](/en/next/developer/addon-guide/kanban-view.md) that shows, for one record, buttons that start work, figures that open the records behind them, and a small bar or line chart. The Accounting overview (one card per journal) and the Inventory overview (one card per operation type) are built this way. Kanban cards admit only field nodes, so the whole card is one field with a widget: <record id=\"journal_dashboard_kanban\" model=\"ir.ui.view\"> <field name=\"name\">account.journal.dashboard.kanban</field> <field name=\"model\">account.journal</field> <field name=\"arch\" type=\"xml\"> <kanban string=\"Accounting\" can_open=\"0\"> <templates> <t t-name=\"card\"> <field name=\"name\"/> <field name=\"dashboard_card\" widget=\"dashboard_card\"/> </t> </templates> </kanban> </field> </record> The first field is the card's title, as on every kanban card. widget=\"dashboard_card\" is admitted on text fields only; on any other type, installation fails with Field widget 'dashboard_card' does not support type '<type>'."
+        },
+        {
+          "anchor": "model-field",
+          "text": "The model declares dashboard_card as a computed text field that is not stored:"
+        },
+        {
+          "anchor": "top",
+          "text": "pub dashboard_card: String, Compute it in one batch for all the records requested, under the caller's access rights and company scope. Write the JSON text described below, or leave the value empty for a record that has nothing to show. Labels are already translated for the user, and domains hold concrete values; the client evaluates nothing in them."
+        },
+        {
+          "anchor": "contract",
+          "text": "{\"v\": 1, \"buttons\": [{\"label\": \"New Invoice\", \"action\": \"account.action_move_out_invoice_type\", \"view_mode\": \"form\", \"context\": {\"default_move_type\": \"out_invoice\", \"default_journal_id\": 5}, \"primary\": true}], \"stats\": [{\"label\": \"Late\", \"count\": 3, \"amount\": \"1250000.00\", \"currency_id\": 12, \"action\": \"account.action_move_out_invoice_type\", \"domain\": [[\"journal_id\", \"=\", 5], [\"state\", \"=\", \"posted\"]], \"context\": {}, \"tone\": \"danger\"}], \"chart\": {\"type\": \"bar\", \"label\": \"Due\", \"points\": [{\"label\": \"Overdue\", \"value\": \"900000.00\", \"tone\": \"danger\"}]}} | Key | Value | |---|---| | v | 1 | | buttons[] | label (text), action (XML id module.name of an ir.actions.act_window), view_mode (\"form\" opens a new record, \"list\" the action's list, null the action's own list), context (object), primary (boolean) | | stats[] | label, count (whole number, zero or more), amount (decimal text) and currency_id (currency id), both null for a plain count, action, domain (list of [field, operator, value] conditions and &, \\|, !), context, tone | | chart | null, or type (\"bar\" or \"line\"), label, points[] of label, value (decimal text) and tone | | tone | \"neutral\", \"warning\" or \"danger\" | Every key is required, including those whose value is null. Amounts and chart values are decimal texts (\"1250.00\", \"-20\"), never JSON numbers, so no amount is rounded on the way."
+        },
+        {
+          "anchor": "behaviour",
+          "text": "- The buttons come first, the primary ones before the others, in the order sent. A button opens its action with its context: view_mode: \"form\" opens a new record whose defaults come from the context (default_* keys). - Each figure is one button: the count, the label and, when there is an amount, the amount formatted in its currency (symbol, position and decimals of currency_id, read once per view). The tone colours the count. Activating it opens the action's list, filtered by the action's own domain and the figure's domain, with the figure's context. - The chart draws a bar per point (coloured by its tone) or one line through the points, over a zero line, at a fixed height (--dashboard-chart-height). The point labels are shown under it; screen readers read the points as a list (\"Overdue: 900,000 (danger)\"). - Every button and figure is a native button: Tab reaches it, Enter or Space activates it, and activating it never also opens the card's record. The card's own Enter and arrow keys keep working on the card itself. - A board of dashboard cards uses wider columns (at least 360 pixels, or the full width on a phone). - The way back from an opened list or form is the breadcrumb to the overview. An action opens as its list (and its form); an action without a list view is refused with a message that names it. Other first views (a kanban, a pivot) come with the action result that can carry them."
+        },
+        {
+          "anchor": "server-call",
+          "text": "The client resolves an action XML id with ir.actions.act_window.erp_load_web_action_ref, a Read method on the model (no record ids). Pass xml_id (module.name) with the caller context; it returns the same window action as erp_load_web_action, after the same checks (action access, its groups, read access to its model). An unknown XML id, an XML id of a record that is not a window action, and an action the caller may not read all answer You may not read this window action., so the method reveals nothing about which XML ids exist. A malformed xml_id (no module part, more than one dot, whitespace, longer than 256 bytes) is refused with a validation error that says what is wrong. The widget calls nothing else of its own: the currency read is the ordinary res.currency web_read the monetary widget uses, and the opened list or form reads its records as usual."
+        },
+        {
+          "anchor": "refusals",
+          "text": "A value that departs from the contract is not drawn in part. The card shows one line in the danger colour that names the key, for example: | Value | Shown on the card | |---|---| | \"v\": 2, or no v | Dashboard card: v 2 is not a known version (expected 1). | | a key left out | Dashboard card: stats[0].tone is missing. | | a key the contract does not have | Dashboard card: card.title is not part of contract v1. | | a wrong type | Dashboard card: stats[0].count must be a whole number of zero or more. | | an unknown tone | Dashboard card: stats[0].tone must be neutral, warning or danger. | | an unknown chart type | Dashboard card: chart.type must be \"bar\" or \"line\". | | a number or 1e5 as an amount or a chart value | Dashboard card: stats[0].amount must be a decimal text such as \"1250.00\". | | an amount without a currency, or the reverse | Dashboard card: stats[0].currency_id must be null exactly when amount is null. | | an action that is not module.name | Dashboard card: buttons[0].action must be a window action XML id (module.name). | | text that is not JSON | Dashboard card: the value is not valid JSON. | An empty value (false, null or an empty text) is a record without dashboard data: the card shows its title only. Used in a form or a list, the widget shows The dashboard card widget is drawn on kanban cards only. A card holds at most 64 buttons, figures or chart points, labels of at most 256 characters, and a value of at most 65,536 characters; past that the card shows which list or label is too long."
+        },
+        {
+          "anchor": "compared",
+          "text": "The reference builds these cards from free kanban template markup plus a chart field that parses its JSON text without a check and draws on a bare canvas. Here the card is one declared field with a closed contract: a wrong value is named on the card instead of breaking it, amounts travel as exact decimal text, the chart has a text alternative, and every figure is a keyboard-reachable button with a full accessible name."
         }
       ]
     },
@@ -111,7 +155,7 @@
         },
         {
           "anchor": "in-the-client",
-          "text": "Add kanban to the window action's view_mode (the sample library's Books action has list,kanban,form,pivot) and the view switcher shows a Kanban button. The client draws the cards ungrouped, one page at a time (limit, else 40), through web_search_read with the card fields. Each card field is drawn by the field widget its widget names, read-only, looked up first under the card.<widget> key of the field widget registry, so an addon can register a card-specific variant (for example card.priority) without changing forms or lists. A field with a static invisible=\"1\" is read but not drawn. A card opens its record when the arch allows it (can_open) and the action has a form view. Grouped columns, drag and drop, quick creation and the drawing of the progress bar are not available yet. A view with default_group_by is shown ungrouped with a sentence that says so."
+          "text": "Add kanban to the window action's view_mode (the sample library's Books action has list,kanban,form,pivot) and the view switcher shows a Kanban button. The client draws the cards ungrouped, one page at a time (limit, else 40), through web_search_read with the card fields. Each card field is drawn by the field widget its widget names, read-only, looked up first under the card.<widget> key of the field widget registry, so an addon can register a card-specific variant (for example card.priority) without changing forms or lists; card.dashboard_card draws a whole application overview card with buttons, figures and a chart from one computed field ([Dashboard cards](/en/next/developer/addon-guide/dashboard-cards.md)). A field with a static invisible=\"1\" is read but not drawn. A card opens its record when the arch allows it (can_open) and the action has a form view. Grouped columns, drag and drop, quick creation and the drawing of the progress bar are not available yet. A view with default_group_by is shown ungrouped with a sentence that says so."
         },
         {
           "anchor": "root",
@@ -127,7 +171,7 @@
         },
         {
           "anchor": "server-calls",
-          "text": "The view adds no method: cards load through web_search_read (ungrouped) and web_read_group (grouped), the bar through read_progress_bar, quick creation through name_create, reordering through web_resequence. Each is the ordinary ORM method with its access checks."
+          "text": "The view adds no method: cards load through web_search_read (ungrouped) and web_read_group (grouped), the bar through read_progress_bar, quick creation through name_create, reordering through web_resequence. Each is the ordinary ORM method with its access checks. A dashboard card opens its actions through erp_load_web_action_ref ([Dashboard cards](/en/next/developer/addon-guide/dashboard-cards.md#server-call))."
         }
       ]
     },
