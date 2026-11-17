@@ -1,7 +1,7 @@
 {
   "lang": "en",
   "version": "next",
-  "doc_count": 96,
+  "doc_count": 99,
   "docs": [
     {
       "id": "index",
@@ -3990,6 +3990,52 @@
       "shard_id": "shard_developer_product_1"
     },
     {
+      "id": "developer/addon-guide/purchase-orders",
+      "title": "Purchase orders: states, operations and extension steps",
+      "description": "The purchase addon's order header: its five states, the operations that change them, the client-write refusals, the numbering, the lines, the screens, the company settings confirmation reads, and the methods another addon overrides.",
+      "audience": "developer",
+      "module": "purchase",
+      "models": [
+        "purchase.order",
+        "purchase.order.line"
+      ],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "states-and-operations",
+          "depth": 2,
+          "text": "States and operations"
+        },
+        {
+          "id": "numbering",
+          "depth": 2,
+          "text": "Numbering"
+        },
+        {
+          "id": "lines",
+          "depth": 2,
+          "text": "Lines and amounts"
+        },
+        {
+          "id": "screens",
+          "depth": 2,
+          "text": "Screens"
+        },
+        {
+          "id": "settings",
+          "depth": 2,
+          "text": "Settings"
+        },
+        {
+          "id": "extending-the-order",
+          "depth": 2,
+          "text": "Extending the order from another addon"
+        }
+      ],
+      "shard_id": "shard_developer_purchase_1"
+    },
+    {
       "id": "developer/addon-guide/query-ast",
       "title": "Query AST: saving a search and running it later",
       "description": "Odoo keeps saved filters as three Python-literal text columns and applies them with the rights of whoever opens them; nothing checks them until they run, and nothing bounds them.",
@@ -4147,6 +4193,134 @@
         }
       ],
       "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/sale-orders",
+      "title": "Sales orders: the order header and its operations",
+      "description": "The sale addon: the sale.order header, its number, its states and lock, the client-write rules and the seams a satellite addon overrides.",
+      "audience": "developer",
+      "module": "sale",
+      "models": [
+        "sale.order",
+        "sale.order.line"
+      ],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-SALEMIN-001",
+        "SPEC-SALESET-011"
+      ],
+      "headings": [
+        {
+          "id": "fields",
+          "depth": 2,
+          "text": "Fields"
+        },
+        {
+          "id": "numbering",
+          "depth": 2,
+          "text": "Numbering"
+        },
+        {
+          "id": "operations",
+          "depth": 2,
+          "text": "Operations"
+        },
+        {
+          "id": "client-writes",
+          "depth": 2,
+          "text": "Client writes"
+        },
+        {
+          "id": "seams",
+          "depth": 2,
+          "text": "Seams for satellite addons"
+        },
+        {
+          "id": "lines",
+          "depth": 2,
+          "text": "Order lines"
+        },
+        {
+          "id": "prices-taxes-and-totals",
+          "depth": 2,
+          "text": "Prices, taxes and totals"
+        },
+        {
+          "id": "screens",
+          "depth": 2,
+          "text": "Screens, menus and the Sales application"
+        },
+        {
+          "id": "configuration",
+          "depth": 2,
+          "text": "Configuration"
+        },
+        {
+          "id": "access",
+          "depth": 2,
+          "text": "Access"
+        },
+        {
+          "id": "not-built-yet",
+          "depth": 2,
+          "text": "Not built yet"
+        }
+      ],
+      "shard_id": "shard_developer_sale_1"
+    },
+    {
+      "id": "developer/addon-guide/sales-team",
+      "title": "Sales teams and the Sales groups",
+      "description": "The sales_team addon: teams, memberships, tags, the team fields of a user, the default team of a document and the three Sales groups.",
+      "audience": "developer",
+      "module": "sales_team",
+      "models": [
+        "crm.team",
+        "crm.team.member",
+        "crm.tag"
+      ],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-SALESET-007"
+      ],
+      "headings": [
+        {
+          "id": "models",
+          "depth": 2,
+          "text": "Models"
+        },
+        {
+          "id": "memberships",
+          "depth": 2,
+          "text": "Memberships"
+        },
+        {
+          "id": "the-team-of-a-document",
+          "depth": 2,
+          "text": "The team of a document"
+        },
+        {
+          "id": "groups",
+          "depth": 2,
+          "text": "Groups"
+        },
+        {
+          "id": "default-data",
+          "depth": 2,
+          "text": "Default data"
+        },
+        {
+          "id": "views",
+          "depth": 2,
+          "text": "Views"
+        },
+        {
+          "id": "not-built-yet",
+          "depth": 2,
+          "text": "Not built yet"
+        }
+      ],
+      "shard_id": "shard_developer_sales_team_1"
     },
     {
       "id": "developer/addon-guide/search-methods",
@@ -4368,7 +4542,8 @@
       "module": "stock",
       "models": [
         "stock.quant",
-        "stock.location"
+        "stock.location",
+        "stock.move.line"
       ],
       "rpc": [],
       "spec_ids": [],
@@ -4407,6 +4582,31 @@
           "id": "settings",
           "depth": 2,
           "text": "Settings"
+        },
+        {
+          "id": "move-lines",
+          "depth": 2,
+          "text": "Move lines"
+        },
+        {
+          "id": "reservation",
+          "depth": 2,
+          "text": "Reservation"
+        },
+        {
+          "id": "confirmation",
+          "depth": 2,
+          "text": "Confirmation"
+        },
+        {
+          "id": "validation",
+          "depth": 2,
+          "text": "Validation"
+        },
+        {
+          "id": "transfers",
+          "depth": 2,
+          "text": "Transfers: reference, defaults, cancel, delete"
         },
         {
           "id": "not-yet",

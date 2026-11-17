@@ -1,7 +1,7 @@
 {
   "lang": "en",
   "version": "next",
-  "total_shards": 9,
+  "total_shards": 12,
   "shards": [
     {
       "shard_id": "shard_developer_account_1",
@@ -10,7 +10,7 @@
         "account"
       ],
       "doc_count": 9,
-      "byte_size": 83973
+      "byte_size": 84075
     },
     {
       "shard_id": "shard_developer_barcodes_1",
@@ -37,7 +37,7 @@
         "core"
       ],
       "doc_count": 71,
-      "byte_size": 1224210
+      "byte_size": 1224559
     },
     {
       "shard_id": "shard_developer_mail_1",
@@ -58,13 +58,40 @@
       "byte_size": 32688
     },
     {
+      "shard_id": "shard_developer_purchase_1",
+      "audience": "developer",
+      "modules": [
+        "purchase"
+      ],
+      "doc_count": 1,
+      "byte_size": 8416
+    },
+    {
+      "shard_id": "shard_developer_sale_1",
+      "audience": "developer",
+      "modules": [
+        "sale"
+      ],
+      "doc_count": 1,
+      "byte_size": 14815
+    },
+    {
+      "shard_id": "shard_developer_sales_team_1",
+      "audience": "developer",
+      "modules": [
+        "sales_team"
+      ],
+      "doc_count": 1,
+      "byte_size": 4464
+    },
+    {
       "shard_id": "shard_developer_stock_1",
       "audience": "developer",
       "modules": [
         "stock"
       ],
       "doc_count": 3,
-      "byte_size": 21312
+      "byte_size": 30286
     },
     {
       "shard_id": "shard_developer_uom_1",
@@ -82,7 +109,7 @@
         "web"
       ],
       "doc_count": 6,
-      "byte_size": 40199
+      "byte_size": 40387
     }
   ],
   "page_to_shard": {
@@ -172,6 +199,9 @@
     "developer/addon-guide/mail": "shard_developer_mail_1",
     "developer/addon-guide/store-topic": "shard_developer_mail_1",
     "developer/addon-guide/product": "shard_developer_product_1",
+    "developer/addon-guide/purchase-orders": "shard_developer_purchase_1",
+    "developer/addon-guide/sale-orders": "shard_developer_sale_1",
+    "developer/addon-guide/sales-team": "shard_developer_sales_team_1",
     "developer/addon-guide/stock-quant-engine": "shard_developer_stock_1",
     "developer/addon-guide/stock-read-models": "shard_developer_stock_1",
     "developer/addon-guide/stock-tracking-change": "shard_developer_stock_1",

@@ -1,0 +1,50 @@
+{
+  "shard_id": "shard_developer_sales_team_1",
+  "lang": "en",
+  "version": "next",
+  "audience": "developer",
+  "modules": [
+    "sales_team"
+  ],
+  "docs": [
+    {
+      "page_id": "developer/addon-guide/sales-team",
+      "title": "Sales teams and the Sales groups",
+      "module": "sales_team",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "Addon sales_team (depends on base and mail) is the base of every sales addon: sale and the later CRM addons depend on it, never the other way round (ADR 0199). Crate erp-addon-sales_team."
+        },
+        {
+          "anchor": "models",
+          "text": "| Model | What it holds | |---|---| | crm.team | A team: name, sequence, active flag, company (empty: every company), leader (user_id), members (member_ids, crm_team_member_ids for the active memberships, crm_team_member_all_ids with the archived ones), favorites, colour. Inherits mail.thread; posting needs read access. | | crm.team.member | One membership of a user in a team, with an active flag. Archived memberships are kept. | | crm.tag | A shared label with a unique name and a colour index from 1 to 11. | | res.users (extended) | crm_team_member_ids, crm_team_ids (teams of the active memberships) and the stored sale_team_id, the team of the oldest active membership. | Company access: a team is visible in its company or everywhere when it has none; a membership follows its team (company_access = parent(edge = \"crm_team_id\")); a tag has no company."
+        },
+        {
+          "anchor": "memberships",
+          "text": "- member_ids on a team is computed from the active memberships. Writing it creates the missing memberships, restores archived ones of a written user and archives the others. - An active pair of team and user exists once; a second one is refused with a validation error. - A team with a company accepts only users allowed in that company. - Unless the declared system parameter sales_team.membership_multi is true, a user has one active team: creating or restoring a membership archives the user's other active memberships. Its default is false, as in the reference; the addon reads it with erp_sdk::params::get_bool. - Archiving a user archives their memberships."
+        },
+        {
+          "anchor": "the-team-of-a-document",
+          "text": "crm.team._get_default_team_id(user_id, company_id, default_team) (all Option<i64>, result Option<i64>) returns, for the user (the current user when None): a team they lead or belong to that fits company_id (teams of that company or without one), else any team of theirs, preferring default_team in both; else default_team; else the first team that fits company_id; else the first team. Only teams of the user's allowed companies or without a company count. The company and the preferred team are typed arguments, not a domain and a context key (ADR 0199 R7). Call it from another addon through the method chain: let team: Option<i64> = env .records(\"crm.team\")? .call(tx, \"_get_default_team_id\", (Some(user), Some(company), current_team)) .await?;"
+        },
+        {
+          "anchor": "groups",
+          "text": "Privilege sales_team.res_groups_privilege_sales with, from least to most access: sales_team.group_sale_salesman (own documents), sales_team.group_sale_salesman_all_leads (all documents) and sales_team.group_sale_manager (administrator, implied by base.group_system). The record rules that use them come with the documents of sale and are not shipped yet."
+        },
+        {
+          "anchor": "default-data",
+          "text": "On install the addon creates the team \"Sales\" (sequence 0, no company) and makes the oldest active system administrator its leader and only member (_sales_team_seed_default_team, called from noupdate data, so it runs on install only). A database without an administrator yet keeps the team without leader. The reference's inactive Website and Point of Sale teams arrive with those applications. crm.tag ships no default records: the reference ships tags only as demo data (odoo/addons/sales_team/__manifest__.py:23-26)."
+        },
+        {
+          "anchor": "views",
+          "text": "List, form and search views of teams, members and tags with their window actions (sales_team.crm_team_action_config, sales_team.crm_team_member_action, sales_team.sales_team_crm_tag_action). The addon has no menu, as the reference's: the Teams entry of the Sales configuration menu belongs to sale and is not shipped yet (ADR 0199 B1)."
+        },
+        {
+          "anchor": "not-built-yet",
+          "text": "The team dashboard (kanban and favorites on it) and the member cards are not built yet. The membership warning texts of the reference's forms, the user-picker helper fields and the activity type action are not built."
+        }
+      ]
+    }
+  ]
+}

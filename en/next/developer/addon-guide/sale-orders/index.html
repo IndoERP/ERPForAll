@@ -1,0 +1,457 @@
+<!DOCTYPE html><html lang="en" dir="ltr" data-theme="dark" data-has-toc data-has-sidebar class="astro-6cjqtku2"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>Sales orders: the order header and its operations | ERPForAll Docs</title><link rel="canonical" href="https://indoerp.github.io/ERPForAll/en/next/developer/addon-guide/sale-orders/"/><link rel="sitemap" href="/ERPForAll/sitemap-index.xml"/><link rel="shortcut icon" href="/ERPForAll/favicon.svg" type="image/svg+xml"/><meta name="generator" content="Astro v7.4.2"/><meta name="generator" content="Starlight v0.42.7"/><meta property="og:title" content="Sales orders: the order header and its operations"/><meta property="og:type" content="article"/><meta property="og:url" content="https://indoerp.github.io/ERPForAll/en/next/developer/addon-guide/sale-orders/"/><meta property="og:locale" content="en"/><meta property="og:description" content="The sale addon: the sale.order header, its number, its states and lock, the client-write rules and the seams a satellite addon overrides."/><meta property="og:site_name" content="ERPForAll Docs"/><meta name="twitter:card" content="summary_large_image"/><meta name="description" content="The sale addon: the sale.order header, its number, its states and lock, the client-write rules and the seams a satellite addon overrides."/><script>
+	window.StarlightThemeProvider = (() => {
+		const storedTheme =
+			typeof localStorage !== 'undefined' && localStorage.getItem('starlight-theme');
+		const theme =
+			storedTheme ||
+			(window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+		document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
+		return {
+			updatePickers(theme = storedTheme || 'auto') {
+				document.querySelectorAll('starlight-theme-select').forEach((picker) => {
+					const select = picker.querySelector('select');
+					if (select) select.value = theme;
+					/** @type {HTMLTemplateElement | null} */
+					const tmpl = document.querySelector(`#theme-icons`);
+					const newIcon = tmpl && tmpl.content.querySelector('.' + theme);
+					if (newIcon) {
+						const oldIcon = picker.querySelector('svg.label-icon');
+						if (oldIcon) {
+							oldIcon.replaceChildren(...newIcon.cloneNode(true).childNodes);
+						}
+					}
+				});
+			},
+		};
+	})();
+</script><template id="theme-icons"><svg aria-hidden="true" class="light astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M5 12a1 1 0 0 0-1-1H3a1 1 0 0 0 0 2h1a1 1 0 0 0 1-1Zm.64 5-.71.71a1 1 0 0 0 0 1.41 1 1 0 0 0 1.41 0l.71-.71A1 1 0 0 0 5.64 17ZM12 5a1 1 0 0 0 1-1V3a1 1 0 0 0-2 0v1a1 1 0 0 0 1 1Zm5.66 2.34a1 1 0 0 0 .7-.29l.71-.71a1 1 0 1 0-1.41-1.41l-.66.71a1 1 0 0 0 0 1.41 1 1 0 0 0 .66.29Zm-12-.29a1 1 0 0 0 1.41 0 1 1 0 0 0 0-1.41l-.71-.71a1.004 1.004 0 1 0-1.43 1.41l.73.71ZM21 11h-1a1 1 0 0 0 0 2h1a1 1 0 0 0 0-2Zm-2.64 6A1 1 0 0 0 17 18.36l.71.71a1 1 0 0 0 1.41 0 1 1 0 0 0 0-1.41l-.76-.66ZM12 6.5a5.5 5.5 0 1 0 5.5 5.5A5.51 5.51 0 0 0 12 6.5Zm0 9a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Zm0 3.5a1 1 0 0 0-1 1v1a1 1 0 0 0 2 0v-1a1 1 0 0 0-1-1Z"/></svg><svg aria-hidden="true" class="dark astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21.64 13a1 1 0 0 0-1.05-.14 8.049 8.049 0 0 1-3.37.73 8.15 8.15 0 0 1-8.14-8.1 8.59 8.59 0 0 1 .25-2A1 1 0 0 0 8 2.36a10.14 10.14 0 1 0 14 11.69 1 1 0 0 0-.36-1.05Zm-9.5 6.69A8.14 8.14 0 0 1 7.08 5.22v.27a10.15 10.15 0 0 0 10.14 10.14 9.784 9.784 0 0 0 2.1-.22 8.11 8.11 0 0 1-7.18 4.32v-.04Z"/></svg><svg aria-hidden="true" class="auto astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg></template><link rel="stylesheet" href="/ERPForAll/_astro/print.ehPL0gv-.css" media="print"><link rel="stylesheet" href="/ERPForAll/_astro/common.DD1vW0WO.css"><script type="module" src="/ERPForAll/_astro/page.cNngjUgL.js"></script></head><body class="astro-6cjqtku2"><a class="sl-skip-link astro-kisk6kzb" href="#_top">Skip to content</a><div class="page sl-flex astro-3a7n2yso"><header class="header astro-3a7n2yso"><div class="header astro-fcwmdtoc"><div class="title-wrapper sl-flex astro-fcwmdtoc"><div class="site-title-group"><a href="/ERPForAll/en" class="site-title sl-flex astro-qrttq3z6"><img class="astro-qrttq3z6" alt src="/ERPForAll/_astro/logo.C9qnaaRe.svg" width="32" height="32"><span class="astro-qrttq3z6" translate="no">ERPForAll Docs</span></a><span class="site-version" title="These pages describe unreleased development code (version next).">Development</span></div></div><div class="sl-flex print:hidden astro-fcwmdtoc"><doc-search class="doc-search"><button type="button" class="doc-search-open" data-search-open disabled aria-label="Search the documentation" aria-keyshortcuts="Control+K Meta+K /"><svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M10.5 3a7.5 7.5 0 0 1 5.9 12.1l4.8 4.8-1.4 1.4-4.8-4.8A7.5 7.5 0 1 1 10.5 3Zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11Z"></path></svg><span class="doc-search-label">Search the docs</span><kbd class="doc-search-key" aria-hidden="true">/</kbd></button><dialog class="doc-search-dialog" aria-label="Search the documentation"><div class="doc-search-panel"><div class="doc-search-field"><svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M10.5 3a7.5 7.5 0 0 1 5.9 12.1l4.8 4.8-1.4 1.4-4.8-4.8A7.5 7.5 0 1 1 10.5 3Zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11Z"></path></svg><input type="search" placeholder="Search titles, headings and page text" aria-label="Search query" autocomplete="off" spellcheck="false" maxlength="256"><button type="button" class="doc-search-close" data-search-close>Close</button></div><p class="doc-search-status" data-search-status role="status" aria-live="polite"></p><ul class="doc-search-results" data-search-results></ul></div></dialog></doc-search><script type="module" src="/ERPForAll/_astro/DocSearch.astro_astro_type_script_index_0_lang.C9sK9ufE.js"></script></div><div class="sl-hidden md:sl-flex print:hidden right-group astro-fcwmdtoc"><div class="sl-flex social-icons astro-fcwmdtoc"></div><starlight-theme-select><label style="--sl-select-width: 6.25em" class="astro-3hi4jykp"><span class="sr-only astro-3hi4jykp">Select theme</span><svg aria-hidden="true" class="icon label-icon astro-3hi4jykp astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg><select autocomplete="off" class="astro-3hi4jykp"><option value="dark" class="astro-3hi4jykp">Dark</option><option value="light" class="astro-3hi4jykp">Light</option><option value="auto" selected class="astro-3hi4jykp">Auto</option></select><svg aria-hidden="true" class="icon caret astro-3hi4jykp astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg></label></starlight-theme-select><script>
+	StarlightThemeProvider.updatePickers();
+</script><script type="module">var e=`starlight-theme`,t=e=>e===`auto`||e===`dark`||e===`light`?e:`auto`,n=()=>t(typeof localStorage<`u`&&localStorage.getItem(e));function r(t){typeof localStorage<`u`&&localStorage.setItem(e,t===`light`||t===`dark`?t:``)}var i=()=>matchMedia(`(prefers-color-scheme: light)`).matches?`light`:`dark`;function a(e){StarlightThemeProvider.updatePickers(e),document.documentElement.dataset.theme=e===`auto`?i():e,r(e)}matchMedia(`(prefers-color-scheme: light)`).addEventListener(`change`,()=>{n()===`auto`&&a(`auto`)});var o=class extends HTMLElement{constructor(){super(),a(n()),this.querySelector(`select`)?.addEventListener(`change`,e=>{e.currentTarget instanceof HTMLSelectElement&&a(t(e.currentTarget.value))})}};customElements.define(`starlight-theme-select`,o);</script><script type="module">var e=class extends HTMLElement{constructor(){super();let e=this.querySelector(`select`);e&&(e.addEventListener(`change`,e=>{e.currentTarget instanceof HTMLSelectElement&&(window.location.pathname=e.currentTarget.value)}),window.addEventListener(`pageshow`,t=>{if(!t.persisted)return;let n=e.querySelector(`option[selected]`)?.index;n!==e.selectedIndex&&(e.selectedIndex=n??0)}))}};customElements.define(`starlight-lang-select`,e);</script></div></div></header><nav class="sidebar print:hidden astro-3a7n2yso" aria-label="Main"><button popovertarget="starlight__sidebar" class="sl-menu-button sl-flex md:sl-hidden print:hidden astro-6tq7w653"><svg aria-hidden="true" class="open-menu astro-6tq7w653 astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M3 8h18a1 1 0 1 0 0-2H3a1 1 0 0 0 0 2Zm18 8H3a1 1 0 0 0 0 2h18a1 1 0 0 0 0-2Zm0-5H3a1 1 0 0 0 0 2h18a1 1 0 0 0 0-2Z"/></svg><svg aria-hidden="true" class="close-menu astro-6tq7w653 astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="m13.41 12 6.3-6.29a1.004 1.004 0 1 0-1.42-1.42L12 10.59l-6.29-6.3a1.004 1.004 0 0 0-1.42 1.42l6.3 6.29-6.3 6.29a1 1 0 0 0 0 1.42.998.998 0 0 0 1.42 0l6.29-6.3 6.29 6.3a.999.999 0 0 0 1.42 0 1 1 0 0 0 0-1.42L13.41 12Z"/></svg><span class="sr-only astro-6tq7w653">Menu</span></button><script type="module">var e=class extends HTMLElement{constructor(){super();let e=matchMedia(`(min-width: 50em)`),t=()=>{this.popover=e.matches?null:`auto`};t(),e.addEventListener(`change`,()=>t()),this.addEventListener(`toggle`,({newState:e})=>this.trapFocus(e===`open`))}trapFocus(e){document.querySelectorAll(`.main-frame, .sl-skip-link`).forEach(t=>{t.toggleAttribute(`inert`,e)})}};customElements.define(`sl-sidebar-pane`,e);</script><sl-sidebar-pane popover id="starlight__sidebar" class="sidebar-pane astro-3a7n2yso"><div class="sidebar-content sl-flex astro-3a7n2yso"><sl-sidebar-state-persist data-hash="007689b" class="astro-vfvcyd7p"><script aria-hidden="true">
+		(() => {
+			try {
+				if (!matchMedia('(min-width: 50em)').matches) return;
+				/** @type {HTMLElement | null} */
+				const target = document.querySelector('sl-sidebar-state-persist');
+				const state = JSON.parse(sessionStorage.getItem('sl-sidebar-state') || '0');
+				if (!target || !state || target.dataset.hash !== state.hash) return;
+				window._starlightScrollRestore = state.scroll;
+				customElements.define(
+					'sl-sidebar-restore',
+					class SidebarRestore extends HTMLElement {
+						connectedCallback() {
+							try {
+								const idx = parseInt(this.dataset.index || '');
+								const details = this.closest('details');
+								if (details && typeof state.open[idx] === 'boolean') details.open = state.open[idx];
+							} catch {}
+						}
+					}
+				);
+			} catch {}
+		})();
+	</script><ul class="top-level astro-vryn2zkq"><li class="astro-vryn2zkq"><a href="/ERPForAll/en/" class="large astro-vryn2zkq"><span class="astro-vryn2zkq">Overview</span></a></li><li class="astro-vryn2zkq"><details open class="astro-vryn2zkq"><summary class="astro-vryn2zkq"><span class="group-label astro-vryn2zkq"><span class="large astro-vryn2zkq">Get started</span></span><svg aria-hidden="true" class="caret astro-vryn2zkq astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="0"></sl-sidebar-restore><ul class="astro-vryn2zkq"><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/installation/postgresql-providers/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">PostgreSQL setup</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/cli/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">The erp command</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/server-lifecycle/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Server lifecycle</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/modules/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Install, upgrade, uninstall</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/installation/background-jobs/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Background jobs</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/installation/sql-object-roles/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">SQL-object roles</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/installation/attachment-store/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Attachment store</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/installation/transient-vacuum/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Transient record cleanup</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/data-only-addon/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">A data-only addon</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/two-addon-tutorial/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Two-addon tutorial</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/odoo-compatibility/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Odoo compatibility</span></a></li></ul></details></li><li class="astro-vryn2zkq"><details open class="astro-vryn2zkq"><summary class="astro-vryn2zkq"><span class="group-label astro-vryn2zkq"><span class="large astro-vryn2zkq">Models and data</span></span><svg aria-hidden="true" class="caret astro-vryn2zkq astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="1"></sl-sidebar-restore><ul class="astro-vryn2zkq"><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/models/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Models and fields</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/search-methods/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Nonstored field search</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/translated-fields/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Translated fields</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/company-dependent-fields/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Company-dependent fields</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/binary-image-fields/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Binary and image fields</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/tracking/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Field tracking</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/money-currency/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Money and currencies</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/country/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Countries and localization</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/uom/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Units of measure</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/barcodes/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Barcode parsing</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/product/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Product catalog</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/sales-team/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Sales teams</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/sale-orders/" aria-current="page" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Sales orders</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/stock-read-models/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Stock read models (proposal)</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/stock-quant-engine/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Stock quant engine</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/stock-tracking-change/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Changing a product&#39;s tracking</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/mail/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Chatter storage</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/attachments/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Attachments</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/store-wire/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Store wire</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/store-topic/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Add a store topic</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/sequences/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Sequences</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/keys-upsert-versions/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Keys, upsert and versions</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/generated-columns/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Generated columns</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/index-kinds/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Index kinds</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/exclusions/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Exclusion constraints</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/query-ast/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Saved queries</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/migrations/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Migrations</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/accounting-mappings/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Accounting mappings (proposal)</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/accounting-addons/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Accounting addon set</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/purchase-orders/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Purchase orders</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/accounting-numbering/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Journal entry numbering</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/accounting-fiscal-periods/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Fiscal periods and lock statuses</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/account-ledger-config/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Accounting ledger configuration</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/account-invoices/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Invoices, bills and their taxes</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/account-moves/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Journal entries in draft</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/account-taxes/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Tax definitions</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/fiscal-positions/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Fiscal-position rules</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/localization-packs/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Localization pack format</span></a></li></ul></details></li><li class="astro-vryn2zkq"><details open class="astro-vryn2zkq"><summary class="astro-vryn2zkq"><span class="group-label astro-vryn2zkq"><span class="large astro-vryn2zkq">Addons and packaging</span></span><svg aria-hidden="true" class="caret astro-vryn2zkq astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="2"></sl-sidebar-restore><ul class="astro-vryn2zkq"><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/data-files/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">XML and CSV data files</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/data-functions/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Functions and deletes in data</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/expressions/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Python expressions in data</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/cross-addon-extension/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Extending other addons</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/settings/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Declared settings</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/rpc/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Methods over RPC</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/luau-scripts/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Luau scripts</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/wasm-addons/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">WASM addons</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/erpaddon-package/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">The .erpaddon package</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/human-lifecycle-engine/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Lifecycle engine</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/demo-data/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Demo data</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/load-demo-data/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Load demo data</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/ai-providers/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">AI providers and tool calling</span></a></li></ul></details></li><li class="astro-vryn2zkq"><details open class="astro-vryn2zkq"><summary class="astro-vryn2zkq"><span class="group-label astro-vryn2zkq"><span class="large astro-vryn2zkq">Security and access</span></span><svg aria-hidden="true" class="caret astro-vryn2zkq astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="3"></sl-sidebar-restore><ul class="astro-vryn2zkq"><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/security/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Security overview</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/access-rules/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Access rules</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/access/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Record access</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/field-access/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Field access</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/capabilities/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Capabilities</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/auth/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Authentication</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/audit/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">The audit trail</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/installation/login-selection-rollout/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Login selection rollout</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/bootstrap-identities/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Bootstrap identities</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/company-consistency/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Multi-company</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/user-company-scope/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">User and company links</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/html-sanitize-report/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">HTML sanitising reports</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/installation/html-field-admission/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">HTML field admission rollout</span></a></li></ul></details></li><li class="astro-vryn2zkq"><details open class="astro-vryn2zkq"><summary class="astro-vryn2zkq"><span class="group-label astro-vryn2zkq"><span class="large astro-vryn2zkq">Views and web client</span></span><svg aria-hidden="true" class="caret astro-vryn2zkq astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="4"></sl-sidebar-restore><ul class="astro-vryn2zkq"><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/views/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Views and inheritance</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/actions-menus/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Actions and menus</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/human-form-layout/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Form layout</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/pivot-view/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Pivot view</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/calendar-view/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Calendar view</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/graph-view/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Graph view</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/kanban-view/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Kanban view</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/dashboard-cards/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Dashboard cards</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/dashboard-headers/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Dashboard headers</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/pdf-post-processing/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">PDF page operations</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/jobs/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Background jobs</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/wizard-dialogs/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Wizard dialogs</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/templates/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Client templates</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/ui-assets/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Client asset bundles</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/client-extensions/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Registries and patches</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/human-client-extensions/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Human client extensions</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/messaging-store/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Messaging store</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/mail-thread-view/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Thread, message and composer</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/expression-host-values/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Host values in expressions</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/expression-transport/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Expression transport</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/restricted-card-host/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Restricted card host types</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/accessibility/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Accessibility</span></a></li><li class="astro-vryn2zkq"><a href="/ERPForAll/en/next/developer/addon-guide/component-testing/" class="astro-vryn2zkq"><span class="astro-vryn2zkq">Component tests</span></a></li></ul></details></li></ul><script aria-hidden="true">
+		(() => {
+			const scroller = document.getElementById('starlight__sidebar');
+			if (!window._starlightScrollRestore || !scroller) return;
+			scroller.scrollTop = window._starlightScrollRestore;
+			delete window._starlightScrollRestore;
+		})();
+	</script></sl-sidebar-state-persist><div class="md:sl-hidden"><div class="mobile-preferences sl-flex astro-25vxztcf"><div class="social-icons astro-25vxztcf"></div><starlight-theme-select><label style="--sl-select-width: 6.25em" class="astro-3hi4jykp"><span class="sr-only astro-3hi4jykp">Select theme</span><svg aria-hidden="true" class="icon label-icon astro-3hi4jykp astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg><select autocomplete="off" class="astro-3hi4jykp"><option value="dark" class="astro-3hi4jykp">Dark</option><option value="light" class="astro-3hi4jykp">Light</option><option value="auto" selected class="astro-3hi4jykp">Auto</option></select><svg aria-hidden="true" class="icon caret astro-3hi4jykp astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg></label></starlight-theme-select><script>
+	StarlightThemeProvider.updatePickers();
+</script></div></div></div></sl-sidebar-pane></nav><div class="main-frame astro-3a7n2yso"><script type="module">var e=document.getElementById(`starlight__sidebar`),t=e?.querySelector(`sl-sidebar-state-persist`),n=`sl-sidebar-state`,r=()=>{let r=[],i=t?.dataset.hash||``;try{let e=sessionStorage.getItem(n),t=JSON.parse(e||`{}`);Array.isArray(t.open)&&t.hash===i&&(r=t.open)}catch{}return{hash:i,open:r,scroll:e?.scrollTop||0}},i=e=>{try{sessionStorage.setItem(n,JSON.stringify(e))}catch{}},a=()=>i(r()),o=(e,t)=>{let n=r();n.open[t]=e,i(n)};t?.addEventListener(`click`,e=>{if(!(e.target instanceof Element))return;let t=e.target.closest(`summary`)?.closest(`details`);if(!t)return;let n=t.querySelector(`sl-sidebar-restore`),r=parseInt(n?.dataset.index||``);isNaN(r)||o(!t.open,r)}),addEventListener(`visibilitychange`,()=>{document.visibilityState===`hidden`&&a()});</script><div class="lg:sl-flex astro-o35kqrak"><aside class="right-sidebar-container print:hidden astro-o35kqrak"><div class="right-sidebar astro-o35kqrak"><div class="lg:sl-hidden astro-dsdb6pyi"><mobile-starlight-toc data-min-h="2" data-max-h="3" class="astro-nkhnjgo3"><nav aria-labelledby="starlight__on-this-page--mobile" class="astro-nkhnjgo3"><details id="starlight__mobile-toc" class="astro-nkhnjgo3"><summary id="starlight__on-this-page--mobile" class="sl-flex astro-nkhnjgo3"><span class="toggle sl-flex astro-nkhnjgo3">On this page<svg aria-hidden="true" class="caret astro-nkhnjgo3 astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></span><span class="display-current astro-nkhnjgo3"></span></summary><div class="dropdown astro-nkhnjgo3"><ul class="isMobile astro-hvjckixu" style="--depth: 0;"><li style="--depth: 0;" class="astro-hvjckixu"><a href="#_top" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Overview</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#fields" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Fields</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#numbering" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Numbering</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#operations" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Operations</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#client-writes" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Client writes</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#seams" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Seams for satellite addons</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#lines" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Order lines</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#prices-taxes-and-totals" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Prices, taxes and totals</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#screens" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Screens, menus and the Sales application</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#configuration" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Configuration</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#access" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Access</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#not-built-yet" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Not built yet</span></a></li></ul></div></details></nav></mobile-starlight-toc><script type="module" src="/ERPForAll/_astro/MobileTableOfContents.astro_astro_type_script_index_0_lang.C3fM4Kra.js"></script></div><div class="right-sidebar-panel sl-hidden lg:sl-block astro-dsdb6pyi"><div class="sl-container astro-dsdb6pyi"><starlight-toc data-min-h="2" data-max-h="3"><nav aria-labelledby="starlight__on-this-page"><h2 id="starlight__on-this-page">On this page</h2><ul class="astro-hvjckixu" style="--depth: 0;"><li style="--depth: 0;" class="astro-hvjckixu"><a href="#_top" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Overview</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#fields" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Fields</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#numbering" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Numbering</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#operations" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Operations</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#client-writes" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Client writes</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#seams" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Seams for satellite addons</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#lines" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Order lines</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#prices-taxes-and-totals" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Prices, taxes and totals</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#screens" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Screens, menus and the Sales application</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#configuration" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Configuration</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#access" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Access</span></a></li><li style="--depth: 0;" class="astro-hvjckixu"><a href="#not-built-yet" style="--depth: 0;" class="astro-hvjckixu"><span style="--depth: 0;" class="astro-hvjckixu">Not built yet</span></a></li></ul></nav></starlight-toc><script type="module" src="/ERPForAll/_astro/TableOfContents.astro_astro_type_script_index_0_lang.BpJaGz7G.js"></script></div></div></div></aside><div class="main-pane astro-o35kqrak"><main data-pagefind-body class="astro-6cjqtku2" lang="en" dir="ltr"><div class="content-panel astro-ejbg54ye"><div class="sl-container astro-ejbg54ye"><aside id="release-status-landmark" aria-label="Release status"><div id="release-status-banner" role="status" hidden></div><div id="release-navigation-error" role="alert" hidden></div><div id="release-navigation-notice" role="status" hidden></div></aside><h1 id="_top" class="astro-nt5eciic">Sales orders: the order header and its operations</h1></div></div><div class="content-panel astro-ejbg54ye"><div class="sl-container astro-ejbg54ye"><div class="sl-markdown-content">
+<p>Addon <code dir="auto">sale</code> (depends on <code dir="auto">sales_team</code>, <code dir="auto">product</code>, <code dir="auto">mail</code> and <code dir="auto">account</code>), crate <code dir="auto">erp-addon-sale</code>.
+It ships <code dir="auto">sale.order</code> and its lines with prices, taxes and totals. The order is a thread model with
+activities. ADR 0199 governs the addon.</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="fields">Fields</h2><a class="sl-anchor-link" href="#fields"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Fields”</span></a></div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Field</th><th>Rule</th></tr></thead><tbody><tr><td><code dir="auto">name</code></td><td>The order number, drawn at creation (below). A name given at create is kept; after create no client write changes it.</td></tr><tr><td><code dir="auto">company_id</code>, <code dir="auto">partner_id</code></td><td>Required. The company defaults to the current one.</td></tr><tr><td><code dir="auto">state</code></td><td><code dir="auto">draft</code>, <code dir="auto">sent</code>, <code dir="auto">sale</code>, <code dir="auto">cancel</code>; changed only by the operations.</td></tr><tr><td><code dir="auto">locked</code></td><td>Changed only by <code dir="auto">action_lock</code> and <code dir="auto">action_unlock</code>.</td></tr><tr><td><code dir="auto">date_order</code></td><td>Creation time; set to the confirmation time by <code dir="auto">action_confirm</code>.</td></tr><tr><td><code dir="auto">partner_invoice_id</code>, <code dir="auto">partner_shipping_id</code></td><td>Stored, editable; computed from the customer’s invoice and delivery contacts (<code dir="auto">res.partner.address_get</code>).</td></tr><tr><td><code dir="auto">user_id</code></td><td>Salesperson, stored, editable: the customer’s salesperson (<code dir="auto">res.partner.user_id</code>), else the commercial partner’s, else the current user when they are a salesperson. A saved order keeps its salesperson.</td></tr><tr><td><code dir="auto">team_id</code></td><td>Stored, editable: <code dir="auto">crm.team._get_default_team_id</code> for the salesperson in the order’s company, the order’s present team preferred.</td></tr><tr><td><code dir="auto">client_order_ref</code>, <code dir="auto">origin</code>, <code dir="auto">commitment_date</code>, <code dir="auto">validity_date</code>, <code dir="auto">tag_ids</code>, <code dir="auto">note</code></td><td>Plain editable fields.</td></tr></tbody></table>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="numbering">Numbering</h2><a class="sl-anchor-link" href="#numbering"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Numbering”</span></a></div>
+<p>An order created without a name, or with the placeholder <code dir="auto">New</code>, takes the next number of the
+sequence record with code <code dir="auto">sale.order</code> for its company: a record of that company wins over the
+shared one. The addon ships the shared record <code dir="auto">sale.seq_sale_order</code> (prefix <code dir="auto">S</code>, padding 5, as fields
+of the record, <code dir="auto">noupdate</code>). The draw goes through <code dir="auto">erp_sdk::sequence::draw_by_code</code>. Without a record
+for the company, the create is refused with a user error naming the code and the company; an order
+is never saved without a number.</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="operations">Operations</h2><a class="sl-anchor-link" href="#operations"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Operations”</span></a></div>
+<p>Each operation is an RPC method with <code dir="auto">effect = write</code> that acts on the whole record set. It locks
+the rows in id order, reads the states, refuses the whole call when one order is not in a legal
+source state (the error names the orders and their states), and writes through the base write.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Operation</th><th>From</th><th>To</th></tr></thead><tbody><tr><td><code dir="auto">action_quotation_sent</code></td><td><code dir="auto">draft</code></td><td><code dir="auto">sent</code></td></tr><tr><td><code dir="auto">action_confirm</code></td><td><code dir="auto">draft</code>, <code dir="auto">sent</code></td><td><code dir="auto">sale</code>, then locked when the setting is on</td></tr><tr><td><code dir="auto">action_cancel</code></td><td><code dir="auto">draft</code>, <code dir="auto">sent</code>, <code dir="auto">sale</code>, not locked</td><td><code dir="auto">cancel</code></td></tr><tr><td><code dir="auto">action_draft</code></td><td><code dir="auto">sent</code>, <code dir="auto">cancel</code></td><td><code dir="auto">draft</code></td></tr><tr><td><code dir="auto">action_lock</code></td><td><code dir="auto">sale</code></td><td>locked; Sales administrators only</td></tr><tr><td><code dir="auto">action_unlock</code></td><td>locked</td><td>unlocked; Sales administrators only</td></tr><tr><td>delete</td><td><code dir="auto">draft</code>, <code dir="auto">cancel</code></td><td>removed</td></tr></tbody></table>
+<p>Cancel, lock and unlock succeed without writing when the order is already in their end state.</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="client-writes">Client writes</h2><a class="sl-anchor-link" href="#client-writes"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Client writes”</span></a></div>
+<p><code dir="auto">write</code> refuses <code dir="auto">state</code>, <code dir="auto">locked</code>, <code dir="auto">invoicing_closed</code>, <code dir="auto">invoice_status</code>, <code dir="auto">delivery_status</code> and
+<code dir="auto">name</code> in every state, also with sudo (<code dir="auto">create</code> refuses the same fields except <code dir="auto">name</code>, and refuses
+them as <code dir="auto">default_&#x3C;field></code> context keys too), any field of a cancelled order, the customer of a
+confirmed order, the company of a confirmed order and of a quotation that has lines (a quotation
+without lines may change company), and the protected fields of a locked order (<code dir="auto">order_line</code> among
+them). All are validation errors that name the field or the order. A create without invoice or delivery address
+takes the customer’s (<code dir="auto">address_get</code>) before the INSERT, since both fields are required.</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="seams">Seams for satellite addons</h2><a class="sl-anchor-link" href="#seams"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Seams for satellite addons”</span></a></div>
+<p>Override these with <code dir="auto">#[method(override)]</code> and call <code dir="auto">sup</code> once (ADR 0199 D4):</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Method</th><th>Result</th></tr></thead><tbody><tr><td><code dir="auto">_confirmation_error_message</code></td><td><code dir="auto">Option&#x3C;String></code>: the first refusal of a confirmation</td></tr><tr><td><code dir="auto">_prepare_confirmation_values</code></td><td><code dir="auto">Vals&#x3C;SaleOrder></code>: what a confirmation writes; add values through field handles</td></tr><tr><td><code dir="auto">_action_confirm</code></td><td><code dir="auto">()</code>: the step where satellites act; empty in <code dir="auto">sale</code></td></tr><tr><td><code dir="auto">_should_be_locked</code></td><td><code dir="auto">Records</code>: the orders a confirmation locks</td></tr><tr><td><code dir="auto">_action_cancel</code></td><td><code dir="auto">()</code>: the cancel step; writes <code dir="auto">state = cancel</code> in <code dir="auto">sale</code></td></tr><tr><td><code dir="auto">_get_protected_fields</code></td><td><code dir="auto">ProtectedFields&#x3C;SaleOrder></code>: the header fields a locked order refuses</td></tr></tbody></table>
+<div class="expressive-code"><link rel="stylesheet" href="/ERPForAll/_astro/ec.w36nc.css"><script type="module" src="/ERPForAll/_astro/ec.0vx5m.js"></script><figure class="frame not-content"><figcaption class="header"></figcaption><pre data-language="rust,ignore"><code><div class="ec-line"><div class="code"><span style="--0:#d6deeb;--1:#403f53">#[method(override)]</span></div></div><div class="ec-line"><div class="code"><span style="--0:#d6deeb;--1:#403f53">async fn _get_protected_fields(</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#d6deeb;--1:#403f53">    </span></span><span style="--0:#d6deeb;--1:#403f53">this: &#x26;RecordSet&#x3C;SaleOrder>,</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#d6deeb;--1:#403f53">    </span></span><span style="--0:#d6deeb;--1:#403f53">tx: &#x26;mut Transaction,</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#d6deeb;--1:#403f53">    </span></span><span style="--0:#d6deeb;--1:#403f53">sup: Super,</span></div></div><div class="ec-line"><div class="code"><span style="--0:#d6deeb;--1:#403f53">) -> Result&#x3C;ProtectedFields&#x3C;SaleOrder>> {</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#d6deeb;--1:#403f53">    </span></span><span style="--0:#d6deeb;--1:#403f53">let base: ProtectedFields&#x3C;SaleOrder> = sup.call(tx, this.as_records(), ()).await?;</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#d6deeb;--1:#403f53">    </span></span><span style="--0:#d6deeb;--1:#403f53">Ok(base.with(SaleOrderCarrier::CARRIER_ID))</span></div></div><div class="ec-line"><div class="code"><span style="--0:#d6deeb;--1:#403f53">}</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="#[method(override)]async fn _get_protected_fields(    this: &#x26;RecordSet<SaleOrder>,    tx: &#x26;mut Transaction,    sup: Super,) -> Result<ProtectedFields<SaleOrder>> {    let base: ProtectedFields<SaleOrder> = sup.call(tx, this.as_records(), ()).await?;    Ok(base.with(SaleOrderCarrier::CARRIER_ID))}"><div></div></button></div></figure></div>
+<p><code dir="auto">ProtectedFields::with</code> takes a field handle of the order or of an extension of it, so a field that
+does not exist cannot be named.</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="lines">Order lines</h2><a class="sl-anchor-link" href="#lines"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Order lines”</span></a></div>
+<p><code dir="auto">sale.order.line</code> (company rule by its company and through its order; the Sales administrator has full access).
+A line is a product line (<code dir="auto">display_type</code> empty) or a section, subsection or note line. Database
+checks: a product line has a unit; a section or note line has no product, unit, price, quantity or
+lead time (create clears them); the lead time is zero or more.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Field</th><th>Rule</th></tr></thead><tbody><tr><td><code dir="auto">product_id</code>, <code dir="auto">name</code></td><td>The description is the product’s name unless written.</td></tr><tr><td><code dir="auto">product_uom_qty</code>, <code dir="auto">product_uom_id</code></td><td>Quantity (default 1) and unit (the product’s unit unless written).</td></tr><tr><td><code dir="auto">allowed_uom_ids</code></td><td>The product’s units (<code dir="auto">product.product._get_available_uoms</code>): its unit, plus its other units when several units are enabled.</td></tr><tr><td><code dir="auto">price_unit</code></td><td>From the order’s pricelist, else the product’s sales price; editable (see below).</td></tr><tr><td><code dir="auto">discount</code>, <code dir="auto">tax_ids</code></td><td>Discount in percent; the taxes (see below).</td></tr><tr><td><code dir="auto">price_subtotal</code>, <code dir="auto">price_tax</code>, <code dir="auto">price_total</code></td><td>Computed amounts in the order currency; never written by a client.</td></tr><tr><td><code dir="auto">qty_delivered_method</code>, <code dir="auto">qty_delivered</code></td><td><code dir="auto">manual</code> in <code dir="auto">sale</code>: the delivered quantity is entered by hand.</td></tr><tr><td><code dir="auto">invoice_policy</code></td><td>The product’s <code dir="auto">invoice_policy</code>, else the company’s <code dir="auto">sale_invoice_policy</code>.</td></tr><tr><td><code dir="auto">qty_invoiced</code>, <code dir="auto">qty_to_invoice</code></td><td>Invoiced quantity from the hook (zero until invoices exist); to invoice is the ordered or delivered quantity less the invoiced one, on a confirmed order only.</td></tr><tr><td><code dir="auto">invoice_status</code></td><td><code dir="auto">no</code>, <code dir="auto">to invoice</code>, <code dir="auto">upselling</code> or <code dir="auto">invoiced</code>.</td></tr></tbody></table>
+<p>On the order: <code dir="auto">order_line</code>, <code dir="auto">invoicing_closed</code> (<code dir="auto">action_close_invoicing</code> on confirmed orders,
+<code dir="auto">action_reopen_order</code>), <code dir="auto">invoice_status</code> and <code dir="auto">delivery_status</code> (over goods lines: <code dir="auto">pending</code>,
+<code dir="auto">partial</code>, <code dir="auto">full</code>).</p>
+<p>The derived line fields (<code dir="auto">state</code>, <code dir="auto">company_id</code>, <code dir="auto">order_partner_id</code>, <code dir="auto">salesman_id</code>,
+<code dir="auto">is_downpayment</code>, <code dir="auto">qty_delivered_method</code>, <code dir="auto">qty_invoiced</code>, <code dir="auto">qty_to_invoice</code>, <code dir="auto">invoice_status</code>) are
+refused on create and write for every caller, also with sudo, through the order’s <code dir="auto">order_line</code>
+commands and as <code dir="auto">default_&#x3C;field></code> context keys. A line is not added to a cancelled or locked order,
+not changed on a cancelled one, and not deleted from either. A line never moves to another order: a
+write of <code dir="auto">order_id</code> naming another order, directly or through another order’s <code dir="auto">order_line</code> link or
+set commands, is refused with a user error for every caller. A product line created without
+description or unit takes the product’s display name and unit before the INSERT, and a product
+created without <code dir="auto">invoice_policy</code> gets the current company’s policy as its default.</p>
+<p>Write guards, in order: the kind of a line does not change (a subsection may become a section); the
+product does not change on a down payment, a cancelled order, or a confirmed order that is locked or
+has delivered or invoiced quantities; a new quantity on a confirmed order calls
+<code dir="auto">_update_line_quantity</code>; a locked order refuses the fields of <code dir="auto">_get_protected_fields</code> (product,
+description, unit price, unit, quantity, discount, taxes, order), except a description change on down payments only.
+A product line of a confirmed order is not deleted (<code dir="auto">_check_line_unlink</code>).</p>
+<p>Seams of the line (override, call <code dir="auto">sup</code> once):</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Method</th><th>Result</th></tr></thead><tbody><tr><td><code dir="auto">_get_consu_qty_delivered_method</code></td><td><code dir="auto">BTreeMap&#x3C;RecId, String></code>: the method of each goods line</td></tr><tr><td><code dir="auto">_prepare_qty_delivered</code></td><td><code dir="auto">BTreeMap&#x3C;RecId, Decimal></code>: the delivered quantity of the non-manual lines</td></tr><tr><td><code dir="auto">_prepare_qty_invoiced</code></td><td><code dir="auto">BTreeMap&#x3C;RecId, Decimal></code>: the invoiced quantity of each line</td></tr><tr><td><code dir="auto">_can_be_invoiced_alone</code></td><td><code dir="auto">Records</code>: the lines that may be invoiced without the others</td></tr><tr><td><code dir="auto">_get_protected_fields</code></td><td><code dir="auto">ProtectedFields&#x3C;SaleOrderLine></code></td></tr><tr><td><code dir="auto">_update_line_quantity</code></td><td><code dir="auto">()</code>, with the new quantity</td></tr><tr><td><code dir="auto">_check_line_unlink</code></td><td><code dir="auto">Records</code>: the lines that may not be deleted</td></tr></tbody></table>
+<p>The order’s <code dir="auto">delivery_status</code> and <code dir="auto">invoice_status</code> are computes that <code dir="auto">sale_stock</code> and the invoicing
+addons override with <code dir="auto">#[compute(override)]</code>.</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="prices-taxes-and-totals">Prices, taxes and totals</h2><a class="sl-anchor-link" href="#prices-taxes-and-totals"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Prices, taxes and totals”</span></a></div>
+<p>On the order: <code dir="auto">pricelist_id</code> (none: the products’ sales prices; not changed once confirmed),
+<code dir="auto">currency_id</code> (the pricelist’s, else the company’s), <code dir="auto">currency_rate</code> (company currency to order
+currency on the order day, latest rate strictly before it), <code dir="auto">fiscal_position_id</code> (computed from the
+customer and delivery address with <code dir="auto">account.fiscal.position._get_fiscal_position</code> in the order’s
+company, editable), and <code dir="auto">amount_untaxed</code>, <code dir="auto">amount_tax</code>, <code dir="auto">amount_total</code>.</p>
+<ul>
+<li><strong>Price.</strong> A new product line without <code dir="auto">price_unit</code>, or with a <code dir="auto">price_unit</code> equal to the
+<code dir="auto">technical_price_unit</code> sent with it (the line form sends its untouched default price 0 with the
+hidden technical price 0), takes the pricelist price (<code dir="auto">ProductPricelist::get_product_price</code> at the
+order date), else the product’s <code dir="auto">lst_price</code> converted from the company currency, in the line’s
+unit and rounded to “Product Price”. A pricelist in another currency than the company’s prices only
+through a fixed-price rule (<code dir="auto">ProductPricelist::get_product_rule</code>); any other price would need a
+conversion inside the pricelist, which is not built, and is refused by name (a typed price is
+accepted). The price the line was priced at is kept in <code dir="auto">technical_price_unit</code>; a typed price keeps
+the technical price sent with it, so it counts as set by hand. A later change of product, unit or
+quantity prices the line again unless the same write gives a price, its price differs from
+<code dir="auto">technical_price_unit</code> (set by hand), it has an invoiced quantity, or it is a down payment. A
+pricelist change does not price existing lines again.</li>
+<li><strong>Taxes.</strong> Not given: the product’s <code dir="auto">taxes_id</code> of the order company or a parent; for a line without
+product and display type, the company’s <code dir="auto">account_sale_tax_id</code>; then mapped with the order’s fiscal
+position (<code dir="auto">map_tax</code>). A new product takes its taxes again unless they are given.</li>
+<li><strong>Amounts.</strong> <code dir="auto">erp_addon_account::tax::compute</code> on price, quantity, discount and taxes, rounded per
+line in the order currency; the order sums its lines. A group of taxes and a reverse-charge tax are
+refused by name, as on invoices; the company’s “round globally” choice is not applied yet.</li>
+<li><strong>Derived fields.</strong> <code dir="auto">amount_*</code>, <code dir="auto">currency_id</code> and <code dir="auto">currency_rate</code> of the order, and
+<code dir="auto">price_subtotal</code>, <code dir="auto">price_tax</code>, <code dir="auto">price_total</code>, <code dir="auto">technical_price_unit</code> and <code dir="auto">currency_id</code> of a line,
+are refused on <code dir="auto">create</code> and <code dir="auto">write</code>, also as <code dir="auto">default_&#x3C;field></code> context keys and inside <code dir="auto">order_line</code>
+commands; <code dir="auto">technical_price_unit</code> is accepted on a line <code dir="auto">create</code> only, where it tells an untouched
+price from a typed one (an untouched price is replaced by the computed one, a typed price keeps it,
+so the line counts as priced by hand).</li>
+</ul>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="screens">Screens, menus and the Sales application</h2><a class="sl-anchor-link" href="#screens"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Screens, menus and the Sales application”</span></a></div>
+<p><code dir="auto">sale</code> ships the views in <code dir="auto">views/sale_order_views.xml</code>: the search view <code dir="auto">view_sales_order_filter</code>,
+the lists <code dir="auto">view_quotation_tree</code> and <code dir="auto">view_order_tree</code>, the form <code dir="auto">view_order_form</code>, and the default
+list and form of <code dir="auto">sale.order.line</code> (<code dir="auto">sale_order_line_view_list</code>, <code dir="auto">sale_order_line_view_form</code>), which
+the form’s <code dir="auto">order_line</code> field shows; a line opens in its form as a dialog. The actions
+<code dir="auto">sale.action_quotations</code> and <code dir="auto">sale.action_orders</code> have no domain and no context. The menus of
+<code dir="auto">views/sale_menus.xml</code>: <code dir="auto">sale_menu_root</code> (Sales, salespeople) with <code dir="auto">sale_order_menu</code> (Quotations,
+Orders, Customers) and <code dir="auto">menu_sale_config</code> (Sales administrators: Sales Teams).</p>
+<p>The root menu ships inactive. The data-only addon <code dir="auto">sale_management</code> (depends on <code dir="auto">sale</code>, no crate)
+is the Sales application: its data file sets <code dir="auto">sale.sale_menu_root</code> active. Uninstalling it leaves
+the menu active while <code dir="auto">sale</code> stays installed: a data-only addon cannot undo its data, and an
+uninstall hook would have to be linked into every binary that reads the addon folder. Extend a Sales screen with an inheriting
+view of these ids; add a menu under <code dir="auto">sale.sale_order_menu</code> or <code dir="auto">sale.menu_sale_config</code>. What each
+screen does and does not do yet: <code dir="auto">docs/design/sale-orders-views-matrix.md</code>.</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="configuration">Configuration</h2><a class="sl-anchor-link" href="#configuration"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Configuration”</span></a></div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Value</th><th>Home</th><th>Default</th></tr></thead><tbody><tr><td>Order number prefix, padding, next number, step</td><td>fields of the <code dir="auto">sale.order</code> sequence record; a record per company may be added</td><td><code dir="auto">S</code>, 5, 1, 1</td></tr><tr><td>Default invoicing policy</td><td>field <code dir="auto">sale_invoice_policy</code> of the company; per product <code dir="auto">invoice_policy</code></td><td>ordered quantities</td></tr><tr><td>Lock confirmed sales</td><td>declared setting <code dir="auto">sale.lock_confirmed_sales</code>, global, read by internal users, written by the system administrator</td><td>off</td></tr></tbody></table>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="access">Access</h2><a class="sl-anchor-link" href="#access"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Access”</span></a></div>
+<p>The rows of <code dir="auto">security/ir.access.csv</code> (reference <code dir="auto">odoo/addons/sale/security/ir.access.csv:32-41</code>):</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Group</th><th><code dir="auto">sale.order</code></th><th><code dir="auto">sale.order.line</code></th></tr></thead><tbody><tr><td><code dir="auto">sales_team.group_sale_salesman</code></td><td><code dir="auto">cru</code> on own and unassigned orders</td><td><code dir="auto">crud</code> on lines of own and unassigned orders</td></tr><tr><td><code dir="auto">sales_team.group_sale_salesman_all_leads</code></td><td><code dir="auto">cru</code> on every order</td><td><code dir="auto">crud</code> on every line</td></tr><tr><td><code dir="auto">sales_team.group_sale_manager</code></td><td><code dir="auto">crud</code></td><td><code dir="auto">crud</code></td></tr></tbody></table>
+<p>“Own and unassigned” is the domain <code dir="auto">['|', ('user_id', '=', user.id), ('user_id', '=', False)]</code> on
+the order and the same over the stored <code dir="auto">salesman_id</code> on the line. The company rule of each model is generated from its <code dir="auto">company_access</code> declaration: an order by its
+<code dir="auto">company_id</code> (exact, no empty company), a line by its own stored <code dir="auto">company_id</code> (the order’s) and through its order. The Sales administrator also
+creates and changes partners, and manages pricelists, pricelist rules and activity types.</p>
+<p>The five feature groups (<code dir="auto">sale.group_auto_done_setting</code>, <code dir="auto">group_discount_per_so_line</code>,
+<code dir="auto">group_warning_sale</code>, <code dir="auto">group_proforma_sales</code>, <code dir="auto">group_services_and_material</code>) are light feature
+groups (<code dir="auto">res.groups._get_light_group_xmlids</code>, extended in <code dir="auto">src/res_groups.rs</code>): no implied group, no
+access row, held by nobody until a setting switches them on. The lock is the declared setting
+<code dir="auto">sale.lock_confirmed_sales</code>; the other four switches come with the Sales settings page. A satellite
+addon that adds a Sales role declares its own order and line rows.</p>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="not-built-yet">Not built yet</h2><a class="sl-anchor-link" href="#not-built-yet"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Not built yet”</span></a></div>
+<p>Chatter tracking of the salesperson and team (tracking of recomputed fields is not built). The
+partner’s own pricelist and fiscal position defaults beyond <code dir="auto">_get_fiscal_position</code>, the discount
+computed from a pricelist rule, currency conversion inside a pricelist; the invoice link (cancelling draft invoices with
+the order); the signature fields; default search filters of the two actions.</p></div><footer class="sl-flex astro-iffdjxxj"><div class="meta sl-flex astro-iffdjxxj"></div><div class="pagination-links print:hidden astro-xgt7gz3a" dir="ltr"><a href="/ERPForAll/en/next/developer/addon-guide/sales-team/" rel="prev" class="astro-xgt7gz3a"><svg aria-hidden="true" class="astro-xgt7gz3a astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.5rem;"><path d="M17 11H9.41l3.3-3.29a1.004 1.004 0 1 0-1.42-1.42l-5 5a1 1 0 0 0-.21.33 1 1 0 0 0 0 .76 1 1 0 0 0 .21.33l5 5a1.002 1.002 0 0 0 1.639-.325 1 1 0 0 0-.219-1.095L9.41 13H17a1 1 0 0 0 0-2Z"/></svg><span class="astro-xgt7gz3a">Previous<br class="astro-xgt7gz3a"><span class="link-title astro-xgt7gz3a">Sales teams</span></span></a><a href="/ERPForAll/en/next/developer/addon-guide/stock-read-models/" rel="next" class="astro-xgt7gz3a"><svg aria-hidden="true" class="astro-xgt7gz3a astro-mzgslidx" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.5rem;"><path d="M17.92 11.62a1.001 1.001 0 0 0-.21-.33l-5-5a1.003 1.003 0 1 0-1.42 1.42l3.3 3.29H7a1 1 0 0 0 0 2h7.59l-3.3 3.29a1.002 1.002 0 0 0 .325 1.639 1 1 0 0 0 1.095-.219l5-5a1 1 0 0 0 .21-.33 1 1 0 0 0 0-.76Z"/></svg><span class="astro-xgt7gz3a">Next<br class="astro-xgt7gz3a"><span class="link-title astro-xgt7gz3a">Stock read models (proposal)</span></span></a></div></footer></div></div></main></div></div><div id="unavailable-page" role="status" hidden></div></div></div><script type="module" src="/ERPForAll/_astro/ReleasePageFrame.astro_astro_type_script_index_0_lang.V6XQiZN7.js"></script></body></html>

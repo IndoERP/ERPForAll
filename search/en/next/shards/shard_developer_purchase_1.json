@@ -1,0 +1,50 @@
+{
+  "shard_id": "shard_developer_purchase_1",
+  "lang": "en",
+  "version": "next",
+  "audience": "developer",
+  "modules": [
+    "purchase"
+  ],
+  "docs": [
+    {
+      "page_id": "developer/addon-guide/purchase-orders",
+      "title": "Purchase orders: states, operations and extension steps",
+      "module": "purchase",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "The purchase addon (depends = [\"base\", \"account\"], an application) owns purchase.order. The contract is ADR 0197 D5; the cases are docs/specs/purchase/purchase-min.md and docs/specs/purchase/access.md. Mail, print, receipts and bills come with their own addons and slices."
+        },
+        {
+          "anchor": "states-and-operations",
+          "text": "| Operation (RPC, effect = write) | Legal from | Result | |---|---|---| | button_confirm | draft, sent | purchase through the approval step when _approval_allowed says yes, else to approve | | button_approve | to approve | the approval step; a caller the approval question refuses gets an access error naming purchase.group_purchase_manager | | button_cancel | every state but cancel, not locked | the cancel step; orders already cancelled are left as they are | | button_draft | cancel | draft | | button_lock | purchase | locked; an order already locked is left as it is | | button_unlock | locked | unlocked; purchase administrators only, checked first | Every operation locks its rows in id order without waiting (a held lock is an immediate lock error) and refuses the whole call when one order is not in a legal state, naming each such order and its state. Nothing is written then. State changes go through the base writer (Records::write_base), so a write override of another addon never sees them. A client write never sets state, locked, date_approve or name; create refuses the first three (an order is born a draft, unlocked, without approval date) and keeps a number it is given. create also refuses these fields and the order amounts as default_<field> context keys, since the base create applies those after the checks; the lines refuse their amounts, the received quantity, state and date_approve the same way, also when they are created through the order's order_line commands. A confirmed order keeps its vendor, currency and company; a cancelled order keeps every field; a locked order keeps the fields of _protected_fields. Each refusal is a validation error naming the field, and the order when there is one. A default_<field> context key for a field create refuses (the three above and the amounts) is refused by name too, also with sudo, so a create or a copy cannot go around the refusal. Only a cancelled order is deleted."
+        },
+        {
+          "anchor": "numbering",
+          "text": "An order created without a number, or with New, draws the next number of the purchase.order sequence for its company through erp_sdk::sequence::draw_by_code, dated by the deadline in the user's time zone. The addon ships one shared sequence (purchase.seq_purchase_order, prefix PO, padding 5). A company gets its own series when an administrator adds a sequence with the same code and that company under Technical, Sequences. Without any sequence for the code the create is refused, naming the code and the company."
+        },
+        {
+          "anchor": "lines",
+          "text": "purchase.order.line holds product, description, quantity, unit, planned date, unit price, discount and taxes. What a create leaves out is filled from the product and the order: - unit: the product's unit; description: its purchase description; taxes: its vendor taxes of the order company; - unit price and discount: the vendor price for the order's vendor, quantity, unit and deadline date, through the product seller service (_select_seller_exact of product.product, run under the order's company), else the product cost; converted to the line unit and the order currency; - planned date: the deadline plus the vendor price's lead time (the deadline itself without a vendor price). A given unit price counts as set by hand unless the values also carry technical_price_unit with the same value: the line form sends both untouched (default 0), so a line saved from the form without a typed price is priced, and its default discount 0 then takes the vendor's discount. A price given without the technical price (an import, a copy) is kept. A vendor price row without a lead time, a tax without a sequence and a product without a cost currency are refused by name instead of being read as 0 or another currency. A later change of quantity or unit prices the line again, unless someone set its price by hand. Subtotal, tax and total come from erp_addon_account::tax::compute and are written after every create, write and delete of a line, with the order's untaxed amount, taxes, total, total in the company currency and earliest planned date. A client never writes these amounts, the selected vendor price row or the received quantity (that one comes with receipts), neither in the values nor as a default_<field> context key. A tax with a negative distribution (reverse charge) is refused by name until the tax computation supports it. Confirming an order with a line without a product is refused. Lines of a locked or cancelled order do not change, and lines of a confirmed order are added but not deleted. To change how a line is priced, extend the seller service of product (ADR 0197 D6, worked example), not the line."
+        },
+        {
+          "anchor": "screens",
+          "text": "views/purchase_views.xml holds the screens, in the view dialect the server admits (views.md): - the Purchase app (purchase.menu_purchase_root, purchase users) with Orders > Requests for Quotation (purchase.purchase_rfq, every order) and Orders > Purchase Orders (purchase.purchase_form_action, state purchase), and Configuration > Settings (purchase.purchase_settings_action, purchase administrators), the shared Settings page opened on the Purchase app; - one list, form and search of purchase.order for both actions. The form header offers the operations above, each shown only in its legal states (Approve and Unlock for purchase administrators); the lines are the one2many order_line, shown with the default list and form of purchase.order.line (view_purchase_order_line_list, view_purchase_order_line_form) and edited in a dialog; - a new order form starts with the active company, its currency, the user as buyer and now as deadline (default_get); the number is drawn on save. To add a column or a field, inherit purchase.purchase_order_list, purchase.purchase_order_form or the line views from your addon (views.md, inheritance); a line form needs no inline sub-view."
+        },
+        {
+          "anchor": "settings",
+          "text": "Three company settings, on the Settings page under Purchase, block Orders; administrators (base.group_system) write them, purchase users read them: | Key | Values | Default | |---|---|---| | purchase.po_double_validation | one_step, two_step | one_step | | purchase.po_double_validation_amount | 0 to 10^12, in the company currency | 5,000 | | purchase.po_lock | edit, lock | edit | With two_step, an order whose total in the company currency is not under the amount waits for a purchase administrator; the approval question converts the order total at that moment, and a change of an order's company converts the stored total into the new company's currency; with lock, the approval step locks the order. Each order of a call uses its own company's values. Native code reads them with erp_addon_purchase::settings::OrderPolicy::read."
+        },
+        {
+          "anchor": "extending-the-order",
+          "text": "Declare purchase in your addon's depends, #[extend(PurchaseOrder)] in your crate, and override one of these methods with #[method(override)], calling sup exactly once (ADR 0197 D6). None is callable over RPC. | Method | Called | Use it to | |---|---|---| | _approval_allowed → Vec<bool> (one answer per order, id order) | by confirm and approve | add an approval rule | | _approve | for the orders that become purchase orders | create receipts, start follow-up work | | _action_cancel | for the orders being cancelled, never twice for one order | cancel what the order started | | _mark_rfqs_as_sent | after an RFQ is sent or printed | react to sending | | _protected_fields → Vec<String> (vendor, currency, company, lines) | by write on a locked order | add your fields to what a locked order keeps | Override the step, never the button: the buttons do the state checks and call the steps once per order."
+        }
+      ]
+    }
+  ]
+}
