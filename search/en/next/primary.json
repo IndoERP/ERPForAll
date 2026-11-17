@@ -1,7 +1,7 @@
 {
   "lang": "en",
   "version": "next",
-  "doc_count": 102,
+  "doc_count": 103,
   "docs": [
     {
       "id": "index",
@@ -452,9 +452,82 @@
       "shard_id": "shard_developer_account_1"
     },
     {
+      "id": "developer/addon-guide/account-payments",
+      "title": "Payments and payment methods",
+      "description": "The account.payment, account.payment.method and account.payment.method.line models of the account addon: drafts without entry, posting, the outstanding account, status and flags, cancel and reset, the Register Payment dialog, rights and what is not built yet.",
+      "audience": "developer",
+      "module": "account",
+      "models": [
+        "account.payment",
+        "account.payment.method",
+        "account.payment.method.line",
+        "account.payment.register"
+      ],
+      "rpc": [
+        "account.payment.action_post",
+        "account.payment.action_cancel",
+        "account.payment.action_draft",
+        "account.payment.action_validate",
+        "account.payment.register.action_create_payments",
+        "account.move.action_register_payment"
+      ],
+      "spec_ids": [
+        "SPEC-ACCPAY-001",
+        "SPEC-ACCPAY-002",
+        "SPEC-ACCPAY-003",
+        "SPEC-ACCPAY-006",
+        "SPEC-ACCPAY-007",
+        "SPEC-ACCPAY-015",
+        "SPEC-ACCPAY-020",
+        "SPEC-ACCPAY-021",
+        "SPEC-ACCPAY-031",
+        "SPEC-ACCPAY-046",
+        "SPEC-ACCPAY-056",
+        "SPEC-ACCPAY-058"
+      ],
+      "headings": [
+        {
+          "id": "methods-and-method-lines",
+          "depth": 2,
+          "text": "Methods and method lines"
+        },
+        {
+          "id": "a-payment-s-life",
+          "depth": 2,
+          "text": "A payment's life"
+        },
+        {
+          "id": "the-entry",
+          "depth": 2,
+          "text": "The entry"
+        },
+        {
+          "id": "status-and-flags",
+          "depth": 2,
+          "text": "Status and flags"
+        },
+        {
+          "id": "register-payment-dialog",
+          "depth": 2,
+          "text": "Register Payment dialog"
+        },
+        {
+          "id": "rights",
+          "depth": 2,
+          "text": "Rights"
+        },
+        {
+          "id": "not-built-yet",
+          "depth": 2,
+          "text": "Not built yet"
+        }
+      ],
+      "shard_id": "shard_developer_account_1"
+    },
+    {
       "id": "developer/addon-guide/account-reconciliation",
       "title": "Reconciliation of journal items",
-      "description": "How the account addon matches receivable and payable journal items: matches, settlements, open items, residuals, matching numbers, the invoice amount due and payment status, locks and what is refused.",
+      "description": "How the account addon matches receivable and payable journal items: matches, settlements, open items, residuals, matching numbers, the invoice amount due and payment status, unmatching, locks and what is refused.",
       "audience": "developer",
       "module": "account",
       "models": [
@@ -464,7 +537,8 @@
         "account.move.line"
       ],
       "rpc": [
-        "account.move.line.reconcile"
+        "account.move.line.reconcile",
+        "account.move.line.remove_move_reconcile"
       ],
       "spec_ids": [
         "SPEC-ACCREC-001",
@@ -473,6 +547,7 @@
         "SPEC-ACCREC-017",
         "SPEC-ACCREC-040",
         "SPEC-ACCREC-109",
+        "SPEC-ACCREC-113",
         "SPEC-ACCREC-130"
       ],
       "headings": [
@@ -487,9 +562,9 @@
           "text": "Fields on journal items"
         },
         {
-          "id": "matching",
+          "id": "matching-and-unmatching",
           "depth": 2,
-          "text": "Matching"
+          "text": "Matching and unmatching"
         },
         {
           "id": "rights-and-locks",
@@ -4580,6 +4655,11 @@
           "id": "gapless-sequences-the-wait-mode",
           "depth": 2,
           "text": "Gapless sequences: the wait mode"
+        },
+        {
+          "id": "standard-at-run-time",
+          "depth": 2,
+          "text": "Standard sequences on a server that may not create database objects"
         },
         {
           "id": "drawing-a-number",

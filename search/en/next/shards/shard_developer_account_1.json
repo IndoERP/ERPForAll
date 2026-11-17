@@ -14,6 +14,7 @@
     "account",
     "account",
     "account",
+    "account",
     "account"
   ],
   "docs": [
@@ -119,7 +120,7 @@
         },
         {
           "anchor": "not-in-this-slice",
-          "text": "| Case | Why | Slice | |---|---|---| | SPEC-ACCLED-007, 008, 019..026, 035, 038, 040, 041 | account type from the code, name_create, name search, copy, ordering by code, search with archived parents, placeholder code | follow-up slice of the ledger configuration models | | SPEC-ACCLED-014, 016, 036 | need journal items | the journal items | | SPEC-ACCLED-062, 063, 064 | journal company change and archive with entries | the journal items | | SPEC-ACCLED-057, 067 | effective company and category account defaults | account mapping runtime | | SPEC-ACCLED-058 | liquidity accounts created from prefixes; company suspense and cash-difference defaults consumed by journals | liquidity defaults and prefix lifecycle | | SPEC-ACCLED-060, 066 | code from the name on import, payment reference from the code | import slice, invoices slice | | SPEC-ACCLED-042..050 | balances, merge wizard | the account wizards slice, reports | | mapped company defaults | typed company-dependent accounting mappings | account mapping runtime | Journal fields of the reference left for their slices: mail alias, invoice reference type and model, invoice report (invoices); payment method lines, bank account and statement source (payments and bank statements); hash mode (locking); self-billing and the sequence override regex (numbering follow-up); dashboard computes (dashboard). account.account is ordered by id until the ordering slice adds the code order of SPEC-ACCLED-038. The code is not searchable yet: look accounts up through account.code.mapping (company_id, code)."
+          "text": "| Case | Why | Slice | |---|---|---| | SPEC-ACCLED-007, 008, 019..026, 035, 038, 040, 041 | account type from the code, name_create, name search, copy, ordering by code, search with archived parents, placeholder code | follow-up slice of the ledger configuration models | | SPEC-ACCLED-014, 016, 036 | need journal items | the journal items | | SPEC-ACCLED-062, 063, 064 | journal company change and archive with entries | the journal items | | SPEC-ACCLED-057, 067 | effective company and category account defaults | account mapping runtime | | SPEC-ACCLED-058 | liquidity accounts created from prefixes; company suspense and cash-difference defaults consumed by journals | liquidity defaults and prefix lifecycle | | SPEC-ACCLED-060, 066 | code from the name on import, payment reference from the code | import slice, invoices slice | | SPEC-ACCLED-042..050 | balances, merge wizard | the account wizards slice, reports | | mapped company defaults | typed company-dependent accounting mappings | account mapping runtime | Journal fields of the reference left for their slices: mail alias, invoice reference type and model, invoice report (invoices); payment method lines, bank account and statement source (payments and bank statements); hash mode (locking); self-billing and the sequence override regex (numbering follow-up); dashboard computes (dashboard). account.account is ordered by id until the ordering slice adds the code order of SPEC-ACCLED-038, so a list cannot be sorted by the code yet. A condition on code (=, !=, in, not in, like, ilike, =like, =ilike and their negations, = False) matches the code of the active company's tree, as reading the code does: a branch searches its root's codes, and an account shared by two trees is found by the code of each tree in that tree. A negative operator also matches accounts without a code in the tree. Without an active company the condition is a Validation error. A name search (a many2one field) matches the name or the code as contained text; the reference matches the code by prefix. Internal users read account.code.mapping, so such a search works for anyone who may read accounts."
         },
         {
           "anchor": "account-tax-choices",
@@ -206,6 +207,49 @@
       ]
     },
     {
+      "page_id": "developer/addon-guide/account-payments",
+      "title": "Payments and payment methods",
+      "module": "account",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "erp_addon_account::payment holds the payment account.payment ([AccountPayment]), the payment method account.payment.method and the method line account.payment.method.line (a method on one journal)."
+        },
+        {
+          "anchor": "methods-and-method-lines",
+          "text": "The addon ships two methods, Manual Payment inbound and outbound (data/account_payment_data.xml). Every bank, cash and credit-card journal created through the ORM, or changed into one, gets one line of each; journals that existed before version 1.3 of the addon get them at the 1.4 upgrade step, and the demo bank and cash journals their demo outstanding accounts there as on a fresh install (the step fails by name when the two methods did not load). A line's payment_account_id is the outstanding receipts (inbound) or payments (outbound) account of its payments. Methods and lines are written by accounting managers."
+        },
+        {
+          "anchor": "a-payment-s-life",
+          "text": "| Status | How it gets there | Journal entry | |---|---|---| | Draft | created | none (ADR 0048, parity treatment A4 W10) | | Paid | action_post | created and posted through moves::post_moves, numbered in the journal's payment chain (P before the code) | | Reconciled | its liquidity item is settled, or it is matched with invoices (or bills) that are all paid and its outstanding account is not a bank or cash account; or action_validate | unchanged | | Cancelled | action_cancel on a draft | none | state, name, move_id, the reconciliation flags, the outstanding account and is_sent are written by these actions only: a value given to create or write, or a default_* context key, is refused by name (a new payment may say state = \"draft\"). action_post never books a payment that already has an entry. The reference resets a confirmed payment and its entry to draft; under the reversal-only policy (ADR 0146) that is refused here. action_draft returns a cancelled or rejected payment to draft. A confirmed payment cannot be cancelled, reset or deleted, and its date, amount, partner, journal, method and accounts cannot change: its posted entry is undone by a reversal (ADR 0146), which is not built yet. The memo stays writable and becomes the entry's reference."
+        },
+        {
+          "anchor": "the-entry",
+          "text": "Posting builds one entry per payment: a liquidity item on the outstanding account (the method line's, else the root company's transfer account, else the payment is refused by name) and a counterpart item on the destination account (the one given, else the company's receivable or payable account, chosen as for invoices). Both carry the commercial partner, the payment date as due date and the label \"method: memo\". The entry's origin_payment_id links it to the payment and is written by the service only."
+        },
+        {
+          "anchor": "status-and-flags",
+          "text": "state, is_reconciled and is_matched are written by payment::refresh_payments, which runs in the unit that posts, matches or unmatches (reconcile::apply::refresh_moves, after the invoices' status). is_matched is also true when the outstanding account is the journal's own account. Callers cannot write them, nor name, move_id, outstanding_account_id and is_sent, given or as default_<field> context keys."
+        },
+        {
+          "anchor": "register-payment-dialog",
+          "text": "account.move.action_register_payment() (the Register Payment button of a confirmed invoice, bill or credit note) returns a dialog action on account.payment.register with default_invoice_ids. The transient model computes from its documents the company, the commercial partner, the direction (from the sign of the netted amount due), the amount due, the amount and the memo (the document numbers, sorted); the journal is the company's first bank journal, else its first cash journal, and the method line the journal's first line of the direction. journal_id and payment_method_line_id stay editable; amount and communication only while single_payment (the dialog makes one payment). A row is its creator's only (the access row's create_uid predicate, as the base wizards have) and of its documents' company. action_create_payments() asks the write right on the dialog row and locks it, reads the documents after the caller's read check, refuses by name what cannot be paid together (not an invoice, bill or credit note; not confirmed; blocked; nothing left to pay; another currency than the company's; an amount due on several receivable or payable accounts; several companies; customer and vendor documents mixed; documents that cancel each other out; an amount of zero or less; an amount due that changed since the dialog opened; a changed amount when several payments would be made; a journal of neither the documents' company nor one of its parents; a payment method of the other direction), then creates the payments in the documents' company, each with the chosen method line, through account.payment.create with the caller's rights, posts them with post_payments and matches each payment's counterpart item with the documents' open items through reconcile_lines. With group_payment (the default) there is one payment per commercial partner and account; without it, one payment per document for its own amount due. When there is one payment it carries the entered amount. The dialog row is deleted with the registration, so a second call finds it gone (Missing) and registers nothing. The dialog closes with a notification naming the payments."
+        },
+        {
+          "anchor": "rights",
+          "text": "Read-only accounting users read payments; accounting users create, post, cancel and reset them (the posting and reconciliation services ask account.group_account_user); records are isolated per company."
+        },
+        {
+          "anchor": "not-built-yet",
+          "text": "Payments in another currency are posted (the items are converted at the payment date) but cannot be matched yet; duplicate detection, the receipt report, check printing, online providers, withholding lines, internal transfers, reversal of a confirmed payment come with their slices. The Register Payment dialog does not yet pay documents in other currencies, write off a difference, split installments, apply early-payment discounts or propose the partner's preferred method line."
+        }
+      ]
+    },
+    {
       "page_id": "developer/addon-guide/account-reconciliation",
       "title": "Reconciliation of journal items",
       "module": "account",
@@ -220,15 +264,15 @@
         },
         {
           "anchor": "models",
-          "text": "| Model | What it holds | Written by | |---|---|---| | account.partial.reconcile | One match: debit item, credit item, amount (company currency and each item's currency), later date of the two, settlement | the service only; unlink is refused | | account.full.reconcile | The settlement of a component whose items are all settled; its id is their matching number | the service only; unlink is refused | | account.open.item | What is still due on a matched item and its component label | the service only; users read it | Database CHECKs keep a match positive and between two different items, and an open item's residual between zero and the item's amount on the item's side, so an over-applied match fails whatever path writes it."
+          "text": "| Model | What it holds | Written by | |---|---|---| | account.partial.reconcile | One match: debit item, credit item, amount (company currency and each item's currency), later date of the two, settlement | the service only; unlink unmatches | | account.full.reconcile | The settlement of a component whose items are all settled; its id is their matching number | the service only; unlink alone is refused | | account.open.item | What is still due on a matched item and its component label | the service only; users read it | Database CHECKs keep a match positive and between two different items, and an open item's residual between zero and the item's amount on the item's side, so an over-applied match fails whatever path writes it."
         },
         {
           "anchor": "fields-on-journal-items",
           "text": "full_reconcile_id, matched_debit_ids and matched_credit_ids are written by the service only: a caller value or a default_<field> context key is refused by name. amount_residual, amount_residual_currency, reconciled and matching_number are computed in one read per batch: from the open-item row when the item belongs to a component that is not settled, zero when it is settled, else the item's own amounts. The number is the settlement id, else P with the smallest match id of the component, else empty. These four fields are not searchable yet."
         },
         {
-          "anchor": "matching",
-          "text": "- account.move.line.reconcile() takes the items in the order due date (else date), amount in currency, balance, grouped by partner when several take part, and matches debits with credits for the smaller open amount at each step. A settled item whose component has an open item in the selection is left out; any other settled item is refused, naming the entries it is matched with that the caller may read and counting the others. An item without an amount is refused as having nothing to match. - A matched journal item cannot be deleted, not even by SQL: the matches refer to their items with `ON DELETE RESTRICT`, and so does an item's open-item row. - Unmatching comes in a later release: unlink of a match or of a settlement is refused by name. The posted invoices among the entries get their amount due (what remains on their receivable or payable items) and their payment status (not paid, partial, paid, reversed) in the same unit, from one function (reconcile::apply::refresh_moves). The \"in payment\" status resolves to paid (plan decision L14). A changed status is reported to the record history (Transaction::track_external), so the invoice thread shows it when the accounting mail bridge is installed."
+          "anchor": "matching-and-unmatching",
+          "text": "- account.move.line.reconcile() takes the items in the order due date (else date), amount in currency, balance, grouped by partner when several take part, and matches debits with credits for the smaller open amount at each step. A settled item whose component has an open item in the selection is left out; any other settled item is refused, naming the entries it is matched with that the caller may read and counting the others. An item without an amount is refused as having nothing to match. - A matched journal item cannot be deleted, not even by SQL: the matches refer to their items with `ON DELETE RESTRICT`, and so does an item's open-item row. - account.move.line.remove_move_reconcile() and unlink of a match remove matches; the residuals of the component are rebuilt from the matches that remain and the settlement goes. - unlink of a settlement on its own is refused (the reference keeps the matches and shows P numbers again; that comes later). The posted invoices among the entries get their amount due (what remains on their receivable or payable items) and their payment status (not paid, partial, paid, reversed) in the same unit, from one function (reconcile::apply::refresh_moves). The \"in payment\" status resolves to paid (plan decision L14). A changed status is reported to the record history (Transaction::track_external), so the invoice thread shows it when the accounting mail bridge is installed."
         },
         {
           "anchor": "rights-and-locks",
@@ -236,7 +280,7 @@
         },
         {
           "anchor": "refused-until-later-releases",
-          "text": "Unmatching; items of draft or cancelled entries; items in another currency than the company's; write-offs, cash-basis taxes, exchange differences and early-payment discounts. Open-item rows are created at an item's first match (the line triggers of ADR 0048 D4 are not built), so open-item lookups by account and partner do not cover unmatched items yet."
+          "text": "Items of draft or cancelled entries; items in another currency than the company's; write-offs, cash-basis taxes, exchange differences and early-payment discounts. Open-item rows are created at an item's first match (the line triggers of ADR 0048 D4 are not built), so open-item lookups by account and partner do not cover unmatched items yet."
         }
       ]
     },
