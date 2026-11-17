@@ -132,6 +132,13 @@ its first cash journal, and the method line the journal’s first line of the di
 <code dir="auto">payment_method_line_id</code> stay editable; <code dir="auto">amount</code> and <code dir="auto">communication</code> only while <code dir="auto">single_payment</code> (the dialog makes
 one payment). A row is its creator’s only (the access row’s <code dir="auto">create_uid</code> predicate, as the base wizards have) and of
 its documents’ company.</p>
+<p>The client opens the dialog as a new record: its first <code dir="auto">onchange</code> sees the documents as in-memory records, so the
+computes read their stored rows through the records’ origin. The client then creates the dialog with one save that
+carries the documents and what the user entered (amount, memo, journal, method line). The company and its currency
+come from a read-only <code dir="auto">#[compute(candidate, ...)]</code>: that only keeps such a create from being refused for an async
+currency. The documents are linked after the INSERT, so the company and currency arrive with the recompute that
+follows the link, and that recompute keeps what the row already holds: the entered amount and memo on the first
+computation, the chosen journal, and the chosen method line while it is a line of that journal and direction.</p>
 <p><code dir="auto">action_create_payments()</code> asks the write right on the dialog row and locks it, reads the documents after the
 caller’s read check, refuses by name what cannot be paid
 together (not an invoice, bill or credit note; not confirmed; blocked; nothing left to pay; another currency than the
