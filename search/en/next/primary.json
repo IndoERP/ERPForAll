@@ -1,7 +1,7 @@
 {
   "lang": "en",
   "version": "next",
-  "doc_count": 99,
+  "doc_count": 102,
   "docs": [
     {
       "id": "index",
@@ -409,6 +409,97 @@
           "id": "rules-the-database-takes-over-with-posting",
           "depth": 2,
           "text": "Rules the database takes over with the posted-row guards"
+        }
+      ],
+      "shard_id": "shard_developer_account_1"
+    },
+    {
+      "id": "developer/addon-guide/account-payment-terms",
+      "title": "Payment terms: models, the split of a total and the invoice integration",
+      "description": "The account.payment.term and account.payment.term.line models, the pure due-date and instalment arithmetic, the partner default properties and how the invoice line sync writes one receivable or payable line per instalment.",
+      "audience": "developer",
+      "module": "account",
+      "models": [
+        "account.payment.term",
+        "account.payment.term.line",
+        "account.move",
+        "res.partner"
+      ],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-ACCTERM-001",
+        "SPEC-ACCTERM-025",
+        "SPEC-ACCTERM-063",
+        "SPEC-ACCTERM-079"
+      ],
+      "headings": [
+        {
+          "id": "checks",
+          "depth": 2,
+          "text": "Checks"
+        },
+        {
+          "id": "the-split",
+          "depth": 2,
+          "text": "The split"
+        },
+        {
+          "id": "on-invoices",
+          "depth": 2,
+          "text": "On invoices"
+        }
+      ],
+      "shard_id": "shard_developer_account_1"
+    },
+    {
+      "id": "developer/addon-guide/account-reconciliation",
+      "title": "Reconciliation of journal items",
+      "description": "How the account addon matches receivable and payable journal items: matches, settlements, open items, residuals, matching numbers, the invoice amount due and payment status, locks and what is refused.",
+      "audience": "developer",
+      "module": "account",
+      "models": [
+        "account.partial.reconcile",
+        "account.full.reconcile",
+        "account.open.item",
+        "account.move.line"
+      ],
+      "rpc": [
+        "account.move.line.reconcile"
+      ],
+      "spec_ids": [
+        "SPEC-ACCREC-001",
+        "SPEC-ACCREC-015",
+        "SPEC-ACCREC-016",
+        "SPEC-ACCREC-017",
+        "SPEC-ACCREC-040",
+        "SPEC-ACCREC-109",
+        "SPEC-ACCREC-130"
+      ],
+      "headings": [
+        {
+          "id": "models",
+          "depth": 2,
+          "text": "Models"
+        },
+        {
+          "id": "fields-on-journal-items",
+          "depth": 2,
+          "text": "Fields on journal items"
+        },
+        {
+          "id": "matching",
+          "depth": 2,
+          "text": "Matching"
+        },
+        {
+          "id": "rights-and-locks",
+          "depth": 2,
+          "text": "Rights and locks"
+        },
+        {
+          "id": "refused-until-later-releases",
+          "depth": 2,
+          "text": "Refused until later releases"
         }
       ],
       "shard_id": "shard_developer_account_1"
@@ -3013,6 +3104,11 @@
           "text": "Change what a thread shows"
         },
         {
+          "id": "record-history",
+          "depth": 3,
+          "text": "Record history"
+        },
+        {
           "id": "load-a-thread",
           "depth": 3,
           "text": "Load a thread into the client (store topics)"
@@ -4094,6 +4190,41 @@
       "shard_id": "shard_developer_core_1"
     },
     {
+      "id": "developer/addon-guide/report-documents",
+      "title": "Printed business documents: the shared document parts",
+      "description": "The templates of the web addon that every printed business document (invoice, order, delivery slip) is built from: title, addresses, information row, lines table, totals, notes and signatures, with their arguments and one complete report.",
+      "audience": "developer",
+      "module": "web",
+      "models": [
+        "ir.actions.report",
+        "res.partner"
+      ],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-RPT-049",
+        "SPEC-RPT-095",
+        "SPEC-RPT-116"
+      ],
+      "headings": [
+        {
+          "id": "the-parts",
+          "depth": 2,
+          "text": "The parts"
+        },
+        {
+          "id": "a-complete-report",
+          "depth": 2,
+          "text": "A complete report"
+        },
+        {
+          "id": "what-the-print-profile-gives-these-parts",
+          "depth": 2,
+          "text": "What the print profile gives these parts"
+        }
+      ],
+      "shard_id": "shard_developer_web_1"
+    },
+    {
       "id": "developer/addon-guide/restricted-card-host",
       "title": "Restricted card host types",
       "description": "Declare readonly record fields, context keys and helper signatures for the versioned restricted card host contract.",
@@ -4727,7 +4858,7 @@
         {
           "id": "thread-models",
           "depth": 2,
-          "text": "Thread models belong in the store schema"
+          "text": "Thread models are in the store schema by themselves"
         }
       ],
       "shard_id": "shard_developer_mail_1"
