@@ -10,7 +10,7 @@
         "account"
       ],
       "doc_count": 9,
-      "byte_size": 84075
+      "byte_size": 87614
     },
     {
       "shard_id": "shard_developer_barcodes_1",
@@ -37,7 +37,7 @@
         "core"
       ],
       "doc_count": 71,
-      "byte_size": 1224559
+      "byte_size": 1225618
     },
     {
       "shard_id": "shard_developer_mail_1",
@@ -55,7 +55,7 @@
         "product"
       ],
       "doc_count": 1,
-      "byte_size": 32688
+      "byte_size": 32875
     },
     {
       "shard_id": "shard_developer_purchase_1",
@@ -64,7 +64,7 @@
         "purchase"
       ],
       "doc_count": 1,
-      "byte_size": 8416
+      "byte_size": 9458
     },
     {
       "shard_id": "shard_developer_sale_1",
@@ -73,7 +73,7 @@
         "sale"
       ],
       "doc_count": 1,
-      "byte_size": 14815
+      "byte_size": 15597
     },
     {
       "shard_id": "shard_developer_sales_team_1",
@@ -91,7 +91,7 @@
         "stock"
       ],
       "doc_count": 3,
-      "byte_size": 30286
+      "byte_size": 31867
     },
     {
       "shard_id": "shard_developer_uom_1",

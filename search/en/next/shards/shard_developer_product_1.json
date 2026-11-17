@@ -114,7 +114,7 @@
         },
         {
           "anchor": "accounting-tax-extension",
-          "text": "The optional accounting addon owns product.template.taxes_id and supplier_taxes_id. Product itself has no accounting dependency. Variants delegate these fields to their template. Explicit empty choices remain empty, and ordinary writes preserve existing unreadable tax links. See [Tax definitions](/en/next/developer/addon-guide/account-taxes.md#default-tax-links) for company scope and defaults. The shared-product resolver and consumers remain outside this extension."
+          "text": "The optional accounting addon owns product.template.taxes_id and supplier_taxes_id. Product itself has no accounting dependency. Variants delegate these fields to their template. Explicit empty choices remain empty, and ordinary writes preserve existing unreadable tax links. See [Tax definitions](/en/next/developer/addon-guide/account-taxes.md#default-tax-links) for company scope and defaults. The shared-product resolver and consumers remain outside this extension. Product version 1.6.0 makes the lead time of a vendor price (delay) required, one day by default; the upgrade gives older rows without one the one day before the column becomes required."
         }
       ]
     }

@@ -185,6 +185,11 @@
           "text": "The invoice line sync"
         },
         {
+          "id": "the-receivable-or-payable-account",
+          "depth": 2,
+          "text": "The receivable or payable account"
+        },
+        {
           "id": "the-tax-computation",
           "depth": 2,
           "text": "The tax computation"
@@ -2476,6 +2481,11 @@
           "id": "static-field-modifiers",
           "depth": 2,
           "text": "Static field modifiers"
+        },
+        {
+          "id": "one2many-line-views",
+          "depth": 2,
+          "text": "The list and form of a one2many's lines"
         },
         {
           "id": "explicit-title-region-bounded-subset",

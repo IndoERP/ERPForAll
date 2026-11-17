@@ -208,11 +208,23 @@ companies is the entry’s company or one of its parents, an unbalanced entry. A
 refuses it is re-dated to the day after the latest violated lock, adjusted to the journal’s numbering reset (ADR
 0147 D4, the reference’s rule); the new date is checked again and a period that is not open refuses it. A
 missing fiscal period is refused naming <code dir="auto">ensure_periods</code>. Then one statement sets the entries and their items to
-<code dir="auto">posted</code> with the final date, and the entries without a number take the next numbers of their journals’
-document chains (<code dir="auto">numbering</code>, ADR 0048 D2.3 step 7). The number of statements does not depend on the batch size.</li>
+<code dir="auto">posted</code> with the final date, and the entries take the next numbers of their journals (<code dir="auto">numbering</code>, ADR 0048 D2.3
+step 7): a credit note in the refund chain of a journal that keeps one (<code dir="auto">R</code> before the code), everything else in
+the document chain. For plain entries the number of statements does not depend on the batch size.
+<ul>
+<li>A draft that carries a name is refused with the collected checks: a posted entry never returns to draft, so
+such a name was written by hand, and it could repeat a posted number or take one the chain gives out later.
+Clear the name to post the entry.</li>
+<li>The draft invoices of the batch are first rebuilt from their product lines (<code dir="auto">invoice::sync_lines</code>), so a price,
+quantity, discount or tax written on an invoice line directly is in the tax line, the receivable or payable
+line and the totals before the invoice checks read them. This part writes each changed line and header on its
+own.</li>
+<li>A re-dated entry keeps its company-currency balances; they are not converted again at the new date.</li>
+</ul>
+</li>
 <li><code dir="auto">button_draft</code> ([<code dir="auto">reset_moves</code>]) returns cancelled entries to draft. A posted entry is refused: every company’s
 posting policy is reversal-only (ADR 0146) until the opt-in policy exists; a posted entry is corrected by a
-reversal ([<code dir="auto">REVERSAL_TASK</code>]).</li>
+reversal (not available yet).</li>
 <li><code dir="auto">button_cancel</code> ([<code dir="auto">cancel_moves</code>]) cancels draft entries; a posted one is refused for the same reason.</li>
 </ul>
 <p>An entry with a line that carries taxes, or with a tax line, reaches the tax report: the tax lock date binds it at

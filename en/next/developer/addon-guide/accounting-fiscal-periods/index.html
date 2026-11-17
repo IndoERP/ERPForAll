@@ -221,7 +221,15 @@ its precise error kind and message. Fiscal-year and hard dates bind every accoun
 and purchase dates bind their journal classes only; tax dates bind report-affecting changes only.
 A cutoff is inclusive. Effective dates take the maximum over the company and its ancestors.
 A branch’s own date never restricts its parent. Hard-locking period rows bind checks before the
-company hard date advances. A missing period is refused with the existing generator/retry instruction.</p>
+company hard date advances. A period that is merely missing does not refuse a post: <code dir="auto">action_post</code> creates the periods its entries need inside its
+own unit of work before the lock check (<code dir="auto">fiscal::ensure::ensure_for_rows</code>, which checks the companies against the
+environment the post was authorised with). It creates only the periods that contain a posted date, for the root company
+and its tree, not the months between two dates. Two units that create the same new month at the same time: the second
+waits for the first one’s commit and then fails with a serialization failure. Inside a retried unit of work (<code dir="auto">Orm::run</code>,
+as the RPC layer runs every call) the retry finds the period and posts; a caller that runs the unit itself without a
+retry sees that failure and posts again. A date beyond the horizon setting, a lock date and a closed or locked period
+still refuse.
+Other writers that ask <code dir="auto">period_admission</code> directly still get <code dir="auto">NoPeriod</code> for a missing period.</p>
 <p>Call once per batch in the same transaction that writes the records. State is private to the call;
 subsequent calls reread it, including after savepoint rollback. There is no process cache or reusable
 permission token. Entry and line hooks are still being integrated, so calling this function is not

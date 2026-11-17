@@ -353,7 +353,15 @@ accepted). The price the line was priced at is kept in <code dir="auto">technica
 the technical price sent with it, so it counts as set by hand. A later change of product, unit or
 quantity prices the line again unless the same write gives a price, its price differs from
 <code dir="auto">technical_price_unit</code> (set by hand), it has an invoiced quantity, or it is a down payment. A
-pricelist change does not price existing lines again.</li>
+pricelist change within one currency keeps hand-set prices and prices the other lines again; on
+a quotation with lines, a pricelist in another currency is refused by name (there is no
+update-prices operation yet). The rule’s minimum quantity is read in the product’s unit, the line’s quantity rounded at the Product Unit precision.</li>
+<li><strong>The form.</strong> A new quotation starts with the active company (<code dir="auto">default_get</code>) and a new line does
+not need a typed description: it takes the product’s (an empty or null description counts as not
+typed). A new line created without <code dir="auto">tax_ids</code> takes the product’s taxes; a given set, the empty one
+too, is kept (copies and API calls included). After confirmation <code dir="auto">date_order</code>, <code dir="auto">validity_date</code> and
+<code dir="auto">fiscal_position_id</code> are refused on write, and on a locked order <code dir="auto">user_id</code> and <code dir="auto">team_id</code>, as the
+form shows them read-only.</li>
 <li><strong>Taxes.</strong> Not given: the product’s <code dir="auto">taxes_id</code> of the order company or a parent; for a line without
 product and display type, the company’s <code dir="auto">account_sale_tax_id</code>; then mapped with the order’s fiscal
 position (<code dir="auto">map_tax</code>). A new product takes its taxes again unless they are given.</li>

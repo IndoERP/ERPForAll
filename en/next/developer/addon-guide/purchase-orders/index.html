@@ -140,15 +140,22 @@ the product cost; converted to the line unit and the order currency;</li>
 <p>A given unit price counts as set by hand unless the values also carry <code dir="auto">technical_price_unit</code> with the same
 value: the line form sends both untouched (default 0), so a line saved from the form without a typed price is
 priced, and its default discount 0 then takes the vendor’s discount. A price given without the technical price
-(an import, a copy) is kept. A vendor price row without a lead time, a tax without a sequence and a product
-without a cost currency are refused by name instead of being read as 0 or another currency.</p>
-<p>A later change of quantity or unit prices the line again, unless someone set its price by hand. Subtotal, tax
+(an import, a copy) is kept. A vendor price always has a lead time (the field is required, one day by default; the
+product upgrade fills older rows); a tax without a sequence and a product without a cost currency are refused by name
+instead of being read as 0 or another currency.</p>
+<p>A later change of quantity, unit or product prices the line again, unless someone set its price by hand; a new
+product also takes the unit, vendor taxes and description of the new product, and a new vendor on the order prices
+its lines again the same way. The stored company and vendor of a line and its technical price are never written
+through the line. Subtotal, tax
 and total come from <code dir="auto">erp_addon_account::tax::compute</code> and are written after every create, write and delete of a
 line, with the order’s untaxed amount, taxes, total, total in the company currency and earliest planned date. A
 client never writes these amounts, the selected vendor price row or the received quantity (that one comes with
 receipts), neither in the values nor as a <code dir="auto">default_&#x3C;field></code> context key. A tax with a negative distribution
 (reverse charge) is refused by name until the tax computation supports it. Confirming an order with a line without a product is refused. Lines of a locked or cancelled order
-do not change, and lines of a confirmed order are added but not deleted.</p>
+do not change, and lines of a confirmed order are added but not deleted. A change of the lines of an approved order
+that takes its total in the company currency above the limit the caller may approve is refused naming the order;
+managers, a lower total and a raise inside the limit pass, and the lines of an order waiting for approval stay
+editable. A company change is refused on an order that has lines; the deadline is refused once the order is approved. The total in the company currency converts at the UTC calendar day of the deadline (a rate dated that day does not count yet), whoever saves the order; the user’s time zone is not used for stored amounts. A line created without <code dir="auto">tax_ids</code> takes the product’s vendor taxes; a given set, the empty one included, is kept.</p>
 <p>To change how a line is priced, extend the seller service of <code dir="auto">product</code> (ADR 0197 D6, worked example), not the
 line.</p>
 

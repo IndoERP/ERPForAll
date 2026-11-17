@@ -106,7 +106,11 @@ writes of a balance are refused by name.</p>
 
 
 
-<table><thead><tr><th>Item</th><th>What it does</th></tr></thead><tbody><tr><td><code dir="auto">QuantKey</code></td><td>The six key parts. The company is the ledger line’s company, never derived from the location. Build it with <code dir="auto">QuantKey::new(company, product, location)</code> and <code dir="auto">.lot_id(..)</code>, <code dir="auto">.package_id(..)</code>, <code dir="auto">.owner_id(..)</code>.</td></tr><tr><td><code dir="auto">QuantChange</code></td><td>A signed on-hand delta, a signed reserved delta and the incoming date the stock carries: <code dir="auto">QuantChange::new(key, quantity, reserved)</code>, <code dir="auto">.in_date(..)</code>.</td></tr><tr><td><code dir="auto">apply_quant_changes(tx, &#x26;[QuantChange])</code></td><td>Applies a batch in the caller’s transaction and returns the new balances, one per distinct stored key, in lock order.</td></tr><tr><td><code dir="auto">QuantFilter</code></td><td>Which balances a read covers: broad (the location and its descendants) or strict (exact key parts): <code dir="auto">QuantFilter::new(company, product, location)</code>, then <code dir="auto">.strict(..)</code>, <code dir="auto">.tracked(..)</code> and the part setters.</td></tr><tr><td><code dir="auto">gather_quants(tx, &#x26;QuantFilter)</code></td><td>The matching balances, lot-bearing ones first, then by id. One query.</td></tr><tr><td><code dir="auto">available_quantity(tx, &#x26;QuantFilter, allow_negative)</code></td><td>Free quantity of the filter. One query.</td></tr><tr><td><code dir="auto">QuantError</code></td><td>Every refusal, with its message and error kind.</td></tr></tbody></table>
+
+
+
+
+<table><thead><tr><th>Item</th><th>What it does</th></tr></thead><tbody><tr><td><code dir="auto">QuantKey</code></td><td>The six key parts. The company is the ledger line’s company, never derived from the location. Build it with <code dir="auto">QuantKey::new(company, product, location)</code> and <code dir="auto">.lot_id(..)</code>, <code dir="auto">.package_id(..)</code>, <code dir="auto">.owner_id(..)</code>.</td></tr><tr><td><code dir="auto">QuantChange</code></td><td>A signed on-hand delta, a signed reserved delta and the incoming date the stock carries: <code dir="auto">QuantChange::new(key, quantity, reserved)</code>, <code dir="auto">.in_date(..)</code>.</td></tr><tr><td><code dir="auto">apply_quant_changes(tx, &#x26;[QuantChange])</code></td><td>Applies a batch in the caller’s transaction and returns the new balances, one per distinct stored key, in lock order. One call takes at most 2,000 distinct keys and 32,000 changes.</td></tr><tr><td><code dir="auto">quant_engine::apply_quant_changes_in_chunks(tx, &#x26;[QuantChange])</code></td><td>The same for a unit whose changes may exceed that bound: sorted by key and applied in ascending calls under the bound, every change of one key in the same call, so the lock order holds. The calls run in one savepoint, so a refusal in a later call undoes the earlier ones and the transaction can go on. Validation, cancellation and every reservation path (Check availability, a reservation at confirmation, a line create or write, Unreserve) use it.</td></tr><tr><td><code dir="auto">QuantFilter</code></td><td>Which balances a read covers: broad (the location and its descendants) or strict (exact key parts): <code dir="auto">QuantFilter::new(company, product, location)</code>, then <code dir="auto">.strict(..)</code>, <code dir="auto">.tracked(..)</code> and the part setters.</td></tr><tr><td><code dir="auto">gather_quants(tx, &#x26;QuantFilter)</code></td><td>The matching balances, lot-bearing ones first, then by id. One query.</td></tr><tr><td><code dir="auto">available_quantity(tx, &#x26;QuantFilter, allow_negative)</code></td><td>Free quantity of the filter. One query.</td></tr><tr><td><code dir="auto">QuantError</code></td><td>Every refusal, with its message and error kind.</td></tr></tbody></table>
 <p><code dir="auto">apply_quant_changes</code> needs a REPEATABLE READ transaction, the ORM default. Use the native <code dir="auto">run_quant_unit</code> entry below for a complete stock unit, including its probe and document changes. The ordinary <code dir="auto">Orm::run</code> retries serialization failures but does not retry stock lock timeouts.</p>
 <p>Before it writes, a batch is checked as a whole. It is refused with nothing changed when:</p>
 <ul>
@@ -250,10 +254,13 @@ location policy’s <code dir="auto">forbid_negative</code> field. For a flagged
 each key after netting: a change that lowers it below zero fails with <code dir="auto">QuantError::NegativeStockForbidden</code> (kind
 Validation, before any write, never clamped); a change that only repays an existing deficit, and every unflagged
 location, behave as before. Switching the flag on is refused with <code dir="auto">ForbidNegativeBlocked</code> while a key at the location
-is below zero. A switch that meets an open stock change at the location, or one that committed a key below zero after
-the switch’s transaction began, fails as a serialization failure and <code dir="auto">Orm::run</code> retries it on a snapshot that sees
-the balance. Not delivered yet: reservation re-flooring, and counting keys with more reserved than on hand when the
-flag is switched on.
+is below zero or has more reserved than on hand. A switch that meets an open stock change at the location, or one
+that took a key’s free quantity (on hand minus reserved) below zero after the switch’s transaction began, fails as a
+serialization failure and <code dir="auto">Orm::run</code> retries it on a snapshot that sees the balance. The engine marks the location’s
+policy row only when a key crosses from a free quantity at or above zero to one below it; a further change of a key
+that is below zero already writes nothing, because the switch sees that key in its snapshot. Each mark makes the
+other engine calls at that location whose snapshot is older fail once with a retryable serialization failure, and
+two calls that both cross at one location can deadlock (one is retried). Not delivered yet: reservation re-flooring.
 The decimal precision is the Product Unit precision (Settings, Technical, Decimal Accuracy).</p>
 <p>Every key below begins with <code dir="auto">stock.quant_</code>. Zero is refused, not treated as unlimited; an empty or deleted row means the default.</p>
 
@@ -325,7 +332,8 @@ true for ORM and RPC callers alike:</p>
 stamps the product-unit snapshot from the unit service, locks the move’s transfer and the move, inserts, and
 raises the reserved quantity of each new line’s key;</li>
 <li><code dir="auto">write</code> of the quantity, unit, source location, package or owner releases the old reservation and takes the
-new one, netted per key in one engine call; the move, transfer, company and product of a line cannot change;</li>
+new one, netted per key in one engine call, also when the written lines need different unit snapshots; the
+move, transfer, company and product of a line cannot change;</li>
 <li><code dir="auto">unlink</code> gives the reservation back.</li>
 </ul>
 <p>After each of them one statement sets every touched move’s <code dir="auto">quantity</code> (the sum of its active lines in the move’s
@@ -336,13 +344,17 @@ move’s <code dir="auto">state</code> and <code dir="auto">quantity</code>: a <
 <code dir="auto">move_ids</code> commands, is refused with <code dir="auto">StockError::DerivedFromLines</code>, as is a <code dir="auto">default_state</code> or <code dir="auto">default_quantity</code>
 context key on a move <code dir="auto">create</code>; a new or copied move starts <code dir="auto">draft</code> with no quantity. A source location that
 bypasses reservation (vendor, customer, inventory, production) and a product that does not track inventory store
-no reservation. Lots on lines and lines without a move are refused by name until their slices exist; done lines are
-fixed (see <a href="#validation">Validation</a>).</p>
+no reservation. Lots on lines and lines without a move are refused by name until their slices exist, also when the
+lot comes as a <code dir="auto">default_lot_id</code>, <code dir="auto">default_lot_name</code> or <code dir="auto">default_child_mode</code> context key; done lines are fixed (see
+<a href="#validation">Validation</a>). A <code dir="auto">create</code> checks that the caller may read the moves it names before it locks them.
+The lines that Check Availability and validation create themselves never take the caller’s <code dir="auto">default_*</code> context.</p>
 
 <div class="sl-heading-wrapper level-h2"><h2 id="reservation">Reservation</h2><a class="sl-anchor-link" href="#reservation"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Reservation”</span></a></div>
 <p><code dir="auto">stock.picking</code> has two methods (also RPC, <code dir="auto">effect = write</code>):</p>
 <ul>
-<li><code dir="auto">action_assign</code> (Check Availability) reserves the transfer’s open moves, refused by name when there is none. A
+<li><code dir="auto">action_assign</code> (Check Availability) reserves the transfer’s open moves, refused by name when there is none. It
+locks the transfers and all their moves once, confirms the drafts without reserving, and reserves every open
+move in one engine call. A
 move from a location that bypasses reservation, or of a product that keeps no stock, gets one line for its
 whole missing quantity. A make-to-order move without origins waits; a move with origin moves keeps its state
 until chained reservation exists. Every other move takes free, lot-less stock (on hand minus reserved) from its
@@ -385,7 +397,8 @@ taken as picked. A move short of its demand (or an unpicked move with demand) wo
 refused by name, unless the operation type never creates backorders: then the move is done with its quantity and
 the unpicked or empty moves are cancelled. A move without quantity and without demand is cancelled; cancelling a
 move that feeds an open move is refused.</p>
-<p>The stock then changes in <strong>one engine call</strong> per validation: the reservations of the done and deleted lines are
+<p>The stock then changes in <strong>one engine call</strong> per validation (in ascending calls of at most 2,000 keys when the
+validation touches more): the reservations of the done and deleted lines are
 released and each done line’s quantity leaves its source key and arrives at its destination key (the result
 package as package), netted per key and applied in the engine’s key order. A location that forbids negative stock
 refuses the whole validation by name and nothing is written. Zero lines are deleted, the done lines join the
