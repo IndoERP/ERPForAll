@@ -130,3 +130,31 @@ test("the office shell is on exactly while an appearance is applied", async () =
   await loadDatabaseTheme(client(false).rpc, "r1", {}, async () => {});
   expect(officeShell()).toBe(false);
 });
+
+test("two appearance addons declaring the same value are refused", async () => {
+  const { rpc, fetch } = server([appearance("theme_office_blue", "office-blue", "Office Blue"), appearance("theme_copy", "office-blue", "Copy")], {});
+  await expect(loadDatabaseTheme(rpc, "r1", {}, async () => {})).rejects.toMatchObject({ kind: "server", message: "Invalid database appearance declaration." });
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+test("values are matched to their declarations by key, not by position", async () => {
+  const declarations = [appearance("theme_office_blue", "office-blue", "Office Blue"), appearance("theme_warm", "warm", "Warm")];
+  const fetch = vi.fn(async (path: unknown) => new Response(JSON.stringify(String(path).endsWith("erp_describe")
+    ? { wire_major: 1, registry_version: "r1", scope: { kind: "global" }, declarations }
+    : { wire_major: 1, scope: { kind: "global" }, revision: "1", values: [{ key: "theme_warm.appearance", value: "warm", source: "stored" }, { key: "theme_office_blue.appearance", value: "default", source: "stored" }] }), { headers: { "Content-Type": "application/json" } }));
+  const loaded: string[] = [];
+  await loadDatabaseTheme(new RpcClient(fetch, () => {}), "r1", {}, async href => { loaded.push(href); });
+  expect(loaded).toEqual(["/theme_warm/static/src/theme.css"]);
+});
+
+test.each([
+  ["a missing value", [{ key: "theme_warm.appearance", value: "warm", source: "stored" }]],
+  ["a duplicated value", [{ key: "theme_warm.appearance", value: "warm", source: "stored" }, { key: "theme_warm.appearance", value: "warm", source: "stored" }]],
+  ["a value for an undeclared key", [{ key: "theme_warm.appearance", value: "warm", source: "stored" }, { key: "theme_other.appearance", value: "default", source: "stored" }]],
+])("a response with %s is reported", async (_name, values) => {
+  const declarations = [appearance("theme_office_blue", "office-blue", "Office Blue"), appearance("theme_warm", "warm", "Warm")];
+  const fetch = vi.fn(async (path: unknown) => new Response(JSON.stringify(String(path).endsWith("erp_describe")
+    ? { wire_major: 1, registry_version: "r1", scope: { kind: "global" }, declarations }
+    : { wire_major: 1, scope: { kind: "global" }, revision: "1", values }), { headers: { "Content-Type": "application/json" } }));
+  await expect(loadDatabaseTheme(new RpcClient(fetch, () => {}), "r1", {}, async () => {})).rejects.toMatchObject({ kind: "server", message: "Invalid database appearance setting." });
+});

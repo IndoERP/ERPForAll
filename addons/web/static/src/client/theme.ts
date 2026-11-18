@@ -76,17 +76,25 @@ export async function loadDatabaseTheme(rpc: RpcClient, registry: string, contex
     .filter((value): value is Appearance => value !== undefined);
   if (!appearances.length) return;
   const keys = appearances.map(item => item.key);
-  if (new Set(keys).size !== keys.length) throw new ClientError("server", "Invalid database appearance declaration.");
+  // One owner per key and per applied value: two addons styling the same attribute value would mix palettes.
+  const applied = appearances.flatMap(item => [...item.choices].filter(choice => choice !== "default"));
+  if (new Set(keys).size !== keys.length || new Set(applied).size !== applied.length) {
+    throw new ClientError("server", "Invalid database appearance declaration.");
+  }
   const response = object(await rpc.call("ir.config.setting", "erp_read_values", { scope, keys, context }));
   if (response["wire_major"] !== 1) throw new ClientError("unsupported", "Unsupported appearance response.");
   checkScope(response);
-  const values = array(response["values"], "appearance values").map(value => object(value, "appearance value"));
-  if (values.length !== appearances.length) throw new ClientError("server", "Invalid database appearance setting.");
-  const selected = appearances.flatMap((item, index) => {
-    const entry = values[index]!, value = entry["value"];
-    if (entry["key"] !== item.key || typeof value !== "string" || !item.choices.has(value)) {
-      throw new ClientError("server", "Invalid database appearance setting.");
-    }
+  const invalidValue = (): ClientError => new ClientError("server", "Invalid database appearance setting.");
+  const stored = new Map<unknown, unknown>();
+  for (const raw of array(response["values"], "appearance values")) {
+    const entry = object(raw, "appearance value");
+    if (stored.has(entry["key"])) throw invalidValue();
+    stored.set(entry["key"], entry["value"]);
+  }
+  if (stored.size !== appearances.length) throw invalidValue();
+  const selected = appearances.flatMap(item => {
+    const value = stored.get(item.key);
+    if (typeof value !== "string" || !item.choices.has(value)) throw invalidValue();
     return value === "default" ? [] : [{ owner: item.owner, value }];
   });
   if (selected.length > 1) {
