@@ -5640,6 +5640,11 @@
           "text": "Overriding `create`, `write` and `unlink`"
         },
         {
+          "id": "overriding-the-other-core-methods",
+          "depth": 3,
+          "text": "`copy`, `copy_data`, `default_get`, `exists`, `filtered_domain` and `upsert`"
+        },
+        {
           "id": "computed-fields-and-constraints-m2bk-override",
           "depth": 2,
           "text": "Computed fields and constraints"
