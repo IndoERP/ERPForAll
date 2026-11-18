@@ -65,7 +65,7 @@ import { RecordForm, formFocus } from "./record-form.js";
 import { MessagingStore } from "@erpforall/mail-store";
 import { ClientError, RpcClient, type CallOptions } from "./transport.js";
 import { attachSubviews } from "./x2many.js";
-import { loadDatabaseTheme, loadUserColorScheme } from "./theme.js";
+import { loadDatabaseTheme, loadUserColorScheme, officeShell } from "./theme.js";
 import { MetadataCache, invalidatesMetadata } from "./metadata-cache.js";
 import { ExpiredMethodAction, MethodActions, type MethodAction } from "./method-actions.js";
 import { BreadcrumbTrail, renderBreadcrumbs } from "./navigation.js";
@@ -540,7 +540,7 @@ export class HumanApp {
       brand.append(logo);
     }
     this.header.append(brand);
-    const office = document.documentElement.dataset["officeTheme"] === "office-blue";
+    const office = officeShell();
     if (office) {
       this.renderSidebarToggle();
       const search = headerMenuSearch({
@@ -1955,7 +1955,7 @@ export class HumanApp {
       observer?.observe(sections);
       this.disposeNavMenus.push(() => { window.removeEventListener("resize", refit); observer?.disconnect(); this.disposeNavMore?.(); this.disposeNavMore = undefined; });
       this.mobileDrawer = new MobileDrawer(mobileDrawer, backdrop, burgerBtn, () => {
-        if (document.documentElement.dataset["officeTheme"] === "office-blue" && window.innerWidth > 768) {
+        if (officeShell() && window.innerWidth > 768) {
           if (this.officeSidebarHidden) {
             this.header.querySelector<HTMLButtonElement>(".office-sidebar-toggle")?.focus();
             return;
@@ -2836,7 +2836,7 @@ export class HumanApp {
     let groupedModel: ListGroupModel | undefined;
     const currencies = new CurrencyDisplayCache();
     let offset = 0, order = "id asc", request = 0, pageSize = view.pageLimit ?? 40;
-    const officeBlue = document.documentElement.dataset["officeTheme"] === "office-blue";
+    const officeBlue = officeShell();
     panel.classList.add("control-panel-list");
     const selectedIds = new Set<number>();
     // Groups the user opened (by group key); a new search, grouping or page starts folded again; a sort keeps them unless it moves the page or orders the groups.

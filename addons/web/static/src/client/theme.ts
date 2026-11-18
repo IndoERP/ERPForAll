@@ -3,18 +3,22 @@ import { array, object, text } from "./metadata.js";
 import { ClientError, type RpcClient } from "./transport.js";
 
 const stylesheetId = "database-appearance-stylesheet";
+// `<addon>.appearance`: the settings registry binds a key's prefix to its installed owner addon.
+const appearanceKey = /^([a-z][a-z0-9_]*)\.appearance$/;
+// A selected value becomes the `data-office-theme` attribute that the owner's stylesheet scopes to.
+const appearanceToken = /^[a-z][a-z0-9-]{0,63}$/;
 
-async function loadThemeStylesheet(): Promise<void> {
+async function loadThemeStylesheet(href: string): Promise<void> {
   const link = document.createElement("link");
   link.id = stylesheetId;
   link.rel = "stylesheet";
   // Tenant-published fixed static alias; the server resolves only the current admitted bundle.
-  link.href = "/theme_office_blue/static/src/theme.css";
+  link.href = href;
   await new Promise<void>((resolve, reject) => {
     const fail = (): void => {
       clearTimeout(timer);
       link.remove();
-      reject(new ClientError("server", "Office Blue stylesheet could not be loaded. Reload the application."));
+      reject(new ClientError("server", "The database appearance stylesheet could not be loaded. Reload the application."));
     };
     const timer = setTimeout(fail, 15000);
     link.onload = () => { clearTimeout(timer); resolve(); };
@@ -23,12 +27,36 @@ async function loadThemeStylesheet(): Promise<void> {
   });
 }
 
-const appearanceKey = "theme_office_blue.appearance";
+/** Whether a database appearance is applied; every appearance styles the sidebar (office) shell. */
+export function officeShell(): boolean {
+  return document.documentElement.hasAttribute("data-office-theme");
+}
 
-/** Resolve only this database's installed declaration. Never persist appearance in browser storage.
- * An absent declaration is the specified uninstall/default path; transport and corrupt values fail.
+interface Appearance { key: string; owner: string; choices: ReadonlySet<string> }
+
+function appearanceOf(declaration: Record<string, unknown>): Appearance | undefined {
+  const key = declaration["key"];
+  const owner = typeof key === "string" ? appearanceKey.exec(key)?.[1] : undefined;
+  if (owner === undefined || typeof key !== "string") return undefined;
+  const invalid = (): ClientError => new ClientError("server", "Invalid database appearance declaration.");
+  const raw = declaration["choices"];
+  if (declaration["kind"] !== "selection" || !Array.isArray(raw)) throw invalid();
+  const choices = new Set<string>();
+  for (const pair of raw) {
+    const value: unknown = Array.isArray(pair) ? pair[0] : undefined;
+    if (typeof value !== "string" || (value !== "default" && !appearanceToken.test(value)) || choices.has(value)) throw invalid();
+    choices.add(value);
+  }
+  if (!choices.has("default")) throw invalid();
+  return { key, owner, choices };
+}
+
+/** Resolve only this database's installed appearance declarations. Never persist appearance in browser storage.
+ * Each `<addon>.appearance` selection belongs to one installed addon whose static `src/theme.css` scopes its
+ * palette to the selected value. No declaration is the default path; more than one selected value, transport
+ * and corrupt values fail.
  */
-export async function loadDatabaseTheme(rpc: RpcClient, registry: string, context: Record<string, unknown>, loadStylesheet: () => Promise<void> = loadThemeStylesheet): Promise<void> {
+export async function loadDatabaseTheme(rpc: RpcClient, registry: string, context: Record<string, unknown>, loadStylesheet: (href: string) => Promise<void> = loadThemeStylesheet): Promise<void> {
   document.documentElement.removeAttribute("data-office-theme");
   document.getElementById(stylesheetId)?.remove();
   const scope = { kind: "global" };
@@ -43,26 +71,32 @@ export async function loadDatabaseTheme(rpc: RpcClient, registry: string, contex
     }
   };
   checkScope(description);
-  const matches = array(description["declarations"], "settings declarations")
-    .map(value => object(value, "setting declaration")).filter(value => value["key"] === appearanceKey);
-  if (!matches.length) return;
-  if (matches.length !== 1 || matches[0]?.["kind"] !== "selection") {
-    throw new ClientError("server", "Invalid database appearance declaration.");
-  }
-  const response = object(await rpc.call("ir.config.setting", "erp_read_values", { scope, keys: [appearanceKey], context }));
+  const appearances = array(description["declarations"], "settings declarations")
+    .map(value => appearanceOf(object(value, "setting declaration")))
+    .filter((value): value is Appearance => value !== undefined);
+  if (!appearances.length) return;
+  const keys = appearances.map(item => item.key);
+  if (new Set(keys).size !== keys.length) throw new ClientError("server", "Invalid database appearance declaration.");
+  const response = object(await rpc.call("ir.config.setting", "erp_read_values", { scope, keys, context }));
   if (response["wire_major"] !== 1) throw new ClientError("unsupported", "Unsupported appearance response.");
   checkScope(response);
-  const values = array(response["values"], "appearance values");
-  if (values.length !== 1) throw new ClientError("server", "Invalid database appearance setting.");
-  const entry = object(values[0], "appearance value"), value = entry["value"];
-  if (entry["key"] !== appearanceKey || (value !== "default" && value !== "office-blue")) {
-    throw new ClientError("server", "Invalid database appearance setting.");
+  const values = array(response["values"], "appearance values").map(value => object(value, "appearance value"));
+  if (values.length !== appearances.length) throw new ClientError("server", "Invalid database appearance setting.");
+  const selected = appearances.flatMap((item, index) => {
+    const entry = values[index]!, value = entry["value"];
+    if (entry["key"] !== item.key || typeof value !== "string" || !item.choices.has(value)) {
+      throw new ClientError("server", "Invalid database appearance setting.");
+    }
+    return value === "default" ? [] : [{ owner: item.owner, value }];
+  });
+  if (selected.length > 1) {
+    throw new ClientError("server", "More than one database appearance is selected. Choose one in Settings.");
   }
-  // Explicit selection wins over device preference; the addon stylesheet supplies all tokens.
-  if (value === "office-blue") {
-    await loadStylesheet();
-    document.documentElement.dataset["officeTheme"] = text(value, "appearance");
-  }
+  const chosen = selected[0];
+  if (!chosen) return;
+  // Explicit selection wins over device preference; the owner's stylesheet supplies all tokens.
+  await loadStylesheet(`/${chosen.owner}/static/src/theme.css`);
+  document.documentElement.dataset["officeTheme"] = text(chosen.value, "appearance");
 }
 
 /**
