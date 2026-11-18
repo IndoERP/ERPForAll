@@ -1,0 +1,29 @@
+[package]
+name = "erp-addon-hr"
+description = "ERPForAll addon hr: job positions (spike)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+erp-sdk = { workspace = true }
+
+[dev-dependencies]
+erp-addon-base = { workspace = true }
+erp-addon-mail = { workspace = true }
+erp-addon-uom = { workspace = true }
+erp-addon-web = { workspace = true }
+erp-fields = { workspace = true }
+erp-modules = { workspace = true }
+erp-orm = { workspace = true }
+erp-security = { workspace = true }
+erp-testkit = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
+tokio-postgres = { workspace = true }
+toml = { workspace = true }
+
+[lints]
+workspace = true

@@ -36,6 +36,7 @@ pub static DESCRIPTORS: &[&AddonDescriptor] = &[
     &erp_addon_sale::ADDON,
     &erp_addon_sale_stock::ADDON,
     &erp_addon_ai_base::ADDON,
+    &erp_addon_hr::ADDON,
 ];
 
 /// Expected SQL registrations of native addons; independent of the linked declarations.

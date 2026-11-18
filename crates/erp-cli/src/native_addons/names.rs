@@ -33,6 +33,7 @@ pub const LINKED: &[&str] = &[
     "sale",
     "sale_stock",
     "ai_base",
+    "hr",
 ];
 
 /// The reason for an addon that is only its manifest and its dependency declaration: offering it

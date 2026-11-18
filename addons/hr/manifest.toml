@@ -1,0 +1,12 @@
+name = "Employees"
+summary = "Job positions (spike: one model to prove native addon registration)"
+category = "Human Resources/Employees"
+author = "Arkana"
+license = "MIT OR Apache-2.0"
+version = "1.0.0"
+depends = ["base"]
+icon = "lucide:briefcase"
+data = [
+    "views/hr_job_views.xml",
+    "security/ir.access.csv",
+]

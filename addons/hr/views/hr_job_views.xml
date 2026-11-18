@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<!-- Job positions: list, form, action and the Employees menu. -->
+<erp>
+  <record id="hr_job_view_list" model="ir.ui.view">
+    <field name="name">hr.job.list</field>
+    <field name="model">hr.job</field>
+    <field name="arch" type="xml">
+      <list>
+        <field name="name"/>
+        <field name="company_id"/>
+      </list>
+    </field>
+  </record>
+
+  <record id="hr_job_view_form" model="ir.ui.view">
+    <field name="name">hr.job.form</field>
+    <field name="model">hr.job</field>
+    <field name="arch" type="xml">
+      <form record_mode="record">
+        <sheet>
+          <group>
+            <field name="name"/>
+            <field name="company_id"/>
+            <field name="active"/>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+
+  <record id="hr_job_action" model="ir.actions.act_window">
+    <field name="name">Job Positions</field>
+    <field name="res_model">hr.job</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="hr_job_view_list"/>
+  </record>
+
+  <menuitem id="hr_menu_root" name="Employees" groups="base.group_user" sequence="70" web_icon="lucide:briefcase"/>
+  <menuitem id="hr_job_menu" name="Job Positions" parent="hr_menu_root" action="hr_job_action" groups="base.group_user" sequence="10"/>
+</erp>
