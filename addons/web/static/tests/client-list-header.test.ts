@@ -23,10 +23,10 @@ const description = {
 };
 
 /** One registration per model for the whole file (identities are unique); each test sets the behaviour. */
-type Behaviour = { refresh: (domain: unknown[]) => Promise<void> };
+type Behaviour = { refresh: (domain: unknown[], signal: AbortSignal) => Promise<void>; secondThrows?: boolean };
 let behaviour: Behaviour = { refresh: async () => {} };
-const created: ListHeaderEnvironment[] = [], refreshed: unknown[][] = [];
-let disposed = 0;
+const created: ListHeaderEnvironment[] = [], refreshed: unknown[][] = [], signals: AbortSignal[] = [];
+let disposed = 0, secondDisposed = 0;
 registerListHeaderExtension("test.note_header", {
   model: "test.note",
   create(env): ListHeaderHandle {
@@ -36,9 +36,16 @@ registerListHeaderExtension("test.note_header", {
     element.textContent = `${env.title} header`;
     return {
       element,
-      refresh: async domain => { refreshed.push(domain); await behaviour.refresh(domain); },
+      refresh: (domain, { signal }) => { refreshed.push(domain); signals.push(signal); return behaviour.refresh(domain, signal); },
       dispose: () => { disposed += 1; },
     };
+  },
+});
+registerListHeaderExtension("test.note_second_header", {
+  model: "test.note",
+  create(): ListHeaderHandle {
+    if (behaviour.secondThrows) throw new Error("second header cannot start");
+    return { element: document.createElement("div"), refresh: async () => {}, dispose: () => { secondDisposed += 1; } };
   },
 });
 registerListHeaderExtension("test.other_header", {
@@ -47,8 +54,13 @@ registerListHeaderExtension("test.other_header", {
 });
 
 let app: HumanApp | undefined;
+const showModalDescriptor = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, "showModal");
+const closeDialogDescriptor = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, "close");
 beforeEach(() => {
-  created.length = 0; refreshed.length = 0; disposed = 0; behaviour = { refresh: async () => {} };
+  // jsdom has no modal dialogs: the error dialog needs them, as in client-app.test.ts.
+  Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value(this: HTMLDialogElement) { this.open = true; } });
+  Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value(this: HTMLDialogElement) { this.open = false; } });
+  created.length = 0; refreshed.length = 0; signals.length = 0; disposed = 0; secondDisposed = 0; behaviour = { refresh: async () => {} };
   configureClientTemplates([{ name: "web.HumanControlPanel", render: () => {
     const root = document.createElement("section");
     root.setAttribute("data-control-panel", "");
@@ -67,6 +79,12 @@ beforeEach(() => {
       : path.endsWith("web_search_read") ? { length: 1, records: [{ id: 5, name: "Meeting Notes" }] } : [];
     return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
   }));
+});
+afterEach(() => {
+  if (showModalDescriptor) Object.defineProperty(HTMLDialogElement.prototype, "showModal", showModalDescriptor);
+  else Reflect.deleteProperty(HTMLDialogElement.prototype, "showModal");
+  if (closeDialogDescriptor) Object.defineProperty(HTMLDialogElement.prototype, "close", closeDialogDescriptor);
+  else Reflect.deleteProperty(HTMLDialogElement.prototype, "close");
 });
 afterEach(() => { app?.dispose(); app = undefined; vi.unstubAllGlobals(); vi.restoreAllMocks(); document.body.replaceChildren(); history.replaceState(null, "", "/"); });
 
@@ -117,4 +135,51 @@ test("leaving the list disposes its header", async () => {
   await vi.waitFor(() => expect(created).toHaveLength(1));
   app.dispose(); app = undefined;
   expect(disposed).toBe(1);
+});
+
+test("a header that cannot start fails the list loudly and disposes the headers created before it", async () => {
+  behaviour = { refresh: async () => {}, secondThrows: true };
+  const root = host(); app = new HumanApp(root, bootstrap);
+  await expect(app.start()).rejects.toThrow("second header cannot start");
+  expect(created).toHaveLength(1);
+  expect(disposed).toBe(1);
+  expect(root.querySelector(".test-note-header")).toBeNull();
+});
+
+test("a refresh that throws synchronously is reported and never stops the rows", async () => {
+  behaviour = { refresh: () => { throw new Error("thrown before any promise"); } };
+  const reported = vi.spyOn(HumanApp.prototype as unknown as { reportError(error: unknown): void }, "reportError");
+  const root = host(); app = new HumanApp(root, bootstrap); await app.start();
+  await vi.waitFor(() => expect(root.textContent).toContain("Meeting Notes"));
+  await vi.waitFor(() => expect(reported.mock.calls.some(([error]) => error instanceof Error && error.message === "thrown before any promise")).toBe(true));
+});
+
+test("a newer load aborts the previous refresh, whose late failure is not reported; leaving aborts the last", async () => {
+  let failLate: ((error: Error) => void) | undefined;
+  behaviour = { refresh: () => refreshed.length === 1 ? new Promise<void>((_, reject) => { failLate = reject; }) : Promise.resolve() };
+  const reported = vi.spyOn(HumanApp.prototype as unknown as { reportError(error: unknown): void }, "reportError");
+  const root = host(); app = new HumanApp(root, bootstrap); await app.start();
+  await vi.waitFor(() => expect(signals).toHaveLength(1));
+  const input = root.querySelector<HTMLInputElement>(".search-input")!;
+  input.value = "Meeting";
+  root.querySelector<HTMLFormElement>(".search-form")!.dispatchEvent(new Event("submit"));
+  await vi.waitFor(() => expect(signals).toHaveLength(2));
+  expect(signals[0]!.aborted).toBe(true);
+  expect(signals[1]!.aborted).toBe(false);
+  failLate!(new Error("stale counts"));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(reported.mock.calls.some(([error]) => error instanceof Error && error.message === "stale counts")).toBe(false);
+  app.dispose(); app = undefined;
+  expect(signals[1]!.aborted).toBe(true);
+});
+
+test("each header gets its own copy of the domain", async () => {
+  behaviour = { refresh: async domain => { domain.push(["mutated", "=", true]); } };
+  const root = host(); app = new HumanApp(root, bootstrap); await app.start();
+  await vi.waitFor(() => expect(refreshed).toHaveLength(1));
+  const input = root.querySelector<HTMLInputElement>(".search-input")!;
+  input.value = "Meeting";
+  root.querySelector<HTMLFormElement>(".search-form")!.dispatchEvent(new Event("submit"));
+  await vi.waitFor(() => expect(refreshed).toHaveLength(2));
+  expect(JSON.stringify(refreshed[1]!.slice(0, -1))).not.toContain("mutated");
 });

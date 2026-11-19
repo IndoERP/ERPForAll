@@ -106,8 +106,10 @@ export function registerClientAction(tag: string, factory: ClientActionFactory):
 export interface ControlPanelExtension { model: string; component: ComponentClass }
 /** What a list header may use: the list's own data access, read as the signed-in user. */
 export interface ListHeaderEnvironment { model: string; title: string; rpc: RpcClient; context: Record<string, unknown> }
-/** A header mounted above an action's list; `refresh` runs on every load with the domain the rows were read with. */
-export interface ListHeaderHandle { element: HTMLElement; refresh(domain: unknown[]): Promise<void>; dispose(): void }
+/** A header above an action's list view (not kanban, pivot or other views). `refresh` runs on every load with its own
+ * copy of the domain the rows were read with; `signal` aborts when a newer load starts or the list closes, and a
+ * failure after that is not reported. */
+export interface ListHeaderHandle { element: HTMLElement; refresh(domain: unknown[], options: { signal: AbortSignal }): Promise<void>; dispose(): void }
 export interface ListHeaderExtension { model: string; create(environment: ListHeaderEnvironment): ListHeaderHandle }
 export const listHeaderExtensions = new Registry<ListHeaderExtension>("list header extension");
 export function registerListHeaderExtension(key: string, extension: ListHeaderExtension): void { listHeaderExtensions.add(key, extension); }

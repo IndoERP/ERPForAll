@@ -51,7 +51,7 @@ import { RecordState, specification } from "./record.js";
 import { parseRoute, routeUrl, rpcId, type Route, isAddressSizeRefusal } from "./route.js";
 import "./services.js";
 import { type ServiceController } from "./services.js";
-import { clientActions, listHeaderExtensions, serviceControllers, type ClientActionHandle } from "./registry.js";
+import { clientActions, listHeaderExtensions, serviceControllers, type ClientActionHandle, type ListHeaderHandle } from "./registry.js";
 import { mountControlPanel } from "./control-panel.js";
 import { printDropdown, printRecords } from "./report-print.js";
 import { requestLoading } from "./loading.js";
@@ -2937,11 +2937,16 @@ export class HumanApp {
       selected: name => searchModel.getFilters().some(f => f.id === `dashboard_${name}` && f.isActive),
       current: () => generation === this.generation && !this.expired,
     }) : undefined;
-    // Addon headers of this action list (related lists in forms do not come through here) read above the dashboard and rows.
-    const listHeaders = [...listHeaderExtensions.entries()]
-      .filter(([, extension]) => extension.model === description.model)
-      .map(([, extension]) => extension.create({ model: description.model, title: actionTitle, rpc: this.rpc, context }));
-    for (const header of listHeaders) staging.append(header.element);
+    // Addon headers of this action list read above the dashboard and rows; they are created just before the first load.
+    const headerSlot = el("div", undefined, "list-headers");
+    staging.append(headerSlot);
+    const listHeaders: ListHeaderHandle[] = [];
+    let headerRefresh: AbortController | undefined;
+    const disposeHeaders = (): void => {
+      headerRefresh?.abort();
+      for (const header of listHeaders.splice(0)) header.dispose();
+      headerSlot.replaceChildren();
+    };
     if (dashboard) {
       await dashboard.refresh(baseDomain);
       searchModel.addDeclaredFilters([...dashboard.domains()].map(([name,domain]) => ({
@@ -3240,8 +3245,13 @@ export class HumanApp {
     const load = async (refreshDashboard = false): Promise<void> => {
       const mine = ++request, base = searchModel.getDomain();
       void dashboard?.refresh(tabs ? tabs.rowDomain(base) : base, refreshDashboard);
-      // A header failure is reported like any client error and never stops the rows from loading.
-      for (const header of listHeaders) header.refresh(tabs ? tabs.rowDomain(base) : base).catch(error => this.reportError(error));
+      // A header failure is reported like any client error and never stops the rows from loading; a superseded one is not.
+      headerRefresh?.abort();
+      const headerSignal = (headerRefresh = new AbortController()).signal, headerDomain = tabs ? tabs.rowDomain(base) : base;
+      for (const header of listHeaders) {
+        void (async () => header.refresh(structuredClone(headerDomain), { signal: headerSignal }))()
+          .catch(error => { if (!headerSignal.aborted) this.reportError(error); });
+      }
       const savedOpen = searchModel.getListState()?.open ?? [];
       groupedModel?.dispose();
       const groupName = searchModel.getGroupBy()[0], grouping = groupName === undefined ? undefined : searchModel.getGroupableField(groupName.split(":")[0]!);
@@ -3606,9 +3616,17 @@ export class HumanApp {
       }
     };
 
-    try { await load(); } catch (error) { disposeActionMenu(); disposeQuickFilters(); disposePageSize(); searchBar.dispose(); dashboard?.dispose(); throw error; }
+    try {
+      for (const [, extension] of listHeaderExtensions.entries()) {
+        if (extension.model !== description.model) continue;
+        const header = extension.create({ model: description.model, title: actionTitle, rpc: this.rpc, context });
+        listHeaders.push(header);
+        headerSlot.append(header.element);
+      }
+      await load();
+    } catch (error) { disposeHeaders(); disposeActionMenu(); disposeQuickFilters(); disposePageSize(); searchBar.dispose(); dashboard?.dispose(); throw error; }
     return {
-      dispose: () => { choices.dispose(); for (const stop of fieldStops.splice(0)) stop(); for (const header of listHeaders.splice(0)) header.dispose(); groupedModel?.dispose(); disposeActionMenu(); disposeQuickFilters(); disposePageSize(); searchBar.dispose(); dashboard?.dispose(); },
+      dispose: () => { choices.dispose(); for (const stop of fieldStops.splice(0)) stop(); disposeHeaders(); groupedModel?.dispose(); disposeActionMenu(); disposeQuickFilters(); disposePageSize(); searchBar.dispose(); dashboard?.dispose(); },
       settle: () => { settleColumns?.(); }
     };
   }
