@@ -1,7 +1,7 @@
 {
   "lang": "en",
   "version": "next",
-  "total_shards": 12,
+  "total_shards": 13,
   "shards": [
     {
       "shard_id": "shard_developer_account_1",
@@ -37,7 +37,7 @@
         "core"
       ],
       "doc_count": 71,
-      "byte_size": 1232459
+      "byte_size": 1232635
     },
     {
       "shard_id": "shard_developer_mail_1",
@@ -65,6 +65,15 @@
       ],
       "doc_count": 1,
       "byte_size": 9458
+    },
+    {
+      "shard_id": "shard_developer_reporting_1",
+      "audience": "developer",
+      "modules": [
+        "reporting"
+      ],
+      "doc_count": 1,
+      "byte_size": 14340
     },
     {
       "shard_id": "shard_developer_sale_1",
@@ -108,8 +117,8 @@
       "modules": [
         "web"
       ],
-      "doc_count": 7,
-      "byte_size": 51620
+      "doc_count": 8,
+      "byte_size": 56275
     }
   ],
   "page_to_shard": {
@@ -203,6 +212,7 @@
     "developer/addon-guide/store-topic": "shard_developer_mail_1",
     "developer/addon-guide/product": "shard_developer_product_1",
     "developer/addon-guide/purchase-orders": "shard_developer_purchase_1",
+    "developer/addon-guide/dynamic-reports": "shard_developer_reporting_1",
     "developer/addon-guide/sale-orders": "shard_developer_sale_1",
     "developer/addon-guide/sales-team": "shard_developer_sales_team_1",
     "developer/addon-guide/stock-quant-engine": "shard_developer_stock_1",
@@ -210,6 +220,7 @@
     "developer/addon-guide/stock-tracking-change": "shard_developer_stock_1",
     "developer/addon-guide/uom": "shard_developer_uom_1",
     "developer/addon-guide/calendar-view": "shard_developer_web_1",
+    "developer/addon-guide/client-actions": "shard_developer_web_1",
     "developer/addon-guide/dashboard-cards": "shard_developer_web_1",
     "developer/addon-guide/dashboard-headers": "shard_developer_web_1",
     "developer/addon-guide/graph-view": "shard_developer_web_1",

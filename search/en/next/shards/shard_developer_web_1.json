@@ -10,6 +10,7 @@
     "web",
     "web",
     "web",
+    "web",
     "web"
   ],
   "docs": [
@@ -45,6 +46,33 @@
         {
           "anchor": "address",
           "text": "The page address keeps calendar_scale (day, week, month, year) and calendar_date (YYYY-MM-DD). Both are checked by the server's address policy and by the client; a malformed value, or a scale the calendar does not offer, is refused by name (SPEC-VIEW-244). Behaviour matrix: docs/design/m4-calendar-matrix.md. User guide: docs/user/calendar-view.md."
+        }
+      ]
+    },
+    {
+      "page_id": "developer/addon-guide/client-actions",
+      "title": "Client actions",
+      "module": "web",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "A client action opens a whole screen that is not a view of one model's records: a report, a board, a workspace. The data is an ordinary ir.actions.client record (a menu points at it); the screen is code your addon ships. The two meet at a **tag** of the form <addon>.<name>. The server serves a client action only when an installed addon declares its tag, and the browser mounts only a tag a bundle registers. Design: ADR 0234."
+        },
+        {
+          "anchor": "declare-tag",
+          "text": "use erp_sdk::client_actions::ClientActionDecl; use erp_sdk::prelude::*; use erp_sdk::serde_json::{Map, Value as Json}; fn tags() -> Result<Vec<ClientActionDecl>> { Ok(vec![ClientActionDecl::new(\"my_addon.board\", \"My board\", check_params)?]) } // Runs with the caller's own rights and returns the normalized parameters. fn check_params<'a>( _env: &'a Env, _tx: &'a mut Transaction, params: &'a Map<String, Json>, ) -> erp_sdk::BoxFuture<'a, Result<Map<String, Json>>> { Box::pin(async move { match params.get(\"board\") { Some(board) if board.is_i64() => Ok(params.clone()), _ => Err(Error::validation(\"A board action needs an integer 'board'.\")), } }) } erp_sdk::client_action_declarations!(tags); - The tag is <addon>.<name>: <addon> is the declaring addon's technical name, <name> matches [a-z][a-z0-9_]*, the whole tag is at most 64 bytes. A tag outside the addon's namespace, or declared twice, fails composition. Only declarations of installed addons are active. - There is no manifest key: a tag needs a validator, so it is declared in Rust. - The validator is the only place the parameters are interpreted. A screen is chosen through params, never through context."
+        },
+        {
+          "anchor": "menu",
+          "text": "<record id=\"board_action\" model=\"ir.actions.client\"> <field name=\"name\">My board</field> <field name=\"tag\">my_addon.board</field> <field name=\"params\">{\"board\": 1}</field> </record> <menuitem id=\"board_menu\" name=\"My board\" action=\"board_action\"/> What the server checks, each with a message that names the menu, the action or the tag: | Where | Check | |---|---| | Menu load | The action is readable by the caller (internal users may read client actions) and its tag is declared by an installed addon. An undeclared tag fails the whole menu load. | | Open by id (ir.actions.client.erp_load_web_client_action) | Caller read access, declared tag, target = current, empty context, params through the tag's validator and at most 16 KiB encoded and 6 levels deep. | | Action result ({\"type\": \"ir.actions.client\", \"tag\": ...} returned by an object method) | The same checks; the display_notification tag keeps its own result kind. | target other than current and a non-empty context are refused; dialog and full-screen client actions are not supported yet. The menu node carries action_kind: \"client\" so the browser knows which action model the id names (ids are unique across action models)."
+        },
+        {
+          "anchor": "register-screen",
+          "text": "import { registerClientAction } from \"@erpforall/client\"; registerClientAction(\"my_addon.board\", { async create(environment) { const view = document.createElement(\"div\"); view.textContent = Board ${String(environment.action.params[\"board\"])}; environment.host.append(view); return { dispose() { view.remove(); }, captureState() { return { scroll: view.scrollTop }; }, }; }, }); environment carries the host area, the control panel (panel, controls), rpc, companies, run, notice, messages, editorLocale, the decoded action (id, name, tag, params), restored and open(result). - **Disposal** follows ADR 0181: dispose() is synchronous and idempotent, and a disposed screen ignores late rendering. It runs when the user leaves the screen and when the page is disposed. - **State.** captureState() returns JSON of at most 16 KiB when the user leaves; the page hands it back as restored when the same action opens again. A larger state is dropped with a notice and the screen restarts from its defaults. - **Drill down.** open(result) runs an action result (a related list, another client action) through the normal navigation, so the screen stays in the way back. - **Errors.** A second registration of one tag throws. A tag the server sent that the page did not register mounts nothing and shows Client action '<tag>' is declared by the server but not registered by this page. Reload the page. Register before the shell boots, from the entry module named in the addon's static/client.json."
         }
       ]
     },

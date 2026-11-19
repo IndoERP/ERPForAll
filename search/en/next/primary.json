@@ -1,7 +1,7 @@
 {
   "lang": "en",
   "version": "next",
-  "doc_count": 103,
+  "doc_count": 105,
   "docs": [
     {
       "id": "index",
@@ -1559,6 +1559,40 @@
       "shard_id": "shard_developer_core_1"
     },
     {
+      "id": "developer/addon-guide/client-actions",
+      "title": "Client actions",
+      "description": "Open a whole screen from a menu: declare a client action tag in Rust, validate its parameters, and bind the tag to a screen with registerClientAction.",
+      "audience": "developer",
+      "module": "web",
+      "models": [],
+      "rpc": [
+        "ir.actions.client.erp_load_web_client_action"
+      ],
+      "spec_ids": [
+        "SPEC-DYNREP-001",
+        "SPEC-DYNREP-002",
+        "SPEC-DYNREP-003"
+      ],
+      "headings": [
+        {
+          "id": "declare-tag",
+          "depth": 2,
+          "text": "1. Declare the tag on the server"
+        },
+        {
+          "id": "menu",
+          "depth": 2,
+          "text": "2. Point a menu at it"
+        },
+        {
+          "id": "register-screen",
+          "depth": 2,
+          "text": "3. Register the screen in the browser"
+        }
+      ],
+      "shard_id": "shard_developer_web_1"
+    },
+    {
       "id": "developer/addon-guide/client-extensions",
       "title": "Client registries, environments, services and patches",
       "description": "UI4 BASE API under ADR 0030; implementation and validation evidence is in the slice review report. Register contributions from an addon's exported synchronous register(ctx) callback. The assembler supplies callbacks in the server module load order;",
@@ -2164,6 +2198,80 @@
         }
       ],
       "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/dynamic-reports",
+      "title": "Dynamic reports",
+      "description": "Declare a report as a tree of lines with dates, comparison periods, unfolding, load more and drill-down: in data with the definition provider, or in Rust with a native report provider.",
+      "audience": "developer",
+      "module": "reporting",
+      "models": [
+        "reporting.report",
+        "reporting.report.line",
+        "reporting.report.column",
+        "reporting.report.expression"
+      ],
+      "rpc": [
+        "reporting.report.erp_report_options",
+        "reporting.report.erp_report_lines",
+        "reporting.report.erp_report_expand",
+        "reporting.report.erp_report_drill"
+      ],
+      "spec_ids": [
+        "SPEC-DYNREP-016",
+        "SPEC-DYNREP-017",
+        "SPEC-DYNREP-021",
+        "SPEC-DYNREP-022",
+        "SPEC-DYNREP-031",
+        "SPEC-DYNREP-033",
+        "SPEC-DYNREP-034",
+        "SPEC-DYNREP-035",
+        "SPEC-DYNREP-036",
+        "SPEC-DYNREP-037",
+        "SPEC-DYNREP-038",
+        "SPEC-DYNREP-039",
+        "SPEC-DYNREP-040",
+        "SPEC-DYNREP-041",
+        "SPEC-DYNREP-042"
+      ],
+      "headings": [
+        {
+          "id": "declared-by-data",
+          "depth": 2,
+          "text": "A report declared by data"
+        },
+        {
+          "id": "native-provider",
+          "depth": 2,
+          "text": "A report declared by a native provider"
+        },
+        {
+          "id": "calls",
+          "depth": 2,
+          "text": "Calls"
+        },
+        {
+          "id": "screen",
+          "depth": 2,
+          "text": "The screen"
+        },
+        {
+          "id": "export",
+          "depth": 2,
+          "text": "Export to PDF and XLSX"
+        },
+        {
+          "id": "settings",
+          "depth": 2,
+          "text": "Settings"
+        },
+        {
+          "id": "access",
+          "depth": 2,
+          "text": "Access"
+        }
+      ],
+      "shard_id": "shard_developer_reporting_1"
     },
     {
       "id": "developer/addon-guide/erpaddon-package",
