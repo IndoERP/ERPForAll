@@ -23,7 +23,12 @@ fn column<T: tokio_postgres::types::FromSqlOwned>(
         .map_err(|e| Error::db(format!("a later release column {i}: {e}")).with_source(e))
 }
 
-async fn hasher(tx: &mut Transaction) -> Result<ApiKeyHasher> {
+/// The API key hasher of this tenant, derived from its `database.secret` read in `tx`, for
+/// [`issue`] in the same transaction.
+///
+/// # Errors
+/// Validation when `database.secret` is missing or invalid; the read's errors.
+pub async fn hasher(tx: &mut Transaction) -> Result<ApiKeyHasher> {
     let rows = tx.query("SELECT CASE WHEN octet_length(value) BETWEEN 32 AND 512 THEN value END FROM ir_config_parameter WHERE key='database.secret'", &[]).await?;
     let text: Option<String> = match rows.first() {
         Some(row) => column(row, 0)?,

@@ -56,7 +56,15 @@ impl KeyScope {
 pub struct IssueRequest {
     subject: UserId,
     name: Box<str>,
-    expiry: Option<DateTime>,
+    expiry: Expiry,
+}
+/// When a requested key expires.
+#[derive(Clone, Copy)]
+enum Expiry {
+    /// The caller's choice, checked against the policy by [`issue`].
+    At(Option<DateTime>),
+    /// The longest lifetime the subject's groups allow, computed by [`issue`].
+    PolicyMaximum,
 }
 impl IssueRequest {
     /// Validate name (nonempty after trimming, at most 128 bytes), kind and scope.
@@ -69,6 +77,30 @@ impl IssueRequest {
         kind: KeyKind,
         scope: KeyScope,
         expiry: Option<DateTime>,
+    ) -> Result<Self> {
+        Self::validated(subject, name, kind, scope, Expiry::At(expiry))
+    }
+
+    /// As [`IssueRequest::new`], expiring at the longest lifetime the subject's groups allow
+    /// (the largest `api_key_duration` of its direct and implied groups; one day when none sets
+    /// one), cut to a whole second. [`issue`] computes it from the database clock under the same
+    /// subject lock and in the same snapshot as its other checks, so no policy change can slip in
+    /// between reading the maximum and writing the key.
+    pub fn at_policy_maximum(
+        subject: UserId,
+        name: &str,
+        kind: KeyKind,
+        scope: KeyScope,
+    ) -> Result<Self> {
+        Self::validated(subject, name, kind, scope, Expiry::PolicyMaximum)
+    }
+
+    fn validated(
+        subject: UserId,
+        name: &str,
+        kind: KeyKind,
+        scope: KeyScope,
+        expiry: Expiry,
     ) -> Result<Self> {
         if name.len() > 128 || name.trim().is_empty() {
             return Err(Error::validation(
@@ -281,12 +313,16 @@ pub async fn issue(
             "Limit of {limit} API keys is reached for programmatic creation"
         )));
     }
-    validate_expiry(request.expiry, now, subject_system, maximum)?;
+    let expiry = match request.expiry {
+        Expiry::At(expiry) => expiry,
+        Expiry::PolicyMaximum => Some(policy_maximum(now, maximum)?),
+    };
+    validate_expiry(expiry, now, subject_system, maximum)?;
     let secret = GeneratedApiKey::generate()?;
     let token = secret.token();
     let prefix: Box<str> = token.display_prefix().into();
     let digest = hasher.digest(&token);
-    let expires = request.expiry;
+    let expires = expiry;
     let rows = tx
         .query(
             INSERT_SQL,
@@ -346,7 +382,7 @@ pub async fn issue(
         id,
         prefix,
         kid: digest.kid(),
-        expiry: request.expiry,
+        expiry,
         secret: IssuedSecret(secret),
     })
 }
@@ -380,6 +416,18 @@ fn validate_expiry(
     if system {
         return Ok(());
     }
+    let (days, limit) = expiry_limit(now, maximum)?;
+    if expiry.micros() > limit {
+        return Err(Error::validation(format!(
+            "You cannot exceed {days:?} days."
+        )));
+    }
+    Ok(())
+}
+
+/// The allowed lifetime in days (an absent or zero maximum is one day) and the latest allowed
+/// expiry in microseconds.
+fn expiry_limit(now: DateTime, maximum: Option<f64>) -> Result<(f64, i64)> {
     let days = match maximum {
         None | Some(0.0) => 1.0,
         Some(days) => days,
@@ -389,7 +437,7 @@ fn validate_expiry(
             "api_key_duration must be finite and nonnegative",
         ));
     }
-    let micros = days * 86_400_000_000.0;
+    let micros = days * MICROS_PER_DAY;
     if !micros.is_finite() || micros >= i64::MAX as f64 {
         return Err(Error::validation(
             "api_key_duration exceeds timestamp range",
@@ -399,13 +447,19 @@ fn validate_expiry(
         .micros()
         .checked_add(micros.round() as i64)
         .ok_or_else(|| Error::validation("api_key_duration exceeds timestamp range"))?;
-    if expiry.micros() > limit {
-        return Err(Error::validation(format!(
-            "You cannot exceed {days:?} days."
-        )));
-    }
-    Ok(())
+    Ok((days, limit))
 }
+
+/// The latest allowed expiry, cut to a whole second.
+fn policy_maximum(now: DateTime, maximum: Option<f64>) -> Result<DateTime> {
+    let (_, limit) = expiry_limit(now, maximum)?;
+    Ok(DateTime::from_micros(
+        limit - limit.rem_euclid(MICROS_PER_SECOND),
+    ))
+}
+
+const MICROS_PER_DAY: f64 = 86_400_000_000.0;
+const MICROS_PER_SECOND: i64 = 1_000_000;
 
 const INSERT_SQL: &str = "INSERT INTO res_users_apikeys
 (name,user_id,created_by,kind,scope,digest,digest_kid,prefix,models,methods,
@@ -504,5 +558,22 @@ mod tests {
         .unwrap_err();
         assert_eq!(e.kind(), ErrorKind::Validation);
         assert_eq!(e.to_string(), "api_key_duration exceeds timestamp range");
+    }
+    #[test]
+    fn policy_maximum_is_the_limit_cut_to_a_whole_second() {
+        let now = DateTime::from_micros(1_700_000_000_123_456);
+        for (maximum, days) in [(None, 1.0), (Some(0.0), 1.0), (Some(2.5), 2.5)] {
+            let limit = now.micros() + (days * MICROS_PER_DAY) as i64;
+            let expiry = policy_maximum(now, maximum).unwrap();
+            assert_eq!(expiry.micros(), limit - limit.rem_euclid(1_000_000));
+            validate_expiry(Some(expiry), now, false, maximum).unwrap();
+        }
+        let e = policy_maximum(DateTime::from_micros(i64::MAX - 1), Some(1.0)).unwrap_err();
+        assert_eq!(e.to_string(), "api_key_duration exceeds timestamp range");
+        let e = policy_maximum(now, Some(f64::NAN)).unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            "api_key_duration must be finite and nonnegative"
+        );
     }
 }

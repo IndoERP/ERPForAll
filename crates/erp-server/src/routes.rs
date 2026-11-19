@@ -34,6 +34,8 @@ pub const LOGIN: &str = "/erp/login";
 pub const LOGIN_SUCCESS: &str = "/erp/login_successful";
 /// Sign-out.
 pub const LOGOUT: &str = "/erp/session/logout";
+/// Password exchanged for a device API key (`POST`, JSON); no browser session.
+pub const SESSION_API_KEY: &str = "/erp/session/api-key";
 /// Readiness probe, matched on the raw path.
 pub const HEALTH_READY: &str = "/erp/health/ready";
 /// Browser error report endpoint.
@@ -81,6 +83,7 @@ pub const ROUTES: &[RouteMatch] = &[
     RouteMatch::Exact("/erp/login"),
     RouteMatch::Exact("/erp/login_successful"),
     RouteMatch::Exact("/erp/session/logout"),
+    RouteMatch::Exact("/erp/session/api-key"),
     RouteMatch::Exact("/erp/health/ready"),
     RouteMatch::Exact("/erp/client-error"),
     RouteMatch::Exact("/erp/pivot/export"),
@@ -146,6 +149,7 @@ mod tests {
         LOGIN,
         LOGIN_SUCCESS,
         LOGOUT,
+        SESSION_API_KEY,
         HEALTH_READY,
         CLIENT_ERROR,
         PIVOT_EXPORT,

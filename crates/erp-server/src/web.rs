@@ -38,6 +38,9 @@ pub use thread_socket::WebThreadFeed;
 
 type HttpResult<T> = Result<T, Response>;
 
+/// The answer to a login refused by a cooldown, on every login entry.
+const LOGIN_COOLDOWN: &str = "Too many login attempts; try again later.";
+
 #[derive(Clone)]
 struct Services {
     auth: Arc<Auth>,
@@ -265,6 +268,7 @@ mod password_change;
 mod pivot_export;
 mod report;
 mod reporting_export;
+mod session_api_key;
 pub use assistant::{HistoryEntry, HistoryRole, WebAssistant};
 pub use content::{
     ContentLookup, ContentOpenFailure, ContentOpener, ContentRange, ContentReader, FoundContent,
@@ -757,8 +761,9 @@ impl WebApp {
             return finish_response(busy(), false);
         }
         let classified_path = canonical_path(request.uri().path());
-        if classified_path == routes::LOGIN
+        if (classified_path == routes::LOGIN
             && matches!(*request.method(), Method::GET | Method::POST)
+            || classified_path == routes::SESSION_API_KEY && request.method() == Method::POST)
             && !self.login_available.load(Ordering::Acquire)
         {
             return finish_response(busy(), true);
@@ -1412,14 +1417,16 @@ impl WebApp {
                         )
                         .await
                     }
-                    Err(LoginError::Cooldown) => Err(response(
-                        StatusCode::TOO_MANY_REQUESTS,
-                        "Too many login attempts; try again later.",
-                    )),
+                    Err(LoginError::Cooldown) => {
+                        Err(response(StatusCode::TOO_MANY_REQUESTS, LOGIN_COOLDOWN))
+                    }
                     Err(LoginError::Overloaded { .. }) => Err(busy()),
                     Err(LoginError::Failed(error)) => Err(auth_error(error)),
                     Err(_) => Err(internal()),
                 }
+            }
+            (&Method::POST, routes::SESSION_API_KEY) => {
+                session_api_key::exchange(&self.config, headers, body, client, &auth).await
             }
             (&Method::POST, routes::LOGOUT) => {
                 self.form_origin(headers)?;

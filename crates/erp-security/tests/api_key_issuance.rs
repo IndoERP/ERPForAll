@@ -1019,3 +1019,92 @@ async fn null_empty_and_oversized_settings() {
             .unwrap();
     }
 }
+
+/// The policy-maximum request takes its expiry from the subject's groups inside `issue`, in the
+/// same transaction and under the same subject lock as the checks: the longest duration of the
+/// direct and implied groups, one day when none sets one, cut to a whole second.
+#[tokio::test]
+async fn policy_maximum_expiry_is_computed_by_issue_from_the_groups() {
+    let h = support::harness().await;
+    users(&h).await;
+    let hash = hasher();
+    let at_maximum = || {
+        IssueRequest::at_policy_maximum(
+            UserId::new(20).unwrap(),
+            "device",
+            KeyKind::User,
+            KeyScope::Rpc,
+        )
+        .unwrap()
+    };
+    let whole_second = |micros: i64| DateTime::from_micros(micros - micros.rem_euclid(1_000_000));
+
+    // no group sets a duration: one day
+    let mut tx = h.begin().await.unwrap();
+    let clock = now(&mut tx).await;
+    let issued = issue(&mut tx, &hash, &at_maximum()).await.unwrap();
+    let expected = whole_second(clock.micros() + 86_400_000_000);
+    assert_eq!(issued.expiration_date(), Some(expected));
+    let stored: DateTime = tx
+        .query(
+            "SELECT expiration_date FROM res_users_apikeys WHERE id=$1",
+            &[&issued.id().get()],
+        )
+        .await
+        .unwrap()[0]
+        .get(0);
+    assert_eq!(stored, expected);
+    tx.rollback().await.unwrap();
+
+    // the largest of a direct (0, no limit of its own) and an implied (2.5 days) group
+    let c = support::connect(&h).await;
+    c.batch_execute("INSERT INTO res_groups(id,name,api_key_duration) VALUES (30,'Direct',0),(31,'Implied',2.5); INSERT INTO res_groups_implied_rel(gid,hid) VALUES(30,31); INSERT INTO res_groups_users_rel(uid,gid) VALUES(20,30)").await.unwrap();
+    let mut tx = h.begin().await.unwrap();
+    let clock = now(&mut tx).await;
+    let issued = issue(&mut tx, &hash, &at_maximum()).await.unwrap();
+    assert_eq!(
+        issued.expiration_date(),
+        Some(whole_second(clock.micros() + 216_000_000_000))
+    );
+    tx.rollback().await.unwrap();
+
+    // an invalid duration still fails loudly
+    c.batch_execute("UPDATE res_groups SET api_key_duration='NaN' WHERE id=31")
+        .await
+        .unwrap();
+    let mut tx = h.begin().await.unwrap();
+    error(
+        issue(&mut tx, &hash, &at_maximum()).await.err().unwrap(),
+        ErrorKind::Validation,
+        "api_key_duration must be finite and nonnegative",
+    );
+    tx.rollback().await.unwrap();
+}
+
+#[test]
+fn policy_maximum_request_validates_like_new() {
+    error(
+        IssueRequest::at_policy_maximum(
+            UserId::new(20).unwrap(),
+            " ",
+            KeyKind::User,
+            KeyScope::Rpc,
+        )
+        .err()
+        .unwrap(),
+        ErrorKind::Validation,
+        "name must be nonempty after trimming and at most 128 bytes",
+    );
+    error(
+        IssueRequest::at_policy_maximum(
+            UserId::new(20).unwrap(),
+            "a",
+            KeyKind::Agent,
+            KeyScope::Rpc,
+        )
+        .err()
+        .unwrap(),
+        ErrorKind::AccessDenied,
+        "API keys of kind 'agent' are not accepted until a later release",
+    );
+}
