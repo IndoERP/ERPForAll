@@ -321,6 +321,35 @@ async fn a_password_buys_a_device_key_that_works_until_it_revokes_itself() {
 /// A wrong password, an unknown login and an archived user get the same bytes; the two without
 /// a stored hash to check still pay for a (dummy) verify.
 #[tokio::test]
+async fn a_json_media_type_with_a_charset_parameter_is_accepted() {
+    let f = fixture().await;
+    support::set_param(&f.h, "base.enable_programmatic_api_keys", "True").await;
+    for media in [
+        "application/json; charset=utf-8",
+        "Application/JSON;charset=UTF-8",
+    ] {
+        let (response, body) = f
+            .send(
+                Request::builder()
+                    .method("POST")
+                    .uri(ROUTE)
+                    .header("x-erp-proxy-token", PROXY_TOKEN)
+                    .header("x-forwarded-for", "192.0.2.9")
+                    .header("content-type", media)
+                    .body(Body::from(body("device-user", PASSWORD)))
+                    .unwrap(),
+            )
+            .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "{media}: {}",
+            text(&body)
+        );
+    }
+}
+
+#[tokio::test]
 async fn refusals_are_byte_identical_and_cost_a_verify() {
     let f = fixture().await;
     support::set_param(&f.h, "base.enable_programmatic_api_keys", "True").await;

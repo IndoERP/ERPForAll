@@ -63,9 +63,20 @@ pub(super) async fn exchange(
         attempt = attempt.user_agent(agent);
     }
     let login = auth.authenticate(attempt).await.map_err(login_refusal)?;
-    let issued = issue_key(auth, &login, &request.device_name).await;
-    // The browser session only opened the issuing transaction: it ends here on every outcome.
-    if let Err(error) = auth.logout(login.session().id()).await {
+    // Issuing and ending the browser session run in their own task: a client that disconnects
+    // drops this request future, but never leaves the session open or a key half-handled.
+    let owner = Arc::clone(auth);
+    let device_name = request.device_name.clone();
+    let uid = login.uid().get();
+    let (issued, ended) = tokio::spawn(async move {
+        let issued = issue_key(&owner, &login, &device_name).await;
+        // The browser session only opened the issuing transaction: it ends here on every outcome.
+        let ended = owner.logout(login.session().id()).await;
+        (issued, ended)
+    })
+    .await
+    .map_err(|_| refuse(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"))?;
+    if let Err(error) = ended {
         return Err(failure(error));
     }
     let (secret, expiry) = issued?;
@@ -73,7 +84,7 @@ pub(super) async fn exchange(
         serde_json::to_vec(&serde_json::json!({
             "api_key": secret.expose(),
             "expires_at": iso_utc(expiry),
-            "uid": login.uid().get(),
+            "uid": uid,
         }))
         .map_err(|_| refuse(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"))?,
     );
@@ -216,7 +227,10 @@ fn header<'a>(headers: &'a HeaderMap, name: &str) -> HttpResult<Option<&'a str>>
 }
 
 async fn read(headers: &HeaderMap, body: Body) -> HttpResult<Exchange> {
-    if header(headers, "content-type")? != Some("application/json") {
+    // The media type decides; a parameter such as `charset=utf-8` is allowed (JSON is UTF-8).
+    let media =
+        header(headers, "content-type")?.map(|value| value.split(';').next().unwrap_or("").trim());
+    if !media.is_some_and(|media| media.eq_ignore_ascii_case("application/json")) {
         return Err(refuse(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             "expected application/json",
