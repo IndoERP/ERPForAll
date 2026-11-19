@@ -19,8 +19,11 @@ erp-addon-web = { workspace = true }
 erp-fields = { workspace = true }
 erp-modules = { workspace = true }
 erp-orm = { workspace = true }
+# company_access: the reader's calls go through the JSON-2 dispatcher
+erp-rpc = { workspace = true }
 erp-security = { workspace = true }
 erp-testkit = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
 tokio-postgres = { workspace = true }
 toml = { workspace = true }
