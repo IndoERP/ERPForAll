@@ -1,3 +1,5 @@
 id,name,model_id/id,group_id/id,operation,domain
 access_hr_job_user,hr.job.user,model_hr_job,base.group_user,r,
 access_hr_job_manager,hr.job.manager,model_hr_job,base.group_system,crud,
+access_hr_employee_user,hr.employee.user,model_hr_employee,base.group_user,r,
+access_hr_employee_manager,hr.employee.manager,model_hr_employee,base.group_system,crud,

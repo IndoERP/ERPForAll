@@ -2,6 +2,8 @@
 //! `hr.job` declares `company_access = direct(field = "company_id", empty = "allow")`: a user
 //! who holds only company A reaches, through JSON-2, the positions of A and the positions
 //! without a company, and neither finds, reads nor selects the positions of company B.
+//! `hr.employee` declares `direct(field = "company_id", empty = "deny")`: the same user reaches
+//! the employees of A only.
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "tests")]
 
 use std::{path::Path, sync::Arc};
@@ -121,6 +123,8 @@ struct Seed {
     own_job: i64,
     other_job: i64,
     shared_job: i64,
+    own_employee: i64,
+    other_employee: i64,
 }
 
 impl Seed {
@@ -170,6 +174,15 @@ async fn seed(db: &TestDb, orm: &Orm) -> Seed {
     let own_job = job(&mut tx, "Own Engineer", Some(own_company)).await;
     let other_job = job(&mut tx, "Other Engineer", Some(other_company)).await;
     let shared_job = job(&mut tx, "Shared Engineer", None).await;
+    let employees = tx.env().records("hr.employee").unwrap();
+    let employee = async |tx: &mut erp_orm::Transaction, name: &str, company: i64| {
+        let vals = RawVals::new()
+            .set_cell("name", Cell::Str(name.into()))
+            .set_cell("company_id", Cell::Id(company));
+        employees.create(tx, vec![vals]).await.unwrap().ids()[0]
+    };
+    let own_employee = employee(&mut tx, "Own Employee", own_company).await;
+    let other_employee = employee(&mut tx, "Other Employee", other_company).await;
     // The base addon refuses a user table without an administrator, so one comes first.
     let user = |login: &str, group: i64| {
         RawVals::new()
@@ -196,6 +209,8 @@ async fn seed(db: &TestDb, orm: &Orm) -> Seed {
         own_job,
         other_job,
         shared_job,
+        own_employee,
+        other_employee,
     }
 }
 
@@ -217,16 +232,17 @@ async fn principal(auth: &Auth) -> erp_orm::Principal {
     principal
 }
 
-/// One JSON-2 call (`POST /json/2/hr.job/<method>`) as the reader: its status and body.
+/// One JSON-2 call (`POST /json/2/<model>/<method>`) as the reader: its status and body.
 async fn call(
     service: &RpcService,
     who: &erp_orm::Principal,
+    model: &str,
     method: &str,
     body: &Value,
 ) -> (u16, Value) {
     let response = service
         .call(RpcCall::json2(
-            &format!("/json/2/hr.job/{method}"),
+            &format!("/json/2/{model}/{method}"),
             serde_json::to_vec(body).unwrap(),
             Caller::Principal(who.clone()),
         ))
@@ -253,10 +269,21 @@ fn refusal(status: u16, body: &Value) -> &str {
     body["message"].as_str().unwrap()
 }
 
-async fn scenario() {
+/// What one model's case checks: the rows a reader of the own company must find (`reachable`),
+/// the row of the other company (`foreign`), and every seeded row (`all`).
+struct Case {
+    model: &'static str,
+    label: &'static str,
+    all: Vec<i64>,
+    reachable: Vec<i64>,
+    foreign: i64,
+}
+
+async fn scenario(case: impl Fn(&Seed) -> Case) {
     let db = TestDb::create().await.unwrap();
     let orm = installed(&db).await;
     let seed = seed(&db, &orm).await;
+    let case = case(&seed);
     let auth = Auth::new(
         orm.clone(),
         erp_security::auth::AuthConfig::DEFAULT,
@@ -266,23 +293,23 @@ async fn scenario() {
     .unwrap();
     let reader = principal(&auth).await;
     let service = RpcService::new(orm.clone(), Host, RpcConfig::default());
-    let all = json!([["id", "in", seed.jobs()]]);
+    let all = json!([["id", "in", case.all]]);
 
-    // The rows exist: the superuser sees all three.
+    // The rows exist: the superuser sees all of them.
     let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
     let every = tx
         .env()
-        .records("hr.job")
+        .records(case.model)
         .unwrap()
         .search_count(&mut tx, &erp_sdk::prelude::Domain::TRUE, None)
         .await
         .unwrap();
     tx.rollback().await.unwrap();
-    assert_eq!(every, 3);
+    assert_eq!(every, case.all.len() as u64);
 
-    // A search finds the own company's position and the one without a company, with the
-    // default companies and with the own company asked for explicitly.
-    let mut expected = vec![seed.own_job, seed.shared_job];
+    // A search finds the reachable rows, with the default companies and with the own company
+    // asked for explicitly.
+    let mut expected = case.reachable.clone();
     expected.sort_unstable();
     for context in [
         json!({}),
@@ -291,6 +318,7 @@ async fn scenario() {
         let (status, rows) = call(
             &service,
             &reader,
+            case.model,
             "search_read",
             &json!({"domain": all, "fields": ["name"], "context": context}),
         )
@@ -299,19 +327,23 @@ async fn scenario() {
         assert_eq!(sorted_ids(&rows), expected, "{context}");
     }
 
-    // Reading the other company's position by id is refused, not answered with an empty list,
-    // and the refusal names the company boundary.
+    // Reading the other company's row by id is refused, not answered with an empty list, and
+    // the refusal names the company boundary.
     let (status, body) = call(
         &service,
         &reader,
+        case.model,
         "read",
-        &json!({"ids": [seed.other_job], "fields": ["name"]}),
+        &json!({"ids": [case.foreign], "fields": ["name"]}),
     )
     .await;
     let message = refusal(status, &body);
     assert!(
         message.starts_with("Access rules protect some of these records.")
-            && message.contains("has no 'read' access to:\n- Job Position (hr.job)")
+            && message.contains(&format!(
+                "has no 'read' access to:\n- {} ({})",
+                case.label, case.model
+            ))
             && message.ends_with(OUTSIDE),
         "{message}"
     );
@@ -324,6 +356,7 @@ async fn scenario() {
         let (status, body) = call(
             &service,
             &reader,
+            case.model,
             "search_read",
             &json!({"domain": all, "fields": ["name"],
                     "context": {"allowed_company_ids": companies}}),
@@ -333,19 +366,40 @@ async fn scenario() {
     }
 }
 
-#[test]
-fn a_user_of_one_company_cannot_reach_job_positions_of_another() {
+fn run(case: fn(&Seed) -> Case) {
     std::thread::Builder::new()
         .stack_size(STACK_SIZE)
-        .spawn(|| {
+        .spawn(move || {
             tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
                 .enable_all()
                 .build()
                 .unwrap()
-                .block_on(scenario());
+                .block_on(scenario(case));
         })
         .unwrap()
         .join()
         .unwrap();
+}
+
+#[test]
+fn a_user_of_one_company_cannot_reach_job_positions_of_another() {
+    run(|seed| Case {
+        model: "hr.job",
+        label: "Job Position",
+        all: seed.jobs().to_vec(),
+        reachable: vec![seed.own_job, seed.shared_job],
+        foreign: seed.other_job,
+    });
+}
+
+#[test]
+fn a_user_of_one_company_cannot_reach_employees_of_another() {
+    run(|seed| Case {
+        model: "hr.employee",
+        label: "Employee",
+        all: vec![seed.own_employee, seed.other_employee],
+        reachable: vec![seed.own_employee],
+        foreign: seed.other_employee,
+    });
 }

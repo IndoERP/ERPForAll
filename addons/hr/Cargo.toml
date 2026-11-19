@@ -1,6 +1,6 @@
 [package]
 name = "erp-addon-hr"
-description = "ERPForAll addon hr: job positions (spike)"
+description = "ERPForAll addon hr: employees and job positions"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

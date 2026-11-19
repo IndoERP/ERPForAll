@@ -65,3 +65,24 @@ fn hr_job_declares_its_fields() {
         "boolean"
     );
 }
+
+/// `hr.employee` has a required name and company, an optional user, an `active` flag and the
+/// work contact fields.
+#[test]
+fn hr_employee_declares_its_fields() {
+    let registry = erp_sdk::RegistryBuilder::new([&erp_addon_base::ADDON, &erp_addon_hr::ADDON])
+        .build()
+        .expect("real linked registry");
+    let employee = registry
+        .model("hr.employee")
+        .expect("hr.employee is linked");
+    let field = |name: &str| employee.field(name).expect(name);
+    assert!(field("name").required);
+    assert!(field("company_id").required);
+    assert_eq!(field("company_id").ty.type_name(), "many2one");
+    assert!(!field("user_id").required);
+    assert_eq!(field("user_id").ty.type_name(), "many2one");
+    assert_eq!(field("active").ty.type_name(), "boolean");
+    assert_eq!(field("work_email").ty.type_name(), "char");
+    assert_eq!(field("work_phone").ty.type_name(), "char");
+}
