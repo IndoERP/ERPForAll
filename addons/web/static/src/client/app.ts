@@ -51,7 +51,7 @@ import { RecordState, specification } from "./record.js";
 import { parseRoute, routeUrl, rpcId, type Route, isAddressSizeRefusal } from "./route.js";
 import "./services.js";
 import { type ServiceController } from "./services.js";
-import { clientActions, serviceControllers, type ClientActionHandle } from "./registry.js";
+import { clientActions, listHeaderExtensions, serviceControllers, type ClientActionHandle } from "./registry.js";
 import { mountControlPanel } from "./control-panel.js";
 import { printDropdown, printRecords } from "./report-print.js";
 import { requestLoading } from "./loading.js";
@@ -2937,6 +2937,11 @@ export class HumanApp {
       selected: name => searchModel.getFilters().some(f => f.id === `dashboard_${name}` && f.isActive),
       current: () => generation === this.generation && !this.expired,
     }) : undefined;
+    // Addon headers of this action list (related lists in forms do not come through here) read above the dashboard and rows.
+    const listHeaders = [...listHeaderExtensions.entries()]
+      .filter(([, extension]) => extension.model === description.model)
+      .map(([, extension]) => extension.create({ model: description.model, title: actionTitle, rpc: this.rpc, context }));
+    for (const header of listHeaders) staging.append(header.element);
     if (dashboard) {
       await dashboard.refresh(baseDomain);
       searchModel.addDeclaredFilters([...dashboard.domains()].map(([name,domain]) => ({
@@ -3235,6 +3240,8 @@ export class HumanApp {
     const load = async (refreshDashboard = false): Promise<void> => {
       const mine = ++request, base = searchModel.getDomain();
       void dashboard?.refresh(tabs ? tabs.rowDomain(base) : base, refreshDashboard);
+      // A header failure is reported like any client error and never stops the rows from loading.
+      for (const header of listHeaders) header.refresh(tabs ? tabs.rowDomain(base) : base).catch(error => this.reportError(error));
       const savedOpen = searchModel.getListState()?.open ?? [];
       groupedModel?.dispose();
       const groupName = searchModel.getGroupBy()[0], grouping = groupName === undefined ? undefined : searchModel.getGroupableField(groupName.split(":")[0]!);
@@ -3601,7 +3608,7 @@ export class HumanApp {
 
     try { await load(); } catch (error) { disposeActionMenu(); disposeQuickFilters(); disposePageSize(); searchBar.dispose(); dashboard?.dispose(); throw error; }
     return {
-      dispose: () => { choices.dispose(); for (const stop of fieldStops.splice(0)) stop(); groupedModel?.dispose(); disposeActionMenu(); disposeQuickFilters(); disposePageSize(); searchBar.dispose(); dashboard?.dispose(); },
+      dispose: () => { choices.dispose(); for (const stop of fieldStops.splice(0)) stop(); for (const header of listHeaders.splice(0)) header.dispose(); groupedModel?.dispose(); disposeActionMenu(); disposeQuickFilters(); disposePageSize(); searchBar.dispose(); dashboard?.dispose(); },
       settle: () => { settleColumns?.(); }
     };
   }
