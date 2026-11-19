@@ -270,12 +270,11 @@ unless <code dir="auto">allow_attachment_group_fields</code> is set.</li>
 <li>At the end of the install or upgrade, a template (or called template) that is not an active QWeb
 view of the database is refused: <code dir="auto">Report 'Order' (my_addon.report_order): template '...' is not an active QWeb view of this database</code>.</li>
 </ul>
-<p>Not available yet: printing. The <code dir="auto">/report/&#x3C;converter>/&#x3C;report>/&#x3C;ids></code> and <code dir="auto">/report/download</code>
-routes, rendering, archiving and the Print menu of the web client are not served yet. The layouts
-<code dir="auto">web.external_layout</code> and <code dir="auto">web.internal_layout</code> are not shipped yet, so a template that calls them
-is refused at install by the rule above. <code dir="auto">report_action</code> returns the client action (<code dir="auto">type</code>, <code dir="auto">name</code>,
-<code dir="auto">report_name</code>, <code dir="auto">report_type</code>, <code dir="auto">context.active_ids</code>, <code dir="auto">data</code>); the web client refuses it as an
-unsupported action until printing is available.</p>
+<p>Printing: a list with selected records and a record form each show a <strong>Print</strong> button before the
+<strong>Actions</strong> menu. It lists the reports of the model (<code dir="auto">erp_print_reports</code>) by name, a model without a
+report shows “No report available”, and the Actions menu never holds reports. On a form, picking a
+report saves unsaved changes first and then prints that one record. <code dir="auto">report_action</code> returns the
+client action (<code dir="auto">type</code>, <code dir="auto">name</code>, <code dir="auto">report_name</code>, <code dir="auto">report_type</code>, <code dir="auto">context.active_ids</code>, <code dir="auto">data</code>).</p>
 
 <div class="sl-heading-wrapper level-h2"><h2 id="scaling-out">Scaling out</h2><a class="sl-anchor-link" href="#scaling-out"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Scaling out”</span></a></div>
 <p>Actions and menus live in PostgreSQL only. The bindings cache is per process and rebuilt on demand;
