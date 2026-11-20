@@ -1,0 +1,30 @@
+{
+  "shard_id": "shard_functional_stock_1",
+  "lang": "en",
+  "version": "next",
+  "audience": "functional",
+  "modules": [
+    "stock"
+  ],
+  "docs": [
+    {
+      "page_id": "user/stock-receipt-admission",
+      "title": "Validate a company-owned receipt",
+      "module": "stock",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "In Inventory, open the supplier receipt and check the company, destination and received quantities. When Stock Valuation Admission is installed, a stock manager validates receipts of company-owned storable products into an internal or transit location of the same company. Select the receipt's company among your active companies. Validation records the physical receipt and reserves its company/product control for the transaction. The control carries no price."
+        },
+        {
+          "anchor": "resolve-refusal",
+          "text": "For an access refusal, ask a stock manager with access to the company and the transfer to validate it. If a valuation seal or a competing operation prevents completion, refresh the transfer and check its state before retrying. A seal that continues to block receipts needs administrator attention. If an integration submits several pickings in one transaction, send the full batch in one validation so the system can reserve every affected product before moving stock."
+        }
+      ]
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 {
   "lang": "id",
   "version": "next",
-  "doc_count": 1,
+  "doc_count": 2,
   "docs": [
     {
       "id": "user/report-barcodes",
@@ -35,6 +35,27 @@
         }
       ],
       "shard_id": "shard_functional_web_1"
+    },
+    {
+      "id": "user/stock-receipt-admission",
+      "title": "Validasi penerimaan barang milik perusahaan",
+      "description": "Menerima barang yang disimpan sebagai stok saat Stock Valuation Admission terpasang.",
+      "audience": "functional",
+      "module": "stock",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-STOCKVALENGINE-001",
+        "SPEC-STOCKVALENGINE-015"
+      ],
+      "headings": [
+        {
+          "id": "resolve-refusal",
+          "depth": 2,
+          "text": "Jika validasi ditolak"
+        }
+      ],
+      "shard_id": "shard_functional_stock_1"
     }
   ]
 }

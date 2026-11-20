@@ -1,7 +1,7 @@
 {
   "lang": "en",
   "version": "next",
-  "total_shards": 15,
+  "total_shards": 16,
   "shards": [
     {
       "shard_id": "shard_developer_account_1",
@@ -10,7 +10,7 @@
         "account"
       ],
       "doc_count": 13,
-      "byte_size": 111734
+      "byte_size": 114018
     },
     {
       "shard_id": "shard_developer_ai_base_1",
@@ -19,7 +19,7 @@
         "ai_base"
       ],
       "doc_count": 1,
-      "byte_size": 5450
+      "byte_size": 5826
     },
     {
       "shard_id": "shard_developer_barcodes_1",
@@ -46,7 +46,7 @@
         "core"
       ],
       "doc_count": 70,
-      "byte_size": 1230641
+      "byte_size": 1235687
     },
     {
       "shard_id": "shard_developer_mail_1",
@@ -82,7 +82,7 @@
         "reporting"
       ],
       "doc_count": 1,
-      "byte_size": 22550
+      "byte_size": 23805
     },
     {
       "shard_id": "shard_developer_sale_1",
@@ -109,7 +109,7 @@
         "stock"
       ],
       "doc_count": 3,
-      "byte_size": 32823
+      "byte_size": 33733
     },
     {
       "shard_id": "shard_developer_uom_1",
@@ -128,6 +128,15 @@
       ],
       "doc_count": 8,
       "byte_size": 56275
+    },
+    {
+      "shard_id": "shard_functional_stock_1",
+      "audience": "functional",
+      "modules": [
+        "stock"
+      ],
+      "doc_count": 1,
+      "byte_size": 1340
     },
     {
       "shard_id": "shard_functional_web_1",
@@ -246,6 +255,7 @@
     "developer/addon-guide/kanban-view": "shard_developer_web_1",
     "developer/addon-guide/pivot-view": "shard_developer_web_1",
     "developer/addon-guide/report-documents": "shard_developer_web_1",
+    "user/stock-receipt-admission": "shard_functional_stock_1",
     "user/report-barcodes": "shard_functional_web_1"
   }
 }

@@ -1,0 +1,30 @@
+{
+  "shard_id": "shard_functional_stock_1",
+  "lang": "id",
+  "version": "next",
+  "audience": "functional",
+  "modules": [
+    "stock"
+  ],
+  "docs": [
+    {
+      "page_id": "user/stock-receipt-admission",
+      "title": "Validasi penerimaan barang milik perusahaan",
+      "module": "stock",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "Di Inventaris, buka penerimaan dari pemasok lalu periksa perusahaan, lokasi tujuan, dan jumlah yang diterima. Saat Stock Valuation Admission terpasang, manajer stok memvalidasi penerimaan barang stok milik perusahaan ke lokasi internal atau transit perusahaan yang sama. Pastikan perusahaan pada penerimaan termasuk perusahaan aktif Anda. Validasi mencatat penerimaan fisik dan mengunci kontrol perusahaan dan produk selama transaksi. Kontrol ini tidak memuat harga barang."
+        },
+        {
+          "anchor": "resolve-refusal",
+          "text": "Jika hak akses tidak mencukupi, minta manajer stok yang memiliki akses ke perusahaan dan transfer tersebut untuk memvalidasinya. Jika penguncian valuasi atau transaksi lain menghalangi penerimaan, muat ulang transfer dan periksa statusnya sebelum mencoba kembali. Hubungi administrator jika penguncian terus menghalangi penerimaan. Jika integrasi memproses beberapa transfer dalam satu transaksi, kirim semuanya dalam satu validasi agar sistem dapat mengunci semua produk terkait sebelum perpindahan stok."
+        }
+      ]
+    }
+  ]
+}

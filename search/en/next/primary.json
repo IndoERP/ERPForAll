@@ -1,7 +1,7 @@
 {
   "lang": "en",
   "version": "next",
-  "doc_count": 107,
+  "doc_count": 108,
   "docs": [
     {
       "id": "index",
@@ -575,6 +575,11 @@
           "id": "refused-until-later-releases",
           "depth": 2,
           "text": "Refused until later releases"
+        },
+        {
+          "id": "dated-inputs-for-removed-matches",
+          "depth": 2,
+          "text": "Dated inputs for removed matches"
         }
       ],
       "shard_id": "shard_developer_account_1"
@@ -2330,6 +2335,11 @@
           "id": "guarded-balance-sheet",
           "depth": 3,
           "text": "Guarded Balance Sheet (account_reporting 1.6)"
+        },
+        {
+          "id": "historical-partner-ledger-source-filter",
+          "depth": 2,
+          "text": "Historical Partner Ledger source filter"
         }
       ],
       "shard_id": "shard_developer_reporting_1"
@@ -4999,6 +5009,11 @@
           "text": "Validation"
         },
         {
+          "id": "original-line-completion",
+          "depth": 2,
+          "text": "Observing original line completion"
+        },
+        {
           "id": "transfers",
           "depth": 2,
           "text": "Transfers: reference, defaults, cancel, delete"
@@ -6177,7 +6192,13 @@
         "SPEC-ORMX-052",
         "SPEC-HUMAN-007"
       ],
-      "headings": [],
+      "headings": [
+        {
+          "id": "stock-receipt-control",
+          "depth": 2,
+          "text": "Enable control admission for stock receipts"
+        }
+      ],
       "shard_id": "shard_developer_core_1"
     },
     {
@@ -6250,6 +6271,27 @@
         }
       ],
       "shard_id": "shard_functional_web_1"
+    },
+    {
+      "id": "user/stock-receipt-admission",
+      "title": "Validate a company-owned receipt",
+      "description": "Receive storable stock when Stock Valuation Admission is installed.",
+      "audience": "functional",
+      "module": "stock",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-STOCKVALENGINE-001",
+        "SPEC-STOCKVALENGINE-015"
+      ],
+      "headings": [
+        {
+          "id": "resolve-refusal",
+          "depth": 2,
+          "text": "If validation is refused"
+        }
+      ],
+      "shard_id": "shard_functional_stock_1"
     }
   ]
 }

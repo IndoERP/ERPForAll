@@ -1,8 +1,17 @@
 {
   "lang": "id",
   "version": "next",
-  "total_shards": 1,
+  "total_shards": 2,
   "shards": [
+    {
+      "shard_id": "shard_functional_stock_1",
+      "audience": "functional",
+      "modules": [
+        "stock"
+      ],
+      "doc_count": 1,
+      "byte_size": 1399
+    },
     {
       "shard_id": "shard_functional_web_1",
       "audience": "functional",
@@ -14,6 +23,7 @@
     }
   ],
   "page_to_shard": {
+    "user/stock-receipt-admission": "shard_functional_stock_1",
     "user/report-barcodes": "shard_functional_web_1"
   }
 }
