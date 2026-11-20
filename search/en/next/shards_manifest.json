@@ -46,7 +46,7 @@
         "core"
       ],
       "doc_count": 70,
-      "byte_size": 1235687
+      "byte_size": 1237468
     },
     {
       "shard_id": "shard_developer_mail_1",
@@ -82,7 +82,7 @@
         "reporting"
       ],
       "doc_count": 1,
-      "byte_size": 23805
+      "byte_size": 24189
     },
     {
       "shard_id": "shard_developer_sale_1",
@@ -91,7 +91,7 @@
         "sale"
       ],
       "doc_count": 1,
-      "byte_size": 15597
+      "byte_size": 18370
     },
     {
       "shard_id": "shard_developer_sales_team_1",
@@ -127,7 +127,7 @@
         "web"
       ],
       "doc_count": 8,
-      "byte_size": 56275
+      "byte_size": 56416
     },
     {
       "shard_id": "shard_functional_stock_1",

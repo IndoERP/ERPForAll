@@ -3582,6 +3582,11 @@
           "text": "Normalization and overrides"
         },
         {
+          "id": "native-workflow-default-policy",
+          "depth": 3,
+          "text": "Defaults for internally generated records"
+        },
+        {
           "id": "database-default-of-a-fail-closed-flag",
           "depth": 3,
           "text": "Database default of a fail-closed flag"
@@ -4659,6 +4664,11 @@
           "id": "access",
           "depth": 2,
           "text": "Access"
+        },
+        {
+          "id": "direct-stock-delivery",
+          "depth": 2,
+          "text": "Direct stock delivery"
         },
         {
           "id": "not-built-yet",

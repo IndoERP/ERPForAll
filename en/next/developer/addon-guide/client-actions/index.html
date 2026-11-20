@@ -117,7 +117,7 @@ rendering. It runs when the user leaves the screen and when the page is disposed
 <li><strong>State.</strong> <code dir="auto">captureState()</code> returns JSON of at most 16 KiB when the user leaves; the page hands it back as
 <code dir="auto">restored</code> when the same action opens again. A larger state is dropped with a notice and the screen restarts
 from its defaults.</li>
-<li><strong>Drill down.</strong> <code dir="auto">open(result)</code> runs an action result (a related list, another client action) through the normal
+<li><strong>Drill down.</strong> <code dir="auto">open(result)</code> runs an action result (an existing record form, a related list or another client action) through the normal
 navigation, so the screen stays in the way back.</li>
 <li><strong>Errors.</strong> A second registration of one tag throws. A tag the server sent that the page did not register mounts
 nothing and shows <code dir="auto">Client action '&#x3C;tag>' is declared by the server but not registered by this page. Reload the page.</code></li>
