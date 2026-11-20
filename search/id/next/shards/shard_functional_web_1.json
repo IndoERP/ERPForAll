@@ -1,0 +1,38 @@
+{
+  "shard_id": "shard_functional_web_1",
+  "lang": "id",
+  "version": "next",
+  "audience": "functional",
+  "modules": [
+    "web"
+  ],
+  "docs": [
+    {
+      "page_id": "user/report-barcodes",
+      "title": "Barcode pada laporan cetak",
+      "module": "web",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "Templat laporan menentukan jenis kode. Data Matrix dan QR adalah format yang berbeda: permintaan Data Matrix mencetak simbol ECC200 persegi, termasuk saat templat memakai nama ECC200DataMatrix. Perender tidak mengganti kode yang gagal dengan format lain. Pilihan laporan dan label bergantung pada addon yang terpasang; dukungan pengode tidak menambahkan panduan pencetakan label."
+        },
+        {
+          "anchor": "printing",
+          "text": "Cetak dengan ukuran sebenarnya dan jaga area kosong di sekeliling simbol. Data Matrix menyertakan margin selebar satu modul dan tidak memiliki teks keterangan. Minta pembuat laporan menyesuaikan resolusi printer pada templat dengan printer Anda. Jika kode tidak muat, perbesar kotaknya; jangan meregangkan PDF. Gunakan pemindai yang diatur untuk Data Matrix. Kode biasa dapat memuat Unicode, tetapi penanganan pengodean karakter berbeda antar pemindai. Bandingkan hasil pemindaian dengan nilai rekaman asli menggunakan printer dan pemindai Anda sebelum memakai tata letak label untuk kegiatan operasional. Dukungan pengode laporan tidak membuktikan kompatibilitas perangkat keras."
+        },
+        {
+          "anchor": "gs1",
+          "text": "GS1 Data Matrix memerlukan opsi templat secara eksplisit; awalan angka saja tidak mengaktifkannya. Pembuat laporan menyediakan string elemen GS1, memvalidasi pengenal aplikasi dan digit pemeriksa, serta menempatkan pemisah grup yang diperlukan. Pengode menambahkan penanda GS1 dan mempertahankan data yang diberikan. Mode ini menerima ASCII yang dapat dicetak dan pemisah grup; karakter lain ditolak."
+        },
+        {
+          "anchor": "errors",
+          "text": "Nilai yang tidak didukung, panjang berlebih, atau kotak yang terlalu kecil menghentikan perenderan dengan pesan kesalahan. Berikan pesan tersebut dan rekaman terkait kepada pembuat laporan agar nilai atau templat dapat diperbaiki. Perender tidak memendekkan nilai atau menggantinya dengan QR, Code 128, atau teks biasa secara diam-diam."
+        }
+      ]
+    }
+  ]
+}

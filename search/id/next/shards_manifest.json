@@ -1,0 +1,19 @@
+{
+  "lang": "id",
+  "version": "next",
+  "total_shards": 1,
+  "shards": [
+    {
+      "shard_id": "shard_functional_web_1",
+      "audience": "functional",
+      "modules": [
+        "web"
+      ],
+      "doc_count": 1,
+      "byte_size": 2243
+    }
+  ],
+  "page_to_shard": {
+    "user/report-barcodes": "shard_functional_web_1"
+  }
+}

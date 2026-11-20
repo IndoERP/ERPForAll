@@ -1,7 +1,7 @@
 {
   "lang": "en",
   "version": "next",
-  "total_shards": 13,
+  "total_shards": 15,
   "shards": [
     {
       "shard_id": "shard_developer_account_1",
@@ -9,8 +9,17 @@
       "modules": [
         "account"
       ],
-      "doc_count": 12,
-      "byte_size": 104291
+      "doc_count": 13,
+      "byte_size": 111734
+    },
+    {
+      "shard_id": "shard_developer_ai_base_1",
+      "audience": "developer",
+      "modules": [
+        "ai_base"
+      ],
+      "doc_count": 1,
+      "byte_size": 5450
     },
     {
       "shard_id": "shard_developer_barcodes_1",
@@ -36,8 +45,8 @@
       "modules": [
         "core"
       ],
-      "doc_count": 71,
-      "byte_size": 1232635
+      "doc_count": 70,
+      "byte_size": 1230641
     },
     {
       "shard_id": "shard_developer_mail_1",
@@ -64,7 +73,7 @@
         "purchase"
       ],
       "doc_count": 1,
-      "byte_size": 9458
+      "byte_size": 11279
     },
     {
       "shard_id": "shard_developer_reporting_1",
@@ -73,7 +82,7 @@
         "reporting"
       ],
       "doc_count": 1,
-      "byte_size": 14604
+      "byte_size": 22550
     },
     {
       "shard_id": "shard_developer_sale_1",
@@ -100,7 +109,7 @@
         "stock"
       ],
       "doc_count": 3,
-      "byte_size": 31867
+      "byte_size": 32823
     },
     {
       "shard_id": "shard_developer_uom_1",
@@ -119,6 +128,15 @@
       ],
       "doc_count": 8,
       "byte_size": 56275
+    },
+    {
+      "shard_id": "shard_functional_web_1",
+      "audience": "functional",
+      "modules": [
+        "web"
+      ],
+      "doc_count": 1,
+      "byte_size": 2088
     }
   ],
   "page_to_shard": {
@@ -131,9 +149,11 @@
     "developer/addon-guide/account-taxes": "shard_developer_account_1",
     "developer/addon-guide/accounting-addons": "shard_developer_account_1",
     "developer/addon-guide/accounting-fiscal-periods": "shard_developer_account_1",
+    "developer/addon-guide/accounting-mappings": "shard_developer_account_1",
     "developer/addon-guide/accounting-numbering": "shard_developer_account_1",
     "developer/addon-guide/fiscal-positions": "shard_developer_account_1",
     "developer/addon-guide/localization-packs": "shard_developer_account_1",
+    "developer/addon-guide/ai-configuration": "shard_developer_ai_base_1",
     "developer/addon-guide/barcodes": "shard_developer_barcodes_1",
     "developer/addon-guide/attachments": "shard_developer_base_1",
     "developer/installation/attachment-store": "shard_developer_base_1",
@@ -141,7 +161,6 @@
     "developer/addon-guide/access-rules": "shard_developer_core_1",
     "developer/addon-guide/access": "shard_developer_core_1",
     "developer/addon-guide/accessibility": "shard_developer_core_1",
-    "developer/addon-guide/accounting-mappings": "shard_developer_core_1",
     "developer/addon-guide/actions-menus": "shard_developer_core_1",
     "developer/addon-guide/ai-providers": "shard_developer_core_1",
     "developer/addon-guide/audit": "shard_developer_core_1",
@@ -226,6 +245,7 @@
     "developer/addon-guide/graph-view": "shard_developer_web_1",
     "developer/addon-guide/kanban-view": "shard_developer_web_1",
     "developer/addon-guide/pivot-view": "shard_developer_web_1",
-    "developer/addon-guide/report-documents": "shard_developer_web_1"
+    "developer/addon-guide/report-documents": "shard_developer_web_1",
+    "user/report-barcodes": "shard_functional_web_1"
   }
 }

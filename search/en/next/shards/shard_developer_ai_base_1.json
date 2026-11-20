@@ -1,0 +1,30 @@
+{
+  "shard_id": "shard_developer_ai_base_1",
+  "lang": "en",
+  "version": "next",
+  "audience": "developer",
+  "modules": [
+    "ai_base"
+  ],
+  "docs": [
+    {
+      "page_id": "developer/addon-guide/ai-configuration",
+      "title": "AI provider configuration",
+      "module": "ai_base",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "erp-addon-ai-base::config::Credentials validates the [ai] section of the server configuration. The CLI invokes it through the configuration entry shared by erp server and the lifecycle commands. The server crate only retains the optional TOML table; it has no dependency on the AI addon. [ai] max_providers = 32 max_key_bytes = 16384 [ai.provider.office_model] key_file = \"/etc/erpforall/ai/office_model.key\" A relative key path is resolved against the directory of server.toml. A key file must be a regular file, owned by the effective service user, with exact mode 0600, without setuid/setgid/sticky bits. The final path component cannot be a symlink. The token must contain ASCII graphic characters; one terminal LF is accepted. Empty files, whitespace/control characters, non-ASCII bytes, missing files and oversized files fail admission with a provider/path diagnostic that excludes file contents. Parent directories and the server configuration remain operator-controlled trusted paths. These limits are node configuration because the process validates credentials before database access: | Setting | Default | Inclusive range | |---|---|---| | ai.max_providers | 32 | 1–128 | | ai.max_key_bytes | 16384 | 1–65536 | Missing [ai] creates an empty registry. Unknown keys and wrong types fail with sanitized diagnostics. Provider configuration names contain 1–63 ASCII letters, digits, underscores or hyphens. Credentials::require(name) checks only that explicit name and returns erp.ai.provider_unconfigured when absent. It never selects another credential. Secret buffers use Zeroizing<Vec<u8>>, are not serializable or cloneable through this API, and are omitted from Debug. Reload code can construct a replacement registry and swap it only after successful validation. No configuration reload command or running assistant retains the registry yet: the CLI currently loads it for startup validation and drops it. This foundation exposes no credential bytes to external callers. Future provider adapters reside in the same addon and will consume its internal storage."
+        },
+        {
+          "anchor": "provider-and-route-records",
+          "text": "ai_base declares ai.provider and ai.route and is linked into the CLI native addon catalogue. Installation seeds an inactive local provider at http://127.0.0.1:11434/v1 with model local-model, and the main company's explicit assistant route to that provider. These inert values are editable records, not a claim that a local server/model is installed. Default records are noupdate so upgrades preserve operator choices. No hosted provider, key or unrestricted budget is installed. Providers have a unique configuration name, protocol family (anthropic or openai_compatible), base_url, JSON allowed_models, model_limit, region, no_training, terms_reference and active. model_limit is a provider field: default 128, floor 1, hard bound 1024. Each allowed model identifier is unique, nonempty, ASCII graphic text of at most 1024 bytes. Endpoint URLs require HTTP(S), a host, and no embedded credentials, query or fragment. No terms or endpoint URL is visited by this addon. no_training and region record the operator's chosen policy; this slice does not verify vendor terms. Routes have name, required company_id, task_kind (currently only assistant), required provider_id and an explicit allowed model. A SQL unique constraint permits one route per task per company. Native exact-company policy applies to all route reads/writes, including direct record ids. base.group_system may manage configuration; base.group_user may read provider metadata and routes within allowed companies. No model contains keys or key paths. A provider is global configuration; its ordinary metadata is shared. Company-specific choices live on routes. erp_addon_ai_base::routing::resolve(env, tx, credentials) uses the caller's current company and ordinary access checks without elevation. Missing routes fail by company; inactive/missing credentials fail by provider name; no other route/provider/model is tried. If an operator removes a model from a provider's allowlist, existing routes remain stored but subsequent resolutions refuse them. Validation at resolution prevents stale configuration from authorizing a call. There is no provider transport here. The assistant endpoint, transport adapters, retained runtime registry/reload, budget/usage accounting and provider forms/Settings still belong to dependent slices. Backend verification covers configuration admission, fresh installation and role/company boundaries. The complete form and turn-stream secrecy contract remains unverified until those surfaces exist. Configuration reload is not available: changing key files or the server configuration requires a restart. To rotate a credential, replace its file with a regular service-owned file at mode 0600, then restart each node using that configuration. An invalid replacement refuses startup; there is no fallback key. Keep the protected file outside version control and never paste its contents into diagnostics. No live provider requests belong in CI."
+        }
+      ]
+    }
+  ]
+}

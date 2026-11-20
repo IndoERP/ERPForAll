@@ -1,0 +1,38 @@
+{
+  "shard_id": "shard_functional_web_1",
+  "lang": "en",
+  "version": "next",
+  "audience": "functional",
+  "modules": [
+    "web"
+  ],
+  "docs": [
+    {
+      "page_id": "user/report-barcodes",
+      "title": "Barcodes in printed reports",
+      "module": "web",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "Report templates choose the code type. Data Matrix and QR are different formats: a Data Matrix request prints a square ECC200 symbol, including when the template calls it ECC200DataMatrix. The renderer does not replace a failed code with another format. Available report and label choices depend on the installed addons; encoder support does not add a label-printing wizard."
+        },
+        {
+          "anchor": "printing",
+          "text": "Print at actual size and keep the blank margin around the symbol clear. Data Matrix includes a one-module margin and no text caption. Ask the report author to match the template's printer resolution to your printer. If the code does not fit, enlarge its box; do not stretch the PDF. Use a scanner configured for Data Matrix. Ordinary codes can carry Unicode, but scanner handling of character encoding varies. Check the scanned value against the original record on your own printer and scanner before using a label layout operationally. Hardware compatibility is not established by the report encoder."
+        },
+        {
+          "anchor": "gs1",
+          "text": "GS1 Data Matrix requires an explicit template option; a numeric prefix alone does not enable it. The report author supplies the GS1 element string, validates its application identifiers and check digits, and places any group separators. The encoder adds the GS1 marker and preserves the supplied data. It accepts printable ASCII and group separators in this mode; other characters fail."
+        },
+        {
+          "anchor": "errors",
+          "text": "An unsupported value, excessive length or a box too small stops rendering with an error. Give the report author the error and the affected record so they can correct the value or template. The renderer does not silently shorten the value or switch to QR, Code 128 or plain text."
+        }
+      ]
+    }
+  ]
+}

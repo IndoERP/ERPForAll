@@ -1,0 +1,40 @@
+{
+  "lang": "id",
+  "version": "next",
+  "doc_count": 1,
+  "docs": [
+    {
+      "id": "user/report-barcodes",
+      "title": "Barcode pada laporan cetak",
+      "description": "Mencetak dan memindai Data Matrix, memahami mode GS1, dan menangani kesalahan perenderan.",
+      "audience": "functional",
+      "module": "web",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-RPTBARCODE-029",
+        "SPEC-RPTBARCODE-037",
+        "SPEC-RPTBARCODE-038",
+        "SPEC-RPTBARCODE-039"
+      ],
+      "headings": [
+        {
+          "id": "printing",
+          "depth": 2,
+          "text": "Mencetak dan memindai"
+        },
+        {
+          "id": "gs1",
+          "depth": 2,
+          "text": "Label GS1"
+        },
+        {
+          "id": "errors",
+          "depth": 2,
+          "text": "Saat kode tidak dapat dicetak"
+        }
+      ],
+      "shard_id": "shard_functional_web_1"
+    }
+  ]
+}

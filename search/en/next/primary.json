@@ -1,7 +1,7 @@
 {
   "lang": "en",
   "version": "next",
-  "doc_count": 105,
+  "doc_count": 107,
   "docs": [
     {
       "id": "index",
@@ -700,14 +700,24 @@
     },
     {
       "id": "developer/addon-guide/accounting-mappings",
-      "title": "Company-specific accounting mappings: proposed contract",
-      "description": "Design guidance for future company-specific account properties; implementation is pending.",
+      "title": "Company-specific accounting mappings",
+      "description": "Use the company default account adapter and follow the design for mapped account properties.",
       "audience": "developer",
-      "module": "core",
-      "models": [],
+      "module": "account",
+      "models": [
+        "account.default.role",
+        "account.default.generation",
+        "account.default.key",
+        "account.default.segment"
+      ],
       "rpc": [],
       "spec_ids": [],
       "headings": [
+        {
+          "id": "company-defaults-and-chart-activation",
+          "depth": 2,
+          "text": "Company defaults and chart activation"
+        },
         {
           "id": "company-specific-account-properties",
           "depth": 2,
@@ -724,7 +734,7 @@
           "text": "Access and integration"
         }
       ],
-      "shard_id": "shard_developer_core_1"
+      "shard_id": "shard_developer_account_1"
     },
     {
       "id": "developer/addon-guide/accounting-numbering",
@@ -849,6 +859,32 @@
         }
       ],
       "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "developer/addon-guide/ai-configuration",
+      "title": "AI provider configuration",
+      "description": "Configure provider metadata, company routes and protected node-local credential files.",
+      "audience": "developer",
+      "module": "ai_base",
+      "models": [
+        "ai.provider",
+        "ai.route"
+      ],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-AIA-005",
+        "SPEC-AIA-006",
+        "SPEC-AIA-007",
+        "SPEC-AIA-008"
+      ],
+      "headings": [
+        {
+          "id": "provider-and-route-records",
+          "depth": 2,
+          "text": "Provider and route records"
+        }
+      ],
+      "shard_id": "shard_developer_ai_base_1"
     },
     {
       "id": "developer/addon-guide/ai-providers",
@@ -1698,6 +1734,11 @@
           "id": "native-company-tree-queries",
           "depth": 2,
           "text": "Native company-tree queries"
+        },
+        {
+          "id": "company-business-date",
+          "depth": 3,
+          "text": "Company business date"
         }
       ],
       "shard_id": "shard_developer_core_1"
@@ -2269,6 +2310,26 @@
           "id": "access",
           "depth": 2,
           "text": "Access"
+        },
+        {
+          "id": "accounting-example",
+          "depth": 3,
+          "text": "Accounting example"
+        },
+        {
+          "id": "current-balances-and-native-measures",
+          "depth": 3,
+          "text": "Current balances and protected native measures"
+        },
+        {
+          "id": "native-general-ledger",
+          "depth": 3,
+          "text": "Native General Ledger (account_reporting 1.5)"
+        },
+        {
+          "id": "guarded-balance-sheet",
+          "depth": 3,
+          "text": "Guarded Balance Sheet (account_reporting 1.6)"
         }
       ],
       "shard_id": "shard_developer_reporting_1"
@@ -4297,6 +4358,11 @@
           "text": "States and operations"
         },
         {
+          "id": "direct-receipt-bridge",
+          "depth": 2,
+          "text": "Direct receipt bridge"
+        },
+        {
           "id": "numbering",
           "depth": 2,
           "text": "Numbering"
@@ -6151,6 +6217,39 @@
         }
       ],
       "shard_id": "shard_developer_core_1"
+    },
+    {
+      "id": "user/report-barcodes",
+      "title": "Barcodes in printed reports",
+      "description": "Print and scan Data Matrix codes, understand GS1 mode and resolve rendering errors.",
+      "audience": "functional",
+      "module": "web",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [
+        "SPEC-RPTBARCODE-029",
+        "SPEC-RPTBARCODE-037",
+        "SPEC-RPTBARCODE-038",
+        "SPEC-RPTBARCODE-039"
+      ],
+      "headings": [
+        {
+          "id": "printing",
+          "depth": 2,
+          "text": "Print and scan"
+        },
+        {
+          "id": "gs1",
+          "depth": 2,
+          "text": "GS1 labels"
+        },
+        {
+          "id": "errors",
+          "depth": 2,
+          "text": "When a code cannot print"
+        }
+      ],
+      "shard_id": "shard_functional_web_1"
     }
   ]
 }
