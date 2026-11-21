@@ -2497,6 +2497,11 @@
           "id": "generator-and-test-only-producer-boundaries",
           "depth": 2,
           "text": "Generator and test-only producer boundaries"
+        },
+        {
+          "id": "generating-typescript-from-validated-wire-types",
+          "depth": 3,
+          "text": "Generating TypeScript from validated wire types"
         }
       ],
       "shard_id": "shard_developer_core_1"
