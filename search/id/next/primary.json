@@ -6,7 +6,7 @@
     {
       "id": "user/report-barcodes",
       "title": "Barcode pada laporan cetak",
-      "description": "Mencetak dan memindai Data Matrix, memahami mode GS1, dan menangani kesalahan perenderan.",
+      "description": "Mencetak barcode laporan, memahami mode ASCII lengkap dan GS1, serta menangani kesalahan perenderan.",
       "audience": "functional",
       "module": "web",
       "models": [],
@@ -27,6 +27,11 @@
           "id": "gs1",
           "depth": 2,
           "text": "Label GS1"
+        },
+        {
+          "id": "linear",
+          "depth": 2,
+          "text": "Kode linear"
         },
         {
           "id": "errors",

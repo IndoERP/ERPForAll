@@ -26,7 +26,11 @@
         },
         {
           "anchor": "gs1",
-          "text": "GS1 Data Matrix requires an explicit template option; a numeric prefix alone does not enable it. The report author supplies the GS1 element string, validates its application identifiers and check digits, and places any group separators. The encoder adds the GS1 marker and preserves the supplied data. It accepts printable ASCII and group separators in this mode; other characters fail."
+          "text": "GS1 Data Matrix and GS1-128 require an explicit template option; a numeric prefix alone does not enable it. The report author supplies the GS1 element string, validates its application identifiers and check digits, and places any group separators. The encoder adds the GS1 marker and preserves the supplied data. It accepts printable ASCII and group separators in this mode; other characters fail."
+        },
+        {
+          "anchor": "linear",
+          "text": "Extended39 carries lowercase letters and other ASCII characters. Configure your scanner for full-ASCII Code39; ordinary Code39 remains limited to its standard alphabet. Control characters appear as visible hexadecimal escapes in the printed caption, while the code retains the original data. ITF14 includes top and bottom bearer bars. The report author can set their thickness from 2 to 10 narrow modules. They fit inside the code's box; if the box is too short, rendering stops with an error. This supports non-plate printing. Confirm the physical label dimensions required by your trading partner; encoder support alone does not certify a label for every GS1 application."
         },
         {
           "anchor": "errors",

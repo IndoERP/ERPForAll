@@ -777,7 +777,7 @@
         {
           "id": "setting",
           "depth": 2,
-          "text": "The lock-wait setting"
+          "text": "The lock-wait parameter"
         },
         {
           "id": "not-yet",
@@ -887,6 +887,21 @@
           "id": "provider-and-route-records",
           "depth": 2,
           "text": "Provider and route records"
+        },
+        {
+          "id": "sending-a-non-streaming-turn-from-native-code",
+          "depth": 3,
+          "text": "Sending a non-streaming turn from native code"
+        },
+        {
+          "id": "administrator-configuration-ui",
+          "depth": 2,
+          "text": "Administrator configuration UI"
+        },
+        {
+          "id": "interactive-text-turn",
+          "depth": 2,
+          "text": "Interactive text turn"
         }
       ],
       "shard_id": "shard_developer_ai_base_1"
@@ -901,9 +916,20 @@
       "rpc": [],
       "spec_ids": [
         "SPEC-AIA-001",
-        "SPEC-AIA-002"
+        "SPEC-AIA-002",
+        "SPEC-AIA-015"
       ],
       "headings": [
+        {
+          "id": "find-models",
+          "depth": 2,
+          "text": "Looking up readable models"
+        },
+        {
+          "id": "search-records",
+          "depth": 2,
+          "text": "Reading selected records"
+        },
         {
           "id": "tool-turns",
           "depth": 2,
@@ -3421,6 +3447,11 @@
           "id": "adopt-a-streamed-upload",
           "depth": 2,
           "text": "Adopt a streamed upload"
+        },
+        {
+          "id": "saved-record-notifications",
+          "depth": 3,
+          "text": "Saved record notifications"
         }
       ],
       "shard_id": "shard_developer_mail_1"
@@ -4033,6 +4064,10 @@
         "SPEC-PDF-031",
         "SPEC-PDF-032",
         "SPEC-PDF-033",
+        "SPEC-PDF-056",
+        "SPEC-PDF-057",
+        "SPEC-PDF-058",
+        "SPEC-PDF-059",
         "SPEC-RPT-089",
         "SPEC-RPT-090"
       ],
@@ -4056,6 +4091,11 @@
           "id": "layers",
           "depth": 2,
           "text": "Layers (optional content)"
+        },
+        {
+          "id": "forms",
+          "depth": 2,
+          "text": "Forms and signed documents"
         },
         {
           "id": "attachments-metadata-einvoice",
@@ -4401,6 +4441,16 @@
           "id": "extending-the-order",
           "depth": 2,
           "text": "Extending the order from another addon"
+        },
+        {
+          "id": "vendor-bill-item-source",
+          "depth": 3,
+          "text": "Vendor bill item source"
+        },
+        {
+          "id": "first-direct-vendor-bill",
+          "depth": 2,
+          "text": "First direct vendor bill"
         }
       ],
       "shard_id": "shard_developer_purchase_1"
@@ -5029,6 +5079,11 @@
           "text": "Transfers: reference, defaults, cancel, delete"
         },
         {
+          "id": "transfer-returns",
+          "depth": 2,
+          "text": "Returns from completed stock transfers"
+        },
+        {
           "id": "not-yet",
           "depth": 2,
           "text": "Not yet available"
@@ -5038,14 +5093,19 @@
     },
     {
       "id": "developer/addon-guide/stock-read-models",
-      "title": "Stock read models: proposed contract",
-      "description": "Future stock-position integration, scope, history, authorization and freshness semantics.",
+      "title": "Stock read models",
+      "description": "Current positions from exact stock sources and the planned history and forecast contract.",
       "audience": "developer",
       "module": "stock",
       "models": [],
       "rpc": [],
       "spec_ids": [],
       "headings": [
+        {
+          "id": "current-product-positions",
+          "depth": 2,
+          "text": "Current product positions"
+        },
         {
           "id": "one-position-service",
           "depth": 2,
@@ -6252,7 +6312,7 @@
     {
       "id": "user/report-barcodes",
       "title": "Barcodes in printed reports",
-      "description": "Print and scan Data Matrix codes, understand GS1 mode and resolve rendering errors.",
+      "description": "Print report barcodes, understand full-ASCII and GS1 modes, and resolve rendering errors.",
       "audience": "functional",
       "module": "web",
       "models": [],
@@ -6273,6 +6333,11 @@
           "id": "gs1",
           "depth": 2,
           "text": "GS1 labels"
+        },
+        {
+          "id": "linear",
+          "depth": 2,
+          "text": "Linear codes"
         },
         {
           "id": "errors",

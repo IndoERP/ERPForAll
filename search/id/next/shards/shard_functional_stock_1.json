@@ -22,7 +22,7 @@
         },
         {
           "anchor": "resolve-refusal",
-          "text": "Jika hak akses tidak mencukupi, minta manajer stok yang memiliki akses ke perusahaan dan transfer tersebut untuk memvalidasinya. Jika penguncian valuasi atau transaksi lain menghalangi penerimaan, muat ulang transfer dan periksa statusnya sebelum mencoba kembali. Hubungi administrator jika penguncian terus menghalangi penerimaan. Jika integrasi memproses beberapa transfer dalam satu transaksi, kirim semuanya dalam satu validasi agar sistem dapat mengunci semua produk terkait sebelum perpindahan stok."
+          "text": "Jika hak akses tidak mencukupi, minta manajer stok yang memiliki akses ke perusahaan dan transfer tersebut untuk memvalidasinya. Jika penguncian valuasi atau transaksi lain menghalangi penerimaan, muat ulang transfer dan periksa statusnya sebelum mencoba kembali. Hubungi administrator jika penguncian terus menghalangi penerimaan. Jika integrasi memproses beberapa transfer dalam satu transaksi, kirim semuanya dalam satu validasi agar sistem dapat mengunci semua produk terkait sebelum perpindahan stok. Jika validasi menolak karena terlalu banyak sumber penerimaan, pecah kelompok penerimaan menjadi operasi yang lebih kecil. Baris berulang untuk produk yang sama juga dihitung dalam batas ini. Administrator dapat menyesuaikan batas baris sumber melalui Parameter Sistem pada menu Teknis dalam rentang yang diizinkan."
         }
       ]
     }

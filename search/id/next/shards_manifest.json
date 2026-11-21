@@ -10,7 +10,7 @@
         "stock"
       ],
       "doc_count": 1,
-      "byte_size": 1399
+      "byte_size": 1715
     },
     {
       "shard_id": "shard_functional_web_1",
@@ -19,7 +19,7 @@
         "web"
       ],
       "doc_count": 1,
-      "byte_size": 2243
+      "byte_size": 3003
     }
   ],
   "page_to_shard": {

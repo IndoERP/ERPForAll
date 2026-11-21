@@ -22,7 +22,7 @@
         },
         {
           "anchor": "resolve-refusal",
-          "text": "For an access refusal, ask a stock manager with access to the company and the transfer to validate it. If a valuation seal or a competing operation prevents completion, refresh the transfer and check its state before retrying. A seal that continues to block receipts needs administrator attention. If an integration submits several pickings in one transaction, send the full batch in one validation so the system can reserve every affected product before moving stock."
+          "text": "For an access refusal, ask a stock manager with access to the company and the transfer to validate it. If a valuation seal or a competing operation prevents completion, refresh the transfer and check its state before retrying. A seal that continues to block receipts needs administrator attention. If an integration submits several pickings in one transaction, send the full batch in one validation so the system can reserve every affected product before moving stock. If validation reports too many receipt sources, split the receipt batch into smaller operations. Repeated lines for the same product also count toward this limit. An administrator can adjust the bounded source-row limit in Technical System Parameters."
         }
       ]
     }

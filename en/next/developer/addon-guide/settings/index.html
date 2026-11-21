@@ -72,7 +72,7 @@ transitive dependency closure. Declarations are not generic parameter keys. Secr
 Use the typed constructors for boolean, bounded string/integer/float and selection; no coercion occurs.
 A company declaration has exactly company scope, with no fallback to global values.
 A value of the wrong type or outside a setting’s floor or hard bound is refused, by <code dir="auto">validate</code> and by every write
-through it, with one sentence that names the setting, for example <code dir="auto">account.journal_code_max_length takes a whole number from 1 to 32.</code> A stored value that no longer fits its declaration is refused on read as
+through it, with one sentence that names the setting and its accepted bounds. A stored value that no longer fits its declaration is refused on read as
 <code dir="auto">Stored setting &#x3C;key> is invalid.</code></p>
 <p>Call <code dir="auto">ir.config.setting.erp_describe(scope)</code>, then <code dir="auto">erp_read_values(scope, keys)</code>. Read results carry a
 canonical decimal scope revision. <code dir="auto">erp_write_values(scope, expected_revision, changes)</code> accepts a nonempty
@@ -351,6 +351,10 @@ observed revision. There is no mirror on company rows or arbitrary parameter fal
 sibling under the scope lock; an impossible date is refused rather than adjusted. A failed batch
 preserves the prior values, revision and audit. Inventory managers can read company values; only
 settings administrators can save. The global separator is administrator-only.</p>
+<p>An effective <code dir="auto">stock.picking_policy</code> change updates the active operation types of that company
+in the same transaction. Compare-and-save behavior, the RPC response and existing Settings
+permissions are unchanged. The native <code dir="auto">_apply_value_changes</code> hook receives the exact scoped
+company and only the changed effective values. Consumer failures roll back the batch.</p>
 <p>Key-level refusals have kind <code dir="auto">Access</code>, HTTP status 403, and the sentence
 <code dir="auto">Setting &#x3C;key> is unavailable or access is denied.</code> The key comes from the request. Unknown,
 inaccessible, wrong-scope and information/link keys use the same refusal path and do not reveal

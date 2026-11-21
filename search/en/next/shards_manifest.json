@@ -10,7 +10,7 @@
         "account"
       ],
       "doc_count": 13,
-      "byte_size": 114018
+      "byte_size": 114842
     },
     {
       "shard_id": "shard_developer_ai_base_1",
@@ -19,7 +19,7 @@
         "ai_base"
       ],
       "doc_count": 1,
-      "byte_size": 5826
+      "byte_size": 11716
     },
     {
       "shard_id": "shard_developer_barcodes_1",
@@ -46,7 +46,7 @@
         "core"
       ],
       "doc_count": 70,
-      "byte_size": 1237468
+      "byte_size": 1243554
     },
     {
       "shard_id": "shard_developer_mail_1",
@@ -55,7 +55,7 @@
         "mail"
       ],
       "doc_count": 2,
-      "byte_size": 69958
+      "byte_size": 71066
     },
     {
       "shard_id": "shard_developer_product_1",
@@ -73,7 +73,7 @@
         "purchase"
       ],
       "doc_count": 1,
-      "byte_size": 11279
+      "byte_size": 14110
     },
     {
       "shard_id": "shard_developer_reporting_1",
@@ -82,7 +82,7 @@
         "reporting"
       ],
       "doc_count": 1,
-      "byte_size": 24189
+      "byte_size": 25184
     },
     {
       "shard_id": "shard_developer_sale_1",
@@ -91,7 +91,7 @@
         "sale"
       ],
       "doc_count": 1,
-      "byte_size": 18370
+      "byte_size": 20463
     },
     {
       "shard_id": "shard_developer_sales_team_1",
@@ -109,7 +109,7 @@
         "stock"
       ],
       "doc_count": 3,
-      "byte_size": 33733
+      "byte_size": 38313
     },
     {
       "shard_id": "shard_developer_uom_1",
@@ -136,7 +136,7 @@
         "stock"
       ],
       "doc_count": 1,
-      "byte_size": 1340
+      "byte_size": 1592
     },
     {
       "shard_id": "shard_functional_web_1",
@@ -145,7 +145,7 @@
         "web"
       ],
       "doc_count": 1,
-      "byte_size": 2088
+      "byte_size": 2806
     }
   ],
   "page_to_shard": {

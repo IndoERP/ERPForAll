@@ -241,6 +241,9 @@ service reads the declaration through <code dir="auto">JournalSequence</code>, w
 journal entry work, which also rewrites the numbering tests that use free journal ids.</p>
 
 <div class="sl-heading-wrapper level-h3"><h3 id="journal-settings">Journal settings</h3><a class="sl-anchor-link" href="#journal-settings"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Journal settings”</span></a></div>
+<p>An administrator can change <code dir="auto">account.journal_code_max_length</code> in Technical > System Parameters.
+It is a database-wide integer with default 16 and bounds 1 to 32 characters. Account 1.10 carries
+an existing global Journals setting into that parameter during upgrade.</p>
 <p>Declared settings of the accounting app (database scope, block “Journals”; read: <code dir="auto">account.group_account_readonly</code>,
 write: <code dir="auto">account.group_account_manager</code>):</p>
 
@@ -263,15 +266,10 @@ write: <code dir="auto">account.group_account_manager</code>):</p>
 
 
 
-
-
-
-
-
-<table><thead><tr><th>Setting</th><th>Default</th><th>Bounds</th></tr></thead><tbody><tr><td><code dir="auto">account.journal_code_max_length</code></td><td>16</td><td>1 to 32 characters</td></tr><tr><td><code dir="auto">account.journal_code_prefix_&#x3C;type></code></td><td>INV, BILL, CSH, BNK, CCD, MISC</td><td>one word, at most 16 bytes</td></tr><tr><td><code dir="auto">account.journal_account_types_&#x3C;type></code></td><td>the reference’s default-account domain per type</td><td>a comma list of known account types, at most 512 bytes</td></tr></tbody></table>
-<p><code dir="auto">JournalSettings::read(tx)</code> reads them all in one statement with the framework’s rights. A value of the wrong kind or
-outside its bounds is refused naming the key and its bounds; an empty list of account types is refused. A changed
-setting applies to the next create or write of a journal or account: existing journals are not checked again.</p>
+<table><thead><tr><th>Setting</th><th>Default</th><th>Bounds</th></tr></thead><tbody><tr><td><code dir="auto">account.journal_code_prefix_&#x3C;type></code></td><td>INV, BILL, CSH, BNK, CCD, MISC</td><td>one word, at most 16 bytes</td></tr><tr><td><code dir="auto">account.journal_account_types_&#x3C;type></code></td><td>the reference’s default-account domain per type</td><td>a comma list of known account types, at most 512 bytes</td></tr></tbody></table>
+<p><code dir="auto">JournalSettings::read(tx)</code> reads the typed parameter and loads the remaining Settings keys together.
+The service reports the key and its bounds for invalid values and refuses an empty account type list.
+Changes apply when a journal or account is next created or written.</p>
 
 <div class="sl-heading-wrapper level-h3"><h3 id="journal-dashboard">Journal dashboard card</h3><a class="sl-anchor-link" href="#journal-dashboard"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Journal dashboard card”</span></a></div>
 <p><code dir="auto">account.journal.dashboard_card</code> is a computed, non-stored text field holding the card contract v1 as JSON (buttons,

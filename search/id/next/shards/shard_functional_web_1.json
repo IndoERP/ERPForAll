@@ -26,7 +26,11 @@
         },
         {
           "anchor": "gs1",
-          "text": "GS1 Data Matrix memerlukan opsi templat secara eksplisit; awalan angka saja tidak mengaktifkannya. Pembuat laporan menyediakan string elemen GS1, memvalidasi pengenal aplikasi dan digit pemeriksa, serta menempatkan pemisah grup yang diperlukan. Pengode menambahkan penanda GS1 dan mempertahankan data yang diberikan. Mode ini menerima ASCII yang dapat dicetak dan pemisah grup; karakter lain ditolak."
+          "text": "GS1 Data Matrix dan GS1-128 memerlukan opsi templat secara eksplisit; awalan angka saja tidak mengaktifkannya. Pembuat laporan menyediakan string elemen GS1, memvalidasi pengenal aplikasi dan digit pemeriksa, serta menempatkan pemisah grup yang diperlukan. Pengode menambahkan penanda GS1 dan mempertahankan data yang diberikan. Mode ini menerima ASCII yang dapat dicetak dan pemisah grup; karakter lain ditolak."
+        },
+        {
+          "anchor": "linear",
+          "text": "Extended39 memuat huruf kecil dan karakter ASCII lainnya. Atur pemindai untuk Code39 dengan ASCII lengkap; Code39 biasa tetap memakai alfabet standarnya. Karakter kontrol ditampilkan sebagai escape heksadesimal pada keterangan cetak, sedangkan kode mempertahankan data aslinya. ITF14 menyertakan batang penyangga di atas dan di bawah kode. Pembuat laporan dapat mengatur ketebalannya dari 2 hingga 10 modul sempit. Batang tetap berada di dalam kotak kode; jika kotak terlalu pendek, perenderan berhenti dengan pesan kesalahan. Profil ini mendukung pencetakan tanpa pelat. Pastikan ukuran fisik label sesuai persyaratan mitra dagang Anda; dukungan pengode saja tidak menyertifikasi label untuk setiap penerapan GS1."
         },
         {
           "anchor": "errors",
