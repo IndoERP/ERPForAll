@@ -1,0 +1,50 @@
+{
+  "shard_id": "shard_functional_account_reporting_1",
+  "lang": "id",
+  "version": "next",
+  "audience": "functional",
+  "modules": [
+    "account_reporting"
+  ],
+  "docs": [
+    {
+      "page_id": "user/read-financial-reports",
+      "title": "Laporan Keuangan: Cakupan, Navigasi, Penelusuran Rinci, dan Ekspor",
+      "module": "account_reporting",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "Laporan dinamis menyajikan tabel bertingkat interaktif di mana setiap angka mencerminkan hak akses pengguna dan transaksi yang telah dibukukan. Seorang operator dapat mengatur filter pelaporan, menavigasi ringkasan laba rugi dan neraca, memeriksa dokumen sumber, serta mengekspor data laporan."
+        },
+        {
+          "anchor": "before-starting",
+          "text": "Sebelum membuat laporan keuangan, pastikan akses dan pengaturan telah sesuai: - **Peran dan Hak Akses Pengguna**: Pastikan akun Anda memiliki izin pelaporan akuntansi. Laporan dinamis menghitung angka berdasarkan hak akses Anda; jika Anda tidak memiliki izin untuk melihat akun atau jurnal tertentu, baris status akan menyebutkan apa yang dikecualikan dan tidak menampilkan angka nol secara keliru. Laporan tidak pernah menampilkan jurnal atau akun yang berada di luar hak akses Anda. - **Keseragaman Mata Uang Perusahaan**: Nilai moneter disajikan tanpa simbol mata uang. Jika Anda mengonsolidasikan beberapa perusahaan, pilih entitas yang menggunakan mata uang perusahaan yang sama, atau jalankan laporan secara terpisah untuk setiap mata uang. - **Entri Jurnal yang Telah Dibukukan**: Baris laporan menjumlahkan item jurnal resmi yang telah diposting dalam mata uang perusahaan. Entri draf yang belum diposting tidak akan masuk ke laporan standar sebelum dibukukan."
+        },
+        {
+          "anchor": "navigate-and-scope",
+          "text": "1. Buka laporan langsung melalui aplikasi Accounting di menu **Accounting → Reporting** (seperti **Profit and Loss**, **Balance Sheet**, **General Ledger**, atau **Cash Flow Statement**). Definisi laporan dinamis umum juga dapat dibuka dari **Settings → Technical → Reporting → Dynamic Reports**. 2. Pahami peran utama masing-masing laporan: - **Profit and Loss (Laba Rugi)**: Mengukur kinerja keuangan selama rentang tanggal atau periode fiskal yang dipilih (pendapatan dan beban yang terjadi). - **Balance Sheet (Neraca)**: Menilai posisi keuangan pada tanggal tertentu (akumulasi aset, kewajiban, dan ekuitas). - **General Ledger (Buku Besar)**: Menampilkan rincian item jurnal pendukung, baris debit/kredit yang telah dibukukan, serta saldo berjalan untuk setiap akun. 3. Pada bilah filter di bagian atas lembar laporan, tentukan cakupan data: - **Companies**: Pilih perusahaan yang transaksinya ingin disertakan. Setidaknya satu perusahaan harus tetap dipilih. Harap diperhatikan bahwa **Cash Flow Statement** hanya dijalankan untuk satu perusahaan dalam satu waktu. - **Period**: Pilih rentang tanggal yang tersedia (**this or last month**, **quarter**, **year**, atau **Today** untuk laporan satu tanggal). Pilih opsi **Custom** untuk memasukkan tanggal mulai dan tanggal selesai secara spesifik. - **Compare**: Tambahkan kolom perbandingan untuk periode sebelumnya, periode yang sama pada tahun lalu, atau rentang kustom. Tentukan jumlah periode serta urutan penayangan (apakah periode terbaru atau terlama yang muncul pertama). - **Options**: Pilih **Unfold all lines** untuk membuka seluruh hierarki, atau pilih **Hide zero rows** untuk menyembunyikan akun dengan saldo nol sambil tetap mempertahankan grup agar dapat diakses. - **Saldo Awal Buku Besar**: Pada **General Ledger → Options**, pilih **Use fiscal-year opening** untuk menghitung saldo awal berdasarkan kalender fiskal perusahaan terpilih dalam satu tahun fiskal. ![Dasbor Accounting menampilkan transaksi menurut jurnal. Buka Reporting untuk melihat hasil gabungannya.](https://raw.githubusercontent.com/IndoERP/ERPForAll/a0b166f13a9bfef45efe154016c4f5d9fd2e37c0/.github/assets/accounting-dashboard.png)"
+        },
+        {
+          "anchor": "read-and-drill",
+          "text": "Lembar laporan keuangan menyusun informasi secara hierarkis dengan kendali navigasi interaktif dan pintasan papan ketik: - **Membuka Bagian Baris (Unfolding)**: Klik ikon panah (chevron) di samping nama bagian atau akun, atau sorot baris lalu tekan tombol panah **Right** pada papan ketik untuk menampilkan sub-baris. Klik kembali atau tekan panah **Left** untuk menutupnya. - **Memuat Halaman Lanjutan**: Jika suatu bagian memiliki baris yang melebihi satu layar, klik baris **Show more** untuk memuat sisa baris yang ada. Halaman tambahan yang telah dimuat akan tetap disertakan saat Anda kembali melalui remah roti (breadcrumb) atau saat mengekspor laporan. - **Mengurutkan Kolom**: Klik judul kolom yang memiliki chevron untuk mengurutkan nilai: nilai terbesar ke terkecil, terkecil ke terbesar, atau kembali ke urutan bawaan. Hanya periode utama yang dapat diurutkan. - **Menelusuri Transaksi Asal**: Klik nilai angka pada tabel untuk membuka daftar transaksi pendukung di tampilan daftar. Arahkan kursor atau fokuskan baris untuk menampilkan tanda panah di akhir baris: klik panah untuk memilih **Records behind** guna memeriksa entri kolom tersebut, atau **Open** untuk melihat rekaman data master pada formulir. - **Navigasi Remah Roti (Breadcrumb)**: Gunakan tautan breadcrumb untuk kembali ke laporan. Tampilan akan mempertahankan filter aktif, baris yang dibuka, pencarian, dan halaman yang telah dimuat sebelumnya."
+        },
+        {
+          "anchor": "cash-flow-classification",
+          "text": "Laporan Arus Kas (Cash Flow Statement) menghitung mutasi kas secara langsung dari transaksi jurnal resmi yang telah diposting pada akun Bank and Cash dalam mata uang perusahaan: - **Saldo Kas Awal dan Akhir**: Saldo kas awal dihitung dari saldo akun Bank and Cash sebelum hari pertama periode yang dipilih. Saldo kas akhir mencakup seluruh transaksi yang dibukukan hingga hari terakhir periode. - **Contoh Rekonsiliasi Arus Kas**: Sebagai contoh, dalam mata uang perusahaan USD: - Saldo kas awal: 12.000 USD - Arus kas dari aktivitas operasi: +5.000 USD - Arus kas dari aktivitas investasi: −3.400 USD - Arus kas dari aktivitas pendanaan: +5.000 USD - Saldo kas akhir: 18.600 USD (12.000 + 5.000 − 3.400 + 5.000 = 18.600 USD) - Pergerakan kas tanpa klasifikasi (unclassified): 0 USD - **Membedakan Kondisi Mutasi Kas**: - *Tidak ada entri likuiditas yang dibukukan*: Jika tidak ada transaksi diposting yang memengaruhi akun Bank and Cash selama periode, mutasi kas bersih adalah nol dan kas akhir sama dengan kas awal tanpa menghasilkan baris aktivitas kas. - *Pergerakan bersih nol (Transfer internal)*: Pemindahan dana internal antara dua akun Bank and Cash menghasilkan entri debit dan kredit likuiditas yang saling mengimbangi, sehingga menghasilkan mutasi kas bersih nol. - *Tag arus kas bercampur atau konflik*: Jika baris akun lawan menggunakan beberapa tag berbeda, tidak konsisten antar-baris, atau tidak memiliki tag, seluruh nilai transaksi akan dimasukkan ke dalam **Unclassified cash movements** agar dapat ditinjau oleh operator. - **Alokasi Penyelesaian**: Pembayaran yang dibukukan ke akun perantara (outstanding) baru muncul pada laporan setelah diselesaikan ke akun Bank atau Cash. Laporan tidak mengalokasikan pembayaran kembali melalui rekonsiliasi ke faktur pelanggan atau tagihan vendor asal."
+        },
+        {
+          "anchor": "export-and-print",
+          "text": "Setelah menyesuaikan filter dan membuka rincian baris akun yang diperlukan, lakukan ekspor laporan: 1. Periksa baris status tepat di bawah bilah filter untuk memastikan waktu penghitungan. Klik **Refresh** jika terdapat entri baru yang dibukukan saat laporan sedang dibuka. 2. Klik **PDF** untuk mengunduh berkas laporan, atau klik **Print** untuk membuka PDF di tab peramban baru guna langsung dicetak. 3. Klik **XLSX** untuk mengekspor data ke dalam lembar kerja spreadsheet. Seluruh berkas ekspor mereproduksi kondisi tampilan aktif pada layar, termasuk filter tanggal yang diterapkan, cakupan perusahaan aktif, baris yang dibuka, dan baris dari **Show more** yang telah dimuat."
+        },
+        {
+          "anchor": "failure-and-recovery",
+          "text": "- **Batas Tampilan Layar Terlampaui (Screen Limit Exceeded)**: Jika membuka terlalu banyak baris atau mengeklik **Show more** berulang kali hingga melampaui kapasitas tampilan layar, sistem akan menghentikan pemuatan baris tambahan dan mempertahankan tabel terakhir yang valid untuk diekspor. - *Pemulihan*: Klik chevron pada bagian yang sedang terbuka untuk menutupnya (fold). Menutup grup baris akan mengosongkan halaman yang tersimpan dalam memori, sehingga Anda dapat membuka bagian target lain dan mengulangi ekspor. - **Penolakan Batas Ukuran Laporan saat Ekspor**: Jika ekspor ditolak karena batas ukuran total laporan, administrator dapat menyesuaikan batas tersebut melalui menu **Settings → Technical → Reporting → Dynamic Reports**. - **Mereset Saldo Awal Tahun Fiskal**: Mengaktifkan atau menonaktifkan opsi **Use fiscal-year opening** pada General Ledger secara otomatis akan mengembalikan seluruh baris yang terbuka ke kondisi tertutup (folded). Buka kembali baris target setelah mengubah opsi ini."
+        }
+      ]
+    }
+  ]
+}

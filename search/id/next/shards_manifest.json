@@ -1,16 +1,61 @@
 {
   "lang": "id",
   "version": "next",
-  "total_shards": 2,
+  "total_shards": 7,
   "shards": [
+    {
+      "shard_id": "shard_functional_account_1",
+      "audience": "functional",
+      "modules": [
+        "account"
+      ],
+      "doc_count": 1,
+      "byte_size": 7803
+    },
+    {
+      "shard_id": "shard_functional_account_reporting_1",
+      "audience": "functional",
+      "modules": [
+        "account_reporting"
+      ],
+      "doc_count": 1,
+      "byte_size": 9101
+    },
+    {
+      "shard_id": "shard_functional_base_1",
+      "audience": "functional",
+      "modules": [
+        "base"
+      ],
+      "doc_count": 2,
+      "byte_size": 10341
+    },
+    {
+      "shard_id": "shard_functional_purchase_1",
+      "audience": "functional",
+      "modules": [
+        "purchase"
+      ],
+      "doc_count": 1,
+      "byte_size": 6368
+    },
+    {
+      "shard_id": "shard_functional_sale_1",
+      "audience": "functional",
+      "modules": [
+        "sale"
+      ],
+      "doc_count": 1,
+      "byte_size": 8565
+    },
     {
       "shard_id": "shard_functional_stock_1",
       "audience": "functional",
       "modules": [
         "stock"
       ],
-      "doc_count": 1,
-      "byte_size": 1715
+      "doc_count": 2,
+      "byte_size": 10407
     },
     {
       "shard_id": "shard_functional_web_1",
@@ -23,6 +68,13 @@
     }
   ],
   "page_to_shard": {
+    "user/record-and-settle-invoices": "shard_functional_account_1",
+    "user/read-financial-reports": "shard_functional_account_reporting_1",
+    "user/configure-your-workspace": "shard_functional_base_1",
+    "user/operations-guide": "shard_functional_base_1",
+    "user/buy-and-receive": "shard_functional_purchase_1",
+    "user/work-with-customers": "shard_functional_sale_1",
+    "user/manage-warehouse": "shard_functional_stock_1",
     "user/stock-receipt-admission": "shard_functional_stock_1",
     "user/report-barcodes": "shard_functional_web_1"
   }

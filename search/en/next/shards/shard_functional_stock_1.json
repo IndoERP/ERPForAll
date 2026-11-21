@@ -4,9 +4,49 @@
   "version": "next",
   "audience": "functional",
   "modules": [
+    "stock",
     "stock"
   ],
   "docs": [
+    {
+      "page_id": "user/manage-warehouse",
+      "title": "Manage Warehouse Transfers, Lots, Short Receipts, and Replenishment",
+      "module": "stock",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "This guide walks warehouse operators through daily inventory tasks in ERPForAll. You will learn how to navigate the Inventory Overview, review lot information, process a vendor receipt when fewer items arrive than scheduled, generate a manual replenishment quotation under the Buy route, and confirm the resulting stock position on the stock report."
+        },
+        {
+          "anchor": "before-starting",
+          "text": "Before performing these procedures, ensure you have access to the **Inventory** app and the appropriate operational permissions: * **Role & Access**: You must be an inventory operator or stock user authorized for the active company. To view lot registers, your user account requires the **Lot and serial tracking** group assigned under **Access Rights → Groups** by an administrator. For replenishment requests, the **Purchase Stock** addon must be installed, and your account must have permissions to update reordering rules and create purchase orders. * **Warehouse Setup**: Ensure a warehouse is configured with direct receiving into stock and that operation types (such as Receiving) have a designated sequence prefix. * **Master Data**: The product must exist in the inventory catalog. Lot tracking is optional: a product can be tracked by lot, by serial number, or not at all (units in stock without lots are tracked without numbers). If replenishment is triggered, the product requires a configured vendor with a current vendor price that covers the requested purchase quantity."
+        },
+        {
+          "anchor": "choose-transfer-and-track-lots",
+          "text": "Follow these steps to find an incoming receipt and inspect lot traceability details: 1. Open **Inventory** to view the **Overview** dashboard. Cards display active operation types with counts for **To Process**, **Waiting**, **Late**, and **Backorders**. 2. Locate the card for your warehouse's receipt operation type (such as **Receiving**) and click the **To Process** count to view ready transfers, or navigate to **Operations → Receipts**. 3. In the transfer list, review the reference number, source and destination locations, partner contact, scheduled date, source document, and status. Click an open receipt in **Ready** status to open its transfer form. 4. Review the header details and select the **Operations** tab to see product lines, initial demand, and units. Switch to the **Detailed Operations** tab to view the move lines where lot allocations are tracked. 5. To independently verify registered lots across locations, open **Inventory → Products → Lots/Serial Numbers** (or **Inventory → Configuration → Settings**, then **Traceability → Lots and serial numbers**). Click a specific lot record to review its assigned product and location history. ![The Inventory overview groups work by operation type.](https://raw.githubusercontent.com/IndoERP/ERPForAll/a0b166f13a9bfef45efe154016c4f5d9fd2e37c0/.github/assets/inventory-overview.png)"
+        },
+        {
+          "anchor": "receive-less-than-planned",
+          "text": "When a shipment arrives with fewer items than ordered, record the actual delivered quantity and post the transfer: 1. On the open receipt form, switch to the **Detailed Operations** tab. 2. Locate the product line being received and adjust the **Done** (or quantity moved) field to match the quantity physically delivered instead of the full planned demand (for example, entering 8 units when the demand was 10 units). 3. Click **Validate** at the top of the transfer form. 4. Depending on the operation type's **Create Backorder** configuration: * If set to **Always**: The transfer finishes the entered quantity and automatically generates a new, numbered backorder transfer for the remaining balance. The new transfer's **Back Order of** field references the original receipt. * If set to **Ask**: A prompt displays the outstanding quantities. Click **Create Backorder** to schedule the remaining balance on a linked transfer, or **Close Remaining Demand** to cancel the balance. * If set to **Never**: The transfer closes immediately at the received quantity with no backorder. 5. Click **Create Backorder** if prompted. The original transfer status changes from **Ready** to **Done**, moving the received stock into your destination warehouse location."
+        },
+        {
+          "anchor": "manual-replenishment-buy",
+          "text": "When inventory drops below desired safety levels, warehouse operators can generate a draft request for quotation using an established reordering rule: 1. Navigate to **Inventory → Configuration → Replenishment** (or **Inventory → Configuration → Settings → Planning → Reordering rules (minimum and maximum)**). 2. Open the reordering rule for the product. Verify that the route is set to **Buy** and the destination points to your direct-receiving warehouse stock location. 3. Verify the **Min Quantity** and **Max Quantity** thresholds in the product's inventory unit, and ensure the product has a valid vendor price covering the purchase volume. 4. Click **Request Quotation**. 5. The system computes the forecasted stock (combining current on-hand quantities with scheduled incoming receipts and outgoing deliveries): * **Replenishment Example**: With min 3, max 6, and a forecasted stock of 2, clicking **Request Quotation** creates a draft RFQ for 4 units to bring stock up to the maximum target of 6. If a positive manual quantity is entered on the rule, that manual override takes precedence. * **Above Threshold**: If forecasted stock is 5 (at or above the minimum of 3), no RFQ is generated without a positive manual override, and the system explains why the rule requires no quotation. * **Pending Request Idempotency**: Opening or clicking **Request Quotation** on an existing pending request twice returns the same draft quotation rather than duplicating orders."
+        },
+        {
+          "anchor": "failure-and-recovery",
+          "text": "If an operation fails during validation or replenishment, identify the cause and recover using these verified steps: * **Negative Stock Refusal on Validation**: If an operation or transfer attempts to move or reserve items from a storage location that forbids negative stock and insufficient free stock exists, the system refuses **Validate** and displays an error naming the location and the free available quantity. No stock moves, and the transfer remains in its previous open state. * *Recovery*: Switch to **Detailed Operations** and correct the quantity to not exceed the available free stock, or wait until prior receipts are validated to replenish the location before clicking **Validate** again. * **Replenishment Quotation Not Needed**: If you click **Request Quotation** when the product's forecasted quantity is already equal to or greater than the defined minimum, the system displays an explanatory message indicating why no quotation was generated. * *Recovery*: Check **Inventory → Reporting → Product Stock Position** to review current reservations and open incoming orders before modifying threshold parameters on the reordering rule."
+        },
+        {
+          "anchor": "verify-stock-records",
+          "text": "Confirm that stock ledger entries and physical counts match what was processed: 1. Navigate to **Inventory → Reporting → Stock**. 2. Locate the row corresponding to your received product, warehouse location, and lot number. 3. Open the line to view the read-only stock record. Verify that **On Hand** has incremented by the exact quantity received, **Reserved** reflects any existing outbound reservations, and **Available** displays the unreserved balance. 4. For comprehensive tracking across warehouse zones, navigate to **Inventory → Reporting → Stock Report**, expand the destination location, and expand the product to verify lot-level quantities. 5. To verify inventory movements over time, open **Inventory → Reporting → Moves Analysis** to confirm that the completed incoming transfer appears under **Incoming** with matching demand and delivered quantities."
+        }
+      ]
+    },
     {
       "page_id": "user/stock-receipt-admission",
       "title": "Validate a company-owned receipt",

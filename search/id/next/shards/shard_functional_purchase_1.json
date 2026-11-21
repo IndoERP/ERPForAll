@@ -1,0 +1,50 @@
+{
+  "shard_id": "shard_functional_purchase_1",
+  "lang": "id",
+  "version": "next",
+  "audience": "functional",
+  "modules": [
+    "purchase"
+  ],
+  "docs": [
+    {
+      "page_id": "user/buy-and-receive",
+      "title": "Membeli dan Menerima Barang",
+      "module": "purchase",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "Panduan ini memandu Anda melalui alur pembelian lengkap di ERPForAll: membuat permintaan penawaran harga, mengonfirmasi dan menyetujui pesanan pembelian, memeriksa penerimaan barang di gudang, serta membuat tagihan vendor yang sesuai."
+        },
+        {
+          "anchor": "before-starting",
+          "text": "Untuk menjalankan alur ini, Anda memerlukan hak akses dan konfigurasi berikut: * **Peran Purchase User**: Diperlukan untuk membuat permintaan penawaran harga, mengubah baris draf, dan mengonfirmasi pesanan standar. * **Peran Purchase Administrator**: Diperlukan jika nilai pesanan melampaui batas persetujuan perusahaan sehingga membutuhkan tombol **Approve Order**, atau untuk membuka kunci pesanan. * **Peran Inventory User**: Diperlukan untuk memeriksa dan memvalidasi penerimaan barang masuk pada menu **Inventory > Operations > Receipts**. * **Peran Accounting User**: Untuk membuat draf tagihan vendor dari pesanan pembelian, operator memerlukan hak akses Purchase sekaligus Accounting (pengguna yang hanya memiliki akses Purchase tidak dapat membuat tagihan). Akses Accounting juga diperlukan untuk memposting tagihan ke buku besar akuntansi. * **Konfigurasi**: Untuk penerimaan langsung, addon **Purchase Stock** harus aktif dengan gudang satu langkah penerimaan. Untuk membuat tagihan dari pesanan, perusahaan harus memiliki jurnal pembelian yang terkonfigurasi."
+        },
+        {
+          "anchor": "request-quotation",
+          "text": "Ikuti langkah-langkah berikut untuk membuat draf penawaran: 1. Buka menu **Purchase > Orders > Requests for Quotation** lalu klik **New**. 2. Periksa data bawaan untuk perusahaan, mata uang, pembeli, dan tenggat waktu pesanan. Pilih mitra pada bidang **Vendor**. 3. Pada tab **Products**, klik **Add a line**. Ketik sebagian nama barang (contoh: Office Chair) dan pilih produk yang sesuai. 4. Masukkan jumlah pesanan pada tabel (contoh: 10.00). Anda dapat mengosongkan satuan, deskripsi, harga satuan, dan pajak agar terisi otomatis dari master produk atau data harga vendor. 5. Klik **Save**. **Hasil yang terlihat**: Dokumen menerima nomor urut seperti PO00001. Total baris, jumlah sebelum pajak, dan total pajak dihitung ulang secara otomatis."
+        },
+        {
+          "anchor": "confirm-and-approve",
+          "text": "Setelah harga dan rincian barang sesuai, lanjutkan proses konfirmasi: 1. Pada formulir permintaan yang telah disimpan, klik **Confirm Order**. 2. Jika total pesanan berada di bawah ambang batas persetujuan perusahaan, status langsung berubah menjadi pesanan pembelian resmi. 3. Jika perusahaan menerapkan persetujuan bertingkat dan pesanan mencapai batas minimum, status berpindah ke **To Approve**. 4. Administrator pembelian memeriksa pesanan lalu mengeklik **Approve Order** untuk menyelesaikan konfirmasi. **Tindakan yang memposting data**: Mengeklik **Confirm Order** (atau **Approve Order**) mengunci vendor dan mata uang, menetapkan baris pesanan, serta secara otomatis membuat dokumen penerimaan barang masuk di modul persediaan."
+        },
+        {
+          "anchor": "receive-goods",
+          "text": "Saat kiriman tiba di gudang: 1. Pada pesanan pembelian yang telah dikonfirmasi, klik tautan **Receipt** (atau buka **Inventory > Operations > Receipts** dan cari nomor pesanan pada **Source Document**). 2. Periksa daftar barang pada tab **Operations** atau **Detailed Operations**. 3. Ubah kuantitas selesai sesuai jumlah fisik yang diterima. Sebagai contoh, jika dipesan 10.00 unit dan yang tiba 8.00, masukkan 8.00. 4. Klik **Validate**. 5. Jika jenis operasi diatur ke **Ask**, pilih **Create Backorder** untuk mencatat sisa 2.00 unit pada dokumen transfer terpisah, atau pilih **Close Remaining Demand** jika tidak ada sisa pengiriman lagi. **Hasil yang terlihat**: Status transfer barang berubah menjadi **Done**. Kembali ke formulir pesanan pembelian di tab **Products**, kolom **Received Qty** terbarui menampilkan jumlah yang telah diterima (8.00)."
+        },
+        {
+          "anchor": "handle-failure",
+          "text": "Saat mengonfirmasi pesanan, Anda mungkin menemui kendala berikut: * **Masalah**: Mengeklik **Confirm Order** atau **Approve Order** gagal dan memunculkan galat konfigurasi bahwa dokumen penerimaan barang tidak dapat dibuat. * **Penyebab**: Hal ini terjadi jika perusahaan memiliki beberapa gudang aktif, jenis operasi barang masuk tidak aktif, atau rute penerimaan menggunakan lebih dari satu langkah yang tidak didukung penerimaan langsung. * **Pemulihan**: Buka **Inventory > Configuration > Warehouses** menggunakan akun administrator. Pastikan gudang target memiliki jenis operasi barang masuk aktif dengan rute penerimaan 1 langkah (Receive goods directly). Setelah diperbaiki, buka kembali pesanan pembelian dan klik **Confirm Order** atau **Approve Order** ulang."
+        },
+        {
+          "anchor": "vendor-billing",
+          "text": "Setelah penerimaan barang tercatat di gudang, buat tagihan vendor yang sesuai: 1. Buka pesanan pembelian yang telah memiliki kuantitas barang diterima. Membuat draf tagihan dari pesanan memerlukan operator dengan hak akses Purchase sekaligus Accounting; pengguna yang hanya memiliki hak akses Purchase tidak dapat membuat tagihan. 2. Klik **First Vendor Bill**. Jika tagihan sudah pernah dibuat, mengeklik **First Vendor Bill** kembali akan membuka ulang dokumen tagihan pertama tersebut (bahkan setelah diposting atau dibatalkan), bukan membuat draf baru. 3. Periksa draf tagihan yang dihasilkan di **Accounting > Vendors > Bills**, yang terisi dengan kuantitas yang diterima, harga satuan yang disepakati, dan pajak vendor. 4. Periksa baris draf tagihan terhadap faktur fisik yang diberikan oleh vendor. 5. Klik **Confirm** pada formulir tagihan vendor untuk memposting entri jurnal ke jurnal pembelian. 6. Untuk menagih sisa kuantitas barang diterima yang bernilai positif, gunakan tombol **Bill Remaining Received Goods**. Sebagai contoh, jika dipesan 10.00 unit, diterima 8.00 unit, dan tagihan pertama mencakup 5.00 unit, mengeklik **Bill Remaining Received Goods** akan membuat draf tagihan untuk sisa 3.00 unit. Jika seluruh 8.00 unit yang diterima telah ditagihkan, tindakan ini membuka tagihan aktif terkait yang terbaru."
+        }
+      ]
+    }
+  ]
+}

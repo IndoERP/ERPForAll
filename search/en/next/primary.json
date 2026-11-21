@@ -1,7 +1,7 @@
 {
   "lang": "en",
   "version": "next",
-  "doc_count": 108,
+  "doc_count": 115,
   "docs": [
     {
       "id": "index",
@@ -4451,6 +4451,11 @@
           "id": "first-direct-vendor-bill",
           "depth": 2,
           "text": "First direct vendor bill"
+        },
+        {
+          "id": "direct-buy-replenishment",
+          "depth": 3,
+          "text": "Direct Buy replenishment"
         }
       ],
       "shard_id": "shard_developer_purchase_1"
@@ -6310,6 +6315,244 @@
       "shard_id": "shard_developer_core_1"
     },
     {
+      "id": "user/buy-and-receive",
+      "title": "Buy and Receive Goods",
+      "description": "Operator guide for requesting quotations, confirming purchase orders, following warehouse receipts, and recording vendor bills.",
+      "audience": "functional",
+      "module": "purchase",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "before-starting",
+          "depth": 2,
+          "text": "Prerequisites and roles"
+        },
+        {
+          "id": "request-quotation",
+          "depth": 2,
+          "text": "Create a request for quotation"
+        },
+        {
+          "id": "confirm-and-approve",
+          "depth": 2,
+          "text": "Confirm and approve the purchase order"
+        },
+        {
+          "id": "receive-goods",
+          "depth": 2,
+          "text": "Receive goods and handle short deliveries"
+        },
+        {
+          "id": "handle-failure",
+          "depth": 2,
+          "text": "Troubleshooting: resolving warehouse configuration errors"
+        },
+        {
+          "id": "vendor-billing",
+          "depth": 2,
+          "text": "Create and verify the vendor bill"
+        }
+      ],
+      "shard_id": "shard_functional_purchase_1"
+    },
+    {
+      "id": "user/configure-your-workspace",
+      "title": "Configure Your Workspace, Companies, and Collaboration",
+      "description": "Learn how to find and adjust module settings, switch active companies safely, preserve ongoing chat, and collaborate using the AI Assistant and record drafts.",
+      "audience": "functional",
+      "module": "base",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "before-starting",
+          "depth": 2,
+          "text": "Prerequisites and Access Roles"
+        },
+        {
+          "id": "find-module-settings",
+          "depth": 2,
+          "text": "Finding and Editing Addon Settings"
+        },
+        {
+          "id": "switch-active-company",
+          "depth": 2,
+          "text": "Switching Companies and Preserving Edits"
+        },
+        {
+          "id": "preserve-chat-and-chatter",
+          "depth": 2,
+          "text": "Preserving Messages and Open Conversations"
+        },
+        {
+          "id": "ai-workspace-safe-drafts",
+          "depth": 2,
+          "text": "Using the AI Workspace and Safe Record Drafts"
+        },
+        {
+          "id": "failure-recovery",
+          "depth": 2,
+          "text": "Resolving Validation Failures and Save Errors"
+        }
+      ],
+      "shard_id": "shard_functional_base_1"
+    },
+    {
+      "id": "user/manage-warehouse",
+      "title": "Manage Warehouse Transfers, Lots, Short Receipts, and Replenishment",
+      "description": "Operator instructions for managing warehouse operations in ERPForAll: opening transfers, inspecting lots, processing partial receipts with backorders, requesting manual replenishment, and verifying updated stock lines.",
+      "audience": "functional",
+      "module": "stock",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "before-starting",
+          "depth": 2,
+          "text": "Prerequisites and Role Requirements"
+        },
+        {
+          "id": "choose-transfer-and-track-lots",
+          "depth": 2,
+          "text": "Selecting a Transfer and Inspecting Lots"
+        },
+        {
+          "id": "receive-less-than-planned",
+          "depth": 2,
+          "text": "Receiving Less Than Planned and Handling Backorders"
+        },
+        {
+          "id": "manual-replenishment-buy",
+          "depth": 2,
+          "text": "Manual Replenishment with the Buy Route"
+        },
+        {
+          "id": "failure-and-recovery",
+          "depth": 2,
+          "text": "Handling Disallowed Negative Stock and Missing Quantities"
+        },
+        {
+          "id": "verify-stock-records",
+          "depth": 2,
+          "text": "Verifying the Updated Stock Record"
+        }
+      ],
+      "shard_id": "shard_functional_stock_1"
+    },
+    {
+      "id": "user/operations-guide",
+      "title": "Daily operations guide",
+      "description": "Follow a sale, purchase or warehouse receipt to the accounting document that records its outcome.",
+      "audience": "functional",
+      "module": "base",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "choose-workflow",
+          "depth": 2,
+          "text": "Choose a workflow"
+        },
+        {
+          "id": "follow-one-purchase",
+          "depth": 2,
+          "text": "Follow one purchase across teams"
+        }
+      ],
+      "shard_id": "shard_functional_base_1"
+    },
+    {
+      "id": "user/read-financial-reports",
+      "title": "Financial Reports: Scope, Navigation, Drill-Down, and Export",
+      "description": "Select reporting periods and company scope, review financial statements, drill down to supporting journal items, and export reports.",
+      "audience": "functional",
+      "module": "account_reporting",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "before-starting",
+          "depth": 2,
+          "text": "Before Starting"
+        },
+        {
+          "id": "navigate-and-scope",
+          "depth": 2,
+          "text": "Accessing Reports and Setting the Scope"
+        },
+        {
+          "id": "read-and-drill",
+          "depth": 2,
+          "text": "Reading Figures and Drilling Down"
+        },
+        {
+          "id": "cash-flow-classification",
+          "depth": 2,
+          "text": "Classifying Cash Flow Activities"
+        },
+        {
+          "id": "export-and-print",
+          "depth": 2,
+          "text": "Exporting and Printing Statements"
+        },
+        {
+          "id": "failure-and-recovery",
+          "depth": 2,
+          "text": "Troubleshooting and Recovery"
+        }
+      ],
+      "shard_id": "shard_functional_account_reporting_1"
+    },
+    {
+      "id": "user/record-and-settle-invoices",
+      "title": "Prepare Journals, Post Invoices, and Settle Payments",
+      "description": "Step-by-step operator guide to configuring journals, issuing customer invoices, recording vendor bills, registering payments, and tracking settlement reconciliation in ERPForAll.",
+      "audience": "functional",
+      "module": "account",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "before-starting",
+          "depth": 2,
+          "text": "Prerequisites and Required Roles"
+        },
+        {
+          "id": "prepare-journals",
+          "depth": 2,
+          "text": "Preparing Accounting Journals"
+        },
+        {
+          "id": "create-and-post-invoice",
+          "depth": 2,
+          "text": "Creating and Confirming an Invoice or Bill"
+        },
+        {
+          "id": "register-payment",
+          "depth": 2,
+          "text": "Registering Payment"
+        },
+        {
+          "id": "review-reconciliation",
+          "depth": 2,
+          "text": "Verifying Status and Reconciliation Outcomes"
+        },
+        {
+          "id": "troubleshooting-recovery",
+          "depth": 2,
+          "text": "Handling Common Validation Failures"
+        }
+      ],
+      "shard_id": "shard_functional_account_1"
+    },
+    {
       "id": "user/report-barcodes",
       "title": "Barcodes in printed reports",
       "description": "Print report barcodes, understand full-ASCII and GS1 modes, and resolve rendering errors.",
@@ -6367,6 +6610,49 @@
         }
       ],
       "shard_id": "shard_functional_stock_1"
+    },
+    {
+      "id": "user/work-with-customers",
+      "title": "Work with Customers and Sales Quotations",
+      "description": "Learn how to locate a customer contact, prepare a sales quotation, add line items, confirm the quotation into a sales order, and verify delivery and invoicing status.",
+      "audience": "functional",
+      "module": "sale",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "before-starting",
+          "depth": 2,
+          "text": "Prerequisites and User Roles"
+        },
+        {
+          "id": "find-customer",
+          "depth": 2,
+          "text": "Find an Existing Customer Contact"
+        },
+        {
+          "id": "create-quote",
+          "depth": 2,
+          "text": "Create a New Quotation and Add Order Lines"
+        },
+        {
+          "id": "confirm-order",
+          "depth": 2,
+          "text": "Progress and Confirm the Quotation into a Sales Order"
+        },
+        {
+          "id": "handle-failure",
+          "depth": 2,
+          "text": "Handling Confirmation Failure and Recovery"
+        },
+        {
+          "id": "track-order",
+          "depth": 2,
+          "text": "Track Order Progress, Invoicing, and Delivery Status"
+        }
+      ],
+      "shard_id": "shard_functional_sale_1"
     }
   ]
 }

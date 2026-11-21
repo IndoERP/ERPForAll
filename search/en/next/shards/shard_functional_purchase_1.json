@@ -1,0 +1,50 @@
+{
+  "shard_id": "shard_functional_purchase_1",
+  "lang": "en",
+  "version": "next",
+  "audience": "functional",
+  "modules": [
+    "purchase"
+  ],
+  "docs": [
+    {
+      "page_id": "user/buy-and-receive",
+      "title": "Buy and Receive Goods",
+      "module": "purchase",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "This guide walks you through the complete purchasing cycle in ERPForAll: preparing a request for quotation, confirming and approving the purchase order, checking goods in as they arrive at the warehouse, and generating the corresponding vendor bill."
+        },
+        {
+          "anchor": "before-starting",
+          "text": "To work through this process, you need the following access rights and configurations: * **Purchase role User**: Required to create requests for quotation, edit draft lines, and confirm standard orders. * **Purchase role Administrator**: Required if an order exceeds your company's approval threshold, requiring second approval via **Approve Order**, or to unlock orders. * **Warehouse / Inventory User**: Required to inspect and validate incoming shipments under **Inventory > Operations > Receipts**. * **Accounting User**: To create a draft vendor bill from a purchase order, an operator needs both Purchase and Accounting access rights (a purchase-only user cannot generate draft bills). Accounting access is also required to post bills in the accounting ledger. * **Configuration**: For direct receipts, **Purchase Stock** must be active with a single-step receiving warehouse. For generating bills from orders, the company must have a standard purchase journal configured."
+        },
+        {
+          "anchor": "request-quotation",
+          "text": "Follow these steps to create and calculate a new purchase request: 1. Navigate to **Purchase > Orders > Requests for Quotation** and click **New**. 2. Verify the prefilled company, currency, buyer name, and order deadline. Choose the partner in the **Vendor** field. 3. Under the **Products** tab, click **Add a line**. Type part of the item name (for example, Office Chair) and select the matching product from the dropdown. 4. Enter the desired quantity in the table (for example, 10.00). You can leave unit, description, price, and taxes blank to pull them automatically from the vendor pricing or product master. 5. Click **Save**. **Visible outcome**: The document is assigned a unique tracking sequence such as PO00001. Line amounts, untaxed total, and combined taxes recalculate based on the entered quantity."
+        },
+        {
+          "anchor": "confirm-and-approve",
+          "text": "Once prices and details are settled, proceed to confirmation: 1. On the saved request form, click **Confirm Order**. 2. If the total is below the company approval threshold, the status updates immediately to purchase order. 3. If your company enforces a second approval threshold and the order total reaches that minimum, the status moves to **To Approve**. 4. A Purchase administrator reviews the order and clicks **Approve Order** to complete confirmation. **What posts data**: Clicking **Confirm Order** (or **Approve Order** for approval-gated orders) locks the partner and currency, commits the order lines, and generates the linked incoming shipment in inventory."
+        },
+        {
+          "anchor": "receive-goods",
+          "text": "When goods arrive at the dock: 1. On the confirmed purchase order, click **Receipt** (or go to **Inventory > Operations > Receipts** and locate the order number in **Source Document**). 2. Review the scheduled items under **Operations** or **Detailed Operations**. 3. Update the quantities done to reflect actual received counts. For example, if 10.00 units were ordered and only 8.00 arrived, enter 8.00. 4. Click **Validate**. 5. If the operation type is configured with **Ask**, select **Create Backorder** to keep the remaining 2.00 units on an open transfer, or choose **Close Remaining Demand** if no further shipment will arrive. **Visible outcome**: The incoming transfer status changes to **Done**. Back on the purchase order under **Products**, the **Received Qty** column updates to show the completed count (8.00)."
+        },
+        {
+          "anchor": "handle-failure",
+          "text": "During order confirmation, you might encounter an error: * **Problem**: Clicking **Confirm Order** or **Approve Order** fails with a configuration error stating that incoming operations cannot be created. * **Cause**: This occurs when your active company has multiple active warehouses, an inactive incoming operation type, or a multi-step receiving route that direct purchase receipts do not support. * **Recovery**: Open **Inventory > Configuration > Warehouses** with an administrator account. Ensure the target warehouse has an active incoming operation type set to 1-step receiving (Receive goods directly). Once configured, return to the purchase order and click **Confirm Order** or **Approve Order** again."
+        },
+        {
+          "anchor": "vendor-billing",
+          "text": "After goods are recorded at the warehouse, generate the corresponding vendor bill: 1. Open the confirmed purchase order containing received quantities. Creating a draft bill from the order requires an operator with both Purchase and Accounting access rights; purchase-only users cannot generate bills. 2. Click **First Vendor Bill**. If a bill was already generated, clicking **First Vendor Bill** again reopens that same first bill (even if posted or cancelled) rather than creating a new draft. 3. Review the generated draft bill under **Accounting > Vendors > Bills**, populated with the received quantities, agreed purchase price, and vendor taxes. 4. Check the draft bill lines against the physical invoice provided by the vendor. 5. Click **Confirm** on the vendor bill to post the journal items to the purchase journal. 6. To bill positive remaining received quantities, use **Bill Remaining Received Goods** instead. For example, if you ordered 10.00 units, received 8.00 units, and the first bill covered 5.00 units, clicking **Bill Remaining Received Goods** drafts a bill for the remaining 3.00 units. If all 8.00 received units were already billed, retrying opens the latest active linked bill."
+        }
+      ]
+    }
+  ]
+}

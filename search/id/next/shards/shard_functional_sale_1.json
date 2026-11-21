@@ -1,0 +1,50 @@
+{
+  "shard_id": "shard_functional_sale_1",
+  "lang": "id",
+  "version": "next",
+  "audience": "functional",
+  "modules": [
+    "sale"
+  ],
+  "docs": [
+    {
+      "page_id": "user/work-with-customers",
+      "title": "Bekerja dengan Pelanggan dan Penawaran Penjualan",
+      "module": "sale",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "Di ERPForAll, staf penjualan mengelola seluruh siklus penawaran pelanggan melalui aplikasi Sales. Panduan ini menjelaskan cara mencari data pelanggan, membuat penawaran baru lengkap dengan rincian produk, harga, dan diskon, mengelola gudang pengiriman satu tahap, mengonfirmasi penawaran menjadi sales order, serta langkah pemulihan jika konfirmasi gagal."
+        },
+        {
+          "anchor": "before-starting",
+          "text": "Sebelum membuat penawaran, pastikan aplikasi dan hak akses yang diperlukan telah tersedia: * **Aplikasi**: Aplikasi **Sales** harus sudah terpasang. Untuk mengirimkan barang fisik melalui operasional gudang satu tahap, addon **Sale Stock** juga harus terpasang. * **Peran Pengguna**: Peran penjualan ditentukan pada formulir pengguna di bawah menu **Sales**: * **User: Own Documents Only**: Membaca, membuat, dan mengubah penawaran serta pesanan milik sendiri atau yang belum memiliki staf penjual. * **User: All Documents**: Membaca, membuat, dan mengubah penawaran serta pesanan seluruh staf penjual. * **Administrator**: Hak administratif penjualan penuh, termasuk menghapus draf atau pesanan yang dibatalkan, mengunci atau membuka kunci pesanan yang sudah dikonfirmasi, serta membuat atau mengubah kontak pelanggan dan daftar harga (pricelist). * **Peran Akuntansi**: Pembuatan draf faktur pelanggan dari pesanan penjualan yang telah dikonfirmasi memerlukan keanggotaan dalam grup pengguna Accounting. * **Penomoran Dokumen (Sequence)**: Nomor urut dokumen dengan kode sale.order harus sudah dikonfigurasi untuk perusahaan Anda di **Settings > Technical > Sequences**; pesanan tidak dapat dibuat tanpa nomor urut ini."
+        },
+        {
+          "anchor": "find-customer",
+          "text": "Cari dan pastikan data kontak pelanggan terlebih dahulu agar alamat dan ketentuan penjualan terisi dengan benar: 1. Buka menu **Sales > Orders > Customers** (atau buka aplikasi **Contacts** dari menu utama). 2. Temukan kontak pelanggan pada daftar menggunakan bilah pencarian berdasarkan nama, email, referensi, atau nomor pokok pajak (tax ID), atau terapkan filter **Companies** atau **Individuals**. 3. Buka catatan kontak dan periksa alamat (jalan, baris jalan kedua, kota, kode pos) pada tab **Address**. Kontak dengan nomor pokok pajak tanpa induk berlaku sebagai perusahaan; kontak anak mewarisi alamat perusahaan induk."
+        },
+        {
+          "anchor": "create-quote",
+          "text": "Setiap penawaran baru dimulai sebagai draf dengan nomor urut seperti S00001: 1. Buka menu **Sales > Orders > Quotations** lalu pilih tombol **New**. 2. Pilih pelanggan pada kolom **Customer**. Sistem akan mengisi otomatis **Invoice Address** dan **Delivery Address** dari kontak, menetapkan **Salesperson**, dan menentukan tim penjualan default. Anda dapat menyesuaikan alamat, staf penjual, atau tim penjualan jika diperlukan. 3. (Opsional) Pilih **Pricelist** untuk menentukan harga baris baru dalam mata uang daftar harga tersebut. Tanpa daftar harga, harga baris menggunakan harga jual produk dalam mata uang perusahaan. Perhatikan bahwa setelah baris ditambahkan atau pesanan dikonfirmasi, perusahaan tidak dapat diubah lagi. 4. Jika **Sale Stock** terpasang dan perusahaan memiliki beberapa gudang pengiriman, pilih gudang aktif dengan rute pengiriman satu tahap pada kolom **Warehouse** di samping alamat pengiriman sebelum mengonfirmasi. Kolom gudang tetap dapat diubah selama penawaran berstatus draf atau terkirim (sent). 5. Pada tab **Order Lines**, pilih **Add a line**: * Pada jendela baris pesanan, pilih **Product**, periksa satuan ukuran, dan masukkan jumlah **Quantity**. Harga satuan terisi otomatis dari produk atau daftar harga kecuali dimasukkan secara manual. * Masukkan persentase pada kolom **Discount (%)** jika terdapat potongan harga. * Pajak penjualan terisi otomatis dari data produk atau pengaturan default perusahaan, yang disesuaikan oleh **Fiscal Position** pesanan. * Simpan dan tutup jendela baris. Ulangi untuk produk lain, bagian (sections), atau catatan tambahan. 6. Simpan formulir penawaran. Sistem akan menghitung subtotal baris, jumlah sebelum pajak, rincian pajak, dan total akhir."
+        },
+        {
+          "anchor": "confirm-order",
+          "text": "Konfirmasikan transaksi secara resmi langsung dari formulir penawaran: 1. Periksa kembali jumlah sebelum pajak, rincian pajak, dan total akhir. 2. (Opsional) Pilih **Print > Quotation / Order** untuk melihat pratinjau dokumen PDF dengan tanda status *Draft*. 3. Pilih tombol **Confirm** pada bagian atas formulir: * Penawaran berubah status menjadi **Sales Order** resmi dengan tetap mempertahankan nomor referensinya (misalnya S00001). * Kolom pelanggan, perusahaan, dan daftar harga menjadi terkunci dan tidak dapat diubah lagi. * Jika pesanan memuat barang fisik dan memiliki gudang pengiriman satu tahap yang aktif, konfirmasi akan otomatis menerbitkan dokumen pengeluaran barang (outgoing transfer). Tautan **Delivery** akan muncul pada pesanan, memungkinkan staf dengan hak baca membuka dokumen pengiriman di bawah menu **Inventory > Operations > Deliveries**. * Pesanan yang hanya berisi layanan (services) akan dikonfirmasi tanpa dokumen transfer pengiriman maupun tautan pengiriman."
+        },
+        {
+          "anchor": "handle-failure",
+          "text": "Jika konfigurasi rute gudang tidak lengkap atau batasan hak akses menghalangi pemrosesan, sistem membatalkan konfirmasi dengan aman: * **Skenario Kegagalan**: Konfirmasi gagal karena opsi **Warehouse** yang dipilih tidak memiliki rute pengiriman satu tahap make-to-stock yang aktif, atau pengguna dibatasi dari catatan stok terkait. * **Perilaku Sistem**: Transaksi dibatalkan sebelum perubahan data tersimpan ke database. Dokumen pengiriman parsial tidak akan terbentuk, dan dokumen tetap bertahan pada status draf penawaran sebelumnya. * **Langkah Pemulihan**: 1. Baca rincian pesan kesalahan yang ditampilkan. 2. Pada draf penawaran, ubah pilihan kolom **Warehouse** di samping alamat pengiriman ke gudang aktif yang memiliki konfigurasi pengiriman satu tahap. 3. Pastikan seluruh produk, jumlah pesanan, dan satuan ukuran pada baris pesanan sudah valid. 4. Pilih kembali tombol **Confirm** untuk menerbitkan pesanan penjualan dan dokumen pengiriman awal."
+        },
+        {
+          "anchor": "track-order",
+          "text": "Setelah konfirmasi, kelola pemenuhan barang, perubahan baris, dan penagihan: * **Tindakan yang Tersedia pada Pesanan yang Dikonfirmasi**: * **Perubahan Baris Pesanan**: Baris pesanan yang sudah ada tidak dapat dihapus; ubah jumlah kuantitasnya menjadi 0 jika suatu item dibatalkan. Pada pesanan yang tidak terkunci, jumlah kuantitas dan harga baris masih dapat disesuaikan. * **Penguncian (Locking)**: Administrator Sales dapat mengunci pesanan yang telah dikonfirmasi (atau terkunci otomatis jika pengaturan **Lock confirmed sales** aktif). Pada pesanan yang terkunci, baris tidak dapat ditambah atau dihapus, rincian baris tidak dapat diubah, serta pelanggan, alamat, dan tanggal pengiriman menjadi hanya-baca. * **Pembatalan**: Untuk membatalkan pesanan yang terhubung dengan pengiriman gudang, batalkan terlebih dahulu transfer pengiriman terkait di Inventory, lalu batalkan pesanan penjualan. Pesanan yang terkunci tidak dapat dibatalkan sebelum dibuka kuncinya. * **Penghapusan**: Hanya draf penawaran dan pesanan yang dibatalkan yang dapat dihapus (memerlukan peran Administrator). Pesanan yang telah dikonfirmasi tidak dapat dihapus. * **Pengiriman Barang vs. Layanan (Services)**: * **Barang Fisik**: Tautan **Delivery** membuka dokumen transfer gudang. Memproses dan memvalidasi transfer pengiriman di Inventory akan memperbarui jumlah terkirim (delivered quantity) pada baris pesanan. * **Layanan**: Baris layanan tidak menghasilkan transfer gudang maupun tautan pengiriman; jumlah terkirimnya diperbarui langsung secara manual atau ditagih berdasarkan kebijakan pemesanan. * **Penagihan Faktur**: * Produk ditagih berdasarkan **Invoicing Policy** masing-masing (berdasarkan jumlah yang dipesan atau jumlah yang terkirim). * Pengguna Accounting memilih tombol **Create Draft Invoice** pada pesanan yang siap ditagih untuk menerbitkan draf faktur pelanggan atas jumlah yang belum ditagih. * Opsi **Close Invoicing** menandai pesanan yang telah dikonfirmasi sebagai selesai ditagih sepenuhnya; opsi ini dapat dibuka kembali jika diperlukan penagihan tambahan."
+        }
+      ]
+    }
+  ]
+}

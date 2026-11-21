@@ -1,0 +1,50 @@
+{
+  "shard_id": "shard_functional_account_1",
+  "lang": "id",
+  "version": "next",
+  "audience": "functional",
+  "modules": [
+    "account"
+  ],
+  "docs": [
+    {
+      "page_id": "user/record-and-settle-invoices",
+      "title": "Menyiapkan Jurnal, Memposting Faktur, dan Menyelesaikan Pembayaran",
+      "module": "account",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "Panduan ini memandu operator dalam mengelola siklus penagihan penjualan dan pembelian di ERPForAll. Anda akan mempelajari cara memeriksa jurnal akuntansi, membuat dan mengonfirmasi faktur pelanggan serta tagihan pemasok, mencatat pembayaran, dan memantau status pencocokan dokumen serta jumlah jatuh tempo."
+        },
+        {
+          "anchor": "before-starting",
+          "text": "Sebelum menerbitkan faktur atau mencatat tagihan pemasok, pastikan konfigurasi berikut telah tersedia: * **Peran Pengguna**: Pengguna akuntansi standar membuat faktur, memasukkan baris produk, mengonfirmasi dokumen, mencatat pembayaran, dan melihat item jurnal. Pengaturan jurnal memerlukan hak akses administrator akuntansi. * **Akun Perusahaan**: Perusahaan harus memiliki akun piutang (*receivable*) dan akun utang (*payable*) aktif yang terdaftar pada bagan akun (*chart of accounts*). * **Jurnal**: Pastikan setidaknya satu jurnal penjualan (untuk dokumen pelanggan) dan satu jurnal pembelian (untuk dokumen pemasok) telah aktif dengan akun bawaan (*default account*) yang sesuai (pendapatan untuk penjualan, beban untuk pembelian). Selain itu, minimal satu jurnal bank atau kas harus aktif beserta metode pembayaran dan akun bawaannya untuk mencatat pelunasan."
+        },
+        {
+          "anchor": "prepare-journals",
+          "text": "Setiap entri faktur, tagihan, dan pembayaran dicatat di dalam jurnal yang sesuai. 1. Buka menu **Accounting > Configuration > Journals** (administrator akuntansi). 2. Periksa daftar jurnal yang tersedia (basis data standar mencakup Customer Invoices, Vendor Bills, dan Main Bank). 3. Klik **New** untuk membuat jurnal baru. 4. Masukkan nama jurnal dan pilih **Type** (Sales, Purchase, Bank, Cash, atau Credit Card). 5. Kolom **Short Code** dapat dikosongkan; ERPForAll secara otomatis menetapkan kode unik berikutnya yang tersedia untuk tipe tersebut (seperti INV1, BILL1, atau BNK1). 6. Tentukan **Default Account** yang sesuai dengan tipe jurnal: akun pendapatan untuk penjualan, akun beban untuk pembelian, atau akun kas/bank untuk jurnal pembayaran. 7. Biarkan kolom **Currency** kosong untuk menggunakan mata uang standar perusahaan, atau pilih mata uang asing jika jurnal ini khusus menangani mata uang tersebut. 8. Klik **Save**. Tab **Journal Entries** mengatur penomoran dokumen (seperti INV1/2026/00001 untuk faktur, RINV1/... untuk nota kredit, atau PBNK1/... untuk pembayaran). ![Form faktur menampilkan jurnal, baris tagihan, dan total.](https://raw.githubusercontent.com/IndoERP/ERPForAll/a0b166f13a9bfef45efe154016c4f5d9fd2e37c0/.github/assets/invoice-form.png)"
+        },
+        {
+          "anchor": "create-and-post-invoice",
+          "text": "Ikuti langkah-langkah berikut untuk mencatat faktur pelanggan atau tagihan pemasok: 1. Untuk penagihan pelanggan, buka menu **Accounting > Customers > Invoices**. Untuk pembelian dari pemasok, buka menu **Accounting > Vendors > Bills**. 2. Klik **New**. 3. Pilih mitra pada kolom **Customer** (atau **Vendor**). Untuk faktur pelanggan, tentukan tanggal pada kolom **Invoice Date** (jika dikosongkan, konfirmasi akan menggunakan tanggal hari ini berdasarkan zona waktu bisnis perusahaan). Untuk tagihan pemasok, tanggal tagihan wajib diisi. 4. Anda dapat memilih **Journal** dan **Currency** jika diperlukan. Jika dikosongkan, Accounting otomatis memilih jurnal penjualan atau pembelian yang sesuai. 5. Pada tab **Invoice Lines**, klik **Add a line**. 6. Pilih item pada kolom **Product** atau jasa untuk mengisi label, satuan ukuran, harga satuan, dan pajak yang berlaku, lalu sesuaikan **Quantity**, **Unit Price**, **Discount**, atau **Taxes**. 7. Klik **Save**. ERPForAll menghitung jumlah sebelum pajak, nilai pajak, total, dan nilai awal **Amount Due**. Tab **Journal Items** menampilkan rincian entri akuntansi di balik faktur: baris produk, baris pajak, serta baris piutang atau utang. 8. Klik **Confirm**. **Tindakan yang mengubah data**: Menekan tombol **Confirm** memeriksa kelengkapan mitra, minimal satu baris produk, dan total yang tidak bernilai negatif (serta tanggal tagihan untuk tagihan pemasok). Setelah terkonfirmasi, sistem menetapkan nomor urut resmi, mengubah status dokumen dari Draft menjadi Posted, dan membukukan entri aktif ke buku besar. Reset to Draft dan Cancel tersedia setelah fitur posting aktif pada versi Anda."
+        },
+        {
+          "anchor": "register-payment",
+          "text": "Mencatat pembayaran berfungsi mencatat penerimaan atau pengeluaran dana dan mencocokkannya langsung dengan saldo terbuka faktur. Tindakan ini berbeda dari rekonsiliasi rekening koran bank, yang mencocokkan mutasi rekening koran terhadap entri jurnal bank. 1. Buka faktur atau tagihan terkonfirmasi yang masih memiliki nilai pada **Amount Due**. 2. Klik **Register Payment**. 3. Periksa kolom-kolom yang diusulkan pada dialog: * **Journal**: Mengusulkan jurnal bank utama perusahaan secara bawaan. * **Payment Method**: Menampilkan metode pembayaran yang sesuai dengan arah transaksi (penerimaan atau pengeluaran). * **Payment Date**: Otomatis terisi tanggal hari ini berdasarkan zona waktu bisnis perusahaan. * **Memo**: Mengusulkan nomor referensi dokumen faktur atau tagihan. * **Amount**: Menampilkan seluruh sisa tagihan. Masukkan nominal yang lebih kecil untuk pembayaran bertahap (misalnya, pada tagihan sebesar 100, pembayaran 60 menyisakan saldo terbuka sebesar 40). 4. Klik **Pay**. Jika dokumen telah dibayar sebagian saat dialog masih terbuka, sistem meminta Anda membuka kembali dialog tersebut. **Tindakan yang mengubah data**: Menekan tombol **Pay** menerbitkan catatan pembayaran terkonfirmasi di bawah menu **Customers > Payments** (atau **Vendors > Payments**) dengan nomor pembayaran tersendiri (seperti PBNK1/2026/00001), membukukan entri jurnal pembayaran kas/bank, dan mencocokkan baris pembayaran terhadap baris piutang/utang faktur terkait."
+        },
+        {
+          "anchor": "review-reconciliation",
+          "text": "Setelah mencatat pembayaran, periksa pembaruan status dokumen dan pencocokan pelunasan: * **Payment Status**: Menampilkan status **Paid** jika seluruh saldo lunas, atau **Partially Paid** jika masih terdapat sisa saldo yang belum terbayar. * **Amount Due**: Berkurang secara langsung sebesar nominal pembayaran yang dicocokkan (misalnya berkurang dari 100 menjadi 40 setelah pembayaran 60, dan menjadi 0 saat lunas sepenuhnya). * **Matching #**: Pada tab **Journal Items**, baris akun piutang atau utang menampilkan penanda pencocokan: kode berawalan P diikuti angka selama pelunasan belum penuh, atau angka tanpa awalan setelah seluruh transaksi terkait selesai dilunasi. * **History & Messages**: Riwayat pesan formulir mencatat perubahan status (Draft → Posted) dan peristiwa pencocokan pembayaran lengkap dengan nama pengguna dan waktu."
+        },
+        {
+          "anchor": "troubleshooting-recovery",
+          "text": "**Penolakan Validasi Saat Konfirmasi** * **Kegagalan yang Terjadi**: Saat menekan tombol **Confirm**, proses ditolak melalui peringatan validasi dan nomor entri tidak diterbitkan. * **Penyebab Utama**: Dokumen belum memiliki mitra pelanggan atau pemasok, tidak memiliki baris produk, memiliki nilai total negatif, atau tagihan pemasok belum diisi tanggal tagihannya. * **Langkah Pemulihan**: 1. Kembali ke formulir draf dokumen. 2. Pilih mitra pada kolom **Customer** atau **Vendor**. 3. Pada tab **Invoice Lines**, tambahkan minimal satu baris produk dengan kuantitas dan harga valid sehingga total tidak negatif. 4. Pada tagihan pemasok, isi kolom tanggal tagihan. 5. Klik **Save**, kemudian klik **Confirm**."
+        }
+      ]
+    }
+  ]
+}

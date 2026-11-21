@@ -1,8 +1,246 @@
 {
   "lang": "id",
   "version": "next",
-  "doc_count": 2,
+  "doc_count": 9,
   "docs": [
+    {
+      "id": "user/buy-and-receive",
+      "title": "Membeli dan Menerima Barang",
+      "description": "Panduan operator untuk meminta penawaran, mengonfirmasi pesanan pembelian, memantau penerimaan gudang, dan mencatat tagihan vendor.",
+      "audience": "functional",
+      "module": "purchase",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "before-starting",
+          "depth": 2,
+          "text": "Prasyarat dan peran pengguna"
+        },
+        {
+          "id": "request-quotation",
+          "depth": 2,
+          "text": "Membuat permintaan penawaran harga"
+        },
+        {
+          "id": "confirm-and-approve",
+          "depth": 2,
+          "text": "Mengonfirmasi dan menyetujui pesanan pembelian"
+        },
+        {
+          "id": "receive-goods",
+          "depth": 2,
+          "text": "Menerima barang dan mengelola penerimaan parsial"
+        },
+        {
+          "id": "handle-failure",
+          "depth": 2,
+          "text": "Penanganan kendala: mengatasi galat konfigurasi gudang"
+        },
+        {
+          "id": "vendor-billing",
+          "depth": 2,
+          "text": "Membuat dan memeriksa tagihan vendor"
+        }
+      ],
+      "shard_id": "shard_functional_purchase_1"
+    },
+    {
+      "id": "user/configure-your-workspace",
+      "title": "Mengonfigurasi Ruang Kerja, Perusahaan, dan Kolaborasi",
+      "description": "Pelajari cara menemukan dan mengubah pengaturan modul, beralih perusahaan aktif dengan aman, mempertahankan riwayat obrolan, serta berkolaborasi menggunakan AI Assistant dan draf dokumen.",
+      "audience": "functional",
+      "module": "base",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "before-starting",
+          "depth": 2,
+          "text": "Prasyarat dan Peran Akses"
+        },
+        {
+          "id": "find-module-settings",
+          "depth": 2,
+          "text": "Menemukan dan Mengubah Pengaturan Modul"
+        },
+        {
+          "id": "switch-active-company",
+          "depth": 2,
+          "text": "Beralih Perusahaan dan Menjaga Perubahan Data"
+        },
+        {
+          "id": "preserve-chat-and-chatter",
+          "depth": 2,
+          "text": "Mempertahankan Pesan dan Percakapan Terbuka"
+        },
+        {
+          "id": "ai-workspace-safe-drafts",
+          "depth": 2,
+          "text": "Menggunakan AI Workspace dan Draf Rekaman Aman"
+        },
+        {
+          "id": "failure-recovery",
+          "depth": 2,
+          "text": "Menangani Kegagalan Validasi dan Kesalahan Simpan"
+        }
+      ],
+      "shard_id": "shard_functional_base_1"
+    },
+    {
+      "id": "user/manage-warehouse",
+      "title": "Panduan Pengelolaan Transfer Gudang, Lot, Penerimaan Sebagian, dan Pengisian Ulang",
+      "description": "Panduan operator untuk mengelola operasi gudang di ERPForAll: memilih transfer, memeriksa lot, memproses penerimaan sebagian dengan backorder, meminta pengisian ulang manual, dan memverifikasi baris stok yang diperbarui.",
+      "audience": "functional",
+      "module": "stock",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "before-starting",
+          "depth": 2,
+          "text": "Prasyarat dan Persyaratan Peran"
+        },
+        {
+          "id": "choose-transfer-and-track-lots",
+          "depth": 2,
+          "text": "Memilih Transfer dan Memeriksa Lot"
+        },
+        {
+          "id": "receive-less-than-planned",
+          "depth": 2,
+          "text": "Menerima Lebih Sedikit dari Rencana dan Menangani Backorder"
+        },
+        {
+          "id": "manual-replenishment-buy",
+          "depth": 2,
+          "text": "Pengisian Ulang Manual dengan Rute Buy"
+        },
+        {
+          "id": "failure-and-recovery",
+          "depth": 2,
+          "text": "Menangani Penolakan Stok Negatif dan Kendala Kuantitas"
+        },
+        {
+          "id": "verify-stock-records",
+          "depth": 2,
+          "text": "Memverifikasi Catatan Stok yang Diperbarui"
+        }
+      ],
+      "shard_id": "shard_functional_stock_1"
+    },
+    {
+      "id": "user/operations-guide",
+      "title": "Panduan operasional ERPForAll",
+      "description": "Ikuti alur penjualan, pembelian dan penerimaan barang sampai ke dokumen akuntansi yang mencatat hasilnya.",
+      "audience": "functional",
+      "module": "base",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "choose-workflow",
+          "depth": 2,
+          "text": "Pilih pekerjaan"
+        },
+        {
+          "id": "follow-one-purchase",
+          "depth": 2,
+          "text": "Ikuti satu pembelian dari awal sampai pembayaran"
+        }
+      ],
+      "shard_id": "shard_functional_base_1"
+    },
+    {
+      "id": "user/read-financial-reports",
+      "title": "Laporan Keuangan: Cakupan, Navigasi, Penelusuran Rinci, dan Ekspor",
+      "description": "Pilih periode laporan dan cakupan perusahaan, tinjau laporan keuangan, telusuri rincian entri jurnal pendukung, serta ekspor laporan.",
+      "audience": "functional",
+      "module": "account_reporting",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "before-starting",
+          "depth": 2,
+          "text": "Sebelum Memulai"
+        },
+        {
+          "id": "navigate-and-scope",
+          "depth": 2,
+          "text": "Mengakses Laporan dan Menentukan Cakupan"
+        },
+        {
+          "id": "read-and-drill",
+          "depth": 2,
+          "text": "Membaca Angka dan Menelusuri Data Rinci"
+        },
+        {
+          "id": "cash-flow-classification",
+          "depth": 2,
+          "text": "Klasifikasi Aktivitas Arus Kas"
+        },
+        {
+          "id": "export-and-print",
+          "depth": 2,
+          "text": "Mengekspor dan Mencetak Laporan"
+        },
+        {
+          "id": "failure-and-recovery",
+          "depth": 2,
+          "text": "Penanganan Kendala dan Pemulihan"
+        }
+      ],
+      "shard_id": "shard_functional_account_reporting_1"
+    },
+    {
+      "id": "user/record-and-settle-invoices",
+      "title": "Menyiapkan Jurnal, Memposting Faktur, dan Menyelesaikan Pembayaran",
+      "description": "Panduan operator langkah demi langkah untuk mengonfigurasi jurnal, menerbitkan faktur pelanggan, mencatat tagihan pemasok, mencatat pembayaran, dan memantau rekonsiliasi pelunasan di ERPForAll.",
+      "audience": "functional",
+      "module": "account",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "before-starting",
+          "depth": 2,
+          "text": "Prasyarat dan Peran Pengguna"
+        },
+        {
+          "id": "prepare-journals",
+          "depth": 2,
+          "text": "Menyiapkan Jurnal Akuntansi"
+        },
+        {
+          "id": "create-and-post-invoice",
+          "depth": 2,
+          "text": "Membuat dan Mengonfirmasi Faktur atau Tagihan"
+        },
+        {
+          "id": "register-payment",
+          "depth": 2,
+          "text": "Mencatat Pembayaran"
+        },
+        {
+          "id": "review-reconciliation",
+          "depth": 2,
+          "text": "Memeriksa Status dan Hasil Rekonsiliasi"
+        },
+        {
+          "id": "troubleshooting-recovery",
+          "depth": 2,
+          "text": "Menangani Kegagalan Validasi Umum"
+        }
+      ],
+      "shard_id": "shard_functional_account_1"
+    },
     {
       "id": "user/report-barcodes",
       "title": "Barcode pada laporan cetak",
@@ -61,6 +299,49 @@
         }
       ],
       "shard_id": "shard_functional_stock_1"
+    },
+    {
+      "id": "user/work-with-customers",
+      "title": "Bekerja dengan Pelanggan dan Penawaran Penjualan",
+      "description": "Pelajari cara menemukan kontak pelanggan, membuat penawaran penjualan (quotation), menambahkan baris pesanan, mengonfirmasi penawaran menjadi sales order, serta memeriksa status pengiriman dan faktur.",
+      "audience": "functional",
+      "module": "sale",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "before-starting",
+          "depth": 2,
+          "text": "Prasyarat dan Peran Pengguna"
+        },
+        {
+          "id": "find-customer",
+          "depth": 2,
+          "text": "Mencari Kontak Pelanggan yang Ada"
+        },
+        {
+          "id": "create-quote",
+          "depth": 2,
+          "text": "Membuat Penawaran Baru dan Menambahkan Baris Pesanan"
+        },
+        {
+          "id": "confirm-order",
+          "depth": 2,
+          "text": "Memproses dan Mengonfirmasi Penawaran Menjadi Sales Order"
+        },
+        {
+          "id": "handle-failure",
+          "depth": 2,
+          "text": "Menangani Kegagalan Konfirmasi dan Langkah Pemulihan"
+        },
+        {
+          "id": "track-order",
+          "depth": 2,
+          "text": "Memantau Progres Pesanan, Penagihan Faktur, dan Pengiriman"
+        }
+      ],
+      "shard_id": "shard_functional_sale_1"
     }
   ]
 }

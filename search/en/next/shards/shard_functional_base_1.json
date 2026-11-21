@@ -1,0 +1,74 @@
+{
+  "shard_id": "shard_functional_base_1",
+  "lang": "en",
+  "version": "next",
+  "audience": "functional",
+  "modules": [
+    "base",
+    "base"
+  ],
+  "docs": [
+    {
+      "page_id": "user/configure-your-workspace",
+      "title": "Configure Your Workspace, Companies, and Collaboration",
+      "module": "base",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "Use the company switcher to choose whose records you are viewing. Open Settings to change shared or company-specific values. Record chatter and the AI Assistant serve different conversations."
+        },
+        {
+          "anchor": "before-starting",
+          "text": "Before adjusting settings or collaborating across companies, verify that your account has the required access rights: * **Settings Administrator (Settings Administration)**: Required to view and change global configuration, addon settings, background jobs, system parameters, and company accounting defaults. * **Internal User**: Can read companies and records assigned to their user profile, switch between authorized companies, view general settings overviews, participate in record chatter, and use the AI Assistant if configured. * **Active Company Assignment**: You must be assigned to at least one active company to create or modify company-dependent records. All settings and company switches observe your existing record permissions. Attempting to open unauthorized menus or forms results in access refusal."
+        },
+        {
+          "anchor": "find-module-settings",
+          "text": "Addon settings can be accessed directly from the main application menu or from shortcut menus inside specific modules: 1. Open **Settings** from the app launcher, or navigate to **Configuration → Settings** from within an authorized module (such as Inventory, Purchase, or Accounting). 2. Review the left sidebar, which lists every installed module with settings using its app name and icon. 3. Click an application name to view its settings organized into distinct blocks (such as **Operations** or **Orders**). 4. Use **Search settings** in the control panel to search for configuration options across all installed apps in the active scope. Clear the search input or press **Escape** to restore the normal view. 5. Choose your target configuration scope: * Select **Global settings** to configure shared database-wide values. * Select **Current company** to configure values that apply only to the company currently named in the header. 6. Make your adjustments, then click **Save** (Alt+S) to commit all changed fields together. Click **Discard** (Alt+J) to revert unsaved entries back to their stored values. *What commits changes*: Clicking **Save** writes all modified settings to the database. Switching tabs or closing the window without saving leaves stored configuration untouched."
+        },
+        {
+          "anchor": "switch-active-company",
+          "text": "When working in a multi-company database, switch or combine active company contexts using the switcher in the header: 1. Click the company switcher dropdown in the header (top right). 2. In single-company mode, click the company name directly (or focus it and press **Enter**) to switch immediately to that company. 3. In multi-company mode, toggle the checkboxes beside company names (or press **Space** on a focused row) to include or remove branches and sister companies. 4. If toggling checkboxes, click **Confirm** (or press **Control+Enter** / **Command+Enter**) to reload the session with the updated active company set. Click **Discard** to revert pending selections. *Departure Guard and Unsaved Edits*: If you have unsaved modifications on the current record or settings sheet, switching companies triggers the departure guard dialog. Choosing **Remain** keeps your unsaved edits and halts the company switch. Choosing **Discard** abandons your unsaved edits and proceeds with the company switch. *What commits changes*: Clicking **Confirm** or pressing **Enter** commits the active company context and reloads the session with records filtered for the chosen companies."
+        },
+        {
+          "anchor": "preserve-chat-and-chatter",
+          "text": "ERPForAll separates team chatter from automated AI conversations: * **Team Chatter on Records**: Colleague discussions belong to the record chatter. Keep an open record visible to receive new messages and updates posted by colleagues working on that record. If a network interruption occurs, returning to the record refreshes the newest messages. If live updates indicate an access change, reload the page with your current authorized company selected. * **Sending Chatter Messages**: You can send messages and attach newly uploaded files even with read-only permissions on a record. Attaching an existing record file requires write permission on that record. * **AI Assistant Tab Scoping**: AI Assistant chat is scoped to the current browser tab, signed-in user, and active company; it does not synchronize across separate browser tabs. It survives navigation between ERP pages within the same tab, retaining messages, unsent draft text, dock minimize/open state, and scroll position. * **Session Boundary**: Signing out, returning to the login screen, or session expiry clears tab chat storage. Interrupted replies are flagged, and the browser never resubmits queries automatically."
+        },
+        {
+          "anchor": "ai-workspace-safe-drafts",
+          "text": "When the AI Assistant is installed and configured with an approved company provider, use it to review information and prepare drafts: 1. Open **AI Assistant** from the application launcher. 2. Toggle **Request a structured reply** if you require structured tables, lists, or slides; leave it disabled for standard conversational answers. 3. Type your inquiry and press **Enter** to submit (press **Shift+Enter** for a newline). Each question is dispatched as an independent, bounded request without automatic re-submission. 4. Use **Find ERP records** to locate existing transactions (such as sales orders, purchase orders, transfers, or journal entries) in the current company. Searching records checks local permissions and consumes no provider tokens. 5. Select **Open** next to a referenced record in an assistant response, or choose a document from **Find ERP records**, to load its standard ERP form sheet. 6. Inspect the opened draft carefully: verify mandatory field values, lines, partner details, taxes, and amounts before committing. *Safe Record Handling*: The assistant cannot post transactions or commit changes on its own. Form fields display standard validation markers, and any proposed record remains an uncommitted draft until you review the entries and explicitly click **Save** or confirm the document on the form sheet."
+        },
+        {
+          "anchor": "failure-recovery",
+          "text": "If an invalid value is submitted or a save operation fails, the system provides clear notifications and error indicators: * **Form Validation Refusal**: If you click **Save** with invalid or missing required values, the form marks the affected controls with colored validation highlights and moves input focus to the first invalid field (switching notebook tabs automatically if needed). A danger notification appears describing the issue. * **Recovery Action**: Review the highlighted fields, enter valid values matching the required format and range, and click **Save** again. If you decide not to proceed, click **Discard** to reload the last stored values. * **Uncertain Network Writes**: If a network failure occurs during a save, do not repeatedly submit the form. Perform a safe read by reloading the view, or contact your database administrator to verify whether the record transaction committed."
+        }
+      ]
+    },
+    {
+      "page_id": "user/operations-guide",
+      "title": "Daily operations guide",
+      "module": "base",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "Choose the task you are about to perform. The menu and button names in these guides match the English interface. Before starting, check the active company in the top bar."
+        },
+        {
+          "anchor": "choose-workflow",
+          "text": "| I need to | Where to start | | --- | --- | | Prepare a customer quotation, confirm it and check delivery | [Sales quotations](/en/next/user/work-with-customers.md) | | Order from a vendor, receive part of the order and bill the received quantity | [Purchasing and receipts](/en/next/user/buy-and-receive.md) | | Record a short receipt, follow a lot or request stock from a supplier | [Warehouse and replenishment](/en/next/user/manage-warehouse.md) | | Post a customer invoice or vendor bill and record a partial payment | [Invoices and payments](/en/next/user/record-and-settle-invoices.md) | | Explain a balance, trace a cash movement and export the report | [Financial statements](/en/next/user/read-financial-reports.md) | | Find an app setting, change company, or open a document from the assistant | [Settings and collaboration](/en/next/user/configure-your-workspace.md) |"
+        },
+        {
+          "anchor": "follow-one-purchase",
+          "text": "Suppose the buyer orders ten units and eight arrive. The buyer confirms the order. The warehouse operator records eight on the receipt, validates it and handles the remaining two according to the operation type’s backorder policy. Back on the purchase order, **Received Qty** shows eight. A user with purchasing and accounting access can now create the draft vendor bill for the received quantity. The accountant reviews and confirms the bill before registering a payment. Each team can check its own document. Keep the purchase order reference when looking up the receipt and bill. If the receipt is missing or a bill seems too large, check the active company, receipt status and quantities already billed before creating another document."
+        }
+      ]
+    }
+  ]
+}

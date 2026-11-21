@@ -1,0 +1,50 @@
+{
+  "shard_id": "shard_functional_account_1",
+  "lang": "en",
+  "version": "next",
+  "audience": "functional",
+  "modules": [
+    "account"
+  ],
+  "docs": [
+    {
+      "page_id": "user/record-and-settle-invoices",
+      "title": "Prepare Journals, Post Invoices, and Settle Payments",
+      "module": "account",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "This guide walks operators through managing sales and purchase billing cycles in ERPForAll. You will learn how to verify accounting journals, create and confirm customer invoices and vendor bills, register payments, and monitor document matching and amount due statuses."
+        },
+        {
+          "anchor": "before-starting",
+          "text": "Before issuing invoices or recording bills, ensure the following setup is in place: * **User Role**: Standard accounting users create invoices, enter product lines, confirm documents, register payments, and view journal items. Configuring journals requires accounting administrator permissions. * **Company Accounts**: The company must have an active receivable account and a payable account configured in the chart of accounts. * **Journals**: Ensure at least one sales journal (for customer invoices) and one purchase journal (for vendor bills) exist with an appropriate default account (income for sales, expenses for purchases). Additionally, at least one bank or cash journal must be active with configured payment methods and a default account for settling balances."
+        },
+        {
+          "anchor": "prepare-journals",
+          "text": "Every invoice, bill, and payment is posted in an appropriate journal. 1. Navigate to **Accounting > Configuration > Journals** (accounting administrator). 2. Review existing journals (a standard database includes Customer Invoices, Vendor Bills, and Main Bank). 3. Click **New** to create a journal. 4. Enter the journal name and select the **Type** (Sales, Purchase, Bank, Cash, or Credit Card). 5. **Short Code** may remain empty; ERPForAll assigns the next available unique code for that type (such as INV1, BILL1, or BNK1). 6. Select the **Default Account** matching the journal type: income for sales, expenses for purchases, or bank/cash for payment journals. 7. Leave **Currency** blank for company currency, or choose a foreign currency if the journal exclusively handles that currency. 8. Click **Save**. The **Journal Entries** tab controls document numbering (such as INV1/2026/00001 for invoices, RINV1/... for credit notes, or PBNK1/... for payments). ![An invoice form shows the journal, invoice lines and current totals.](https://raw.githubusercontent.com/IndoERP/ERPForAll/a0b166f13a9bfef45efe154016c4f5d9fd2e37c0/.github/assets/invoice-form.png)"
+        },
+        {
+          "anchor": "create-and-post-invoice",
+          "text": "Follow these steps to record a customer invoice or vendor bill: 1. For customer billing, open **Accounting > Customers > Invoices**. For vendor purchases, open **Accounting > Vendors > Bills**. 2. Click **New**. 3. Choose the **Customer** (or **Vendor**). For an invoice, set the **Invoice Date** (if omitted, confirmation defaults to today's date in the company Business Time Zone). For a vendor bill, fill the bill date. 4. Optionally choose the **Journal** and **Currency**. If omitted, Accounting chooses the eligible sales or purchase journal. 5. On the **Invoice Lines** tab, click **Add a line**. 6. Select the **Product** or service to populate its label, unit, price, and taxes, then adjust **Quantity**, **Unit Price**, **Discount**, or **Taxes**. 7. Click **Save**. ERPForAll computes untaxed amount, taxes, total, and initial **Amount Due**. The **Journal Items** tab displays the underlying accounting entries: product lines, tax lines, and receivable or payable line. 8. Click **Confirm**. **Action that changes data**: **Confirm** checks that the invoice has a partner, at least one product line, and a non-negative total (and a bill date for vendor bills). Upon confirmation, it assigns the sequential entry number, changes status from Draft to Posted, and books active entries in the general ledger. Reset to Draft and Cancel are available once posting is active in your version."
+        },
+        {
+          "anchor": "register-payment",
+          "text": "Registering a payment records money received or sent and matches it directly against the invoice's open balance. This is distinct from bank statement reconciliation, which matches statement lines to bank journal items. 1. Open a confirmed invoice or bill that still has an **Amount Due**. 2. Click **Register Payment**. 3. Verify the dialog fields: * **Journal**: Proposes the company's first bank journal. * **Payment Method**: Shows methods matching the direction (receiving or sending). * **Payment Date**: Defaults to today's date in the company Business Time Zone. * **Memo**: Proposes document numbers. * **Amount**: Defaults to the full amount due. Enter less for a partial payment (for example, on an invoice of 100, paying 60 leaves an outstanding balance of 40). 4. Click **Pay**. If the document was partially settled while the dialog was open, the system prompts you to reopen the dialog. **Action that changes data**: **Pay** generates a confirmed payment record under **Customers > Payments** (or **Vendors > Payments**) with its own number (such as PBNK1/2026/00001), posts the payment journal entry, and matches the payment line against the invoice receivable/payable line."
+        },
+        {
+          "anchor": "review-reconciliation",
+          "text": "After registering a payment, check the document status and settlement matching: * **Payment Status**: Displays **Paid** once fully settled, or **Partially Paid** when an outstanding balance remains. * **Amount Due**: Decreases immediately by each matched payment amount (for example, falling from 100 to 40 after a 60 payment, and reaching 0 when fully paid). * **Matching #**: On the **Journal Items** tab, receivable or payable lines show a matching code: P followed by a number while partially settled, or a plain number once fully settled. * **History & Messages**: The chatter records status changes (Draft → Posted) and payment matching entries with user and timestamp."
+        },
+        {
+          "anchor": "troubleshooting-recovery",
+          "text": "**Validation Refusal During Confirmation** * **Observed Failure**: Clicking **Confirm** fails with a validation refusal and no entry number is assigned. * **Root Cause**: The document lacks a customer or vendor, has no product lines, has a negative total, or is a vendor bill missing its bill date. * **Recovery Steps**: 1. Return to the draft form. 2. Select a partner in **Customer** or **Vendor**. 3. Under **Invoice Lines**, add at least one line with valid quantity and price ensuring a non-negative total. 4. On vendor bills, fill the bill date. 5. Click **Save**, then click **Confirm**."
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "shard_id": "shard_functional_sale_1",
+  "lang": "en",
+  "version": "next",
+  "audience": "functional",
+  "modules": [
+    "sale"
+  ],
+  "docs": [
+    {
+      "page_id": "user/work-with-customers",
+      "title": "Work with Customers and Sales Quotations",
+      "module": "sale",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "In ERPForAll, sales representatives manage the entire customer quotation process from the Sales application. This tutorial walks through searching for an existing customer, creating a new quotation with product lines, pricing and discounts, handling one-step warehouse deliveries, confirming the quotation into a sales order, and recovering if confirmation fails."
+        },
+        {
+          "anchor": "before-starting",
+          "text": "Before creating quotations, verify that the required applications and permissions are in place: * **Applications**: The **Sales** application must be installed. To deliver physical goods through one-step warehouse operations, the **Sale Stock** addon must also be installed. * **User Roles**: Sales roles are assigned on the user form under **Sales**: * **User: Own Documents Only**: Reads, creates, and modifies own quotations and orders, and those without a salesperson. * **User: All Documents**: Reads, creates, and modifies quotations and orders across all salespeople. * **Administrator**: Full sales administration, including deleting draft or cancelled documents, locking or unlocking confirmed orders, and creating or modifying customer contacts and pricelists. * **Accounting Role**: Creating draft customer invoices from confirmed orders requires membership in the Accounting user group. * **Numbering Sequence**: A numbering sequence with code sale.order must be configured for your company under **Settings > Technical > Sequences**; an order cannot be created without one."
+        },
+        {
+          "anchor": "find-customer",
+          "text": "Locate the customer before preparing a quotation to ensure addresses and sales defaults are applied properly: 1. Navigate to **Sales > Orders > Customers** (or open **Contacts** from the main menu). 2. Find the customer in the list by searching name, email, reference, or tax ID, or apply the **Companies** or **Individuals** filters. 3. Open the contact and verify the address (street, second street, city, postal code) on the **Address** tab. A contact marked with a tax ID and no parent contact acts as a company; child contacts inherit the company address."
+        },
+        {
+          "anchor": "create-quote",
+          "text": "A quotation begins as a draft with a sequence number such as S00001: 1. Navigate to **Sales > Orders > Quotations** and choose **New**. 2. Select the customer in **Customer**. The system fills in **Invoice Address** and **Delivery Address** from the contact, sets **Salesperson**, and sets the default sales team. You can adjust the addresses, salesperson, or sales team if needed. 3. (Optional) Select a **Pricelist** to price new lines in that pricelist currency. Without one, prices default to the product sales price in company currency. Note that once lines are added or the order is confirmed, the company cannot be changed. 4. If **Sale Stock** is installed and the company has multiple delivery warehouses, choose the active one-step warehouse in **Warehouse** beside the delivery address before confirming. The warehouse remains editable while the quotation is in draft or sent status. 5. In the **Order Lines** tab, choose **Add a line**: * In the line dialog, select the **Product**, verify the unit of measure, and enter the **Quantity**. The unit price fills automatically from the product or pricelist unless entered manually. * Enter a **Discount (%)** if a price reduction applies. * Sales taxes default from the product or company default, adjusted by the order's **Fiscal Position**. * Save and close the line. Repeat for additional products, sections, or descriptive notes. 6. Save the quotation. The form calculates the line subtotal, untaxed amount, taxes, and total."
+        },
+        {
+          "anchor": "confirm-order",
+          "text": "Formally commit the transaction from the quotation form: 1. Review the calculated untaxed amount, taxes, and total. 2. (Optional) Choose **Print > Quotation / Order** to generate a PDF preview with status *Draft*. 3. Choose **Confirm** at the top of the form: * The quotation transitions to a confirmed **Sales Order** while retaining its number (e.g., S00001). * The customer, company, and pricelist lock and cannot be edited. * If the order contains physical goods and has an active one-step delivery warehouse configured, confirmation automatically generates an outgoing transfer. A **Delivery** link appears on the order, allowing users who can read the transfer to open it under **Inventory > Operations > Deliveries**. * Service-only orders confirm without creating an outgoing shipment or a delivery link."
+        },
+        {
+          "anchor": "handle-failure",
+          "text": "If required routing, warehouse configurations, or restricted permissions prevent processing, confirmation stops safely: * **Failure Scenario**: Confirmation fails because the selected **Warehouse** lacks an active one-step delivery route with an outgoing make-to-stock rule, or the user lacks permission to linked stock records. * **System Behavior**: The transaction aborts before database changes take effect. No partial outgoing shipment is created, and the document remains in its previous draft quotation state. * **Recovery Steps**: 1. Read the reported error message. 2. On the draft quotation, adjust **Warehouse** beside the delivery address to an active warehouse configured with one-step delivery. 3. Verify that all line items have valid products, quantities, and allowable units. 4. Choose **Confirm** again to generate the sales order and initial delivery."
+        },
+        {
+          "anchor": "track-order",
+          "text": "After confirmation, manage fulfillment, line changes, and billing: * **Actions Available on Confirmed Orders**: * **Line modifications**: Existing order lines cannot be deleted; set an item's quantity to 0 to cancel it. On unlocked orders, line quantities and prices can still be adjusted. * **Locking**: A Sales administrator can lock a confirmed order (or the system locks it automatically if **Lock confirmed sales** is enabled). On a locked order, no lines can be added or deleted, line details cannot be altered, and customer, addresses, and delivery dates become read-only. * **Cancellation**: To cancel a confirmed order linked to warehouse delivery, first cancel the linked transfer in Inventory, then cancel the sales order. Locked orders cannot be cancelled until unlocked. * **Deletion**: Only draft quotations and cancelled orders can be deleted (Administrator role required). Confirmed orders cannot be deleted. * **Goods Deliveries vs. Services**: * **Physical Goods**: The **Delivery** link opens the warehouse transfer. Processing and validating the shipment in Inventory updates the order line's delivered quantity. * **Services**: Service lines have no warehouse transfers or delivery links; their delivered quantities are updated directly or billed based on ordering policy. * **Invoicing**: * Products are invoiced based on their **Invoicing Policy** (ordered quantities vs. delivered quantities). * An Accounting user chooses **Create Draft Invoice** on eligible orders to generate draft customer invoices for unbilled quantities. * **Close Invoicing** marks a confirmed order as fully invoiced; it can be reopened if additional billing is required."
+        }
+      ]
+    }
+  ]
+}

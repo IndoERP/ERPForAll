@@ -4,9 +4,49 @@
   "version": "next",
   "audience": "functional",
   "modules": [
+    "stock",
     "stock"
   ],
   "docs": [
+    {
+      "page_id": "user/manage-warehouse",
+      "title": "Panduan Pengelolaan Transfer Gudang, Lot, Penerimaan Sebagian, dan Pengisian Ulang",
+      "module": "stock",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "Panduan ini memandu operator gudang dalam menjalankan tugas inventaris harian di ERPForAll. Anda akan mempelajari cara menavigasi Ikhtisar Inventaris, meninjau informasi lot, memproses penerimaan vendor saat barang yang tiba lebih sedikit dari yang dijadwalkan, membuat permintaan penawaran pengisian ulang manual menggunakan rute Buy, dan mengonfirmasi posisi stok yang dihasilkan pada laporan stok."
+        },
+        {
+          "anchor": "before-starting",
+          "text": "Sebelum menjalankan prosedur ini, pastikan Anda memiliki akses ke aplikasi **Inventory** dan izin operasional yang sesuai: * **Peran & Akses**: Anda harus menjadi operator inventaris atau pengguna stok yang berwenang untuk perusahaan yang aktif. Untuk melihat register lot, akun Anda memerlukan grup **Lot and serial tracking** yang ditetapkan di bawah **Access Rights → Groups** oleh administrator. Untuk permintaan pengisian ulang, addon **Purchase Stock** harus terpasang, dan akun Anda harus memiliki izin untuk memperbarui aturan pemesanan ulang serta membuat pesanan pembelian. * **Konfigurasi Gudang**: Pastikan gudang telah dikonfigurasi untuk penerimaan langsung ke stok dan tipe operasi (seperti Receiving) memiliki awalan penomoran sequence prefix. * **Data Master**: Produk harus sudah terdaftar pada katalog inventaris. Pelacakan lot bersifat opsional: produk dapat dilacak berdasarkan lot, nomor seri, atau tidak dilacak sama sekali (stok yang ada tanpa lot tetap disimpan tanpa nomor). Jika pengisian ulang dipicu, produk memerlukan konfigurasi vendor dengan harga vendor aktif yang mencakup kuantitas pembelian yang diminta."
+        },
+        {
+          "anchor": "choose-transfer-and-track-lots",
+          "text": "Ikuti langkah-langkah berikut untuk menemukan penerimaan masuk dan memeriksa rincian pelacakan lot: 1. Buka **Inventory** untuk melihat dasbor **Overview**. Kartu-kartu menampilkan tipe operasi yang aktif beserta jumlah untuk **To Process**, **Waiting**, **Late**, dan **Backorders**. 2. Temukan kartu untuk tipe operasi penerimaan gudang Anda (seperti **Receiving**) lalu klik jumlah **To Process** untuk melihat transfer yang siap diproses, atau navigasikan ke **Operations → Receipts**. 3. Pada daftar transfer, tinjau nomor referensi, lokasi sumber dan tujuan, kontak mitra, tanggal terjadwal, dokumen sumber, dan status. Klik penerimaan berstatus **Ready** untuk membuka formulir transfer. 4. Tinjau informasi header dan pilih tab **Operations** untuk melihat baris produk, permintaan awal (demand), dan satuan unit. Beralih ke tab **Detailed Operations** untuk melihat baris pergerakan tempat alokasi lot dicatat. 5. Untuk memverifikasi lot terdaftar secara terpisah di seluruh lokasi, buka **Inventory → Products → Lots/Serial Numbers** (atau **Inventory → Configuration → Settings**, lalu **Traceability → Lots and serial numbers**). Klik catatan lot tertentu untuk meninjau produk dan riwayat lokasi yang terkait. ![Ringkasan Inventory mengelompokkan pekerjaan menurut jenis operasi.](https://raw.githubusercontent.com/IndoERP/ERPForAll/a0b166f13a9bfef45efe154016c4f5d9fd2e37c0/.github/assets/inventory-overview.png)"
+        },
+        {
+          "anchor": "receive-less-than-planned",
+          "text": "Ketika kiriman tiba dengan jumlah barang yang lebih sedikit daripada pesanan, catat kuantitas aktual yang diterima dan posting transfer tersebut: 1. Pada formulir penerimaan yang terbuka, beralih ke tab **Detailed Operations**. 2. Temukan baris produk yang diterima dan sesuaikan nilai **Done** (atau kuantitas yang dipindahkan) agar sesuai dengan kuantitas fisik yang tiba, bukan permintaan penuh yang direncanakan (misalnya memasukkan 8 unit saat permintaan awal adalah 10 unit). 3. Klik **Validate** di bagian atas formulir transfer. 4. Bergantung pada konfigurasi **Create Backorder** pada tipe operasi tersebut: * Jika diatur ke **Always**: Transfer menyelesaikan kuantitas yang ada dan secara otomatis membuat transfer backorder bernomor baru untuk sisa selisihnya. Kolom **Back Order of** pada transfer baru merujuk ke penerimaan asli. * Jika diatur ke **Ask**: Jendela konfirmasi akan menampilkan sisa kuantitas. Klik **Create Backorder** untuk menjadwalkan sisa barang pada transfer tertaut, atau **Close Remaining Demand** untuk membatalkan sisa permintaan. * Jika diatur ke **Never**: Transfer langsung ditutup pada kuantitas aktual yang diterima tanpa membuat backorder. 5. Klik **Create Backorder** jika diminta. Status transfer asli berubah dari **Ready** menjadi **Done**, memindahkan stok yang diterima ke lokasi gudang tujuan."
+        },
+        {
+          "anchor": "manual-replenishment-buy",
+          "text": "Ketika stok turun di bawah batas pengaman yang diinginkan, operator gudang dapat membuat draf permintaan penawaran harga (RFQ) menggunakan aturan pemesanan ulang (reordering rule): 1. Buka **Inventory → Configuration → Replenishment** (atau **Inventory → Configuration → Settings → Planning → Reordering rules (minimum and maximum)**). 2. Buka aturan pemesanan ulang untuk produk yang diinginkan. Pastikan rute diatur ke **Buy** dan tujuan mengarah ke lokasi stok gudang penerimaan langsung. 3. Pastikan ambang batas **Min Quantity** dan **Max Quantity** telah sesuai dalam satuan inventaris produk, serta produk memiliki harga vendor aktif yang mencakup volume pembelian tersebut. 4. Klik **Request Quotation**. 5. Sistem mengevaluasi perkiraan stok (menggabungkan stok di tangan dengan pergerakan masuk dan keluar yang dijadwalkan): * **Contoh Pengisian Ulang**: Dengan min 3, max 6, dan perkiraan stok 2, mengeklik **Request Quotation** membuat draf RFQ sebanyak 4 unit untuk mengembalikan stok ke target maksimum 6 unit. Jika kuantitas manual bernilai positif dimasukkan pada aturan, penimpaan manual tersebut yang diutamakan. * **Di Atas Ambang Batas**: Jika perkiraan stok adalah 5 (sama dengan atau di atas minimum 3), draf RFQ tidak dibuat tanpa adanya penimpaan manual, dan sistem menampilkan pesan bahwa aturan tersebut tidak memerlukan penawaran. * **Idempotensi Permintaan Tertunda**: Membuka atau mengeklik **Request Quotation** pada permintaan tertunda yang sudah ada sebanyak dua kali akan mengembalikan draf penawaran yang sama tanpa membuat pesanan duplikat."
+        },
+        {
+          "anchor": "failure-and-recovery",
+          "text": "Jika terjadi kendala saat validasi atau pengisian ulang, identifikasi penyebabnya dan lakukan pemulihan melalui langkah-langkah terverifikasi berikut: * **Penolakan Validasi Akibat Stok Negatif**: Jika suatu operasi atau transfer mencoba memindahkan atau mencadangkan barang dari lokasi penyimpanan yang melarang stok negatif dan stok bebas tidak mencukupi, sistem menolak **Validate** serta menampilkan pesan kesalahan yang menyebutkan lokasi dan kuantitas bebas yang tersedia. Tidak ada stok yang berpindah, dan transfer tetap pada status terbukanya. * *Pemulihan*: Beralih ke **Detailed Operations** dan koreksi kuantitas agar tidak melebihi stok bebas yang tersedia, atau tunggu hingga penerimaan sebelumnya divalidasi untuk mengisi lokasi tersebut sebelum mengeklik **Validate** kembali. * **Permintaan Penawaran Tidak Diperlukan**: Jika Anda mengeklik **Request Quotation** saat perkiraan kuantitas produk sudah sama dengan atau lebih besar dari batas minimum yang ditentukan, sistem menampilkan penjelasan bahwa aturan tersebut tidak memerlukan penawaran. * *Pemulihan*: Periksa **Inventory → Reporting → Product Stock Position** untuk meninjau reservasi saat ini dan pesanan masuk terbuka sebelum mengubah nilai batas pada aturan pemesanan ulang."
+        },
+        {
+          "anchor": "verify-stock-records",
+          "text": "Konfirmasikan bahwa catatan buku besar stok dan perhitungan fisik telah sesuai dengan yang diproses: 1. Buka **Inventory → Reporting → Stock**. 2. Temukan baris yang sesuai dengan produk yang diterima, lokasi gudang, dan nomor lot. 3. Klik baris tersebut untuk membuka catatan stok hanya-baca (read-only). Pastikan nilai **On Hand** telah bertambah sebesar kuantitas aktual yang diterima, **Reserved** mencerminkan reservasi keluar yang ada, dan **Available** menampilkan saldo yang belum dicadangkan. 4. Untuk pelacakan menyeluruh di seluruh zona gudang, buka **Inventory → Reporting → Stock Report**, perluas lokasi tujuan, dan perluas produk untuk memverifikasi kuantitas pada tingkat lot. 5. Untuk memastikan riwayat pergerakan inventaris, buka **Inventory → Reporting → Moves Analysis** guna memastikan bahwa transfer masuk yang selesai tercatat di bawah **Incoming** dengan nilai permintaan dan kuantitas yang sesuai."
+        }
+      ]
+    },
     {
       "page_id": "user/stock-receipt-admission",
       "title": "Validasi penerimaan barang milik perusahaan",
