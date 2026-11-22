@@ -498,6 +498,7 @@ impl AssetGeneration {
                         .flat_map(|(key, value)| [key.as_str(), value.as_str()]),
                 ),
         )?;
+        let brand = brand_images(&self.fixed)?;
         let (assets, reservation) = store.admit(self.assets, metadata)?;
         Ok(PublishedAssets {
             runtime: self.runtime,
@@ -507,6 +508,7 @@ impl AssetGeneration {
             store: Arc::clone(store),
             imports: self.imports,
             fixed: self.fixed,
+            brand,
         })
     }
 }
@@ -534,6 +536,38 @@ fn local_url(url: &str) -> Result<&str, PublicationError> {
     })?;
     asset_path(path)?;
     Ok(path)
+}
+/// The brand images an installed addon may publish as `static/brand/<image>`; the web addon's asset assembly
+/// (`BRAND_IMAGES` there) lets only one installed addon ship them.
+pub const BRAND_IMAGES: [&str; 3] = ["icon.svg", "logo.svg", "logo-dark.svg"];
+
+/// Brand image name to its published asset URL, from the one addon that declares any of them.
+fn brand_images(
+    fixed: &BTreeMap<String, String>,
+) -> Result<BTreeMap<&'static str, String>, PublicationError> {
+    let mut owner: Option<&str> = None;
+    let mut images = BTreeMap::new();
+    for (path, url) in fixed {
+        let Some((addon, image)) = path
+            .strip_prefix('/')
+            .and_then(|path| path.split_once('/'))
+            .and_then(|(addon, rest)| Some((addon, rest.strip_prefix("static/brand/")?)))
+        else {
+            continue;
+        };
+        let Some(image) = BRAND_IMAGES.iter().find(|name| **name == image) else {
+            continue;
+        };
+        if owner.is_some_and(|owner| owner != addon) {
+            return Err(refused(
+                PublicationErrorKind::Manifest,
+                "more than one addon publishes brand images",
+            ));
+        }
+        owner = Some(addon);
+        images.insert(*image, url.clone());
+    }
+    Ok(images)
 }
 fn fixed_path(path: &str) -> bool {
     if path.len() > 1024 {
@@ -568,6 +602,7 @@ pub struct PublishedAssets {
     store: Arc<AssetStore>,
     imports: BTreeMap<String, String>,
     fixed: BTreeMap<String, String>,
+    brand: BTreeMap<&'static str, String>,
     _metadata: store::Reservation,
 }
 impl PublishedAssets {
@@ -591,6 +626,11 @@ impl PublishedAssets {
     /// Exact declaration lookup. An unknown module/path never falls through to disk.
     pub fn fixed_path(&self, path: &str) -> Option<&str> {
         self.fixed.get(path).map(String::as_str)
+    }
+    /// The published asset URL of brand image `image` (one of [`BRAND_IMAGES`]) when an installed addon
+    /// ships it, else `None` (the server's compiled image applies).
+    pub fn brand_image(&self, image: &str) -> Option<&str> {
+        self.brand.get(image).map(String::as_str)
     }
     /// Import-map JSON, escaped for an inline nonced script element.
     /// # Errors

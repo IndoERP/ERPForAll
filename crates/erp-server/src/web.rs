@@ -1334,8 +1334,8 @@ impl WebApp {
             }
             return Ok(result);
         }
-        if let Some(response) = brand_route(&parts.method, path) {
-            return Ok(response);
+        if let Some(image) = brand_image(&parts.method, path) {
+            return self.brand(image, headers).await;
         }
         match (&parts.method, path) {
             (&Method::GET, routes::ROOT) => redirect("/erp"),
@@ -1827,6 +1827,42 @@ impl WebApp {
             return Ok(Some(AssetAdmission::Published(assets)));
         }
         Ok(admission)
+    }
+
+    /// Brand image `image`: the one installed addon's `static/brand/<image>` from the published assets (served
+    /// with the asset store's headers: ETag, `nosniff` and a sandboxing policy for SVG), else the compiled image.
+    /// An asset outage serves the compiled image, so the error page that reports the outage keeps its logo.
+    async fn brand(&self, image: &'static str, headers: &HeaderMap) -> HttpResult<Response> {
+        let if_none_match = one(headers, "if-none-match")?;
+        match self.current_asset_admission().await {
+            Ok(Some(AssetAdmission::Published(assets))) => {
+                if let Some(url) = assets.brand_image(image) {
+                    let name = url
+                        .strip_prefix(routes::ASSETS_PREFIX)
+                        .ok_or_else(internal)?;
+                    let mut result = assets
+                        .response(name, if_none_match, one(headers, "accept-encoding")?)
+                        .map_err(|error| bad(error.to_string()))?
+                        // The publication admitted this URL with its bytes; absence is an invariant break.
+                        .ok_or_else(internal)?;
+                    if matches!(result.status(), StatusCode::OK | StatusCode::NOT_MODIFIED) {
+                        result.headers_mut().insert(
+                            header::CACHE_CONTROL,
+                            HeaderValue::from_static(BRAND_CACHE_CONTROL),
+                        );
+                    }
+                    return Ok(result);
+                }
+            }
+            Ok(Some(AssetAdmission::Broken(_)) | None) => {}
+            Err(_) => {
+                tracing::warn!(
+                    image,
+                    "published assets unavailable; serving the compiled brand image"
+                );
+            }
+        }
+        compiled_brand_response(compiled_brand(image).ok_or_else(internal)?, if_none_match)
     }
 
     async fn apply_asset_document(
@@ -2377,22 +2413,59 @@ const BRAND_ICON: &[u8] = include_bytes!("../brand/erpforall-icon.svg");
 const BRAND_LOGO: &[u8] = include_bytes!("../brand/erpforall-logo.svg");
 const BRAND_LOGO_DARK: &[u8] = include_bytes!("../brand/erpforall-logo-dark.svg");
 
-// Brand images compiled into the binary, served anonymously like the favicon browsers probe;
-// none opens an application session.
-fn brand_route(method: &Method, path: &str) -> Option<Response> {
+// Brand images, served anonymously like the favicon browsers probe; none opens an application session.
+// The brand image name (`crate::assets::BRAND_IMAGES`) a GET of `path` asks for.
+fn brand_image(method: &Method, path: &str) -> Option<&'static str> {
     if *method != Method::GET {
         return None;
     }
     match path {
-        routes::FAVICON | routes::BRAND_ICON_PATH => Some(brand_response(BRAND_ICON)),
-        routes::BRAND_LOGO_PATH => Some(brand_response(BRAND_LOGO)),
-        routes::BRAND_LOGO_DARK_PATH => Some(brand_response(BRAND_LOGO_DARK)),
+        routes::FAVICON | routes::BRAND_ICON_PATH => Some("icon.svg"),
+        routes::BRAND_LOGO_PATH => Some("logo.svg"),
+        routes::BRAND_LOGO_DARK_PATH => Some("logo-dark.svg"),
         _ => None,
     }
 }
 
-fn brand_response(svg: &'static [u8]) -> Response {
-    let mut response = Response::new(Body::from(svg));
+fn compiled_brand(image: &str) -> Option<&'static [u8]> {
+    match image {
+        "icon.svg" => Some(BRAND_ICON),
+        "logo.svg" => Some(BRAND_LOGO),
+        "logo-dark.svg" => Some(BRAND_LOGO_DARK),
+        _ => None,
+    }
+}
+
+// Brand responses are revalidated on every use (`no-cache` with an ETag): installing or removing a brand
+// addon changes them at a stable URL, and an unchanged image costs a 304.
+const BRAND_CACHE_CONTROL: &str = "no-cache";
+
+fn compiled_brand_response(
+    svg: &'static [u8],
+    if_none_match: Option<&str>,
+) -> HttpResult<Response> {
+    use sha2::Digest as _;
+    let digest = sha2::Sha256::digest(svg);
+    let tag = format!(
+        "\"{}\"",
+        digest
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    );
+    let matched = if_none_match.is_some_and(|value| {
+        value.split(',').any(|item| {
+            let item = item.trim();
+            item == "*" || item == tag || item.strip_prefix("W/") == Some(tag.as_str())
+        })
+    });
+    let mut response = if matched {
+        let mut response = Response::new(Body::empty());
+        *response.status_mut() = StatusCode::NOT_MODIFIED;
+        response
+    } else {
+        Response::new(Body::from(svg))
+    };
     let headers = response.headers_mut();
     headers.insert(
         header::CONTENT_TYPE,
@@ -2400,14 +2473,22 @@ fn brand_response(svg: &'static [u8]) -> Response {
     );
     headers.insert(
         header::CACHE_CONTROL,
-        HeaderValue::from_static("public, max-age=86400"),
+        HeaderValue::from_static(BRAND_CACHE_CONTROL),
+    );
+    headers.insert(
+        header::ETAG,
+        HeaderValue::from_str(&tag).map_err(|_| internal())?,
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
     );
     // An SVG opened directly is a document: it may draw, never run script or load anything.
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static("default-src 'none'; style-src 'unsafe-inline'"),
     );
-    response
+    Ok(response)
 }
 
 /// Whether the request asks for HTML (an `Accept` item starting with `text/html`), as a browser
@@ -3422,15 +3503,15 @@ mod tests {
             ("/erp/brand/logo.svg", BRAND_LOGO),
             ("/erp/brand/logo-dark.svg", BRAND_LOGO_DARK),
         ] {
-            let response = brand_route(&Method::GET, path).unwrap();
+            let image = brand_image(&Method::GET, path).unwrap();
+            let response = compiled_brand_response(compiled_brand(image).unwrap(), None).unwrap();
             assert_eq!(response.status(), StatusCode::OK, "{path}");
-            assert_eq!(
-                response.headers()[header::CONTENT_TYPE],
-                "image/svg+xml",
-                "{path}"
-            );
+            let headers = response.headers().clone();
+            assert_eq!(headers[header::CONTENT_TYPE], "image/svg+xml", "{path}");
+            assert_eq!(headers[header::CACHE_CONTROL], "no-cache", "{path}");
+            assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff", "{path}");
             assert!(
-                response.headers()[header::CONTENT_SECURITY_POLICY]
+                headers[header::CONTENT_SECURITY_POLICY]
                     .to_str()
                     .unwrap()
                     .starts_with("default-src 'none'"),
@@ -3439,9 +3520,19 @@ mod tests {
             let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
             assert_eq!(body.as_ref(), svg, "{path}");
             assert!(body.starts_with(b"<svg"), "{path}");
+            // The ETag revalidates: a match answers 304 with no body, another tag the image.
+            let tag = headers[header::ETAG].to_str().unwrap();
+            assert!(tag.starts_with('"') && tag.len() == 66, "{tag}");
+            let again = compiled_brand_response(svg, Some(&format!("\"other\", {tag}"))).unwrap();
+            assert_eq!(again.status(), StatusCode::NOT_MODIFIED, "{path}");
+            assert_eq!(again.headers()[header::ETAG], tag);
+            assert!(to_bytes(again.into_body(), 1024).await.unwrap().is_empty());
+            let other = compiled_brand_response(svg, Some("\"other\"")).unwrap();
+            assert_eq!(other.status(), StatusCode::OK, "{path}");
         }
-        assert!(brand_route(&Method::POST, "/favicon.ico").is_none());
-        assert!(brand_route(&Method::GET, "/erp/brand/other.svg").is_none());
+        assert!(brand_image(&Method::POST, "/favicon.ico").is_none());
+        assert!(brand_image(&Method::GET, "/erp/brand/other.svg").is_none());
+        assert!(compiled_brand("other.svg").is_none());
         // The error page shows the logo from the same origin, the only image its CSP allows.
         assert!(ERROR_PAGE.contains(r#"<header><img src="/erp/brand/logo.svg""#));
     }

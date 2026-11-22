@@ -181,3 +181,74 @@ fn svg_documents_cannot_execute_active_content() {
         "default-src 'none'; style-src 'unsafe-inline'; sandbox"
     );
 }
+fn svg_source(bytes: &[u8]) -> (AssetSource, String) {
+    let hash = Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    let path = format!("{hash}.svg");
+    (
+        AssetSource::new(&path, "image/svg+xml", bytes.to_vec()).unwrap(),
+        format!("/erp/assets/{path}"),
+    )
+}
+#[test]
+fn the_one_addon_that_publishes_brand_images_supplies_them() {
+    let (logo, logo_url) =
+        svg_source(b"<svg xmlns='http://www.w3.org/2000/svg'><title>logo</title></svg>");
+    let (icon, icon_url) =
+        svg_source(b"<svg xmlns='http://www.w3.org/2000/svg'><title>icon</title></svg>");
+    let assets = AssetGeneration::new("elang-1", "a".repeat(64))
+        .unwrap()
+        .asset(logo)
+        .unwrap()
+        .asset(icon)
+        .unwrap()
+        .static_file("/acme_theme/static/brand/logo.svg", &logo_url)
+        .unwrap()
+        .static_file("/acme_theme/static/brand/icon.svg", &icon_url)
+        .unwrap()
+        // Not brand images: another name, another directory, another addon's lookalike path below static/.
+        .static_file("/acme_theme/static/brand/banner.svg", &icon_url)
+        .unwrap()
+        .static_file("/other/static/icons/brand/logo-dark.svg", &icon_url)
+        .unwrap()
+        .build(&erp_server::assets::AssetStore::new(256 * 1024 * 1024).unwrap())
+        .unwrap();
+    assert_eq!(assets.brand_image("logo.svg"), Some(logo_url.as_str()));
+    assert_eq!(assets.brand_image("icon.svg"), Some(icon_url.as_str()));
+    // An image the addon does not ship keeps the compiled default.
+    assert_eq!(assets.brand_image("logo-dark.svg"), None);
+    assert_eq!(assets.brand_image("banner.svg"), None);
+    let name = logo_url.strip_prefix("/erp/assets/").unwrap();
+    let response = assets.response(name, None, None).unwrap().unwrap();
+    assert_eq!(response.headers()["content-type"], "image/svg+xml");
+    assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+    assert_eq!(
+        response.headers()["content-security-policy"],
+        "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+    );
+    assert!(response.headers().contains_key("etag"));
+}
+#[test]
+fn two_addons_publishing_brand_images_are_refused() {
+    let (logo, logo_url) = svg_source(b"<svg xmlns='http://www.w3.org/2000/svg'/>");
+    let error = AssetGeneration::new("elang-1", "a".repeat(64))
+        .unwrap()
+        .asset(logo)
+        .unwrap()
+        .static_file("/acme_theme/static/brand/logo.svg", &logo_url)
+        .unwrap()
+        .static_file("/zeta_theme/static/brand/icon.svg", &logo_url)
+        .unwrap()
+        .build(&erp_server::assets::AssetStore::new(256 * 1024 * 1024).unwrap())
+        .unwrap_err();
+    assert_eq!(
+        error.kind(),
+        erp_server::assets::PublicationErrorKind::Manifest
+    );
+    assert_eq!(
+        error.to_string(),
+        "asset publication refused: more than one addon publishes brand images"
+    );
+}

@@ -101,6 +101,13 @@ To add a native addon to this repository, put the crate under `addons/`, list it
 
 To try an addon: install it into a database as shown in the [installation guide](install.md#install-an-addon-from-a-folder).
 
+An addon can rebrand the server by shipping `static/brand/icon.svg`, `logo.svg` and `logo-dark.svg` and listing
+them under `static_files` in its asset manifest (`static/dist/manifest.json`). Once it is installed, `/favicon.ico`
+and `/erp/brand/icon.svg`, `logo.svg` and `logo-dark.svg` (used by the login page, the error page and the
+application) answer with its images; an image it does not ship keeps the built-in one. The responses carry an
+`ETag` and `Cache-Control: no-cache`, and SVG is sent with a sandboxing `Content-Security-Policy`. Only one
+installed addon may ship brand images: installing a second one fails.
+
 ## The web client
 
 The client is TypeScript, compiled ahead of time:

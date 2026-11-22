@@ -1,7 +1,8 @@
 //! Pure UI3 assembly contracts; durable publication is tested separately.
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "test assertions")]
 use erp_addon_web::assets::assembly::{
-    AddonAssets, AssemblyError, AssemblyOptions, AssetInput, assemble,
+    AddonAssets, AssemblyError, AssemblyErrorKind, AssemblyOptions, AssetInput, BRAND_IMAGES,
+    assemble,
 };
 use erp_sdk::ui_compiler::{BuildMode, CompileOptions, LimitKind};
 use std::io::Read;
@@ -210,6 +211,61 @@ fn rejects_traversal_and_non_declared_media_types() {
     assert_eq!(
         error.to_string(),
         "unsupported static media type for 'static/payload.html'"
+    );
+}
+
+fn with_static(mut assets: AddonAssets, paths: &[&str]) -> AddonAssets {
+    for path in paths {
+        assets
+            .push(AssetInput::static_file(path, b"<svg/>".to_vec()).unwrap())
+            .unwrap();
+    }
+    assets
+}
+
+#[test]
+fn one_addon_may_ship_brand_images_and_a_second_is_refused() {
+    let paths: Vec<String> = BRAND_IMAGES
+        .iter()
+        .map(|image| format!("static/brand/{image}"))
+        .collect();
+    let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
+    let brand = |name: &str| with_static(addon(name), &paths);
+    // One owner; another addon's unrelated static/brand/ file and its other images are not brand images.
+    let bundle = assemble(
+        &[
+            brand("acme_theme"),
+            with_static(
+                addon("other"),
+                &["static/brand/banner.svg", "static/icon.svg"],
+            ),
+        ],
+        &options(),
+    )
+    .unwrap();
+    for image in BRAND_IMAGES {
+        assert!(
+            bundle
+                .static_files()
+                .contains_key(&format!("/acme_theme/static/brand/{image}"))
+        );
+    }
+    // Two owners, even of a single image each, cannot both brand the server.
+    let error = assemble(
+        &[
+            brand("acme_theme"),
+            with_static(addon("zeta_theme"), &["static/brand/icon.svg"]),
+        ],
+        &options(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(&error, AssemblyError::BrandConflict { first, second } if first == "acme_theme" && second == "zeta_theme")
+    );
+    assert_eq!(error.kind(), AssemblyErrorKind::Conflict);
+    assert_eq!(
+        error.to_string(),
+        "addons 'acme_theme' and 'zeta_theme' both ship brand images (static/brand/); install only one of them"
     );
 }
 

@@ -112,6 +112,16 @@ pub enum AssemblyError {
         /// Duplicate identity.
         value: String,
     },
+    /// Two installed addons ship brand images; the server serves one brand.
+    #[error(
+        "addons '{first}' and '{second}' both ship brand images (static/brand/); install only one of them"
+    )]
+    BrandConflict {
+        /// First owner, in addon name order.
+        first: String,
+        /// Second owner.
+        second: String,
+    },
     /// A content hash resolved to different identity bytes.
     #[error("content hash '{sha256}' has conflicting identity bytes")]
     ContentConflict {
@@ -188,7 +198,9 @@ impl AssemblyError {
             | Self::MissingRuntime { .. }
             | Self::ProductionSourceMap { .. } => AssemblyErrorKind::InvalidInput,
             Self::Limit { .. } => AssemblyErrorKind::Limit,
-            Self::Duplicate { .. } | Self::ContentConflict { .. } => AssemblyErrorKind::Conflict,
+            Self::Duplicate { .. } | Self::ContentConflict { .. } | Self::BrandConflict { .. } => {
+                AssemblyErrorKind::Conflict
+            }
             Self::UnsupportedGroup { .. } | Self::UnsupportedMedia { .. } => {
                 AssemblyErrorKind::Unsupported
             }
@@ -220,6 +232,32 @@ fn token(field: &'static str, value: &str, max: usize) -> Result<(), AssemblyErr
     }
     Ok(())
 }
+/// The brand images an addon may ship under `static/brand/`; the server answers `/erp/brand/<name>` (and
+/// `/favicon.ico` with `icon.svg`) from the one installed addon that ships them.
+pub const BRAND_IMAGES: [&str; 3] = ["icon.svg", "logo.svg", "logo-dark.svg"];
+
+/// The addon whose static route `path` (`/<addon>/static/brand/<image>`) is a brand image.
+fn brand_owner(path: &str) -> Option<&str> {
+    let (addon, rest) = path.strip_prefix('/')?.split_once('/')?;
+    let image = rest.strip_prefix("static/brand/")?;
+    BRAND_IMAGES.contains(&image).then_some(addon)
+}
+
+/// At most one addon ships brand images: two would make the login page and favicon depend on install order.
+fn check_brand_owners(static_files: &BTreeMap<String, String>) -> Result<(), AssemblyError> {
+    let mut owners = static_files.keys().filter_map(|path| brand_owner(path));
+    let Some(first) = owners.next() else {
+        return Ok(());
+    };
+    match owners.find(|owner| *owner != first) {
+        Some(second) => Err(AssemblyError::BrandConflict {
+            first: first.to_owned(),
+            second: second.to_owned(),
+        }),
+        None => Ok(()),
+    }
+}
+
 fn static_path(path: &str) -> Result<(), AssemblyError> {
     if path.len() > 1024
         || !path.starts_with("static/")
@@ -1527,6 +1565,7 @@ pub fn assemble(
             entries.push((addon.name.as_str(), entry.as_str()));
         }
     }
+    check_brand_owners(&static_files)?;
     let compiled = compiler::compile(&set, &options.compile)
         .map_err(|source| AssemblyError::Compile { source })?;
     if !compiled.modules().is_empty() && !imports.contains_key(compiler::ABI_MODULE) {
