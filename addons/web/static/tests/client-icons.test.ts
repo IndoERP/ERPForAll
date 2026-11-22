@@ -178,6 +178,7 @@ test("an addon image that fails to load becomes the default glyph in place, keep
   expect(glyph.classList.contains("menu-entry-icon")).toBe(true);
   expect(glyph.classList.contains("erp-icon-image")).toBe(false);
   expect(warn).toHaveBeenCalledOnce();
+  expect(String(warn.mock.calls[0]?.[0])).toContain("could not be loaded");
 });
 
 test("the picker previews an addon image without the 'not shipped' note", () => {

@@ -17,7 +17,7 @@ function truncated(value: string): string {
   return value.length <= REPORTED_VALUE_MAX ? value : `${value.slice(0, REPORTED_VALUE_MAX)}… (${value.length} characters)`;
 }
 
-function reportUnknownMenuIcon(value: string): void {
+function reportUnknownMenuIcon(value: string, problem = "is not a shipped icon"): void {
   const key = truncated(value);
   if (reportedMenuIcons.has(key)) return;
   if (reportedMenuIcons.size >= REPORTED_MENU_ICONS_MAX) {
@@ -25,7 +25,7 @@ function reportUnknownMenuIcon(value: string): void {
     if (oldest !== undefined) reportedMenuIcons.delete(oldest);
   }
   reportedMenuIcons.add(key);
-  console.warn(`Menu icon ${JSON.stringify(key)} is not a shipped icon or an available addon image; showing the default icon (${DEFAULT_MENU_ICON}).`);
+  console.warn(`Menu icon ${JSON.stringify(key)} ${problem}; showing the default icon (${DEFAULT_MENU_ICON}).`);
 }
 
 /** Decorative local SVG only. The owning control supplies its visible or accessible label. */
@@ -97,7 +97,7 @@ function menuIconImage(value: string, url: string): HTMLImageElement {
   image.dataset["icon"] = "image";
   image.addEventListener("error", () => {
     // Loading starts when `src` is set, but the error event is a later task: every caller has placed the image by then.
-    reportUnknownMenuIcon(value);
+    reportUnknownMenuIcon(value, "could not be loaded (is its addon installed and the file a declared static file?)");
     const svg = icon(DEFAULT_MENU_ICON);
     svg.dataset["requestedIcon"] = "unavailable";
     for (const name of image.classList) if (name !== "erp-icon-image") svg.classList.add(name);
