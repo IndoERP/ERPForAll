@@ -902,3 +902,43 @@ fn corrupt_operating_limit_refuses_instead_of_defaulting() {
         f.db.cleanup().await.unwrap();
     });
 }
+
+#[test]
+fn addons_read_the_limit_without_settings_rights() {
+    use erp_addon_base::approval_settings::{MAX_APPROVERS_KEY, max_approvers};
+    run(|| async {
+        let mut f = fixture().await;
+        // a database keeps at least one administrator before ordinary users are added
+        f.user("reader-admin", &[f.main], &[f.group_user, f.group_system])
+            .await;
+        let user = f.user("reader-user", &[f.main], &[f.group_user]).await;
+        f.refresh().await;
+        assert_eq!(MAX_APPROVERS_KEY, KEY);
+        // The ordinary internal user may not read Settings, yet reads this one policy value.
+        let mut tx = f.begin(user).await;
+        let env = tx.env();
+        let error = read_values(&env, &mut tx, SettingsScope::Global {}, vec![KEY.into()])
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Access);
+        assert_eq!(max_approvers(&mut tx).await.unwrap(), 64);
+        tx.rollback().await.unwrap();
+        drop(tx);
+        configured(&f, 3).await;
+        let mut tx = f.begin(user).await;
+        assert_eq!(max_approvers(&mut tx).await.unwrap(), 3);
+        tx.rollback().await.unwrap();
+        drop(tx);
+        for text in ["null", "0", "65", "broken"] {
+            inject(&f, text).await;
+            let mut tx = f.begin(user).await;
+            validation(
+                &max_approvers(&mut tx).await.unwrap_err(),
+                "Stored setting base.approval_max_approvers is invalid.",
+            );
+            tx.rollback().await.unwrap();
+            drop(tx);
+        }
+        f.db.cleanup().await.unwrap();
+    });
+}

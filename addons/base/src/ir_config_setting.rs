@@ -1145,7 +1145,7 @@ pub async fn write_values(
         for (key, value) in &changes { proposed.insert(key.clone(), value.clone()); }
         registry.validate_groups(&proposed)?;
         for (key, value) in &changes {
-            if key == crate::approval_settings::KEY {
+            if key == crate::approval_settings::MAX_APPROVERS_KEY {
                 // Intrinsic declaration validation above already checked the integer and range.
                 let Value::Int(limit) = value else { return Err(invalid()); };
                 crate::approval_settings::check_active(env, tx, *limit).await?;

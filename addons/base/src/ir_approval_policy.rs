@@ -480,7 +480,7 @@ fn check_combination(revision: &Stored) -> Result<()> {
 /// Every write-time rule of the revisions `ids` (after the ORM wrote them).
 async fn check_revisions(env: &Env, tx: &mut Transaction, ids: &[i64]) -> Result<()> {
     tx.flush().await?;
-    let max_approvers = crate::approval_settings::limit(tx).await?;
+    let max_approvers = crate::approval_settings::max_approvers(tx).await?;
     let sql = format!(
         "SELECT {COLUMNS}, (SELECT count(*) FROM ir_approval_policy_users_rel r WHERE r.policy_id = p.id) \
          + (SELECT count(*) FROM ir_approval_policy_groups_rel g WHERE g.policy_id = p.id) \
@@ -1127,7 +1127,7 @@ pub async fn eligible_approvers(
     companies: &[CompanyId],
 ) -> Result<EligibleApprovers> {
     let company_ids = bounded(companies)?;
-    let max_approvers = crate::approval_settings::limit(tx).await?;
+    let max_approvers = crate::approval_settings::max_approvers(tx).await?;
     let named = tx
         .query(
             "SELECT (SELECT count(*) FROM ir_approval_policy_users_rel WHERE policy_id=$1) + \

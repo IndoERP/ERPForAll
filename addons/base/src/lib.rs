@@ -25,7 +25,7 @@
 //! # Ok::<(), erp_sdk::Error>(())
 //! ```
 
-mod approval_settings;
+pub mod approval_settings;
 pub mod attachments;
 pub mod company_calendar;
 mod company_lifecycle;

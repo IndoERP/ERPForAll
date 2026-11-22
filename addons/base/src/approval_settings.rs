@@ -1,16 +1,22 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Database-global operating policy below's unchanged hard admission ceiling.
+//!
+//! `base.approval_max_approvers` bounds how many approvers one approval step may involve. The core
+//! approval policy enforces it; an addon that routes approvals itself (by position, role or
+//! delegation) reads the same administrator value with [`max_approvers`] instead of declaring a
+//! second setting with the same meaning.
 use erp_sdk::settings::{ScopeKind, SettingDecl, SettingsRegistry};
 use erp_sdk::{Env, Error, Operation, Result, SUPERUSER_ID, Transaction};
 
-pub(crate) const KEY: &str = "base.approval_max_approvers";
+/// The Settings key of the approver limit.
+pub const MAX_APPROVERS_KEY: &str = "base.approval_max_approvers";
 
 fn declaration() -> Result<SettingDecl> {
     let ceiling = i64::try_from(crate::ir_approval_policy::MAX_APPROVERS)
         .map_err(|_| Error::programming("The approver ceiling does not fit Settings."))?;
-    SettingDecl::integer(KEY, "Maximum approvers", ScopeKind::Global, ceiling, (1, ceiling))?
+    SettingDecl::integer(MAX_APPROVERS_KEY, "Maximum approvers", ScopeKind::Global, ceiling, (1, ceiling))?
         .block("Approvals")?
-        .help("Limits named users plus groups and distinct eligible humans. Default: 64; allowed: 1 to 64. Archive or replace oversized active revisions before lowering. Group growth is checked at resolution.")?
+        .help("Limits named users plus groups and distinct eligible humans. Default: 64; allowed: 1 to 64. Archive or replace oversized active revisions before lowering. Group growth is checked at resolution. Addons that route approvals themselves honour the same limit.")?
         .access(&["base.group_system"], &["base.group_system"])
 }
 
@@ -20,20 +26,28 @@ fn declarations() -> Result<Vec<SettingDecl>> {
 erp_sdk::setting_declarations!(declarations);
 
 pub(crate) fn require(registry: &SettingsRegistry) -> Result<()> {
-    if registry.get(KEY).is_none() {
+    if registry.get(MAX_APPROVERS_KEY).is_none() {
         return Err(Error::programming(format!(
-            "The settings declaration {KEY} of erp-addon-base is not linked into this binary."
+            "The settings declaration {MAX_APPROVERS_KEY} of erp-addon-base is not linked into this binary."
         )));
     }
     Ok(())
 }
 
 fn corrupt() -> Error {
-    Error::validation(format!("Stored setting {KEY} is invalid."))
+    Error::validation(format!("Stored setting {MAX_APPROVERS_KEY} is invalid."))
 }
 
-/// Read only this nonsecret policy without granting generic Settings access to the caller.
-pub(crate) async fn limit(tx: &mut Transaction) -> Result<usize> {
+/// The administrator's approver limit, read without granting generic Settings access to the caller.
+///
+/// The value is a nonsecret operating policy, so any transaction may read it; the caller needs no
+/// Settings rights and no elevation. An absent row gives the declared default (64).
+///
+/// # Errors
+/// A stored value that is not a whole number within the declared bounds is refused as
+/// `Stored setting base.approval_max_approvers is invalid.`, never replaced by the default;
+/// database errors propagate.
+pub async fn max_approvers(tx: &mut Transaction) -> Result<usize> {
     let env = tx.env();
     for model in ["ir.config.setting.scope", "ir.config.setting.value"] {
         tx.flush_model(env.records(model)?.model_id()).await?;
@@ -45,7 +59,7 @@ pub(crate) async fn limit(tx: &mut Transaction) -> Result<usize> {
             "SELECT CASE WHEN octet_length(v.value_text)<=32 THEN v.value_text END \
          FROM ir_config_setting_value v JOIN ir_config_setting_scope s ON s.id=v.scope_id \
          WHERE s.identity='global' AND v.setting_key=$1",
-            &[&KEY],
+            &[&MAX_APPROVERS_KEY],
         )
         .await?;
     let declaration = declaration()?;
@@ -125,7 +139,7 @@ pub(crate) async fn check_active(env: &Env, tx: &mut Transaction, proposed: i64)
             .await?
         {
             return Err(Error::access(format!(
-                "{KEY} cannot be lowered: an active approval revision is unavailable or access is denied."
+                "{MAX_APPROVERS_KEY} cannot be lowered: an active approval revision is unavailable or access is denied."
             )));
         }
         if after == 0 {
@@ -155,7 +169,7 @@ pub(crate) async fn check_active(env: &Env, tx: &mut Transaction, proposed: i64)
         String::new()
     };
     Err(Error::validation(format!(
-        "{KEY} cannot be set to {proposed}: active approval revisions exceed this limit: {}{remaining}. Archive or replace these revisions first.",
+        "{MAX_APPROVERS_KEY} cannot be set to {proposed}: active approval revisions exceed this limit: {}{remaining}. Archive or replace these revisions first.",
         names.join(", ")
     )))
 }
