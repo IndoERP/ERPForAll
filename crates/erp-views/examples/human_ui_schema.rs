@@ -50,6 +50,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         FieldPresentationOptions,
         FieldOptions,
         RecordMode,
+        EditMode,
         PivotRole,
         KanbanRegion,
         ProgressTone,

@@ -377,6 +377,7 @@ domain?: WireDocument | null,
 context?: WireDocument | null, };
 export type FieldOptions = CodeOptions | FieldPresentationOptions | StatusbarOptions | EmptyOptions;
 export type RecordMode = "record" | "service";
+export type EditMode = "read" | "edit";
 export type PivotRole = "row" | "col" | "measure";
 export type KanbanRegion = "main" | "aside" | "footer";
 export type ProgressTone = "success" | "warning" | "danger" | "info" | "muted";
@@ -603,7 +604,11 @@ record_mode: RecordMode,
 children: Array<number>,
 create?: boolean,
 edit?: boolean,
-delete?: boolean, } | { "kind": "sheet",
+delete?: boolean,
+/**
+ * `read`: a saved record opens read-first, with an Edit command; absent means `edit` (always editable).
+ */
+edit_mode?: EditMode, } | { "kind": "sheet",
 /**
  * Child arena indexes.
  */

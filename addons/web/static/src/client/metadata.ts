@@ -143,6 +143,8 @@ export interface View {
   canCreate?: boolean;
   canEdit?: boolean;
   canDelete?: boolean;
+  /** `read`: a saved record opens read-first with an Edit command (`<form edit_mode="read">`). */
+  editMode?: "read" | "edit";
 }
 export interface Description { model: string; fields: Map<string, Field>; views: Map<string, View> }
 /** The combined record policy for repeated field occurrences in one view. */
@@ -282,7 +284,7 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
       if (depth > 32) throw new ClientError("server", "View nesting limit exceeded.");
       seen.add(index);
       const node = object(arena[index], "view node"), kind = node["kind"];
-      if (kind === "form") closed(node, ["kind", "record_mode", "children", ...(Object.hasOwn(node, "create") ? ["create"] : []), ...(Object.hasOwn(node, "edit") ? ["edit"] : []), ...(Object.hasOwn(node, "delete") ? ["delete"] : [])], "view node");
+      if (kind === "form") closed(node, ["kind", "record_mode", "children", ...["create", "edit", "delete", "edit_mode"].filter(key => Object.hasOwn(node, key))], "view node");
       else if (kind === "list") closed(node, ["kind", "children", ...(Object.hasOwn(node, "search_panel") ? ["search_panel"] : []), ...(Object.hasOwn(node, "page_limit") ? ["page_limit"] : []), ...(Object.hasOwn(node, "create") ? ["create"] : []), ...(Object.hasOwn(node, "edit") ? ["edit"] : []), ...(Object.hasOwn(node, "delete") ? ["delete"] : [])], "view node");
       else if (kind === "dashboard") closed(node,["kind","version","revision","items"],"dashboard node");
       else if (kind === "field") closed(node, ["kind", "field", "widget", "options", "modifiers", "label", "force_save", ...(Object.hasOwn(node, "width") ? ["width"] : [])], "view node");
@@ -655,6 +657,9 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
     const canCreate = (type === "list" || type === "form" || type === "kanban") && Object.hasOwn(rootNode, "create") ? boolean(rootNode["create"], "view create") : undefined;
     const canEdit = (type === "list" || type === "form" || type === "kanban") && Object.hasOwn(rootNode, "edit") ? boolean(rootNode["edit"], "view edit") : undefined;
     const canDelete = (type === "list" || type === "form" || type === "kanban") && Object.hasOwn(rootNode, "delete") ? boolean(rootNode["delete"], "view delete") : undefined;
+    const editMode = type === "form" && Object.hasOwn(rootNode, "edit_mode") ? rootNode["edit_mode"] : undefined;
+    if (editMode !== undefined && editMode !== "read" && editMode !== "edit") throw new ClientError("server", "Invalid form edit mode.");
+    if (editMode === "read" && (canEdit === false || mode === "service")) throw new ClientError("server", "Read mode requires an editable record form.");
     const tree = visit(root, 1);
     if (seen.size !== arena.length) throw new ClientError("server", "View contains unreachable nodes.");
     // Context references are host-authorized metadata, even when no field occurrence is rendered.
@@ -674,6 +679,7 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
       ...(canCreate === undefined ? {} : { canCreate }),
       ...(canEdit === undefined ? {} : { canEdit }),
       ...(canDelete === undefined ? {} : { canDelete }),
+      ...(editMode === undefined ? {} : { editMode }),
     });
   }
   if (!views.size) throw new ClientError("server", "No supported views were returned.");

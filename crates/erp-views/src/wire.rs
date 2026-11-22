@@ -256,6 +256,7 @@ object!(/// Optional validated expression documents, never evaluation strings.
 object!(/// Empty options for the currently supported basic fields and Addons service.
     EmptyOptions {});
 choice!(RecordMode { Record, Service });
+choice!(EditMode { Read, Edit });
 choice!(PivotRole { Row, Col, Measure });
 choice!(KanbanRegion {
     Main,
@@ -761,6 +762,10 @@ pub enum ViewNode {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "schema-gen", ts(optional))]
         delete: Option<bool>,
+        /// `read`: a saved record opens read-first, with an Edit command; absent means `edit` (always editable).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "schema-gen", ts(optional))]
+        edit_mode: Option<EditMode>,
     },
     /// Record-form sheet.
     Sheet {

@@ -797,6 +797,13 @@ impl Output {
                 create: optional(object, "create").map(boolean).transpose()?,
                 edit: optional(object, "edit").map(boolean).transpose()?,
                 delete: optional(object, "delete").map(boolean).transpose()?,
+                edit_mode: optional(object, "edit_mode")
+                    .map(|value| match text(value)? {
+                        "read" => Ok(wire::EditMode::Read),
+                        "edit" => Ok(wire::EditMode::Edit),
+                        _ => Err(invalid("Builtin form edit mode is invalid")),
+                    })
+                    .transpose()?,
             },
             "sheet" => wire::ViewNode::Sheet {
                 children: self.indices(object)?,

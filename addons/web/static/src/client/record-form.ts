@@ -13,7 +13,7 @@ import { renderFormLayout } from "./form-layout.js";
 import { Chatter } from "./chatter.js";
 import type { MessagingStore } from "@erpforall/mail-store";
 import type { ButtonNode, CancelNode, Node, View } from "./metadata.js";
-import { resolveFieldWidget, type WidgetHandle } from "./registry.js";
+import { resolveFieldWidget, type RecordEvent, type WidgetHandle } from "./registry.js";
 import type { RecordState } from "./record.js";
 import { ClientError, type RpcClient } from "./transport.js";
 
@@ -42,6 +42,9 @@ export function formFocus(form: HTMLElement, element: Element | null = document.
 export class RecordForm {
   private readonly currencies = new CurrencyDisplayCache();
   private stops: (() => void)[] = [];
+  /** A read-first form showing its saved record: fields render as read values until the owner switches to edit. */
+  private readMode = false;
+  private readonly recordListeners = new Set<(event: RecordEvent) => void>();
   private validators: { node: HTMLElement; name: string; validate(): "ok" | "missing" | "invalid" }[] = [];
   private represented: Readonly<Record<string, unknown>> = {};
   private draftVersion = -1;
@@ -74,6 +77,8 @@ export class RecordForm {
     editorLocale?: EditorLocale;
     numericLocale?: import("./numeric-values.js").NumericLocale;
     canEdit?: boolean;
+    /** The owner tells widgets about saves, discards and mode changes (`emitRecordEvent`); widgets get `onRecordEvent`. */
+    recordEvents?: boolean;
     form: HTMLFormElement; state: RecordState; view: View; rpc: RpcClient; context: Record<string, unknown>;
     messagingStore?: MessagingStore;
     threadSocket?: { company: number; csrf: string; retry: readonly [number, number] };
@@ -126,6 +131,7 @@ export class RecordForm {
     this.dead = true; this.epoch++; this.unbind(); this.env.signal?.removeEventListener("abort", this.onAbort); this.clearLayout();
     this.releaseChatter();
     this.retained.forEach(handle => handle.dispose()); this.retained.clear(); this.effective.clear(); this.pending.clear(); this.nativeDisabled.clear();
+    this.recordListeners.clear();
   }
   private releaseChatter(): void {
     this.chatterMount?.chatter.dispose(); this.chatterMount?.slot.remove(); this.chatterMount = undefined;
@@ -135,6 +141,38 @@ export class RecordForm {
     const mount = this.chatterMount;
     if (!mount || this.chatterReloading || mount.id !== this.env.state.id) return;
     mount.chatter.refresh().catch(error => { if (!this.dead) this.env.report(error); });
+  }
+  /** Whether the form shows its saved record read-first; the owner renders again after a change. */
+  get mode(): "read" | "edit" { return this.readMode ? "read" : "edit"; }
+  /** Switch between read and edit mode. Retained editors start again so they take the new policy. */
+  setReadMode(value: boolean): void {
+    if (this.dead) throw new ClientError("validation", "The record form is disposed.");
+    if (value === this.readMode) return;
+    if (value && (this.env.state.dirty || this.env.state.id === undefined)) throw new ClientError("validation", "Save or discard the changes before reading the record.");
+    this.readMode = value;
+    this.env.form.classList.toggle("record-form-read", value);
+    this.reset();
+  }
+  /** Tell the widgets' listeners what happened to the record. A throwing listener is reported; the others still run. */
+  emitRecordEvent(event: RecordEvent): void {
+    if (this.dead) return;
+    if (!this.env.recordEvents) throw new ClientError("unsupported", "This record form does not publish record events.");
+    for (const listener of [...this.recordListeners]) {
+      try { listener(event); } catch (error) { this.env.report(error); }
+    }
+  }
+  /** Subscribe for the widget whose subscriptions `owned` collects; they end when that widget is disposed. */
+  private recordEventsFor(owner: { stops: (() => void)[]; closed: boolean }): { mode: "read" | "edit"; onRecordEvent?(listener: (event: RecordEvent) => void): () => void } {
+    if (!this.env.recordEvents) return { mode: this.mode };
+    return { mode: this.mode, onRecordEvent: listener => {
+      if (typeof listener !== "function") throw new ClientError("validation", "A record event listener must be a function.");
+      if (owner.closed || this.dead) throw new ClientError("validation", "A disposed widget cannot listen to record events.");
+      const entry = (event: RecordEvent): void => listener(event);
+      this.recordListeners.add(entry);
+      const stop = (): void => { this.recordListeners.delete(entry); };
+      owner.stops.push(stop);
+      return stop;
+    } };
   }
   /** Authoritative load/save/discard starts a fresh editor baseline, even for identical source. */
   reset(): void {
@@ -193,7 +231,7 @@ export class RecordForm {
     if (this.dead) throw new ClientError("validation", "The record form is disposed.");
     const { form, state, view } = this.env;
     const canEdit = this.env.canEdit ?? view.canEdit !== false;
-    const isReadOnly = !canEdit && state.id !== undefined;
+    const isReadOnly = (!canEdit || this.readMode) && state.id !== undefined;
     if (this.draftVersion !== state.draftVersion) this.currencies.clear();
     // Capture editor-local text drafts of ordinary controls before the layout is cleared.
     const drafts = new Map<string, { value: string; message: string }>();
@@ -278,8 +316,10 @@ export class RecordForm {
       this.effective.set(source, node);
       const widget = resolveFieldWidget(node.widget, "form");
       let handle = this.retained.get(source);
+      const subscriptions = { stops: [] as (() => void)[], closed: false };
       if (handle) handle.draft!.update(state.values[node.field.name], { ...node.field, widget: node.widget, label: node.label });
       else handle = widget.render({
+        ...this.recordEventsFor(subscriptions),
         columnScope: this.env.uid === undefined ? undefined : JSON.stringify([this.env.uid, "form", state.model, this.env.view.id]),
         field: { ...node.field, widget: node.widget, label: node.label }, value: state.values[node.field.name], values: state.values, model: state.model, changed: state.isChanged(node.field.name), fields: state.currentFields, changeValues: this.env.changeValues ? changes => this.env.changeValues!(changes, this.focus()) : undefined, numericLocale: this.env.numericLocale, currencies: this.currencies, viewContext: "form",
         rpc: this.env.rpc, context: this.env.context, ...(this.env.messages ? { messages: this.env.messages } : {}), editorLocale: this.env.editorLocale, signal: this.env.signal, run: this.env.run, report: this.env.report,
@@ -315,6 +355,11 @@ export class RecordForm {
         },
         change: value => this.env.change(node.field.name, value, this.focus())
       });
+      // A widget's record event subscriptions end with it.
+      if (this.env.recordEvents && !this.retained.has(source)) {
+        const dispose = handle.dispose;
+        handle.dispose = () => { subscriptions.closed = true; for (const stop of subscriptions.stops.splice(0)) stop(); dispose(); };
+      }
       // Register disposal before anything below can throw (tooltip bounds, emptiness hooks).
       if (!handle.draft) this.stops.push(handle.dispose);
       if (handle.draft) {

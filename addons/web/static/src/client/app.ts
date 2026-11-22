@@ -41,7 +41,7 @@ import { buttonHidden, lockButtonControls, runObjectButton, buttonExpression, ty
 import { viewButton, ButtonDebouncer, ButtonHotkeys } from "./view-button.js";
 import { runUrlButton } from "./button-url.js";
 import { CurrencyDisplayCache } from "./field-currency.js";
-import { fieldWidgets, resolveFieldWidget, type ActionRequest } from "./registry.js";
+import { fieldWidgets, resolveFieldWidget, type ActionRequest, type RecordEvent } from "./registry.js";
 import { ListGroupModel, type ListGroupNode } from "./list-group-model.js";
 import type { ListGroupState } from "./list-group-state.js";
 import type { NumericLocale } from "./numeric-values.js";
@@ -4080,13 +4080,21 @@ export class HumanApp {
     const saveBtn = actionButton("Save", () => runFormAction(save), "primary status-btn-save");
     const discardBtn = actionButton("Discard", () => runFormAction(discard), "status-btn-discard");
     statusActions.append(saveBtn, discardBtn);
+    // A read-first form (`edit_mode="read"`) shows its saved record as read values with Edit; Save or Discard return to it.
+    const editBtn = button("Edit", () => runFormAction(edit), "primary status-btn-edit");
+    editBtn.hidden = true; editBtn.title = "Edit (E)";
     const statusIndicator = el("div", undefined, "form-status-indicator");
-    statusIndicator.append(statusBadge, archivedBadge, statusActions);
+    statusIndicator.append(statusBadge, archivedBadge, editBtn, statusActions);
 
     const canEdit = view.canEdit !== false && !isFalsy(context["edit"]);
+    const readFirst = view.editMode === "read" && canEdit;
     if (!canEdit) this.lockedRecords.add(state);
     const updateStatus = (): void => {
-      if ((state.dirty || !state.id) && (canEdit || !state.id)) {
+      editBtn.hidden = surface?.mode !== "read";
+      if (surface?.mode === "read") {
+        statusBadge.hidden = true;
+        statusActions.style.display = "none";
+      } else if ((state.dirty || !state.id) && (canEdit || !state.id)) {
         statusBadge.className = "status-badge dirty";
         statusBadge.textContent = state.dirty ? "Unsaved changes" : "New";
         statusBadge.hidden = !state.dirty;
@@ -4283,16 +4291,24 @@ export class HumanApp {
       try {
         if (surface!.needsCommit()) await surface!.commit();
         if (this.lifetime.signal.aborted || binding !== this.generation) return false;
-        if (!surface!.valid()) return false;
+        if (!surface!.valid()) { recordEvent({ type: "saveFailed" }); return false; }
         surface!.setDisabled(true);
         // A refusal that names fields is shown on those fields; only an error that names none reaches the error dialog.
-        try { await state.save(); } catch (error) { if (surface!.flagServerError(error)) return false; throw error; }
+        try { await state.save(); } catch (error) {
+          const flagged = surface!.flagServerError(error);
+          if (!this.lifetime.signal.aborted && binding === this.generation) recordEvent({ type: "saveFailed" });
+          if (flagged) return false;
+          throw error;
+        }
         if (this.lifetime.signal.aborted || binding !== this.generation) return true;
+        const toRead = readMode(true);
         render();
         this.current = { ...route, id: String(state.id), view_type: "form" };
         this.currentUrl = routeUrl(this.current);
         history.replaceState({ erpIndex: this.historyIndex }, "", this.currentUrl);
         updateBreadcrumbs(); updateStatus(); this.notice("Record saved.");
+        recordEvent({ type: "saved", id: state.id! });
+        if (toRead) recordEvent({ type: "modeChanged", mode: "read" });
         return true;
       } finally {
         this.busy = false;
@@ -4300,13 +4316,32 @@ export class HumanApp {
       }
     };
     const save = async (): Promise<void> => { await trySave(); };
+    /** Widgets hear of saves, discards and mode changes once the form has rendered the outcome. */
+    const recordEvent = (event: RecordEvent): void => { if (!disposed && surface) surface.emitRecordEvent(event); };
+    /** Switch a read-first form; false when nothing changed (an ordinary form, or already in that mode). */
+    const readMode = (read: boolean): boolean => {
+      if (!readFirst || !surface || state.id === undefined || surface.mode === (read ? "read" : "edit")) return false;
+      surface.setReadMode(read);
+      return true;
+    };
+    const edit = async (): Promise<void> => {
+      refuseUncertain();
+      if (!readMode(false)) return;
+      render(); updateStatus();
+      recordEvent({ type: "modeChanged", mode: "edit" });
+      // The first editable control takes the focus the Edit button had.
+      form.querySelector<HTMLElement>("input:not([disabled]):not([type=hidden]),textarea:not([disabled]),select:not([disabled])")?.focus();
+    };
 
     const discard = async (): Promise<void> => {
       state.discard();
       if (!state.id) await this.navigate({ ...route, id: undefined, view_type: "list" });
       else {
+        const toRead = readMode(true);
         render();
         updateStatus();
+        recordEvent({ type: "discarded" });
+        if (toRead) recordEvent({ type: "modeChanged", mode: "read" });
       }
     };
 
@@ -4495,7 +4530,7 @@ export class HumanApp {
     });
 
     surface = new RecordForm({ numericLocale: this.numericLocale, signal: this.lifetime.signal, form, state, view, headerHost, smartHost, asideHost, chatterHost, rpc: this.rpc, context: context,
-      canEdit,
+      canEdit, recordEvents: true,
       ...(this.threadReconnect && { threadSocket: this.threadReconnect }),
       messagingStore: this.getMessagingStore(), uid: this.userId, userName: this.userName,
       run: this.run, report: error => this.reportError(error), messages: this.messages, editorLocale: this.editorLocale,
@@ -4571,11 +4606,15 @@ export class HumanApp {
       })
     });
     try {
+      if (readFirst && state.id !== undefined) surface.setReadMode(true);
       render();
     formHotkeys = createHotkeyController(document.body, {
       blocked: () => this.keyboardPending !== undefined || this.busy || this.actionPending || this.uncertainMethod || state.writeUncertain || this.messages.block.blocked,
       report: error => this.hotkeyError(error),
-      bindings: (): HotkeyBinding[] => (canEdit || !state.id) && (state.dirty || !state.id || surface!.controls().some(control => control.closest(".field-dirty,.field-invalid"))) ? [
+      bindings: (): HotkeyBinding[] => surface!.mode === "read" ? [
+        // E edits a read-first record; typing in a field (the chatter composer, a search box) is never taken.
+        { kind: "callback", chord: "e", target: editBtn, hint: "e", run: () => runFormAction(edit) },
+      ] : (canEdit || !state.id) && (state.dirty || !state.id || surface!.controls().some(control => control.closest(".field-dirty,.field-invalid"))) ? [
         { kind: "callback", chord: "alt+s", target: state.dirty || !state.id ? saveBtn : form, allowEditable: true, hint: "s", run: async () => {
           const binding = this.generation;
           try {

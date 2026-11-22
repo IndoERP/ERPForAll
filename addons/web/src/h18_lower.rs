@@ -552,7 +552,14 @@ fn classify<'a, N: Node<'a>>(
         attrs(
             node,
             match key {
-                "form" => &["record_mode", "string", "create", "edit", "delete"],
+                "form" => &[
+                    "record_mode",
+                    "string",
+                    "create",
+                    "edit",
+                    "delete",
+                    "edit_mode",
+                ],
                 "list" => &["string", "limit", "create", "edit", "delete"],
                 "search" => &["string"],
                 "pivot" => &[
@@ -1892,6 +1899,31 @@ pub(super) fn build_panel_description(
     })
 }
 
+/// `edit_mode="read"` opens a saved record read-first with an Edit command; `edit_mode="edit"` (the default) keeps it
+/// editable. Read mode belongs to an editable record form: a service form or `edit="0"` cannot declare it.
+fn form_edit_mode<'a>(node: impl Node<'a>) -> ViewResult<Option<&'static str>> {
+    let Some(mode) = node.attr("edit_mode") else {
+        return Ok(None);
+    };
+    let mode = match mode {
+        "read" => "read",
+        "edit" => "edit",
+        other => {
+            return Err(invalid(format!(
+                "Unknown form edit_mode '{other}'; use read or edit."
+            )));
+        }
+    };
+    if mode == "read" && node.attr("record_mode") == Some("service") {
+        return Err(invalid("A service form cannot declare edit_mode='read'."));
+    }
+    if mode == "read" && !boolean(node, "edit", true)? {
+        return Err(invalid(
+            "A form with edit='0' is always read-only; edit_mode='read' needs an editable form.",
+        ));
+    }
+    Ok(Some(mode))
+}
 fn set_view_actions<'a, N: Node<'a>>(
     object: &mut erp_sdk::views::DescriptionObjectBuilder<'_>,
     node: N,
@@ -1925,6 +1957,9 @@ fn build_entry<'a, N: Node<'a>>(
                     })?;
                     set_children(object, plan, index)?;
                     set_view_actions(object, node)?;
+                    if let Some(mode) = form_edit_mode(node)? {
+                        object.set("edit_mode", |value| value.text(mode))?;
+                    }
                 }
                 "dashboard" => dashboard::build(node, spec, object, budget)?,
                 "list" => {
@@ -3266,6 +3301,53 @@ mod tests {
                 matches!(error, ViewError::InvalidDescription(_)),
                 "{option}"
             );
+        }
+    }
+
+    /// `edit_mode` opens a saved record read-first (`read`) or editable (`edit`); read needs an editable record form.
+    #[test]
+    fn form_edit_mode() {
+        let value = fixture(
+            r#"<form edit_mode="read"><field name="name"/></form>"#,
+            "form",
+        )
+        .unwrap();
+        assert_eq!(value["nodes"][0]["edit_mode"], "read");
+        let value = fixture(
+            r#"<form edit_mode="edit"><field name="name"/></form>"#,
+            "form",
+        )
+        .unwrap();
+        assert_eq!(value["nodes"][0]["edit_mode"], "edit");
+        let value = fixture(r#"<form><field name="name"/></form>"#, "form").unwrap();
+        assert!(value["nodes"][0].get("edit_mode").is_none());
+        for (xml, message) in [
+            (
+                r#"<form edit_mode="view"><field name="name"/></form>"#,
+                "Unknown form edit_mode 'view'; use read or edit.",
+            ),
+            (
+                r#"<form edit_mode="read" edit="0"><field name="name"/></form>"#,
+                "A form with edit='0' is always read-only; edit_mode='read' needs an editable form.",
+            ),
+            (
+                r#"<form edit_mode="read" record_mode="service"><field name="name"/></form>"#,
+                "A service form cannot declare edit_mode='read'.",
+            ),
+            (r#"<list edit_mode="read"><field name="name"/></list>"#, ""),
+        ] {
+            let kind = if xml.starts_with("<list") {
+                "list"
+            } else {
+                "form"
+            };
+            match fixture(xml, kind).unwrap_err() {
+                ViewError::InvalidDescription(actual) if message.is_empty() => {
+                    assert!(actual.contains("edit_mode"), "{xml}: {actual}")
+                }
+                ViewError::InvalidDescription(actual) => assert_eq!(actual, message, "{xml}"),
+                other => panic!("Unexpected error kind for {xml}: {other:?}"),
+            }
         }
     }
 

@@ -1055,6 +1055,7 @@ mod tests {
                     create: None,
                     edit: None,
                     delete: None,
+                    edit_mode: None,
                 },
                 wire::ViewNode::StatButton {
                     name: "open".to_owned(),

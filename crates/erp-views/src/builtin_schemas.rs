@@ -223,6 +223,7 @@ static FORM_NODE: SchemaNode = SchemaNode::Object(&[
     SchemaProperty::optional("create", &BOOL),
     SchemaProperty::optional("edit", &BOOL),
     SchemaProperty::optional("delete", &BOOL),
+    SchemaProperty::optional("edit_mode", &SHORT),
 ]);
 static HEADING_NODE: SchemaNode = SchemaNode::Object(&[
     SchemaProperty::required("level", &INT),
