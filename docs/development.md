@@ -101,6 +101,13 @@ To add a native addon to this repository, put the crate under `addons/`, list it
 
 To try an addon: install it into a database as shown in the [installation guide](install.md#install-an-addon-from-a-folder).
 
+A form view opens a saved record editable. `<form edit_mode="read">` opens it read-first instead: the fields show as
+read values with an Edit button (or the E key outside a field); a successful Save or a Discard return to read mode,
+a refused save stays in edit mode with its errors, and a new record opens editable. A form with `edit="0"` is always
+read-only and cannot declare read mode. A field widget of the record form receives `mode` (`read` or `edit`) and
+`onRecordEvent(listener)`, which returns an unsubscribe function and reports `saved` (with the record id),
+`saveFailed`, `discarded` and `modeChanged` after the form has shown the outcome; subscriptions end with the widget.
+
 ## The web client
 
 The client is TypeScript, compiled ahead of time:
