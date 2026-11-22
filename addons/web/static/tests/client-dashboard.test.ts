@@ -64,11 +64,12 @@ test("dashboard refuses malformed count, period and numeric response values",asy
 
 /// (partial: cumulative declared-filter capacity cannot be bypassed by repeated registration)
 test("dashboard filter definitions enforce their cumulative bound",()=>{
-  const definitions=Array.from({length:32},(_,i)=>({id:`dashboard_${i}`,description:`Metric ${i}`,domain:[],isActive:false}));
+  // 64 declared filters in all: the search view's own and the dashboard cards.
+  const definitions=Array.from({length:64},(_,i)=>({id:`dashboard_${i}`,description:`Metric ${i}`,domain:[],isActive:false}));
   const model=new SearchModel({model:"demo",fields:new Map([["name",field]]),filters:definitions});
   try {model.addDeclaredFilters([{id:"overflow",description:"Overflow",domain:[],isActive:false}]);throw new Error("Expected rejection");}
   catch(error){expect(error).toMatchObject({kind:"validation",message:"Invalid Duplicate or excessive declared filters.."});}
-  expect(model.getFilters()).toHaveLength(32);
+  expect(model.getFilters()).toHaveLength(64);
 });
 
 /// (partial: a card kept in the address but not offered now is dropped, other saved filters stay for the search model)

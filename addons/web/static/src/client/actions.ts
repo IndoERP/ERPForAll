@@ -59,6 +59,10 @@ export function actionResult(raw: unknown): ActionResult {
           if (!Array.isArray(value) || !value.every(id => typeof id === "number" && Number.isSafeInteger(id) && id > 0)) throw new ClientError("server", "Packaging product_ids must be a list of positive safe integers.");
         } else if (model === "product.uom" && key === "active_model") {
           if (value !== "product.template" && value !== "product.product" && value !== "uom.uom") throw new ClientError("server", "Packaging active_model must name a product or unit model.");
+        } else if (key.startsWith("search_default_")) {
+          // A list's preselected search item (`action_result.rs`, `search_default_name`); the list matches the name against its search view.
+          if (!/^search_default_[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new ClientError("server", `Invalid current-window search default: ${key}.`);
+          if (!(typeof value === "boolean" || typeof value === "number" && Number.isSafeInteger(value) || typeof value === "string" && value.length <= 256)) throw new ClientError("server", `Invalid current-window search default value for ${key}.`);
         } else if (!/^default_[a-z_][a-z0-9_]*$/.test(key)) throw new ClientError("unsupported", `Unsupported current-window context key: ${key}.`);
       }
       // The server owns domain syntax validation; independently bound the entire decoded

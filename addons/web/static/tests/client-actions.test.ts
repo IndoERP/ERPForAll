@@ -21,6 +21,15 @@ test("related-list action retains a literal base filter and defaults", () => {
   refused({...currentResult,views:[{id:null,type:"form"}]}, "unsupported", "A current window requires list, optionally followed by form.");
   refused({...currentResult,res_id:7}, "unsupported", "Unknown action result member: res_id.");
 });
+/// (partial: a related list may preselect search items; a dialog has no search to preselect)
+test("a related-list result carries search defaults by plain name and plain value", () => {
+  const preselected = {...currentResult,context:{default_name:"Ada",search_default_mine:1,search_default_by_state:true,search_default_name:"Ada"}};
+  expect(decode(preselected)).toEqual(preselected);
+  refused({...currentResult,context:{"search_default_a.b":1}}, "server", "Invalid current-window search default: search_default_a.b.");
+  refused({...currentResult,context:{search_default_mine:[1]}}, "server", "Invalid current-window search default value for search_default_mine.");
+  refused({...currentResult,context:{search_default_mine:"x".repeat(257)}}, "server", "Invalid current-window search default value for search_default_mine.");
+  refused({...windowResult,context:{search_default_mine:1}}, "unsupported", "Unsupported dialog context key: search_default_mine.");
+});
 /// (partial: normalized result consumer closes every variant and refuses malformed/hostile members)
 test("closed action result variants and default context boundary", () => {
   expect(decode(windowResult)).toEqual(windowResult);

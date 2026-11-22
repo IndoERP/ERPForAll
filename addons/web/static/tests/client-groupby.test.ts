@@ -872,3 +872,68 @@ test("sorting from a later page of groups does not report the saved open group a
   await settle();
   expect(notice(root)).not.toContain("no longer in these results");
 });
+
+// ---- the search view's named filters and search_default_<name> on a real list ----
+
+const int = (value: number) => ({ kind: "literal", value: { kind: "int", value: String(value) } });
+const highFilter = { kind: "search_filter", name: "high", label: "High", domain: { schema: 1, nodes: [str("priority"), str("="), str("high"), { kind: "tuple", items: [0, 1, 2] }, { kind: "list", items: [3] }] } };
+const withHighFilter = { ...noteDescription, views: noteDescription.views.map(view => view.type === "search"
+  ? { ...view, nodes: [{ kind: "search", children: [1, 2, 3, 4, 5] }, ...view.nodes.slice(1), highFilter] } : view) };
+/** The Notes action with `context`, and a search view that declares the `high` filter. */
+const notesWithContext = (context: unknown) => (call: Call): unknown => {
+  if (call.method === "erp_load_web_action_views") {
+    const action = { wire_major: 1, id: 20, name: "Notes", model: "test.note", target: "current", views: [{ id: 2, type: "list" }, { id: 1, type: "form" }], domain: null, context };
+    return { action, views: noteDescription };
+  }
+  if (call.method === "get_views" && (call.body["views"] as unknown[][]).some(pair => pair[1] === "search")) return withHighFilter;
+  return undefined;
+};
+const searchDefaults = (...pairs: [string, number][]) => ({ schema: 1, nodes: [
+  ...pairs.flatMap(([key, value]) => [str(key), int(value)]),
+  { kind: "dict", items: pairs.map((_, index) => [2 * index, 2 * index + 1]) }
+] });
+
+/// (partial: the action's search default turns the view's filter on at first open; reload and removal keep the user's choice)
+test("search_default_<name> opens the list with the search view's filter on, the user can remove it, and a reload keeps the empty search", async () => {
+  const { root, of, rows } = await startNotes(notesWithContext(searchDefaults(["search_default_high", 1])));
+  await vi.waitFor(() => expect(rows()).toBe(1));
+  const read = of("web_search_read").at(-1)!.body;
+  expect(read["domain"]).toEqual([["priority", "=", "high"]]);
+  // The key chose the search; it does not travel with the list's requests.
+  expect(Object.keys(read["context"] as object).some(key => key.startsWith("search_default_"))).toBe(false);
+  expect(root.querySelector(".erp-facet-filter .erp-facet-values")!.textContent).toBe("High");
+  root.querySelector<HTMLButtonElement>(".erp-facet-filter .chip-remove-btn")!.click();
+  await vi.waitFor(() => expect(rows()).toBe(4));
+  // The emptied search is kept in the address, so a reload or the way back does not apply the default again.
+  expect(new URL(location.href).searchParams.get("search_filters")).toBe("[]");
+  app!.dispose(); app = undefined;
+  const again = await startNotes(notesWithContext(searchDefaults(["search_default_high", 1])), { path: `${location.pathname}${location.search}` });
+  await vi.waitFor(() => expect(again.rows()).toBe(4));
+  expect(again.root.querySelector(".erp-facet-filter")).toBeNull();
+});
+
+/// (partial: a group-by default groups the list; an unknown name is named in a warning and the list opens without it)
+test("a group-by default groups the list and a default the search view does not declare is named, not dropped", async () => {
+  const { root, of } = await startNotes(notesWithContext(searchDefaults(["search_default_by_priority", 1], ["search_default_ghost", 1])));
+  await vi.waitFor(() => expect(root.querySelectorAll(".list-group-row").length).toBe(3));
+  expect(of("web_read_group")).toHaveLength(1);
+  expect(document.body.textContent).toContain("This view opened without the default search “ghost” (the search view declares no filter, group-by item or field with this name).");
+});
+
+/// (partial: without defaults the list reads the search view only when the Filters menu opens, then offers its named filters)
+test("the search view's named filters are read when the menu opens and narrow the list", async () => {
+  const { root, of, rows } = await startNotes(notesWithContext(null));
+  const searchReads = () => of("get_views").filter(call => (call.body["views"] as unknown[][]).some(pair => pair[1] === "search")).length;
+  expect(searchReads()).toBe(0);
+  root.querySelector<HTMLButtonElement>(".search-menu-toggle")!.click();
+  const panel = root.querySelector<HTMLElement>(".erp-search-menu-panel")!;
+  await vi.waitFor(() => expect([...panel.querySelectorAll(".erp-filters-section .erp-item-label")].map(node => node.textContent)).toContain("High"));
+  const high = [...panel.querySelectorAll<HTMLButtonElement>(".erp-filters-section .erp-search-menu-item")].find(item => item.textContent === "High")!;
+  high.click();
+  await vi.waitFor(() => expect(rows()).toBe(1));
+  expect(new URL(location.href).searchParams.get("search_filters")).toBe(JSON.stringify(["view_high"]));
+  // The address restores it: the view's filters are read before the search is.
+  app!.dispose(); app = undefined;
+  const again = await startNotes(notesWithContext(null), { path: `${location.pathname}${location.search}` });
+  await vi.waitFor(() => expect(again.rows()).toBe(1));
+});

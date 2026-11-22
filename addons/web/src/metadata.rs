@@ -1619,9 +1619,11 @@ const MAX_SAFE_INTEGER: i64 = (1 << 53) - 1;
 
 /// A window action's own context, admitted only as a literal dictionary of `default_<field>` keys
 /// naming fields of the action's model, each with a text, integer or boolean literal that fits the
-/// field. A field a default cannot set (readonly, computed, related, one2many, many2many, a type
-/// without a literal form here) and everything else (expressions, `search_default_*`, session
-/// keys, other keys) is refused by name.
+/// field, and of `search_default_<name>` keys, each naming a search item by a plain identifier with
+/// a boolean, integer or short text literal. The browser applies a search default against the
+/// search view it reads for the caller and names one it cannot apply. A field a default cannot set
+/// (readonly, computed, related, one2many, many2many, a type without a literal form here) and
+/// everything else (expressions, session keys, other keys) is refused by name.
 fn parse_action_context(
     context: Option<&str>,
     model: &str,
@@ -1648,10 +1650,32 @@ fn parse_action_context(
             return Err(refuse("keys must be text literals.".into()));
         };
         let shown: String = key.chars().take(64).collect();
-        if key.starts_with("search_default_") {
-            return Err(refuse(format!(
-                "key '{shown}' is not admitted: default search filters of an action are not delivered yet; only default_<field> keys are."
-            )));
+        if let Some(name) = key.strip_prefix("search_default_") {
+            if !crate::action_result::search_default_name(name) {
+                return Err(refuse(format!(
+                    "key '{shown}' does not name a search item: search_default_<name> takes a plain identifier."
+                )));
+            }
+            if !seen.insert(key.as_str()) {
+                return Err(refuse(format!("repeats the key '{shown}'.")));
+            }
+            let admitted = match value {
+                Expr::Literal(Literal::Bool(_)) => true,
+                Expr::Literal(Literal::Int(number)) => {
+                    (-MAX_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(number)
+                }
+                Expr::Literal(Literal::Str(text)) => {
+                    text.len() <= crate::action_result::MAX_SEARCH_DEFAULT_BYTES
+                }
+                _ => false,
+            };
+            if !admitted {
+                return Err(refuse(format!(
+                    "value of '{shown}' must be a boolean, a safe integer or a text of at most {} bytes.",
+                    crate::action_result::MAX_SEARCH_DEFAULT_BYTES
+                )));
+            }
+            continue;
         }
         let Some(field) = key.strip_prefix("default_").filter(|name| !name.is_empty()) else {
             return Err(refuse(format!(
@@ -5031,6 +5055,8 @@ mod producer_admission_tests {
             "{'default_move_type': 'in_refund', 'default_kind': 'anything'}",
             "{'default_sequence': 3, 'default_amount': 100, 'default_ref': 'INV'}",
             "{'default_date': '2026-11-17', 'default_posted_at': '2026-11-17 08:30:00'}",
+            "{'search_default_posted': 1, 'search_default_by_journal': True, 'search_default_ref': 'INV'}",
+            "{'default_move_type': 'entry', 'search_default_draft': 0}",
         ] {
             let (_, document) = sources(None, Some(context)).unwrap();
             let document = document.expect("an admitted context is sent");
@@ -5071,8 +5097,24 @@ mod producer_admission_tests {
                 "Window action context key 'allowed_company_ids' is not admitted",
             ),
             (
-                "{'search_default_posted': 1}",
-                "Window action context key 'search_default_posted' is not admitted: default search filters",
+                "{'search_default_a-b': 1}",
+                "Window action context key 'search_default_a-b' does not name a search item",
+            ),
+            (
+                "{'search_default_': 1}",
+                "Window action context key 'search_default_' does not name a search item",
+            ),
+            (
+                "{'search_default_posted': [1]}",
+                "Window action context value of 'search_default_posted' must be a boolean, a safe integer or a text",
+            ),
+            (
+                "{'search_default_posted': uid}",
+                "Window action context value of 'search_default_posted' must be a boolean",
+            ),
+            (
+                "{'search_default_posted': 1, 'search_default_posted': 0}",
+                "Window action context repeats the key 'search_default_posted'.",
             ),
             (
                 "{'default_ghost': 1}",

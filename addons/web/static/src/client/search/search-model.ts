@@ -2,11 +2,16 @@
 import type { Field } from "../metadata.js";
 import { ClientError } from "../transport.js";
 import type { AutocompleteItem, FavoriteItem, FilterItem, GroupableField, GroupByCatalogue, GroupByItem, SearchFacet, SearchModelOptions } from "./types.js";
+
+/** The search view's filters the Filters menu offers, and the ones it leaves out with their reasons. */
+export interface ViewFilters { filters: readonly FilterItem[]; skipped: readonly { description: string; reason: string }[] }
 import { decodeListState, type ListGroupState } from "../list-group-state.js";
 import { GROUP_INTERVALS } from "./types.js";
 
 const MAX_PARAM = 2048;
 const MAX_ITEMS = 32;
+/** Most filters the owner declares (the search view's own and the dashboard cards). */
+const MAX_DECLARED = 64;
 const MAX_VALUE = 256;
 const operators = ["ilike", "=", "!=", ">", "<", ">=", "<="];
 const searchableKinds: readonly string[] = ["char", "text", "integer", "selection", "many2one", "one2many", "many2many"];
@@ -45,7 +50,7 @@ function orDomains(domains: unknown[][]): unknown[] {
 
 /** Bounded state for the human client's currently supported search subset.
  * Owners enable ordered grouping and temporal intervals; lists also persist grouping in the address.
- * Favorites and general search-arch interpretation remain milestone work.
+ * The search view's named filters arrive as declared filters (`search-arch.ts`). Favorites remain milestone work.
  */
 export class SearchModel {
   readonly model: string;
@@ -56,6 +61,13 @@ export class SearchModel {
   private facets: SearchFacet[] = [];
   private filters: FilterItem[] = [];
   private declaredFilters: FilterItem[] = [];
+  private skippedFilters: { description: string; reason: string }[] = [];
+  /** Set when the action preselects search items: an emptied search is then kept in the address as `search_filters=[]`,
+   *  so a reload or the way back shows what the user left instead of applying the defaults again. */
+  private keepEmpty = false;
+  private viewFilterLoader: (() => Promise<ViewFilters>) | undefined;
+  private viewFiltersLoaded = false;
+  private viewFilterLoad: Promise<void> | undefined;
   private listeners: (() => void)[] = [];
   private readonly initialDomain: unknown[];
   private sequence = 0;
@@ -131,12 +143,36 @@ export class SearchModel {
     for (const listener of this.listeners) listener();
   }
   getFacets(): SearchFacet[] { return structuredClone(this.facets); }
-  /** Register bounded admitted definitions before URL state is loaded. */
-  addDeclaredFilters(filters: readonly FilterItem[]): void {
-    if (this.declaredFilters.length + filters.length > MAX_ITEMS || filters.some(f => this.filters.some(old => old.id === f.id)) || new Set(filters.map(f => f.id)).size !== filters.length) invalid("Duplicate or excessive declared filters.");
+  /** Register bounded admitted definitions before URL state is loaded; `skipped` are the declared filters the menu
+   *  leaves out, each with its reason. */
+  addDeclaredFilters(filters: readonly FilterItem[], skipped: readonly { description: string; reason: string }[] = []): void {
+    if (this.declaredFilters.length + filters.length > MAX_DECLARED || filters.some(f => this.filters.some(old => old.id === f.id)) || new Set(filters.map(f => f.id)).size !== filters.length) invalid("Duplicate or excessive declared filters.");
     this.declaredFilters.push(...structuredClone(filters));
     this.filters.push(...structuredClone(filters));
+    this.skippedFilters.push(...structuredClone(skipped));
   }
+  /** Declared filters the Filters menu leaves out, each with its reason. */
+  getSkippedFilters(): { description: string; reason: string }[] { return structuredClone(this.skippedFilters); }
+  /** Name where the search view's own filters come from. They are read the first time the Filters menu opens, an
+   *  address names one, or the action preselects one, so a list that needs none costs no request. */
+  declareViewFilters(load: () => Promise<ViewFilters>): void {
+    if (this.viewFilterLoader) throw new ClientError("validation", "The search view's filters are already declared.");
+    this.viewFilterLoader = load;
+  }
+  /** True when the search view's filters are known: read, or none were declared. */
+  viewFiltersReady(): boolean { return !this.viewFilterLoader || this.viewFiltersLoaded; }
+  /** Read and register the search view's filters once; a failure is returned to the caller and the next call tries again. */
+  loadViewFilters(): Promise<void> {
+    const loader = this.viewFilterLoader;
+    if (!loader || this.viewFiltersLoaded) return Promise.resolve();
+    this.viewFilterLoad ??= loader().then(({ filters, skipped }) => {
+      this.addDeclaredFilters(filters, skipped);
+      this.viewFiltersLoaded = true;
+    }, error => { this.viewFilterLoad = undefined; throw error; });
+    return this.viewFilterLoad;
+  }
+  /** Keep an emptied search in the address (see `keepEmpty`). */
+  keepEmptySearch(): void { this.keepEmpty = true; }
   getFilters(): FilterItem[] { this.refreshDates(); return structuredClone(this.filters); }
   /** True when the owner groups by several fields and by date intervals (the pivot view). */
   hasGroupByIntervals(): boolean { return this.multipleGroupBy; }
@@ -449,7 +485,7 @@ export class SearchModel {
       return filter.custom ?? (f.optionId ? `${f.filterId}:${f.optionId}` : f.filterId);
     });
     const entries = [["search_facets", fields], ["search_filters", filters]] as const;
-    const encoded = entries.map(([key, value]) => [key, value.length ? JSON.stringify(value) : ""] as const);
+    const encoded = entries.map(([key, value]) => [key, value.length || this.keepEmpty && key === "search_filters" ? JSON.stringify(value) : ""] as const);
     for (const [key, value] of encoded) if (value.length > MAX_PARAM) invalid(`${key}: exceeds 2048 characters`);
     for (const [key, value] of encoded) { if (value) params.set(key, value); else params.delete(key); }
     if (this.groupByLoader?.persist && this.getGroupBy().length) {

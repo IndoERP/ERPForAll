@@ -58,11 +58,10 @@ function tone(value: unknown, path: string): DashboardTone {
 }
 /** Most keys of the context a button or figure hands to its action. */
 const MAX_CONTEXT_KEYS = 16;
-/** The context a card's button or figure hands to its action: at most 16 `default_<field>` keys, each with a text,
- *  boolean or safe-integer value. Session keys (companies, language, time zone) and every other key or value form are
- *  refused by name; so is `search_default_<name>`, because the list does not apply default filters yet and would open
- *  unfiltered next to a figure that counts filtered rows. The application checks a request's context again where it
- *  uses it. */
+/** The context a card's button or figure hands to its action: at most 16 `default_<field>` and `search_default_<name>`
+ *  keys, each with a text, boolean or safe-integer value. A `search_default_<name>` preselects a filter, group-by item or
+ *  field of the action's search view that the user can still remove. Session keys (companies, language, time zone) and
+ *  every other key or value form are refused by name. The application checks a request's context again where it uses it. */
 export function admitRequestContext(value: unknown, path: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return refuse(path, "must be an object");
   const entries = Object.entries(value as Json);
@@ -71,8 +70,7 @@ export function admitRequestContext(value: unknown, path: string): Record<string
   for (const [key, item] of entries) {
     // A key is quoted and clipped: it is server data on its way into a message.
     const at = `${path}[${JSON.stringify(key.slice(0, 64))}]`;
-    if (key.startsWith("search_default_")) refuse(at, "is not admitted: a card cannot set a default filter yet (put the condition in the figure's domain), only default_<field> keys are");
-    if (!/^default_[a-z_][a-z0-9_]*$/.test(key)) refuse(at, "is not admitted: only default_<field> keys are");
+    if (!/^default_[a-z_][a-z0-9_]*$/.test(key) && !/^search_default_[A-Za-z_][A-Za-z0-9_]*$/.test(key)) refuse(at, "is not admitted: only default_<field> and search_default_<name> keys are");
     if (!(typeof item === "string" || typeof item === "boolean" || typeof item === "number" && Number.isSafeInteger(item))) refuse(at, "must be a text, a boolean or a whole number");
     admitted[key] = item;
   }

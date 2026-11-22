@@ -194,6 +194,20 @@ export function createSearchMenuPanel(model: SearchModel, onUpdate: () => void, 
       });
       filterList.append(customForm);
     }
+    if (!model.viewFiltersReady()) {
+      const status = document.createElement("p");
+      status.className = "erp-search-section-status muted";
+      status.setAttribute("role", "status");
+      status.textContent = viewFiltersLoading ? "Loading the search view's filters…" : "The search view's filters are unavailable.";
+      filterList.append(status);
+    }
+    const skippedFilters = model.getSkippedFilters();
+    if (skippedFilters.length) {
+      const note = document.createElement("p");
+      note.className = "erp-search-section-status muted";
+      note.textContent = `Not offered here: ${skippedFilters.map(item => `${item.description} (${item.reason})`).join("; ")}.`;
+      filterList.append(note);
+    }
 
     filtersSection.append(filterList);
     container.append(filtersSection);
@@ -275,6 +289,15 @@ export function createSearchMenuPanel(model: SearchModel, onUpdate: () => void, 
     }
     return section;
   };
+  let viewFiltersLoading = false;
+  const loadViewFilters = (): void => {
+    if (model.viewFiltersReady() || viewFiltersLoading) return;
+    viewFiltersLoading = true;
+    model.loadViewFilters().then(() => undefined, error => {
+      errorNotice.hidden = false;
+      errorNotice.textContent = error instanceof Error ? error.message : "Unable to load the search view's filters.";
+    }).finally(() => { viewFiltersLoading = false; if (isOpen()) render(); });
+  };
   const loadGroupBy = (): void => {
     if (!model.hasGroupBy() || model.groupByReady() || groupByLoading) return;
     groupByLoading = true;
@@ -319,6 +342,7 @@ export function createSearchMenuPanel(model: SearchModel, onUpdate: () => void, 
   const open = (): void => {
     hotkeys?.dispose(); hotkeys = undefined;
     loadGroupBy();
+    loadViewFilters();
     render();
     panel.style.display = "block";
     trigger?.setAttribute("aria-expanded", "true");

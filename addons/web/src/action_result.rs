@@ -488,6 +488,22 @@ fn literal(value: &Json) -> Result<()> {
     }
 }
 
+/// Longest name a `search_default_<name>` key may give, and longest text value it may carry.
+pub(crate) const MAX_SEARCH_DEFAULT_BYTES: usize = 256;
+
+/// Whether `name` (the part after `search_default_`) can name a filter, group-by item or field
+/// of a search view: a plain identifier. The browser matches it against the search view it reads
+/// and names a default it cannot apply; the server cannot, because the action's search view is
+/// chosen and pruned for the caller when the list opens.
+pub(crate) fn search_default_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    name.len() <= MAX_SEARCH_DEFAULT_BYTES
+        && bytes
+            .next()
+            .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+        && bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+
 fn context(
     raw: Option<&Json>,
     model: &str,
@@ -608,6 +624,32 @@ fn context(
                 result.insert(key.clone(), value.clone());
                 continue;
             }
+        }
+        if let Some(name) = key
+            .strip_prefix("search_default_")
+            .filter(|_| current_window)
+        {
+            if !search_default_name(name) {
+                return Err(fail(format!(
+                    "Context key '{}' does not name a search item: search_default_<name> takes a plain identifier.",
+                    shown(key)
+                )));
+            }
+            let admitted = value.is_boolean()
+                || value
+                    .as_i64()
+                    .is_some_and(|number| number.unsigned_abs() <= 9_007_199_254_740_991)
+                || value
+                    .as_str()
+                    .is_some_and(|text| text.len() <= MAX_SEARCH_DEFAULT_BYTES);
+            if !admitted {
+                return Err(fail(format!(
+                    "Context key '{}' must be a boolean, a safe integer or a text of at most {MAX_SEARCH_DEFAULT_BYTES} bytes.",
+                    shown(key)
+                )));
+            }
+            result.insert(key.clone(), value.clone());
+            continue;
         }
         let Some(field) = key.strip_prefix("default_").filter(|name| !name.is_empty()) else {
             return Err(fail(format!(
@@ -843,6 +885,31 @@ mod tests {
     }
 
     #[test]
+    fn search_defaults_open_a_current_window_only() {
+        let value = json!({"type": ACT_WINDOW, "name":"Loans", "res_model":"library.loan", "target":"current", "views":[[false,"list"]], "domain":[],
+            "context":{"search_default_overdue": 1, "search_default_by_book": true, "search_default_name": "Atlas", "default_book_id": 3}});
+        let result = serde_json::to_value(run(value).unwrap()).unwrap();
+        assert_eq!(result["context"]["search_default_overdue"], json!(1));
+        assert_eq!(result["context"]["search_default_by_book"], json!(true));
+        assert_eq!(result["context"]["search_default_name"], json!("Atlas"));
+        assert_eq!(result["context"]["default_book_id"], json!(3));
+        let long = "x".repeat(MAX_SEARCH_DEFAULT_BYTES + 1);
+        let mut value = json!({"type": ACT_WINDOW, "name":"Loans", "res_model":"library.loan", "target":"current", "views":[[false,"list"]], "domain":[], "context":{}});
+        value["context"] = json!({ "search_default_name": long });
+        assert_eq!(
+            run(value).unwrap_err().message(),
+            "Context key 'search_default_name' must be a boolean, a safe integer or a text of at most 256 bytes."
+        );
+        // A dialog opens a form: it has no search to preselect.
+        let mut modal = window_json();
+        modal["context"] = json!({"search_default_overdue": 1});
+        assert_eq!(
+            run(modal).unwrap_err().message(),
+            "Context key 'search_default_overdue' is not admitted: only default_<field> literals pass."
+        );
+    }
+
+    #[test]
     fn create_is_boolean_and_current_window_only() {
         for create in [true, false] {
             let value = json!({"type": ACT_WINDOW, "name":"Branches", "res_model":"library.loan", "target":"current", "views":[[false,"list"],[false,"form"]], "domain":[], "context":{"create":create, "default_book_id": 3}});
@@ -931,8 +998,23 @@ mod tests {
             ),
             (
                 "context",
-                json!({"search_default_name":"filter"}),
-                "Context key 'search_default_name' is not admitted: only default_<field> literals pass.",
+                json!({"search_default_a.b":1}),
+                "Context key 'search_default_a.b' does not name a search item: search_default_<name> takes a plain identifier.",
+            ),
+            (
+                "context",
+                json!({"search_default_":1}),
+                "Context key 'search_default_' does not name a search item: search_default_<name> takes a plain identifier.",
+            ),
+            (
+                "context",
+                json!({"search_default_mine":[1]}),
+                "Context key 'search_default_mine' must be a boolean, a safe integer or a text of at most 256 bytes.",
+            ),
+            (
+                "context",
+                json!({"search_default_mine":9_007_199_254_740_992_u64}),
+                "Context key 'search_default_mine' must be a boolean, a safe integer or a text of at most 256 bytes.",
             ),
             (
                 "context",

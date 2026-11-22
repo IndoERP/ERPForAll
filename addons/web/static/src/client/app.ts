@@ -9,7 +9,7 @@ import { createHotkeyController, type HotkeyBinding } from "@erpforall/elang";
 import { reportHotkeyError } from "../../../../../web/src/runtime/hotkeys.js";
 import { dropAbsentDashboardFilters, mountDashboard } from "./dashboard.js";
 import { admitRequestContext } from "./dashboard-card.js";
-import { SearchModel, createSearchBar } from "./search/index.js";
+import { SearchModel, createSearchBar, readSearchArch, applySearchDefaults, splitSearchDefaults, namesViewFilter, SEARCH_DEFAULT_PREFIX, type SearchArch } from "./search/index.js";
 import { readMenuModule, readSettingsTarget } from "./settings-items.js";
 import { icon, menuIcon } from "./icons.js";
 import { MessageServices } from "./messages.js";
@@ -33,7 +33,7 @@ import { GRAPH_MAX_GROUPINGS, GRAPH_PARAMS, GraphModel, graphGrouping, graphPara
 import { mountGraph, type GraphTarget } from "./graph-view.js";
 import { focusKanbanCard, kanbanLayout, kanbanRoot, renderKanbanCards } from "./kanban.js";
 import type { GroupByCatalogue, GroupableField } from "./search/types.js";
-import { createContext, decodeAst, evalAst, parseBoundedJson } from "../../../../../web/packages/expr/src/index.js";
+import { createContext, decodeAst, evalAst, parseBoundedJson, type ValidatedAst } from "../../../../../web/packages/expr/src/index.js";
 import { expressionValue, jsonValue } from "./field-relations.js";
 import { array, describeViews, integer, object, text, type ButtonNode, type Description, type Field, type Node, type View } from "./metadata.js";
 import { actionButton, button, choose, confirmChoice, el, errorMessage, relabelActionButton } from "./dom.js";
@@ -1228,15 +1228,16 @@ export class HumanApp {
     return val;
   }
 
-  /** A window action's own context: the server admits only a literal dictionary of `default_<field>` text, safe
-   *  integer or boolean values (`addons/web/src/metadata.rs`, `parse_action_context`); the same is checked here. */
+  /** A window action's own context: the server admits only a literal dictionary of `default_<field>` and
+   *  `search_default_<name>` text, safe integer or boolean values (`addons/web/src/metadata.rs`, `parse_action_context`);
+   *  the same is checked here (the search defaults by `splitSearchDefaults`). */
   private actionContext(action: Record<string, unknown>): Record<string, unknown> {
     if (action["context"] === null) return {};
     const ast = decodeAst(parseBoundedJson(JSON.stringify(action["context"])));
     const value = jsonValue(evalAst(ast, createContext({ names: {} })));
     const context = object(value, "action context");
     for (const [key, item] of Object.entries(context)) {
-      if (!/^default_[a-z_][a-z0-9_]*$/.test(key)) throw new ClientError("unsupported", `Unsupported action context key: ${key}.`);
+      if (!/^default_[a-z_][a-z0-9_]*$/.test(key) && !key.startsWith(SEARCH_DEFAULT_PREFIX)) throw new ClientError("unsupported", `Unsupported action context key: ${key}.`);
       if (!(typeof item === "string" || typeof item === "boolean" || typeof item === "number" && Number.isSafeInteger(item))) {
         throw new ClientError("server", `Invalid action context value for ${key}.`);
       }
@@ -2043,7 +2044,8 @@ export class HumanApp {
         if (action["wire_major"] !== 1 || action["target"] !== "current" || action["id"] !== rpcId(route.action)) {
           throw new ClientError("unsupported", "Unsupported or mismatched window action.");
         }
-        const context = entry?.context ?? { ...this.context, ...this.actionContext(action) };
+        // `search_default_<name>` keys only choose the search the view opens with; they never travel with its requests.
+        const { context, defaults: searchDefaults } = splitSearchDefaults(entry?.context ?? { ...this.context, ...this.actionContext(action) });
         const actionDomain: unknown[] = entry ? [] : this.actionDomain(action, context);
         const model = text(action["model"], "action model");
         if (route.model && route.model !== model) throw new ClientError("validation", "URL model does not match the action.");
@@ -2113,7 +2115,7 @@ export class HumanApp {
           const hasForm = views.some(view => view[1] === "form");
           const canCreate = hasForm && view.canCreate !== false && !isFalsy(context["create"]);
           if (canCreate) controls.append(actionButton("New", () => this.run(() => this.navigate({ ...route, id: undefined, view_type: "form" })), "primary"));
-          const list = await this.listView(staging, panel, actionTitle, description, view, route, generation, actionHelp, views as [number | null, string][], {baseDomain: entry?.result.domain ?? actionDomain, context, hasForm, canCreate});
+          const list = await this.listView(staging, panel, actionTitle, description, view, route, generation, actionHelp, views as [number | null, string][], {baseDomain: entry?.result.domain ?? actionDomain, context, hasForm, canCreate, searchDefaults});
           nextDispose = list.dispose;
           nextSettle = list.settle;
           stagedDisposers.push(nextDispose);
@@ -2121,20 +2123,20 @@ export class HumanApp {
           const hasForm = views.some(view => view[1] === "form");
           const canCreate = hasForm && view.canCreate !== false && !isFalsy(context["create"]);
           if (canCreate) controls.append(actionButton("New", () => this.run(() => this.navigate({ ...route, id: undefined, view_type: "form" })), "primary"));
-          const kanban = await this.kanbanView(staging, panel, actionTitle, description, view, route, generation, views as [number | null, string][], {baseDomain: entry?.result.domain ?? actionDomain, context, hasForm});
+          const kanban = await this.kanbanView(staging, panel, actionTitle, description, view, route, generation, views as [number | null, string][], {baseDomain: entry?.result.domain ?? actionDomain, context, hasForm, searchDefaults});
           nextDispose = kanban.dispose;
           nextRestore = kanban.restore;
           stagedDisposers.push(nextDispose);
         } else if (view.type === "pivot") {
-          const pivot = await this.pivotView(staging, panel, actionTitle, description, view, route, generation, views as [number | null, string][], {baseDomain: entry?.result.domain ?? actionDomain, context});
+          const pivot = await this.pivotView(staging, panel, actionTitle, description, view, route, generation, views as [number | null, string][], {baseDomain: entry?.result.domain ?? actionDomain, context, searchDefaults});
           nextDispose = pivot.dispose;
           stagedDisposers.push(nextDispose);
         } else if (view.type === "calendar") {
-          const calendar = await this.calendarView(staging, panel, actionTitle, description, view, route, generation, views as [number | null, string][], {baseDomain: entry?.result.domain ?? actionDomain, context});
+          const calendar = await this.calendarView(staging, panel, actionTitle, description, view, route, generation, views as [number | null, string][], {baseDomain: entry?.result.domain ?? actionDomain, context, searchDefaults});
           nextDispose = calendar.dispose;
           stagedDisposers.push(nextDispose);
         } else if (view.type === "graph") {
-          const graph = await this.graphView(staging, panel, actionTitle, description, view, route, generation, views as [number | null, string][], {baseDomain: entry?.result.domain ?? actionDomain, context});
+          const graph = await this.graphView(staging, panel, actionTitle, description, view, route, generation, views as [number | null, string][], {baseDomain: entry?.result.domain ?? actionDomain, context, searchDefaults});
           nextDispose = graph.dispose;
           stagedDisposers.push(nextDispose);
         } else {
@@ -2214,21 +2216,12 @@ export class HumanApp {
 
   /** What a header can be expanded by: the model's groupable fields, its summable fields and the search view's group-by items. */
   private async pivotCatalogue(model: string, context: Record<string, unknown>): Promise<{ groupable: ReturnType<typeof decodePivotFields>["groupable"]; measures: ReturnType<typeof decodePivotFields>["measures"]; items: PivotGroupItem[]; /** What the search bar's Group By menu offers. */ groupBy: GroupByCatalogue }> {
-    const [searchView, raw] = await Promise.all([
-      this.viewDescriptions(model, [[null, "search"]], {}, context).catch((error: unknown) => {
-        if (error instanceof ClientError && error.kind === "validation" && error.message.startsWith("No default view of type 'search'")) return undefined;
-        throw error;
-      }),
+    const [nodes, raw] = await Promise.all([
+      this.searchViewNodes(model, context),
       this.rpc.call(model, "fields_get", { attributes: ["string", "type", "groupable", "selection", "aggregator"], context })
     ]);
     const decoded = decodePivotFields(raw);
-    let nodes: Node[] = [];
-    if (searchView !== undefined) {
-      const search = describeViews(searchView, model, this.registry).views.get("search");
-      if (!search) throw new ClientError("server", "The search view description is missing.");
-      nodes = search.nodes;
-    }
-    const catalogue = buildGroupByCatalogue(nodes, ast => jsonValue(evalAst(ast, createContext({ names: { context: expressionValue(context, 0), uid: expressionValue(this.userId, 0) } }))),
+    const catalogue = buildGroupByCatalogue(nodes, this.searchExpression(context),
       { groupable: decoded.groupable as unknown as Map<string, GroupableField>, excluded: new Map() }, true);
     const items: PivotGroupItem[] = [];
     for (const item of catalogue.items) {
@@ -2278,7 +2271,7 @@ export class HumanApp {
   }
 
   /** The pivot view: the search bar's domain, grouped reads narrowed to the header that opens, the table, and its state in the address. */
-  private async pivotView(staging: HTMLElement, panel: HTMLElement, actionTitle: string, description: Description, view: View, route: Route, generation: number, availableViews: [number | null, string][], scope: { baseDomain: unknown[]; context: Record<string, unknown> }): Promise<{ dispose: () => void }> {
+  private async pivotView(staging: HTMLElement, panel: HTMLElement, actionTitle: string, description: Description, view: View, route: Route, generation: number, availableViews: [number | null, string][], scope: { baseDomain: unknown[]; context: Record<string, unknown>; searchDefaults?: ReadonlyMap<string, unknown> }): Promise<{ dispose: () => void }> {
     const { context, baseDomain } = scope;
     if (route.id !== undefined) throw new ClientError("validation", "The pivot view shows a whole table; the address cannot name one record.");
     const [limits, catalogue] = await Promise.all([this.pivotLimits(context), this.pivotCatalogue(description.model, context)]);
@@ -2309,7 +2302,7 @@ export class HumanApp {
       // The search's Group By sets the rows (reference pivot_model.js), in the order chosen, with date intervals.
       groupBy: { load: async () => catalogue.groupBy, multiple: true, maxLevels: PIVOT_MAX_LEVELS }
     });
-    searchModel.loadFromUrlParams(await this.restoreDashboardFilters(searchModel, description, route, generation, baseDomain, context));
+    await this.prepareSearch(searchModel, description.model, context, route, () => this.restoreDashboardFilters(searchModel, description, route, generation, baseDomain, context), scope.searchDefaults ?? new Map(), generation);
     if (route.search && !new URL(routeUrl(route), window.location.origin).searchParams.has("search_facets")) {
       // The pivot arch declares only its groupings and measures, so `name` is looked for in the model's fields as well: the list builds this facet on `name`.
       const field = searchModel.getSearchableFields().find(f => f.name === "name") ?? (description.fields.get("name")?.kind === "char" ? description.fields.get("name") : undefined) ?? searchModel.getSearchableFields()[0];
@@ -2417,7 +2410,7 @@ export class HumanApp {
   }
 
   /** The calendar view: the search bar's domain, the events of the visible range, the grids and the side panel, and the scale and day in the address. */
-  private async calendarView(staging: HTMLElement, panel: HTMLElement, actionTitle: string, description: Description, view: View, route: Route, generation: number, availableViews: [number | null, string][], scope: { baseDomain: unknown[]; context: Record<string, unknown> }): Promise<{ dispose: () => void }> {
+  private async calendarView(staging: HTMLElement, panel: HTMLElement, actionTitle: string, description: Description, view: View, route: Route, generation: number, availableViews: [number | null, string][], scope: { baseDomain: unknown[]; context: Record<string, unknown>; searchDefaults?: ReadonlyMap<string, unknown> }): Promise<{ dispose: () => void }> {
     const { context, baseDomain } = scope;
     if (route.id !== undefined) throw new ClientError("validation", "The calendar view shows a range of records; the address cannot name one record.");
     const config = readCalendarView(view), zone = this.editorLocale.tz;
@@ -2453,7 +2446,7 @@ export class HumanApp {
       userId: this.userId, companyId: this.companyId, initialDomain: baseDomain
     });
     // The list's dashboard cards narrow the calendar the same way (the pivot does this too).
-    searchModel.loadFromUrlParams(await this.restoreDashboardFilters(searchModel, description, route, generation, baseDomain, context));
+    await this.prepareSearch(searchModel, description.model, context, route, () => this.restoreDashboardFilters(searchModel, description, route, generation, baseDomain, context), scope.searchDefaults ?? new Map(), generation);
     if (route.search && !new URL(routeUrl(route), window.location.origin).searchParams.has("search_facets")) {
       // The calendar arch names few fields, so `name` is looked for in the model's fields as well: the list builds this facet on `name`.
       const field = searchModel.getSearchableFields().find(f => f.name === "name") ?? (description.fields.get("name")?.kind === "char" ? description.fields.get("name") : undefined) ?? searchModel.getSearchableFields()[0];
@@ -2527,7 +2520,7 @@ export class HumanApp {
   }
 
   /** The graph view: the search bar's domain and Group By (two levels), one grouped read per change of what is drawn, the chart, and its state in the address. */
-  private async graphView(staging: HTMLElement, panel: HTMLElement, actionTitle: string, description: Description, view: View, route: Route, generation: number, availableViews: [number | null, string][], scope: { baseDomain: unknown[]; context: Record<string, unknown> }): Promise<{ dispose: () => void }> {
+  private async graphView(staging: HTMLElement, panel: HTMLElement, actionTitle: string, description: Description, view: View, route: Route, generation: number, availableViews: [number | null, string][], scope: { baseDomain: unknown[]; context: Record<string, unknown>; searchDefaults?: ReadonlyMap<string, unknown> }): Promise<{ dispose: () => void }> {
     const { context, baseDomain } = scope;
     if (route.id !== undefined) throw new ClientError("validation", "The graph view draws a whole chart; the address cannot name one record.");
     const [settings, catalogue] = await Promise.all([
@@ -2567,7 +2560,7 @@ export class HumanApp {
       groupBy: { load: async () => catalogue.groupBy, multiple: true, maxLevels: GRAPH_MAX_GROUPINGS }
     });
     // The list's dashboard cards kept in the address narrow the chart the same way.
-    searchModel.loadFromUrlParams(await this.restoreDashboardFilters(searchModel, description, route, generation, baseDomain, context));
+    await this.prepareSearch(searchModel, description.model, context, route, () => this.restoreDashboardFilters(searchModel, description, route, generation, baseDomain, context), scope.searchDefaults ?? new Map(), generation);
     if (route.search && !new URL(routeUrl(route), window.location.origin).searchParams.has("search_facets")) {
       const field = searchModel.getSearchableFields().find(f => f.name === "name") ?? (description.fields.get("name")?.kind === "char" ? description.fields.get("name") : undefined) ?? searchModel.getSearchableFields()[0];
       if (!field) throw new ClientError("unsupported", "Text search is not available for this model.");
@@ -2657,7 +2650,7 @@ export class HumanApp {
     The kanban view, ungrouped: the search bar's domain, one page of cards, the pager and the way back to the card
    *  that was opened. Grouped columns, drag and drop and quick create are.
    */
-  private async kanbanView(staging: HTMLElement, panel: HTMLElement, actionTitle: string, description: Description, view: View, route: Route, generation: number, availableViews: [number | null, string][], scope: { baseDomain: unknown[]; context: Record<string, unknown>; hasForm: boolean }): Promise<{ dispose: () => void; restore: () => void }> {
+  private async kanbanView(staging: HTMLElement, panel: HTMLElement, actionTitle: string, description: Description, view: View, route: Route, generation: number, availableViews: [number | null, string][], scope: { baseDomain: unknown[]; context: Record<string, unknown>; hasForm: boolean; searchDefaults?: ReadonlyMap<string, unknown> }): Promise<{ dispose: () => void; restore: () => void }> {
     const { context, baseDomain, hasForm } = scope;
     if (route.id !== undefined) throw new ClientError("validation", "The kanban view shows many records; the address cannot name one record.");
     const root = kanbanRoot(view), layout = kanbanLayout(view);
@@ -2686,7 +2679,7 @@ export class HumanApp {
       }),
       userId: this.userId, companyId: this.companyId, initialDomain: baseDomain
     });
-    searchModel.loadFromUrlParams(await this.restoreDashboardFilters(searchModel, description, route, generation, baseDomain, context));
+    await this.prepareSearch(searchModel, description.model, context, route, () => this.restoreDashboardFilters(searchModel, description, route, generation, baseDomain, context), scope.searchDefaults ?? new Map(), generation);
     if (route.search && !new URL(routeUrl(route), window.location.origin).searchParams.has("search_facets")) {
       const field = searchModel.getSearchableFields().find(f => f.name === "name") ?? searchModel.getSearchableFields()[0];
       if (!field) throw new ClientError("unsupported", "Text search is not available for this model.");
@@ -2811,26 +2804,58 @@ export class HumanApp {
   }
 
 
-  /** What the Group By menu offers for `model`: the search view's declared items and the fields the server can group by. */
-  private async groupByCatalogue(model: string, context: Record<string, unknown>): Promise<GroupByCatalogue> {
-    const [searchView, fields] = await Promise.all([
-      this.viewDescriptions(model, [[null, "search"]], {}, context).catch((error: unknown) => {
-        // A model with no search view has no declared items; the server answers it with this sentence (select_view).
-        if (error instanceof ClientError && error.kind === "validation" && error.message.startsWith("No default view of type 'search'")) return undefined;
-        throw error;
-      }),
-      this.rpc.call(model, "fields_get", { attributes: ["string", "type", "groupable", "selection", "aggregator", "currency_field"], context })
-    ]);
-    let nodes: Node[] = [];
-    if (searchView !== undefined) {
-      const search = describeViews(searchView, model, this.registry).views.get("search");
-      if (!search) throw new ClientError("server", "The search view description is missing.");
-      nodes = search.nodes;
-    }
-    return buildGroupByCatalogue(nodes, ast => jsonValue(evalAst(ast, createContext({ names: { context: expressionValue(context, 0), uid: expressionValue(this.userId, 0) } }))), decodeGroupableFields(fields, true), true, true);
+  /** The nodes of `model`'s default search view (shared through the metadata cache); none when the model has no search view. */
+  private async searchViewNodes(model: string, context: Record<string, unknown>): Promise<Node[]> {
+    const searchView = await this.viewDescriptions(model, [[null, "search"]], {}, context).catch((error: unknown) => {
+      // A model with no search view has no declared items; the server answers it with this sentence (select_view).
+      if (error instanceof ClientError && error.kind === "validation" && error.message.startsWith("No default view of type 'search'")) return undefined;
+      throw error;
+    });
+    if (searchView === undefined) return [];
+    const search = describeViews(searchView, model, this.registry).views.get("search");
+    if (!search) throw new ClientError("server", "The search view description is missing.");
+    return search.nodes;
   }
 
-  private async listView(staging: HTMLElement, panel: HTMLElement, actionTitle: string, description: Description, view: View, route: Route, generation: number, actionHelp?: string, availableViews?: [number | null, string][], scope?: {baseDomain: unknown[]; context: Record<string, unknown>; hasForm: boolean; canCreate: boolean}): Promise<{ dispose: () => void; settle: () => void }> {
+  /** Reads a search view expression (a filter's domain or context) with the names the search view may use. */
+  private searchExpression(context: Record<string, unknown>): (ast: ValidatedAst) => unknown {
+    return ast => jsonValue(evalAst(ast, createContext({ names: { context: expressionValue(context, 0), uid: expressionValue(this.userId, 0) } })));
+  }
+
+  /** What the Group By menu offers for `model`: the search view's declared items and the fields the server can group by. */
+  private async groupByCatalogue(model: string, context: Record<string, unknown>): Promise<GroupByCatalogue> {
+    const [nodes, fields] = await Promise.all([
+      this.searchViewNodes(model, context),
+      this.rpc.call(model, "fields_get", { attributes: ["string", "type", "groupable", "selection", "aggregator", "currency_field"], context })
+    ]);
+    return buildGroupByCatalogue(nodes, this.searchExpression(context), decodeGroupableFields(fields, true), true, true);
+  }
+
+  /** Declares the search view's named filters on a view's search model (read when first needed), restores the search
+   *  from the address and, when the address holds no search (a first open), applies the action's `search_default_<name>`
+   *  values. A default that cannot be applied is named in a warning and the view opens without it. Returns the address
+   *  parameters. */
+  private async prepareSearch(searchModel: SearchModel, model: string, context: Record<string, unknown>, route: Route, params: () => Promise<URLSearchParams> | URLSearchParams, defaults: ReadonlyMap<string, unknown>, generation: number): Promise<URLSearchParams> {
+    let arch: Promise<SearchArch> | undefined;
+    const readArch = (): Promise<SearchArch> => arch ??= this.searchViewNodes(model, context).then(nodes => readSearchArch(nodes, this.searchExpression(context)), error => { arch = undefined; throw error; });
+    searchModel.declareViewFilters(readArch);
+    const restored = await params();
+    // An address that names one of the view's filters needs them before it can be restored.
+    if (defaults.size || namesViewFilter(restored)) await searchModel.loadViewFilters();
+    if (defaults.size) searchModel.keepEmptySearch();
+    if (searchModel.loadFromUrlParams(restored) || route.search || !defaults.size) return restored;
+    const unapplied = await applySearchDefaults(searchModel, await readArch(), defaults, async (relation, id) => {
+      const rows = array(await this.rpc.call(relation, "web_read", { ids: [id], specification: { display_name: {} }, context }), "default record");
+      if (rows.length !== 1) throw new ClientError("validation", `Record ${id} of ${relation} is not available.`);
+      return text(object(rows[0])["display_name"], "default record name");
+    });
+    if (unapplied.length && generation === this.generation && !this.expired) {
+      this.messages.notifications.add(`This view opened without the default search ${unapplied.map(item => `“${item.name}” (${item.reason})`).join(", ")}.`, { level: "warning" });
+    }
+    return restored;
+  }
+
+  private async listView(staging: HTMLElement, panel: HTMLElement, actionTitle: string, description: Description, view: View, route: Route, generation: number, actionHelp?: string, availableViews?: [number | null, string][], scope?: {baseDomain: unknown[]; context: Record<string, unknown>; hasForm: boolean; canCreate: boolean; searchDefaults?: ReadonlyMap<string, unknown>}): Promise<{ dispose: () => void; settle: () => void }> {
     const context = scope?.context ?? this.context, baseDomain = scope?.baseDomain ?? [], hasForm = scope?.hasForm ?? true, canCreate = scope?.canCreate ?? hasForm;
     const fieldStops: (() => void)[] = [];
     let groupedModel: ListGroupModel | undefined;
@@ -2955,7 +2980,7 @@ export class HumanApp {
     // The address this navigation commits must not keep the dropped card, or a reload or a shared link brings it back.
     const keptFilters = urlParams.get("search_filters");
     if (keptFilters === null) delete route.search_filters; else route.search_filters = keptFilters;
-    searchModel.loadFromUrlParams(urlParams);
+    await this.prepareSearch(searchModel, description.model, context, route, () => urlParams, scope?.searchDefaults ?? new Map(), generation);
     const restoredList = searchModel.getListState();
     if (restoredList) { offset = restoredList.offset;
       if (restoredList.limit !== undefined) {

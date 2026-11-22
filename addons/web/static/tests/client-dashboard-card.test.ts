@@ -108,10 +108,9 @@ test("each departure from contract v1 is refused by the key it concerns and draw
   }
 });
 
-test("a button's or figure's context admits only default keys with plain values", () => {
+test("a button's or figure's context admits only default and search default keys with plain values", () => {
   const withContext = (context: unknown, stat = false) => json(value => { ((stat ? value.stats[0] : value.buttons[1]) as Record<string, unknown>)["context"] = context; });
-  const keys = "is not admitted: only default_<field> keys are.";
-  const filter = "is not admitted: a card cannot set a default filter yet (put the condition in the figure's domain), only default_<field> keys are.";
+  const keys = "is not admitted: only default_<field> and search_default_<name> keys are.";
   const plain = "must be a text, a boolean or a whole number.";
   const cases: [string, string][] = [
     [withContext({ allowed_company_ids: [1, 2] }), `Dashboard card: buttons[1].context["allowed_company_ids"] ${keys}`],
@@ -126,9 +125,10 @@ test("a button's or figure's context admits only default keys with plain values"
     [withContext({ default_journal_id: [5] }), `Dashboard card: buttons[1].context["default_journal_id"] ${plain}`],
     [withContext({ default_journal_id: 5.5 }), `Dashboard card: buttons[1].context["default_journal_id"] ${plain}`],
     [withContext({ default_journal_id: null }), `Dashboard card: buttons[1].context["default_journal_id"] ${plain}`],
-    // The list does not apply default filters yet: such a key would open it unfiltered, so it is refused by name.
-    [withContext({ search_default_journal_id: 5 }), `Dashboard card: buttons[1].context["search_default_journal_id"] ${filter}`],
-    [withContext({ search_default_journal_id: 5 }, true), `Dashboard card: stats[0].context["search_default_journal_id"] ${filter}`],
+    // A search default names a search item: a plain identifier with a plain value.
+    [withContext({ "search_default_my-filter": 1 }), `Dashboard card: buttons[1].context["search_default_my-filter"] ${keys}`],
+    [withContext({ search_default_: 1 }), `Dashboard card: buttons[1].context["search_default_"] ${keys}`],
+    [withContext({ search_default_journal_id: [5] }, true), `Dashboard card: stats[0].context["search_default_journal_id"] ${plain}`],
     [withContext(Object.fromEntries(Array.from({ length: 17 }, (_, index) => [`default_field_${index}`, index]))), "Dashboard card: buttons[1].context has more than 16 keys."],
     [withContext({ lang: "fr_FR" }, true), `Dashboard card: stats[0].context["lang"] ${keys}`],
     [withContext({ default_journal_id: 5.5 }, true), `Dashboard card: stats[0].context["default_journal_id"] ${plain}`]
@@ -143,15 +143,19 @@ test("a button's or figure's context admits only default keys with plain values"
   const real = { default_move_type: "out_invoice", default_journal_id: 5, default_picking_type_id: 3 };
   expect(parseDashboardCard(withContext(real))!.buttons[1]!.context).toEqual(real);
   expect(parseDashboardCard(withContext(real, true))!.stats[0]!.context).toEqual(real);
+  // A figure may open its list with a filter preselected that the user can still remove.
+  const preselected = { search_default_journal_id: 5, search_default_posted: true, default_move_type: "entry" };
+  expect(parseDashboardCard(withContext(preselected, true))!.stats[0]!.context).toEqual(preselected);
   const sixteen = Object.fromEntries(Array.from({ length: 16 }, (_, index) => [`default_field_${index}`, index % 2 === 0 ? index : `value ${index}`]));
   expect(parseDashboardCard(withContext({ ...sixteen, default_field_0: true }))!.buttons[1]!.context).toEqual({ ...sixteen, default_field_0: true });
 });
 
 test("the application checks a request's context again where it uses it", () => {
   expect(admitRequestContext({ default_move_type: "out_invoice", default_journal_id: 5 }, "the request context")).toEqual({ default_move_type: "out_invoice", default_journal_id: 5 });
+  expect(admitRequestContext({ search_default_posted: 1 }, "the request context")).toEqual({ search_default_posted: 1 });
   for (const [value, message] of [
-    [{ allowed_company_ids: [9] }, "Dashboard card: the request context[\"allowed_company_ids\"] is not admitted: only default_<field> keys are."],
-    [{ search_default_journal_id: 5 }, "Dashboard card: the request context[\"search_default_journal_id\"] is not admitted: a card cannot set a default filter yet (put the condition in the figure's domain), only default_<field> keys are."],
+    [{ allowed_company_ids: [9] }, "Dashboard card: the request context[\"allowed_company_ids\"] is not admitted: only default_<field> and search_default_<name> keys are."],
+    [{ "search_default_a.b": 5 }, "Dashboard card: the request context[\"search_default_a.b\"] is not admitted: only default_<field> and search_default_<name> keys are."],
     [{ default_journal_id: [5] }, "Dashboard card: the request context[\"default_journal_id\"] must be a text, a boolean or a whole number."],
     [[], "Dashboard card: the request context must be an object."]
   ] as [unknown, string][]) {
