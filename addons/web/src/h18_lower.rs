@@ -1124,8 +1124,14 @@ fn validate_button<'a>(node: impl Node<'a>, parent: impl Node<'a>) -> ViewResult
             "confirm-label",
             "cancel-label",
             "context",
+            "prompt",
+            "prompt-label",
+            "prompt-required",
+            "prompt-max",
+            "prompt-options",
         ],
     )?;
+    button_prompt(node)?;
     if node.attr("special").is_some() {
         if parent.tag() != "footer" || node.attr("special") != Some("cancel") {
             return Err(layout_error(
@@ -1241,6 +1247,114 @@ fn validate_button<'a>(node: impl Node<'a>, parent: impl Node<'a>) -> ViewResult
     button_label(node)?;
     button_variant(node)?;
     Ok(())
+}
+/// The declared answer of a prompting object button, `None` without `prompt`.
+struct PromptDecl<'a> {
+    kind: &'a str,
+    label: &'a str,
+    required: bool,
+    max_length: Option<i64>,
+    choices: Vec<(&'a str, &'a str)>,
+}
+/// `prompt="text|date|selection"` with `prompt-label`, optional `prompt-required`, `prompt-max` (text) and
+/// `prompt-options` (selection: `value:Label` entries separated by commas). Only a plain object button prompts,
+/// and never together with `confirm`: the prompt is already the question before the call.
+fn button_prompt<'a>(node: impl Node<'a>) -> ViewResult<Option<PromptDecl<'a>>> {
+    let Some(kind) = node.attr("prompt") else {
+        for key in [
+            "prompt-label",
+            "prompt-required",
+            "prompt-max",
+            "prompt-options",
+        ] {
+            if node.attr(key).is_some() {
+                return Err(invalid(format!("Button '{key}' requires prompt.")));
+            }
+        }
+        return Ok(None);
+    };
+    if !matches!(kind, "text" | "date" | "selection") {
+        return Err(invalid(format!(
+            "Unsupported button prompt '{kind}'; use text, date or selection."
+        )));
+    }
+    if node.attr("type") != Some("object") || has_button_class(node, "oe_stat_button") {
+        return Err(invalid("Only an object button can declare a prompt."));
+    }
+    if node.attr("confirm").is_some() {
+        return Err(invalid(
+            "A button prompt already asks before the call; it cannot combine with confirm.",
+        ));
+    }
+    let label = node
+        .attr("prompt-label")
+        .filter(|label| !label.trim().is_empty())
+        .ok_or_else(|| invalid("A button prompt requires a nonempty prompt-label."))?;
+    if label.len() > MAX_LABEL {
+        return Err(invalid(
+            "Button 'prompt-label' exceeds the 4096-byte limit.",
+        ));
+    }
+    let required = boolean(node, "prompt-required", false)?;
+    let max_length = match node.attr("prompt-max") {
+        None => None,
+        Some(_) if kind != "text" => {
+            return Err(invalid("Button 'prompt-max' requires prompt='text'."));
+        }
+        Some(raw) => Some(
+            raw.parse::<u32>()
+                .ok()
+                .filter(|max| (1..=4096).contains(max))
+                .map(i64::from)
+                .ok_or_else(|| invalid("Button 'prompt-max' must be an integer from 1 to 4096."))?,
+        ),
+    };
+    let choices = match node.attr("prompt-options") {
+        None if kind == "selection" => {
+            return Err(invalid("A selection prompt requires prompt-options."));
+        }
+        None => Vec::new(),
+        Some(_) if kind != "selection" => {
+            return Err(invalid(
+                "Button 'prompt-options' requires prompt='selection'.",
+            ));
+        }
+        Some(raw) => {
+            let mut choices: Vec<(&str, &str)> = Vec::new();
+            for entry in raw.split(',') {
+                let (value, caption) = entry.split_once(':').ok_or_else(|| {
+                    invalid("Button 'prompt-options' entries are written value:Label.")
+                })?;
+                let (value, caption) = (value.trim(), caption.trim());
+                if !erp_sdk::views::wire::valid_prompt_choice_value(value)
+                    || caption.is_empty()
+                    || caption.len() > MAX_LABEL
+                {
+                    return Err(invalid(format!(
+                        "Invalid button prompt option '{}'.",
+                        entry.trim()
+                    )));
+                }
+                if choices.iter().any(|(prior, _)| *prior == value) {
+                    return Err(invalid(format!(
+                        "Duplicate button prompt option '{value}'."
+                    )));
+                }
+                choices.push((value, caption));
+            }
+            if choices.len() > 64 {
+                return Err(invalid("A button prompt offers at most 64 options."));
+            }
+            choices
+        }
+    };
+    Ok(Some(PromptDecl {
+        kind,
+        label,
+        required,
+        max_length,
+        choices,
+    }))
 }
 fn button_action_id<'a>(node: impl Node<'a>) -> ViewResult<i64> {
     node.attr("name")
@@ -2400,6 +2514,7 @@ fn set_button_details<'a>(
         "confirm-label",
         "cancel-label",
         "context",
+        "prompt",
     ]
     .iter()
     .any(|key| node.attr(key).is_some())
@@ -2448,6 +2563,33 @@ fn set_button_details<'a>(
             if let Some(source) = node.attr("context") {
                 details.set("context", |value| {
                     source_expression(source, value, |_| Ok(()))
+                })?;
+            }
+            if let Some(prompt) = button_prompt(node)? {
+                details.set("prompt", |value| {
+                    value.object(|object| {
+                        object.set("kind", |value| value.text(prompt.kind))?;
+                        object.set("label", |value| value.text(prompt.label))?;
+                        object.set("required", |value| value.boolean(prompt.required))?;
+                        if let Some(max) = prompt.max_length {
+                            object.set("max_length", |value| value.integer(max))?;
+                        }
+                        if !prompt.choices.is_empty() {
+                            object.set("choices", |value| {
+                                value.array(prompt.choices.len(), |index, value| {
+                                    let (choice, caption) =
+                                        prompt.choices.get(index).copied().ok_or_else(|| {
+                                            invalid("Button prompt option index changed.")
+                                        })?;
+                                    value.object(|object| {
+                                        object.set("value", |value| value.text(choice))?;
+                                        object.set("label", |value| value.text(caption))
+                                    })
+                                })
+                            })?;
+                        }
+                        Ok(())
+                    })
                 })?;
             }
             Ok(())
@@ -3267,6 +3409,113 @@ mod tests {
                 "{option}"
             );
         }
+    }
+
+    fn prompt_button(attrs: &str) -> Result<Value, ViewError> {
+        fixture(
+            &format!(
+                "<form><header><button name='action_refuse' type='object' string='Refuse' {attrs}/></header><field name='name'/></form>"
+            ),
+            "form",
+        )
+    }
+
+    /// An object button may ask for one short answer before its method is called.
+    #[test]
+    fn button_prompt_is_described() {
+        let value = prompt_button(
+            "prompt='text' prompt-label='Reason' prompt-required='1' prompt-max='500'",
+        )
+        .unwrap();
+        assert_eq!(
+            value["nodes"][2]["details"]["prompt"],
+            serde_json::json!({"kind": "text", "label": "Reason", "required": true, "max_length": 500})
+        );
+        let value = prompt_button("prompt='date' prompt-label='Run for date'").unwrap();
+        assert_eq!(
+            value["nodes"][2]["details"]["prompt"],
+            serde_json::json!({"kind": "date", "label": "Run for date", "required": false})
+        );
+        let value = prompt_button(
+            "prompt='selection' prompt-label='Outcome' prompt-options='lost:Lost, won:Won the deal'",
+        )
+        .unwrap();
+        assert_eq!(
+            value["nodes"][2]["details"]["prompt"]["choices"],
+            serde_json::json!([{"value": "lost", "label": "Lost"}, {"value": "won", "label": "Won the deal"}])
+        );
+    }
+
+    #[test]
+    fn button_prompt_grammar_is_closed() {
+        for (attrs, message) in [
+            (
+                "prompt='number' prompt-label='N'",
+                "Unsupported button prompt 'number'; use text, date or selection.",
+            ),
+            (
+                "prompt='text'",
+                "A button prompt requires a nonempty prompt-label.",
+            ),
+            (
+                "prompt='text' prompt-label=' '",
+                "A button prompt requires a nonempty prompt-label.",
+            ),
+            (
+                "prompt-label='Reason'",
+                "Button 'prompt-label' requires prompt.",
+            ),
+            (
+                "prompt='date' prompt-label='D' prompt-max='5'",
+                "Button 'prompt-max' requires prompt='text'.",
+            ),
+            (
+                "prompt='text' prompt-label='R' prompt-max='0'",
+                "Button 'prompt-max' must be an integer from 1 to 4096.",
+            ),
+            (
+                "prompt='text' prompt-label='R' prompt-options='a:A'",
+                "Button 'prompt-options' requires prompt='selection'.",
+            ),
+            (
+                "prompt='selection' prompt-label='O'",
+                "A selection prompt requires prompt-options.",
+            ),
+            (
+                "prompt='selection' prompt-label='O' prompt-options='won'",
+                "Button 'prompt-options' entries are written value:Label.",
+            ),
+            (
+                "prompt='selection' prompt-label='O' prompt-options='Won:Won'",
+                "Invalid button prompt option 'Won:Won'.",
+            ),
+            (
+                "prompt='selection' prompt-label='O' prompt-options='won:Won,won:Again'",
+                "Duplicate button prompt option 'won'.",
+            ),
+            (
+                "prompt='text' prompt-label='R' prompt-required='maybe'",
+                "Dynamic 'prompt-required' modifier is unsupported by the current human UI contract.",
+            ),
+            (
+                "prompt='text' prompt-label='R' confirm='Sure?'",
+                "A button prompt already asks before the call; it cannot combine with confirm.",
+            ),
+        ] {
+            match prompt_button(attrs).unwrap_err() {
+                ViewError::InvalidDescription(actual) => assert_eq!(actual, message, "{attrs}"),
+                other => panic!("Unexpected error kind for {attrs}: {other:?}"),
+            }
+        }
+        let error = fixture(
+            "<form><header><button name='12' type='action' string='Open' prompt='text' prompt-label='R'/></header><field name='name'/></form>",
+            "form",
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&error, ViewError::InvalidDescription(message) if message == "Only an object button can declare a prompt."),
+            "{error:?}"
+        );
     }
 
     #[test]

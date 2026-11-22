@@ -1,6 +1,7 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import { FALSE, NONE, boolVal, createContext, decodeAst, dictVal, evalAst, floatVal, intVal, isTruthy, listVal, parseBoundedJson, strVal, type ExprValue, type ValidatedAst } from "../../../../../web/packages/expr/src/index.js";
-import type { ButtonNode, CancelNode, Field } from "./metadata.js";
+import type { ButtonNode, ButtonPrompt, CancelNode, Field } from "./metadata.js";
+import type { PromptAnswer } from "./button-prompt.js";
 import { passwordResubmitted, type Resubmission } from "./password-flow.js";
 import { ClientError } from "./transport.js";
 
@@ -70,6 +71,8 @@ export interface ButtonEnvironment {
   /** Sends a kept password operation again after the source surface may be gone; defaults to `call`. */
   resubmitCall?(model: string, method: string, args: Record<string, unknown>): Promise<unknown>;
   confirm(title: string, message: string, accept: string, cancel?: string): Promise<boolean>;
+  /** Ask a prompting button's question (`button-prompt.ts`); `undefined` when the user cancels. */
+  prompt?(prompt: ButtonPrompt, title: string): Promise<PromptAnswer | undefined>;
   readonly fields?: readonly Field[];
   readonly uid?: number;
   values?(): Record<string,unknown>;
@@ -93,6 +96,16 @@ export async function runObjectButton(node: ButtonNode, env: ButtonEnvironment):
       : await env.confirm(identity,node.confirm,identity);
     if(!accepted) return;
   }
+  // A prompting button asks first; its answer is the method's `prompt_value` keyword argument.
+  let answer:{prompt_value:string|null}|undefined;
+  if(details?.prompt) {
+    const identity=node.label.trim()?node.label:details.title;
+    if(!identity?.trim())throw new ClientError("validation","Button prompt requires an accessible label.");
+    if(!env.prompt) throw new ClientError("unsupported","This button owner does not supply prompts.");
+    const reply=await env.prompt(details.prompt,identity);
+    if(reply===undefined) return;
+    answer={prompt_value:reply.value};
+  }
   if(details?.block_ui && !env.block) throw new ClientError("unsupported","This button owner does not supply UI blocking.");
   const release=details?.block_ui?env.block!():undefined;
   try {
@@ -102,7 +115,7 @@ export async function runObjectButton(node: ButtonNode, env: ButtonEnvironment):
       const effective=():Record<string,unknown>=>context??=details?.context?buttonContext(details.context,env):env.context;
       const args=await env.secretArguments(node.name,effective);
       if(args === null) return;
-      if(args !== undefined) { await invoke(node, env, args, details?.context ? effective() : undefined); return; }
+      if(args !== undefined) { await invoke(node, env, {...args,...answer}, details?.context ? effective() : undefined); return; }
     }
     if (env.dirty() || env.id() === undefined) {
       await env.save();
@@ -119,7 +132,7 @@ export async function runObjectButton(node: ButtonNode, env: ButtonEnvironment):
       if(!env.action) throw new ClientError("unsupported","This button owner does not supply action loading.");
       await env.action(node.target.id,context); return;
     }
-    await invoke(node, env, {ids:[id],context}, details?.context ? context : undefined);
+    await invoke(node, env, {ids:[id],context,...answer}, details?.context ? context : undefined);
   } finally { release?.(); }
 }
 

@@ -4,8 +4,9 @@ import type { EditorLocale } from "./datetime-values.js";
 import type { DialogHandle } from "./dialog-service.js";
 import type { ActionResult } from "../generated/human-ui.js";
 import { buttonHidden, runObjectButton } from "./buttons.js";
+import { askButtonPrompt } from "./button-prompt.js";
 import { actionButton, button, confirmChoice, el } from "./dom.js";
-import type { ButtonNode, CancelNode, View } from "./metadata.js";
+import type { ButtonNode, ButtonPrompt, CancelNode, View } from "./metadata.js";
 import { passwordArguments, passwordModels, passwordSubmission, type Resubmission } from "./password-flow.js";
 import { RecordForm, formFocus } from "./record-form.js";
 import type { RecordState } from "./record.js";
@@ -290,6 +291,7 @@ export class WizardDialog {
         // without this wizard's closed-state guard.
         resubmitCall: (model, method, args) => this.env.rpc.call(model, method, args, { write: true }),
         confirm: async (title, message, accept, cancel="Cancel") => await confirmChoice({title,message,accept,cancel,signal:this.abort.signal,...(this.env.messages?{service:this.env.messages.dialogs}:{})}) && !this.dead,
+        ...(this.env.messages?{prompt:async (prompt:ButtonPrompt,title:string)=>{const answer=await askButtonPrompt({title,prompt,service:this.env.messages!.dialogs,signal:this.abort.signal});return this.dead?undefined:answer;}}:{}),
         call: async (model, method, args) => {
           if (this.dead) throw new ClientError("validation", "The wizard is closed.");
           try { return await this.env.rpc.call(model, method, args, { write: true }); }

@@ -847,18 +847,21 @@ impl<'a> Request<'a> {
                 allowed = true;
             }
             if allowed
-                && let wire::ViewNode::Button { name, .. } | wire::ViewNode::StatButton { name, .. } =
-                    node
+                && let wire::ViewNode::Button { name, details, .. }
+                | wire::ViewNode::StatButton { name, details, .. } = node
             {
-                let exposed = env
+                let exposure = env
                     .registry()
                     .model_id(model)
-                    .and_then(|id| tx.exposure().get(id, name))
-                    .is_some_and(|exposure| matches!(exposure, erp_sdk::rpc::Exposure::Exposed(_)));
-                if !exposed {
+                    .and_then(|id| tx.exposure().get(id, name));
+                let Some(erp_sdk::rpc::Exposure::Exposed(exposed)) = exposure else {
                     return Err(failure(format!(
                         "Button '{name}' names a method that '{model}' does not expose over RPC. Unsupported form layout requires a later release."
                     )));
+                };
+                if let Some(prompt) = details.as_ref().and_then(|details| details.prompt.as_ref()) {
+                    prompt_parameter(model, name, exposed.params(), prompt.required)
+                        .map_err(failure)?;
                 }
             }
             decisions.push(decision(node, allowed)?);
@@ -912,6 +915,37 @@ impl<'a> Request<'a> {
     }
 }
 
+/// The answer of a prompting button reaches its method as the `prompt_value` keyword: the method must take it as
+/// text, and as optional text (`Option<String>`) when an empty answer is allowed, since that one is sent as `null`.
+/// A parameter without a declared shape (a WebAssembly method) is left to the binder.
+fn prompt_parameter(
+    model: &str,
+    method: &str,
+    params: &[erp_sdk::rpc::ParamSpec],
+    required: bool,
+) -> Result<(), String> {
+    use erp_sdk::rpc::ArgShape;
+    let Some(param) = params.iter().find(|param| param.name() == "prompt_value") else {
+        return Err(format!(
+            "Button '{method}' asks for a value, but '{model}.{method}' takes no 'prompt_value' parameter."
+        ));
+    };
+    let fits = match param.shape() {
+        ArgShape::Open(_) => true,
+        ArgShape::OrNull(ArgShape::String) => true,
+        ArgShape::String => required,
+        _ => false,
+    };
+    if !fits {
+        return Err(format!(
+            "Button '{method}' sends its answer as text{}, but '{model}.{method}' takes 'prompt_value' as {}.",
+            if required { "" } else { " or null" },
+            param.expected()
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -920,6 +954,51 @@ impl<'a> Request<'a> {
 )]
 mod tests {
     use erp_sdk::views::{DescriptionBudget, wire};
+
+    /// A prompting button's method takes `prompt_value` as text, or as optional text when the answer may be empty.
+    #[test]
+    fn prompt_parameter_matches_the_answer() {
+        use erp_sdk::rpc::{ArgShape, ParamSpec};
+        static TEXT: ArgShape = ArgShape::String;
+        let text = [ParamSpec::with_shape(
+            "prompt_value",
+            true,
+            "a string",
+            ArgShape::String,
+        )];
+        let optional = [ParamSpec::with_shape(
+            "prompt_value",
+            false,
+            "a string or null",
+            ArgShape::OrNull(&TEXT),
+        )];
+        let number = [ParamSpec::with_shape(
+            "prompt_value",
+            true,
+            "an integer",
+            ArgShape::Integer { min: None },
+        )];
+        let open = [ParamSpec::new("prompt_value", true, "a value")];
+        let check = |params: &[ParamSpec], required| {
+            super::prompt_parameter("m", "action_refuse", params, required)
+        };
+        assert_eq!(check(&text, true), Ok(()));
+        assert_eq!(check(&optional, true), Ok(()));
+        assert_eq!(check(&optional, false), Ok(()));
+        assert_eq!(check(&open, false), Ok(()));
+        assert_eq!(
+            check(&text, false),
+            Err("Button 'action_refuse' sends its answer as text or null, but 'm.action_refuse' takes 'prompt_value' as a string.".to_owned())
+        );
+        assert_eq!(
+            check(&number, true),
+            Err("Button 'action_refuse' sends its answer as text, but 'm.action_refuse' takes 'prompt_value' as an integer.".to_owned())
+        );
+        assert_eq!(
+            check(&[], true),
+            Err("Button 'action_refuse' asks for a value, but 'm.action_refuse' takes no 'prompt_value' parameter.".to_owned())
+        );
+    }
 
     #[test]
     fn chatter_is_a_childless_leaf_for_host_authorization() {

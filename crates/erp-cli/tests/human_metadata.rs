@@ -4468,6 +4468,10 @@ async fn installed_metadata_rpc_uses_authenticated_acl_and_field_groups_async() 
             "Button 'sudo' names a method that 'acceptance_notes.note' does not expose over RPC. Unsupported form layout requires a later release.".to_owned(),
         ),
         (
+            "<button name='action_archive' type='object' string='Archive' prompt='text' prompt-label='Reason'/>",
+            "Button 'action_archive' asks for a value, but 'acceptance_notes.note.action_archive' takes no 'prompt_value' parameter.".to_owned(),
+        ),
+        (
             "<button name='action_archive' type='object' string='X' invisible=\"missing == 1\"/>",
             format!(
                 "Field \"missing\" used in the invisible attribute does not exist in model \"acceptance_notes.note\" (view {form_view}, line 1)"

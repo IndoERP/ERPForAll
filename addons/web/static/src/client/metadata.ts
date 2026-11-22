@@ -9,7 +9,7 @@ import type { MessageLevel } from "./message-widgets.js";
 import { codeEditorMode } from "./code-editor-session.js";
 import { validateSelectionTabField } from "./list-tabs.js";
 import { readFieldOptions, type FieldPresentationOptions } from "./field-options.js";
-import type { FieldDescription, ButtonDetails as WireButtonDetails, ButtonTarget as WireButtonTarget } from "../generated/human-ui.js";
+import type { FieldDescription, ButtonDetails as WireButtonDetails, ButtonPrompt, ButtonTarget as WireButtonTarget } from "../generated/human-ui.js";
 import { fieldWidgets, serviceControllers } from "./registry.js";
 import { ClientError } from "./transport.js";
 import { decodeAst, parseBoundedJson, type ValidatedAst } from "../../../../../web/packages/expr/src/index.js";
@@ -160,6 +160,7 @@ export function combineFields(fields: readonly Field[]): Field[] {
 /** Admitted client behavior derived from the Rust-owned details DTO. */
 export interface ButtonDetails extends Omit<WireButtonDetails,"context"> { context?: ValidatedAst }
 export type ButtonTarget = WireButtonTarget;
+export type { ButtonPrompt };
 const buttonRanks: readonly string[] = ["primary","secondary","link","success","info","warning","danger","unstyled"];
 function buttonRank(value: unknown): ButtonRank {
   if(typeof value !== "string" || !buttonRanks.includes(value)) unsupported("Unsupported button variant.");
@@ -177,7 +178,7 @@ function buttonConfirmation(value: unknown): string | null {
   return result;
 }
 function buttonDetails(value: unknown, admitContext: (raw:unknown)=>ValidatedAst): ButtonDetails {
-  const details=object(value,"button details"), optional=["icon","title","help","hotkey","confirm_title","confirm_label","cancel_label","context"];
+  const details=object(value,"button details"), optional=["icon","title","help","hotkey","confirm_title","confirm_label","cancel_label","context","prompt"];
   closed(details,["size","circle","classes","debounce_ms","block_ui",...optional.filter(key=>Object.hasOwn(details,key))],"button details");
   if(typeof details["size"]!=="string" || !["small","normal","large"].includes(details["size"])) throw new ClientError("server","Invalid button size.");
   if(typeof details["circle"]!=="boolean") throw new ClientError("server","Button circle must be boolean.");
@@ -197,6 +198,36 @@ function buttonDetails(value: unknown, admitContext: (raw:unknown)=>ValidatedAst
   if(result.icon!==undefined && knownMenuIcon(result.icon)===null) throw new ClientError("server",`Unknown button icon: ${result.icon}.`);
   if(result.hotkey!==undefined && !/^(?:shift\+)?[a-z0-9]$/.test(result.hotkey)) throw new ClientError("server","Invalid button hotkey.");
   if(Object.hasOwn(details,"context")) result.context=admitContext(details["context"]);
+  if(Object.hasOwn(details,"prompt")) result.prompt=buttonPrompt(details["prompt"]);
+  return result;
+}
+/** A prompting button's question: the same closed rules the server admits (`h18_lower::button_prompt`). */
+function buttonPrompt(value: unknown): ButtonPrompt {
+  const prompt=object(value,"button prompt");
+  closed(prompt,["kind","label","required",...["max_length","choices"].filter(key=>Object.hasOwn(prompt,key))],"button prompt");
+  const kind=prompt["kind"];
+  if(kind!=="text" && kind!=="date" && kind!=="selection") throw new ClientError("server","Invalid button prompt kind.");
+  const label=boundedButtonText(prompt["label"],"prompt label");
+  if(!label.trim()) throw new ClientError("server","Button prompt label must be nonempty.");
+  if(typeof prompt["required"]!=="boolean") throw new ClientError("server","Button prompt required must be boolean.");
+  const result:ButtonPrompt={kind,label,required:prompt["required"]};
+  if(Object.hasOwn(prompt,"max_length")) {
+    const max=prompt["max_length"];
+    if(kind!=="text" || typeof max!=="number" || !Number.isSafeInteger(max) || max<1 || max>4096) throw new ClientError("server","Invalid button prompt max_length.");
+    result.max_length=max;
+  }
+  if(Object.hasOwn(prompt,"choices")!==(kind==="selection")) throw new ClientError("server","Button prompt choices belong to a selection prompt.");
+  if(kind==="selection") {
+    const choices=array(prompt["choices"],"button prompt choices");
+    if(choices.length<1 || choices.length>64) throw new ClientError("server","A selection prompt offers 1 to 64 choices.");
+    result.choices=choices.map(item=>{
+      const choice=object(item,"button prompt choice"); closed(choice,["value","label"],"button prompt choice");
+      const value=text(choice["value"],"prompt choice value"), caption=boundedButtonText(choice["label"],"prompt choice label");
+      if(!/^[a-z][a-z0-9_]{0,63}$/.test(value) || !caption.trim()) throw new ClientError("server","Invalid button prompt choice.");
+      return {value,label:caption};
+    });
+    if(new Set(result.choices.map(choice=>choice.value)).size!==result.choices.length) throw new ClientError("server","Duplicate button prompt choice.");
+  }
   return result;
 }
 

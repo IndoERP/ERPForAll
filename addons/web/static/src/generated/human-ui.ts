@@ -417,7 +417,26 @@ confirm_label?: string,
 /** Wire member `cancel_label`. */
 cancel_label?: string,
 /** Wire member `context`. */
-context?: WireDocument, };
+context?: WireDocument,
+/** Wire member `prompt`. */
+prompt?: ButtonPrompt, };
+export type PromptKind = "text" | "date" | "selection";
+export type PromptChoice = {
+/** Wire member `value`. */
+value: string,
+/** Wire member `label`. */
+label: string, };
+export type ButtonPrompt = {
+/** Wire member `kind`. */
+kind: PromptKind,
+/** Wire member `label`. */
+label: string,
+/** Wire member `required`. */
+required: boolean,
+/** Wire member `max_length`. */
+max_length?: number,
+/** Wire member `choices`. */
+choices?: Array<PromptChoice>, };
 export type ButtonSize = "small" | "normal" | "large";
 export type ButtonTarget = { "kind": "action",
 /**

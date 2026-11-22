@@ -302,6 +302,29 @@ choice!(RibbonBackground {
     Warning,
     Danger
 });
+choice!(PromptKind {
+    Text,
+    Date,
+    Selection
+});
+/// A selection prompt choice value: 1 to 64 ASCII lowercase letters, digits or `_`, starting with a letter.
+pub fn valid_prompt_choice_value(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value.starts_with(|c: char| c.is_ascii_lowercase())
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+}
+object!(/// One choice of a selection prompt: the value sent and its caption.
+    PromptChoice { value: String, label: String });
+object!(/// A short answer the client asks for before an object button calls its method. The answer is the method's
+/// `prompt_value` keyword argument: text, an ISO date or a choice value, and `null` when an optional answer is empty.
+ButtonPrompt {
+    kind: PromptKind, label: String, required: bool,
+    #[serde(default, deserialize_with="present_optional", skip_serializing_if="Option::is_none")] #[cfg_attr(feature="schema-gen", ts(optional))] max_length: Option<u32>,
+    #[serde(default, deserialize_with="present_optional", skip_serializing_if="Option::is_none")] #[cfg_attr(feature="schema-gen", ts(optional))] choices: Option<Vec<PromptChoice>>
+});
 object!(/// Optional, bounded button presentation and execution declarations.
 ButtonDetails {
     size: ButtonSize, circle: bool, classes: Vec<String>, debounce_ms: u32, block_ui: bool,
@@ -312,7 +335,8 @@ ButtonDetails {
     #[serde(default, deserialize_with="present_optional", skip_serializing_if="Option::is_none")] #[cfg_attr(feature="schema-gen", ts(optional))] confirm_title: Option<String>,
     #[serde(default, deserialize_with="present_optional", skip_serializing_if="Option::is_none")] #[cfg_attr(feature="schema-gen", ts(optional))] confirm_label: Option<String>,
     #[serde(default, deserialize_with="present_optional", skip_serializing_if="Option::is_none")] #[cfg_attr(feature="schema-gen", ts(optional))] cancel_label: Option<String>,
-    #[serde(default, deserialize_with="present_optional", skip_serializing_if="Option::is_none")] #[cfg_attr(feature="schema-gen", ts(optional))] context: Option<WireDocument>
+    #[serde(default, deserialize_with="present_optional", skip_serializing_if="Option::is_none")] #[cfg_attr(feature="schema-gen", ts(optional))] context: Option<WireDocument>,
+    #[serde(default, deserialize_with="present_optional", skip_serializing_if="Option::is_none")] #[cfg_attr(feature="schema-gen", ts(optional))] prompt: Option<ButtonPrompt>
 });
 /// Explicit non-object execution identity; captions never select an action.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -653,8 +653,45 @@ impl Output {
             confirm_label: self.optional_text(source, "confirm_label")?,
             cancel_label: self.optional_text(source, "cancel_label")?,
             context: self.optional_expression(source, "context")?,
+            prompt: optional(source, "prompt")
+                .map(|value| self.button_prompt(value))
+                .transpose()?,
         };
         Ok(Some(details))
+    }
+    fn button_prompt(&mut self, value: &DescriptionValue) -> ViewResult<wire::ButtonPrompt> {
+        let source = members(value)?;
+        let kind = match text(required(source, "kind")?)? {
+            "text" => wire::PromptKind::Text,
+            "date" => wire::PromptKind::Date,
+            "selection" => wire::PromptKind::Selection,
+            _ => return Err(invalid("Builtin button prompt kind is invalid")),
+        };
+        let max_length = optional(source, "max_length").map(unsigned).transpose()?;
+        let choices = match optional(source, "choices") {
+            None => None,
+            Some(value) => {
+                let items = array(value)?;
+                let mut choices = self.vector(items.len())?;
+                for item in items {
+                    let choice = members(item)?;
+                    choices.push(wire::PromptChoice {
+                        value: self.string(choice, "value")?,
+                        label: self.string(choice, "label")?,
+                    });
+                }
+                Some(choices)
+            }
+        };
+        let prompt = wire::ButtonPrompt {
+            kind,
+            label: self.string(source, "label")?,
+            required: boolean(required(source, "required")?)?,
+            max_length,
+            choices,
+        };
+        validate_prompt(&prompt)?;
+        Ok(prompt)
     }
     fn button_target(&mut self, value: &DescriptionValue) -> ViewResult<wire::ButtonTarget> {
         let (kind, source) = variant(value)?;
@@ -925,6 +962,13 @@ impl Output {
                 let modifiers = self.modifiers(object)?;
                 let details = self.button_details(object)?;
                 validate_button_content(&label, confirm.as_deref(), details.as_ref())?;
+                if details.as_ref().is_some_and(|d| d.prompt.is_some())
+                    && (kind == "stat_button" || confirm.is_some())
+                {
+                    return Err(invalid(
+                        "Builtin button prompt requires an object button without confirm",
+                    ));
+                }
                 if !valid_method(&name) {
                     return Err(invalid("Builtin button method is invalid"));
                 }
@@ -956,6 +1000,9 @@ impl Output {
                 let confirm = self.optional_text(object, "confirm")?;
                 let details = self.button_details(object)?;
                 validate_button_content(&label, confirm.as_deref(), details.as_ref())?;
+                if details.as_ref().is_some_and(|d| d.prompt.is_some()) {
+                    return Err(invalid("Builtin action button cannot declare a prompt"));
+                }
                 wire::ViewNode::ActionButton {
                     target: self.button_target(required(object, "target")?)?,
                     label,
@@ -992,6 +1039,9 @@ impl Output {
                     validate_button_content(text_value(object, "label")?, None, details.as_ref())?;
                     if details.as_ref().is_some_and(|d| d.context.is_some()) {
                         return Err(invalid("Builtin cancel button cannot declare context"));
+                    }
+                    if details.as_ref().is_some_and(|d| d.prompt.is_some()) {
+                        return Err(invalid("Builtin cancel button cannot declare a prompt"));
                     }
                     details
                 },
@@ -1233,6 +1283,45 @@ fn valid_icon(icon: &str) -> bool {
                     .bytes()
                     .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
         })
+}
+/// Most characters a text prompt may admit, and most choices a selection prompt may offer.
+const PROMPT_MAX_LENGTH: u32 = 4096;
+const PROMPT_MAX_CHOICES: usize = 64;
+fn validate_prompt(prompt: &wire::ButtonPrompt) -> ViewResult<()> {
+    if prompt.label.trim().is_empty() {
+        return Err(invalid("Builtin button prompt label is empty"));
+    }
+    let text = matches!(prompt.kind, wire::PromptKind::Text);
+    let selection = matches!(prompt.kind, wire::PromptKind::Selection);
+    if prompt
+        .max_length
+        .is_some_and(|max| !text || max == 0 || max > PROMPT_MAX_LENGTH)
+    {
+        return Err(invalid("Builtin button prompt max_length is invalid"));
+    }
+    match &prompt.choices {
+        None if selection => Err(invalid("Builtin selection prompt requires choices")),
+        Some(_) if !selection => Err(invalid(
+            "Builtin button prompt choices require a selection prompt",
+        )),
+        Some(choices) => {
+            if choices.is_empty() || choices.len() > PROMPT_MAX_CHOICES {
+                return Err(invalid("Builtin selection prompt choices are invalid"));
+            }
+            for (index, choice) in choices.iter().enumerate() {
+                if !wire::valid_prompt_choice_value(&choice.value)
+                    || choice.label.trim().is_empty()
+                    || choices[..index]
+                        .iter()
+                        .any(|prior| prior.value == choice.value)
+                {
+                    return Err(invalid("Builtin selection prompt choices are invalid"));
+                }
+            }
+            Ok(())
+        }
+        None => Ok(()),
+    }
 }
 fn validate_button_content(
     label: &str,

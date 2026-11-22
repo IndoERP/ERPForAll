@@ -38,6 +38,7 @@ import { expressionValue, jsonValue } from "./field-relations.js";
 import { array, describeViews, integer, object, text, type ButtonNode, type Description, type Field, type Node, type View } from "./metadata.js";
 import { actionButton, button, choose, confirmChoice, el, errorMessage, relabelActionButton } from "./dom.js";
 import { buttonHidden, lockButtonControls, runObjectButton, buttonExpression, type ButtonEnvironment } from "./buttons.js";
+import { askButtonPrompt } from "./button-prompt.js";
 import { viewButton, ButtonDebouncer, ButtonHotkeys } from "./view-button.js";
 import { runUrlButton } from "./button-url.js";
 import { CurrencyDisplayCache } from "./field-currency.js";
@@ -4368,7 +4369,11 @@ export class HumanApp {
             this.busy = true;
             try { await state.load(state.id); } finally { this.busy = false; }
           },
-          confirm: async (title, message, accept, cancel="Cancel") => await confirmChoice({title,message,accept,cancel,signal:this.lifetime.signal,service:this.messages.dialogs}) && binding === this.generation && !this.expired
+          confirm: async (title, message, accept, cancel="Cancel") => await confirmChoice({title,message,accept,cancel,signal:this.lifetime.signal,service:this.messages.dialogs}) && binding === this.generation && !this.expired,
+          prompt: async (prompt, title) => {
+            const answer = await askButtonPrompt({ title, prompt, service: this.messages.dialogs, signal: this.lifetime.signal });
+            return binding === this.generation && !this.expired ? answer : undefined;
+          }
         });
       } finally {
         if (this.pendingInvocation === invocation) this.pendingInvocation = undefined;

@@ -119,6 +119,22 @@ pnpm run typecheck
 pnpm run test
 ```
 
+An object button in a form can ask for one short answer before its method runs, instead of a one-field wizard:
+
+```xml
+<button name="action_refuse" type="object" string="Refuse"
+        prompt="text" prompt-label="Reason" prompt-required="1" prompt-max="500"/>
+<button name="action_run" type="object" string="Run" prompt="date" prompt-label="Run for date"/>
+<button name="action_close" type="object" string="Close"
+        prompt="selection" prompt-label="Outcome" prompt-options="won:Won,lost:Lost"/>
+```
+
+The answer arrives as the `prompt_value` keyword argument: text, an ISO date or the chosen value, and `null` for an
+empty optional answer. The method must take `prompt_value: String` (or `Option<String>` when the prompt is not
+required); the view is refused otherwise. The client checks required, length, date and choice before calling, but the
+method can be called directly over RPC, so it validates its argument like any other. A prompt cannot combine with
+`confirm`, and a wizard stays the way for several fields.
+
 ## Pull request rules
 
 - One topic per pull request, with tests for the behaviour you change.
