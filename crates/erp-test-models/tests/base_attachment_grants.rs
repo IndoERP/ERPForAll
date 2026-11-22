@@ -393,3 +393,106 @@ async fn pending_guard_allows_generation_updates_but_never_identity_or_deletion(
     drop(owner);
     f.h.cleanup().await.unwrap();
 }
+
+/// `Uploader::create` (a print job keeping its PDF) runs as the runtime role, whose
+/// `ir_blob_upload` grants are those of `/*attachment_quota_grants*/`: the upload it linked is
+/// left to the staging cleaner with what that role may write, so no upload stays waiting for a
+/// claim (a pending slot of the subject) until it expires, and the cleaner removes it.
+#[tokio::test]
+async fn uploader_create_leaves_its_upload_to_the_cleaner_as_the_runtime_role() {
+    let f = fixture(external_limits()).await;
+    let config = f.h.read_only_role().await.unwrap();
+    let role = config.get_user().unwrap().to_owned();
+    let owner = f.h.db().client().await.unwrap();
+    let quoted = erp_sql::quote(&role);
+    owner.batch_execute(&format!("GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO {quoted}; GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO {quoted}")).await.unwrap();
+    let grants = HUMAN_RS
+        .split("/*attachment_quota_grants*/")
+        .nth(1)
+        .expect("quota grant narrowing")
+        .split("/*end attachment_quota_grants*/")
+        .next()
+        .unwrap()
+        .split('"')
+        .nth(1)
+        .unwrap()
+        .replace("{role_sql}", &quoted)
+        .replace("\\\n", "");
+    owner.batch_execute(&grants).await.unwrap();
+    let orm = erp_orm::Orm::builder(
+        std::sync::Arc::clone(f.h.registry()),
+        erp_orm::pool::create_pool(config.clone(), 4).unwrap(),
+    )
+    .policy(erp_orm::StaticPolicy::AllowAll)
+    .generation_attachment(erp_orm::GenerationAttachment::new(
+        std::sync::Arc::clone(f.h.registry()),
+        std::sync::Arc::clone(&f.rt),
+    ))
+    .build()
+    .unwrap();
+    let uploader = erp_addon_base::attachments::Uploader::new(&orm);
+    // the first content registers the write store, so the store row is older than `tx` below
+    let mut tx = orm.begin(erp_orm::PrincipalHint::system()).await.unwrap();
+    let env = tx.env();
+    tx.rollback().await.unwrap();
+    drop(tx);
+    let prime = b"registers the store";
+    uploader
+        .stage(
+            &env,
+            &mut prime.as_slice(),
+            erp_addon_base::attachments::StageRequest::named("prime.txt")
+                .with_declared_length(prime.len() as u64),
+        )
+        .await
+        .unwrap();
+    owner
+        .batch_execute("DELETE FROM ir_blob_upload")
+        .await
+        .unwrap();
+    let mut tx = orm.begin(erp_orm::PrincipalHint::system()).await.unwrap();
+    // the snapshot is taken before the upload row is staged
+    tx.query("SELECT count(*) FROM ir_blob_upload", &[])
+        .await
+        .unwrap();
+    let payload = b"a print job's PDF, kept as the runtime role";
+    let id = uploader
+        .create(
+            &mut tx,
+            erp_addon_base::attachments::NewAttachment::new(
+                "print-job-1-part.pdf",
+                erp_addon_base::attachments::AttachmentContent::Empty,
+            ),
+            &mut payload.as_slice(),
+            Some(payload.len() as u64),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        erp_addon_base::attachments::open(&mut tx, id.get())
+            .await
+            .unwrap()
+            .read_to_vec(100)
+            .await
+            .unwrap(),
+        payload
+    );
+    tx.commit().await.unwrap();
+    drop(tx);
+    let row = owner
+        .query_one(
+            "SELECT count(*) FILTER (WHERE state IN (0, 1) AND expires_at > now()), \
+             count(*) FILTER (WHERE state = 3 OR expires_at <= now()) FROM ir_blob_upload",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (row.get::<_, i64>(0), row.get::<_, i64>(1)),
+        (0, 1),
+        "the linked upload is left to the cleaner, not waiting for a claim"
+    );
+    drop(orm);
+    drop(owner);
+    f.h.cleanup().await.unwrap();
+}

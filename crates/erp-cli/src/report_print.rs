@@ -19,7 +19,7 @@ use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
-use erp_addon_base::attachments::{self, AttachmentContent, NewAttachment, StageRequest, Uploader};
+use erp_addon_base::attachments::{self, AttachmentContent, NewAttachment, Uploader};
 use erp_addon_base::report_job::{PrintableReport, RenderedChunk, ReportBackend};
 use erp_addon_base::report_print::{self, PrintReport};
 use erp_fields::{Error, Result};
@@ -249,27 +249,18 @@ impl ReportRuntime {
         Ok((parts, failures, warnings))
     }
 
-    /// Stage `bytes` and keep them as a PDF attachment `name` of the caller.
+    /// Keep `bytes` as a PDF attachment `name` of the caller, inside the job's transaction (which
+    /// started before the bytes existed, so they are attached with [`Uploader::create`], not
+    /// staged and then claimed).
     async fn keep(tx: &mut Transaction, job: i64, name: &str, bytes: Vec<u8>) -> Result<i64> {
-        let env = tx.env();
         let length = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-        let staged = Uploader::new(&serve_orm()?)
-            .stage(
-                &env,
-                &mut Cursor::new(bytes),
-                StageRequest::named(name)
-                    .declared("application/pdf")
-                    .with_declared_length(length),
-            )
-            .await?;
-        let mut item = NewAttachment::new(name, AttachmentContent::Upload(staged.id));
+        let mut item = NewAttachment::new(name, AttachmentContent::Empty);
         item.declared_mimetype = Some("application/pdf".to_owned());
         item.description = Some(format!("Print job {job}"));
-        let created = attachments::create(tx, vec![item]).await?;
-        created
-            .first()
-            .map(|id| id.get())
-            .ok_or_else(|| Error::internal("printing: the attachment was not created"))
+        let created = Uploader::new(&serve_orm()?)
+            .create(tx, item, &mut Cursor::new(bytes), Some(length))
+            .await?;
+        Ok(created.get())
     }
 }
 
@@ -570,5 +561,93 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(settings.optional_fonts().len(), 1);
+    }
+
+    /// A PDF of `len` bytes that the type detection reads as `application/pdf`.
+    fn pdf_of(len: usize) -> Vec<u8> {
+        let mut bytes = b"%PDF-1.7\n%".to_vec();
+        bytes.resize(len.saturating_sub(7), b'x');
+        bytes.extend_from_slice(b"\n%%EOF\n");
+        bytes
+    }
+
+    /// A print job keeps each PDF inside the job's own transaction, whose snapshot was taken by
+    /// its first statement, before the bytes were staged. Staging and then claiming the upload in
+    /// that transaction could not work: the upload row committed after the snapshot is invisible
+    /// to the claim, so every queued print failed with "The upload is not usable".
+    #[tokio::test]
+    async fn keep_stores_the_pdf_in_the_jobs_older_transaction() {
+        let store: Arc<dyn erp_sdk::blob::AttachmentStore> =
+            Arc::new(erp_sdk::blob::MemoryStore::new());
+        let runtime = Arc::new(erp_sdk::blob::AttachmentRuntime::single(
+            "main",
+            store,
+            erp_sdk::blob::AttachmentLimits::default(),
+        ));
+        let h = erp_testkit::Harness::builder([
+            &erp_test_models::base_users::ADDON,
+            &erp_addon_base::ADDON,
+        ])
+        .attach(runtime)
+        .unlink_hook(attachments::UNLINK_HOOK)
+        .build()
+        .await
+        .unwrap();
+        serve_with(h.orm());
+        // above the 2 KiB inline threshold: the bytes go through the store
+        let pdf = pdf_of(26 * 1024);
+        let job = async || {
+            let mut tx = h.begin().await.unwrap();
+            // the job's first statement takes its snapshot, as run_chunk's read of the job does
+            tx.query("SELECT count(*) FROM ir_blob_upload", &[])
+                .await
+                .unwrap();
+            tx
+        };
+        // the first file ever stored registers the store after the snapshot: the queue retries
+        let mut tx = job().await;
+        let error = ReportRuntime::keep(&mut tx, 7, "print-job-7-part.pdf", pdf.clone())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.kind(),
+            erp_fields::ErrorKind::Concurrency,
+            "{error:?}"
+        );
+        tx.rollback().await.unwrap();
+        drop(tx);
+        let mut tx = job().await;
+        let id = ReportRuntime::keep(&mut tx, 7, "print-job-7-part.pdf", pdf.clone())
+            .await
+            .unwrap();
+        let handle = attachments::open(&mut tx, id).await.unwrap();
+        assert_eq!(handle.read_to_vec(64 * 1024).await.unwrap(), pdf);
+        let rows = tx
+            .query(
+                "SELECT mimetype, description FROM ir_attachment WHERE id = $1",
+                &[&id],
+            )
+            .await
+            .unwrap();
+        let (mimetype, description): (String, String) = (rows[0].get(0), rows[0].get(1));
+        assert_eq!(
+            (mimetype.as_str(), description.as_str()),
+            ("application/pdf", "Print job 7")
+        );
+        tx.commit().await.unwrap();
+        drop(tx);
+        // the refused attempt staged nothing; the kept upload no longer waits for a claim: it is
+        // left to the staging cleaner
+        let mut tx = h.begin().await.unwrap();
+        let rows = tx
+            .query(
+                "SELECT count(*), count(*) FILTER (WHERE state IN (0, 1) AND expires_at > now()) \
+                 FROM ir_blob_upload",
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!((rows[0].get::<_, i64>(0), rows[0].get::<_, i64>(1)), (1, 0));
+        tx.rollback().await.unwrap();
     }
 }

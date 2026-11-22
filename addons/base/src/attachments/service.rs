@@ -18,7 +18,7 @@ use super::types::{
     AttachmentContent, AttachmentMeta, BlobHandle, HandleSource, ListOptions, MAX_BATCH,
     NewAttachment, ParentRef, URL_MAX_BYTES, UploadId,
 };
-use super::upload::check_name;
+use super::upload::{StagedContent, check_name};
 
 /// Set while the service writes through the ORM: the model's overrides then accept the columns
 /// only the server sets. A private type, so no other crate can open the scope.
@@ -341,6 +341,26 @@ pub async fn create(tx: &mut Transaction, items: Vec<NewAttachment>) -> Result<V
             pending.push(prepare(&env, item, file_limit)?);
         }
         insert(tx, &env, pending).await
+    })
+    .await
+}
+
+/// Create one attachment from `item` (no content of its own) with content staged while `tx` was
+/// open ([`super::Uploader::create`]).
+pub(crate) async fn create_staged(
+    tx: &mut Transaction,
+    item: NewAttachment,
+    content: StagedContent,
+) -> Result<RecId> {
+    tx.savepoint(async |tx| {
+        let env = tx.env();
+        let file_limit = super::upload_policy(tx).await?.max_file_bytes();
+        let mut pending = prepare(&env, item, file_limit)?;
+        pending.source = Source::Staged(content);
+        let ids = insert(tx, &env, vec![pending]).await?;
+        ids.first()
+            .copied()
+            .ok_or_else(|| Error::internal("the attachment was not created"))
     })
     .await
 }

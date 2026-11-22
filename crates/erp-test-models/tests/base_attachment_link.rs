@@ -680,3 +680,154 @@ async fn a_full_node_answers_busy_and_a_failed_stream_returns_its_permit() {
     assert_eq!(up.size, 14);
     assert_eq!(f.rt.available_stream_permits(), 1, "returned after success");
 }
+
+/// Server-produced content is attached inside a transaction that started before the bytes were
+/// staged (a print job): the upload row committed after its snapshot cannot be claimed there, so
+/// `Uploader::create` links what staging returned, through the store and inline, and leaves the
+/// upload to the staging cleaner (state 3, handled as expired; no longer waiting for a claim).
+#[tokio::test]
+async fn uploader_create_attaches_inside_a_transaction_older_than_the_upload() {
+    let f = fixture(external_limits()).await;
+    prime_store(&f).await;
+    let mut tx = f.h.begin().await.unwrap();
+    let p = partner(&mut tx, "P").await;
+    // the snapshot is taken: the upload rows staged below are invisible to this transaction
+    assert_eq!(
+        count(&mut tx, "SELECT count(*) FROM ir_blob_upload").await,
+        1
+    );
+    let uploader = Uploader::new(f.h.orm());
+    let mut external = &b"bytes through the store"[..];
+    let first = uploader
+        .create(
+            &mut tx,
+            NewAttachment::new("a.txt", AttachmentContent::Empty).on(on_partner(p)),
+            &mut external,
+            Some(23),
+        )
+        .await
+        .unwrap();
+    let mut inline = &b"tiny"[..];
+    let second = uploader
+        .create(
+            &mut tx,
+            NewAttachment::new("b.txt", AttachmentContent::Empty),
+            &mut inline,
+            None,
+        )
+        .await
+        .unwrap();
+    let a = attachments::open(&mut tx, first.get()).await.unwrap();
+    assert_eq!(
+        a.read_to_vec(100).await.unwrap(),
+        b"bytes through the store"
+    );
+    let b = attachments::open(&mut tx, second.get()).await.unwrap();
+    assert_eq!(b.read_to_vec(100).await.unwrap(), b"tiny");
+    assert_eq!(row(&mut tx, first.get()).await.2, 23);
+    tx.commit().await.unwrap();
+    drop(tx);
+    assert_eq!(
+        f.store.content_keys().len(),
+        1,
+        "the external bytes promoted"
+    );
+    assert_eq!(
+        scalar(&f.h, "SELECT count(*) FROM ir_blob_upload WHERE state = 3").await,
+        2,
+        "both uploads left to the cleaner"
+    );
+}
+
+/// `Uploader::create` takes its content from the body only, and refuses a body above its declared
+/// length like staging does.
+#[tokio::test]
+async fn uploader_create_refuses_an_item_with_content_and_a_longer_body() {
+    let f = fixture(external_limits()).await;
+    prime_store(&f).await;
+    let mut tx = f.h.begin().await.unwrap();
+    let uploader = Uploader::new(f.h.orm());
+    let mut body = &b"content"[..];
+    let err = uploader
+        .create(
+            &mut tx,
+            NewAttachment::new("a.txt", AttachmentContent::Bytes(b"other".to_vec())),
+            &mut body,
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Programming);
+    let mut body = &b"longer than declared"[..];
+    let err = uploader
+        .create(
+            &mut tx,
+            NewAttachment::new("a.txt", AttachmentContent::Empty),
+            &mut body,
+            Some(4),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Validation, "{err:?}");
+    assert_eq!(
+        count(
+            &mut tx,
+            "SELECT count(*) FROM ir_attachment WHERE name = 'a.txt'"
+        )
+        .await,
+        0
+    );
+}
+
+/// Register the write store as earlier files of a database did: stage one upload, in
+/// transactions of its own.
+async fn prime_store(f: &Fixture) {
+    let mut tx = f.h.begin().await.unwrap();
+    let env = tx.env();
+    tx.rollback().await.unwrap();
+    drop(tx);
+    stage(f, &env, "prime.txt", b"registers the store").await;
+}
+
+/// The first content ever stored in a database registers the write store after the caller's
+/// snapshot: the new blob row could not reference it there, so `Uploader::create` registers the
+/// store, stages nothing and answers the retryable error; the retried work succeeds.
+#[tokio::test]
+async fn uploader_create_retries_when_the_store_is_newer_than_the_transaction() {
+    let f = fixture(external_limits()).await;
+    let uploader = Uploader::new(f.h.orm());
+    let mut tx = f.h.begin().await.unwrap();
+    assert_eq!(
+        count(&mut tx, "SELECT count(*) FROM ir_blob_store").await,
+        0
+    );
+    let mut body = &b"the first file"[..];
+    let err = uploader
+        .create(
+            &mut tx,
+            NewAttachment::new("first.txt", AttachmentContent::Empty),
+            &mut body,
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Concurrency, "{err:?}");
+    tx.rollback().await.unwrap();
+    drop(tx);
+    assert_eq!(scalar(&f.h, "SELECT count(*) FROM ir_blob_upload").await, 0);
+    assert_eq!(scalar(&f.h, "SELECT count(*) FROM ir_blob_store").await, 1);
+    let mut tx = f.h.begin().await.unwrap();
+    let mut body = &b"the first file"[..];
+    let id = uploader
+        .create(
+            &mut tx,
+            NewAttachment::new("first.txt", AttachmentContent::Empty),
+            &mut body,
+            None,
+        )
+        .await
+        .unwrap();
+    let handle = attachments::open(&mut tx, id.get()).await.unwrap();
+    assert_eq!(handle.read_to_vec(100).await.unwrap(), b"the first file");
+    tx.commit().await.unwrap();
+}

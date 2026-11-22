@@ -955,3 +955,61 @@ async fn metadata_maintenance_refuses_repeatable_read_before_mutation() {
     }
     f.h.cleanup().await.unwrap();
 }
+
+/// Content attached with `Uploader::create` in a transaction that then rolls back: the bytes were
+/// promoted, and the upload row (left to the cleaner by `create`) is the marker the cleaner
+/// adopts, so the sweep removes the key. A committed one is left alone.
+#[tokio::test]
+async fn uploader_create_in_a_rolled_back_transaction_is_adopted_and_swept() {
+    let f = fixture(external_limits()).await;
+    admit_cleanup(f.h.orm()).await;
+    let uploader = erp_addon_base::attachments::Uploader::new(f.h.orm());
+    // (the write store is registered by admit_cleanup, as by earlier files of a database)
+    let mut tx = f.h.begin().await.unwrap();
+    assert_eq!(count(&mut tx, "SELECT count(*) FROM ir_blob").await, 0);
+    let mut kept = &b"kept by a committed print"[..];
+    uploader
+        .create(
+            &mut tx,
+            NewAttachment::new("kept.txt", AttachmentContent::Empty),
+            &mut kept,
+            None,
+        )
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    drop(tx);
+    let mut tx = f.h.begin().await.unwrap();
+    assert_eq!(count(&mut tx, "SELECT count(*) FROM ir_blob").await, 1);
+    let mut lost = &b"orphaned by a failed print"[..];
+    uploader
+        .create(
+            &mut tx,
+            NewAttachment::new("lost.txt", AttachmentContent::Empty),
+            &mut lost,
+            None,
+        )
+        .await
+        .unwrap();
+    tx.rollback().await.unwrap();
+    drop(tx);
+    assert_eq!(f.store.content_keys().len(), 2, "both promoted");
+    assert_eq!(blobs(&f).await, 1);
+    let mut tx = rc(&f).await;
+    let env = tx.env();
+    let report = clean_staging(&mut tx, &env, 100).await.unwrap();
+    tx.commit().await.unwrap();
+    drop(tx);
+    assert_eq!((report.expired, report.adopted), (2, 1));
+    assert!(f.store.staging_keys().is_empty());
+    let ids = mark(&f).await;
+    assert_eq!(ids.len(), 1);
+    remove(&f, &ids).await.unwrap();
+    assert_eq!(
+        f.store.content_keys().len(),
+        1,
+        "the committed content stays"
+    );
+    assert_eq!(blobs(&f).await, 1);
+    assert_eq!(scalar(&f.h, "SELECT count(*) FROM ir_blob_upload").await, 0);
+}

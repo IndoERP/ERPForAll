@@ -3,7 +3,10 @@
 //! locks in opposite orders.
 //!
 //! 1. the uploads are consumed (`ready` -> `consumed`) if they are unexpired and bound to the
-//!    caller's subject and actor; fewer rows than ids is one error for every cause;
+//!    caller's subject and actor; fewer rows than ids is one error for every cause. Content
+//!    staged during this transaction ([`Source::Staged`]) is not claimed: its row committed after
+//!    this transaction's snapshot and cannot be seen; its subject and actor are checked from
+//!    what staging returned, and the stager leaves the row to the staging cleaner;
 //! 2. the blob rows of the digests are locked `FOR KEY SHARE` (linkers of popular content never
 //!    block each other; the lock conflicts with the `FOR UPDATE` of the garbage collector);
 //! 3. absent digests are inserted `ON CONFLICT DO NOTHING`;
@@ -23,7 +26,7 @@ use erp_sdk::{Env, Transaction};
 
 use super::runtime::{StoreRef, blob_error, col_error, retryable, runtime, store_by_id};
 use super::types::{MAX_BATCH, UploadId, upload_not_usable};
-use super::upload::actor_text;
+use super::upload::{StagedContent, actor_text};
 
 macro_rules! col {
     ($row:expr, $i:expr) => {
@@ -46,6 +49,8 @@ pub(crate) enum Source {
     },
     /// A staged upload.
     Upload(UploadId),
+    /// Content staged by [`super::Uploader::create`] while this transaction was open.
+    Staged(StagedContent),
     /// An existing blob (a copy references the same content).
     Blob(i64),
 }
@@ -159,18 +164,30 @@ async fn link_checked(tx: &mut Transaction, env: &Env, sources: &[Source]) -> Re
         .min(rt.limits().max_file_bytes);
 
     // 1. consume the uploads
-    let mut upload_ids: Vec<String> = Vec::new();
-    for source in sources {
-        if let Source::Upload(id) = source {
-            if upload_ids.iter().any(|u| u == id.as_str()) {
-                // one upload carries one attachment
-                return Err(upload_not_usable());
-            }
-            upload_ids.push(id.as_str().to_owned());
-        }
-    }
     let uid = env.principal().subject().get();
     let actor = actor_text(env);
+    let mut upload_ids: Vec<String> = Vec::new();
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    for source in sources {
+        let id = match source {
+            Source::Upload(id) => {
+                upload_ids.push(id.as_str().to_owned());
+                id
+            }
+            Source::Staged(content) => {
+                if content.subject != uid || content.actor != actor {
+                    return Err(upload_not_usable());
+                }
+                super::settings::check_size(content.size, file_limit)?;
+                &content.upload
+            }
+            _ => continue,
+        };
+        // one upload carries one attachment
+        if !seen.insert(id.as_str()) {
+            return Err(upload_not_usable());
+        }
+    }
     let mut consumed: HashMap<String, Consumed> = HashMap::new();
     if !upload_ids.is_empty() {
         let rows = tx
@@ -231,6 +248,25 @@ async fn link_checked(tx: &mut Transaction, env: &Env, sources: &[Source]) -> Re
                     inline: Some(bytes.clone()),
                     staged: None,
                 });
+            }
+            Source::Staged(content) => {
+                let need = needs.entry(content.sha256).or_insert_with(|| Need {
+                    size: i64::try_from(content.size).unwrap_or(i64::MAX),
+                    quota_admitted: true,
+                    mimetype: Some(content.mimetype.clone()),
+                    store_id: if content.inline.is_some() {
+                        None
+                    } else {
+                        Some(content.store_id)
+                    },
+                    inline: content.inline.clone(),
+                    staged: if content.inline.is_some() {
+                        None
+                    } else {
+                        Some((content.upload.clone(), content.sha1))
+                    },
+                });
+                need.quota_admitted = true;
             }
             Source::Upload(id) => {
                 let up = consumed.get(id.as_str()).ok_or_else(upload_not_usable)?;
@@ -510,6 +546,12 @@ async fn link_checked(tx: &mut Transaction, env: &Env, sources: &[Source]) -> Re
                     mimetype: up.mimetype.clone(),
                 }
             }
+            Source::Staged(content) => Linked {
+                blob_id: Some(row_of(&content.sha256)?.id),
+                size: content.size,
+                sha1: Some(content.sha1),
+                mimetype: Some(content.mimetype.clone()),
+            },
             Source::Blob(id) => {
                 let row = found_by_id
                     .get(id)

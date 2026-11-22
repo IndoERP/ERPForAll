@@ -3,6 +3,11 @@
 //! hashed on their way into staging; the row then becomes `ready` and bound to the subject and
 //! actor that staged it. A business transaction links it later ([`super::link`]).
 //!
+//! Content the server produces while a business transaction is already open (a printed
+//! document) is attached by [`Uploader::create`]: that transaction's snapshot predates the upload
+//! row, so it links the bytes from what staging returned instead of claiming the row, and the
+//! row is left to the staging cleaner like an expired upload.
+//!
 //! Every staging object has a committed row, so the cleaner never lists the store. A failed or
 //! abandoned upload retains its reservation; fenced [`super::gc`] maintenance removes its object.
 
@@ -10,11 +15,11 @@ use erp_sdk::blob::{
     AttachmentRuntime, DETECT_BYTES, Namespace, StageLimits, StagingKey, resolve, to_hex,
 };
 use erp_sdk::prelude::*;
-use erp_sdk::{Actor, BeginOptions, Env, Isolation, Orm};
+use erp_sdk::{Actor, BeginOptions, Env, Isolation, Orm, Transaction};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
-use super::runtime::{blob_error, col_error, runtime, store_by_key};
-use super::types::{NAME_MAX_BYTES, UploadId};
+use super::runtime::{blob_error, col_error, retryable, runtime, store_by_key};
+use super::types::{AttachmentContent, NAME_MAX_BYTES, NewAttachment, UploadId};
 
 /// What the client says about an upload.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -87,6 +92,22 @@ pub struct StagedUpload {
     pub mimetype: String,
 }
 
+/// What staging wrote, kept in memory for a link in a transaction that cannot see the upload row
+/// ([`Uploader::create`]).
+#[derive(Clone)]
+pub(crate) struct StagedContent {
+    pub(crate) upload: UploadId,
+    pub(crate) subject: i64,
+    pub(crate) actor: String,
+    pub(crate) store_id: i16,
+    pub(crate) sha256: [u8; 32],
+    pub(crate) sha1: [u8; 20],
+    pub(crate) size: u64,
+    pub(crate) mimetype: String,
+    /// The bytes, when they stayed in the upload row (at most the inline threshold).
+    pub(crate) inline: Option<Vec<u8>>,
+}
+
 /// The actor of an environment as stored with an upload: empty for the subject acting alone.
 pub(crate) fn actor_text(env: &Env) -> String {
     match env.principal().actor() {
@@ -147,6 +168,121 @@ impl Uploader {
         body: &mut (dyn AsyncRead + Send + Unpin),
         request: StageRequest,
     ) -> Result<StagedUpload> {
+        Ok(self.stage_content(env, body, request).await?.0)
+    }
+
+    /// Stream `body` into the write store and attach it inside `tx`, which may have started
+    /// before the bytes were staged: the content a server produces during a business transaction
+    /// (a printed document, a generated export). The attachment is created as by
+    /// [`super::create`] from `item`, whose content must be [`AttachmentContent::Empty`]: the
+    /// content is `body`, of `length` bytes when known (the reservation; `None` reserves the
+    /// file limit).
+    ///
+    /// The upload is staged in transactions of its own, as by [`Self::stage`], and linked from
+    /// what staging returned, never claimed in `tx` (whose snapshot cannot see a row committed
+    /// after it). The upload row is then left to the staging cleaner like an expired upload: it
+    /// removes the staged object and, when `tx` rolled back after its bytes were promoted, marks
+    /// that content for collection.
+    ///
+    /// The write store's row must be older than `tx` (the new blob row references it). Only the
+    /// first content ever stored in a database can find it missing: the row is then registered
+    /// in a transaction of its own and the call fails with the retryable `Concurrency` error,
+    /// before anything is staged, so a retry of the work succeeds.
+    ///
+    /// # Errors
+    ///
+    /// `Programming` when `item` has content; `Concurrency` (retryable) when the write store was
+    /// registered after `tx` began; as [`Self::stage`] and [`super::create`].
+    pub async fn create(
+        &self,
+        tx: &mut Transaction,
+        item: NewAttachment,
+        body: &mut (dyn AsyncRead + Send + Unpin),
+        length: Option<u64>,
+    ) -> Result<RecId> {
+        if item.content != AttachmentContent::Empty {
+            return Err(Error::programming(
+                "Uploader::create streams the content from its body: give the attachment no \
+                 content (AttachmentContent::Empty).",
+            ));
+        }
+        let env = tx.env();
+        self.require_visible_store(tx, &env).await?;
+        let mut request = StageRequest::named(item.name.clone());
+        request
+            .declared_mimetype
+            .clone_from(&item.declared_mimetype);
+        if let Some(bytes) = length {
+            request = request.with_declared_length(bytes);
+        }
+        let (staged, content) = self.stage_content(&env, body, request).await?;
+        let created = super::service::create_staged(tx, item, content).await;
+        self.release(&env, &staged.id).await;
+        created
+    }
+
+    /// Refuse, retryably, when `tx` cannot see the write store's row; register it first so the
+    /// retry can.
+    async fn require_visible_store(&self, tx: &mut Transaction, env: &Env) -> Result<()> {
+        let rt = runtime(env)?;
+        let key = rt.write_store_key();
+        let visible = tx
+            .query(
+                "SELECT 1 FROM ir_blob_store WHERE store_key = $1 AND role = 'own'",
+                &[&key],
+            )
+            .await?;
+        if !visible.is_empty() {
+            return Ok(());
+        }
+        let mut own = self
+            .orm
+            .begin_opts(
+                BeginOptions::for_principal(env.principal().clone())
+                    .on_primary()
+                    .isolation(Isolation::ReadCommitted),
+            )
+            .await?;
+        store_by_key(&mut own, &rt, key).await?;
+        own.commit().await?;
+        Err(retryable(
+            "the attachment store was registered after this transaction began",
+        ))
+    }
+
+    /// Leave an upload that [`Self::create`] linked (or failed to link) to the staging cleaner:
+    /// it moves to state 3, which the cleaner handles exactly as an expired upload (staged object
+    /// removed, promoted content adopted when `tx` rolled back). The runtime role may update
+    /// `state` and `cleanup_error` of an upload, not `expires_at`. A failure is logged and the
+    /// upload expires at its own time instead.
+    async fn release(&self, env: &Env, upload: &UploadId) {
+        let released = async {
+            let mut tx = self
+                .orm
+                .begin_opts(BeginOptions::for_principal(env.principal().clone()).on_primary())
+                .await?;
+            tx.execute(
+                "UPDATE ir_blob_upload SET state = 3, \
+                 cleanup_error = 'Linked by Uploader::create; left to the staging cleaner.' \
+                 WHERE id = $1::text::uuid AND state = 1",
+                &[&upload.as_str()],
+            )
+            .await?;
+            tx.commit().await
+        }
+        .await;
+        if let Err(error) = released {
+            tracing::warn!(target: "erp::attachments", upload_id = upload.as_str(), %error,
+                "A linked upload could not be released to the staging cleaner; it expires at its own time");
+        }
+    }
+
+    async fn stage_content(
+        &self,
+        env: &Env,
+        body: &mut (dyn AsyncRead + Send + Unpin),
+        request: StageRequest,
+    ) -> Result<(StagedUpload, StagedContent)> {
         let rt = runtime(env)?;
         if let Some(name) = &request.name {
             check_name(name)?;
@@ -226,7 +362,10 @@ impl Uploader {
             ).await?;
             if updated != 1 { return Err(Error::internal("The upload intent left receiving state before completion; cleanup is required.")); }
             tx.commit().await?;
-            Ok(StagedUpload { id: UploadId::from_db(upload_id.clone()), size: staged.size, checksum: to_hex(&staged.sha1), mimetype: staged.mimetype })
+            let id = UploadId::from_db(upload_id.clone());
+            let upload = StagedUpload { id: id.clone(), size: staged.size, checksum: to_hex(&staged.sha1), mimetype: staged.mimetype.clone() };
+            let content = StagedContent { upload: id, subject: uid, actor: actor.clone(), store_id: store.id, sha256: staged.sha256, sha1: staged.sha1, size: staged.size, mimetype: staged.mimetype, inline: staged.inline };
+            Ok((upload, content))
         }.await;
         match result {
             Ok(staged) => Ok(staged),
