@@ -1,6 +1,6 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 // Shell navigation for addon code (`navigate`, `openAction` on systray, service, client action and field widget
-// environments) and the page's companies kept across navigation.
+// environments), the page's companies kept across navigation, and the user's home action.
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
   clientActions, configureClientTemplates, fieldWidgets, registerClientAction, registerFieldWidget, registerServiceController,
@@ -268,4 +268,43 @@ test("list cells get navigate and openAction", async () => {
   expect(env?.openAction).toBeTypeOf("function");
   await env!.navigate!({ action: "21" });
   expect(address().pathname).toBe("/erp/action-21");
+});
+
+test("the home action opens on /erp in place of the app grid; the logo still opens the grid", async () => {
+  const { calls } = server({ home: 21 });
+  const root = await boot("/erp?cids=1");
+  expect(calls.find(call => call.model === "res.users" && call.method === "web_read")?.body).toMatchObject({ ids: [2], specification: { action_id: {} } });
+  expect(address().pathname).toBe("/erp/action-21");
+  expect(address().searchParams.get("cids")).toBe("1");
+  root.querySelector<HTMLButtonElement>("button.brand")!.click();
+  await vi.waitFor(() => expect(address().pathname).toBe("/erp"));
+  expect(address().searchParams.get("cids")).toBe("1");
+});
+
+test("without a home action, or with an address that names an action, the user's choice is not read", async () => {
+  const none = server({ home: false });
+  await boot("/erp");
+  expect(address().pathname).toBe("/erp");
+  expect(document.querySelector("[data-client-notice]")?.textContent ?? "").not.toContain("home action");
+  app!.dispose(); app = undefined; document.body.replaceChildren();
+  expect(none.calls.filter(call => call.model === "res.users" && call.method === "web_read")).toHaveLength(1);
+  const named = server({ home: 21 });
+  await boot("/erp/action-20");
+  expect(address().pathname).toBe("/erp/action-20");
+  expect(named.calls.some(call => call.model === "res.users" && call.method === "web_read")).toBe(false);
+});
+
+test("a home action the user may not open leaves the grid, with a notice that says so", async () => {
+  server({ home: 21, refused: [21] });
+  const root = await boot("/erp");
+  expect(address().pathname).toBe("/erp");
+  expect(address().searchParams.has("cids")).toBe(false);
+  expect(root.textContent).toContain("Your home action could not be opened, so the apps are shown instead");
+});
+
+test("a failed read of the home action leaves the grid with a notice", async () => {
+  server({ home: "fail" });
+  const root = await boot("/erp");
+  expect(address().pathname).toBe("/erp");
+  expect(root.textContent).toContain("Your home action could not be opened");
 });

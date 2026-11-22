@@ -789,6 +789,110 @@ async fn spec_prefs_014_the_colour_scheme_takes_three_values_and_cannot_be_empti
     f.finish().await;
 }
 
+/// The stored home action of a user, read by SQL.
+async fn stored_home_action(client: &Client, uid: i64) -> Option<i64> {
+    client
+        .query_one(
+            "SELECT action_id::int8 FROM res_users WHERE id = $1",
+            &[&uid],
+        )
+        .await
+        .unwrap()
+        .get(0)
+}
+
+#[tokio::test]
+async fn spec_prefs_home_action_is_the_users_own_choice_and_clears_with_its_action() {
+    let f = fixture().await;
+    let mut tx = begin(&f.orm, erp_orm::SUPERUSER_ID.get()).await;
+    let action = create(
+        &mut tx,
+        "ir.actions.act_window",
+        &[("name", s("My Day")), ("res_model", s("res.partner"))],
+    )
+    .await;
+    tx.commit().await.unwrap();
+    drop(tx);
+
+    // the field is a many2one to window actions that the user writes on their own record
+    let mut tx = begin(&f.orm, f.me).await;
+    let users = tx.env().records("res.users").unwrap();
+    let described = users
+        .fields_get(&mut tx, Some(&["action_id"]), Some(&["type", "relation"]))
+        .await
+        .unwrap();
+    assert_eq!(described["action_id"]["type"], s("many2one"));
+    assert_eq!(
+        described["action_id"]["relation"],
+        s("ir.actions.act_window")
+    );
+    let own = users.browse([f.me]).unwrap();
+    assert_eq!(own.value(&mut tx, "action_id").await.unwrap(), Value::False);
+    own.write_values(&mut tx, &map(&[("action_id", Value::Int(action))]))
+        .await
+        .unwrap();
+    // the web client reads it with `web_read` and a bare specification: the id, not a pair
+    let read = own
+        .web_read(&mut tx, erp_orm::Spec::new().field("action_id"))
+        .await
+        .unwrap();
+    let Value::Map(row) = &read[0] else {
+        panic!("web_read answers one map per record, got {read:?}");
+    };
+    assert_eq!(row.get("action_id"), Some(&Value::Int(action)));
+    // nobody else's home action is within reach
+    let foreign = users.browse([f.other]).unwrap();
+    let err = foreign
+        .write_values(&mut tx, &map(&[("action_id", Value::Int(action))]))
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Access, "{err}");
+    drop(tx);
+    let mut tx = begin(&f.orm, f.me).await;
+    tx.env()
+        .records("res.users")
+        .unwrap()
+        .browse([f.me])
+        .unwrap()
+        .write_values(&mut tx, &map(&[("action_id", Value::Int(action))]))
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    drop(tx);
+    assert_eq!(stored_home_action(&f.client, f.me).await, Some(action));
+    assert_eq!(stored_home_action(&f.client, f.other).await, None);
+
+    // an administrator sets it for another user
+    let mut tx = begin(&f.orm, f.admin).await;
+    tx.env()
+        .records("res.users")
+        .unwrap()
+        .browse([f.other])
+        .unwrap()
+        .write_values(&mut tx, &map(&[("action_id", Value::Int(action))]))
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    drop(tx);
+    assert_eq!(stored_home_action(&f.client, f.other).await, Some(action));
+
+    // deleting the action clears every user's choice instead of refusing the delete
+    let mut tx = begin(&f.orm, erp_orm::SUPERUSER_ID.get()).await;
+    tx.env()
+        .records("ir.actions.act_window")
+        .unwrap()
+        .browse([action])
+        .unwrap()
+        .unlink(&mut tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    drop(tx);
+    assert_eq!(stored_home_action(&f.client, f.me).await, None);
+    assert_eq!(stored_home_action(&f.client, f.other).await, None);
+    f.finish().await;
+}
+
 /// A write of the own record that the model refuses with `Validation` and `message`, in a
 /// transaction of its own (a `Validation` error poisons the transaction,
 /// `crates/erp-orm/src/transaction.rs:4735-4741`); the stored state is read by SQL and is the

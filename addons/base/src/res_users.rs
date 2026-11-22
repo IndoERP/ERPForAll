@@ -113,6 +113,20 @@ pub struct ResUsersAccess {
         user_writeable
     )]
     pub color_scheme: Option<Arc<str>>,
+    /// Home action: the window action the web client opens when the user signs in or opens `/erp`
+    /// without an action, instead of the app grid (the logo still opens the grid). Naming an
+    /// action grants nothing: the client loads it through the same access checks as any other
+    /// action, and an action the user may not open leaves them on the grid with a notice.
+    /// `user_writeable`: a choice about the user's own first screen. Cleared when the action is
+    /// deleted.
+    #[field(
+        many2one,
+        comodel = "ir.actions.act_window",
+        string = "Home Action",
+        ondelete = "set null",
+        user_writeable
+    )]
+    pub action_id: Option<RecId>,
     /// Groups explicitly assigned to the user.
     #[field(
         many2many,

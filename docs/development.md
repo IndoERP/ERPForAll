@@ -128,6 +128,10 @@ two functions from the shell (`ShellNavigation` in `addons/web/static/src/client
 Both do nothing once the page that handed them out was left. The address of every page keeps the active companies,
 so a reload or a copied link opens the same companies.
 
+A user's home action (`res.users.action_id`, a window action the user may set on their own record) opens in place of
+the app grid when the address names no action. It loads through the usual access checks: an action the user may not
+open leaves the grid with a notice. The logo still opens the grid.
+
 Checks (after `eval "$(scripts/web-toolchain.sh env)"` and `pnpm --dir web install --frozen-lockfile`):
 
 ```sh

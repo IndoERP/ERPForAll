@@ -1197,6 +1197,8 @@ export class HumanApp {
     this.headerMenuSearchReady?.();
 
     const initialRoute = parseRoute(new URL(window.location.href));
+    if (initialRoute.action === undefined && await this.openHomeAction(initialRoute)) return;
+    if (this.lifetime.signal.aborted) return;
     try { await this.navigate(initialRoute, true); }
     catch (error) {
       if (error instanceof ExpiredMethodAction) {
@@ -1207,6 +1209,25 @@ export class HumanApp {
         this.content.replaceChildren(recovery);
       }
       throw error;
+    }
+  }
+
+  /** The user's home action (`res.users.action_id`) in place of the app grid, on a first load whose address names no
+   *  action. Answers whether it opened. The action loads through the usual access checks; one the user may not open,
+   *  or a failed read, leaves the grid with a notice that says why. The logo and Back still reach the grid. */
+  private async openHomeAction(initial: Route): Promise<boolean> {
+    try {
+      const rows = array(await this.rpc.call("res.users", "web_read", { ids: [this.userId], specification: { action_id: {} }, context: this.context }, { signal: this.lifetime.signal }), "user rows");
+      if (rows.length !== 1) throw new ClientError("server", "Invalid home action response.");
+      const value = object(rows[0], "user row")["action_id"];
+      if (value === false) return false;
+      const action = String(integer(value, "home action"));
+      await this.navigate({ action, ...(initial.cids === undefined ? {} : { cids: initial.cids }) }, true);
+      return this.current.action === action;
+    } catch (error) {
+      if (this.lifetime.signal.aborted) return false;
+      this.messages.notifications.add(`Your home action could not be opened, so the apps are shown instead: ${errorMessage(error)}`, { level: "warning" });
+      return false;
     }
   }
 
