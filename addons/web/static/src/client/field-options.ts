@@ -10,7 +10,7 @@ export type FieldPresentationOptions = { [K in keyof RawPresentationOptions]?: E
 const texts = ["help", "placeholder", "autocomplete", "icon", "icon_class", "alt", "img_class", "accepted_file_extensions", "min_date", "max_date", "min_precision", "max_precision", "warn", "type", "text"];
 const flags = ["password", "no_open", "no_create", "no_quick_create", "no_create_edit", "no_symbol", "enable_formatting", "hide_trailing_zeros", "field_digits", "show_time", "show_seconds", "always_range", "numeric", "create", "can_open", "horizontal", "nolabel", "zoom", "reload", "convert_to_webp"];
 const integers = ["rows", "max_length", "badge_limit", "tag_limit", "search_threshold", "rounding", "zoom_delay"];
-const references = ["placeholder_field", "currency_field", "start_date_field", "end_date_field", "whitelist_fname", "color_field", "preview_image"];
+const references = ["placeholder_field", "currency_field", "start_date_field", "end_date_field", "whitelist_fname", "color_field", "preview_image", "filename"];
 /** Admit closed typed presentation options. Dependent root fields must be in authorized metadata. */
 export function readFieldOptions(raw: Record<string, unknown>, model: string, fields: ReadonlyMap<string, unknown>, relation?: string | null): FieldPresentationOptions {
   for (const [key, value] of Object.entries(raw)) {

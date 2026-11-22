@@ -402,13 +402,13 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
         // The count provider calls COUNT; loading this O2M into state would materialize ids.
         // An ordinary occurrence of the same relation is still selected by its own node.
         if (!relationCount) selected.push(occurrence);
-        for (const key of ["placeholder_field", "currency_field", "start_date_field", "end_date_field", "whitelist_fname", "color_field", "preview_image"] as const) {
+        for (const key of ["placeholder_field", "currency_field", "start_date_field", "end_date_field", "whitelist_fname", "color_field", "preview_image", "filename"] as const) {
           const reference = occurrence.options?.[key];
           if (reference && reference.model === model) {
             const dependency = fields.get(reference.name);
             if (!dependency) throw new ClientError("server", `Missing field dependency: ${reference.name}.`);
-            // Range endpoints are editable participants. Other dependencies are read inputs only.
-            selected.push({ ...dependency, readonly: key === "start_date_field" || key === "end_date_field" ? dependency.readonly : true, invisible: true, forceSave: false });
+            // Range endpoints and a file's name field are editable participants. Other dependencies are read inputs only.
+            selected.push({ ...dependency, readonly: key === "start_date_field" || key === "end_date_field" || key === "filename" ? dependency.readonly : true, invisible: true, forceSave: false });
           }
         }
 

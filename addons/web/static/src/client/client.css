@@ -3579,6 +3579,19 @@ button.statusbar-step.is-passed:hover, button.statusbar-step:not(.is-current):ho
 .field-image-zoom { position: absolute; z-index: 20; top: 0; inset-inline-start: 100%; margin-inline-start: .5rem; padding: .25rem; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-panel); box-shadow: var(--shadow-menu); pointer-events: none; }
 .field-image-zoom img { display: block; max-width: min(24rem, 60vw); max-height: 24rem; }
 .field-image-list .field-image-stage:not(.has-height) .field-image-img, .field-image-card .field-image-stage:not(.has-height) .field-image-img { max-height: 3rem; }
+/* A file (the binary widget): its name and size, then Upload or Replace, Download and Clear; in a list, the name as a link. */
+.field-binary-form { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; max-width: 100%; }
+.field-binary-summary { display: inline-flex; align-items: center; gap: .375rem; min-width: 0; }
+.field-binary-summary > svg { flex: none; width: 16px; height: 16px; color: var(--muted); }
+.field-binary-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.field-binary-size { color: var(--muted); font-size: .8rem; }
+.field-binary-actions { display: inline-flex; gap: .5rem; }
+.field-binary-form .field-binary-button, .field-binary-form .field-binary-download { display: inline-flex; align-items: center; min-height: 2rem; padding: 0 .5rem; font-size: .85rem; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-control); cursor: pointer; text-decoration: none; }
+.field-binary-form :is(.field-binary-button, .field-binary-download):hover:not(:disabled) { background: var(--hover); border-color: var(--input-line); }
+.field-binary-actions > [hidden] { display: none; }
+.field-binary[aria-busy="true"] { cursor: progress; }
+.field-binary-status:empty { display: none; }
+.field-binary-status { flex-basis: 100%; color: var(--danger); font-size: .8rem; }
 /* The actions carry an icon and their text; the text shows where there is room for it. */
 .field-image-button > svg { display: none; width: 16px; height: 16px; }
 /* A list cell shows the picture alone: the row opens the record, where the actions are; an empty cell stays empty. */

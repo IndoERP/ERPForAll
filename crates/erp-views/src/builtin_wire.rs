@@ -426,6 +426,9 @@ impl Output {
         result.preview_image = optional(source, "preview_image")
             .map(|value| self.field(value))
             .transpose()?;
+        result.filename = optional(source, "filename")
+            .map(|value| self.field(value))
+            .transpose()?;
         result.whitelisted_values = optional(source, "whitelisted_values")
             .map(|value| self.strings(value))
             .transpose()?;

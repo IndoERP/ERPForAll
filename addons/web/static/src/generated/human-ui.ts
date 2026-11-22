@@ -363,6 +363,8 @@ whitelist_fname?: FieldRef | null,
 color_field?: FieldRef | null,
 /** Wire member `preview_image`. */
 preview_image?: FieldRef | null,
+/** Wire member `filename`. */
+filename?: FieldRef | null,
 /** Wire member `whitelisted_values`. */
 whitelisted_values?: Array<string> | null,
 /** Wire member `blacklisted_values`. */

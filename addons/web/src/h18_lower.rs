@@ -798,6 +798,7 @@ fn classify<'a, N: Node<'a>>(
                     "help",
                     "autocomplete",
                     "alt",
+                    "filename",
                     "password",
                     "domain",
                     "context",
@@ -2257,6 +2258,15 @@ fn set_field_options<'a, N: Node<'a>>(
                 object.set(key, |slot| slot.text(value))?;
             }
         }
+        if let Some(name) = node.attr("filename") {
+            if erp_sdk::views::wire::field_option_kind(widget, "filename").is_none() {
+                return Err(invalid(format!("Field option 'filename' is not supported by widget '{widget}'.")));
+            }
+            if entries.iter().any(|(key, _)| matches!(key, Expr::Literal(Literal::Str(key)) if key == "filename")) {
+                return Err(invalid("Set the file name field once: the 'filename' attribute or the 'filename' option."));
+            }
+            object.set("filename", |value| file_name_field(spec, field(spec, node)?, name, value))?;
+        }
         if node.attr("password").is_some() {
             if !matches!(widget, "char" | "text" | "password") { return Err(invalid("password requires a text widget.")); }
             object.set("password", |value| value.boolean(boolean(node, "password", false)?))?;
@@ -2287,6 +2297,28 @@ fn set_field_options<'a, N: Node<'a>>(
         }
         Ok(())
     })
+}
+/// The `filename` of a binary widget: a char field of the same record, other than the file itself, that holds the
+/// file's name.
+fn file_name_field(
+    spec: &ModelSpec,
+    occurrence: &FieldSpec,
+    name: &str,
+    output: DescriptionValueBuilder<'_>,
+) -> ViewResult<DescriptionValue> {
+    let field = spec.field(name).ok_or_else(|| {
+        invalid(format!(
+            "The file name field '{name}' of '{}.{}' does not exist.",
+            spec.name, occurrence.name
+        ))
+    })?;
+    if !matches!(field.ty, FieldType::Char { .. }) || field.name == occurrence.name {
+        return Err(invalid(format!(
+            "The file name field '{name}' of '{}.{}' must be a char field.",
+            spec.name, occurrence.name
+        )));
+    }
+    output.field_handle(spec.name, field.name)
 }
 fn field_option_value(
     spec: &ModelSpec,
@@ -2340,6 +2372,9 @@ fn field_option_value(
             }
             if key == "preview_image" && field.ty.type_name() != "binary" {
                 return Err(wrong());
+            }
+            if key == "filename" {
+                return file_name_field(spec, occurrence, value, output);
             }
             if key == "currency_field"
                 && !matches!(&field.ty, FieldType::Many2one { comodel, .. } if comodel == "res.currency")
@@ -2602,6 +2637,12 @@ mod tests {
         FieldDecl::float("ratio"),
     ]);
 
+    static FILES: ModelDecl = ModelDecl::new("base", "h18.files").fields(&[
+        FieldDecl::binary("document"),
+        FieldDecl::char("document_name"),
+        FieldDecl::integer("count"),
+    ]);
+
     // Fixture-only mixins: no registered model inherits mail.thread until.
     static THREAD: ModelDecl =
         ModelDecl::new("base", "mail.thread").kind(erp_sdk::ModelKind::Abstract);
@@ -2633,7 +2674,7 @@ mod tests {
         budget: &DescriptionBudget,
     ) -> Result<Value, ViewError> {
         let registry = RegistryBuilder::new([&erp_addon_base::ADDON, &crate::ADDON])
-            .with_decls([&MODEL, &THREAD, &ACTIVITY, &THREADED, &SCHEDULED])
+            .with_decls([&MODEL, &THREAD, &ACTIVITY, &THREADED, &SCHEDULED, &FILES])
             .build()
             .unwrap();
         let spec = registry.model(model).unwrap();
@@ -3266,6 +3307,90 @@ mod tests {
                 matches!(error, ViewError::InvalidDescription(_)),
                 "{option}"
             );
+        }
+    }
+
+    fn files(xml: &str, kind: &str) -> Result<Value, ViewError> {
+        fixture_model("h18.files", xml, kind, &DescriptionBudget::new())
+    }
+
+    fn files_refused(xml: &str) -> String {
+        match files(xml, "form").unwrap_err() {
+            ViewError::InvalidDescription(message) => message,
+            other => panic!("Unexpected error kind: {other:?}"),
+        }
+    }
+
+    /// A binary field without a widget gets the `binary` widget, in a form and in a list.
+    #[test]
+    fn binary_field_defaults_to_binary_widget() {
+        for kind in ["form", "list"] {
+            let value = files(
+                &format!(r#"<{kind}><field name="document"/></{kind}>"#),
+                kind,
+            )
+            .unwrap();
+            assert_eq!(value["nodes"][1]["widget"], "binary", "{kind}");
+        }
+        let value = files(
+            r#"<form><field name="document" widget="binary"/></form>"#,
+            "form",
+        )
+        .unwrap();
+        assert_eq!(value["nodes"][1]["widget"], "binary");
+        assert_eq!(
+            files_refused(r#"<form><field name="count" widget="binary"/></form>"#),
+            "Field widget 'binary' does not support type 'integer'."
+        );
+    }
+
+    /// `filename` names the char field holding the file's name, as an attribute or an option; anything else is refused.
+    #[test]
+    fn binary_widget_filename_and_accept() {
+        for xml in [
+            r#"<form><field name="document" filename="document_name" options="{'accepted_file_extensions': '.pdf'}"/></form>"#,
+            r#"<form><field name="document" widget="binary" options="{'filename': 'document_name', 'accepted_file_extensions': '.pdf'}"/></form>"#,
+        ] {
+            let value = files(xml, "form").unwrap();
+            let options = &value["nodes"][1]["options"];
+            assert_eq!(
+                options["filename"],
+                serde_json::json!({"model": "h18.files", "name": "document_name"}),
+                "{xml}"
+            );
+            assert_eq!(options["accepted_file_extensions"], ".pdf", "{xml}");
+        }
+        for (xml, message) in [
+            (
+                r#"<form><field name="document" filename="missing"/></form>"#,
+                "The file name field 'missing' of 'h18.files.document' does not exist.",
+            ),
+            (
+                r#"<form><field name="document" filename="count"/></form>"#,
+                "The file name field 'count' of 'h18.files.document' must be a char field.",
+            ),
+            (
+                r#"<form><field name="document" filename="document"/></form>"#,
+                "The file name field 'document' of 'h18.files.document' must be a char field.",
+            ),
+            (
+                r#"<form><field name="document" options="{'filename': 'count'}"/></form>"#,
+                "The file name field 'count' of 'h18.files.document' must be a char field.",
+            ),
+            (
+                r#"<form><field name="document" filename="document_name" options="{'filename': 'document_name'}"/></form>"#,
+                "Set the file name field once: the 'filename' attribute or the 'filename' option.",
+            ),
+            (
+                r#"<form><field name="document" widget="image" filename="document_name"/></form>"#,
+                "Field option 'filename' is not supported by widget 'image'.",
+            ),
+            (
+                r#"<form><field name="document" options="{'convert_to_webp': True}"/></form>"#,
+                "Field option 'convert_to_webp' is not supported by widget 'binary'.",
+            ),
+        ] {
+            assert_eq!(files_refused(xml), message, "{xml}");
         }
     }
 

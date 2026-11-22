@@ -110,6 +110,11 @@ The client is TypeScript, compiled ahead of time:
 - The views, widgets and shell of the application are in the `web` addon: `addons/web/static/`.
 - XML templates are compiled by `erp-ui-compile` and bundled by `web/scripts/build-human-ui.mjs`, as shown in the
   installation guide.
+- A binary field shows as a file (the `binary` widget, also used when the view names no widget): its name, its size
+  and Download, plus Upload or Replace and Clear when editable. `filename="document_name"` (or the `filename` option)
+  names the char field of the same record that holds the file's name; Upload writes both. The
+  `accepted_file_extensions` option (`'.pdf,image/*'`) is a hint for the file chooser; the server stays the
+  authority. Use `widget="image"` for pictures.
 
 Checks (after `eval "$(scripts/web-toolchain.sh env)"` and `pnpm --dir web install --frozen-lockfile`):
 

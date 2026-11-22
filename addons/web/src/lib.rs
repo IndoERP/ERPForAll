@@ -205,6 +205,13 @@ static COLOR_PICKER_WIDGET: erp_sdk::views::WidgetDecl =
 static IMAGE_WIDGET: erp_sdk::views::WidgetDecl =
     erp_sdk::views::WidgetDecl::new("image", &["binary"]);
 
+/// Native admission for the binary field adapter (a file with an optional name field); also the
+/// widget of a binary field that names none.
+#[erp_sdk::__private::linkme::distributed_slice(erp_sdk::views::FIELD_WIDGETS)]
+#[linkme(crate = erp_sdk::__private::linkme)]
+static BINARY_WIDGET: erp_sdk::views::WidgetDecl =
+    erp_sdk::views::WidgetDecl::new("binary", &["binary"]);
+
 /// Native admission for the image_url field adapter (a Char field holding an URL).
 #[erp_sdk::__private::linkme::distributed_slice(erp_sdk::views::FIELD_WIDGETS)]
 #[linkme(crate = erp_sdk::__private::linkme)]

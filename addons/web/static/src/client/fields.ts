@@ -23,6 +23,7 @@ import { scalarControl } from "./field-scalars.js";
 import { radioControl } from "./field-radio.js";
 import { priorityControl } from "./priority.js";
 import { imageControl } from "./image-field.js";
+import { binaryControl } from "./binary-field.js";
 import { colorControl, colorPickerControl } from "./color.js";
 import { copyClipboardControl } from "./copy-clipboard.js";
 import type { NumericLocale } from "./numeric-values.js";
@@ -92,6 +93,7 @@ export function createFieldControl(options: FieldControlOptions): FieldControl {
   if (field.widget === "radio") return radioControl(options);
   if (field.widget === "priority") return priorityControl(options);
   if (field.widget === "image" || field.widget === "image_url") return imageControl(options);
+  if (field.widget === "binary" || field.widget === undefined && field.kind === "binary") return binaryControl(options);
   if (field.widget === "color") return colorControl(options);
   if (field.widget === "color_picker") return colorPickerControl(options);
   if (field.widget === "CopyClipboardChar" || field.widget === "CopyClipboardText" || field.widget === "CopyClipboardURL") return copyClipboardControl(options);
@@ -374,7 +376,7 @@ for (const kind of ["char", "text", "boolean", "integer", "float", "monetary", "
     }), environment) });
 }
 
-for (const [widget, kinds] of Object.entries({ password: ["char", "text"], email: ["char"], phone: ["char"], url: ["char"], percentage: ["integer", "float"], boolean_checkbox: ["boolean"], boolean_toggle: ["boolean"], boolean_favorite: ["boolean"], boolean_icon: ["boolean"], badge: ["selection", "char", "many2one"], label_selection: ["selection"], badges_selection: ["selection"], filterable_selection: ["selection"], radio: ["selection", "many2one"], priority: ["selection"], color: ["char"], color_picker: ["integer"], image: ["binary"], image_url: ["char"], CopyClipboardChar: ["char"], CopyClipboardText: ["text"], CopyClipboardURL: ["char"], many2many_tags: ["many2many"], many2many_tags_avatar: ["many2many"], many2many_tags_color_dot: ["many2many"] } as const)) {
+for (const [widget, kinds] of Object.entries({ password: ["char", "text"], email: ["char"], phone: ["char"], url: ["char"], percentage: ["integer", "float"], boolean_checkbox: ["boolean"], boolean_toggle: ["boolean"], boolean_favorite: ["boolean"], boolean_icon: ["boolean"], badge: ["selection", "char", "many2one"], label_selection: ["selection"], badges_selection: ["selection"], filterable_selection: ["selection"], radio: ["selection", "many2one"], priority: ["selection"], color: ["char"], color_picker: ["integer"], image: ["binary"], binary: ["binary"], image_url: ["char"], CopyClipboardChar: ["char"], CopyClipboardText: ["text"], CopyClipboardURL: ["char"], many2many_tags: ["many2many"], many2many_tags_avatar: ["many2many"], many2many_tags_color_dot: ["many2many"] } as const)) {
   registerFieldWidget(widget, { kinds, render: environment => createFieldControl({ viewContext: environment.viewContext, field: { ...environment.field, widget }, value: environment.value, rpc: environment.rpc, context: environment.context, numericLocale: environment.numericLocale, currencies: environment.currencies, values: environment.values, ...(environment.model === undefined ? {} : { model: environment.model }), fields: environment.fields, changeValues: environment.changeValues, change: environment.change, run: environment.run, openRecord: environment.openRecord, changed: environment.changed, ...(environment.messages ? { editor: { messages: environment.messages, report: environment.report, signal: environment.signal } } : {}) }) });
 }
 

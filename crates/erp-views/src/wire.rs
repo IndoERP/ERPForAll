@@ -466,6 +466,7 @@ object!(/// Closed optional presentation members; widget identity admission rest
         #[serde(default, skip_serializing_if="Option::is_none")] whitelist_fname: Option<FieldRef>,
         #[serde(default, skip_serializing_if="Option::is_none")] color_field: Option<FieldRef>,
         #[serde(default, skip_serializing_if="Option::is_none")] preview_image: Option<FieldRef>,
+        #[serde(default, skip_serializing_if="Option::is_none")] filename: Option<FieldRef>,
         #[serde(default, skip_serializing_if="Option::is_none")] whitelisted_values: Option<Vec<String>>,
         #[serde(default, skip_serializing_if="Option::is_none")] blacklisted_values: Option<Vec<String>>,
         #[serde(default, skip_serializing_if="Option::is_none")] #[cfg_attr(feature="schema-gen", ts(type="number[] | null"))] digits: Option<Vec<i64>>,
@@ -525,6 +526,7 @@ impl FieldPresentationOptions {
             whitelist_fname: None,
             color_field: None,
             preview_image: None,
+            filename: None,
             whitelisted_values: None,
             blacklisted_values: None,
             digits: None,
@@ -1883,7 +1885,9 @@ pub fn field_option_kind(widget: &str, key: &str) -> Option<FieldOptionKind> {
         }
         "text" => widget == "url",
         "alt" | "img_class" | "zoom" | "zoom_delay" | "size" | "reload" => image,
-        "accepted_file_extensions" | "convert_to_webp" | "preview_image" => widget == "image",
+        "accepted_file_extensions" => matches!(widget, "image" | "binary"),
+        "convert_to_webp" | "preview_image" => widget == "image",
+        "filename" => widget == "binary",
         _ => false,
     };
     if !admitted {
@@ -1938,7 +1942,7 @@ pub fn field_option_kind(widget: &str, key: &str) -> Option<FieldOptionKind> {
         "alt" | "img_class" | "accepted_file_extensions" => FieldOptionKind::Text,
         "zoom" | "reload" | "convert_to_webp" => FieldOptionKind::Bool,
         "zoom_delay" => FieldOptionKind::Integer,
-        "preview_image" => FieldOptionKind::Field,
+        "preview_image" | "filename" => FieldOptionKind::Field,
         "domain" | "context" => FieldOptionKind::Expression,
         _ => return None,
     })
