@@ -25,7 +25,7 @@ function reportUnknownMenuIcon(value: string): void {
     if (oldest !== undefined) reportedMenuIcons.delete(oldest);
   }
   reportedMenuIcons.add(key);
-  console.warn(`Menu icon ${JSON.stringify(key)} is not a shipped icon; showing the default icon (${DEFAULT_MENU_ICON}).`);
+  console.warn(`Menu icon ${JSON.stringify(key)} is not a shipped icon or an available addon image; showing the default icon (${DEFAULT_MENU_ICON}).`);
 }
 
 /** Decorative local SVG only. The owning control supplies its visible or accessible label. */
@@ -55,22 +55,80 @@ export function knownMenuIcon(value: string | null | undefined): IconName | null
   return Object.hasOwn(iconNodes, name) ? name as IconName : null;
 }
 
-/** Menu metadata selects a checked local identity; no markup or URL is evaluated. A value that names no
- *  shipped icon (an addon written against a newer icon set, a typo) shows the default icon and is reported
- *  on the console, so one menu never stops the application from starting. */
-export function menuIcon(value: string | null): SVGSVGElement {
-  if (value === null) return icon(DEFAULT_MENU_ICON);
-  const name = knownMenuIcon(value);
-  if (name === null) {
+/** Longest `<addon>,static/<path>` reference, in characters (the server caps a menu icon value at 2048 bytes). */
+const MAX_ADDON_ICON_REFERENCE = 512;
+const ADDON_NAME = /^[a-z][a-z0-9_]*$/;
+const STATIC_SEGMENT = /^[A-Za-z0-9_-][A-Za-z0-9._-]*$/;
+const IMAGE_DATA_URL = /^data:image\/(?:svg\+xml|png)(?:;base64)?,/;
+/** Longest `data:` image a menu may carry, in characters: the server's menu icon cap. */
+const MAX_DATA_URL = 2048;
+
+/** The same-origin URL of an addon image a menu value names, or null when the value names none.
+ *
+ *  Accepted: `<addon>,static/<path>.svg|.png` (served as `/<addon>/static/<path>` from the addon's declared static
+ *  files; the server publishes those only for installed addons and sends SVG with a sandboxing policy) and
+ *  `data:image/svg+xml` or `data:image/png` URLs. Segments are plain names: no `..`, query, fragment or escape. */
+export function menuIconImageUrl(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  if (IMAGE_DATA_URL.test(value)) return value.length <= MAX_DATA_URL ? value : null;
+  if (value.length > MAX_ADDON_ICON_REFERENCE) return null;
+  const comma = value.indexOf(",");
+  if (comma < 0) return null;
+  const addon = value.slice(0, comma), path = value.slice(comma + 1);
+  if (!ADDON_NAME.test(addon)) return null;
+  const segments = path.split("/");
+  if (segments.length < 2 || segments[0] !== "static") return null;
+  if (!segments.slice(1).every(segment => STATIC_SEGMENT.test(segment) && segment !== "." && segment !== "..")) return null;
+  if (!/\.(?:svg|png)$/.test(path)) return null;
+  return `/${addon}/${path}`;
+}
+
+/** An addon image drawn as `<img>`: an SVG in an image context runs no script and loads nothing else. The label
+ *  beside it names the menu, so the image is decorative. A file that fails to load becomes the default glyph. */
+function menuIconImage(value: string, url: string): HTMLImageElement {
+  const image = document.createElement("img");
+  image.src = url;
+  image.alt = "";
+  image.decoding = "async";
+  image.setAttribute("aria-hidden", "true");
+  image.setAttribute("width", "18");
+  image.setAttribute("height", "18");
+  image.className = "erp-icon erp-icon-image";
+  image.dataset["icon"] = "image";
+  image.addEventListener("error", () => {
+    // Loading starts when `src` is set, but the error event is a later task: every caller has placed the image by then.
     reportUnknownMenuIcon(value);
     const svg = icon(DEFAULT_MENU_ICON);
-    svg.dataset["requestedIcon"] = "unknown";
-    return svg;
+    svg.dataset["requestedIcon"] = "unavailable";
+    for (const name of image.classList) if (name !== "erp-icon-image") svg.classList.add(name);
+    image.replaceWith(svg);
+  }, { once: true });
+  return image;
+}
+
+/** Menu metadata selects a checked local identity or a checked same-origin addon image; no markup is evaluated.
+ *  A value that names neither (an addon written against a newer icon set, a typo, a path outside `static/`) shows
+ *  the default icon and is reported on the console, so one menu never stops the application from starting. */
+export function menuIcon(value: string | null): SVGSVGElement | HTMLImageElement {
+  if (value !== null && knownMenuIcon(value) === null) {
+    const url = menuIconImageUrl(value);
+    if (url !== null) return menuIconImage(value, url);
   }
-  return icon(name);
+  return menuGlyph(value);
+}
+
+/** The shipped glyph a menu value names, or the reported default. */
+function menuGlyph(value: string | null): SVGSVGElement {
+  if (value === null) return icon(DEFAULT_MENU_ICON);
+  const name = knownMenuIcon(value);
+  if (name !== null) return icon(name);
+  reportUnknownMenuIcon(value);
+  const svg = icon(DEFAULT_MENU_ICON);
+  svg.dataset["requestedIcon"] = "unknown";
+  return svg;
 }
 
 /** Use each entry's declared glyph or the shared fallback, including menus supplied by addons. */
 export function menuEntryIcons(declared: readonly (string | null | undefined)[]): SVGSVGElement[] {
-  return declared.map(name => menuIcon(typeof name === "string" ? menuIconValue(name as IconName) : null));
+  return declared.map(name => menuGlyph(typeof name === "string" ? menuIconValue(name as IconName) : null));
 }

@@ -336,6 +336,70 @@ async fn an_action_whose_record_was_deleted_is_refused() {
     h.cleanup().await.unwrap();
 }
 
+#[tokio::test]
+async fn a_menu_icon_the_client_cannot_draw_fails_the_load_and_names_the_menu() {
+    let h = harness().await;
+    // Each refused load runs in its own transaction: a failed load leaves its transaction for the caller to drop.
+    for (xml, reason) in [
+        (
+            r#"<menuitem id="bad" name="Bad App" web_icon="m,static/../../secret.svg"/>"#,
+            "an addon icon path holds only plain file names",
+        ),
+        (
+            r#"<menuitem id="bad" name="Bad App" web_icon="m,icon.svg"/>"#,
+            "an addon icon lies inside the addon's 'static/' directory",
+        ),
+        (
+            r#"<menuitem id="bad" name="Bad App" web_icon="fa-home"/>"#,
+            "a menu icon is 'lucide:<name>'",
+        ),
+        (
+            r#"<menuitem id="bad" name="Bad App" web_icon="data:text/html,x"/>"#,
+            "a data URL icon is image/svg+xml or image/png",
+        ),
+        // A record write is held to the same grammar as a <menuitem>.
+        (
+            r#"<record id="bad" model="ir.ui.menu"><field name="name">Bad App</field><field name="web_icon">m,static/icon.svg?v=2</field></record>"#,
+            "an addon icon path holds only plain file names",
+        ),
+    ] {
+        let mut tx = begin(&h).await;
+        let err = init(&mut session(), &mut tx, &format!("<odoo>{xml}</odoo>"))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.orm_kind(),
+            Some(erp_sdk::ErrorKind::Validation),
+            "{xml}"
+        );
+        let message = err.source().unwrap().to_string();
+        assert!(
+            message.contains("('Bad App') has an invalid web_icon: "),
+            "{message}"
+        );
+        assert!(message.contains(reason), "{message}");
+        assert!(
+            !message.contains("secret") && !message.contains("v=2"),
+            "the value is not echoed: {message}"
+        );
+        tx.rollback().await.unwrap();
+    }
+    let mut tx = begin(&h).await;
+    init(
+        &mut session(),
+        &mut tx,
+        r#"<odoo><menuitem id="ok" name="Ok" web_icon="m,static/description/icon.svg"/></odoo>"#,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        cell(&mut tx, "ir.ui.menu", "m.ok", "web_icon").await,
+        s("m,static/description/icon.svg")
+    );
+    tx.rollback().await.unwrap();
+    h.cleanup().await.unwrap();
+}
+
 // t3 is a primary view over t1: the real `ir.ui.view` checks that its root element can be located in the
 // parent arch, so it repeats t1's `<div>` root.
 const TEMPLATES: &str = r#"<odoo>

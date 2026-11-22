@@ -1,6 +1,6 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import { el } from "./dom.js";
-import { DEFAULT_MENU_ICON, icon, knownMenuIcon, menuIcon, menuIconChoices, menuIconValue } from "./icons.js";
+import { DEFAULT_MENU_ICON, icon, knownMenuIcon, menuIcon, menuIconChoices, menuIconImageUrl, menuIconValue } from "./icons.js";
 import { registerFieldWidget, type WidgetEnvironment, type WidgetHandle } from "./registry.js";
 
 let pickerCount = 0;
@@ -16,6 +16,7 @@ export function menuIconPicker(environment: WidgetEnvironment): WidgetHandle {
   const { field, value, change } = environment;
   const current = typeof value === "string" && value !== "" ? value : null;
   const known = knownMenuIcon(current);
+  const image = known === null ? menuIconImageUrl(current) : null;
   const id = `menu-icon-${++pickerCount}`;
   const toggleKey = `menu-icon:${field.name}:toggle`;
 
@@ -30,11 +31,11 @@ export function menuIconPicker(environment: WidgetEnvironment): WidgetHandle {
   const area = el("div", undefined, "menu-icon-picker");
   const preview = el("span", undefined, "menu-icon-preview");
   preview.append(menuIcon(current));
-  const caption = el("span", known ?? (current === null ? `Default (${DEFAULT_MENU_ICON})` : current), "menu-icon-name");
+  const caption = el("span", known ?? (current === null ? `Default (${DEFAULT_MENU_ICON})` : image?.startsWith("data:") ? "Embedded image" : current), "menu-icon-name");
   const head = el("div", undefined, "menu-icon-head");
   head.append(preview, caption);
   area.append(head);
-  if (current !== null && known === null) {
+  if (current !== null && known === null && image === null) {
     area.append(el("p", "This icon is not shipped with this version; the default icon is shown.", "menu-icon-note"));
   }
   if (!field.readonly) {

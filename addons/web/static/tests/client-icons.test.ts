@@ -1,6 +1,6 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import { afterEach, expect, test, vi } from "vitest";
-import { DEFAULT_MENU_ICON, menuIcon, menuIconChoices } from "../src/client/icons.js";
+import { DEFAULT_MENU_ICON, menuIcon, menuIconChoices, menuIconImageUrl } from "../src/client/icons.js";
 import { actionButton, button, isActionLabel } from "../src/client/dom.js";
 import { fieldWidgets } from "../src/client/registry.js";
 import { menuIconPicker } from "../src/client/menu-icon-picker.js";
@@ -124,4 +124,67 @@ test("picker groups native controls without listbox semantics or a multi-control
   node.querySelector<HTMLInputElement>(".menu-icon-search")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   expect(document.activeElement).toBe(toggle);
   expect(toggle.getAttribute("aria-expanded")).toBe("false");
+});
+
+test("an addon image menu icon is drawn as a decorative same-origin <img>, never inline markup", () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  for (const [value, src] of [
+    ["my_addon,static/description/icon.svg", "/my_addon/static/description/icon.svg"],
+    ["m,static/i.png", "/m/static/i.png"],
+    ["data:image/png;base64,iVBORw0KGgo=", "data:image/png;base64,iVBORw0KGgo="],
+  ] as const) {
+    const node = menuIcon(value);
+    expect(node).toBeInstanceOf(HTMLImageElement);
+    expect(node.getAttribute("src")).toBe(src);
+    expect(node.getAttribute("alt")).toBe("");
+    expect(node.getAttribute("aria-hidden")).toBe("true");
+    expect(node.classList.contains("erp-icon")).toBe(true);
+    expect(menuIconImageUrl(value)).toBe(src);
+  }
+  expect(warn).not.toHaveBeenCalled();
+});
+
+test("traversal, other directories and types, other schemes and oversize data URLs show the default glyph, reported once", () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const refused = [
+    "m,static/../../etc/passwd.svg", "m,static/./i.svg", "m,static//i.svg", "m,static/i.svg?v=1", "m,static/i.svg#x",
+    "m,static/%2e%2e/i.svg", "m,icon.svg", "m,static/i.gif", "M,static/i.svg", "../m,static/i.svg", "/m,static/i.svg",
+    "https://evil.example/i.svg", "//evil.example,static/i.svg", "javascript:alert(1)", "data:text/html,<script>alert(1)</script>",
+    `data:image/png;base64,${"A".repeat(2048)}`, `m,static/${"a".repeat(600)}.svg`,
+  ];
+  for (const value of refused) {
+    expect(menuIconImageUrl(value), value).toBeNull();
+    const node = menuIcon(value);
+    expect(node, value).toBeInstanceOf(SVGSVGElement);
+    expect(node.dataset["icon"]).toBe(DEFAULT_MENU_ICON);
+    expect(node.outerHTML).not.toContain("evil.example");
+  }
+  expect(warn).toHaveBeenCalledTimes(refused.length);
+  menuIcon(refused[0]!);
+  expect(warn).toHaveBeenCalledTimes(refused.length);
+});
+
+test("an addon image that fails to load becomes the default glyph in place, keeping the site's classes", () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const host = document.createElement("span");
+  const image = menuIcon("gone_addon,static/description/icon.svg");
+  image.classList.add("menu-entry-icon");
+  host.append(image);
+  image.dispatchEvent(new Event("error"));
+  const glyph = host.firstElementChild as SVGSVGElement;
+  expect(glyph).toBeInstanceOf(SVGSVGElement);
+  expect(glyph.dataset["icon"]).toBe(DEFAULT_MENU_ICON);
+  expect(glyph.dataset["requestedIcon"]).toBe("unavailable");
+  expect(glyph.classList.contains("menu-entry-icon")).toBe(true);
+  expect(glyph.classList.contains("erp-icon-image")).toBe(false);
+  expect(warn).toHaveBeenCalledOnce();
+});
+
+test("the picker previews an addon image without the 'not shipped' note", () => {
+  const { node } = picker("my_addon,static/description/icon.svg");
+  expect(node.querySelector(".menu-icon-preview img")?.getAttribute("src")).toBe("/my_addon/static/description/icon.svg");
+  expect(node.textContent).not.toContain("not shipped");
+  expect(node.querySelector(".menu-icon-name")?.textContent).toBe("my_addon,static/description/icon.svg");
+  const embedded = picker("data:image/png;base64,iVBORw0KGgo=");
+  expect(embedded.node.querySelector(".menu-icon-name")?.textContent).toBe("Embedded image");
 });

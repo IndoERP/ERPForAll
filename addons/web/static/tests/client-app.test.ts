@@ -2162,6 +2162,33 @@ test("invalid Lucide menu identity cannot fall through to external image renderi
   warn.mockRestore();
 });
 
+test("an addon SVG menu icon is drawn as an <img> on the home grid and in the navigation, a lucide glyph stays a glyph", async () => {
+  history.replaceState(null, "", "/erp");
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+    wire_major: 1, registry_version: "r1", roots: [10, 11], nodes: [
+      { module: "my_addon", id: 10, parent_id: null, label: "Timesheets", action_id: 20, children: [], icon: "my_addon,static/description/icon.svg" },
+      { module: null, id: 11, parent_id: null, label: "Library", action_id: 21, children: [], icon: "lucide:library" }
+    ]
+  }), { headers: { "Content-Type": "application/json" } })));
+  const root = host(); app = new HumanApp(root, bootstrap);
+  await app.start();
+  const tile = root.querySelector('[data-menu-id="10"] .app-icon')!;
+  expect(tile.querySelector("img")?.getAttribute("src")).toBe("/my_addon/static/description/icon.svg");
+  expect(tile.classList.contains("app-icon-fallback")).toBe(false);
+  expect(root.querySelector('[data-menu-id="11"] .app-icon svg')?.getAttribute("data-icon")).toBe("library");
+  expect(root.querySelector('[data-menu-id="11"] .app-icon')?.classList.contains("app-icon-fallback")).toBe(true);
+  const images = [...root.querySelectorAll('img[src="/my_addon/static/description/icon.svg"]')];
+  expect(images.length).toBeGreaterThan(1);
+  for (const image of images) expect(image.getAttribute("alt")).toBe("");
+  expect(warn).not.toHaveBeenCalled();
+  // A file the server does not publish (addon not installed, path not declared) falls back on the tile too.
+  tile.querySelector("img")!.dispatchEvent(new Event("error"));
+  expect(tile.querySelector("svg")?.getAttribute("data-icon")).toBe("layout-grid");
+  expect(tile.classList.contains("app-icon-fallback")).toBe(true);
+  warn.mockRestore();
+});
+
 async function mobileNavigationFixture(): Promise<HTMLElement> {
   history.replaceState(null, "", "/erp/action-20?menu=11");
   vi.stubGlobal("fetch", vi.fn(async (path: string) => {

@@ -59,7 +59,8 @@ pub struct IrUiMenu {
         string = "Groups"
     )]
     pub group_ids: Vec<RecId>,
-    /// Icon of a top-level menu (`module,path` or a data URL).
+    /// Icon of a menu: `lucide:<name>`, `<addon>,static/<path>.svg|.png` or a `data:image/svg+xml` or
+    /// `data:image/png` URL (see [`check_web_icon`]).
     #[field(char, string = "Web Icon File")]
     pub web_icon: Option<Arc<str>>,
     /// The action it opens, as `model,id`; the report slice adds its model with
@@ -104,6 +105,163 @@ fn menu_group_ids(row: &BTreeMap<String, Value>) -> Result<Vec<erp_sdk::access::
             )),
         })
         .collect()
+}
+
+/// Longest `lucide:<name>` value, in bytes.
+const MAX_GLYPH_ICON_BYTES: usize = 64;
+/// Longest `<addon>,static/<path>` value, in bytes.
+const MAX_ADDON_ICON_BYTES: usize = 512;
+/// Longest `data:` image value, in bytes; the menu metadata refuses larger icon values anyway.
+const MAX_DATA_ICON_BYTES: usize = 2048;
+
+fn is_glyph_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.split('-').all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        })
+}
+
+fn is_addon_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    bytes.next().is_some_and(|b| b.is_ascii_lowercase())
+        && bytes.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+}
+
+fn is_static_segment(segment: &str) -> bool {
+    segment.bytes().next().is_some_and(|b| b != b'.')
+        && segment
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+}
+
+/// Check the grammar of a menu icon value; the web client draws exactly these and nothing else.
+///
+/// - `lucide:<name>`: a glyph the client ships (`<name>` is lowercase words joined by `-`);
+/// - `<addon>,static/<path>.svg` or `.png`: an image the addon publishes from its `static/` directory, drawn
+///   as `<img>`; every path segment is a plain file name (no `.`/`..`, query, fragment or escape);
+/// - `data:image/svg+xml` or `data:image/png` (plain or `;base64`), at most 2048 bytes.
+///
+/// # Errors
+/// The reason, without the value, when the value matches none of these.
+pub fn check_web_icon(value: &str) -> std::result::Result<(), &'static str> {
+    if let Some(name) = value.strip_prefix("lucide:") {
+        return if value.len() <= MAX_GLYPH_ICON_BYTES && is_glyph_name(name) {
+            Ok(())
+        } else {
+            Err("a 'lucide:' icon name is lowercase words joined by '-', at most 64 bytes")
+        };
+    }
+    if let Some(rest) = value.strip_prefix("data:") {
+        let media = rest.split_once(',').map(|(media, _)| media);
+        return match media {
+            Some("image/svg+xml" | "image/svg+xml;base64" | "image/png" | "image/png;base64")
+                if value.len() <= MAX_DATA_ICON_BYTES =>
+            {
+                Ok(())
+            }
+            Some("image/svg+xml" | "image/svg+xml;base64" | "image/png" | "image/png;base64") => {
+                Err("a data URL icon is at most 2048 bytes")
+            }
+            _ => Err("a data URL icon is image/svg+xml or image/png"),
+        };
+    }
+    let Some((addon, path)) = value.split_once(',') else {
+        return Err(
+            "a menu icon is 'lucide:<name>', '<addon>,static/<path>.svg|.png' or an image data URL",
+        );
+    };
+    if value.len() > MAX_ADDON_ICON_BYTES {
+        return Err("an addon icon reference is at most 512 bytes");
+    }
+    if !is_addon_name(addon) {
+        return Err("an addon icon reference starts with an addon technical name");
+    }
+    let mut segments = path.split('/');
+    if segments.next() != Some("static") {
+        return Err("an addon icon lies inside the addon's 'static/' directory");
+    }
+    let mut count = 0;
+    for segment in segments {
+        if !is_static_segment(segment) {
+            return Err(
+                "an addon icon path holds only plain file names (letters, digits, '.', '_', '-'; no '..')",
+            );
+        }
+        count += 1;
+    }
+    if count == 0 || !(path.ends_with(".svg") || path.ends_with(".png")) {
+        return Err("an addon icon is an .svg or .png file");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod web_icon_tests {
+    use super::check_web_icon;
+
+    #[test]
+    fn accepts_glyphs_addon_images_and_small_image_data_urls() {
+        for value in [
+            "lucide:settings",
+            "lucide:receipt-text",
+            "lucide:panels-top-left",
+            "m,static/i.png",
+            "my_addon,static/description/icon.svg",
+            "my_addon,static/icons/app-dark_2.svg",
+            "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%2F%3E",
+            "data:image/png;base64,iVBORw0KGgo=",
+        ] {
+            assert_eq!(check_web_icon(value), Ok(()), "{value}");
+        }
+    }
+
+    #[test]
+    fn refuses_traversal_other_directories_types_schemes_and_oversize() {
+        let long_data = format!("data:image/png;base64,{}", "A".repeat(2048));
+        let long_path = format!("m,static/{}.svg", "a".repeat(600));
+        for (value, reason) in [
+            ("lucide:", "lowercase words"),
+            ("lucide:Settings", "lowercase words"),
+            ("lucide:a--b", "lowercase words"),
+            ("fa-home", "a menu icon is"),
+            ("i.png", "a menu icon is"),
+            ("m,i.png", "inside the addon's 'static/'"),
+            ("m,static/../../etc/passwd.svg", "plain file names"),
+            ("m,static/./i.svg", "plain file names"),
+            ("m,static//i.svg", "plain file names"),
+            ("m,static/i.svg?x=1", "plain file names"),
+            ("m,static/i%2e.svg", "plain file names"),
+            ("m,static/", "plain file names"),
+            ("m,static", "an .svg or .png"),
+            ("m,static/i.gif", "an .svg or .png"),
+            ("m,static/icon.svg.js", "an .svg or .png"),
+            ("M,static/i.svg", "addon technical name"),
+            ("../m,static/i.svg", "addon technical name"),
+            ("/m,static/i.svg", "addon technical name"),
+            (
+                "https://evil.example/i.svg,static/x.svg",
+                "addon technical name",
+            ),
+            (
+                "data:text/html,<script>alert(1)</script>",
+                "image/svg+xml or image/png",
+            ),
+            (
+                "data:image/svg+xml;charset=utf-8,<svg/>",
+                "image/svg+xml or image/png",
+            ),
+            ("data:image/png", "image/svg+xml or image/png"),
+            (long_data.as_str(), "at most 2048 bytes"),
+            (long_path.as_str(), "at most 512 bytes"),
+            ("javascript:alert(1)", "a menu icon is"),
+        ] {
+            let error = check_web_icon(value).expect_err(value);
+            assert!(error.contains(reason), "{value}: {error}");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -509,6 +667,28 @@ impl IrUiMenu {
         }
 
         Ok(visible_ids)
+    }
+
+    /// A menu icon is a value the web client can draw (module data and RPC writes alike), so a typo or a path
+    /// outside an addon's `static/` fails the install instead of showing a broken icon.
+    #[constrains("web_icon")]
+    async fn _check_web_icon(this: &RecordSet<IrUiMenu>, tx: &mut Transaction) -> Result<()> {
+        for (id, rec) in this.as_records().ids().into_iter().zip(this.iter()) {
+            let Some(icon) = rec.get(tx, IrUiMenu::WEB_ICON).await? else {
+                continue;
+            };
+            if icon.is_empty() {
+                continue;
+            }
+            if let Err(reason) = check_web_icon(&icon) {
+                let name = rec.get(tx, IrUiMenu::NAME).await?;
+                return Err(Error::validation(format!(
+                    "Menu {id} ('{}') has an invalid web_icon: {reason}.",
+                    name.as_deref().unwrap_or("")
+                )));
+            }
+        }
+        Ok(())
     }
 
     #[method(override)]

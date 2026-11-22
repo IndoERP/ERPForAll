@@ -111,6 +111,18 @@ The client is TypeScript, compiled ahead of time:
 - XML templates are compiled by `erp-ui-compile` and bundled by `web/scripts/build-human-ui.mjs`, as shown in the
   installation guide.
 
+A menu's icon (`web_icon` on `<menuitem>` or `ir.ui.menu`) is one of:
+
+- `lucide:<name>`, a glyph the client ships (the menu icon picker lists them);
+- `<addon>,static/<path>.svg` or `.png`, an image of the addon: list `static/<path>` under `static_files` in the
+  addon's asset manifest (`static/dist/manifest.json`) so the server publishes it at `/<addon>/static/<path>`.
+  The client draws it as `<img>` (an SVG there runs no script, and the server sends SVG files with a sandboxing
+  `Content-Security-Policy`); a file that is not published shows the default glyph;
+- a `data:image/svg+xml` or `data:image/png` URL of at most 2048 bytes.
+
+The same icon is drawn on the home screen, in the navigation and in Settings. Any other value fails the write that
+stores it, so an addon with a mistyped icon fails to install.
+
 Checks (after `eval "$(scripts/web-toolchain.sh env)"` and `pnpm --dir web install --frozen-lockfile`):
 
 ```sh

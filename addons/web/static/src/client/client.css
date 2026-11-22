@@ -1146,6 +1146,8 @@ input[type=checkbox].boolean-toggle:focus-visible { outline: 2px solid var(--acc
 .action-toggle-btn > .erp-icon { margin-inline-start: 6px; margin-inline-end: 0; }
 .print-toggle-btn > .erp-icon, .print-report-btn > .erp-icon { width: 16px; height: 16px; }
 .app-icon > .erp-icon { width: 30px; height: 30px; color: var(--launcher-fg); }
+.erp-icon-image { object-fit: contain; }
+.app-icon > .erp-icon-image { width: 100%; height: 100%; object-fit: cover; }
 .user-button > .erp-icon { width: 14px; height: 14px; }
 
 .client-error-dialog { overflow:auto; }

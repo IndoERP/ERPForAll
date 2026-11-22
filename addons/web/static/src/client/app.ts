@@ -1565,15 +1565,11 @@ export class HumanApp {
 
         const iconBox = el("div", undefined, "app-icon");
         iconBox.setAttribute("aria-hidden", "true");
-        if (rootMenu.icon && !rootMenu.icon.startsWith("lucide:") && (rootMenu.icon.includes("/") || rootMenu.icon.startsWith("data:"))) {
-          const img = el("img");
-          img.src = rootMenu.icon.includes(",") ? "/" + rootMenu.icon.split(",")[0] + "/" + rootMenu.icon.split(",")[1] : rootMenu.icon;
-          img.alt = "";
-          iconBox.append(img);
-        } else {
-          iconBox.append(menuIcon(rootMenu.icon));
-          iconBox.classList.add("app-icon-fallback");
-        }
+        const appIcon = menuIcon(rootMenu.icon);
+        iconBox.append(appIcon);
+        // An addon image fills the tile; a glyph sits on the launcher background (also when the image fails to load).
+        if (!(appIcon instanceof HTMLImageElement)) iconBox.classList.add("app-icon-fallback");
+        else appIcon.addEventListener("error", () => iconBox.classList.add("app-icon-fallback"), { once: true });
         const caption = el("div", rootMenu.label, "app-caption");
         tile.append(iconBox, caption);
         grid.append(tile);

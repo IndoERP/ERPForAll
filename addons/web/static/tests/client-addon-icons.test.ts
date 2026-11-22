@@ -58,3 +58,9 @@ test("an Apps tile shows the declared icon instead of its letter", async () => {
   expect(theme?.hasAttribute("data-letter")).toBe(false);
   expect(tiles.some(tile => tile.getAttribute("data-letter") === "U")).toBe(true);
 });
+
+test("a Settings app whose root menu names an addon SVG shows that image in the sidebar", async () => {
+  const { host } = await settings([{ ...notesRoot, icon: "notes,static/description/icon.svg" }], catalog);
+  const notes = [...host.querySelectorAll(".settings-app-tab")].find(tab => tab.textContent?.includes("Notes"))!;
+  expect(notes.querySelector(".settings-app-icon img")?.getAttribute("src")).toBe("/notes/static/description/icon.svg");
+});
