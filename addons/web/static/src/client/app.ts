@@ -41,7 +41,7 @@ import { buttonHidden, lockButtonControls, runObjectButton, buttonExpression, ty
 import { viewButton, ButtonDebouncer, ButtonHotkeys } from "./view-button.js";
 import { runUrlButton } from "./button-url.js";
 import { CurrencyDisplayCache } from "./field-currency.js";
-import { fieldWidgets, resolveFieldWidget, type ActionRequest } from "./registry.js";
+import { fieldWidgets, resolveFieldWidget, type ActionRequest, type ShellNavigation } from "./registry.js";
 import { ListGroupModel, type ListGroupNode } from "./list-group-model.js";
 import type { ListGroupState } from "./list-group-state.js";
 import type { NumericLocale } from "./numeric-values.js";
@@ -153,6 +153,17 @@ export function isFalsy(value: unknown): boolean {
   return false;
 }
 
+/** An `openAction` request from addon code, checked before anything is read: an XML id, a view mode, a domain list
+ *  and a context of `default_<field>` keys only (as a dashboard card's). */
+function admitAddonActionRequest(request: ActionRequest): ActionRequest {
+  const refuse = (path: string, problem: string): never => { throw new ClientError("validation", `openAction: ${path} ${problem}.`); };
+  if (typeof request !== "object" || request === null) return refuse("the request", "must be an object");
+  if (typeof request.xmlId !== "string" || request.xmlId.length > 128 || !/^[a-z0-9_]+\.[A-Za-z0-9_]+$/.test(request.xmlId)) return refuse("the XML id", "must be module.name");
+  if (request.viewMode !== "list" && request.viewMode !== "form" && request.viewMode !== null) return refuse("the view mode", "must be list, form or null");
+  if (!Array.isArray(request.domain)) return refuse("the domain", "must be a list");
+  return { xmlId: request.xmlId, viewMode: request.viewMode, domain: [...request.domain], context: admitRequestContext(request.context, "the context", refuse) };
+}
+
 export class HumanApp {
   private readonly errors: ErrorDialog;
   readonly messages: MessageServices;
@@ -189,6 +200,8 @@ export class HumanApp {
   private current: Route = {};
   private currentUrl = window.location.pathname + window.location.search;
   private generation = 0;
+  /** The navigation generation whose page is on screen (`current`); a later one may still be staging. */
+  private shownGeneration = 0;
   /** Number of the latest action a dashboard card asked to open (`openActionRequest`). */
   private actionRequest = 0;
   /** Settles when the navigation now running ends, whether it committed, was superseded or failed. */
@@ -561,6 +574,9 @@ export class HumanApp {
 
     const systray = el("div", undefined, "systray");
     const customSystrayContainer = el("div", undefined, "systray-custom-items");
+    // A handle that arrives after this header was replaced is disposed, not added to the newer header's disposers.
+    const headerStops = this.disposeHeader;
+    const systrayNavigation = this.shellWideNavigation(() => this.disposeHeader === headerStops);
     const systrayEnv: SystrayEnvironment = {
       userId: this.userId,
       csrfToken: text(object(bootstrap["csrf"])["logout"], "session token"),
@@ -569,10 +585,10 @@ export class HumanApp {
       run: job => this.run(job),
       report: err => this.reportError(err),
       messages: this.messages,
-      openActivities: action => this.openActivities(action)
+      openActivities: action => this.openActivities(action),
+      navigate: systrayNavigation.navigate,
+      openAction: systrayNavigation.openAction
     };
-    // A handle that arrives after this header was replaced is disposed, not added to the newer header's disposers.
-    const headerStops = this.disposeHeader;
     renderSystray(customSystrayContainer, systrayItems.entries(), systrayEnv).then(handle => {
       if (this.disposeHeader === headerStops) headerStops.push(() => handle.dispose());
       else handle.dispose();
@@ -1244,8 +1260,53 @@ export class HumanApp {
     return context;
   }
 
-  /** Opens a window action named by its XML id (dashboard cards): its list, or a new record in its form, filtered by
-   *  the action's domain and the request's, with the request's context and the way back to `origin`. */
+  /** The `ShellNavigation` handed to addon code. `live` says whether the owner that received it is still the one on
+   *  screen (after that both do nothing); `origin` is the page `openAction` leads back to, read when it is called. */
+  private shellNavigation(live: () => boolean, origin: () => { route: Route; label: string }): ShellNavigation {
+    const usable = (): boolean => live() && !this.expired && !this.lifetime.signal.aborted;
+    return {
+      navigate: async requested => {
+        if (!usable()) return;
+        const route: Route = { ...requested };
+        routeUrl(route); // a malformed route fails here, before any guard runs
+        if (route.method_action !== undefined) throw new ClientError("validation", "Addon navigation cannot name a method action: open the action with openAction instead.");
+        const active = new Set(this.activeCompanyIds.map(String));
+        if (route.cids !== undefined && (route.cids.length !== active.size || route.cids.some(id => !active.has(id)))) {
+          // Other companies are a new company context: the page loads again with them, as the company switcher does.
+          if (await this.canLeave()) this.navigateLocation(routeUrl(route));
+          return;
+        }
+        await this.navigate(route);
+      },
+      openAction: async request => {
+        if (!usable()) return;
+        const admitted = admitAddonActionRequest(request);
+        const from = origin();
+        await this.openActionRequest(admitted, from.route, from.label);
+      }
+    };
+  }
+
+  /** `ShellNavigation` for code that lives as long as the shell (systray items): it leads back to the page open at the
+   *  time of the call. */
+  private shellWideNavigation(live: () => boolean): ShellNavigation {
+    return this.shellNavigation(live, () => {
+      const menu = this.current.menu === undefined ? undefined : this.menus.get(Number(this.current.menu));
+      return { route: { ...this.current }, label: this.breadcrumbs.current?.title ?? menu?.label ?? "Back" };
+    });
+  }
+
+  /** `ShellNavigation` for code that belongs to the page of navigation `generation` (a service, a client action, a
+   *  field widget): it stops when that page is left and leads back to that page as it is at the time of the call (its
+   *  address keeps search and record changes), or to `route` while the page is still being built; titled `label`. */
+  private pageNavigation(generation: number, route: Route, label: () => string): ShellNavigation {
+    return this.shellNavigation(() => generation === this.generation,
+      () => ({ route: this.shownGeneration === generation ? { ...this.current } : { ...route }, label: label() }));
+  }
+
+  /** Opens a window action named by its XML id (dashboard cards, addon code): its list, or a new record in its form,
+   *  filtered by the action's domain and the request's, with the request's context and the way back to `origin`.
+   *  From a page without an action (the app grid), the way back is the opened action's own list. */
   private async openActionRequest(request: ActionRequest, origin: Route, originLabel: string): Promise<void> {
     // The list's stale-answer guard: request number, route generation, expiry. The read does not block the page, so
     // the user may go elsewhere or activate a control again before it answers; only the latest request of the page
@@ -1266,8 +1327,11 @@ export class HumanApp {
       domain: [...this.actionDomain(action, context), ...request.domain], context: {},
       views: [{ id: list[0] ?? null, type: "list" }, ...(form ? [{ id: form[0] ?? null, type: "form" }] : [])] } });
     if (result.kind !== "current_window") throw new ClientError("server", "The dashboard action did not open as a list.");
-    const id = this.methodActions.add({ result, context, origin: { ...origin }, originLabel });
-    try { await this.navigate({ action: origin.action, menu: origin.menu, cids: origin.cids, method_action: id, model: result.model, view_type: request.viewMode === "form" ? "form" : "list" }); }
+    // A method action lives under an action route; the app grid has none, so the opened action anchors itself.
+    const anchor: Route = origin.action !== undefined ? { ...origin } : { action: String(integer(action["id"], "action id")), ...(origin.cids === undefined ? {} : { cids: origin.cids }) };
+    const label = origin.action !== undefined ? originLabel : result.name;
+    const id = this.methodActions.add({ result, context, origin: anchor, originLabel: label });
+    try { await this.navigate({ action: anchor.action, menu: anchor.menu, cids: anchor.cids, method_action: id, model: result.model, view_type: request.viewMode === "form" ? "form" : "list" }); }
     catch (error) { this.methodActions.remove(id); throw error; }
     // A navigation that did not arrive (the page may not be left) keeps no entry behind.
     if (this.current.method_action !== id) this.methodActions.remove(id);
@@ -1987,6 +2051,9 @@ export class HumanApp {
 
   private async navigate(route: Route, initial = false, fromHistory = false, invocation?: { caller: RecordState; generation: number }, options?: { autosave?: boolean; target?: "current" | "main" | "new" }): Promise<void> {
     if(this.debug)route={...route,debug:"1"};
+    // The page's companies stay in the address: a route that names none (a menu, a breadcrumb, addon code) keeps
+    // them, so a reload or a copied link opens the same companies. A history entry is restored as it was recorded.
+    if (route.cids === undefined && this.current.cids !== undefined && !fromHistory) route = { ...route, cids: [...this.current.cids] };
     if (invocation) {
       // A completed object call already saved/validated its record. Do not weaken canLeave's
       // global pending guard: only the exact active invocation can consume this handoff once.
@@ -2072,6 +2139,7 @@ export class HumanApp {
           const widget = widgets[0]!;
           if (widget.widget === "web.settings") mountedPanel.update({ title: "Settings", model });
           nextService = await serviceControllers.get(widget.widget).create({
+            ...this.pageNavigation(generation, route, () => actionTitle),
             host: staging,
             panel,
             controls,
@@ -2164,6 +2232,7 @@ export class HumanApp {
       this.record = nextRecord;
       this.service = nextService;
       this.current = route;
+      this.shownGeneration = generation;
       committed = true;
 
       this.renderNavigation(route);
@@ -2660,6 +2729,7 @@ export class HumanApp {
   private async kanbanView(staging: HTMLElement, panel: HTMLElement, actionTitle: string, description: Description, view: View, route: Route, generation: number, availableViews: [number | null, string][], scope: { baseDomain: unknown[]; context: Record<string, unknown>; hasForm: boolean }): Promise<{ dispose: () => void; restore: () => void }> {
     const { context, baseDomain, hasForm } = scope;
     if (route.id !== undefined) throw new ClientError("validation", "The kanban view shows many records; the address cannot name one record.");
+    const cardNavigation = this.pageNavigation(generation, route, () => actionTitle);
     const root = kanbanRoot(view), layout = kanbanLayout(view);
     const resume = this.kanbanResume?.url === routeUrl(route) ? this.kanbanResume : undefined;
     this.kanbanResume = undefined;
@@ -2758,7 +2828,7 @@ export class HumanApp {
           rpc: this.rpc, context, currencies, numericLocale: this.numericLocale, editorLocale: this.editorLocale,
           messages: this.messages, run: this.run, report: error => this.reportError(error), signal: this.lifetime.signal,
           openRecord: (model, related) => this.openRelatedRecord(model, related), change: () => { throw new ClientError("validation", "Kanban card fields cannot be edited here."); },
-          openAction: request => this.openActionRequest(request, route, actionTitle),
+          ...cardNavigation,
         });
       } });
       body.replaceChildren(cards.node);
@@ -2832,6 +2902,7 @@ export class HumanApp {
 
   private async listView(staging: HTMLElement, panel: HTMLElement, actionTitle: string, description: Description, view: View, route: Route, generation: number, actionHelp?: string, availableViews?: [number | null, string][], scope?: {baseDomain: unknown[]; context: Record<string, unknown>; hasForm: boolean; canCreate: boolean}): Promise<{ dispose: () => void; settle: () => void }> {
     const context = scope?.context ?? this.context, baseDomain = scope?.baseDomain ?? [], hasForm = scope?.hasForm ?? true, canCreate = scope?.canCreate ?? hasForm;
+    const cellNavigation = this.pageNavigation(generation, route, () => actionTitle);
     const fieldStops: (() => void)[] = [];
     let groupedModel: ListGroupModel | undefined;
     const currencies = new CurrencyDisplayCache();
@@ -3423,6 +3494,7 @@ export class HumanApp {
             rpc: this.rpc, context, currencies, numericLocale: this.numericLocale, editorLocale: this.editorLocale,
             messages: this.messages, run: this.run, report: error => this.reportError(error), signal: this.lifetime.signal,
             openRecord: (model, related) => this.openRelatedRecord(model, related), change: () => { throw new ClientError("validation", "List display fields cannot be edited."); },
+            ...cellNavigation,
           });
           stops.push(handle.dispose);
           const widget = field.widget ?? field.kind;
@@ -3639,6 +3711,7 @@ export class HumanApp {
     const mounted = await mountControlPanel(staging, { title: result.name, model: "" }, error => this.reportError(error));
     stagedDisposers.push(mounted.dispose);
     const handle = await factory.create({
+      ...this.pageNavigation(generation, route, () => result.name),
       host: staging, panel: mounted.panel, controls: mounted.actions, rpc: this.rpc, companies: this.companies, run: this.run,
       notice: this.notice, messages: this.messages, editorLocale: this.editorLocale,
       // ORM company context and the assistant dock both use the first selected company.
@@ -4021,6 +4094,11 @@ export class HumanApp {
 
   private formView(staging: HTMLElement, controls: HTMLElement, panel: HTMLElement, actionTitle: string, state: RecordState, view: View, route: Route, availableViews?: [number | null, string][], context = this.context): () => void {
     const titleField = view.fields.find(f => f.name === "name" && f.kind === "char") || view.fields.find(f => f.kind === "char");
+    // Built while its navigation stages, so the current generation is this form's.
+    const fieldNavigation = this.pageNavigation(this.generation, route, () => {
+      const title = titleField ? state.values[titleField.name] : undefined;
+      return typeof title === "string" && title.trim() ? title : actionTitle;
+    });
     let surface: RecordForm | undefined;
     let headingObserver: MutationObserver | undefined;
     let formHotkeys: ReturnType<typeof createHotkeyController> | undefined;
@@ -4500,7 +4578,7 @@ export class HumanApp {
       messagingStore: this.getMessagingStore(), uid: this.userId, userName: this.userName,
       run: this.run, report: error => this.reportError(error), messages: this.messages, editorLocale: this.editorLocale,
       notify: message => this.messages.notifications.add(message, { level: "warning" }),
-      openRecord: (model, id) => this.openRelatedRecord(model, id), button: renderButton,
+      openRecord: (model, id) => this.openRelatedRecord(model, id), button: renderButton, navigation: fieldNavigation,
       changeValues: (changes, focus) => this.run(async () => {
         if (this.uncertainMethod || this.expired) throw new ClientError("ambiguous", uncertainMethodMessage);
         const changeGeneration = this.generation;

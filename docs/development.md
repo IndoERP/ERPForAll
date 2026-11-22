@@ -111,6 +111,23 @@ The client is TypeScript, compiled ahead of time:
 - XML templates are compiled by `erp-ui-compile` and bundled by `web/scripts/build-human-ui.mjs`, as shown in the
   installation guide.
 
+### Navigation from addon code
+
+Systray items, service controllers, client actions and field widgets (in the main form, list cells and kanban cards;
+not in dialogs or one2many lines) receive
+two functions from the shell (`ShellNavigation` in `addons/web/static/src/client/registry.ts`, exported from
+`public.ts` with the `Route` and `ActionRequest` types):
+
+- `navigate(route)` opens a route through the shell's guards (an unsaved record is saved or the user is asked). The
+  page's companies (`cids`) stay unless the route names its own; other companies load the page again with them, as
+  the company switcher does. A malformed route or one that names a `method_action` is refused.
+- `openAction({xmlId, viewMode, domain, context})` opens a window action by XML id as its list (or a new record in
+  its form) with the given domain and `default_<field>` context keys, with a breadcrumb back to the page it was
+  called from. Other context keys are refused.
+
+Both do nothing once the page that handed them out was left. The address of every page keeps the active companies,
+so a reload or a copied link opens the same companies.
+
 Checks (after `eval "$(scripts/web-toolchain.sh env)"` and `pnpm --dir web install --frozen-lockfile`):
 
 ```sh

@@ -3,6 +3,8 @@ import type { ComponentClass } from "@erpforall/elang";
 import type { RpcClient } from "./transport.js";
 import type { MessageServices } from "./messages.js";
 import type { ActivityWindowAction } from "./activity-menu.js";
+import type { ActionRequest } from "./registry.js";
+import type { Route } from "./route.js";
 
 export interface SystrayEnvironment {
   userId?: number;
@@ -15,6 +17,10 @@ export interface SystrayEnvironment {
   messages?: MessageServices;
   /** Opens a checked activity window action as a list; `null` opens the user's own "My Activities" list. */
   openActivities?: (action: ActivityWindowAction | null) => Promise<void>;
+  /** Goes to a route through the shell (see `ShellNavigation` in registry.ts). */
+  navigate?: (route: Route) => Promise<void>;
+  /** Opens a window action by XML id; the breadcrumb leads back to the page that was open. */
+  openAction?: (request: ActionRequest) => Promise<void>;
 }
 
 export interface SystrayItem {

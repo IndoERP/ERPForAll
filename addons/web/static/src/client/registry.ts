@@ -9,6 +9,7 @@ import type { Company } from "../generated/human-ui.js";
 import type { SettingsNavigation } from "./settings-items.js";
 import type { ServiceController } from "./services.js";
 import { ClientError, type RpcClient } from "./transport.js";
+import type { Route } from "./route.js";
 import type { CogMenuItem } from "./cog-menu.js";
 import type { SystrayItem } from "./systray.js";
 import type { CommandProvider, CommandCategory, CommandSetup } from "./command-palette.js";
@@ -34,6 +35,16 @@ export class Registry<T> {
 export interface FieldWidgetProps { field: Field; value: unknown; change: (value: unknown) => void }
 /** A window action named by its XML id, opened as its list (or a new record in its form) with a concrete domain and context. */
 export interface ActionRequest { xmlId: string; viewMode: "form" | "list" | null; domain: unknown[]; context: Record<string, unknown> }
+/** The shell navigation handed to addon code. Both go through the shell's guards (an unsaved record is saved or the
+ *  user is asked first). `navigate` keeps the page's companies unless the route names its own, and naming other
+ *  companies reloads the page with them (the server checks them). A route with a `method_action` is refused: that
+ *  identity belongs to the page. `openAction` opens a window action by XML id as its list (or a new record in its
+ *  form) with the request's domain and `default_<field>` context, and a breadcrumb back to the page it was called
+ *  from. Once the owner that received them is gone (the page was left), both do nothing. */
+export interface ShellNavigation {
+  navigate(route: Route): Promise<void>;
+  openAction(request: ActionRequest): Promise<void>;
+}
 export interface WidgetEnvironment extends FieldWidgetProps {
   /** Signed-in user and owning form view for local table preferences. */
   columnScope?: string | undefined;
@@ -55,8 +66,10 @@ export interface WidgetEnvironment extends FieldWidgetProps {
   /** Owner-scope disposal; stop reads and remove any protected child overlays when aborted. */
   signal?: AbortSignal;
   openRecord?: (model: string, id: number) => Promise<void>;
-  /** Opens a window action by XML id; present on kanban cards (the dashboard card widget). */
+  /** Opens a window action by XML id ({@link ShellNavigation.openAction}); present on the main form's fields, list cells and kanban cards (not in dialogs or one2many lines). */
   openAction?: (request: ActionRequest) => Promise<void>;
+  /** Goes to a route through the shell ({@link ShellNavigation.navigate}); present where `openAction` is. */
+  navigate?: (route: Route) => Promise<void>;
   rpc: RpcClient;
   context: Record<string, unknown>;
   run: (job: () => Promise<void>) => void;
@@ -76,12 +89,12 @@ export interface DraftWidgetLifecycle {
 export interface WidgetDraft { readonly value: string; readonly message: string }
 export interface WidgetHandle { node: HTMLElement; dispose(): void; captureDraft?(): WidgetDraft | undefined; restoreDraft?(draft: WidgetDraft): void; draft?: DraftWidgetLifecycle }
 export interface FieldWidget { isEmpty?(value: unknown): boolean; isValid?(value: unknown): boolean; kinds: readonly Field["kind"][]; render: (environment: WidgetEnvironment) => WidgetHandle }
-export interface ServiceEnvironment { /** Authorized Settings presentation and guarded navigation. */ settingsNavigation?: SettingsNavigation; messages?: MessageServices; editorLocale?: EditorLocale; host: HTMLElement; panel?: HTMLElement; controls?: HTMLElement; rpc: RpcClient; companies: readonly Company[]; run: (job: () => Promise<void>) => void; notice: (message: string) => void; context: Record<string, unknown>; registry: string; options: Record<string, unknown> }
+export interface ServiceEnvironment extends Partial<ShellNavigation> { /** Authorized Settings presentation and guarded navigation. */ settingsNavigation?: SettingsNavigation; messages?: MessageServices; editorLocale?: EditorLocale; host: HTMLElement; panel?: HTMLElement; controls?: HTMLElement; rpc: RpcClient; companies: readonly Company[]; run: (job: () => Promise<void>) => void; notice: (message: string) => void; context: Record<string, unknown>; registry: string; options: Record<string, unknown> }
 export interface ServiceFactory { model: string; validateOptions(options: Record<string, unknown>): void; create(environment: ServiceEnvironment): Promise<ServiceController> }
 /** The decoded `ir.actions.client` a screen is mounted. */
 export interface ClientActionDescriptor { readonly id: number | null; readonly name: string; readonly tag: string; readonly params: Readonly<Record<string, unknown>> }
 /** What a client action screen receives: the host area, the services a screen needs, its action and the state it left. */
-export interface ClientActionEnvironment {
+export interface ClientActionEnvironment extends Partial<ShellNavigation> {
   host: HTMLElement; panel: HTMLElement; controls: HTMLElement; rpc: RpcClient; companies: readonly Company[];
   run: (job: () => Promise<void>) => void; notice: (message: string) => void; messages: MessageServices; editorLocale: EditorLocale;
   /** Active interactive identity for first-party, session-bound client actions. */
