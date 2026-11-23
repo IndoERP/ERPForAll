@@ -478,6 +478,12 @@ const ENTRY_POINTS: &[(&str, Class)] = &[
             "the job_wake of a settings edit: called by the settings write (base ir_config_setting.rs) after a `base.jobs.*` value was stored under that write's own checks, it pokes the runners after the commit and sends one payload-free NOTIFY with the new policy's notify interval; reads and writes no record and grants nothing",
         ),
     ),
+    (
+        "jobs::schedule::sync_addon_schedules",
+        Unchecked(
+            "keeps the one erp_job row of each scheduled job kind of an installed, upgraded or uninstalled addon (core table erp_job, no record of a model) inside the module operation's transaction; refuses every principal but the system one, and only resolves the schedule's `run_as` user by external id (active internal `res.users`), never runs as the system",
+        ),
+    ),
     ("RecordSet::exists", Unchecked(PARITY_EXISTS)),
     ("RecordSet::try_lock_for_update", Unchecked(PARITY_LOCK)),
     ("RecordSet::new_record", Unchecked(NEW_RECORD)),
