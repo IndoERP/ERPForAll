@@ -194,7 +194,67 @@ Each
   <record id="settings_groups_form" model="ir.ui.view">
     <field name="name">res.groups.settings.form</field>
     <field name="model">res.groups</field>
-    <field name="arch" type="xml"><form record_mode="record"><field name="name"/><field name="share"/><field name="implied_ids"/></form></field>
+    <field name="arch" type="xml"><form record_mode="record">
+      <sheet>
+        <div class="oe_title"><h1><field name="name" placeholder="e.g. Sales Manager"/></h1></div>
+        <group>
+          <group>
+            <field name="privilege_id"/>
+            <field name="share"/>
+          </group>
+        </group>
+        <notebook>
+          <page name="users" string="Users">
+            <field name="user_ids" nolabel="1">
+              <list><field name="name"/><field name="login"/></list>
+            </field>
+          </page>
+          <page name="inherited" string="Inherited">
+            <group string="Groups this group implies">
+              <field name="implied_ids" nolabel="1"/>
+            </group>
+            <group string="Groups that imply this group">
+              <field name="implied_by_ids" nolabel="1" readonly="1"/>
+            </group>
+          </page>
+          <page name="access_rights" string="Access Rights">
+            <field name="access_ids" nolabel="1" readonly="1">
+              <list><field name="name"/><field name="model_id"/><field name="operation"/><field name="domain"/><field name="active"/></list>
+            </field>
+          </page>
+          <page name="menus" string="Menus">
+            <field name="menu_ids" nolabel="1">
+              <list><field name="complete_name"/></list>
+            </field>
+          </page>
+          <page name="views" string="Views">
+            <field name="view_ids" nolabel="1">
+              <list><field name="name"/><field name="model"/><field name="type"/></list>
+            </field>
+          </page>
+          <page name="actions" string="Actions">
+            <group string="Window Actions">
+              <field name="window_action_ids" nolabel="1">
+                <list><field name="name"/><field name="res_model"/></list>
+              </field>
+            </group>
+            <group string="Reports">
+              <field name="report_action_ids" nolabel="1">
+                <list><field name="name"/><field name="model"/></list>
+              </field>
+            </group>
+            <group string="Server Actions">
+              <field name="server_action_ids" nolabel="1">
+                <list><field name="name"/><field name="model_id"/></list>
+              </field>
+            </group>
+          </page>
+          <page name="notes" string="Notes">
+            <field name="comment" nolabel="1"/>
+          </page>
+        </notebook>
+      </sheet>
+    </form></field>
   </record>
   <record id="settings_groups_action" model="ir.actions.act_window">
     <field name="name">Groups</field>

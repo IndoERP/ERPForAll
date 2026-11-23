@@ -684,3 +684,87 @@ async fn shares(tx: &mut erp_sdk::Transaction, ids: &[i64]) -> Vec<Value> {
         .await
         .unwrap()
 }
+
+/// The group form lists what is restricted to a group: menus, views and window actions whose
+/// `group_ids` name it, read from their relation tables; another group's records and an unsaved
+/// group show none.
+#[tokio::test]
+async fn restricted_records_are_listed_on_the_group() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    installing(&mut tx, true);
+    let a = create(&mut tx, "res.groups", &[("name", s("Restricted A"))]).await;
+    let b = create(&mut tx, "res.groups", &[("name", s("Restricted B"))]).await;
+    let menu_a = create(
+        &mut tx,
+        "ir.ui.menu",
+        &[("name", s("Only A")), ("group_ids", set_cmd(&[a]))],
+    )
+    .await;
+    let menu_ab = create(
+        &mut tx,
+        "ir.ui.menu",
+        &[("name", s("A and B")), ("group_ids", set_cmd(&[a, b]))],
+    )
+    .await;
+    create(&mut tx, "ir.ui.menu", &[("name", s("Everybody"))]).await;
+    let view = create(
+        &mut tx,
+        "ir.ui.view",
+        &[
+            ("name", s("Restricted list")),
+            ("model", s("res.groups")),
+            ("arch_db", s("<list><field name='name'/></list>")),
+            ("group_ids", set_cmd(&[b])),
+        ],
+    )
+    .await;
+    let action = create(
+        &mut tx,
+        "ir.actions.act_window",
+        &[
+            ("name", s("Restricted action")),
+            ("res_model", s("res.groups")),
+            ("group_ids", set_cmd(&[a])),
+        ],
+    )
+    .await;
+
+    let group_a = records(&tx, "res.groups", &[a]);
+    let group_b = records(&tx, "res.groups", &[b]);
+    let mut expected_menus = vec![menu_a, menu_ab];
+    expected_menus.sort_unstable();
+    assert_eq!(ids_of(&mut tx, &group_a, "menu_ids").await, expected_menus);
+    assert_eq!(ids_of(&mut tx, &group_b, "menu_ids").await, [menu_ab]);
+    assert!(ids_of(&mut tx, &group_a, "view_ids").await.is_empty());
+    assert_eq!(ids_of(&mut tx, &group_b, "view_ids").await, [view]);
+    assert_eq!(
+        ids_of(&mut tx, &group_a, "window_action_ids").await,
+        [action]
+    );
+    assert!(
+        ids_of(&mut tx, &group_b, "window_action_ids")
+            .await
+            .is_empty()
+    );
+    assert!(
+        ids_of(&mut tx, &group_a, "report_action_ids")
+            .await
+            .is_empty()
+    );
+    assert!(
+        ids_of(&mut tx, &group_a, "server_action_ids")
+            .await
+            .is_empty()
+    );
+    // the restriction follows the restricted record: removing A from the menu drops it here
+    let menu = records(&tx, "ir.ui.menu", &[menu_a]);
+    menu.set_value(&mut tx, "group_ids", set_cmd(&[b]))
+        .await
+        .unwrap();
+    tx.invalidate_model("res.groups", Some(&["menu_ids"]))
+        .await
+        .unwrap();
+    assert_eq!(ids_of(&mut tx, &group_a, "menu_ids").await, [menu_ab]);
+    tx.rollback().await.unwrap();
+}

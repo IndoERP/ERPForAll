@@ -20,8 +20,12 @@
 //! - A change of the implication relation recomputes the `share` flag of the users set-based
 //!   ([`crate::group_graph::recompute_user_share`]).
 //!
+//! - `menu_ids`, `view_ids`, `window_action_ids`, `report_action_ids`, `server_action_ids`: the
+//!   records restricted to the group, read from their relation tables (read-only; a restriction
+//!   is changed on the restricted record).
+//!
 //! Not yet here: `category_id` of a privilege (`ir.module.category` arrives with),
-//! translated names, `menu_access`/`view_access`, the `all_user_ids` inverse.
+//! translated names, the `all_user_ids` inverse.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -171,6 +175,51 @@ pub struct ResGroups {
         string = "Disjoint Groups"
     )]
     pub disjoint_ids: Vec<RecId>,
+    /// The menus shown only to this group (`ir.ui.menu.group_ids`). Read-only: the restriction
+    /// is changed on the restricted record, whose own write keeps its caches current.
+    #[field(
+        many2many,
+        comodel = "ir.ui.menu",
+        compute = "_compute_menu_ids",
+        string = "Menus"
+    )]
+    pub menu_ids: Vec<RecId>,
+    /// The views applied only for this group (`ir.ui.view.group_ids`). Read-only: the restriction
+    /// is changed on the restricted record, whose own write keeps its caches current.
+    #[field(
+        many2many,
+        comodel = "ir.ui.view",
+        compute = "_compute_view_ids",
+        string = "Views"
+    )]
+    pub view_ids: Vec<RecId>,
+    /// The window actions only this group may open (`ir.actions.act_window.group_ids`). Read-only: the restriction
+    /// is changed on the restricted record, whose own write keeps its caches current.
+    #[field(
+        many2many,
+        comodel = "ir.actions.act_window",
+        compute = "_compute_window_action_ids",
+        string = "Window Actions"
+    )]
+    pub window_action_ids: Vec<RecId>,
+    /// The reports only this group may print (`ir.actions.report.group_ids`). Read-only: the restriction
+    /// is changed on the restricted record, whose own write keeps its caches current.
+    #[field(
+        many2many,
+        comodel = "ir.actions.report",
+        compute = "_compute_report_action_ids",
+        string = "Reports"
+    )]
+    pub report_action_ids: Vec<RecId>,
+    /// The server actions only this group may run (`ir.actions.server.group_ids`). Read-only: the restriction
+    /// is changed on the restricted record, whose own write keeps its caches current.
+    #[field(
+        many2many,
+        comodel = "ir.actions.server",
+        compute = "_compute_server_action_ids",
+        string = "Server Actions"
+    )]
+    pub server_action_ids: Vec<RecId>,
 }
 
 /// Whether a write or create names `field` (a plain value or x2many commands).
@@ -215,6 +264,76 @@ fn rec(id: i64) -> Result<RecId> {
 
 fn rec_ids(ids: impl IntoIterator<Item = i64>) -> Result<Vec<RecId>> {
     ids.into_iter().map(rec).collect()
+}
+
+/// A relation table that restricts records of another model to groups: its name, the group
+/// column and the restricted record's column. Fixed names, never caller input.
+struct Restriction {
+    table: &'static str,
+    group: &'static str,
+    record: &'static str,
+}
+
+const MENU_RESTRICTION: Restriction = Restriction {
+    table: "ir_ui_menu_group_rel",
+    group: "gid",
+    record: "menu_id",
+};
+const VIEW_RESTRICTION: Restriction = Restriction {
+    table: "ir_ui_view_group_rel",
+    group: "group_id",
+    record: "view_id",
+};
+const WINDOW_ACTION_RESTRICTION: Restriction = Restriction {
+    table: "ir_act_window_group_rel",
+    group: "gid",
+    record: "act_id",
+};
+const REPORT_ACTION_RESTRICTION: Restriction = Restriction {
+    table: "res_groups_report_rel",
+    group: "gid",
+    record: "uid",
+};
+const SERVER_ACTION_RESTRICTION: Restriction = Restriction {
+    table: "ir_act_server_group_rel",
+    group: "gid",
+    record: "act_id",
+};
+
+/// The records `restriction` limits to each group of `records`, in record id order, one list per
+/// group (empty for an unsaved group). One statement for the whole batch.
+async fn restricted_records(
+    tx: &mut Transaction,
+    records: &Records,
+    restriction: &Restriction,
+) -> Result<Vec<Vec<RecId>>> {
+    let groups: Vec<Option<i64>> = records.rec_ids().iter().map(|id| row_id(*id)).collect();
+    let wanted: Vec<i64> = groups.iter().flatten().copied().collect();
+    let mut by_group: HashMap<i64, Vec<i64>> = HashMap::new();
+    if !wanted.is_empty() {
+        let Restriction {
+            table,
+            group,
+            record,
+        } = restriction;
+        let sql = format!(
+            "SELECT {group}, {record} FROM {table} WHERE {group} = ANY($1) ORDER BY {record}"
+        );
+        for row in &tx.query(&sql, &[&wanted]).await? {
+            let read = |index: usize| -> Result<i64> {
+                row.try_get(index)
+                    .map_err(|e| Error::db(format!("unexpected value in {table}: {e}")))
+            };
+            by_group.entry(read(0)?).or_default().push(read(1)?);
+        }
+    }
+    groups
+        .iter()
+        .map(|group| match group {
+            Some(g) => rec_ids(by_group.get(g).cloned().unwrap_or_default()),
+            None => Ok(Vec::new()),
+        })
+        .collect()
 }
 
 /// The database ids of a recordset (a new record stands for its origin, if any).
@@ -405,6 +524,76 @@ impl ResGroups {
             // as `_compute_all_implied_ids`: an unsaved group has no closure until it is saved
             let closure = row_id(*id).map(|g| graph.down([g])).unwrap_or_default();
             out.set(i, ResGroups::ALL_IMPLIED_BY_IDS, rec_ids(closure)?)?;
+        }
+        Ok(())
+    }
+
+    /// The menus shown only to this group (`ir.ui.menu.group_ids`).
+    #[compute(depends = [])]
+    async fn _compute_menu_ids(
+        this: &RecordSet<ResGroups>,
+        tx: &mut Transaction,
+        out: &mut Assign<'_, ResGroups>,
+    ) -> Result<()> {
+        let lists = restricted_records(tx, this.as_records(), &MENU_RESTRICTION).await?;
+        for (i, ids) in lists.into_iter().enumerate() {
+            out.set(i, ResGroups::MENU_IDS, ids)?;
+        }
+        Ok(())
+    }
+
+    /// The views applied only for this group (`ir.ui.view.group_ids`).
+    #[compute(depends = [])]
+    async fn _compute_view_ids(
+        this: &RecordSet<ResGroups>,
+        tx: &mut Transaction,
+        out: &mut Assign<'_, ResGroups>,
+    ) -> Result<()> {
+        let lists = restricted_records(tx, this.as_records(), &VIEW_RESTRICTION).await?;
+        for (i, ids) in lists.into_iter().enumerate() {
+            out.set(i, ResGroups::VIEW_IDS, ids)?;
+        }
+        Ok(())
+    }
+
+    /// The window actions only this group may open (`ir.actions.act_window.group_ids`).
+    #[compute(depends = [])]
+    async fn _compute_window_action_ids(
+        this: &RecordSet<ResGroups>,
+        tx: &mut Transaction,
+        out: &mut Assign<'_, ResGroups>,
+    ) -> Result<()> {
+        let lists = restricted_records(tx, this.as_records(), &WINDOW_ACTION_RESTRICTION).await?;
+        for (i, ids) in lists.into_iter().enumerate() {
+            out.set(i, ResGroups::WINDOW_ACTION_IDS, ids)?;
+        }
+        Ok(())
+    }
+
+    /// The reports only this group may print (`ir.actions.report.group_ids`).
+    #[compute(depends = [])]
+    async fn _compute_report_action_ids(
+        this: &RecordSet<ResGroups>,
+        tx: &mut Transaction,
+        out: &mut Assign<'_, ResGroups>,
+    ) -> Result<()> {
+        let lists = restricted_records(tx, this.as_records(), &REPORT_ACTION_RESTRICTION).await?;
+        for (i, ids) in lists.into_iter().enumerate() {
+            out.set(i, ResGroups::REPORT_ACTION_IDS, ids)?;
+        }
+        Ok(())
+    }
+
+    /// The server actions only this group may run (`ir.actions.server.group_ids`).
+    #[compute(depends = [])]
+    async fn _compute_server_action_ids(
+        this: &RecordSet<ResGroups>,
+        tx: &mut Transaction,
+        out: &mut Assign<'_, ResGroups>,
+    ) -> Result<()> {
+        let lists = restricted_records(tx, this.as_records(), &SERVER_ACTION_RESTRICTION).await?;
+        for (i, ids) in lists.into_iter().enumerate() {
+            out.set(i, ResGroups::SERVER_ACTION_IDS, ids)?;
         }
         Ok(())
     }
