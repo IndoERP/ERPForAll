@@ -787,6 +787,56 @@ test("list view header and row selection with count and delete action", async ()
   expect(unlinkCalls[0]!.sort()).toEqual([5, 6]);
 });
 
+/** A list with a many2one column, in either position; `paths` collects every request. */
+async function startRelationList(relationFirst: boolean): Promise<{ root: HTMLElement; paths: string[] }> {
+  history.replaceState(null, "", "/erp/action-20");
+  const paths: string[] = [];
+  const relationField = { type: "many2one", label: "Owner", required: false, readonly: false, relation: "res.partner", relation_field: null, selection: null };
+  const relationNode = { kind: "field", force_save: false, field: { model: "test.note", name: "owner_id" }, widget: "many2one", options: {}, modifiers: { readonly: null, required: null, invisible: null }, label: "Owner" };
+  const listed = {
+    ...description, fields: { "test.note": { ...description.fields["test.note"], owner_id: relationField } },
+    views: description.views.map(view => view.type !== "list" ? view : {
+      ...view, nodes: relationFirst ? [{ kind: "list", children: [1, 2] }, relationNode, view.nodes[1]] : [{ kind: "list", children: [1, 2] }, view.nodes[1], relationNode]
+    })
+  };
+  const records = [{ id: 5, name: "First note", owner_id: { id: 77, display_name: "Alice" } }];
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+    paths.push(path);
+    const value = path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] }
+      : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, { wire_major: 1, id: 20, name: "Notes", model: "test.note", target: "current", views: [{ id: 2, type: "list" }, { id: 1, type: "form" }], domain: null, context: null }, listed)
+      : path.endsWith("get_views") ? listed
+      : path.endsWith("web_search_read") ? { length: records.length, records }
+      : path.endsWith("web_read") ? [{ id: 5, name: "First note" }]
+      : [];
+    return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
+  }));
+  const root = host();
+  app = new HumanApp(root, bootstrap);
+  await app.start();
+  await vi.waitFor(() => expect(root.querySelector("table.list-table tbody tr")).not.toBeNull());
+  return { root, paths };
+}
+
+test("clicking a related record's name in a list row opens that row's record, not the related one", async () => {
+  const { root, paths } = await startRelationList(false);
+  const cell = [...root.querySelectorAll<HTMLElement>("table.list-table tbody td")].find(td => td.textContent?.includes("Alice"))!;
+  expect(cell.querySelector("button, a")).toBeNull(); // shown as text, not as a link to the partner
+  cell.querySelector<HTMLElement>(".many2one-value")!.click();
+  await vi.waitFor(() => expect(location.search).toContain("id=5"));
+  expect(location.search).toContain("view_type=form");
+  expect(paths.some(path => path.includes("/res.partner/"))).toBe(false);
+});
+
+test("a many2one in the first list column is the row's open button", async () => {
+  const { root, paths } = await startRelationList(true);
+  const open = root.querySelector<HTMLButtonElement>("table.list-table tbody [data-record-open='5']")!;
+  expect(open.textContent).toContain("Alice");
+  expect(open.querySelector(".many2one-value")).not.toBeNull();
+  open.click();
+  await vi.waitFor(() => expect(location.search).toContain("id=5"));
+  expect(paths.some(path => path.includes("/res.partner/"))).toBe(false);
+});
+
 test("list columns settle synchronously on initial load and reload (no auto-layout frame)", async () => {
   history.replaceState(null, "", "/erp/action-20");
   const records = [{ id: 5, name: "Note A" }, { id: 6, name: "Note B" }];

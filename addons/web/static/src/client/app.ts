@@ -3491,7 +3491,9 @@ export class HumanApp {
             field: { ...field, readonly: true }, value: record[field.name], values: record, model: description.model, fields: view.fields.map(field => ({ ...field, readonly: true })), viewContext: "list",
             rpc: this.rpc, context, currencies, numericLocale: this.numericLocale, editorLocale: this.editorLocale,
             messages: this.messages, run: this.run, report: error => this.reportError(error), signal: this.lifetime.signal,
-            openRecord: (model, related) => this.openRelatedRecord(model, related), change: () => { throw new ClientError("validation", "List display fields cannot be edited."); },
+            // No openRecord: a list cell shows a related record as text and a click anywhere on the row opens the row's own
+            // record, as in the reference client; the related record is one click further, in the form.
+            change: () => { throw new ClientError("validation", "List display fields cannot be edited."); },
           });
           stops.push(handle.dispose);
           const widget = field.widget ?? field.kind;
@@ -3503,7 +3505,7 @@ export class HumanApp {
           if (index === 0 && hasForm) {
             const open = button("", () => this.run(() => this.navigate({ ...route, id: String(id), view_type: "form" })), "link");
             open.dataset["recordOpen"] = String(id); open.title = `Open record ${id}`;
-            const plainBuiltin = ["char", "text", "integer", "float", "monetary", "date", "datetime", "daterange", "boolean", "boolean_checkbox", "boolean_toggle", "selection", "badge", "label_selection", "badges_selection", "filterable_selection", "radio", "priority", "percentage"].includes(widget) && adapter === fieldWidgets.get(widget);
+            const plainBuiltin = ["char", "text", "integer", "float", "monetary", "date", "datetime", "daterange", "boolean", "boolean_checkbox", "boolean_toggle", "selection", "badge", "label_selection", "badges_selection", "filterable_selection", "radio", "priority", "percentage", "many2one"].includes(widget) && adapter === fieldWidgets.get(widget);
             const interactive = "input,select,textarea,button,a[href],[tabindex]";
             // Only known read adapters may be a primary value button. Links, reveals and trusted
             // custom/async action widgets retain a separate root-record action beside their output.
