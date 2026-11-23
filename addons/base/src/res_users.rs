@@ -117,8 +117,10 @@ pub struct ResUsersAccess {
     /// without an action, instead of the app grid (the logo still opens the grid). Naming an
     /// action grants nothing: the client loads it through the same access checks as any other
     /// action, and an action the user may not open leaves them on the grid with a notice.
-    /// `user_writeable`: a choice about the user's own first screen. Cleared when the action is
-    /// deleted.
+    /// `user_writeable`: a choice about the user's own first screen. A window action, not any
+    /// `ir.actions.actions` row: its foreign key to `ir_act_window` is `ON DELETE SET NULL`, so
+    /// the database clears the choice in the statement that deletes the action (which is why
+    /// `ir_actions::CLEANUPS` no longer lists this field).
     #[field(
         many2one,
         comodel = "ir.actions.act_window",

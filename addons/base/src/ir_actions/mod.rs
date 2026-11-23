@@ -24,10 +24,11 @@
 //!
 //! Not here yet: translated names,
 //! `/web/action/load` and `_get_action_dict`, the clean-up of
-//! `ir.actions.todo` and `res.users.action_id` at unlink ([`CLEANUPS`]: those models and
-//! fields do not exist yet, and an action unlink is refused once one of them is present without
-//! its clean-up; `ir.filters.action_id` is `ondelete = "cascade"`, so the database removes the
-//! saved filters of a deleted action).
+//! `ir.actions.todo` at unlink ([`CLEANUPS`]: that model does not exist yet, and an action unlink
+//! is refused once it is present without its clean-up; `ir.filters.action_id` is
+//! `ondelete = "cascade"`, so the database removes the saved filters of a deleted action, and
+//! `res.users.action_id` names a window action with `ondelete = "set null"`, so the database
+//! clears a user's home action when its window action is deleted).
 
 pub mod bindings;
 pub mod path;
@@ -57,11 +58,9 @@ const PATH_UNIQUE: &str = "ir_actions_path_unique";
 /// fields yet; the task named is the one whose scope reaches them first. [`check_cleanups`]
 /// refuses an action unlink (and the final registry, `_register_hook`) once one of them exists,
 /// so the clean-up cannot be forgotten silently.
-pub const CLEANUPS: [(&str, &str, &str); 2] = [
+pub const CLEANUPS: [(&str, &str, &str); 1] = [
     // the configuration wizards' to-do list: Settings is the first scope that reaches it
     ("ir.actions.todo", "", "a later release"),
-    // a user's home action, of the user form
-    ("res.users", "action_id", "a later release"),
 ];
 
 /// Refuse an action model (one that inherits `ir.actions.base` and has a table) that does not
