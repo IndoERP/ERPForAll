@@ -762,6 +762,8 @@ export class HumanApp {
               const targetCids = companySelector.selectedCompanyIds.length
                 ? companySelector.selectedCompanyIds
                 : [entry.company.id];
+              try { await this.rememberCompanies(targetCids); }
+              catch (error) { companySelector.reset(); renderTreeAndActions(); throw error; }
               const route = { ...this.current, cids: targetCids.map(String) };
               this.navigateLocation(routeUrl(route));
             }));
@@ -811,7 +813,10 @@ export class HumanApp {
                 renderTreeAndActions();
                 return;
               }
-              const route = { ...this.current, cids: companySelector.selectedCompanyIds.map(String) };
+              const chosen = [...companySelector.selectedCompanyIds];
+              try { await this.rememberCompanies(chosen); }
+              catch (error) { companySelector.reset(); renderTreeAndActions(); throw error; }
+              const route = { ...this.current, cids: chosen.map(String) };
               this.navigateLocation(routeUrl(route));
             }));
 
@@ -1442,6 +1447,17 @@ export class HumanApp {
       overlay.replaceChildren();
     }
     this.coverContent(false);
+  }
+
+  /**
+   * Stores the companies the user chose in the switcher (current first) in `res.users.settings`,
+   * so a later load without `cids` in its address starts with them. A refused or failed save
+   * stops the switch: the error is reported and the user stays where they are.
+   */
+  private async rememberCompanies(companyIds: readonly number[]): Promise<void> {
+    await this.rpc.call("res.users.settings", "set_res_users_settings", {
+      new_settings: { active_company_ids: [...companyIds] },
+    }, { write: true });
   }
 
   /** Reorders home menu root applications and persists the preference to `res.users.settings`. */

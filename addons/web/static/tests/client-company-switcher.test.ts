@@ -484,3 +484,91 @@ test("company dropdown restores focus to the same control (checkbox or switch bu
   root.remove();
 });
 
+
+/** The switcher stores the confirmed companies in res.users.settings before it reloads. */
+function spySettingsSave(app: HumanApp, order: string[], outcome: () => Promise<unknown> = async () => ({})): unknown[][] {
+  const saved: unknown[][] = [];
+  const rpc = (app as any).rpc;
+  const original = rpc.call.bind(rpc);
+  vi.spyOn(rpc, "call").mockImplementation(((model: string, method: string, args: Record<string, unknown>, options: unknown) => {
+    if (model === "res.users.settings" && method === "set_res_users_settings") {
+      order.push("save");
+      saved.push([args, options]);
+      return outcome();
+    }
+    return original(model, method, args, options);
+  }) as never);
+  return saved;
+}
+
+test("Confirm stores the chosen companies, current first, before it reloads with them", async () => {
+  history.replaceState(null, "", "/erp");
+  const root = createHost();
+  setupMenuFetch();
+  const order: string[] = [];
+  const app = new HumanApp(root, multiCompanyBootstrap);
+  (app as any).navigateLocation = vi.fn(() => { order.push("reload"); });
+  await app.start();
+  const saved = spySettingsSave(app, order);
+
+  const switcher = root.querySelector<HTMLElement>(".company-switcher")!;
+  const chk10 = switcher.querySelector<HTMLElement>('.company-row[data-company-id="10"]')!.querySelector<HTMLInputElement>("input[type=checkbox]")!;
+  chk10.checked = true;
+  chk10.dispatchEvent(new Event("change"));
+  switcher.querySelector<HTMLButtonElement>(".company-btn-confirm")!.click();
+
+  await vi.waitFor(() => expect(order).toEqual(["save", "reload"]));
+  expect(saved).toEqual([[{ new_settings: { active_company_ids: [1, 2, 3, 10, 11] } }, { write: true }]]);
+  expect((app as any).navigateLocation).toHaveBeenCalledWith(expect.stringContaining("cids=1%2C2%2C3%2C10%2C11"));
+
+  app.dispose();
+  root.remove();
+});
+
+test("switching to one company stores it and its branches", async () => {
+  history.replaceState(null, "", "/erp");
+  const root = createHost();
+  setupMenuFetch();
+  const order: string[] = [];
+  const app = new HumanApp(root, multiCompanyBootstrap);
+  (app as any).navigateLocation = vi.fn(() => { order.push("reload"); });
+  await app.start();
+  const saved = spySettingsSave(app, order);
+
+  const switcher = root.querySelector<HTMLElement>(".company-switcher")!;
+  switcher.querySelector<HTMLElement>('.company-row[data-company-id="10"]')!.querySelector<HTMLButtonElement>(".company-switch-btn")!.click();
+
+  await vi.waitFor(() => expect(order).toEqual(["save", "reload"]));
+  expect(saved[0]![0]).toEqual({ new_settings: { active_company_ids: [10, 11] } });
+
+  app.dispose();
+  root.remove();
+});
+
+test("a refused save reports the error, does not switch and restores the selection", async () => {
+  history.replaceState(null, "", "/erp");
+  const root = createHost();
+  setupMenuFetch();
+  const order: string[] = [];
+  const app = new HumanApp(root, multiCompanyBootstrap);
+  (app as any).navigateLocation = vi.fn(() => { order.push("reload"); });
+  await app.start();
+  const reported = vi.spyOn(app as any, "reportError").mockImplementation(() => undefined);
+  spySettingsSave(app, order, async () => { throw new Error("refused by the server"); });
+
+  const switcher = root.querySelector<HTMLElement>(".company-switcher")!;
+  const chk10 = switcher.querySelector<HTMLElement>('.company-row[data-company-id="10"]')!.querySelector<HTMLInputElement>("input[type=checkbox]")!;
+  chk10.checked = true;
+  chk10.dispatchEvent(new Event("change"));
+  switcher.querySelector<HTMLButtonElement>(".company-btn-confirm")!.click();
+
+  await vi.waitFor(() => expect(reported).toHaveBeenCalled());
+  expect(order).toEqual(["save"]);
+  expect((app as any).navigateLocation).not.toHaveBeenCalled();
+  const chk10After = switcher.querySelector<HTMLElement>('.company-row[data-company-id="10"]')!.querySelector<HTMLInputElement>("input[type=checkbox]")!;
+  expect(chk10After.checked).toBe(false);
+  expect(switcher.querySelector(".company-btn-confirm")).toBeNull();
+
+  app.dispose();
+  root.remove();
+});
