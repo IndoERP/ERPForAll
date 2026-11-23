@@ -287,7 +287,7 @@ fn the_brand_addon_may_name_the_product_and_ship_a_login_stylesheet() {
         "static/brand/login.css",
         b".login-screen{--login-bg:#123}",
     );
-    let bundle = assemble(&[brand.clone()], &options()).unwrap();
+    let bundle = assemble(std::slice::from_ref(&brand), &options()).unwrap();
     for file in ["brand.json", "login.css"] {
         assert!(
             bundle
