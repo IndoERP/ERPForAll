@@ -573,6 +573,10 @@ fn classify<'a, N: Node<'a>>(
                 _ => return Err(invalid("Unknown builtin view type.")),
             },
         )?;
+        if key == "form" {
+            // Checked with the root, before its children: a service form refuses field children of its own.
+            form_edit_mode(node)?;
+        }
         if key == "pivot" {
             boolean(node, "disable_linking", false)?;
             boolean(node, "display_quantity", false)?;
