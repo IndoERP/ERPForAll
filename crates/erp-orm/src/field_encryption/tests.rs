@@ -222,7 +222,15 @@ fn a_registry_with_an_encrypted_field_needs_keys() {
 
 #[test]
 fn an_encrypted_field_has_a_bytea_column_and_text_in_the_cache() {
-    let registry = registry(const { &[FieldDecl::text("note").encrypted(true)] }).unwrap();
+    let registry = registry(
+        const {
+            &[
+                FieldDecl::char("name"),
+                FieldDecl::text("note").encrypted(true),
+            ]
+        },
+    )
+    .unwrap();
     let model = registry.model("crypt_test.person").unwrap();
     let field = model.field("note").unwrap();
     assert!(field.encrypted);
