@@ -1298,6 +1298,11 @@
           "id": "authentication-configuration",
           "depth": 2,
           "text": "Operator configuration and session policy (ADR 0200)"
+        },
+        {
+          "id": "exchanging-a-password-for-a-device-api-key",
+          "depth": 2,
+          "text": "Exchanging a password for a device API key: `POST /erp/session/api-key`"
         }
       ],
       "shard_id": "shard_developer_core_1"

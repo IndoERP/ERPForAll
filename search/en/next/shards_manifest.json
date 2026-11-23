@@ -19,7 +19,7 @@
         "ai_base"
       ],
       "doc_count": 1,
-      "byte_size": 13020
+      "byte_size": 13204
     },
     {
       "shard_id": "shard_developer_barcodes_1",
@@ -46,7 +46,7 @@
         "core"
       ],
       "doc_count": 70,
-      "byte_size": 1245654
+      "byte_size": 1247463
     },
     {
       "shard_id": "shard_developer_mail_1",

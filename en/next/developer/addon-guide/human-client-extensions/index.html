@@ -87,6 +87,12 @@ the component receiver (<code dir="auto">web/tests/contract.test.ts:72</code>).<
 Its compiled component receives <code dir="auto">ControlPanelProps {title, model}</code> and mounts at the core control
 panel’s <code dir="auto">data-control-extension</code> anchor. This is an additive extension, not a replacement of another
 addon’s registration. Duplicate identities reject; there is no last-registration-wins override.</p>
+<p>For a data-aware header placed above an action’s list view (above the dashboard strip and rows;
+list views only), call <code dir="auto">registerListHeaderExtension("addon.header", {model, create})</code>. <code dir="auto">create</code>
+receives <code dir="auto">ListHeaderEnvironment {model, title, rpc, context}</code> and returns a <code dir="auto">ListHeaderHandle</code>
+<code dir="auto">{element, refresh(domain, {signal}), dispose()}</code>. <code dir="auto">refresh</code> runs on every load with its own copy
+of the active domain and an <code dir="auto">AbortSignal</code> that aborts on a newer load or view disposal; failures
+are reported through the client error surface without blocking row loads. Duplicate keys reject.</p>
 <p><code dir="auto">registerServiceController</code> registers a model-bound service form factory with explicit option
 validation and a dirty/busy/save/discard contract. Core Settings and Addons use this same registry.
 Record forms use <code dir="auto">web_save</code>; service forms never fall through to record creation.</p>

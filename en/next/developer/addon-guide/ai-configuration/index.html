@@ -137,8 +137,11 @@ preserve operator choices. No hosted provider, key or unrestricted budget is ins
 is unique, nonempty, ASCII graphic text of at most 1024 bytes. Endpoint URLs require HTTP(S), a host,
 and no embedded credentials, query or fragment. Saving a provider or a route does not contact an endpoint.
 <code dir="auto">no_training</code> and region record the operator’s chosen policy; this slice does not verify vendor terms.</p>
-<p>Routes have <code dir="auto">name</code>, required <code dir="auto">company_id</code>, <code dir="auto">task_kind</code> (currently only <code dir="auto">assistant</code>), required <code dir="auto">provider_id</code>
+<p>Routes have <code dir="auto">name</code>, required <code dir="auto">company_id</code>, <code dir="auto">task_kind</code> (<code dir="auto">assistant</code>, <code dir="auto">summarize</code> for the in-turn
+rolling summary, or <code dir="auto">title</code> for the in-turn session title), required <code dir="auto">provider_id</code>
 and an explicit allowed <code dir="auto">model</code>. A SQL unique constraint permits one route per task per company.
+A missing route for a task answers <code dir="auto">erp.ai.route_missing</code> naming the task; no other route is
+ever used as a fallback.
 Native exact-company policy applies to all route reads/writes, including direct record ids.
 <code dir="auto">base.group_system</code> may manage configuration; <code dir="auto">base.group_user</code> may read provider metadata and routes
 within allowed companies. No model contains keys or key paths. A provider is global configuration;
