@@ -273,6 +273,26 @@ pub fn alter_column_type(table: &str, column: &str, ty: ColumnType) -> String {
     )
 }
 
+/// Change a `varchar` or `text` column to `bytea` holding the UTF-8 bytes of its text (a field
+/// that became encrypted; the ORM seals the bytes in the same transaction). A plain `::bytea` cast
+/// would parse the text as `bytea` input and alter values with backslashes.
+///
+/// ```
+/// assert_eq!(
+///     erp_sql::ddl::alter_column_to_utf8_bytea("t", "c"),
+///     "ALTER TABLE \"t\" ALTER COLUMN \"c\" DROP DEFAULT, ALTER COLUMN \"c\" TYPE bytea USING \
+///      convert_to(\"c\", 'UTF8')"
+/// );
+/// ```
+pub fn alter_column_to_utf8_bytea(table: &str, column: &str) -> String {
+    format!(
+        "ALTER TABLE {t} ALTER COLUMN {c} DROP DEFAULT, ALTER COLUMN {c} TYPE bytea USING \
+         convert_to({c}, 'UTF8')",
+        t = quote(table),
+        c = quote(column),
+    )
+}
+
 /// Change textual column collation without dropping defaults or changing values.
 /// The caller supplies the admitted target type, retaining the installed varchar width.
 pub fn alter_column_collation(

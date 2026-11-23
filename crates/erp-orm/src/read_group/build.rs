@@ -543,6 +543,16 @@ impl<'r> Builder<'r> {
         if matches!(field.ty, FieldType::Id) {
             return Ok(format!("{}.{}", quote(alias), quote("id")));
         }
+        if field.encrypted {
+            return Err(bad(
+                self.external,
+                erp_sql::filter::encrypted_message(
+                    model.name,
+                    field.name,
+                    "grouping or aggregating",
+                ),
+            ));
+        }
         if let Some(target) = field.company_default_for {
             return Err(erp_sql::company::default_for_unsupported(
                 model.name,

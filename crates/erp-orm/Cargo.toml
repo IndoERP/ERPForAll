@@ -64,6 +64,9 @@ tokio = { workspace = true, features = ["time", "sync", "macros", "rt", "rt-mult
 # Node digests: SHA-256 of configuration, build and addons, HMAC of shared secrets.
 sha2 = { workspace = true }
 hmac = { workspace = true }
+# Encrypted fields (`field_encryption`): the AEAD and the wiping of key bytes read from the key file.
+chacha20poly1305 = { workspace = true }
+zeroize = { workspace = true }
 # Image fields (B6): decode, scale down and encode PNG and JPEG, and decode a GIF or WebP
 # larger than a field's bounds (stored as PNG). SVG is refused, so no other decoder is compiled in.
 image = { workspace = true, features = ["gif", "webp"] }

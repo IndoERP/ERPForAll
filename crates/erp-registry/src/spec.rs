@@ -389,6 +389,11 @@ pub struct FieldSpec {
     /// `secret`: the field holds a credential; the audit call digest redacts its value
     /// (redaction v2).
     pub secret: bool,
+    /// `encrypted`: the value is kept encrypted at rest. A stored encrypted field's column is
+    /// `bytea` and holds an envelope the ORM seals on write and opens on read
+    /// (`erp_orm::field_encryption`); conditions, ordering and grouping on it are refused. A
+    /// related field whose path ends at an encrypted field is encrypted too.
+    pub encrypted: bool,
     /// `db_default`: schema sync keeps the static default (a boolean) as the column's
     /// database default instead of dropping it. Only on stored, required boolean fields with a
     /// static boolean default; never on an `_inherits` copy.
@@ -457,7 +462,9 @@ impl FieldSpec {
     /// The database column: stored fields whose type has one (`id` is created with the table).
     pub fn column(&self) -> Option<ColumnType> {
         if self.store {
-            if self.company_dependent || self.translate {
+            if self.encrypted {
+                Some(ColumnType::Bytea)
+            } else if self.company_dependent || self.translate {
                 Some(ColumnType::Jsonb)
             } else {
                 self.ty.column_type()

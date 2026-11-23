@@ -574,6 +574,16 @@ pub fn not_stored_message(model: &str, field: &str) -> String {
     )
 }
 
+/// The refusal of `what` (`"a condition"`, `"ordering"`, `"grouping"`) on an encrypted field: its
+/// column holds an envelope, so SQL could only compare, sort or group random-looking bytes. Every
+/// SQL surface refuses it with this sentence rather than answer with a wrong result.
+pub fn encrypted_message(model: &str, field: &str, what: &str) -> String {
+    format!(
+        "The field {field} of {model} is encrypted: {what} on it is not supported, because the \
+         database holds only its encrypted value."
+    )
+}
+
 pub fn make_alias(from: &str, link: &str) -> Arc<str> {
     Arc::from(shorten_identifier(&format!("{from}__{link}")))
 }
@@ -1865,6 +1875,9 @@ impl<'a> Planner<'a> {
                 target.path,
                 "searching",
             ));
+        }
+        if field.encrypted {
+            return Err(self.input_error(encrypted_message(model.name, field.name, "a condition")));
         }
         if !matches!(field.ty, FieldType::Id) && !field.has_column() {
             return Err(self.input_error(not_stored_message(model.name, field.name)));

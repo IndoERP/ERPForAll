@@ -1306,6 +1306,8 @@ impl Merged {
             let modules = std::mem::take(&mut self.modules);
             // a type change keeps `secret` (D2)
             let secret = self.params.secret;
+            // and `encrypted`: a type change cannot silently leave sealed values unread
+            let encrypted = self.params.encrypted;
             let collation = self.params.collation;
             let native = if decl.runtime {
                 self.native
@@ -1325,6 +1327,7 @@ impl Merged {
                 native,
             };
             self.params.secret = secret;
+            self.params.encrypted = encrypted;
             self.params.collation = collation;
         }
         if addon == MANUAL_ADDON {
@@ -1524,6 +1527,25 @@ impl Merged {
         }
         if fd.secret.is_some() {
             p.secret = fd.secret;
+        }
+        // `encrypted` only ever turns on as well: switching it off would leave the stored
+        // envelopes to be read as text (decrypting a column is a later slice)
+        if fd.encrypted == Some(false) && p.encrypted == Some(true) {
+            let earlier = self
+                .modules
+                .iter()
+                .filter(|m| **m != addon)
+                .copied()
+                .collect::<Vec<_>>()
+                .join("', '");
+            return Err(Error::programming(format!(
+                "field '{model}.{}' is declared encrypted by addon(s) '{earlier}'; addon \
+                 '{addon}' cannot switch `encrypted` off",
+                fd.name
+            )));
+        }
+        if fd.encrypted.is_some() {
+            p.encrypted = fd.encrypted;
         }
         macro_rules! take {
             ($($attr:ident),*) => {$( if fd.$attr.is_some() { p.$attr = fd.$attr; } )*};
@@ -2520,6 +2542,52 @@ fn resolve_tracking(
     Ok(Some(sequence))
 }
 
+/// The declarations an `encrypted` field cannot have: the database holds an envelope, so
+/// nothing that reads the column's value in SQL (an index, a collation, a generated expression,
+/// a JSON layout) can work, and a history of its changes would store the clear text.
+fn check_encrypted(
+    model: &str,
+    name: &str,
+    ty: &FieldType,
+    store: bool,
+    p: &FieldDecl,
+    tracked: bool,
+) -> Result<()> {
+    let why = if !matches!(ty, FieldType::Char { .. } | FieldType::Text) {
+        Some(format!(
+            "only char and text fields can be encrypted (this field is {})",
+            ty.type_name()
+        ))
+    } else if !store && p.related.is_none() {
+        Some("an encrypted field must be stored (or related to an encrypted field)".to_owned())
+    } else if p.translate == Some(true) {
+        Some("a translated field cannot be encrypted".to_owned())
+    } else if p.company_dependent == Some(true) {
+        Some("a company-dependent field cannot be encrypted".to_owned())
+    } else if matches!(p.index, Some(Some(_))) {
+        Some(
+            "an encrypted field cannot be indexed (the column holds random-looking bytes)"
+                .to_owned(),
+        )
+    } else if p.collation.is_some() {
+        Some("an encrypted field has no collation (the column is bytea)".to_owned())
+    } else if matches!(p.generated, Some(Some(_))) {
+        Some("a database-generated field cannot be encrypted".to_owned())
+    } else if tracked {
+        Some(
+            "tracking an encrypted field is refused (its value would be stored in clear in the \
+             document's history)"
+                .to_owned(),
+        )
+    } else {
+        None
+    };
+    match why {
+        Some(why) => Err(Error::programming(format!("field '{model}.{name}': {why}"))),
+        None => Ok(()),
+    }
+}
+
 fn resolve_field(model: &str, id: FieldId, merged: Merged) -> Result<FieldSpec> {
     let p = merged.params;
     let name = p.name;
@@ -2979,6 +3047,10 @@ fn resolve_field(model: &str, id: FieldId, merged: Merged) -> Result<FieldSpec> 
             )));
         }
     }
+    let encrypted = p.encrypted.unwrap_or(false);
+    if encrypted {
+        check_encrypted(model, name, &ty, store, &p, tracking.is_some())?;
+    }
     let quoted_name = crate::ident::quote_arc(name);
     Ok(FieldSpec {
         id,
@@ -3035,6 +3107,7 @@ fn resolve_field(model: &str, id: FieldId, merged: Merged) -> Result<FieldSpec> 
         change_default: p.change_default.unwrap_or(false),
         user_writeable: p.user_writeable.unwrap_or(false),
         secret: p.secret.unwrap_or(false),
+        encrypted,
         db_default,
         tracking,
         inherited: None,

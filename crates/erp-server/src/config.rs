@@ -55,6 +55,9 @@ pub enum ConfigError {
     /// The `[report]` table is not a table of named non-negative integers and a path.
     #[error("[report]: {0}")]
     Report(String),
+    /// `field_key_file` is not a key file; the message names the line, never its content.
+    #[error("{0}")]
+    FieldKeys(#[source] erp_fields::Error),
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -67,6 +70,8 @@ struct RawConfig {
     owner_database_url_file: PathBuf,
     node_database_url_file: Option<PathBuf>,
     audit_reader_database_url_file: Option<PathBuf>,
+    /// The keys of encrypted fields (`erp_orm::field_encryption`), mode 600.
+    field_key_file: Option<PathBuf>,
     node_name: Option<String>,
     shutdown_deadline_secs: Option<u64>,
     #[serde(default)]
@@ -210,6 +215,7 @@ pub struct ServerConfig {
     attachments: String,
     report: ReportConfig,
     ai: Option<toml::Value>,
+    field_keys: Option<erp_orm::field_encryption::FieldKeys>,
 }
 impl fmt::Debug for ServerConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -231,7 +237,9 @@ impl ServerConfig {
         self.auth
     }
 
-    /// Load strict TOML and private mode-600 regular files, refusing symlink secret paths.
+    /// Load strict TOML and private mode-600 regular files, refusing symlink secret paths. The
+    /// keys of `field_key_file`, when set, are installed for the process
+    /// ([`erp_orm::field_encryption::install`]).
     /// # Errors
     /// Invalid configuration, secret file, database binding or explicit proxy mode.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
@@ -317,6 +325,18 @@ impl ServerConfig {
                     return Err(ConfigError::AuditReaderConnection);
                 }
                 Some(reader)
+            }
+            None => None,
+        };
+        // installed for the whole process here, before any ORM is built from this
+        // configuration: every command that loads it can open encrypted fields
+        let field_keys = match raw.field_key_file.as_deref() {
+            Some(path) => {
+                let keys =
+                    erp_orm::field_encryption::FieldKeys::parse(&read_secret(&resolve(path))?)
+                        .map_err(ConfigError::FieldKeys)?;
+                erp_orm::field_encryption::install(keys.clone()).map_err(ConfigError::FieldKeys)?;
+                Some(keys)
             }
             None => None,
         };
@@ -443,7 +463,14 @@ impl ServerConfig {
             report: read_report(raw.report, resolve)?,
             ai: raw.ai,
             audit_read_policy: read_audit_policy(raw.audit_read_policy)?,
+            field_keys,
         })
+    }
+
+    /// The keys of encrypted fields from `field_key_file`, `None` when the file is not set
+    /// (installed for the process by [`ServerConfig::load`]).
+    pub fn field_keys(&self) -> Option<&erp_orm::field_encryption::FieldKeys> {
+        self.field_keys.as_ref()
     }
     /// Validated additive read-audit policy shared by admission and serving RPC configuration.
     pub fn read_audit_policy(&self) -> &erp_rpc::ReadAuditPolicy {
@@ -596,6 +623,7 @@ impl erp_orm::node::SharedSettings for ServerConfig {
             report: _,
             // Provider files belong to each node and never enter shared settings metadata.
             ai: _,
+            field_keys,
         } = self;
         out.shared_str("server.database", database)?;
         out.shared_str("server.public_origin", origin)?;
@@ -603,6 +631,12 @@ impl erp_orm::node::SharedSettings for ServerConfig {
         out.shared_duration("server.http_header_deadline", connections.header_deadline())?;
         out.shared_duration("server.http_keep_alive_idle", connections.idle())?;
         out.shared_duration("server.http_max_connection_age", connections.max_age())?;
+        // every node of a database opens what the others seal: the same key set everywhere (only
+        // a keyed digest of its fingerprint enters the settings digest)
+        match field_keys {
+            Some(keys) => out.shared_secret("server.field_keys", &keys.fingerprint())?,
+            None => out.shared_str("server.field_keys", "none")?,
+        }
         // Each node may connect through its own role, listener, proxy peer and local files.
         // The canonical external origin remains shared: it participates in CSRF policy.
         for name in [

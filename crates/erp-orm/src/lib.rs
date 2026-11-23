@@ -84,6 +84,8 @@ mod external_modified;
 mod field_access;
 pub mod field_chain;
 mod field_check;
+/// Encryption of field values at rest (`encrypted = true`).
+pub mod field_encryption;
 mod grantee;
 mod graph;
 mod group_check;

@@ -746,6 +746,10 @@ pub struct FieldDecl {
     /// `secret` (redaction v2): the field holds a credential. The audit trail replaces
     /// its value with `{"$redacted":"secret"}` before the call digest is hashed.
     pub secret: Option<bool>,
+    /// `encrypted`: a stored `char` or `text` field whose value the ORM keeps encrypted at rest
+    /// (an envelope in a `bytea` column, sealed with the node's field key). Only ever turns on:
+    /// an extension cannot switch it off.
+    pub encrypted: Option<bool>,
     /// `tracking`: `Some(Some(sequence))` tracks the field with that display
     /// sequence (`tracking = true` is [`DEFAULT_TRACKING_SEQUENCE`]); `Some(None)` is an explicit
     /// `tracking = false`, which switches tracking off when an extension re-declares the field.
@@ -827,6 +831,7 @@ impl FieldDecl {
             change_default: None,
             user_writeable: None,
             secret: None,
+            encrypted: None,
             tracking: None,
             translate: None,
             collation: None,
@@ -1288,6 +1293,16 @@ impl FieldDecl {
     /// value (`{"$redacted":"secret"}`).
     pub const fn secret(mut self, on: bool) -> Self {
         self.secret = Some(on);
+        self
+    }
+
+    /// Keep the value encrypted at rest (`char` and `text` fields): the column holds an envelope
+    /// sealed with the node's field key, and conditions, ordering and grouping on the field are
+    /// refused. Registry build refuses it on other types, on a computed field that is not
+    /// stored, and together with `translate`, `company_dependent`, `index`, `tracking`,
+    /// `collation` or a generated column.
+    pub const fn encrypted(mut self, on: bool) -> Self {
+        self.encrypted = Some(on);
         self
     }
 

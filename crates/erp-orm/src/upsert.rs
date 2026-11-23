@@ -1185,6 +1185,21 @@ fn column_type(spec: &ModelSpec, field: FieldId) -> Result<ColumnType> {
         .ok_or_else(|| upsert_error(spec, format!("field '{}' has no column", fs.name)))
 }
 
+/// Column `index` of a returned row as the cache value of `field`: an encrypted field's envelope is
+/// opened.
+fn decode_column<R: crate::transaction::raw_row::CellSource + ?Sized>(
+    row: &R,
+    index: usize,
+    spec: &ModelSpec,
+    field: FieldId,
+) -> Result<Cell> {
+    let cell = crate::read::decode(row, index, column_type(spec, field)?)?;
+    match crate::field_encryption::Sealed::of(spec, spec.field_by_id(field)) {
+        Some(sealed) => sealed.open(cell),
+        None => Ok(cell),
+    }
+}
+
 fn shape(tx: &Transaction, spec: &ModelSpec, plan: &Plan<'_>, batch: &Batch) -> Result<Shape> {
     let mut columns: Vec<(&str, ColumnType)> = Vec::with_capacity(batch.columns.len());
     for f in &batch.columns {
@@ -1495,8 +1510,9 @@ async fn precheck(
     for (c, f) in batch.columns.iter().take(key_columns.len()).enumerate() {
         types.push(column_type(spec, *f)?);
         let cells: Vec<Cell> = members.iter().map(|&m| batch.rows[m][c].clone()).collect();
-        bound.push(crate::write::array_param(
-            spec.field_by_id(*f).storage(),
+        bound.push(crate::write::column_param(
+            spec,
+            spec.field_by_id(*f),
             cells,
         )?);
     }
@@ -1623,8 +1639,9 @@ async fn run_statement(
     let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
     for (c, f) in batch.columns.iter().enumerate() {
         let cells: Vec<Cell> = members.iter().map(|&m| batch.rows[m][c].clone()).collect();
-        params.push(crate::write::array_param(
-            spec.field_by_id(*f).storage(),
+        params.push(crate::write::column_param(
+            spec,
+            spec.field_by_id(*f),
             cells,
         )?);
     }
@@ -1700,19 +1717,11 @@ async fn run_statement(
             .enumerate()
             .skip(plan.accumulate.len())
         {
-            stored.push(crate::read::decode(
-                row,
-                first_new + i,
-                column_type(spec, *f)?,
-            )?);
+            stored.push(decode_column(row, first_new + i, spec, *f)?);
         }
         let mut old = Vec::with_capacity(shape.old_fields.len());
         for (i, f) in shape.old_fields.iter().enumerate() {
-            old.push(crate::read::decode(
-                row,
-                first_old + i,
-                column_type(spec, *f)?,
-            )?);
+            old.push(decode_column(row, first_old + i, spec, *f)?);
         }
         let mut changed = Vec::new();
         for (index, field) in shape.changed_fields.iter().enumerate() {

@@ -108,6 +108,7 @@ pub(crate) fn finish(
     add_inherited_fields(models)?;
     related_groups(models, by_name)?;
     related_secret(models, by_name);
+    related_encrypted(models, by_name)?;
     parent_names(models)?;
     parent_store(models)?;
     signal_trigger_rules(models)?;
@@ -794,6 +795,52 @@ fn related_groups(
 /// target (delta D2). A path that does not resolve is left to `related_groups`, which
 /// refuses it.
 fn related_secret(models: &mut [ModelSpec], by_name: &FxHashMap<&'static str, ModelId>) {
+    propagate_along_related(models, by_name, |f| f.secret, |f| f.secret = true);
+}
+
+/// A related field whose path ends at an `encrypted` field is `encrypted` itself, along chains of
+/// related fields: a stored one keeps its copy sealed like its target (its column becomes
+/// `bytea`), and conditions, ordering and grouping through it are refused as on the target.
+/// A related field that becomes encrypted this way must not carry what an encrypted field
+/// cannot have (an index, tracking, a collation).
+fn related_encrypted(
+    models: &mut [ModelSpec],
+    by_name: &FxHashMap<&'static str, ModelId>,
+) -> Result<()> {
+    propagate_along_related(models, by_name, |f| f.encrypted, |f| f.encrypted = true);
+    for model in models.iter() {
+        for field in model
+            .fields
+            .iter()
+            .filter(|f| f.encrypted && f.related.is_some())
+        {
+            let why = if field.index.is_some() {
+                "is indexed"
+            } else if field.tracking.is_some() {
+                "is tracked"
+            } else if field.collation_declared {
+                "declares a collation"
+            } else {
+                continue;
+            };
+            return Err(Error::programming(format!(
+                "field '{}.{}' is related to an encrypted field, so it is encrypted too, but it \
+                 {why}: an encrypted field cannot be",
+                model.name, field.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Turn `set` on for every related field whose path ends at a field with `has`, along chains of
+/// related fields.
+fn propagate_along_related(
+    models: &mut [ModelSpec],
+    by_name: &FxHashMap<&'static str, ModelId>,
+    has: fn(&FieldSpec) -> bool,
+    set: fn(&mut FieldSpec),
+) {
     fn target(
         models: &[ModelSpec],
         by_name: &FxHashMap<&'static str, ModelId>,
@@ -817,12 +864,12 @@ fn related_secret(models: &mut [ModelSpec], by_name: &FxHashMap<&'static str, Mo
         let mut updates = Vec::new();
         for (m, model) in models.iter().enumerate() {
             for (f, field) in model.fields.iter().enumerate() {
-                if field.secret {
+                if has(field) {
                     continue;
                 }
                 if let Some(path) = field.related
                     && let Some((tm, tf)) = target(models, by_name, m, path)
-                    && models[tm].fields[tf].secret
+                    && has(&models[tm].fields[tf])
                 {
                     updates.push((m, f));
                 }
@@ -832,7 +879,7 @@ fn related_secret(models: &mut [ModelSpec], by_name: &FxHashMap<&'static str, Mo
             return;
         }
         for (m, f) in updates {
-            models[m].fields[f].secret = true;
+            set(&mut models[m].fields[f]);
         }
     }
 }

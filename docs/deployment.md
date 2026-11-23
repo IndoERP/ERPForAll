@@ -56,10 +56,45 @@ role, and a `NOLOGIN` maintenance role. Notes for a real deployment:
 | `assets_manifest` | yes | Path of the client `manifest.json`. |
 | `shutdown_deadline_secs` | no | Time running requests get to finish on shutdown; 5 to 3600, default 45. |
 | `http_header_deadline_secs`, `http_keep_alive_idle_secs`, `http_max_connection_age_secs` | no | HTTP/1 connection limits; defaults 5, 30 and 120. |
+| `field_key_file` | when addons declare encrypted fields | File with the keys of encrypted fields (see [Encrypted fields](#encrypted-fields)). |
 | `[startup_limits]` | no | Optional tables of memory and size limits; invalid or inconsistent values stop the start with an error. Defaults apply when absent. |
 
 Secret files must be regular files with mode 600, not symbolic links. In `direct` mode `bind` must be a loopback
 address and the proxy keys must be absent.
+
+## Encrypted fields
+
+A `char` or `text` field declared `encrypted = true` (`#[field(char, encrypted = true)]`) is stored encrypted: its
+column is `bytea` and holds an envelope sealed with XChaCha20-Poly1305 (RustCrypto `chacha20poly1305`) with a new
+random nonce on every write, bound to its model and field. The application reads and writes the clear value; the
+database, its dumps and replicas, and any role that reads the table see only the envelope.
+
+The keys come from `field_key_file`, never from the database. The file is mode 600, one key per line, the key that
+encrypts new values first:
+
+```sh
+umask 077
+printf 'k2026a %s\n' "$(openssl rand -base64 32)" > /srv/erp/private/field-keys
+```
+
+A key id is 1 to 32 letters, digits, `.`, `_` or `-`; at most 16 keys; lines starting with `#` are ignored. Every node
+of a database needs the same file: the node settings check refuses a node whose key set differs.
+
+- **Missing key:** when the linked addons declare an encrypted field and `field_key_file` is not set, every command
+  that builds the ORM (the server, `erp db init`, `erp module upgrade`, …) stops with an error naming the field.
+- **Lost key:** values sealed with it cannot be read again. Back the key file up separately from the database dumps;
+  a dump without its key file is unreadable for these fields, which is the point.
+- **Rotation:** put a new key on the first line and keep the old ones below it. New and changed values are sealed
+  with the new key; values sealed with an old key still open. Remove an old key only when no value uses it: a
+  re-encryption job that rewrites old values is not built yet, so for now keep old keys.
+- **Existing data:** when a field becomes encrypted, the schema synchronization of the module upgrade converts its
+  column and encrypts every existing value in the same transaction (in batches of 1,000 rows; on a large table this
+  lengthens the upgrade). Declaring an encrypted field plain again is refused: decrypting a column is not built yet.
+- **Searching:** conditions, sorting, grouping and aggregates on an encrypted field are refused with an error naming
+  the field (the database cannot compare encrypted values). Keys, indexes and exclusion constraints on such a field
+  are refused when the registry is built; an addon's SQL must not read the column directly.
+- **Audit:** the call digest of the audit trail replaces an encrypted field's value with `{"$redacted":"encrypted"}`;
+  tracking an encrypted field is refused.
 
 ## Run it as a service
 

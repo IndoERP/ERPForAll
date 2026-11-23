@@ -1454,8 +1454,16 @@ impl Transaction {
 /// for every row: the columns to decode are resolved once.
 pub(crate) struct RowCacher {
     model: ModelId,
-    /// `(field, column index in the row, column type, storage)` of each field with a column.
-    columns: Vec<(FieldId, usize, ColumnType, Storage)>,
+    /// `(field, column index in the row, column type, storage, envelope)` of each field with a
+    /// column; `envelope` is set for an encrypted field, whose column is opened into the text the
+    /// cache holds.
+    columns: Vec<(
+        FieldId,
+        usize,
+        ColumnType,
+        Storage,
+        Option<crate::field_encryption::Sealed>,
+    )>,
 }
 
 impl RowCacher {
@@ -1469,7 +1477,8 @@ impl RowCacher {
                 let field = spec.field_by_id(*fid);
                 // a field without a column is not selected (not a skipped value)
                 let column = field.column()?;
-                Some((*fid, i + 1, column, field.storage()))
+                let sealed = crate::field_encryption::Sealed::of(spec, field);
+                Some((*fid, i + 1, column, field.storage(), sealed))
             })
             .collect();
         Self {
@@ -1523,9 +1532,13 @@ impl RowSink<'_> {
         let writer = *self.writer.get_or_insert_with(|| cache.writer(model));
         let model = cache.write(writer);
         let at = model.fetched_slot(id, remaining);
-        for (field, index, column, storage) in &self.cacher.columns {
+        for (field, index, column, storage, sealed) in &self.cacher.columns {
             model.fill_fetched(at, *field, *storage, || {
-                crate::read::decode(row, *index, *column)
+                let cell = crate::read::decode(row, *index, *column)?;
+                match sealed {
+                    Some(sealed) => sealed.open(cell),
+                    None => Ok(cell),
+                }
             })?;
         }
         Ok(id)

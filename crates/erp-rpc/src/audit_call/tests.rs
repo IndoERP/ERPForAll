@@ -17,6 +17,7 @@ fn registry() -> Registry {
             FieldDecl::char("name"),
             FieldDecl::char("restricted_note").groups("."),
             FieldDecl::char("password").secret(true),
+            FieldDecl::char("national_id").encrypted(true),
             FieldDecl::one2many("lines", "audit_digest.line", "order_id"),
         ]
     };
@@ -232,6 +233,37 @@ fn secret_fields_are_redacted_before_hashing() {
             .count(),
         2,
         "{many}"
+    );
+}
+
+/// A field marked `encrypted` is replaced by `{"$redacted":"encrypted"}`: its clear value is in no
+/// part of the projection, so the digest cannot be used to guess it.
+#[test]
+fn encrypted_fields_are_redacted_before_hashing() {
+    let r = registry();
+    let digest = |value: &str| {
+        args_digest(
+            &r,
+            "audit_digest.order",
+            "write",
+            &[1],
+            &json(&format!(
+                r#"{{"vals":{{"name":"n","national_id":"{value}"}}}}"#
+            )),
+        )
+    };
+    assert_eq!(digest("3201-CANARY-A"), digest("3201-CANARY-B"));
+    let shown = text(&projection(
+        &r,
+        "audit_digest.order",
+        "write",
+        &[1],
+        &json(r#"{"vals":{"national_id":"CANARY"}}"#),
+    ));
+    assert!(!shown.contains("CANARY"), "{shown}");
+    assert!(
+        shown.contains(r#""national_id":{"$redacted":"encrypted"}"#),
+        "{shown}"
     );
 }
 

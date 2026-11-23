@@ -1025,8 +1025,8 @@ async fn create_records_inner(
                     .iter()
                     .map(|&r| rows[r][f.index()].clone().unwrap_or(Cell::Null))
                     .collect();
-                arrays.push(array_param(spec.field_by_id(*f).storage(), cells).map_err(
-                    |error| {
+                arrays.push(
+                    column_param(spec, spec.field_by_id(*f), cells).map_err(|error| {
                         Error::new(
                             error.kind(),
                             format!(
@@ -1036,8 +1036,8 @@ async fn create_records_inner(
                                 error.message()
                             ),
                         )
-                    },
-                )?);
+                    })?,
+                );
             }
             if fields.is_empty() {
                 arrays.push(Box::new(chunk.len() as i64));
@@ -2276,6 +2276,19 @@ async fn write_protected(
     Ok(())
 }
 
+/// The array parameter of `field`'s column: [`array_param`] of the field's storage or, for an
+/// encrypted field, of the envelopes its values are sealed into (a `bytea` column).
+pub(crate) fn column_param(
+    spec: &ModelSpec,
+    field: &FieldSpec,
+    cells: Vec<Cell>,
+) -> Result<Box<dyn ToSql + Sync + Send>> {
+    match crate::field_encryption::Sealed::of(spec, field) {
+        Some(sealed) => array_param(Storage::Bytes, sealed.seal_all(cells)?),
+        None => array_param(field.storage(), cells),
+    }
+}
+
 pub(crate) fn array_param(
     storage: Storage,
     cells: Vec<Cell>,
@@ -2734,7 +2747,7 @@ impl Transaction {
                         .iter()
                         .map(|id| self.cache.get(spec.id, *fid, *id).unwrap_or(Cell::Null))
                         .collect();
-                    arrays.push(array_param(field.storage(), cells)?);
+                    arrays.push(column_param(spec, field, cells)?);
                 }
             }
             let extra: Vec<(&str, &str)> = if spec.log_access && spec.field("write_date").is_some()
@@ -2882,8 +2895,15 @@ impl Transaction {
                                 spec.field_by_id(*f).name
                             ))
                         })?;
-                        let old = crate::read::decode(row, 1 + 2 * i, col)?;
-                        let new = crate::read::decode(row, 2 + 2 * i, col)?;
+                        let mut old = crate::read::decode(row, 1 + 2 * i, col)?;
+                        let mut new = crate::read::decode(row, 2 + 2 * i, col)?;
+                        // a hook sees the clear values, as it would read them
+                        if let Some(sealed) =
+                            crate::field_encryption::Sealed::of(spec, spec.field_by_id(*f))
+                        {
+                            old = sealed.open(old)?;
+                            new = sealed.open(new)?;
+                        }
                         values.push((old, new));
                     }
                     hook_rows.push((id, values));

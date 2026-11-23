@@ -12,7 +12,8 @@
 //! - a method that takes record values (the keyword arguments `vals` and `vals_list`, as `create`,
 //!   `write` and `web_save` do) keeps each value unless its field is unknown to the registry
 //!   (`unknown`), marked `secret` on its declaration (`secret`: passwords, whatever their value
-//!   or type), a binary or image field (`binary`) or a field restricted to a group with `.` in
+//!   or type), marked `encrypted` (`encrypted`: a digest of a short clear value could be
+//!   reversed by trying every value), a binary or image field (`binary`) or a field restricted to a group with `.` in
 //!   its `groups` attribute (`restricted`); x2many create and update commands recurse into the
 //!   comodel's values (so a `secret` field of a nested `[0, 0, {..}]` is redacted by the
 //!   comodel's own declaration), to at most [`MAX_DEPTH`] levels (`depth` beyond);
@@ -106,6 +107,8 @@ fn values(registry: &Registry, spec: Option<&ModelSpec>, value: &Json, depth: us
                 let kept = match spec.and_then(|s| s.field(field)) {
                     None => redacted("unknown"),
                     Some(f) if f.secret => redacted("secret"),
+                    // a digest of a short clear value (an identity number) could be brute-forced
+                    Some(f) if f.encrypted => redacted("encrypted"),
                     Some(f) if matches!(f.ty.type_name(), "binary" | "image") => redacted("binary"),
                     Some(f) if f.groups.is_some_and(|g| g.contains('.')) => redacted("restricted"),
                     Some(f) => match (f.ty.type_name(), f.ty.comodel()) {

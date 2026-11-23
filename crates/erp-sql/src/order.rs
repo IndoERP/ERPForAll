@@ -496,6 +496,11 @@ impl<'a> OrderCompiler<'a> {
                     "sorting",
                 ));
             }
+            _ if field.encrypted => {
+                return Err(Error::validation(crate::filter::encrypted_message(
+                    model.name, field.name, "ordering",
+                )));
+            }
             _ if !field.has_column() => {
                 return Err(Error::programming(format!(
                     "Cannot convert {}.{} to SQL because it is not stored",

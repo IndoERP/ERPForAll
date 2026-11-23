@@ -866,6 +866,8 @@ impl OrmBuilder {
             return Err(refused);
         }
         crate::principal::validate_capabilities(crate::principal::CAPABILITIES.iter())?;
+        // a node that cannot open its encrypted fields does not start
+        crate::field_encryption::validate(&self.registry)?;
         for model in self.registry.models() {
             for field in &model.fields {
                 if field.translate && (field.compute.is_some() || field.related.is_some()) {

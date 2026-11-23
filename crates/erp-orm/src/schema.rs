@@ -1917,6 +1917,7 @@ impl Transaction {
         let (saved, lock_timeout) = self.set_schema_limits(false).await?;
         // Serialize schema changes, then read the catalog under the lock.
         self.take_schema_lock(&lock_timeout).await?;
+        let clear = self.clear_encrypted_columns(&specs).await?;
         let steps = self
             .init_models_locked(
                 &specs,
@@ -1933,6 +1934,7 @@ impl Transaction {
                 },
             )
             .await?;
+        self.seal_clear_columns(&clear).await?;
         self.set_timeouts(&saved.0, &saved.1).await?;
         Ok(SchemaSync { steps })
     }
@@ -2051,6 +2053,7 @@ impl Transaction {
         // the limits the transaction began with no longer hold: errors say so
         self.note_limits_changed(Some(SCHEMA_STATEMENT_TIMEOUT_DURATION));
         let target = Replan { table, recorded };
+        let clear = self.clear_encrypted_columns(&specs).await?;
         let steps = self
             .init_models_locked(
                 &specs,
@@ -2063,6 +2066,7 @@ impl Transaction {
                 },
             )
             .await?;
+        self.seal_clear_columns(&clear).await?;
         if let Some(step) = steps
             .into_iter()
             .find(|step| step.table == table && step.key == key.as_str())
@@ -2913,6 +2917,19 @@ impl Transaction {
                             )));
                         }
                         if converted {
+                            // a column of envelopes is never read back as text: switching
+                            // encryption off needs a decrypting migration (not built yet)
+                            if udt == "bytea"
+                                && !field.encrypted
+                                && matches!(field.ty, FieldType::Char { .. } | FieldType::Text)
+                            {
+                                return Err(Error::programming(format!(
+                                    "{}.{}: the column holds encrypted values (bytea) but the \
+                                     field is no longer declared encrypted; decrypting a column \
+                                     is not supported yet, so the column is unchanged",
+                                    spec.name, field.name
+                                )));
+                            }
                             if field.company_dependent {
                                 self.batch(&format!(
                                     "LOCK TABLE {} IN ACCESS EXCLUSIVE MODE",
@@ -3041,7 +3058,14 @@ impl Transaction {
                                     &col.name,
                                 )));
                             } else {
-                                let alter = if textual {
+                                let alter = if field.encrypted
+                                    && matches!(udt.as_str(), "varchar" | "text" | "bpchar")
+                                {
+                                    // the clear text becomes its UTF-8 bytes here; the schema
+                                    // step seals them before it returns
+                                    // (`field_encryption::sync`)
+                                    ddl::alter_column_to_utf8_bytea(&spec.table, &col.name)
+                                } else if textual {
                                     ddl::alter_column_type_collated(
                                         &spec.table,
                                         &col.name,

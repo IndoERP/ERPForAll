@@ -332,6 +332,7 @@ fn parse_field(name: &str, attr: &syn::Attribute) -> syn::Result<FieldOut> {
             | "user_writeable"
             | "input_adapted"
             | "secret"
+            | "encrypted"
             | "bypass_search_access"
             | "delegate"
             | "server_set"
