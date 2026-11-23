@@ -3,6 +3,13 @@
 //! across companies and respect subject privacy: filters restricted to specific users (`user_ids`)
 //! are never returned to callers outside that subject set.
 
+// `create_or_replace` takes its RPC parameters by name, and the methods macro repeats them in the
+// code it generates for the impl block.
+#![allow(
+    clippy::too_many_arguments,
+    reason = "RPC parameters are named, not bundled"
+)]
+
 use std::sync::Arc;
 
 use erp_sdk::domain::{Operator, Value as DomainValue};
@@ -161,7 +168,6 @@ impl IrFilters {
     /// model under the caller's rights before anything is stored.
     #[method]
     #[rpc(effect = write, model)]
-    #[allow(clippy::too_many_arguments, reason = "the RPC's named parameters")]
     pub async fn create_or_replace(
         this: &RecordSet<IrFilters>,
         tx: &mut Transaction,
@@ -276,7 +282,7 @@ impl IrFilters {
                 .filter(|row| {
                     matches!(row.get("is_default"), Some(Value::Bool(true))) && !same_name(row)
                 })
-                .filter_map(|row| row_id(row))
+                .filter_map(row_id)
                 .collect();
             if !previous.is_empty() {
                 filters

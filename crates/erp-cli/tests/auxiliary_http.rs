@@ -298,6 +298,8 @@ async fn run_test() {
         .unlink_hook(erp_data::model_data::UNLINK_HOOK)
         .build()
         .unwrap();
+    // The favorites part saves through write calls, which the audit trail must be able to record.
+    orm.check_audit_store().await.unwrap();
 
     let service = RpcService::new(orm.clone(), Host, RpcConfig::default());
 
