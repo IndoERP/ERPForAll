@@ -119,6 +119,22 @@ pnpm run typecheck
 pnpm run test
 ```
 
+## Printed reports for native clients
+
+`GET /erp/report/pdf/<report>/<ids>` (`?download=1` for an attachment) answers the PDF of a report. A browser sends
+its session cookie; a native client without one (a mobile app) sends the API key it signed in with instead:
+
+```http
+GET /erp/report/pdf/my_addon.report_document/42?download=1
+Authorization: Bearer <key>
+```
+
+The key is checked as on JSON-2 (an `rpc` user key, the address throttle, a foreign `Origin` refused, a cookie sent
+alongside must belong to the key's user) and its user is the one the report prints for: the report's groups, read
+access on every id and the id limits apply as for that user's browser session. The answer is
+`application/pdf` with `Cache-Control: private, no-store` and no cookie. The HTML preview
+(`/erp/report/html/...`) stays with the browser session; a key is refused there.
+
 ## Pull request rules
 
 - One topic per pull request, with tests for the behaviour you change.

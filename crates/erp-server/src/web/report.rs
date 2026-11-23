@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! `ids` are comma-separated record ids; `?download=1` asks for an attachment instead of
-//! an inline answer. The route owns the transport: a browser session, the path syntax, the
-//! headers. Finding the report, the access checks, the document and its layout belong to the
-//! composition behind [`WebReport`] (addons cannot depend on this crate: layer check).
+//! an inline answer. The route owns the transport: the credential (a browser session, or an API
+//! key for PDF), the path syntax, the headers. Finding the report, the access checks, the
+//! document and its layout belong to the composition behind [`WebReport`] (addons cannot depend
+//! on this crate: layer check).
 use super::*;
 
 /// Most record ids one report address takes before the database is asked; the composition behind
@@ -91,11 +92,15 @@ impl WebApp {
         self
     }
 
-    /// `GET /erp/report/<pdf|html>/<report>/<ids>`.
+    /// `GET /erp/report/<pdf|html>/<report>/<ids>`, with a browser session or, for PDF, an API
+    /// key (`Authorization: Bearer`). Both open the caller's own request transaction and hand it
+    /// to the same composition, so the report's groups, read access on every id and the id limits
+    /// are checked the same way.
     pub(super) async fn report(
         &self,
         parts: &axum::http::request::Parts,
         rest: &str,
+        client: IpAddr,
         auth: &Arc<Auth>,
     ) -> HttpResult<Response> {
         if parts.method != Method::GET {
@@ -109,10 +114,12 @@ impl WebApp {
             parse(rest).map_err(|reason| response(StatusCode::NOT_FOUND, reason))?;
         let download = matches!(parts.uri.query(), Some("download=1" | "download=true"));
         let headers = &parts.headers;
-        if headers.contains_key(header::AUTHORIZATION) {
+        let bearer = headers.contains_key(header::AUTHORIZATION);
+        if bearer && format != ReportFormat::Pdf {
+            // the HTML preview is a page for a browser tab, which has the session
             return Err(response(
-                StatusCode::UNAUTHORIZED,
-                "Bearer credentials are not accepted on the report route; sign in with a browser session.",
+                StatusCode::FORBIDDEN,
+                "API keys print PDF only; the HTML preview needs a browser session.",
             ));
         }
         let printer = self.report.as_ref().ok_or_else(|| {
@@ -121,24 +128,20 @@ impl WebApp {
                 "report printing composition is unavailable",
             )
         })?;
-        let secret = self
-            .session(headers)?
-            .ok_or_else(|| response(StatusCode::UNAUTHORIZED, "user is not connected"))?;
-        let mut begun = auth
-            .begin_session(&secret, CredentialOptions::new())
-            .await
-            .map_err(auth_error)?;
-        // shortcut: the session transaction stays open while the document is laid out; upgrade
-        // to a prepare step and a render step when long layouts hold too many connections.
-        let printed = printer.print(&mut begun.tx, format, report, &ids).await;
-        // printing reads only: nothing of the transaction is kept
-        let rolled_back = begun.tx.rollback().await;
-        drop(begun);
-        let printed = match printed {
-            Ok(printed) => printed,
-            Err(error) => return Err(self.rpc_error(error).await),
+        let request = PrintRequest {
+            printer: printer.as_ref(),
+            format,
+            report,
+            ids: &ids,
         };
-        rolled_back.map_err(auth_error)?;
+        let (printed, drop_cookie) = if bearer {
+            self.print_with_key(headers, client, auth, request).await?
+        } else {
+            (
+                self.print_with_session(headers, auth, request).await?,
+                false,
+            )
+        };
         let content_type = match format {
             ReportFormat::Pdf => "application/pdf",
             ReportFormat::Html => "text/html; charset=utf-8",
@@ -169,8 +172,104 @@ impl WebApp {
                 ),
             );
         }
+        if drop_cookie {
+            self.set_cookie(&mut result, "session_id", "", 0)?;
+        }
         Ok(result)
     }
+
+    /// Print in the transaction of the browser session.
+    async fn print_with_session(
+        &self,
+        headers: &HeaderMap,
+        auth: &Arc<Auth>,
+        request: PrintRequest<'_>,
+    ) -> HttpResult<PrintedReport> {
+        let secret = self
+            .session(headers)?
+            .ok_or_else(|| response(StatusCode::UNAUTHORIZED, "user is not connected"))?;
+        let mut begun = auth
+            .begin_session(&secret, CredentialOptions::new())
+            .await
+            .map_err(auth_error)?;
+        let printed = request.print(&mut begun.tx).await;
+        // printing reads only: nothing of the transaction is kept
+        let rolled_back = begun.tx.rollback().await;
+        drop(begun);
+        let printed = match printed {
+            Ok(printed) => printed,
+            Err(error) => return Err(self.rpc_error(error).await),
+        };
+        rolled_back.map_err(auth_error)?;
+        Ok(printed)
+    }
+
+    /// Print in the transaction of the presented API key, checked as on JSON-2: the address
+    /// throttle, a foreign `Origin` refused, the `rpc` audience, a cookie sent alongside must be
+    /// the key's user. Answers whether an invalid cookie sent alongside is to be cleared.
+    async fn print_with_key(
+        &self,
+        headers: &HeaderMap,
+        client: IpAddr,
+        auth: &Arc<Auth>,
+        request: PrintRequest<'_>,
+    ) -> HttpResult<(PrintedReport, bool)> {
+        let credential = self.bearer_credential(headers, client, auth).await?;
+        let mut tx = self.open_bearer(&credential).await?;
+        let printed = if printable_with(tx.env().principal().scope()) {
+            request.print(&mut tx).await
+        } else {
+            Err(erp_fields::Error::access(
+                "This API key is limited to some models or methods; it cannot print reports.",
+            ))
+        };
+        let rolled_back = tx.rollback().await;
+        // The transaction has ended: dropping the credential below may now start the key's
+        // last-use write without contending with this request.
+        drop(tx);
+        let drop_cookie = credential.drop_cookie.load(Ordering::Relaxed);
+        drop(credential);
+        let printed = match printed {
+            Ok(printed) => printed,
+            Err(error) => {
+                let mut refused = self.rpc_error(error).await;
+                if drop_cookie {
+                    self.set_cookie(&mut refused, "session_id", "", 0)?;
+                }
+                return Err(refused);
+            }
+        };
+        rolled_back.map_err(auth_error)?;
+        Ok((printed, drop_cookie))
+    }
+}
+
+/// What one report request prints, handed to the transaction the credential opened.
+#[derive(Clone, Copy)]
+struct PrintRequest<'a> {
+    printer: &'a dyn WebReport,
+    format: ReportFormat,
+    report: &'a str,
+    ids: &'a [i64],
+}
+impl PrintRequest<'_> {
+    async fn print(self, tx: &mut erp_orm::Transaction) -> erp_fields::Result<PrintedReport> {
+        // shortcut: the request transaction stays open while the document is laid out; upgrade
+        // to a prepare step and a render step when long layouts hold too many connections.
+        self.printer
+            .print(tx, self.format, self.report, self.ids)
+            .await
+    }
+}
+
+/// Whether a key of `scope` may print. A report reads records outside the RPC dispatch, where a
+/// key's model and method allowlists are enforced, so a key limited by either is refused rather
+/// than allowed past its list. Unrestricted keys (every user key today) and sessions print.
+fn printable_with(scope: Option<&erp_orm::Scope>) -> bool {
+    scope.is_none_or(|scope| {
+        matches!(scope.models(), erp_orm::ModelAllow::All)
+            && matches!(scope.methods(), erp_orm::MethodAllow::All)
+    })
 }
 
 #[cfg(test)]
@@ -199,5 +298,29 @@ mod tests {
         assert!(parse("pdf/a b/1").unwrap_err().contains("report reference"));
         assert!(parse("pdf/a").unwrap_err().contains("/erp/report/"));
         assert!(parse("pdf/a/1/2").unwrap_err().contains("/erp/report/"));
+    }
+
+    #[test]
+    fn only_unrestricted_keys_print() {
+        let scope = |models, methods| {
+            erp_orm::Scope::builder(erp_orm::ApiKeyId::new(1).unwrap(), "device")
+                .models(models)
+                .methods(methods)
+                .build()
+                .unwrap()
+        };
+        let all = scope(erp_orm::ModelAllow::All, erp_orm::MethodAllow::All);
+        assert!(printable_with(None));
+        assert!(printable_with(Some(&all)));
+        let models = scope(
+            erp_orm::ModelAllow::named(["res.partner"]).unwrap(),
+            erp_orm::MethodAllow::All,
+        );
+        assert!(!printable_with(Some(&models)));
+        let methods = scope(
+            erp_orm::ModelAllow::All,
+            erp_orm::MethodAllow::named(["read"]).unwrap(),
+        );
+        assert!(!printable_with(Some(&methods)));
     }
 }

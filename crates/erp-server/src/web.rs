@@ -1049,7 +1049,7 @@ impl WebApp {
             return self.reporting_export(&parts, body, &auth).await;
         }
         if let Some(rest) = path.strip_prefix(routes::REPORT_PREFIX) {
-            return self.report(&parts, rest, &auth).await;
+            return self.report(&parts, rest, client, &auth).await;
         }
         if path == routes::CLIENT_ERROR {
             return self
@@ -1085,51 +1085,14 @@ impl WebApp {
             // An ambiguous/non-ASCII header remains a failed key attempt; its text is never
             // retained, and it still receives cookie precedence and address throttling.
             let bearer = if json2 && headers.contains_key(header::AUTHORIZATION) {
-                // Charge external requests once, before any credential/settings SQL. The
-                // execution adapter rechecks authority without charging retries again.
-                let address = erp_security::auth::throttle::address_key(client);
-                if !auth.prefilter().admit(&address) {
-                    return Err(self
-                        .render_bearer_failure(
-                            erp_rpc::InfraError::RateLimited { retry_after: 1 }.into(),
-                        )
-                        .await);
-                }
-                let raw = match values(headers, "authorization") {
-                    Ok(values) => match boundary::bearer(&values) {
-                        Ok(Some(raw)) => raw,
-                        Ok(None) | Err(_) => "", // Presented malformed credentials cannot use a cookie.
-                    },
-                    Err(_) => "", // Invalid bytes are an invalid credential, never a diagnostic.
-                };
-                if one(headers, "origin")?.is_some_and(|origin| origin != self.config.origin()) {
-                    return Err(response(
-                        StatusCode::FORBIDDEN,
-                        boundary::BoundaryError::SameOrigin.to_string(),
-                    ));
-                }
-                Some(Arc::new(BearerCredential {
-                    auth: Arc::clone(&auth),
-                    secret: zeroize::Zeroizing::new(raw.to_owned()),
-                    session: self.session(headers)?,
-                    client,
-                    drop_cookie: AtomicBool::new(false),
-                    last_use: std::sync::Mutex::new(None),
-                }))
+                Some(Arc::new(
+                    self.bearer_credential(headers, client, &auth).await?,
+                ))
             } else {
                 None
             };
             let (mut request_tx, secret) = if let Some(credential) = &bearer {
-                match credential.open(CredentialOptions::new()).await {
-                    Ok(tx) => (tx, None),
-                    Err(error) => {
-                        let mut result = self.bearer_error(error).await;
-                        if credential.drop_cookie.load(Ordering::Relaxed) {
-                            self.set_cookie(&mut result, "session_id", "", 0)?;
-                        }
-                        return Err(result);
-                    }
-                }
+                (self.open_bearer(credential).await?, None)
             } else {
                 let secret = self.session(headers)?;
                 if json2 && secret.is_none() {
@@ -1729,6 +1692,62 @@ impl WebApp {
             *current = candidate;
         }
         Ok(())
+    }
+
+    /// The request-local credential of a request that presents `Authorization`, on a route that
+    /// accepts API keys (JSON-2 and the PDF report route). The address is charged once, before
+    /// any credential or settings SQL; a foreign `Origin` is refused, so a browser page of
+    /// another site cannot replay a key it holds against this origin. Malformed or undecodable
+    /// headers stay an attempt with an empty secret: they are throttled and refused as an invalid
+    /// key, never diagnosed, and never fall back to the cookie.
+    async fn bearer_credential(
+        &self,
+        headers: &HeaderMap,
+        client: IpAddr,
+        auth: &Arc<Auth>,
+    ) -> HttpResult<BearerCredential> {
+        let address = erp_security::auth::throttle::address_key(client);
+        if !auth.prefilter().admit(&address) {
+            return Err(self
+                .render_bearer_failure(erp_rpc::InfraError::RateLimited { retry_after: 1 }.into())
+                .await);
+        }
+        let raw = match values(headers, "authorization") {
+            Ok(values) => match boundary::bearer(&values) {
+                Ok(Some(raw)) => raw,
+                Ok(None) | Err(_) => "", // Presented malformed credentials cannot use a cookie.
+            },
+            Err(_) => "", // Invalid bytes are an invalid credential, never a diagnostic.
+        };
+        if one(headers, "origin")?.is_some_and(|origin| origin != self.config.origin()) {
+            return Err(response(
+                StatusCode::FORBIDDEN,
+                boundary::BoundaryError::SameOrigin.to_string(),
+            ));
+        }
+        Ok(BearerCredential {
+            auth: Arc::clone(auth),
+            secret: zeroize::Zeroizing::new(raw.to_owned()),
+            session: self.session(headers)?,
+            client,
+            drop_cookie: AtomicBool::new(false),
+            last_use: std::sync::Mutex::new(None),
+        })
+    }
+
+    /// Open `credential`'s request transaction, or the rendered refusal (an invalid cookie sent
+    /// alongside the key is cleared).
+    async fn open_bearer(&self, credential: &BearerCredential) -> HttpResult<erp_orm::Transaction> {
+        match credential.open(CredentialOptions::new()).await {
+            Ok(tx) => Ok(tx),
+            Err(error) => {
+                let mut result = self.bearer_error(error).await;
+                if credential.drop_cookie.load(Ordering::Relaxed) {
+                    self.set_cookie(&mut result, "session_id", "", 0)?;
+                }
+                Err(result)
+            }
+        }
     }
 
     async fn unauthorized(&self, message: &str) -> Response {
