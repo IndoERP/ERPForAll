@@ -769,6 +769,10 @@ impl WebApp {
             && !classified_path.starts_with(routes::ASSETS_PREFIX)
             // attachment errors keep their class and stay plain text, never the HTML page
             && !classified_path.starts_with(content::CONTENT_PREFIX)
+            // a report printed with an API key is a native client's call, not a page: its
+            // refusals keep their JSON or text body
+            && !(classified_path.starts_with(routes::REPORT_PREFIX)
+                && request.headers().contains_key(header::AUTHORIZATION))
             && (request.method() == Method::GET || accepts_html(request.headers()));
         // The queue admission and execution permit precede body buffering.
         let queued = match Arc::clone(&self.queue).try_acquire_owned() {

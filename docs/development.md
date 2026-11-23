@@ -132,7 +132,8 @@ Authorization: Bearer <key>
 The key is checked as on JSON-2 (an `rpc` user key, the address throttle, a foreign `Origin` refused, a cookie sent
 alongside must belong to the key's user) and its user is the one the report prints for: the report's groups, read
 access on every id and the id limits apply as for that user's browser session. The answer is
-`application/pdf` with `Cache-Control: private, no-store` and no cookie. The HTML preview
+`application/pdf` with `Cache-Control: private, no-store` and no cookie. A refusal is the JSON error of JSON-2 (or a short text), not the HTML error page a browser
+navigation gets. The HTML preview
 (`/erp/report/html/...`) stays with the browser session; a key is refused there.
 
 ## Pull request rules
