@@ -1481,9 +1481,11 @@ impl WebApp {
                     return self.session_login(&canonical);
                 };
                 let mut context = erp_orm::Context::new();
+                let mut address_names_companies = false;
                 if let Some(query) = parts.uri.query() {
                     for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
                         if key == "cids" {
+                            address_names_companies = true;
                             let ids = value
                                 .split(',')
                                 .map(|value| {
@@ -1540,7 +1542,9 @@ impl WebApp {
                     // Rendered in place, never a redirect loop through the login page.
                     return self.login_success_page().await;
                 }
-                let document = self.bootstrap(&mut begun.tx, &signer, &prefs).await?;
+                let document = self
+                    .bootstrap(&mut begun.tx, &signer, &prefs, address_names_companies)
+                    .await?;
                 begun.tx.rollback().await.map_err(auth_error)?;
                 let mut result = self.document("erp-bootstrap", &document).await?;
                 // Sliding expiry: the verified value is sent again, never re-minted.
@@ -1879,9 +1883,17 @@ impl WebApp {
         tx: &mut erp_orm::Transaction,
         signer: &PrefsSigner,
         prefs: &SignedPrefs,
+        address_names_companies: bool,
     ) -> HttpResult<erp_views::wire::Bootstrap> {
         // The caller checked the shell access guard (internal user) before this.
         let env = tx.env();
+        // An address without `cids` starts with the companies the user last confirmed in the
+        // switcher; an address with them wins for this load and leaves the stored choice alone.
+        let env = if address_names_companies {
+            env
+        } else {
+            self.stored_companies(tx, env).await?
+        };
         let ids: Vec<i64> = env
             .principal()
             .resolution()
@@ -1967,6 +1979,32 @@ impl WebApp {
             "csrf":{"logout":signer.csrf(prefs,now()?).map_err(|_| internal())?},
             "renderers":[{"key":"web.list","schema_major":1},{"key":"web.form","schema_major":1}]});
         serde_json::from_value(document).map_err(|_| internal())
+    }
+    /// `env` with the active companies stored in the caller's `res.users.settings`, when there are
+    /// any. `get_res_users_settings` keeps only the companies the caller is still allowed, and the
+    /// derived environment validates them against the subject once more: a stored choice never
+    /// widens access. Nothing stored (or nothing left) keeps the default companies.
+    async fn stored_companies(
+        &self,
+        tx: &mut erp_orm::Transaction,
+        env: erp_orm::Env,
+    ) -> HttpResult<erp_orm::Env> {
+        if env.registry().model("res.users.settings").is_none() {
+            return Ok(env);
+        }
+        let model = env.records("res.users.settings").map_err(auth_error)?;
+        let settings: erp_fields::ValueMap =
+            erp_orm::call_method(tx, &model, "get_res_users_settings", ())
+                .await
+                .map_err(auth_error)?;
+        match settings.get("active_company_ids") {
+            Some(erp_fields::Value::List(ids)) if !ids.is_empty() => Ok(env.with_context([(
+                "allowed_company_ids",
+                erp_fields::Value::List(std::sync::Arc::clone(ids)),
+            )])),
+            Some(erp_fields::Value::False) | None => Ok(env),
+            Some(_) => Err(internal()),
+        }
     }
     fn form_origin(&self, headers: &HeaderMap) -> HttpResult<()> {
         if one(headers, "sec-fetch-site")?

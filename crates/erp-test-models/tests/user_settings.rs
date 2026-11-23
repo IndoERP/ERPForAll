@@ -380,6 +380,200 @@ async fn test_user_settings_refuse_unknown_keys_and_the_public_user() {
     f.finish().await;
 }
 
+/// Two more companies; the first user may use the fixture company and `second`, not `foreign`.
+async fn companies_of_u1(f: &Fixture) -> (i64, i64, i64) {
+    let main = one(
+        &f.client,
+        "SELECT company_id::int8 FROM res_users WHERE id = $1",
+        &[&f.u1],
+    )
+    .await;
+    let mut more = Vec::new();
+    for name in ["Second Company", "Foreign Company"] {
+        more.push(
+            one(
+                &f.client,
+                "INSERT INTO res_company (tz, name, currency_id, active) \
+                 SELECT 'UTC', $1, currency_id, true FROM res_company WHERE id = $2 \
+                 RETURNING id::int8",
+                &[&name, &main],
+            )
+            .await,
+        );
+    }
+    exec(
+        &f.client,
+        "INSERT INTO res_company_users_rel (user_id, cid) VALUES ($1, $2)",
+        &[&f.u1, &more[0]],
+    )
+    .await;
+    (main, more[0], more[1])
+}
+
+impl Fixture {
+    async fn companies(&self, uid: i64) -> Value {
+        self.call(uid, "get_res_users_settings", ValueMap::new())
+            .await
+            .unwrap()["active_company_ids"]
+            .clone()
+    }
+
+    /// A generic `write` of the caller's own row, in a transaction of its own.
+    async fn write_own(
+        &self,
+        uid: i64,
+        vals: std::collections::BTreeMap<String, Value>,
+    ) -> erp_sdk::Result<()> {
+        let mut tx = self.orm.begin(UserId::new(uid).unwrap()).await.unwrap();
+        let model = tx.env().records("res.users.settings").unwrap();
+        let own = model.search(&mut tx, &Domain::TRUE).await.unwrap();
+        own.write_values(&mut tx, &vals).await
+    }
+
+    /// A generic `write` of `owner`'s row by the superuser, in a transaction of its own.
+    async fn write_as_superuser(
+        &self,
+        owner: i64,
+        vals: std::collections::BTreeMap<String, Value>,
+    ) -> erp_sdk::Result<()> {
+        let mut tx = self.h.begin().await.unwrap();
+        let row_id = one(
+            &self.client,
+            "SELECT id::int8 FROM res_users_settings WHERE user_id = $1",
+            &[&owner],
+        )
+        .await;
+        let row = tx
+            .env()
+            .records("res.users.settings")
+            .unwrap()
+            .browse([row_id])
+            .unwrap();
+        row.write_values(&mut tx, &vals).await
+    }
+
+    async fn set_companies(&self, uid: i64, companies: Value) -> erp_sdk::Result<ValueMap> {
+        let mut args = ValueMap::new();
+        args.insert("active_company_ids".to_string(), companies);
+        self.call(uid, "set_res_users_settings", args).await
+    }
+}
+
+fn ids(ids: &[i64]) -> Value {
+    Value::list(ids.iter().copied().map(Value::Int))
+}
+
+#[tokio::test]
+async fn active_companies_are_stored_in_order_and_only_among_the_allowed_ones() {
+    let f = fixture().await;
+    let (main, second, foreign) = companies_of_u1(&f).await;
+    assert_eq!(f.companies(f.u1).await, Value::False);
+    let saved = f.set_companies(f.u1, ids(&[second, main])).await.unwrap();
+    assert_eq!(saved["active_company_ids"], ids(&[second, main]));
+    // the app order is untouched by a company save, and the other way round
+    assert_eq!(saved["homemenu_config"], Value::False);
+    f.set(f.u1, Value::from("[2, 1]")).await.unwrap();
+    assert_eq!(f.companies(f.u1).await, ids(&[second, main]));
+    assert_eq!(f.get(f.u1).await, Value::str("[2, 1]"));
+
+    // a company the user does not have: refused with the company context's own message
+    for refused in [ids(&[foreign]), ids(&[main, foreign]), ids(&[9_999_999])] {
+        let err = f.set_companies(f.u1, refused).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Access, "{err}");
+        assert_eq!(
+            err.message(),
+            "One of the selected companies does not exist or is not one of yours."
+        );
+    }
+    // malformed: empty, duplicated, not positive, not a list of ids
+    for bad in [
+        ids(&[]),
+        ids(&[main, main]),
+        ids(&[0]),
+        Value::from("[1]"),
+        Value::Int(main),
+        Value::list([Value::from("1")]),
+    ] {
+        let err = f.set_companies(f.u1, bad).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Validation, "{err}");
+    }
+    assert_eq!(f.companies(f.u1).await, ids(&[second, main]));
+
+    // the generic write path is held to the owner's companies, whoever writes
+    for bad in [
+        format!("[{foreign}]"),
+        "[]".to_owned(),
+        "not json".to_owned(),
+    ] {
+        let err = f
+            .write_own(f.u1, map(&[("active_company_config", s(&bad))]))
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Validation, "{bad}: {err}");
+    }
+    let err = f
+        .write_as_superuser(
+            f.u1,
+            map(&[("active_company_config", s(&format!("[{foreign}]")))]),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Validation, "{err}");
+    // nor handed to a user whose companies it is not among
+    let err = f
+        .write_as_superuser(f.u1, map(&[("user_id", Value::Int(f.u2))]))
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Validation, "{err}");
+
+    // another user cannot reach the row through the method: theirs is separate
+    assert_eq!(f.companies(f.u2).await, Value::False);
+    let err = f.set_companies(f.u2, ids(&[second])).await.unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Access, "{err}");
+    assert_eq!(f.companies(f.u1).await, ids(&[second, main]));
+
+    // False clears the choice
+    f.set_companies(f.u1, Value::False).await.unwrap();
+    assert_eq!(f.companies(f.u1).await, Value::False);
+    assert_eq!(f.get(f.u1).await, Value::str("[2, 1]"));
+    f.finish().await;
+}
+
+#[tokio::test]
+async fn active_companies_taken_from_the_user_are_dropped_on_read() {
+    let f = fixture().await;
+    let (main, second, _) = companies_of_u1(&f).await;
+    f.set_companies(f.u1, ids(&[second, main])).await.unwrap();
+    exec(
+        &f.client,
+        "DELETE FROM res_company_users_rel WHERE user_id = $1 AND cid = $2",
+        &[&f.u1, &second],
+    )
+    .await;
+    assert_eq!(f.companies(f.u1).await, ids(&[main]));
+    // a save of something else returns the same filtered list
+    let saved = f.set(f.u1, Value::from("[1]")).await.unwrap();
+    assert_eq!(saved["active_company_ids"], ids(&[main]));
+    // the stored value is kept as written: giving the company back restores the choice
+    exec(
+        &f.client,
+        "INSERT INTO res_company_users_rel (user_id, cid) VALUES ($1, $2)",
+        &[&f.u1, &second],
+    )
+    .await;
+    assert_eq!(f.companies(f.u1).await, ids(&[second, main]));
+    // nothing left at all: no stored choice
+    f.set_companies(f.u1, ids(&[second])).await.unwrap();
+    exec(
+        &f.client,
+        "DELETE FROM res_company_users_rel WHERE user_id = $1 AND cid = $2",
+        &[&f.u1, &second],
+    )
+    .await;
+    assert_eq!(f.companies(f.u1).await, Value::False);
+    f.finish().await;
+}
+
 /// The lock classes of the addons are the ones registered in `erp_sql::locks`, and distinct.
 #[test]
 fn the_addon_lock_classes_are_registered_and_distinct() {

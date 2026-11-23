@@ -111,6 +111,22 @@ The client is TypeScript, compiled ahead of time:
 - XML templates are compiled by `erp-ui-compile` and bundled by `web/scripts/build-human-ui.mjs`, as shown in the
   installation guide.
 
+### Active companies
+
+The companies a page works in are the `allowed_company_ids` of every call, current company first. The shell
+bootstrap (`GET /erp`) decides them once per load:
+
+1. `cids` in the address (`/erp/action-42?cids=3,1`) wins for that load. A link carries its companies, and opening
+   it does not change anything stored.
+2. Otherwise, the companies the user last confirmed in the company switcher. The switcher stores them with
+   `res.users.settings` / `set_res_users_settings({"active_company_ids": [3, 1]})` before it reloads; `False`
+   clears the choice. The list must be non-empty, distinct, at most 64 ids, and only of the user's allowed companies:
+   anything else is refused, on the generic `write` path too.
+3. Otherwise, the user's default companies (main company first).
+
+A stored choice never widens access. `get_res_users_settings` and the bootstrap keep only the companies the user is
+still allowed, in the stored order. When none is left, the default companies apply again.
+
 Checks (after `eval "$(scripts/web-toolchain.sh env)"` and `pnpm --dir web install --frozen-lockfile`):
 
 ```sh

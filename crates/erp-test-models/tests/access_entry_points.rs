@@ -1248,6 +1248,11 @@ const SUDO_SITES: &[(&str, usize, &str)] = &[
         "finds the caller's own `res.users.settings` row by `tx.env().uid()`, never by an argument: the row is selected by that user id alone, so a portal user outside `base.group_user` (who has no `ir.access` row on the model; the public user, whom every anonymous visitor shares, is refused by the caller before this) still reads the settings that are theirs; generic `read`/`search` stay under the `ir.access` rows",
     ),
     (
+        "base/res_users_settings.rs::_check_active_company_config",
+        1,
+        "a constraint, not a read for the caller: reads the written rows' `user_id` (writable and readable by `base.group_system` only) and stored active companies to check that every stored company is one of the owner's allowed companies; nothing read is returned, a failure is the validation error that refuses the write",
+    ),
+    (
         "base/res_users_settings.rs::set_res_users_settings",
         1,
         "after refusing the public user and unknown keys and taking the per-user advisory lock, creates the caller's own settings row with `user_id` set from `tx.env().uid()`: `user_id` is writable by `base.group_system` only, so that a user cannot hand a row to another user through generic `write`/`create`, and the method sets it as superuser for the caller alone",

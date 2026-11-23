@@ -8,8 +8,10 @@ use erp_sdk::{ErrorKind, ValueMap};
 
 pub const MAX_HOMEMENU_CONFIG_BYTES: usize = 4096;
 pub const MAX_HOMEMENU_APPS: usize = 256;
-/// The only key `set_res_users_settings` accepts.
-const SETTING_KEYS: &[&str] = &["homemenu_config"];
+/// The most active companies a user may store: the bound of `cids` in the web client's address.
+pub const MAX_ACTIVE_COMPANIES: usize = 64;
+/// The keys `set_res_users_settings` accepts.
+const SETTING_KEYS: &[&str] = &["homemenu_config", "active_company_ids"];
 
 /// Model for durable per-user UI preferences and settings.
 #[model(
@@ -36,6 +38,12 @@ pub struct ResUsersSettings {
     /// Home menu application ordering preference, stored as a JSON string of ordered root menu IDs.
     #[field(char, size = 4096)]
     pub homemenu_config: Option<Arc<str>>,
+    /// The active companies the user last chose in the company switcher, current company first,
+    /// stored as a JSON array of company ids. The web shell opened without `cids` in its address
+    /// starts with them. Every write is checked against the owner's allowed companies, and every
+    /// read keeps only the companies the reader is still allowed, in the stored order.
+    #[field(char, size = 2048)]
+    pub active_company_config: Option<Arc<str>>,
 }
 
 #[methods(ResUsersSettings, addon = "base")]
@@ -58,6 +66,37 @@ impl ResUsersSettings {
         Ok(())
     }
 
+    /// The stored active companies must be a valid list of the owner's allowed companies, whichever
+    /// path wrote them (the methods below or generic `create`/`write`, also by an administrator
+    /// for another user).
+    #[constrains("active_company_config", "user_id")]
+    async fn _check_active_company_config(
+        this: &RecordSet<ResUsersSettings>,
+        tx: &mut Transaction,
+    ) -> Result<()> {
+        let rows = this.sudo(true);
+        for row in rows.iter() {
+            let Some(raw) = row.get(tx, ResUsersSettings::ACTIVE_COMPANY_CONFIG).await? else {
+                continue;
+            };
+            let ids = parse_active_company_config(&raw)?;
+            let owner = row
+                .get(tx, ResUsersSettings::USER_ID)
+                .await?
+                .and_then(crate::group_graph::row_id)
+                .ok_or_else(|| {
+                    Error::validation("Active companies need the user they belong to.")
+                })?;
+            let allowed = owner_companies(tx, owner).await?;
+            if ids.iter().any(|id| !allowed.contains(id)) {
+                return Err(Error::validation(
+                    "The active companies must be among the user's allowed companies.",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Read the caller's user settings.
     #[method]
     #[rpc(effect = read, model)]
@@ -68,7 +107,12 @@ impl ResUsersSettings {
         refuse_public(tx).await?;
         let own = own_row(this, tx).await?;
         let config = own.get(tx, ResUsersSettings::HOMEMENU_CONFIG).await?;
-        Ok(config_map(config))
+        let stored = own.get(tx, ResUsersSettings::ACTIVE_COMPANY_CONFIG).await?;
+        let companies = match stored {
+            Some(raw) => still_allowed(tx, &parse_active_company_config(&raw)?),
+            None => Vec::new(),
+        };
+        Ok(settings_map(config, &companies))
     }
 
     /// Update the caller's user settings.
@@ -90,6 +134,7 @@ impl ResUsersSettings {
         }
         let own = own_row(this, tx).await?;
         let mut config = own.get(tx, ResUsersSettings::HOMEMENU_CONFIG).await?;
+        let mut vals = this.vals();
         if let Some(config_val) = new_settings.get("homemenu_config") {
             config = match config_val {
                 Value::False => None,
@@ -103,9 +148,35 @@ impl ResUsersSettings {
                     ));
                 }
             };
-            let vals = this
-                .vals()
-                .set(ResUsersSettings::HOMEMENU_CONFIG, config.clone());
+            vals = vals.set(ResUsersSettings::HOMEMENU_CONFIG, config.clone());
+        }
+        let stored = own.get(tx, ResUsersSettings::ACTIVE_COMPANY_CONFIG).await?;
+        let companies = match new_settings.get("active_company_ids") {
+            Some(Value::False) => {
+                vals = vals.set(ResUsersSettings::ACTIVE_COMPANY_CONFIG, None::<Arc<str>>);
+                Vec::new()
+            }
+            Some(chosen) => {
+                let ids = active_company_list(chosen)?;
+                if still_allowed(tx, &ids) != ids {
+                    return Err(Error::access(
+                        "One of the selected companies does not exist or is not one of yours.",
+                    ));
+                }
+                let raw = serde_json::to_string(&ids)
+                    .map_err(|e| Error::programming(format!("active companies: {e}")))?;
+                vals = vals.set(
+                    ResUsersSettings::ACTIVE_COMPANY_CONFIG,
+                    Some(Arc::from(raw.as_str())),
+                );
+                ids
+            }
+            None => match stored {
+                Some(raw) => still_allowed(tx, &parse_active_company_config(&raw)?),
+                None => Vec::new(),
+            },
+        };
+        if !new_settings.is_empty() {
             if own.ids().is_empty() {
                 let uid = RecId::from_real(tx.env().uid())
                     .ok_or_else(|| Error::programming("the caller has no real user id"))?;
@@ -117,7 +188,7 @@ impl ResUsersSettings {
                 own.write(tx, vals).await?;
             }
         }
-        Ok(config_map(config))
+        Ok(settings_map(config, &companies))
     }
 }
 
@@ -161,13 +232,110 @@ async fn own_row(
         .await
 }
 
-fn config_map(config: Option<Arc<str>>) -> ValueMap {
+fn settings_map(config: Option<Arc<str>>, companies: &[i64]) -> ValueMap {
     let mut out = ValueMap::new();
     out.insert(
         "homemenu_config".to_string(),
         config.map_or(Value::False, |c| Value::from(&*c)),
     );
+    out.insert(
+        "active_company_ids".to_string(),
+        if companies.is_empty() {
+            Value::False
+        } else {
+            Value::list(companies.iter().copied().map(Value::Int))
+        },
+    );
     out
+}
+
+/// `ids` without the companies the caller is no longer allowed (removed from the user, archived),
+/// in the given order. The caller's companies come from the principal this transaction resolved.
+fn still_allowed(tx: &Transaction, ids: &[i64]) -> Vec<i64> {
+    let env = tx.env();
+    let allowed = env.principal().resolution().all_companies();
+    ids.iter()
+        .copied()
+        .filter(|id| allowed.iter().any(|company| company.get() == *id))
+        .collect()
+}
+
+/// The allowed companies of `user` (`res_company_users_rel`), for the write check.
+async fn owner_companies(tx: &mut Transaction, user: i64) -> Result<Vec<i64>> {
+    let rows = tx
+        .query(
+            "SELECT cid::int8 FROM res_company_users_rel WHERE user_id = $1::int8",
+            &[&user],
+        )
+        .await?;
+    rows.iter()
+        .map(|row| {
+            row.try_get::<_, i64>(0)
+                .map_err(|e| Error::db(format!("res.users.settings company check: {e}")))
+        })
+        .collect()
+}
+
+/// The `active_company_ids` argument of `set_res_users_settings`: a list of company ids.
+fn active_company_list(value: &Value) -> Result<Vec<i64>> {
+    let Value::List(items) = value else {
+        return Err(Error::validation(
+            "active_company_ids must be a list of company ids or False",
+        ));
+    };
+    let ids = items
+        .iter()
+        .map(|item| match item {
+            Value::Int(id) => Ok(*id),
+            _ => Err(Error::validation(
+                "active_company_ids must be a list of company ids or False",
+            )),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    validate_active_companies(&ids)?;
+    Ok(ids)
+}
+
+/// Parses a stored `active_company_config`: a JSON array of company ids, current first.
+pub fn parse_active_company_config(raw: &str) -> Result<Vec<i64>> {
+    let parsed: serde_json::Value = serde_json::from_str(raw)
+        .map_err(|e| Error::validation(format!("Invalid JSON in active companies: {e}")))?;
+    let arr = parsed
+        .as_array()
+        .ok_or_else(|| Error::validation("The active companies must be a JSON array"))?;
+    let ids = arr
+        .iter()
+        .map(|item| {
+            item.as_i64()
+                .ok_or_else(|| Error::validation("The active companies must be company ids"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    validate_active_companies(&ids)?;
+    Ok(ids)
+}
+
+/// A non-empty list of at most [`MAX_ACTIVE_COMPANIES`] distinct positive ids.
+fn validate_active_companies(ids: &[i64]) -> Result<()> {
+    if ids.is_empty() {
+        return Err(Error::validation(
+            "Choose at least one active company (False clears the choice).",
+        ));
+    }
+    if ids.len() > MAX_ACTIVE_COMPANIES {
+        return Err(Error::validation(format!(
+            "At most {MAX_ACTIVE_COMPANIES} active companies can be stored."
+        )));
+    }
+    if ids.iter().any(|id| *id <= 0) {
+        return Err(Error::validation(
+            "The active companies must be positive company ids.",
+        ));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    if !ids.iter().all(|id| seen.insert(*id)) {
+        return Err(Error::validation("A company is listed twice."));
+    }
+    Ok(())
 }
 
 /// Validates that a raw `homemenu_config` string is a valid, bounded JSON array of IDs.
@@ -205,6 +373,49 @@ pub fn validate_homemenu_config(raw: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn active_company_config_keeps_the_stored_order() {
+        assert_eq!(parse_active_company_config("[3, 1, 2]").unwrap(), [3, 1, 2]);
+    }
+
+    #[test]
+    fn active_company_config_refuses_malformed_lists() {
+        let too_many = serde_json::to_string(&(1..=65).collect::<Vec<i64>>()).unwrap();
+        for bad in [
+            "",
+            "{}",
+            "[]",
+            "[0]",
+            "[-1]",
+            "[1, 1]",
+            "[\"1\"]",
+            "[1.5]",
+            too_many.as_str(),
+        ] {
+            let error = parse_active_company_config(bad).unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::Validation, "{bad}");
+        }
+    }
+
+    #[test]
+    fn active_company_argument_must_be_a_list_of_ids() {
+        assert_eq!(
+            active_company_list(&Value::list([Value::Int(2), Value::Int(1)])).unwrap(),
+            [2, 1]
+        );
+        for bad in [
+            Value::Int(1),
+            Value::from("[1]"),
+            Value::list([Value::from("1")]),
+            Value::list(std::iter::empty::<Value>()),
+        ] {
+            assert_eq!(
+                active_company_list(&bad).unwrap_err().kind(),
+                ErrorKind::Validation
+            );
+        }
+    }
 
     #[test]
     fn test_validate_homemenu_config_valid_numbers() {
