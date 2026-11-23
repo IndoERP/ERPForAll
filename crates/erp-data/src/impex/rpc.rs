@@ -1,4 +1,5 @@
-//! JSON-2 RPC exposure and argument binders for `load`, `export_data`, and `get_import_templates`.
+//! JSON-2 RPC exposure and argument binders for `load`, `read_import_file`, `export_data`, and
+//! `get_import_templates`.
 //!
 //! Contributes [`RpcImpl`] entries to [`erp_orm::rpc::RPC_IMPLS`] under model `"base"` and addon `"base"`.
 
@@ -87,6 +88,96 @@ fn check_count(method: &str, item: &str, count: usize, limit: usize) -> Result<(
         )));
     }
     Ok(())
+}
+
+const READ_IMPORT_FILE_PARAMS: &[ParamSpec] = &[
+    ParamSpec::new("file", true, "a base64 string"),
+    ParamSpec::new("file_type", true, "'csv' or 'xlsx'"),
+    ParamSpec::new("sheet", false, "a sheet name"),
+    ParamSpec::new("separator", false, "',', ';' or a tab"),
+];
+
+/// `read_import_file(file, file_type, sheet?, separator?)`: the column titles and data rows of a
+/// CSV or XLSX file, as `load` takes them. Reads nothing from the database and writes nothing.
+#[erp_orm::linkme::distributed_slice(erp_orm::rpc::RPC_IMPLS)]
+#[linkme(crate = erp_orm::linkme)]
+static READ_IMPORT_FILE: RpcImpl = RpcImpl {
+    addon: "base",
+    model: "base",
+    method: "read_import_file",
+    decl: RpcDecl::Expose {
+        effect: Effect::Read,
+        receiver: Receiver::Model,
+        params: READ_IMPORT_FILE_PARAMS,
+        bind: bind_read_import_file,
+    },
+    file: file!(),
+    line: line!(),
+};
+
+fn bind_read_import_file<'a>(
+    _tx: &'a mut Transaction,
+    _records: Records,
+    mut args: RpcArgs,
+) -> BoxFuture<'a, Result<Value, BindError>> {
+    Box::pin(async move {
+        let file: String = args.take("file")?;
+        let file_type: String = args.take("file_type")?;
+        let sheet: Option<String> = args.take("sheet")?;
+        let separator: Option<String> = args.take("separator")?;
+        Ok(read_import_file_value(
+            &file,
+            &file_type,
+            sheet,
+            separator.as_deref(),
+        )?)
+    })
+}
+
+fn read_import_file_value(
+    file: &str,
+    file_type: &str,
+    sheet: Option<String>,
+    separator: Option<&str>,
+) -> Result<Value> {
+    let kind = super::ImportFileType::parse(file_type)?;
+    // base64 grows the file by a third; refuse an oversized text before decoding it
+    if file.len() > super::MAX_FILE_BYTES.div_ceil(3) * 4 + 4 {
+        return Err(Error::validation(format!(
+            "The import file is larger than {} bytes.",
+            super::MAX_FILE_BYTES
+        )));
+    }
+    let bytes = erp_fields::base64::decode_strict(file)
+        .map_err(|_| Error::validation("The import file is not valid base64."))?;
+    let separator = match separator {
+        None => None,
+        Some(text) => {
+            let mut chars = text.chars();
+            match (chars.next(), chars.next()) {
+                (Some(ch), None) => Some(ch),
+                _ => {
+                    return Err(Error::validation(
+                        "The CSV separator must be a single character.",
+                    ));
+                }
+            }
+        }
+    };
+    let read =
+        super::read_import_file(&bytes, kind, &super::ImportFileOptions { sheet, separator })?;
+    let strings = |row: &[String]| Value::list(row.iter().map(Value::str));
+    let mut map = erp_fields::ValueMap::new();
+    map.insert("header".to_owned(), strings(&read.header));
+    map.insert(
+        "rows".to_owned(),
+        Value::list(read.rows.iter().map(|row| strings(row))),
+    );
+    map.insert(
+        "sheet".to_owned(),
+        read.sheet.as_deref().map_or(Value::False, Value::str),
+    );
+    Ok(Value::Map(std::sync::Arc::new(map)))
 }
 
 const EXPORT_DATA_PARAMS: &[ParamSpec] = &[ParamSpec::new("fields_to_export", true, "an array")];
@@ -191,5 +282,54 @@ mod tests {
             error.message(),
             "load cell at row 1, column 0 must be a string"
         );
+    }
+
+    #[test]
+    fn read_import_file_answers_titles_and_rows_from_base64() {
+        let file = erp_fields::base64::encode("Name;Code\nAda;1\n".as_bytes());
+        let value = read_import_file_value(&file, "csv", None, Some(";")).unwrap();
+        let Value::Map(map) = value else {
+            panic!("a map");
+        };
+        assert_eq!(
+            map.get("header"),
+            Some(&Value::list([Value::str("Name"), Value::str("Code")]))
+        );
+        assert_eq!(
+            map.get("rows"),
+            Some(&Value::list([Value::list([
+                Value::str("Ada"),
+                Value::str("1")
+            ])]))
+        );
+        assert_eq!(map.get("sheet"), Some(&Value::False));
+    }
+
+    #[test]
+    fn read_import_file_refuses_bad_arguments_by_name() {
+        let file = erp_fields::base64::encode(b"Name\nAda\n");
+        let cases = [
+            (
+                read_import_file_value(&file, "xls", None, None),
+                "Import files of type 'xls' are not supported; use csv or xlsx.",
+            ),
+            (
+                read_import_file_value("not base64!", "csv", None, None),
+                "The import file is not valid base64.",
+            ),
+            (
+                read_import_file_value(&file, "csv", None, Some(";;")),
+                "The CSV separator must be a single character.",
+            ),
+            (
+                read_import_file_value(&file, "csv", Some("Data".to_owned()), None),
+                "A CSV file has no sheets to choose from.",
+            ),
+        ];
+        for (result, expected) in cases {
+            let error = result.unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::Validation);
+            assert_eq!(error.message(), expected);
+        }
     }
 }

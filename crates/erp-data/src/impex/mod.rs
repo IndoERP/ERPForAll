@@ -4,12 +4,15 @@
 //!   ([`LoadResult::ids`] is `None`). Misuse of the API (an unknown field, an unsupported context
 //!   key) and infrastructure failures (lost connection, serialization failures) are returned as
 //!   errors instead.
+//! - [`read_import_file`]: a CSV or XLSX file into the column titles and the string matrix `load`
+//!   takes, for an import screen's preview (`read_import_file` RPC).
 //! - [`export_data`]: records to a matrix of export cells (`id` gives external ids, created on
 //!   demand under `__export__`), after checking the caller's export right ([`ExportRights`]).
 
 mod convert;
 mod export;
 pub(crate) mod extract;
+mod file;
 mod load;
 mod message;
 mod path;
@@ -17,6 +20,10 @@ pub(crate) mod row;
 mod rpc;
 
 pub use export::{ExportResult, ExportRights, SuperuserOnly, export_data};
+pub use file::{
+    ImportFile, ImportFileOptions, ImportFileType, MAX_CELL_BYTES, MAX_FILE_BYTES,
+    MAX_FILE_COLUMNS, MAX_FILE_ROWS, read_import_file,
+};
 pub(crate) use load::load_rows;
 pub use load::{DEFAULT_BATCH_SIZE, MAX_ROWS, load};
 pub use message::{ImportMessage, LoadResult, MessageType, RowSpan};

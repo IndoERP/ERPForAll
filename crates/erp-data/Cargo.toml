@@ -11,6 +11,8 @@ publish.workspace = true
 [dependencies]
 quick-xml = { workspace = true }
 csv = { workspace = true }
+# Import files: the XLSX workbook archive (MIT; already a workspace dependency).
+zip = { workspace = true }
 erp-domain = { workspace = true }
 erp-expr = { workspace = true }
 erp-fields = { workspace = true }

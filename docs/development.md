@@ -115,6 +115,17 @@ read-only and cannot declare read mode. A field widget of the record form receiv
 `onRecordEvent(listener)`, which returns an unsubscribe function and reports `saved` (with the record id),
 `saveFailed`, `discarded` and `modeChanged` after the form has shown the outcome; subscriptions end with the widget.
 
+An import screen reads the user's file with `read_import_file` (on any model, like `load`): `file` (base64),
+`file_type` (`csv` or `xlsx`), and optionally `sheet` (the worksheet; required when a workbook has more than one) or
+`separator` (`,`, `;` or a tab, CSV only). It answers `{header, rows, sheet}`: the first row as column titles and the
+data rows as strings, squared to the titles, without entirely empty rows. The screen previews them and passes the
+same matrix to `load`, so a workbook is checked exactly like a CSV file. Workbook cells are read as text `load`
+understands: numbers as stored, booleans as `1`/`0`, date-formatted cells as `YYYY-MM-DD` (with ` HH:MM:SS` when
+they have a time), formulas as their saved value. An error value, a formula saved without its value, a date before
+1 March 1900 or a value beyond the titled columns is refused with the cell's reference. A file is at most 16 MiB,
+100 000 data rows and 1 000 columns, and each workbook part is bounded when it is unpacked; the request itself is
+also bounded by `limits.rpc_body_bytes` (2 MiB by default).
+
 ## The web client
 
 The client is TypeScript, compiled ahead of time:

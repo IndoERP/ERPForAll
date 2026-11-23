@@ -34,8 +34,9 @@ pub use i18n::{
     TranslationEntry, TranslationImporter,
 };
 pub use impex::{
-    DEFAULT_BATCH_SIZE, ExportResult, ExportRights, ImpexExt, ImportMessage, LoadResult, MAX_ROWS,
-    MessageType, RowSpan, SuperuserOnly, export_data, load,
+    DEFAULT_BATCH_SIZE, ExportResult, ExportRights, ImpexExt, ImportFile, ImportFileOptions,
+    ImportFileType, ImportMessage, LoadResult, MAX_ROWS, MessageType, RowSpan, SuperuserOnly,
+    export_data, load, read_import_file,
 };
 
 #[doc(hidden)]
