@@ -639,7 +639,7 @@ fn parse_sheet(xml: &str, context: &SheetContext<'_>) -> Result<Vec<Vec<String>>
             Event::Start(start) => {
                 open_sheet_element(
                     &start,
-                    &mut rows,
+                    &rows,
                     &mut row,
                     &mut cell,
                     &mut capture,
@@ -649,7 +649,7 @@ fn parse_sheet(xml: &str, context: &SheetContext<'_>) -> Result<Vec<Vec<String>>
             Event::Empty(start) => {
                 open_sheet_element(
                     &start,
-                    &mut rows,
+                    &rows,
                     &mut row,
                     &mut cell,
                     &mut capture,
@@ -711,7 +711,7 @@ fn append(cell: &mut Option<CellState>, capture: Capture, text: &str) -> Result<
 
 fn open_sheet_element(
     start: &BytesStart<'_>,
-    rows: &mut Vec<Vec<String>>,
+    rows: &[Vec<String>],
     row: &mut Option<(usize, Vec<String>)>,
     cell: &mut Option<CellState>,
     capture: &mut Capture,
@@ -1032,7 +1032,6 @@ mod tests {
         if let Some(styles) = styles {
             add("xl/styles.xml", styles);
         }
-        drop(add);
         out.finish().unwrap().into_inner()
     }
     use zip::ZipWriter;
