@@ -156,6 +156,23 @@ async fn run_test() {
         .unwrap();
     let loaded = system.initialize(InitOptions::new()).await.unwrap();
     assert!(loaded.post_commit.is_clean());
+    // The favorites part saves through write calls, which the audit trail records: a database that
+    // serves audited calls carries the audit table. The publication step installs it in a real
+    // deployment; this fixture does it directly, on the primary and read-committed, as the other
+    // fixtures do, before the calls' own ORM is built (the RPC service checks the store lazily).
+    {
+        let mut audit_tx = loaded
+            .orm
+            .begin_opts(
+                erp_orm::BeginOptions::new(SUPERUSER_ID)
+                    .isolation(erp_orm::Isolation::ReadCommitted)
+                    .on_primary(),
+            )
+            .await
+            .unwrap();
+        audit_tx.install_audit_schema().await.unwrap();
+        audit_tx.commit().await.unwrap();
+    }
 
     let mut tx = loaded.orm.begin(SUPERUSER_ID).await.unwrap();
 
@@ -298,12 +315,6 @@ async fn run_test() {
         .unlink_hook(erp_data::model_data::UNLINK_HOOK)
         .build()
         .unwrap();
-    // The favorites part saves through write calls, which the audit trail must be able to record:
-    // install its table as a server database has it.
-    let mut tx_audit = orm.begin(SUPERUSER_ID).await.unwrap();
-    tx_audit.install_audit_schema().await.unwrap();
-    tx_audit.commit().await.unwrap();
-    orm.check_audit_store().await.unwrap();
 
     let service = RpcService::new(orm.clone(), Host, RpcConfig::default());
 
