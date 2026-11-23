@@ -520,6 +520,12 @@ const ENTRY_POINTS: &[(&str, Class)] = &[
             "transaction control for the caller's own transaction: keeps the first whole-transaction retry reason after an operation savepoint rolls back, so commit refuses with that reason; no record access or elevation",
         ),
     ),
+    (
+        "Transaction::bind_idempotency_key",
+        Unchecked(
+            "transaction state: stores the Idempotency-Key the RPC service already claimed for this call on the caller's own transaction, after checking its canonical UUID form and that none is bound; reads and writes no record and grants nothing",
+        ),
+    ),
     ("Super::call", Unchecked(DISPATCH)),
     (
         "AsyncComputeSuper::call",
