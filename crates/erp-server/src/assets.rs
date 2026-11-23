@@ -498,7 +498,19 @@ impl AssetGeneration {
                         .flat_map(|(key, value)| [key.as_str(), value.as_str()]),
                 ),
         )?;
-        let brand = brand_images(&self.fixed)?;
+        let brand = brand_files(&self.fixed)?;
+        let product_name = match brand.get(BRAND_MANIFEST) {
+            Some(url) => {
+                let source = self.assets.get(local_url(url)?).ok_or_else(|| {
+                    refused(
+                        PublicationErrorKind::Manifest,
+                        "unreferenced asset URL in manifest",
+                    )
+                })?;
+                Some(product_name(&source.bytes)?)
+            }
+            None => None,
+        };
         let (assets, reservation) = store.admit(self.assets, metadata)?;
         Ok(PublishedAssets {
             runtime: self.runtime,
@@ -509,6 +521,7 @@ impl AssetGeneration {
             imports: self.imports,
             fixed: self.fixed,
             brand,
+            product_name,
         })
     }
 }
@@ -540,34 +553,94 @@ fn local_url(url: &str) -> Result<&str, PublicationError> {
 /// The brand images an installed addon may publish as `static/brand/<image>`; the web addon's asset assembly
 /// (`BRAND_IMAGES` there) lets only one installed addon ship them.
 pub const BRAND_IMAGES: [&str; 3] = ["icon.svg", "logo.svg", "logo-dark.svg"];
+/// The login stylesheet a brand addon may publish as `static/brand/login.css`: the login and login-success
+/// pages link it after the client stylesheet.
+pub const BRAND_STYLESHEET: &str = "login.css";
+/// The brand manifest a brand addon may publish as `static/brand/brand.json`: `{"name": "<product name>"}`.
+pub const BRAND_MANIFEST: &str = "brand.json";
+/// Every file under `static/brand/` the server reads; one installed addon owns all of them.
+pub const BRAND_FILES: [&str; 5] = [
+    "icon.svg",
+    "logo.svg",
+    "logo-dark.svg",
+    BRAND_STYLESHEET,
+    BRAND_MANIFEST,
+];
+/// Longest product name a brand manifest may give, in characters.
+pub const MAX_PRODUCT_NAME_CHARS: usize = 64;
+/// Largest brand manifest, in bytes.
+const MAX_BRAND_MANIFEST_BYTES: usize = 4 * 1024;
 
-/// Brand image name to its published asset URL, from the one addon that declares any of them.
-fn brand_images(
+/// Brand file name to its published asset URL, from the one addon that declares any of them. Each URL keeps
+/// its file's extension, so the asset store serves it with the file's media type.
+fn brand_files(
     fixed: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<&'static str, String>, PublicationError> {
     let mut owner: Option<&str> = None;
-    let mut images = BTreeMap::new();
+    let mut files = BTreeMap::new();
     for (path, url) in fixed {
-        let Some((addon, image)) = path
+        let Some((addon, file)) = path
             .strip_prefix('/')
             .and_then(|path| path.split_once('/'))
             .and_then(|(addon, rest)| Some((addon, rest.strip_prefix("static/brand/")?)))
         else {
             continue;
         };
-        let Some(image) = BRAND_IMAGES.iter().find(|name| **name == image) else {
+        let Some(file) = BRAND_FILES.iter().find(|name| **name == file) else {
             continue;
         };
         if owner.is_some_and(|owner| owner != addon) {
             return Err(refused(
                 PublicationErrorKind::Manifest,
-                "more than one addon publishes brand images",
+                "more than one addon publishes brand files",
+            ));
+        }
+        if url.rsplit_once('.').map(|(_, ext)| ext) != file.rsplit_once('.').map(|(_, ext)| ext) {
+            return Err(refused(
+                PublicationErrorKind::Manifest,
+                "brand file published with another media type",
             ));
         }
         owner = Some(addon);
-        images.insert(*image, url.clone());
+        files.insert(*file, url.clone());
     }
-    Ok(images)
+    Ok(files)
+}
+
+/// The product name of a brand manifest: a JSON object with exactly one member, `name`, a plain-text string of
+/// at most [`MAX_PRODUCT_NAME_CHARS`] characters without control or invisible formatting characters and without
+/// leading or trailing whitespace. Anything else is refused, never repaired.
+/// # Errors
+/// A manifest that is not exactly that.
+pub fn product_name(manifest: &[u8]) -> Result<String, PublicationError> {
+    let invalid = |reason: &'static str| refused(PublicationErrorKind::Manifest, reason);
+    if manifest.len() > MAX_BRAND_MANIFEST_BYTES {
+        return Err(invalid("brand.json exceeds 4 KiB"));
+    }
+    let value: serde_json::Value =
+        serde_json::from_slice(manifest).map_err(|_| invalid("brand.json is not valid JSON"))?;
+    let name = match value {
+        serde_json::Value::Object(members) if members.len() == 1 => match members.get("name") {
+            Some(serde_json::Value::String(name)) => name.clone(),
+            _ => return Err(invalid("brand.json must be {\"name\": \"<product name>\"}")),
+        },
+        _ => return Err(invalid("brand.json must be {\"name\": \"<product name>\"}")),
+    };
+    if name.is_empty()
+        || name.trim() != name
+        || name.chars().count() > MAX_PRODUCT_NAME_CHARS
+        || name.chars().any(|c| c.is_control() || invisible_format(c))
+    {
+        return Err(invalid(
+            "brand.json name must be 1 to 64 characters of plain text",
+        ));
+    }
+    Ok(name)
+}
+
+/// Zero-width and bidirectional formatting characters: invisible in a title, able to reorder what is shown.
+fn invisible_format(c: char) -> bool {
+    matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}')
 }
 fn fixed_path(path: &str) -> bool {
     if path.len() > 1024 {
@@ -603,6 +676,7 @@ pub struct PublishedAssets {
     imports: BTreeMap<String, String>,
     fixed: BTreeMap<String, String>,
     brand: BTreeMap<&'static str, String>,
+    product_name: Option<String>,
     _metadata: store::Reservation,
 }
 impl PublishedAssets {
@@ -627,10 +701,19 @@ impl PublishedAssets {
     pub fn fixed_path(&self, path: &str) -> Option<&str> {
         self.fixed.get(path).map(String::as_str)
     }
-    /// The published asset URL of brand image `image` (one of [`BRAND_IMAGES`]) when an installed addon
-    /// ships it, else `None` (the server's compiled image applies).
+    /// The published asset URL of brand file `image` (one of [`BRAND_FILES`]) when an installed addon
+    /// ships it, else `None` (the server's compiled image applies; there is no compiled stylesheet).
     pub fn brand_image(&self, image: &str) -> Option<&str> {
         self.brand.get(image).map(String::as_str)
+    }
+    /// Whether the brand addon ships a login stylesheet ([`BRAND_STYLESHEET`]).
+    pub fn has_brand_stylesheet(&self) -> bool {
+        self.brand.contains_key(BRAND_STYLESHEET)
+    }
+    /// The product name of the brand addon's [`BRAND_MANIFEST`], validated at publication; `None` when no
+    /// installed addon ships one.
+    pub fn product_name(&self) -> Option<&str> {
+        self.product_name.as_deref()
     }
     /// Import-map JSON, escaped for an inline nonced script element.
     /// # Errors

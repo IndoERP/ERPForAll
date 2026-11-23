@@ -108,6 +108,26 @@ application) answer with its images; an image it does not ship keeps the built-i
 `ETag` and `Cache-Control: no-cache`, and SVG is sent with a sandboxing `Content-Security-Policy`. Only one
 installed addon may ship brand images: installing a second one fails.
 
+The same addon can name the product and theme the sign-in pages:
+
+- `static/brand/brand.json` is exactly `{"name": "<product name>"}`: plain text, 1 to 64 characters, no control
+  or invisible formatting characters, no leading or trailing whitespace. The name replaces "ERPForAll" in the
+  `<title>` of the login, login-success, error and application pages and in the logo text of the login page,
+  the error page and the application header (the server sends it as `<meta name="application-name">`, always
+  HTML-escaped). A manifest that is anything else fails the install, and the server refuses it again when it
+  publishes the assets.
+- `static/brand/login.css` is linked after the client stylesheet on the login and login-success pages, as
+  `/erp/brand/login.css` (same headers as the brand images, served from the published assets; not found when no
+  addon ships one). It is a theme, not new markup: set the `--login-*` custom properties
+  (`--login-bg`, `--login-card`, `--login-fg`, `--login-line`, `--login-input-*`, `--login-link`, ...) and the
+  colour tokens (`--accent`, `--canvas`, `--surface`, ...) on `:root` or `.login-screen`, and style the
+  `.login-screen`, `.login-brand`, `.login-logo`, `.login-card`, `.login-field`, `.login-submit`,
+  `.login-error`, `.login-hint` and `.login-footer` classes. Other selectors are not a supported surface and may
+  change. The page policy is unchanged: the stylesheet is same-origin (`style-src-elem 'self'`), and the images
+  and fonts it uses must be same-origin assets of the addon. The error page keeps its own built-in style.
+
+Both files count as brand files: they must come from the addon that ships the brand images, if any.
+
 ## The web client
 
 The client is TypeScript, compiled ahead of time:

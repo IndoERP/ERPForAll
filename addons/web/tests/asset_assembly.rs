@@ -2,7 +2,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "test assertions")]
 use erp_addon_web::assets::assembly::{
     AddonAssets, AssemblyError, AssemblyErrorKind, AssemblyOptions, AssetInput, BRAND_IMAGES,
-    assemble,
+    BRAND_MANIFEST, assemble,
 };
 use erp_sdk::ui_compiler::{BuildMode, CompileOptions, LimitKind};
 use std::io::Read;
@@ -265,8 +265,77 @@ fn one_addon_may_ship_brand_images_and_a_second_is_refused() {
     assert_eq!(error.kind(), AssemblyErrorKind::Conflict);
     assert_eq!(
         error.to_string(),
-        "addons 'acme_theme' and 'zeta_theme' both ship brand images (static/brand/); install only one of them"
+        "addons 'acme_theme' and 'zeta_theme' both ship brand files (static/brand/); install only one of them"
     );
+}
+
+fn with_file(mut assets: AddonAssets, path: &str, bytes: &[u8]) -> AddonAssets {
+    assets
+        .push(AssetInput::static_file(path, bytes.to_vec()).unwrap())
+        .unwrap();
+    assets
+}
+
+#[test]
+fn the_brand_addon_may_name_the_product_and_ship_a_login_stylesheet() {
+    let brand = with_file(
+        with_file(
+            addon("acme_theme"),
+            BRAND_MANIFEST,
+            r#"{"name":"Acme Suite"}"#.as_bytes(),
+        ),
+        "static/brand/login.css",
+        b".login-screen{--login-bg:#123}",
+    );
+    let bundle = assemble(&[brand.clone()], &options()).unwrap();
+    for file in ["brand.json", "login.css"] {
+        assert!(
+            bundle
+                .static_files()
+                .contains_key(&format!("/acme_theme/static/brand/{file}"))
+        );
+    }
+    // The stylesheet is a brand file: another addon cannot add it next to the brand addon.
+    let error = assemble(
+        &[
+            brand,
+            with_file(addon("zeta_theme"), "static/brand/login.css", b"a{}"),
+        ],
+        &options(),
+    )
+    .unwrap_err();
+    assert!(matches!(error, AssemblyError::BrandConflict { .. }));
+}
+
+#[test]
+fn a_brand_manifest_that_is_not_a_plain_name_fails_the_install() {
+    let shape = "expected {\"name\": \"<product name>\"}";
+    let text = "expected a name of 1 to 64 characters of plain text";
+    let long = format!(r#"{{"name":"{}"}}"#, "x".repeat(65));
+    let cases: [(&[u8], &str); 8] = [
+        (b"Acme", "expected JSON"),
+        (br#"{"name":"Acme","extra":1}"#, shape),
+        (br#"{"name":["Acme"]}"#, shape),
+        (br#"{"name":""}"#, text),
+        (br#"{"name":"Acme "}"#, text),
+        (br#"{"name":"Ac\tme"}"#, text),
+        ("{\"name\":\"Ac\u{202E}me\"}".as_bytes(), text),
+        (long.as_bytes(), text),
+    ];
+    for (manifest, reason) in cases {
+        let error = assemble(
+            &[with_file(addon("acme_theme"), BRAND_MANIFEST, manifest)],
+            &options(),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), AssemblyErrorKind::InvalidInput);
+        assert_eq!(
+            error.to_string(),
+            format!("invalid brand manifest 'acme_theme/static/brand/brand.json': {reason}"),
+            "{}",
+            String::from_utf8_lossy(manifest)
+        );
+    }
 }
 
 #[test]

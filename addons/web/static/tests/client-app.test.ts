@@ -243,6 +243,24 @@ test("Back and Forward restore existing application history entries", async () =
   expect(history.length).toBe(originalLength + 1);
 });
 
+test("the header logo is labelled with the page's product name, as text", async () => {
+  history.replaceState(null, "", "/erp");
+  const meta = document.createElement("meta"); meta.name = "application-name"; meta.content = "Acme <Suite>"; document.head.append(meta);
+  try {
+    vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+      const value = path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [], nodes: [] } : {};
+      return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
+    }));
+    const root = host();
+    app = new HumanApp(root, bootstrap);
+    await app.start();
+    const brand = root.querySelector<HTMLButtonElement>("button.brand")!;
+    expect(brand.getAttribute("aria-label")).toBe("Acme <Suite> home");
+    expect([...brand.querySelectorAll("img")].map(img => img.alt)).toEqual(["Acme <Suite>", ""]);
+    expect(brand.querySelector("Suite")).toBeNull();
+  } finally { meta.remove(); }
+});
+
 test("rapid Back traversals share one dirty decision and restore the latest captured entry", async () => {
   history.replaceState(null, "", "/erp");
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function (this: HTMLDialogElement) { this.open = true; } });

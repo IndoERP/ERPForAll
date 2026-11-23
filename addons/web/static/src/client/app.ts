@@ -78,6 +78,7 @@ import { renderDebugMenu, createDebugCommandProvider, type DebugEnvironment } fr
 import { createChoiceDropdown } from "./choice-dropdown.js";
 import { attachMenuDropdown } from "./menu-dropdown.js";
 import { navOverflowCount } from "./navbar-overflow.js";
+import { productName } from "./product-name.js";
 
 import type { Company } from "../generated/human-ui.js";
 
@@ -532,11 +533,12 @@ export class HumanApp {
     this.header.replaceChildren();
 
     const brand = button("", () => this.run(() => this.navigate({})), "brand");
-    brand.setAttribute("aria-label", "ERPForAll home");
+    const product = productName();
+    brand.setAttribute("aria-label", `${product} home`);
     // Both variants ship; the theme tokens in client.css show the one that fits the top bar.
     for (const [src, variant] of [["/erp/brand/logo.svg", "light"], ["/erp/brand/logo-dark.svg", "dark"]] as const) {
       const logo = el("img", undefined, `brand-logo brand-logo-${variant}`);
-      logo.src = src; logo.alt = variant === "light" ? "ERPForAll" : ""; logo.width = 120; logo.height = 32;
+      logo.src = src; logo.alt = variant === "light" ? product : ""; logo.width = 120; logo.height = 32;
       brand.append(logo);
     }
     this.header.append(brand);
@@ -1879,7 +1881,7 @@ export class HumanApp {
       mobileDrawer.setAttribute("aria-labelledby", "mobile-navigation-title");
 
       const drawerHeader = el("div", undefined, "mobile-drawer-header");
-      const drawerTitle = el("strong", activeRoot ? activeRoot.label : "ERPForAll");
+      const drawerTitle = el("strong", activeRoot ? activeRoot.label : productName());
       drawerTitle.id = "mobile-navigation-title";
       drawerHeader.append(drawerTitle);
       const drawerClose = button("", () => this.closeMobileDrawer(), "drawer-close-btn");

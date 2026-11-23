@@ -11,7 +11,8 @@ import { guardSubmit, setSubmitBusy, togglePasswordReveal, updateCapsLockHint } 
 import { object, text } from "./metadata.js";
 import type { LoginPage as Login } from "../generated/human-ui.js";
 import { prepareClientMount } from "./mount-point.js";
-class LoginPage extends Component<{ page: Login }> {
+import { productName } from "./product-name.js";
+class LoginPage extends Component<{ page: Login; productName: string }> {
   static override template = "web.HumanLogin";
   private form: HTMLFormElement | null = null;
   override setup(): void {
@@ -53,7 +54,7 @@ export async function boot(documentRoot: Document = document): Promise<void> {
       const target = new URL(redirect, window.location.origin);
       if (target.origin !== window.location.origin) throw new Error("Invalid sign-in redirect origin.");
       const page: Login = { csrf: text(data["csrf"], "CSRF token"), database: text(data["database"], "database"), redirect, error: data["error"] === null ? null : text(data["error"], "login error") };
-      await mount(LoginPage, host, { templates, props: { page }, dev: false, onError: fail });
+      await mount(LoginPage, host, { templates, props: { page, productName: productName(documentRoot) }, dev: false, onError: fail });
     } else {
       registerBuiltinSystrayItems(systrayItems);
       await mount(Shell, host, { templates, props: { host, bootstrap: value }, dev: false, onError: fail });

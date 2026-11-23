@@ -12,7 +12,7 @@
   <t t-name="web.HumanLogin">
     <main class="login-screen">
       <div class="login-brand">
-        <img class="login-logo brand-logo-light" src="/erp/brand/logo.svg" alt="ERPForAll" width="168" height="45"/>
+        <img class="login-logo brand-logo-light" src="/erp/brand/logo.svg" t-att-alt="this.props.productName" width="168" height="45"/>
         <img class="login-logo brand-logo-dark" src="/erp/brand/logo-dark.svg" alt="" width="168" height="45"/>
       </div>
       <section class="login-card" aria-labelledby="login-title">

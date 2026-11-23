@@ -261,6 +261,7 @@ pub trait WebLifecycle: Send + Sync {
 
 mod assistant;
 mod content;
+mod page_brand;
 mod password_change;
 mod pivot_export;
 mod report;
@@ -270,6 +271,7 @@ pub use content::{
     ContentLookup, ContentOpenFailure, ContentOpener, ContentRange, ContentReader, FoundContent,
     WebAttachmentContent,
 };
+use page_brand::PageBrand;
 pub use pivot_export::{PivotWorkbook, WebPivotExport};
 pub use report::{PrintedReport, ReportFormat, WebReport};
 pub use reporting_export::{ReportingFile, WebReportingExport};
@@ -716,7 +718,7 @@ impl WebApp {
     ) -> Response {
         let id = match request_id(request.headers()) {
             Ok(id) => id,
-            Err(response) => return finish_response(response, false),
+            Err(response) => return finish_response(response, false, PageBrand::default),
         };
         request.extensions_mut().insert(id.clone());
         let method = request.method().clone();
@@ -733,7 +735,7 @@ impl WebApp {
             Ok(value) => {
                 response.headers_mut().insert("x-request-id", value);
             }
-            Err(_) => return finish_response(internal(), false), // a UUID is always a valid header value
+            Err(_) => return finish_response(internal(), false, PageBrand::default), // a UUID is always a valid header value
         }
         if response.extensions().get::<RpcLogged>().is_none() {
             log_web_refusal(&method, &path, &response, id.as_str());
@@ -754,14 +756,14 @@ impl WebApp {
                 .as_ref()
                 .is_some_and(|admission| !admission.is_serving())
         {
-            return finish_response(busy(), false);
+            return finish_response(busy(), false, PageBrand::default);
         }
         let classified_path = canonical_path(request.uri().path());
         if classified_path == routes::LOGIN
             && matches!(*request.method(), Method::GET | Method::POST)
             && !self.login_available.load(Ordering::Acquire)
         {
-            return finish_response(busy(), true);
+            return finish_response(busy(), true, || self.error_page_brand());
         }
         let navigation = !matches!(classified_path.as_ref(), routes::THREAD_SOCKET | routes::ASSISTANT_STATUS | routes::ASSISTANT_TURN)
             && !classified_path.starts_with(routes::JSON2_PREFIX)
@@ -773,7 +775,7 @@ impl WebApp {
         // The queue admission and execution permit precede body buffering.
         let queued = match Arc::clone(&self.queue).try_acquire_owned() {
             Ok(permit) => permit,
-            Err(_) => return finish_response(busy(), navigation),
+            Err(_) => return finish_response(busy(), navigation, || self.error_page_brand()),
         };
         let permit = match tokio::time::timeout(
             Duration::from_secs(5),
@@ -782,7 +784,9 @@ impl WebApp {
         .await
         {
             Ok(Ok(permit)) => permit,
-            Ok(Err(_)) | Err(_) => return finish_response(busy(), navigation),
+            Ok(Err(_)) | Err(_) => {
+                return finish_response(busy(), navigation, || self.error_page_brand());
+            }
         };
         drop(queued);
         // A cancelled lifecycle future may have sent COMMIT without receiving acknowledgement.
@@ -799,7 +803,7 @@ impl WebApp {
             Err(_) => lifecycle_deadline_response(deadline_operation),
         };
         drop(permit);
-        finish_response(response, navigation)
+        finish_response(response, navigation, || self.error_page_brand())
     }
     async fn dispatch_and_refresh(
         &self,
@@ -1780,29 +1784,49 @@ impl WebApp {
             .replace('\u{2029}', "\\u2029");
         let js = self.assets.path("client.js").ok_or_else(internal)?;
         let css = self.assets.path("client.css").ok_or_else(internal)?;
-        let mut result = response(
-            StatusCode::OK,
-            format!(
-                "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>ERPForAll</title><link rel=\"icon\" type=\"image/svg+xml\" href=\"/erp/brand/icon.svg\"><link rel=\"stylesheet\" href=\"/erp/assets/{css}\"></head><body><main id=\"erp-root\"></main><script type=\"application/json\" id=\"{id}\">{json}</script><script type=\"module\" src=\"/erp/assets/{js}\"></script></body></html>"
-            ),
+        let admission = self.current_asset_admission().await?;
+        let html = client_page_html(
+            &page_brand(admission.as_ref()),
+            PageClass::Shell,
+            ClientPage {
+                id,
+                json: &json,
+                css,
+                js,
+            },
         );
+        let mut result = response(StatusCode::OK, html);
         result.headers_mut().insert(
             header::CONTENT_TYPE,
             HeaderValue::from_static("text/html; charset=utf-8"),
         );
-        self.apply_asset_document(result, PageClass::Shell).await
+        self.apply_asset_document(result, admission, PageClass::Shell)
+            .await
     }
 
     /// The fixed login-success document (`login` class): the sealed `/erp/login_successful`
     /// page, and what a signed-in non-internal user opening the shell as HTML receives.
     /// No bootstrap, menus or back-office data.
     async fn login_success_page(&self) -> HttpResult<Response> {
-        let mut result = response(StatusCode::OK, LOGIN_SUCCESS_PAGE);
+        let css = self.assets.path("client.css").ok_or_else(internal)?;
+        let admission = self.current_asset_admission().await?;
+        let html = login_success_html(&page_brand(admission.as_ref()), css);
+        let mut result = response(StatusCode::OK, html);
         result.headers_mut().insert(
             header::CONTENT_TYPE,
             HeaderValue::from_static("text/html; charset=utf-8"),
         );
-        self.apply_asset_document(result, PageClass::Login).await
+        self.apply_asset_document(result, admission, PageClass::Login)
+            .await
+    }
+
+    /// The brand of an error page: the in-process published snapshot's, without waiting for a lock or asking the
+    /// asset authority (the page may report exactly that outage); the built-in brand when it is not at hand.
+    fn error_page_brand(&self) -> PageBrand {
+        match self.services.try_read() {
+            Ok(services) => page_brand(services.assets.as_ref()),
+            Err(_) => PageBrand::default(),
+        }
     }
 
     async fn current_asset_admission(&self) -> HttpResult<Option<AssetAdmission>> {
@@ -1829,7 +1853,7 @@ impl WebApp {
         Ok(admission)
     }
 
-    /// Brand image `image`: the one installed addon's `static/brand/<image>` from the published assets (served
+    /// Brand file `image`: the one installed addon's `static/brand/<image>` from the published assets (served
     /// with the asset store's headers: ETag, `nosniff` and a sandboxing policy for SVG), else the compiled image.
     /// An asset outage serves the compiled image, so the error page that reports the outage keeps its logo.
     async fn brand(&self, image: &'static str, headers: &HeaderMap) -> HttpResult<Response> {
@@ -1862,15 +1886,20 @@ impl WebApp {
                 );
             }
         }
-        compiled_brand_response(compiled_brand(image).ok_or_else(internal)?, if_none_match)
+        // There is no compiled login stylesheet: without a brand addon that ships one, the route is not found.
+        let svg =
+            compiled_brand(image).ok_or_else(|| response(StatusCode::NOT_FOUND, "Not found"))?;
+        compiled_brand_response(svg, if_none_match)
     }
 
+    /// Finish a served document with the class headers and, with a published generation, its import map.
+    /// `admission` is the [`Self::current_asset_admission`] the document was rendered with.
     async fn apply_asset_document(
         &self,
         mut result: Response,
+        admission: Option<AssetAdmission>,
         class: PageClass,
     ) -> HttpResult<Response> {
-        let admission = self.current_asset_admission().await?;
         let Some(admission) = &admission else {
             // No published generation (a transport fixture, a host without tenant assets): the
             // page carries no import map, so it gets the class policy without a nonce. Never a
@@ -2062,8 +2091,16 @@ impl WebApp {
             .replace('\u{2029}', "\\u2029");
         let js = self.assets.path("client.js").ok_or_else(internal)?;
         let css = self.assets.path("client.css").ok_or_else(internal)?;
-        let html = format!(
-            "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>ERPForAll</title><link rel=\"icon\" type=\"image/svg+xml\" href=\"/erp/brand/icon.svg\"><link rel=\"stylesheet\" href=\"/erp/assets/{css}\"></head><body><main id=\"erp-root\"></main><script type=\"application/json\" id=\"erp-login\">{json}</script><script type=\"module\" src=\"/erp/assets/{js}\"></script></body></html>"
+        let admission = self.current_asset_admission().await?;
+        let html = client_page_html(
+            &page_brand(admission.as_ref()),
+            PageClass::Login,
+            ClientPage {
+                id: "erp-login",
+                json: &json,
+                css,
+                js,
+            },
         );
         let mut result = response(StatusCode::OK, html);
         result.headers_mut().insert(
@@ -2073,7 +2110,8 @@ impl WebApp {
         if let Some(cookie) = cookie {
             self.set_cookie(&mut result, "prefs", &cookie, PREFS_LIFETIME_SECS)?;
         }
-        self.apply_asset_document(result, PageClass::Login).await
+        self.apply_asset_document(result, admission, PageClass::Login)
+            .await
     }
     fn session(&self, headers: &HeaderMap) -> HttpResult<Option<SessionSecret>> {
         let cookies = values(headers, "cookie")?;
@@ -2249,8 +2287,46 @@ const PREFS_LIFETIME_SECS: u64 = 48 * 60 * 60;
 /// What a valid sign-out clears in the browser for this origin (T-SHELL.5).
 const LOGOUT_CLEAR_SITE_DATA: &str = "\"cache\", \"storage\"";
 
-// Fixed document for a signed-in user without web client access; nothing is interpolated.
-const LOGIN_SUCCESS_PAGE: &str = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Login successful · ERPForAll</title><link rel=\"icon\" type=\"image/svg+xml\" href=\"/erp/brand/icon.svg\"></head><body><main><h1>Login successful.</h1></main></body></html>";
+/// The data of a page the web client renders: the id and escaped JSON of its data element, and the client's
+/// published stylesheet and module paths.
+struct ClientPage<'a> {
+    id: &'a str,
+    json: &'a str,
+    css: &'a str,
+    js: &'a str,
+}
+
+/// A page the web client renders, with the brand's title and name. A `login` page also links the brand
+/// stylesheet after the client stylesheet, so its rules win at equal specificity; the shell does not.
+fn client_page_html(brand: &PageBrand, class: PageClass, page: ClientPage<'_>) -> String {
+    let ClientPage { id, json, css, js } = page;
+    let head = brand.head(None);
+    let theme = match class {
+        PageClass::Login => brand.login_stylesheet_link(),
+        PageClass::Shell => String::new(),
+    };
+    format!(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">{head}<link rel=\"icon\" type=\"image/svg+xml\" href=\"/erp/brand/icon.svg\"><link rel=\"stylesheet\" href=\"/erp/assets/{css}\">{theme}</head><body><main id=\"erp-root\"></main><script type=\"application/json\" id=\"{id}\">{json}</script><script type=\"module\" src=\"/erp/assets/{js}\"></script></body></html>"
+    )
+}
+
+/// The document for a signed-in user without web client access: the brand (escaped) and the client stylesheet
+/// path are the only interpolations. It uses the login screen classes, so the brand stylesheet themes it too.
+fn login_success_html(brand: &PageBrand, client_css: &str) -> String {
+    let head = brand.head(Some("Login successful"));
+    let theme = brand.login_stylesheet_link();
+    format!(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">{head}<link rel=\"icon\" type=\"image/svg+xml\" href=\"/erp/brand/icon.svg\"><link rel=\"stylesheet\" href=\"/erp/assets/{client_css}\">{theme}</head><body><main class=\"login-screen\"><section class=\"login-card\"><h1>Login successful.</h1></section></main></body></html>"
+    )
+}
+
+/// The brand of a page rendered with asset admission `admission`.
+fn page_brand(admission: Option<&AssetAdmission>) -> PageBrand {
+    match admission {
+        Some(AssetAdmission::Published(assets)) => PageBrand::of(Some(assets)),
+        Some(AssetAdmission::Broken(_)) | None => PageBrand::of(None),
+    }
+}
 
 /// Header class of a served HTML document (threat model §13). Both classes send
 /// `same-origin`: a page that hosts a form must not send `no-referrer`, because a browser then
@@ -2290,10 +2366,11 @@ fn class_headers(mut result: Response, csp: &str, class: PageClass) -> HttpResul
 const ERROR_STYLE: &str = r#":root{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#28343c;background:#f5f6f8;color-scheme:light}*{box-sizing:border-box}body{margin:0}header{padding:12px 24px;background:#fff;border-bottom:1px solid #dce0e4}header img{display:block;height:28px;width:auto}main{min-height:calc(100dvh - 60px);display:grid;place-items:center;padding:24px}.card{width:100%;max-width:520px;background:white;border:1px solid #dce1e5;border-radius:12px;padding:40px;box-shadow:0 3px 14px #23303b0a}.code{color:#714b67;font-size:14px;font-weight:650;letter-spacing:.08em;margin:0 0 16px}h1{font-size:28px;line-height:1.25;margin:0 0 14px}p{line-height:1.6;color:#596570;margin:0 0 28px}nav{display:flex;gap:12px;flex-wrap:wrap}a{display:inline-flex;align-items:center;justify-content:center;min-height:44px;border:1px solid #cbd2d8;border-radius:6px;padding:10px 18px;color:#34424b;font-weight:600;text-decoration:none}.primary{background:#007e84;border-color:#007e84;color:white}a:hover{filter:brightness(.94)}a:focus-visible{outline:3px solid #218c99;outline-offset:3px}@media(max-width:480px){main{padding:16px}.card{padding:28px 24px}h1{font-size:25px}nav a{flex:1}}.ref{margin:24px 0 0;font-size:13px;line-height:1.5}.ref code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;user-select:all}"#;
 
 // Fixed template owned by this transport; no request or diagnostic text is interpolated. The
-// reference is a fresh server-generated UUID (`ErrorReference`), never request input.
+// reference is a fresh server-generated UUID (`ErrorReference`), never request input. The product
+// name comes from the published brand manifest, validated at publication and HTML-escaped here.
 const ERROR_PAGE: &str = r#"<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{TITLE}} · ERPForAll</title>
-<style>{{STYLE}}</style></head><body><header><img src="/erp/brand/logo.svg" alt="ERPForAll" width="105" height="28"></header><main><section class="card" aria-labelledby="error-title"><p class="code">ERROR {{STATUS}}</p><h1 id="error-title">{{TITLE}}</h1><p>{{MESSAGE}}</p><nav aria-label="Recovery options"><a class="primary" href="/erp/login">Sign in again</a><a href="/erp">Go to home</a></nav><p class="ref">Reference: <code>{{REFERENCE}}</code></p></section></main></body></html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{TITLE}} · {{PRODUCT}}</title>
+<style>{{STYLE}}</style></head><body><header><img src="/erp/brand/logo.svg" alt="{{PRODUCT}}" width="105" height="28"></header><main><section class="card" aria-labelledby="error-title"><p class="code">ERROR {{STATUS}}</p><h1 id="error-title">{{TITLE}}</h1><p>{{MESSAGE}}</p><nav aria-label="Recovery options"><a class="primary" href="/erp/login">Sign in again</a><a href="/erp">Go to home</a></nav><p class="ref">Reference: <code>{{REFERENCE}}</code></p></section></main></body></html>
 "#;
 
 /// The error page policy (threat model §13 `error` class, moved toward it): the style is allowed
@@ -2317,7 +2394,12 @@ static ERROR_CSP: std::sync::LazyLock<HeaderValue> = std::sync::LazyLock::new(||
 });
 
 // Render only navigation failures. JSON/asset protocol bodies and every HTTP status remain intact.
-fn finish_response(mut result: Response, navigation: bool) -> Response {
+// `brand` is asked only when an error page is rendered.
+fn finish_response(
+    mut result: Response,
+    navigation: bool,
+    brand: impl FnOnce() -> PageBrand,
+) -> Response {
     let status = result.status();
     if navigation
         && result.extensions().get::<LifecycleResponse>().is_none()
@@ -2365,12 +2447,14 @@ fn finish_response(mut result: Response, navigation: bool) -> Response {
         let shown = reference
             .as_ref()
             .map_or("unavailable", erp_rpc::CorrelationId::as_str);
+        // The product name goes in last, so text in it is never taken for another placeholder.
         let html = ERROR_PAGE
             .replace("{{STYLE}}", ERROR_STYLE)
             .replace("{{TITLE}}", title)
             .replace("{{STATUS}}", status.as_str())
             .replace("{{MESSAGE}}", message)
-            .replace("{{REFERENCE}}", shown);
+            .replace("{{REFERENCE}}", shown)
+            .replace("{{PRODUCT}}", &brand().name_html());
         *result.body_mut() = Body::from(html);
         result.headers_mut().remove(header::CONTENT_LENGTH);
         result.headers_mut().insert(
@@ -2423,6 +2507,7 @@ fn brand_image(method: &Method, path: &str) -> Option<&'static str> {
         routes::FAVICON | routes::BRAND_ICON_PATH => Some("icon.svg"),
         routes::BRAND_LOGO_PATH => Some("logo.svg"),
         routes::BRAND_LOGO_DARK_PATH => Some("logo-dark.svg"),
+        routes::BRAND_LOGIN_CSS_PATH => Some(crate::assets::BRAND_STYLESHEET),
         _ => None,
     }
 }
@@ -3197,7 +3282,11 @@ mod tests {
             LifecycleOperation::Upgrade,
             LifecycleOperation::Uninstall,
         ] {
-            let result = finish_response(lifecycle_deadline_response(Some(operation)), true);
+            let result = finish_response(
+                lifecycle_deadline_response(Some(operation)),
+                true,
+                PageBrand::default,
+            );
             assert_eq!(result.status(), StatusCode::SERVICE_UNAVAILABLE);
             assert_eq!(result.headers()[header::CONTENT_TYPE], "application/json");
             assert!(result.extensions().get::<LifecycleResponse>().is_some());
@@ -3240,6 +3329,7 @@ mod tests {
             let result = finish_response(
                 lifecycle_outcome_response(LifecycleOperation::Upgrade, Some(stage)),
                 true,
+                PageBrand::default,
             );
             assert_eq!(result.headers()[header::CONTENT_TYPE], "application/json");
             assert!(result.extensions().get::<LifecycleResponse>().is_some());
@@ -3278,7 +3368,7 @@ mod tests {
         );
         raw.headers_mut()
             .insert(header::RETRY_AFTER, HeaderValue::from_static("5"));
-        let page = finish_response(raw, true);
+        let page = finish_response(raw, true, PageBrand::default);
         assert_eq!(page.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(page.headers()[header::RETRY_AFTER], "5");
         assert_eq!(page.headers()[header::CACHE_CONTROL], "no-store");
@@ -3300,6 +3390,7 @@ mod tests {
             )
             .unwrap(),
             false,
+            PageBrand::default,
         );
         assert_eq!(api.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(api.headers()[header::CONTENT_TYPE], "application/json");
@@ -3317,7 +3408,11 @@ mod tests {
         use sha2::Digest as _;
         let mut references = Vec::new();
         for _ in 0..2 {
-            let page = finish_response(response(StatusCode::FORBIDDEN, "private detail"), true);
+            let page = finish_response(
+                response(StatusCode::FORBIDDEN, "private detail"),
+                true,
+                PageBrand::default,
+            );
             assert_eq!(page.status(), StatusCode::FORBIDDEN);
             let stored = page
                 .extensions()
@@ -3369,7 +3464,11 @@ mod tests {
             "each page has its own reference"
         );
         // A protocol response is not rendered and carries no reference.
-        let api = finish_response(response(StatusCode::FORBIDDEN, "denied"), false);
+        let api = finish_response(
+            response(StatusCode::FORBIDDEN, "denied"),
+            false,
+            PageBrand::default,
+        );
         assert!(api.extensions().get::<ErrorReference>().is_none());
         assert!(!api.headers().contains_key(header::CONTENT_SECURITY_POLICY));
     }
@@ -3379,10 +3478,10 @@ mod tests {
     #[test]
     #[allow(clippy::unwrap_used, reason = "test assertions")]
     fn final_referrer_policy_is_never_weaker_than_same_origin() {
-        let plain = finish_response(response(StatusCode::OK, "ok"), false);
+        let plain = finish_response(response(StatusCode::OK, "ok"), false, PageBrand::default);
         assert_eq!(plain.headers()[header::REFERRER_POLICY], "same-origin");
 
-        let local = finish_response(redirect("/erp/login").unwrap(), false);
+        let local = finish_response(redirect("/erp/login").unwrap(), false, PageBrand::default);
         assert_eq!(local.headers()[header::REFERRER_POLICY], "no-referrer");
 
         for weaker in [
@@ -3393,7 +3492,7 @@ mod tests {
             let mut raw = response(StatusCode::OK, "ok");
             raw.headers_mut()
                 .insert(header::REFERRER_POLICY, HeaderValue::from_static(weaker));
-            let finished = finish_response(raw, false);
+            let finished = finish_response(raw, false, PageBrand::default);
             let values: Vec<_> = finished
                 .headers()
                 .get_all(header::REFERRER_POLICY)
@@ -3413,7 +3512,7 @@ mod tests {
             header::REFERRER_POLICY,
             HeaderValue::from_static("unsafe-url"),
         );
-        let finished = finish_response(raw, false);
+        let finished = finish_response(raw, false, PageBrand::default);
         let values: Vec<_> = finished
             .headers()
             .get_all(header::REFERRER_POLICY)
@@ -3535,5 +3634,135 @@ mod tests {
         assert!(compiled_brand("other.svg").is_none());
         // The error page shows the logo from the same origin, the only image its CSP allows.
         assert!(ERROR_PAGE.contains(r#"<header><img src="/erp/brand/logo.svg""#));
+        // The login stylesheet has a route but no compiled default: without a brand addon it is not found.
+        assert_eq!(
+            brand_image(&Method::GET, "/erp/brand/login.css"),
+            Some("login.css")
+        );
+        assert!(compiled_brand("login.css").is_none());
+    }
+
+    /// A published generation whose brand addon ships `brand.json` with `manifest` and, when `stylesheet`,
+    /// `login.css`.
+    #[allow(clippy::unwrap_used, reason = "test fixture")]
+    fn branded_assets(manifest: &[u8], stylesheet: bool) -> crate::assets::PublishedAssets {
+        use sha2::Digest as _;
+        let source = |bytes: &[u8], ext: &str, mime: &str| {
+            let hash: String = sha2::Sha256::digest(bytes)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            let path = format!("{hash}.{ext}");
+            let url = format!("/erp/assets/{path}");
+            (
+                crate::assets::AssetSource::new(&path, mime, bytes.to_vec()).unwrap(),
+                url,
+            )
+        };
+        let (json, json_url) = source(manifest, "json", "application/json; charset=utf-8");
+        let mut generation = crate::assets::AssetGeneration::new("elang-1", "a".repeat(64))
+            .unwrap()
+            .asset(json)
+            .unwrap()
+            .static_file("/acme_theme/static/brand/brand.json", &json_url)
+            .unwrap();
+        if stylesheet {
+            let (css, css_url) = source(
+                b".login-screen{--login-bg:#123}",
+                "css",
+                "text/css; charset=utf-8",
+            );
+            generation = generation
+                .asset(css)
+                .unwrap()
+                .static_file("/acme_theme/static/brand/login.css", &css_url)
+                .unwrap();
+        }
+        generation
+            .build(&crate::assets::AssetStore::new(1 << 20).unwrap())
+            .unwrap()
+    }
+
+    fn client_page(brand: &PageBrand, class: PageClass) -> String {
+        client_page_html(
+            brand,
+            class,
+            ClientPage {
+                id: "erp-login",
+                json: "{}",
+                css: "c.css",
+                js: "c.js",
+            },
+        )
+    }
+
+    /// Without a brand addon the pages keep the built-in name and link no brand stylesheet.
+    #[test]
+    fn pages_without_a_brand_addon_keep_the_built_in_name() {
+        let brand = page_brand(None);
+        assert_eq!(page_brand(Some(&AssetAdmission::Broken("x".into()))), brand);
+        let name = "<title>ERPForAll</title><meta name=\"application-name\" content=\"ERPForAll\">";
+        for class in [PageClass::Login, PageClass::Shell] {
+            let html = client_page(&brand, class);
+            assert!(html.contains(name), "{html}");
+            assert!(!html.contains("/erp/brand/login.css"), "{html}");
+        }
+        let success = login_success_html(&brand, "c.css");
+        assert!(success.contains("<title>Login successful · ERPForAll</title>"));
+        assert!(!success.contains("/erp/brand/login.css"));
+    }
+
+    /// The brand addon's name is escaped into every anonymous page; its stylesheet follows the client
+    /// stylesheet on the login pages only, never on the application shell.
+    #[tokio::test]
+    #[allow(clippy::unwrap_used, reason = "test assertions")]
+    async fn anonymous_pages_carry_the_brand_name_and_login_stylesheet() {
+        let assets = Arc::new(branded_assets(br#"{"name":"{{REFERENCE}} & <Co>"}"#, true));
+        let brand = page_brand(Some(&AssetAdmission::Published(Arc::clone(&assets))));
+        let shown = "{{REFERENCE}} &amp; &lt;Co&gt;";
+        let link = r#"<link rel="stylesheet" href="/erp/brand/login.css">"#;
+        let login = client_page(&brand, PageClass::Login);
+        assert!(
+            login.contains(&format!(
+                "<title>{shown}</title><meta name=\"application-name\" content=\"{shown}\">"
+            )),
+            "{login}"
+        );
+        let client_css = login.find("/erp/assets/c.css").unwrap();
+        assert!(login.find(link).unwrap() > client_css, "{login}");
+        assert!(!login.contains("<Co>"), "{login}");
+        let shell = client_page(&brand, PageClass::Shell);
+        assert!(
+            shell.contains(&format!("<title>{shown}</title>")),
+            "{shell}"
+        );
+        assert!(!shell.contains(link), "{shell}");
+        let success = login_success_html(&brand, "c.css");
+        assert!(
+            success.contains(&format!("<title>Login successful · {shown}</title>")),
+            "{success}"
+        );
+        assert!(success.find(link).unwrap() > success.find("/erp/assets/c.css").unwrap());
+        assert!(success.contains(r#"<main class="login-screen"><section class="login-card">"#));
+        // The error page names the product (title and logo text) and keeps its hash-only style policy; the
+        // name goes in last, so the placeholder text in it stays text.
+        let page = finish_response(response(StatusCode::NOT_FOUND, "missing"), true, || {
+            brand.clone()
+        });
+        assert_eq!(page.headers()[header::CONTENT_SECURITY_POLICY], *ERROR_CSP);
+        let html =
+            String::from_utf8(to_bytes(page.into_body(), 65_536).await.unwrap().to_vec()).unwrap();
+        assert!(
+            html.contains(&format!("<title>Page not found · {shown}</title>")),
+            "{html}"
+        );
+        assert!(html.contains(&format!(r#"alt="{shown}""#)), "{html}");
+        assert!(!html.contains("<Co>"), "{html}");
+        assert!(!html.contains("{{PRODUCT}}"), "{html}");
+        // A response that renders no page never asks for the brand.
+        let api = finish_response(response(StatusCode::NOT_FOUND, "missing"), false, || {
+            unreachable!("no error page")
+        });
+        assert_eq!(api.status(), StatusCode::NOT_FOUND);
     }
 }

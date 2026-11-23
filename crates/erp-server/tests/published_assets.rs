@@ -249,6 +249,143 @@ fn two_addons_publishing_brand_images_are_refused() {
     );
     assert_eq!(
         error.to_string(),
-        "asset publication refused: more than one addon publishes brand images"
+        "asset publication refused: more than one addon publishes brand files"
+    );
+}
+fn source(bytes: &[u8], ext: &str, mime: &str) -> (AssetSource, String) {
+    let hash = Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    let path = format!("{hash}.{ext}");
+    (
+        AssetSource::new(&path, mime, bytes.to_vec()).unwrap(),
+        format!("/erp/assets/{path}"),
+    )
+}
+const JSON: &str = "application/json; charset=utf-8";
+const CSS: &str = "text/css; charset=utf-8";
+#[test]
+fn the_brand_addon_names_the_product_and_ships_a_login_stylesheet() {
+    let (manifest, manifest_url) = source(r#"{"name":"Acme Suite"}"#.as_bytes(), "json", JSON);
+    let (css, css_url) = source(b".login-screen{--login-bg:#123}", "css", CSS);
+    let assets = AssetGeneration::new("elang-1", "a".repeat(64))
+        .unwrap()
+        .asset(manifest)
+        .unwrap()
+        .asset(css)
+        .unwrap()
+        .static_file("/acme_theme/static/brand/brand.json", &manifest_url)
+        .unwrap()
+        .static_file("/acme_theme/static/brand/login.css", &css_url)
+        .unwrap()
+        .build(&erp_server::assets::AssetStore::new(256 * 1024 * 1024).unwrap())
+        .unwrap();
+    assert_eq!(assets.product_name(), Some("Acme Suite"));
+    assert!(assets.has_brand_stylesheet());
+    assert_eq!(assets.brand_image("login.css"), Some(css_url.as_str()));
+    let name = css_url.strip_prefix("/erp/assets/").unwrap();
+    let response = assets.response(name, None, None).unwrap().unwrap();
+    assert_eq!(response.headers()["content-type"], CSS);
+    assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+    assert!(response.headers().contains_key("etag"));
+    // Without brand files: no name, no stylesheet.
+    let plain = AssetGeneration::new("elang-1", "a".repeat(64))
+        .unwrap()
+        .build(&erp_server::assets::AssetStore::new(256 * 1024 * 1024).unwrap())
+        .unwrap();
+    assert_eq!(plain.product_name(), None);
+    assert!(!plain.has_brand_stylesheet());
+}
+#[test]
+fn a_brand_manifest_must_name_the_product_in_plain_text() {
+    use erp_server::assets::{PublicationErrorKind, product_name};
+    assert_eq!(product_name(br#"{"name":"Acme"}"#).unwrap(), "Acme");
+    let longest = "\u{e9}".repeat(64);
+    assert_eq!(
+        product_name(format!(r#"{{"name":"{longest}"}}"#).as_bytes()).unwrap(),
+        longest
+    );
+    let shape = "brand.json must be {\"name\": \"<product name>\"}";
+    let text = "brand.json name must be 1 to 64 characters of plain text";
+    let long = format!(r#"{{"name":"{}"}}"#, "x".repeat(65));
+    let huge = format!(r#"{{"name":"x","pad":"{}"}}"#, " ".repeat(4096));
+    let cases: [(&[u8], &str); 13] = [
+        (b"not json", "brand.json is not valid JSON"),
+        (br#"["Acme"]"#, shape),
+        (br#"{"name":7}"#, shape),
+        (br#"{"title":"Acme"}"#, shape),
+        (br#"{"name":"Acme","logo":"x"}"#, shape),
+        (br#"{"name":""}"#, text),
+        (br#"{"name":" Acme"}"#, text),
+        (br#"{"name":"Ac\nme"}"#, text),
+        (br#"{"name":"Ac\u0007me"}"#, text),
+        ("{\"name\":\"Acme\u{202E}ecruS\"}".as_bytes(), text),
+        ("{\"name\":\"Ac\u{200B}me\"}".as_bytes(), text),
+        (long.as_bytes(), text),
+        (huge.as_bytes(), "brand.json exceeds 4 KiB"),
+    ];
+    for (manifest, reason) in cases {
+        let error = product_name(manifest).unwrap_err();
+        assert_eq!(error.kind(), PublicationErrorKind::Manifest);
+        assert_eq!(
+            error.to_string(),
+            format!("asset publication refused: {reason}"),
+            "{}",
+            String::from_utf8_lossy(manifest)
+        );
+    }
+}
+#[test]
+fn an_invalid_or_mistyped_brand_file_refuses_the_publication() {
+    let build = |path: &str, bytes: &[u8], ext: &str, mime: &str| {
+        let (file, url) = source(bytes, ext, mime);
+        AssetGeneration::new("elang-1", "a".repeat(64))
+            .unwrap()
+            .asset(file)
+            .unwrap()
+            .static_file(path, &url)
+            .unwrap()
+            .build(&erp_server::assets::AssetStore::new(256 * 1024 * 1024).unwrap())
+            .unwrap_err()
+            .to_string()
+    };
+    assert_eq!(
+        build(
+            "/acme_theme/static/brand/brand.json",
+            br#"{"name":""}"#,
+            "json",
+            JSON
+        ),
+        "asset publication refused: brand.json name must be 1 to 64 characters of plain text"
+    );
+    // A brand file declared with another file's bytes would be served with that media type.
+    assert_eq!(
+        build(
+            "/acme_theme/static/brand/login.css",
+            b"export {};",
+            "js",
+            "text/javascript; charset=utf-8"
+        ),
+        "asset publication refused: brand file published with another media type"
+    );
+    // The stylesheet and the manifest count as brand files: a second addon cannot add them.
+    let (logo, logo_url) = svg_source(b"<svg xmlns='http://www.w3.org/2000/svg'/>");
+    let (css, css_url) = source(b"a{}", "css", CSS);
+    let error = AssetGeneration::new("elang-1", "a".repeat(64))
+        .unwrap()
+        .asset(logo)
+        .unwrap()
+        .asset(css)
+        .unwrap()
+        .static_file("/acme_theme/static/brand/logo.svg", &logo_url)
+        .unwrap()
+        .static_file("/zeta_theme/static/brand/login.css", &css_url)
+        .unwrap()
+        .build(&erp_server::assets::AssetStore::new(256 * 1024 * 1024).unwrap())
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "asset publication refused: more than one addon publishes brand files"
     );
 }

@@ -112,9 +112,9 @@ pub enum AssemblyError {
         /// Duplicate identity.
         value: String,
     },
-    /// Two installed addons ship brand images; the server serves one brand.
+    /// Two installed addons ship brand files; the server serves one brand.
     #[error(
-        "addons '{first}' and '{second}' both ship brand images (static/brand/); install only one of them"
+        "addons '{first}' and '{second}' both ship brand files (static/brand/); install only one of them"
     )]
     BrandConflict {
         /// First owner, in addon name order.
@@ -235,15 +235,68 @@ fn token(field: &'static str, value: &str, max: usize) -> Result<(), AssemblyErr
 /// The brand images an addon may ship under `static/brand/`; the server answers `/erp/brand/<name>` (and
 /// `/favicon.ico` with `icon.svg`) from the one installed addon that ships them.
 pub const BRAND_IMAGES: [&str; 3] = ["icon.svg", "logo.svg", "logo-dark.svg"];
+/// The brand manifest an addon may ship as `static/brand/brand.json`: `{"name": "<product name>"}`, the
+/// product name of the login, error and application pages. The server checks it again at publication.
+pub const BRAND_MANIFEST: &str = "static/brand/brand.json";
+/// Every file under `static/brand/` the server reads (`login.css` is the login pages' stylesheet); one
+/// installed addon owns all of them.
+pub const BRAND_FILES: [&str; 5] = [
+    "icon.svg",
+    "logo.svg",
+    "logo-dark.svg",
+    "login.css",
+    "brand.json",
+];
+/// Longest product name a brand manifest may give, in characters.
+pub const MAX_PRODUCT_NAME_CHARS: usize = 64;
+const MAX_BRAND_MANIFEST_BYTES: usize = 4 * 1024;
 
-/// The addon whose static route `path` (`/<addon>/static/brand/<image>`) is a brand image.
+/// The addon whose static route `path` (`/<addon>/static/brand/<file>`) is a brand file.
 fn brand_owner(path: &str) -> Option<&str> {
     let (addon, rest) = path.strip_prefix('/')?.split_once('/')?;
-    let image = rest.strip_prefix("static/brand/")?;
-    BRAND_IMAGES.contains(&image).then_some(addon)
+    let file = rest.strip_prefix("static/brand/")?;
+    BRAND_FILES.contains(&file).then_some(addon)
 }
 
-/// At most one addon ships brand images: two would make the login page and favicon depend on install order.
+/// Refuse a brand manifest that is not exactly `{"name": "<plain text>"}` (1 to [`MAX_PRODUCT_NAME_CHARS`]
+/// characters, no control or invisible formatting characters, no surrounding whitespace), so the install
+/// fails before it commits instead of the server refusing the publication afterwards.
+fn check_brand_manifest(addon: &str, bytes: &[u8]) -> Result<(), AssemblyError> {
+    let refuse = |reason| {
+        invalid(
+            "brand manifest",
+            &format!("{addon}/{BRAND_MANIFEST}"),
+            reason,
+        )
+    };
+    if bytes.len() > MAX_BRAND_MANIFEST_BYTES {
+        return Err(refuse("expected at most 4 KiB"));
+    }
+    let value: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|_| refuse("expected JSON"))?;
+    let name = match &value {
+        serde_json::Value::Object(members) if members.len() == 1 => members.get("name"),
+        _ => None,
+    };
+    let Some(serde_json::Value::String(name)) = name else {
+        return Err(refuse("expected {\"name\": \"<product name>\"}"));
+    };
+    if name.is_empty()
+        || name.trim() != name
+        || name.chars().count() > MAX_PRODUCT_NAME_CHARS
+        || name.chars().any(|c| {
+            c.is_control()
+                || matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}')
+        })
+    {
+        return Err(refuse(
+            "expected a name of 1 to 64 characters of plain text",
+        ));
+    }
+    Ok(())
+}
+
+/// At most one addon ships brand files: two would make the login page and favicon depend on install order.
 fn check_brand_owners(static_files: &BTreeMap<String, String>) -> Result<(), AssemblyError> {
     let mut owners = static_files.keys().filter_map(|path| brand_owner(path));
     let Some(first) = owners.next() else {
@@ -1541,6 +1594,9 @@ pub fn assemble(
                 }
                 InputKind::Static => {
                     key.field(b"static")?;
+                    if input.path == BRAND_MANIFEST {
+                        check_brand_manifest(&addon.name, &input.bytes)?;
+                    }
                     let (mime, ext) = media(&input.path)?;
                     let url = add_blob(
                         &mut blobs,
