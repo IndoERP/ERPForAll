@@ -152,7 +152,8 @@ impl ResUsersSettings {
         }
         let stored = own.get(tx, ResUsersSettings::ACTIVE_COMPANY_CONFIG).await?;
         let companies = match new_settings.get("active_company_ids") {
-            Some(Value::False) => {
+            // JSON `false` over RPC arrives as `Bool(false)`, `null` and in-process callers as `False`.
+            Some(Value::False | Value::Bool(false)) => {
                 vals = vals.set(ResUsersSettings::ACTIVE_COMPANY_CONFIG, None::<Arc<str>>);
                 Vec::new()
             }

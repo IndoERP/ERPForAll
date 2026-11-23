@@ -532,10 +532,14 @@ async fn active_companies_are_stored_in_order_and_only_among_the_allowed_ones() 
     assert_eq!(err.kind(), ErrorKind::Access, "{err}");
     assert_eq!(f.companies(f.u1).await, ids(&[second, main]));
 
-    // False clears the choice
+    // False clears the choice, and so does JSON `false` as RPC decodes it (`Bool(false)`)
     f.set_companies(f.u1, Value::False).await.unwrap();
     assert_eq!(f.companies(f.u1).await, Value::False);
     assert_eq!(f.get(f.u1).await, Value::str("[2, 1]"));
+    f.set_companies(f.u1, ids(&[main])).await.unwrap();
+    assert_eq!(f.companies(f.u1).await, ids(&[main]));
+    f.set_companies(f.u1, Value::Bool(false)).await.unwrap();
+    assert_eq!(f.companies(f.u1).await, Value::False);
     f.finish().await;
 }
 
