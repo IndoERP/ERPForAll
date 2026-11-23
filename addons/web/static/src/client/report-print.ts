@@ -4,7 +4,7 @@ import { icon } from "./icons.js";
 import { attachMenuDropdown } from "./menu-dropdown.js";
 import type { DialogHandle, DialogService } from "./dialog-service.js";
 import { saveFile } from "./file-save.js";
-import { ClientError, type RpcClient } from "./transport.js";
+import { ClientError, type CallOptions, type RpcClient } from "./transport.js";
 
 /** A report the Print menu offers for a model (`report.job.erp_print_reports`). */
 export interface PrintableReport { readonly report: string; readonly name: string }
@@ -38,8 +38,8 @@ async function fetchAndSave(services: PrintServices, url: string): Promise<void>
 }
 
 /** The reports offered for `model`; empty when the server has no report runtime yet. */
-export async function loadPrintReports(rpc: RpcClient, model: string): Promise<PrintableReport[]> {
-  const answer = await rpc.call(MODEL, "erp_print_reports", { res_model: model });
+export async function loadPrintReports(rpc: RpcClient, model: string, options: CallOptions = {}): Promise<PrintableReport[]> {
+  const answer = await rpc.call(MODEL, "erp_print_reports", { res_model: model }, options);
   if (!Array.isArray(answer)) throw new ClientError("server", "The server did not answer the report list with a list.");
   return answer.map(item => {
     const entry = object(item, "a report of the Print menu");
@@ -141,12 +141,15 @@ export interface PrintDropdown {
 
 /**
  * The Print button of a list or a form, before Actions as in the reference client: a printer icon and "Print", opening one
- * entry per report of `model`. The reports load at the first opening (a list that is never printed asks nothing);
- * a model without one says "No report available". `pick` prints with the chosen report. A failed load is reported
- * and tried again at the next opening.
+ * entry per report of `model`. The reports are read in the background at once (through `reports`, which a caller may share
+ * between buttons of the same model) and the button stays hidden until they arrive; a model without a report has no Print
+ * button, as in the reference client. `pick` prints with the chosen report. When that first read fails the button is
+ * shown and opening it reads again; a failure of a read the user asked for is reported.
  */
-export function printDropdown(rpc: RpcClient, model: string, pick: (report: PrintableReport) => void, report: (error: unknown) => void): PrintDropdown {
+export function printDropdown(rpc: RpcClient, model: string, pick: (report: PrintableReport) => void, report: (error: unknown) => void,
+  reports: () => Promise<PrintableReport[]> = () => loadPrintReports(rpc, model, { background: true })): PrintDropdown {
   const node = el("div", undefined, "nav-dropdown print-dropdown");
+  node.hidden = true;
   const toggle = button("Print", () => {}, "print-toggle-btn has-action-icon");
   toggle.prepend(icon("printer"));
   toggle.setAttribute("aria-haspopup", "menu");
@@ -155,26 +158,32 @@ export function printDropdown(rpc: RpcClient, model: string, pick: (report: Prin
   node.append(toggle, menu);
   let live = true;
   let state: "idle" | "loading" | "done" = "idle";
-  const load = (): void => {
+  const load = (asked: boolean): void => {
     if (state !== "idle") return;
     state = "loading";
-    void loadPrintReports(rpc, model).then(reports => {
+    void reports().then(entries => {
       if (!live) return;
-      for (const entry of reports) {
+      menu.replaceChildren();
+      for (const entry of entries) {
         const item = button(entry.name, () => { dropdown.close(true); pick(entry); }, "dropdown-item print-report-btn");
         item.setAttribute("role", "menuitem");
         item.setAttribute("aria-label", `Print ${entry.name}`);
         menu.append(item);
       }
-      if (!reports.length) {
-        const none = button("No report available", () => {}, "dropdown-item print-report-none");
-        none.disabled = true; none.setAttribute("role", "menuitem");
-        menu.append(none);
-      }
-      dropdown.refresh();
       state = "done";
-    }).catch((error: unknown) => { state = "idle"; if (live) report(error); });
+      if (!entries.length) { dropdown.close(false); node.hidden = true; return; }
+      node.hidden = false;
+      dropdown.refresh();
+    }).catch((error: unknown) => {
+      state = "idle";
+      if (!live) return;
+      // A Print button that may have reports is not hidden by a failed background read: it stays, and opening it reads
+      // again and reports what fails then.
+      node.hidden = false;
+      if (asked) report(error);
+    });
   };
-  const dropdown = attachMenuDropdown({ trigger: toggle, menu, mode: "class-open", onOpen: load });
+  const dropdown = attachMenuDropdown({ trigger: toggle, menu, mode: "class-open", onOpen: () => load(true) });
+  load(false);
   return { node, dispose: () => { live = false; dropdown.dispose(); } };
 }

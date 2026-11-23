@@ -3692,6 +3692,24 @@ test("form Print button lists the reports, Actions holds none, and printing save
   await vi.waitFor(() => expect(order).toEqual(["web_save", "erp_print"]));
 });
 
+test("a form of a model without a report has no Print button, and the reports are read once per model", async () => {
+  history.replaceState(null, "", "/erp/action-20?id=5&view_type=form");
+  const order: string[] = [];
+  const fetcher = printFormFetch(order, { reports: [] });
+  vi.stubGlobal("fetch", fetcher);
+  const root = host();
+  app = new HumanApp(root, bootstrap);
+  await app.start();
+  await vi.waitFor(() => expect(root.querySelector(".form-actions-dropdown")).not.toBeNull());
+  const reads = (): number => (fetcher as unknown as { mock: { calls: [string][] } }).mock.calls.filter(([path]) => path.endsWith("erp_print_reports")).length;
+  await vi.waitFor(() => expect(reads()).toBe(1));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(root.querySelector<HTMLElement>(".form-record-menus .print-dropdown")!.hidden).toBe(true);
+  root.querySelector<HTMLButtonElement>(".form-reload-btn")!.click();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  expect(reads()).toBe(1);
+});
+
 test("form Print on a new record with no edits saves it first, then prints it", async () => {
   history.replaceState(null, "", "/erp/action-20?view_type=form");
   const order: string[] = [];

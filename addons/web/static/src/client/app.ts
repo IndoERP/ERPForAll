@@ -54,7 +54,7 @@ import "./services.js";
 import { type ServiceController } from "./services.js";
 import { clientActions, listHeaderExtensions, serviceControllers, type ClientActionHandle, type ListHeaderHandle } from "./registry.js";
 import { mountControlPanel } from "./control-panel.js";
-import { printDropdown, printRecords } from "./report-print.js";
+import { loadPrintReports, printDropdown, printRecords, type PrintableReport } from "./report-print.js";
 import { requestLoading } from "./loading.js";
 import { actionResult } from "./actions.js";
 import { CompanySelector, type CompanyItem } from "./company-selector.js";
@@ -203,6 +203,8 @@ export class HumanApp {
   private navigationInFlight: Promise<void> | undefined;
   /** Records of `edit="0"` views: once they have an id they are never written back. */
   private readonly lockedRecords = new WeakSet<RecordState>();
+  /** The Print reports of each model, read once per page: a list and its forms share one answer; a failed read is not kept. */
+  private readonly printReports = new Map<string, Promise<PrintableReport[]>>();
   private keyboardPending: "save" | "discard" | undefined;
   private historyIndex = 0;
   private restoringHistory: number | undefined;
@@ -1282,6 +1284,16 @@ export class HumanApp {
     catch (error) { this.methodActions.remove(id); throw error; }
     // A navigation that did not arrive (the page may not be left) keeps no entry behind.
     if (this.current.method_action !== id) this.methodActions.remove(id);
+  }
+
+  /** The reports the Print button offers for `model`, shared for the page's lifetime; a failed read is tried again next time. */
+  private reportsOf(model: string): Promise<PrintableReport[]> {
+    const known = this.printReports.get(model);
+    if (known) return known;
+    const loading = loadPrintReports(this.rpc, model, { background: true });
+    this.printReports.set(model, loading);
+    loading.catch(() => { if (this.printReports.get(model) === loading) this.printReports.delete(model); });
+    return loading;
   }
 
   /** Navigation and prefetch share one caller-bound action/view metadata producer. */
@@ -3139,7 +3151,7 @@ export class HumanApp {
       const print = printDropdown(this.rpc, description.model, report => this.run(async () => {
         if (!selectedIds.size) return;
         await printRecords({ rpc: this.rpc, dialogs: this.messages.dialogs }, report, description.model, Array.from(selectedIds));
-      }), error => this.reportError(error));
+      }), error => this.reportError(error), () => this.reportsOf(description.model));
       const dropdown = attachMenuDropdown({ trigger: actionToggle, menu: actionMenu, mode: "class-open" });
       disposeActionMenu = () => { print.dispose(); dropdown.dispose(); };
       if (canDelete) {
@@ -4591,14 +4603,13 @@ export class HumanApp {
     for (const item of actionMenu.querySelectorAll<HTMLElement>("button")) item.setAttribute("role", "menuitem");
     // Print is its own button before Actions (not mixed with record actions). A dirty or new record is saved first,
     // as the reference client does before a menu item runs.
-    // shortcut: Print shows on every form (a model without a report says so when opened); hiding it needs the print
-    // bindings in get_views' toolbar, task.
+    // A model without a report has no Print button.
     const print = printDropdown(this.rpc, state.model, report => runFormAction(async () => {
       refuseUncertain();
       if ((state.dirty || !state.id) && !await trySave()) return;
       if (!state.id) throw new ClientError("validation", "Save the record before printing it.");
       await printRecords({ rpc: this.rpc, dialogs: this.messages.dialogs }, report, state.model, [state.id]);
-    }), error => this.reportError(error));
+    }), error => this.reportError(error), () => this.reportsOf(state.model));
     const recordMenus = el("div", undefined, "form-record-menus");
     recordMenus.append(print.node, actionDropdown);
     const actionMenuDropdown = attachMenuDropdown({ trigger: actionToggle, menu: actionMenu, mode: "class-open", onOpen: () => { duplicateBtn.hidden = !state.id || !canCreate; } });

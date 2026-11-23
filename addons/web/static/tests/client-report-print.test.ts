@@ -85,39 +85,68 @@ test("a report list that is not a list is refused", async () => {
   await expect(loadPrintReports(rpc, "sale.order")).rejects.toThrow("did not answer the report list with a list");
 });
 
-test("the Print button shows a printer icon and loads one entry per report at its first opening", async () => {
-  const { rpc, calls } = fakeRpc(() => [order, { report: "sale.order.quote", name: "Quotation" }]);
+test("the Print button shows a printer icon, loads its reports at once and stays hidden until they arrive", async () => {
+  let release!: (value: unknown) => void;
+  const calls: unknown[] = [];
+  const rpc = { call: vi.fn((model: string, method: string, args: unknown) => { calls.push({ model, method, args }); return new Promise(resolve => { release = resolve; }); }) } as unknown as RpcClient;
   const pick = vi.fn();
   const print = printDropdown(rpc, "sale.order", pick, () => {});
   document.body.append(print.node);
   const toggle = print.node.querySelector<HTMLButtonElement>(".print-toggle-btn")!;
   expect(toggle.textContent).toBe("Print");
   expect(toggle.querySelector("svg")?.getAttribute("data-icon")).toBe("printer");
-  expect(calls).toHaveLength(0); // a list that is never printed asks nothing
-  toggle.click();
-  await vi.waitFor(() => expect([...print.node.querySelectorAll(".print-report-btn")].map(item => item.textContent)).toEqual(["Order", "Quotation"]));
-  expect(print.node.querySelector(".print-report-btn")!.getAttribute("aria-label")).toBe("Print Order");
+  expect(print.node.hidden).toBe(true);
   expect(calls).toEqual([{ model: "report.job", method: "erp_print_reports", args: { res_model: "sale.order" } }]);
+  expect(rpc.call).toHaveBeenCalledWith("report.job", "erp_print_reports", { res_model: "sale.order" }, { background: true });
+  release([order, { report: "sale.order.quote", name: "Quotation" }]);
+  await vi.waitFor(() => expect(print.node.hidden).toBe(false));
+  toggle.click();
+  expect([...print.node.querySelectorAll(".print-report-btn")].map(item => item.textContent)).toEqual(["Order", "Quotation"]);
+  expect(print.node.querySelector(".print-report-btn")!.getAttribute("aria-label")).toBe("Print Order");
+  expect(calls).toHaveLength(1);
   print.node.querySelector<HTMLButtonElement>(".print-report-btn")!.click();
   expect(pick).toHaveBeenCalledWith(order);
   print.dispose();
 });
 
-test("a model without a report says so, and a failed load is reported and tried again at the next opening", async () => {
-  let fail = true;
-  const { rpc, calls } = fakeRpc(() => { if (fail) throw new Error("offline"); return []; });
-  const errors: unknown[] = [];
-  const print = printDropdown(rpc, "res.partner", () => {}, error => errors.push(error));
+test("a model without a report has no Print button", async () => {
+  const { rpc, calls } = fakeRpc(() => []);
+  const print = printDropdown(rpc, "res.partner", () => {}, () => {});
   document.body.append(print.node);
+  await vi.waitFor(() => expect(calls).toHaveLength(1));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(print.node.hidden).toBe(true);
+  expect(print.node.querySelector(".print-report-btn, .print-report-none")).toBeNull();
+  print.dispose();
+});
+
+test("a failed background read shows the button; opening it reads again and reports a failure", async () => {
+  let fail = true;
+  const { rpc, calls } = fakeRpc(() => { if (fail) throw new Error("offline"); return [order]; });
+  const errors: unknown[] = [];
+  const print = printDropdown(rpc, "sale.order", () => {}, error => errors.push(error));
+  document.body.append(print.node);
+  await vi.waitFor(() => expect(print.node.hidden).toBe(false));
+  expect(errors).toHaveLength(0);
   const toggle = print.node.querySelector<HTMLButtonElement>(".print-toggle-btn")!;
   toggle.click();
   await vi.waitFor(() => expect(errors).toHaveLength(1));
   toggle.click(); // closes
   fail = false;
   toggle.click();
-  await vi.waitFor(() => expect(print.node.querySelector(".print-report-none")?.textContent).toBe("No report available"));
-  expect(calls).toHaveLength(2);
+  await vi.waitFor(() => expect(print.node.querySelector(".print-report-btn")?.textContent).toBe("Order"));
+  expect(calls).toHaveLength(3);
   print.dispose();
+});
+
+test("the reports may come from a shared source, read once for several buttons", async () => {
+  const { rpc, calls } = fakeRpc(() => { throw new Error("not called"); });
+  const shared = Promise.resolve([order]);
+  const first = printDropdown(rpc, "sale.order", () => {}, () => {}, () => shared);
+  const second = printDropdown(rpc, "sale.order", () => {}, () => {}, () => shared);
+  await vi.waitFor(() => expect([first.node.hidden, second.node.hidden]).toEqual([false, false]));
+  expect(calls).toHaveLength(0);
+  first.dispose(); second.dispose();
 });
 
 test("picking a report closes the Print menu and prints with that report", async () => {
@@ -150,9 +179,9 @@ test("a Print button disposed before the reports arrive adds nothing", async () 
   const rpc = { call: vi.fn(() => new Promise(resolve => { release = resolve; })) } as unknown as RpcClient;
   const print = printDropdown(rpc, "sale.order", () => {}, () => {});
   document.body.append(print.node);
-  print.node.querySelector<HTMLButtonElement>(".print-toggle-btn")!.click();
   print.dispose();
   release([order]);
   await new Promise(resolve => setTimeout(resolve, 10));
   expect(print.node.querySelector(".print-report-btn")).toBeNull();
+  expect(print.node.hidden).toBe(true);
 });
