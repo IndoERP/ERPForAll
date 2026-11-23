@@ -131,7 +131,7 @@ async fn install_keeps_one_row_due_at_the_next_aligned_instant_and_upgrade_keeps
     sync(&h, &["test_jobs"], &[]).await.unwrap();
     sync(&h, &["test_jobs"], &[]).await.unwrap();
     assert_eq!(job(&h).await, format!("ready|user|7|{KIND}"));
-    // due at the top of the next UTC hour, in the future
+    // due at the top of the next UTC hour, in the future (concat_ws prints booleans as t/f)
     assert_eq!(
         cell(
             &h,
@@ -142,7 +142,7 @@ async fn install_keeps_one_row_due_at_the_next_aligned_instant_and_upgrade_keeps
             )
         )
         .await,
-        "true|true|true"
+        "t|t|t"
     );
     // an operator's hold survives an upgrade
     exec(&h, "UPDATE erp_job SET state = 'held'").await;
@@ -184,7 +184,7 @@ async fn a_due_occurrence_runs_once_across_two_runners_and_reschedules_itself() 
             )
         )
         .await,
-        "0|true"
+        "0|t"
     );
     assert_eq!(
         cell(
