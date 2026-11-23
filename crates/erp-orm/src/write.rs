@@ -462,7 +462,8 @@ impl Records {
                 return Err(Error::validation(format!(
                     "Missing required field '{}': the base (en_US) value must be non-empty",
                     field.name
-                )));
+                ))
+                .with_fields([field.name]));
             }
         }
 

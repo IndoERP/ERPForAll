@@ -18,10 +18,27 @@ export function newRequestId(): string {
   return crypto.randomUUID();
 }
 export class ClientError extends Error {
-  constructor(readonly kind: FailureKind, message: string, readonly status = 0, readonly diagnostics?: ErrorDiagnostics) {
+  constructor(readonly kind: FailureKind, message: string, readonly status = 0, readonly diagnostics?: ErrorDiagnostics,
+    /** The fields of the record a server refusal is about (`context.fields`, or `context.field`); empty when it names none. */
+    readonly fields: readonly string[] = []) {
     super(message);
     this.name = "ClientError";
   }
+}
+const FIELD_NAME = /^[a-z_][a-z0-9_]*$/;
+const MAX_FIELDS = 64;
+/**
+ * The fields a refusal names in its error context: `fields` (a list of field names, as the server's `Error::with_fields`
+ * writes it) and `field` (one name, a convention addons also use). Anything else in the context is left alone; a name that
+ * is not a field name is not used, so the refusal is then shown as an error that names no field.
+ */
+export function refusedFields(context: unknown): string[] {
+  if (context === null || typeof context !== "object" || Array.isArray(context)) return [];
+  const source = context as Record<string, unknown>;
+  const names: unknown[] = [...(Array.isArray(source["fields"]) ? source["fields"] : []), ...("field" in source ? [source["field"]] : [])];
+  const fields: string[] = [];
+  for (const name of names.slice(0, MAX_FIELDS)) if (typeof name === "string" && FIELD_NAME.test(name) && !fields.includes(name)) fields.push(name);
+  return fields;
 }
 /** The name in a `Content-Disposition` header: the exact `filename*` (RFC 8187) when present, else `filename`, else a neutral name. */
 export function fileNameOf(disposition: string | null): string {
@@ -185,7 +202,8 @@ export class RpcClient {
         ...(typeof source["debug"] === "string" && source["debug"] ? { debug: source["debug"].slice(0, 32_768) } : {}),
       };
       if (ambiguousWrite) throw new ClientError("ambiguous", ambiguousMessage, response.status, details);
-      throw new ClientError(response.status === 403 ? "permission" : response.status < 500 ? "validation" : "server", message, response.status, details);
+      const kind: FailureKind = response.status === 403 ? "permission" : response.status < 500 ? "validation" : "server";
+      throw new ClientError(kind, message, response.status, details, kind === "validation" ? refusedFields(source["context"]) : []);
     }
     return value;
   }

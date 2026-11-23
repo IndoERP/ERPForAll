@@ -1,6 +1,6 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import { expect, test, vi } from "vitest";
-import { RpcClient, ClientError } from "../src/client/transport.js";
+import { RpcClient, ClientError, refusedFields } from "../src/client/transport.js";
 import { RecordState } from "../src/client/record.js";
 import type { Field } from "../src/client/metadata.js";
 import { parseRoute, routeUrl } from "../src/client/route.js";
@@ -209,4 +209,22 @@ test("a call that gets no answer keeps the id it sent, and a malformed answered 
   }, () => {});
   const refused = await odd.call("test.note", "web_read", {}).catch((error: unknown) => error) as ClientError;
   expect(refused.diagnostics?.requestId).toBe(sent);
+});
+
+test("a refusal carries the fields its error context names, as a list or as one field", async () => {
+  const refusal = (context: unknown, status = 422) => vi.fn(async () => new Response(JSON.stringify({ name: "erp.exceptions.ValidationError", message: "Refused", context }), { status, headers: { "Content-Type": "application/json" } }));
+  const failure = async (fetcher: ReturnType<typeof refusal>): Promise<ClientError> => await new RpcClient(fetcher, () => {}).call("test.note", "web_save", {}, { write: true }).catch((error: unknown) => error) as ClientError;
+  expect((await failure(refusal({ fields: ["date_start", "date_end"] }))).fields).toEqual(["date_start", "date_end"]);
+  expect((await failure(refusal({ field: "nik" }))).fields).toEqual(["nik"]);
+  expect((await failure(refusal({}))).fields).toEqual([]);
+  // an access refusal is not a field error
+  expect((await failure(refusal({ fields: ["name"] }, 403))).fields).toEqual([]);
+});
+
+test("only field names are taken from an error context, each once and at most 64", () => {
+  expect(refusedFields({ fields: ["name", "Name", "a.b", 3, "name"], field: "ref", blocking_model: "res.partner" })).toEqual(["name", "ref"]);
+  expect(refusedFields(null)).toEqual([]);
+  expect(refusedFields(["name"])).toEqual([]);
+  expect(refusedFields({ fields: "name" })).toEqual([]);
+  expect(refusedFields({ fields: Array.from({ length: 80 }, (_, i) => `f${i}`) })).toHaveLength(64);
 });

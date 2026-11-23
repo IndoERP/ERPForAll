@@ -80,7 +80,8 @@ pub fn apply_write(
         return Err(Error::validation(format!(
             "Missing required field '{}': it cannot be cleared",
             field.name
-        )));
+        ))
+        .with_fields([field.name]));
     }
     if field.required
         && let Cell::Json(v) = &cell
@@ -95,7 +96,8 @@ pub fn apply_write(
             return Err(Error::validation(format!(
                 "Missing required field '{}': the base (en_US) value must be non-empty",
                 field.name
-            )));
+            ))
+            .with_fields([field.name]));
         }
     }
     Ok(cell)

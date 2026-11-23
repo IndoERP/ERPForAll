@@ -379,6 +379,50 @@ impl Error {
         self.context.as_deref()
     }
 
+    /// Name the fields of the record this refusal is about, for a client that shows the message on
+    /// those fields (the JSON-2 error body's `context.fields`). The names join any already given and
+    /// any other context key is kept. A refusal about the record as a whole names none.
+    #[must_use]
+    pub fn with_fields<'a>(mut self, names: impl IntoIterator<Item = &'a str>) -> Self {
+        let mut context = match self.context.as_deref() {
+            Some(crate::Value::Map(map)) => (**map).clone(),
+            _ => crate::ValueMap::new(),
+        };
+        let mut fields: Vec<crate::Value> = match context.get(FIELDS_KEY) {
+            Some(crate::Value::List(list)) => list.to_vec(),
+            _ => Vec::new(),
+        };
+        for name in names {
+            let value = crate::Value::str(name);
+            if !fields.contains(&value) {
+                fields.push(value);
+            }
+        }
+        if fields.is_empty() {
+            return self;
+        }
+        context.insert(FIELDS_KEY.to_owned(), crate::Value::List(fields.into()));
+        self.context = Some(Box::new(crate::Value::Map(Arc::new(context))));
+        self
+    }
+
+    /// The fields [`Error::with_fields`] named, in the order they were given.
+    pub fn fields(&self) -> Vec<&str> {
+        match self.context.as_deref() {
+            Some(crate::Value::Map(map)) => match map.get(FIELDS_KEY) {
+                Some(crate::Value::List(list)) => list
+                    .iter()
+                    .filter_map(|value| match value {
+                        crate::Value::Str(name) => Some(name.as_ref()),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            },
+            _ => Vec::new(),
+        }
+    }
+
     /// The kind.
     pub fn kind(&self) -> ErrorKind {
         self.kind
@@ -453,6 +497,9 @@ impl StdError for Error {
     }
 }
 
+/// The error context key naming the fields a refusal is about ([`Error::with_fields`]).
+pub const FIELDS_KEY: &str = "fields";
+
 /// Result alias using [`Error`].
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -513,6 +560,31 @@ mod tests {
         assert_eq!(scoped.sqlstate(), Some("55P03"));
         assert_eq!(scoped.condition(), Some(Condition::LockTimeout));
         assert!(scoped.retries_transaction());
+    }
+
+    #[test]
+    fn named_fields_travel_in_the_context_and_keep_other_keys() {
+        let plain = Error::validation("Wrong value");
+        assert!(plain.fields().is_empty());
+        assert!(plain.clone().with_fields([]).context().is_none());
+        let blocked = Error::validation("Blocked").with_context(crate::Value::Map(Arc::new(
+            crate::ValueMap::from([(
+                "blocking_model".to_owned(),
+                crate::Value::str("res.partner"),
+            )]),
+        )));
+        let named = blocked
+            .with_fields(["date_end"])
+            .with_fields(["date_start", "date_end"]);
+        assert_eq!(named.fields(), ["date_end", "date_start"]);
+        let Some(crate::Value::Map(map)) = named.context() else {
+            panic!("a context map");
+        };
+        assert_eq!(
+            map.get("blocking_model"),
+            Some(&crate::Value::str("res.partner"))
+        );
+        assert_eq!(named.message(), "Blocked");
     }
 
     #[test]

@@ -115,6 +115,14 @@ read-only and cannot declare read mode. A field widget of the record form receiv
 `onRecordEvent(listener)`, which returns an unsubscribe function and reports `saved` (with the record id),
 `saveFailed`, `discarded` and `modeChanged` after the form has shown the outcome; subscriptions end with the widget.
 
+A refusal can name the fields of the record it is about: `Error::validation("…").with_fields(["date_end"])` puts
+`fields: ["date_end"]` in the JSON-2 error body's `context` (other context keys are kept). The ORM names them itself for
+a missing required value, an inverted period of a typed exclusion and a `#[constrains(...)]` method that names none
+(the constrained fields this write changed). The web client also accepts `context.field` with one name. A form shows such
+a refusal on those fields, with the server's message, instead of an error dialog; a validation or user error that names
+no shown field gets a dialog with its message only, without the Error ID and technical details (kept when the server
+granted debug details).
+
 ## The web client
 
 The client is TypeScript, compiled ahead of time:

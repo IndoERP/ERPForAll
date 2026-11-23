@@ -313,6 +313,7 @@ async fn spec_crud_014_missing_required_value() {
         err.message(),
         "The database refused the change: Missing required field 'Name' (name) for model 'Model B' (test_rpc.model_b)"
     );
+    assert_eq!(err.fields(), ["name"]);
     tx.rollback().await.unwrap();
     drop(tx);
     h.cleanup().await.unwrap();

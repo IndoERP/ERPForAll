@@ -30,8 +30,13 @@ pub(crate) fn map_pg_error(registry: &Registry, err: tokio_postgres::Error) -> E
     if let Some(message) = crate::partition::missing_partition_message(model, db) {
         return Error::database(ErrorKind::Database, state, message, err);
     }
+    // the fields of the record the refusal is about, for a client that shows it on them
+    let mut fields: Vec<&'static str> = Vec::new();
     let (kind, message) = if code == SqlState::NOT_NULL_VIOLATION {
         let column = db.column().unwrap_or_default();
+        if let Some(field) = model.and_then(|m| m.field(column)) {
+            fields.push(field.name);
+        }
         let message = match model {
             Some(m) => {
                 let label = m
@@ -46,11 +51,12 @@ pub(crate) fn map_pg_error(registry: &Registry, err: tokio_postgres::Error) -> E
         };
         (ErrorKind::Validation, message)
     } else if code == SqlState::CHECK_VIOLATION
-        && let Some(message) = model
+        && let Some((message, period)) = model
             .zip(db.constraint())
             .and_then(|(m, c)| crate::exclusion::period_check_message(m, c))
     {
         // the period check of a typed exclusion: the field-named text (design §10)
+        fields.extend(period);
         (ErrorKind::Validation, message)
     } else if code == SqlState::CHECK_VIOLATION
         || code == SqlState::UNIQUE_VIOLATION
@@ -133,7 +139,7 @@ pub(crate) fn map_pg_error(registry: &Registry, err: tokio_postgres::Error) -> E
         }
         (ErrorKind::Database, db.message().to_owned())
     };
-    let error = Error::database(kind, state, message, err);
+    let error = Error::database(kind, state, message, err).with_fields(fields);
     // integrity violations name their constraint (callers match on it, never on the text)
     match violated {
         Some(c) if code.code().starts_with("23") => error.with_constraint(&c),

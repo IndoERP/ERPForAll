@@ -1070,6 +1070,7 @@ async fn test_required_translated_field() {
         "error message: {}",
         err.message()
     );
+    assert_eq!(err.fields(), ["title"]);
 
     // 3. Writing an empty string in non-en_US language with en_US present is allowed
     let mut w = ValueMap::new();

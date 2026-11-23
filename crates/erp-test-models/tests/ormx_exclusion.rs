@@ -221,6 +221,8 @@ async fn spec_ormx_017_empty_or_inverted_periods_are_refused() {
         });
         assert_eq!(err.kind(), ErrorKind::Validation);
         assert_eq!(err.message(), expected);
+        // a client shows the refusal on both ends of the period
+        assert_eq!(err.fields(), ["start", "stop"]);
     }
     drop(tx);
 
@@ -341,6 +343,7 @@ async fn uncached_period_end_is_refused_by_the_check_at_flush() {
         period_message(booking, "start", "stop", "be before")
     );
     assert_eq!(err.sqlstate(), Some("23514"));
+    assert_eq!(err.fields(), ["start", "stop"]);
     drop(tx);
     drop(registry);
     h.cleanup().await.unwrap();

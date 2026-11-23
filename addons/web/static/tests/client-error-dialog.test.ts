@@ -64,3 +64,29 @@ test("an error without a server id shows no Error ID line", () => {
   controller.show(new Error("Renderer failed"));
   expect(document.querySelector(".error-request-id")).toBeNull();
 });
+
+test("an ordinary validation refusal shows its message without the Error ID or technical details", () => {
+  controller.show(new ClientError("validation", "The end date must follow the start date.", 422,
+    { endpoint: "/erp/json/2/test.note/web_save", status: 422, name: "erp.exceptions.ValidationError", requestId: "0b8f2c1e-1d2a-4b3c-8d4e-5f6a7b8c9d0e" }));
+  const dialog = document.querySelector<HTMLDialogElement>("dialog")!;
+  expect(dialog.querySelector("h2")?.textContent).toBe("The change was not accepted");
+  expect(dialog.querySelector("#client-error-message")?.textContent).toBe("The end date must follow the start date.");
+  expect(dialog.querySelector("details")).toBeNull();
+  expect(dialog.textContent).not.toContain("Error ID");
+  expect(dialog.textContent).not.toContain("0b8f2c1e");
+});
+
+test("a user error is ordinary too, but a server failure, a debug grant or an access refusal keep the technical dialog", () => {
+  controller.show(new ClientError("validation", "Confirm the order first.", 422, { endpoint: "/erp/json/2/x/y", status: 422, name: "erp.exceptions.UserError" }));
+  expect(document.querySelector("dialog details")).toBeNull();
+  controller.dispose();
+  for (const error of [
+    new ClientError("server", "Internal server error", 500, { endpoint: "/erp/json/2/x/y", status: 500, name: "erp.exceptions.ValidationError", requestId: "0b8f2c1e-1d2a-4b3c-8d4e-5f6a7b8c9d0e" }),
+    new ClientError("validation", "Bad value", 422, { endpoint: "/erp/json/2/x/y", status: 422, name: "erp.exceptions.ValidationError", debug: "trace" }),
+    new ClientError("permission", "No access", 403, { endpoint: "/erp/json/2/x/y", status: 403, name: "erp.exceptions.AccessError" }),
+  ]) {
+    controller.show(error);
+    expect(document.querySelector("dialog details")).not.toBeNull();
+    controller.dispose();
+  }
+});

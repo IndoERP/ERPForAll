@@ -87,6 +87,31 @@ test("only a validation refusal that names a displayed field is handled; everyth
   surface.dispose();
 });
 
+test("a refusal whose error context names fields is shown on those fields with the server's message", () => {
+  const { form, surface, notify } = formWithTabs();
+  const refused = new ClientError("validation", "The reference and the memo do not match.", 422, undefined, ["memo", "ref"]);
+  expect(surface.flagServerError(refused)).toBe(true);
+  for (const name of ["memo", "ref"]) {
+    const shell = form.querySelector(`input[name=${name}]`)!.closest(".field-shell")!;
+    expect(shell.classList.contains("field-invalid")).toBe(true);
+    expect(shell.querySelector(".field-error")?.textContent).toBe("The reference and the memo do not match.");
+  }
+  expect(form.querySelector("input[name=name]")!.closest(".field-shell")!.classList.contains("field-invalid")).toBe(false);
+  expect(notify).toHaveBeenCalledExactlyOnceWith("2 fields need attention");
+  surface.dispose();
+});
+
+test("named fields take precedence over a field name in the message, and fields the form does not show are not flagged", () => {
+  const { form, surface } = formWithTabs();
+  expect(surface.flagServerError(new ClientError("validation", "Field 'name' looks odd.", 422, undefined, ["memo"]))).toBe(true);
+  expect(form.querySelector("input[name=name]")!.closest(".field-shell")!.classList.contains("field-invalid")).toBe(false);
+  expect(form.querySelector("input[name=memo]")!.closest(".field-shell")!.classList.contains("field-invalid")).toBe(true);
+  surface.dispose();
+  const other = formWithTabs();
+  expect(other.surface.flagServerError(new ClientError("validation", "Not shown here.", 422, undefined, ["hidden_field"]))).toBe(false);
+  other.surface.dispose();
+});
+
 const email: Field & { widget: string } = { name: "email", label: "Email", kind: "char", readonly: false, required: false, relation: null, relationField: null, selection: null, widget: "email" };
 test("Open Email is an icon link in the field's own row, named for assistive technology", () => {
   const handle = createFieldControl({ field: email, value: "a@b.test", rpc: new RpcClient(async () => new Response("{}"), () => {}), context: {}, change: () => {}, run: () => {} });

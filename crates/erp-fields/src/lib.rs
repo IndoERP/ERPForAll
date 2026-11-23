@@ -38,7 +38,7 @@ pub use cell::{
     Blob, Cell, FieldTranslations, FieldValue, IntoFieldValue, RealId, RecId, RefType, ValueFor,
     kinds,
 };
-pub use error::{Condition, Error, ErrorKind, Result};
+pub use error::{Condition, Error, ErrorKind, FIELDS_KEY, Result};
 pub use label::default_label;
 #[cfg(feature = "pg")]
 pub use pg::{RangeSql, StoredRange};

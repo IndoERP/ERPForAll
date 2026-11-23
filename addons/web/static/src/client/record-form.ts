@@ -511,7 +511,8 @@ export class RecordForm {
   /** A save the server refused for naming fields (`Missing required field 'name'`) is shown on those fields, not in a dialog. */
   flagServerError(error: unknown): boolean {
     if (this.dead || !(error instanceof ClientError) || error.kind !== "validation" || error.status < 400 || error.status >= 500) return false;
-    const names = new Set([...error.message.matchAll(/\bfields? '([a-z_][a-z0-9_]*)'/g)].map(match => match[1]));
+    // The server names the fields in the error context; an older message names them in its text.
+    const names = new Set(error.fields.length ? error.fields : [...error.message.matchAll(/\bfields? '([a-z_][a-z0-9_]*)'/g)].map(match => match[1]));
     const found: { root: HTMLElement; focus(): void; missing: boolean }[] = [];
     const missing = /\brequired\b/i.test(error.message);
     for (const item of this.validators) {

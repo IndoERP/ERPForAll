@@ -3,6 +3,14 @@ import { button, el, errorMessage } from "./dom.js";
 import type { DialogHandle, DialogService } from "./dialog-service.js";
 import { ClientError } from "./transport.js";
 
+/** The server's ordinary refusals: a validation or user error, answered below 500, whose message is meant for the user.
+ *  When the server granted debug details (an administrator in debug mode), the full dialog is kept. */
+const ORDINARY_REFUSALS = new Set(["erp.exceptions.ValidationError", "erp.exceptions.UserError"]);
+export function ordinaryRefusal(error: unknown): boolean {
+  return error instanceof ClientError && error.kind === "validation" && error.status >= 400 && error.status < 500
+    && ORDINARY_REFUSALS.has(error.diagnostics?.name ?? "") && !error.diagnostics?.debug;
+}
+
 /** One bounded modal per application. Diagnostics contain no request arguments or raw bodies. */
 export class ErrorDialog {
   private modal: DialogHandle | undefined;
@@ -27,6 +35,15 @@ export class ErrorDialog {
     dialog.setAttribute("aria-labelledby", heading.id);
     dialog.setAttribute("aria-describedby", "client-error-message");
     const message = el("p", errorMessage(error).slice(0, 8192)); message.id = "client-error-message";
+    // An ordinary refusal (a validation or user error the server explains in its message) is the user's to fix: it gets the
+    // message only, without the Error ID and technical details an unexpected failure carries.
+    if (ordinaryRefusal(error)) {
+      const close = button("Close", () => this.dispose(), "primary"); close.setAttribute("data-error-close", "");
+      const repeated = el("p"); repeated.setAttribute("data-error-repeated", ""); repeated.setAttribute("role", "status");
+      heading.textContent = "The change was not accepted";
+      this.present(dialog, heading, el("div", undefined, "message-dialog-body"), [message, repeated], close);
+      return;
+    }
     const details = el("details"), summary = el("summary", "Technical details");
     const data = error instanceof ClientError ? error.diagnostics : undefined;
     const lines = [error instanceof Error ? error.name : "Application error", message.textContent ?? ""];
@@ -53,12 +70,15 @@ export class ErrorDialog {
     details.append(summary, trace, copy, copyStatus);
     const close = button("Close", () => this.dispose(), "primary"); close.setAttribute("data-error-close", "");
     const repeated = el("p"); repeated.setAttribute("data-error-repeated", ""); repeated.setAttribute("role", "status");
+    this.present(dialog, heading, el("div", undefined, "message-dialog-body"), [message, ...(reference ? [reference] : []), details, repeated], close);
+  }
+  /** The shared dialog anatomy (dialog-service.ts): header with the title and a close button, body, footer. */
+  private present(dialog: HTMLDialogElement, heading: HTMLElement, body: HTMLElement, content: HTMLElement[], close: HTMLButtonElement): void {
     const actions = el("div", undefined, "actions"); actions.append(close);
-    // The shared dialog anatomy (dialog-service.ts): header with the title and a close button, body, footer.
     const header = el("header", undefined, "message-dialog-header");
     const headerClose = button("×", () => this.dispose(), "message-dialog-close"); headerClose.setAttribute("aria-label", "Close");
     header.append(heading, headerClose);
-    const body = el("div", undefined, "message-dialog-body"); body.append(message, ...(reference ? [reference] : []), details, repeated);
+    body.append(...content);
     const footer = el("footer", undefined, "message-dialog-footer"); footer.append(actions);
     dialog.append(header, body, footer);
     dialog.addEventListener("cancel", event => { event.preventDefault(); this.dispose(); });

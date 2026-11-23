@@ -653,6 +653,7 @@ fn period_error(spec: &ModelSpec, from: &FieldSpec, to: &FieldSpec, bounds: Rang
         to.string,
         spec.description
     ))
+    .with_fields([from.name, to.name])
 }
 
 /// Refuse the rows about to be inserted whose period of a typed exclusion is empty or inverted
@@ -711,7 +712,10 @@ pub(crate) fn check_write(
 /// The message of a violated period check (`23514` on `constraint`), when `constraint` is the
 /// period check of an exclusion of `model`: the same field-named text as the check before the
 /// statement.
-pub(crate) fn period_check_message(model: &ModelSpec, constraint: &str) -> Option<String> {
+pub(crate) fn period_check_message(
+    model: &ModelSpec,
+    constraint: &str,
+) -> Option<(String, [&'static str; 2])> {
     model.table_objects.iter().find_map(|object| {
         let TableObjectKind::Exclusion(decl) = object.kind else {
             return None;
@@ -720,11 +724,12 @@ pub(crate) fn period_check_message(model: &ModelSpec, constraint: &str) -> Optio
             return None;
         }
         let (from, to) = (model.field(decl.period.0)?, model.field(decl.period.1)?);
-        Some(
+        Some((
             period_error(model, from, to, decl.bounds)
                 .message()
                 .to_owned(),
-        )
+            [from.name, to.name],
+        ))
     })
 }
 

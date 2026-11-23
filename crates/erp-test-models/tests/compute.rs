@@ -966,6 +966,8 @@ async fn comp_006_crud_017_019_constraints_on_create_and_after_recompute() {
     let err = tx.flush().await.unwrap_err();
     assert_eq!(err.kind(), ErrorKind::Validation);
     assert_eq!(err.message(), "upper may not be BAD");
+    // the refusal names the constrained field whose change ran the check (not `note`)
+    assert_eq!(err.fields(), ["upper"]);
     tx.rollback().await.unwrap();
     // new records never run constraints
     let model = tx.env().model::<Constrained>().unwrap();
