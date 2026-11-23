@@ -518,6 +518,57 @@ async fn test_rpc_load_malformed_rows_fail_loudly() {
     h.cleanup().await.unwrap();
 }
 
+/// `erp_impex_rights` answers the same export rule as `export_data` and the create and write
+/// rights `load` needs, without changing anything.
+#[tokio::test]
+async fn test_rpc_impex_rights_follow_the_export_group_and_model_rights() {
+    let h = impex_harness().await;
+    let rights = |uid| {
+        call(
+            &h,
+            "/json/2/export.integer/erp_impex_rights",
+            "{}",
+            user(uid),
+        )
+    };
+    // alice: every model right and the export group
+    assert_eq!(
+        ok(&rights(ALICE).await),
+        json!({"export": true, "import": true})
+    );
+    // admin: every model right and Access Administration, which export_data also accepts
+    assert_eq!(
+        ok(&rights(ADMIN).await),
+        json!({"export": true, "import": true})
+    );
+    // bob: read only, no export group
+    assert_eq!(
+        ok(&rights(BOB).await),
+        json!({"export": false, "import": false})
+    );
+    h.cleanup().await.unwrap();
+}
+
+/// An export group that is not defined is an error here as in `export_data`, never "allowed".
+#[tokio::test]
+async fn test_rpc_impex_rights_propagate_missing_group_errors() {
+    let h = impex_harness_with_groups(false).await;
+    let r = call(
+        &h,
+        "/json/2/export.integer/erp_impex_rights",
+        "{}",
+        user(ALICE),
+    )
+    .await;
+    assert_error(
+        &r,
+        500,
+        "erp.programming",
+        "FieldPolicy does not know the group 'base.group_allow_export' in 'base.group_allow_export,base.group_erp_manager'",
+    );
+    h.cleanup().await.unwrap();
+}
+
 /// Missing group definitions must never activate the old uid 2/4 export bypass.
 #[tokio::test]
 async fn test_rpc_export_propagates_missing_group_errors() {

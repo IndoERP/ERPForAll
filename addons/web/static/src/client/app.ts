@@ -55,6 +55,7 @@ import { type ServiceController } from "./services.js";
 import { clientActions, listHeaderExtensions, serviceControllers, type ClientActionHandle, type ListHeaderHandle } from "./registry.js";
 import { mountControlPanel } from "./control-panel.js";
 import { printDropdown, printRecords } from "./report-print.js";
+import { listDataMenu, MAX_EXPORT_RECORDS } from "./list-data-menu.js";
 import { requestLoading } from "./loading.js";
 import { actionResult } from "./actions.js";
 import { CompanySelector, type CompanyItem } from "./company-selector.js";
@@ -3166,6 +3167,27 @@ export class HumanApp {
     }
     // Beside the title, not before it: the summary appears without moving the title in every appearance.
     (breadcrumbs ?? controls).append(selectionBox);
+
+    // Import and Export beside New: the menu reads the caller's import and export rights when first opened.
+    const dataMenu = listDataMenu({
+      rpc: this.rpc, model: description.model, context, dialogs: this.messages.dialogs,
+      canImport: canCreate && view.canEdit !== false && !isFalsy(context["edit"]),
+      fields: view.fields.filter(field => !field.invisible && field.name !== "id" && !["one2many", "many2many", "binary", "json"].includes(field.kind)).map(field => ({ name: field.name, label: field.label })),
+      exportIds: async () => {
+        if (selectedIds.size) return Array.from(selectedIds);
+        const base = searchModel.getDomain();
+        const found = await this.rpc.call(description.model, "search", { domain: tabs ? tabs.rowDomain(base) : base, limit: MAX_EXPORT_RECORDS + 1, order, context });
+        if (!Array.isArray(found) || found.some(id => !Number.isSafeInteger(id))) throw new ClientError("server", "The server did not answer the search with record ids.");
+        if (found.length > MAX_EXPORT_RECORDS) throw new ClientError("validation", `More than ${MAX_EXPORT_RECORDS} records match. Narrow the search or select the records to export.`);
+        return found as number[];
+      },
+      imported: async () => { await load(true); },
+      notice: message => this.notice(message),
+      report: error => this.reportError(error),
+    });
+    controls.append(dataMenu.node);
+    const disposeSelectionMenu = disposeActionMenu;
+    disposeActionMenu = () => { disposeSelectionMenu(); dataMenu.dispose(); };
 
     const pager = el("div", undefined, "pager");
     const count = el("span", "", "pager-count muted");

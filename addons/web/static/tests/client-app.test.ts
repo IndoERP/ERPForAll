@@ -787,6 +787,31 @@ test("list view header and row selection with count and delete action", async ()
   expect(unlinkCalls[0]!.sort()).toEqual([5, 6]);
 });
 
+test("the list control row offers Import / Export and reads its rights only when opened", async () => {
+  history.replaceState(null, "", "/erp/action-20");
+  const paths: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+    paths.push(path);
+    const value = path.endsWith("erp_load_web_menus") ? { wire_major: 1, registry_version: "r1", roots: [10], nodes: [{ module: null, id: 10, parent_id: null, label: "Notes", action_id: 20, children: [], icon: null }] }
+      : (path.endsWith("erp_load_web_action") || path.endsWith("erp_load_web_action_views")) ? actionMetadata(path, { wire_major: 1, id: 20, name: "Notes", model: "test.note", target: "current", views: [{ id: 2, type: "list" }, { id: 1, type: "form" }], domain: null, context: null }, description)
+      : path.endsWith("get_views") ? description
+      : path.endsWith("web_search_read") ? { length: 1, records: [{ id: 5, name: "First note" }] }
+      : path.endsWith("erp_impex_rights") ? { export: true, import: true }
+      : [];
+    return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
+  }));
+  const root = host();
+  app = new HumanApp(root, bootstrap);
+  await app.start();
+  await vi.waitFor(() => expect(root.querySelector("table.list-table")).not.toBeNull());
+  const toggle = root.querySelector<HTMLButtonElement>("[data-control-actions] .list-data-toggle-btn")!;
+  expect(toggle.textContent).toBe("Import / Export");
+  expect(paths.some(path => path.endsWith("erp_impex_rights"))).toBe(false);
+  toggle.click();
+  await vi.waitFor(() => expect([...root.querySelectorAll(".list-data-menu button")].map(item => item.textContent)).toEqual(["Import records", "Export"]));
+  expect(paths.filter(path => path.endsWith("/test.note/erp_impex_rights"))).toHaveLength(1);
+});
+
 test("list columns settle synchronously on initial load and reload (no auto-layout frame)", async () => {
   history.replaceState(null, "", "/erp/action-20");
   const records = [{ id: 5, name: "Note A" }, { id: 6, name: "Note B" }];

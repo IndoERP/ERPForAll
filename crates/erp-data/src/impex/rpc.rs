@@ -1,11 +1,12 @@
-//! JSON-2 RPC exposure and argument binders for `load`, `export_data`, and `get_import_templates`.
+//! JSON-2 RPC exposure and argument binders for `load`, `export_data`, `get_import_templates` and
+//! `erp_impex_rights`.
 //!
 //! Contributes [`RpcImpl`] entries to [`erp_orm::rpc::RPC_IMPLS`] under model `"base"` and addon `"base"`.
 
 use erp_fields::{Error, Result, Value};
 use erp_orm::dispatch::BoxFuture;
 use erp_orm::rpc::{BindError, Effect, ParamSpec, Receiver, RpcArgs, RpcDecl, RpcImpl};
-use erp_orm::{Env, Records, Transaction};
+use erp_orm::{Env, Operation, Records, Transaction};
 
 use super::{ExportRights, MAX_ROWS};
 
@@ -65,6 +66,48 @@ fn bind_load<'a>(
         let field_refs: Vec<&str> = fields.iter().map(String::as_str).collect();
         let result = super::load_rows(&records, tx, &field_refs, rows).await?;
         Ok(result.to_value())
+    })
+}
+
+const IMPEX_RIGHTS_PARAMS: &[ParamSpec] = &[];
+
+#[erp_orm::linkme::distributed_slice(erp_orm::rpc::RPC_IMPLS)]
+#[linkme(crate = erp_orm::linkme)]
+static IMPEX_RIGHTS: RpcImpl = RpcImpl {
+    addon: "base",
+    model: "base",
+    method: "erp_impex_rights",
+    decl: RpcDecl::Expose {
+        effect: Effect::Read,
+        receiver: Receiver::Model,
+        params: IMPEX_RIGHTS_PARAMS,
+        bind: bind_impex_rights,
+    },
+    file: file!(),
+    line: line!(),
+};
+
+/// `{export, import}`: whether the caller may export the model's records (read them, and the
+/// export right `export_data` checks) and import them (`load` creates and updates, so create and
+/// write). A client asks before offering Import or Export; the methods still check on their own.
+/// A policy failure that is not a refusal (an export group that is not defined) is an error.
+fn bind_impex_rights<'a>(
+    tx: &'a mut Transaction,
+    records: Records,
+    _args: RpcArgs,
+) -> BoxFuture<'a, Result<Value, BindError>> {
+    Box::pin(async move {
+        let env = records.env().clone();
+        let export = records.has_access(tx, Operation::Read).await?
+            && (env.su() || RpcExportRights.may_export(tx, &env).await?);
+        let import = records.has_access(tx, Operation::Create).await?
+            && records.has_access(tx, Operation::Write).await?;
+        Ok(Value::Map(std::sync::Arc::new(erp_fields::ValueMap::from(
+            [
+                ("export".to_owned(), Value::Bool(export)),
+                ("import".to_owned(), Value::Bool(import)),
+            ],
+        ))))
     })
 }
 
