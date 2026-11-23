@@ -892,6 +892,7 @@ impl Output {
                 name: self.string(object, "name")?,
                 label: self.string(object, "label")?,
                 children: self.indices(object)?,
+                invisible: self.optional_expression(object, "invisible")?,
             },
             "separator" => wire::ViewNode::Separator {
                 label: self.string(object, "label")?,

@@ -977,6 +977,11 @@ pub enum ViewNode {
         label: String,
         /// Child arena indexes.
         children: Vec<u32>,
+        /// Per-record visibility: the page and its tab are hidden while this expression is true.
+        /// Absent means always shown (a static `invisible="1"` page is pruned before the wire).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "schema-gen", ts(optional))]
+        invisible: Option<WireDocument>,
     },
     /// Static section caption with no children.
     Separator {

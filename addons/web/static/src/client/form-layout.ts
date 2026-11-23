@@ -282,41 +282,48 @@ export function renderFormLayout(
       const tabsHost = parent === host || parent.classList.contains("form-sheet-layout") ? presentation?.notebookTabsHost : undefined;
       (tabsHost ?? notebook).append(tabs); parent.append(notebook);
       const id = `form-notebook-${++nextNotebook}`;
-      const pages: { tab: HTMLButtonElement; panel: HTMLElement }[] = [];
+      // `index` is the page's declared position: the remembered selection survives pages hiding and showing again.
+      const pages: { index: number; tab: HTMLButtonElement; panel: HTMLElement }[] = [];
       let refit: (() => void) | undefined;
       const activate = (index: number, focus = false): void => {
         selectedPages.set(node, index);
-        pages.forEach(({ tab, panel }, i) => {
-          const current = i === index; tab.setAttribute("aria-selected", String(current));
+        pages.forEach(({ index: declared, tab, panel }) => {
+          const current = declared === index; tab.setAttribute("aria-selected", String(current));
           tab.tabIndex = current ? 0 : -1; panel.hidden = !current;
         });
         refit?.();
-        if (focus) pages[index]?.tab.focus();
+        if (focus) pages.find(page => page.index === index)?.tab.focus();
       };
       node.children.forEach((page, index) => {
         // Metadata admission guarantees a notebook contains only pages.
         if (page.kind !== "page") throw new Error("Invalid notebook page structure.");
+        // A page hidden for this record has no tab and no panel.
+        if (page.hidden) return;
         const panel = el("div", undefined, "form-tab-panel");
         panel.id = `${id}-panel-${index}`; panel.setAttribute("role", "tabpanel"); panel.tabIndex = 0;
         const tab = button(page.label, () => activate(index), "form-tab");
         tab.id = `${id}-tab-${index}`; tab.setAttribute("role", "tab"); tab.setAttribute("aria-controls", panel.id);
         panel.setAttribute("aria-labelledby", tab.id);
         tab.addEventListener("keydown", event => {
+          const position = pages.findIndex(entry => entry.index === index);
           let next: number;
           if (event.key === "Home") next = 0;
           else if (event.key === "End") next = pages.length - 1;
-          else if (event.key === "ArrowRight") next = (index + 1) % pages.length;
-          else if (event.key === "ArrowLeft") next = (index + pages.length - 1) % pages.length;
+          else if (event.key === "ArrowRight") next = (position + 1) % pages.length;
+          else if (event.key === "ArrowLeft") next = (position + pages.length - 1) % pages.length;
           else return;
-          event.preventDefault(); activate(next, true);
+          event.preventDefault(); activate(pages[next]!.index, true);
         });
-        pages.push({ tab, panel }); tabs.append(tab); notebook.append(panel);
+        pages.push({ index, tab, panel }); tabs.append(tab); notebook.append(panel);
         revealers.set(panel, () => activate(index));
         page.children.forEach(child => render(child, panel, 2));
       });
+      if (!pages.length) { tabs.remove(); notebook.remove(); return; }
+      // The remembered page when it is shown for this record; else the nearest shown page before it, else the first.
       const selected = selectedPages.get(node) ?? 0;
-      if (pages.length) activate(Math.min(selected, pages.length - 1));
-      if (pages.length > 2) { const overflow = overflowTabs(tabs, pages, index => activate(index, true)); refit = overflow.fit; stops.push(overflow.dispose); }
+      const shown = pages.find(page => page.index === selected) ?? [...pages].reverse().find(page => page.index < selected) ?? pages[0]!;
+      activate(shown.index);
+      if (pages.length > 2) { const overflow = overflowTabs(tabs, pages, position => activate(pages[position]!.index, true)); refit = overflow.fit; stops.push(overflow.dispose); }
       return;
     }
     throw new Error(`Unexpected record form node: ${node.kind}.`);

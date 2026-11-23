@@ -325,6 +325,7 @@ static PAGE_NODE: SchemaNode = SchemaNode::Object(&[
     SchemaProperty::required("name", &SHORT),
     SchemaProperty::required("label", &LABEL),
     SchemaProperty::required("children", &CHILDREN),
+    SchemaProperty::optional("invisible", &VALUE_EXPR),
 ]);
 static SEPARATOR_NODE: SchemaNode =
     SchemaNode::Object(&[SchemaProperty::required("label", &LABEL)]);

@@ -2332,6 +2332,7 @@ fn layout_node(node: &erp_sdk::views::NodeRef<'_>) -> Result<wire::ViewNode> {
                     label
                 },
                 children,
+                invisible: None,
             }
         }
         "separator" => wire::ViewNode::Separator { label },

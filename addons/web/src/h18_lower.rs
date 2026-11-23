@@ -1003,6 +1003,15 @@ fn classify<'a, N: Node<'a>>(
         ))),
     }
 }
+/// A page's static `invisible`: `Some(true)` or `Some(false)` for the boolean spellings and for no
+/// attribute (`Some(false)`), `None` for an expression evaluated per record by the client.
+fn page_invisible<'a>(node: impl Node<'a>) -> Option<bool> {
+    match node.attr("invisible") {
+        None | Some("0" | "false" | "False") => Some(false),
+        Some("1" | "true" | "True") => Some(true),
+        Some(_) => None,
+    }
+}
 fn page_name<'a>(node: impl Node<'a>) -> ViewResult<&'a str> {
     node.attr("name")
         .filter(|value| !value.trim().is_empty())
@@ -1556,7 +1565,13 @@ fn plan<'a, N: Node<'a>>(
         if kind == "searchpanel" {
             return Ok(());
         } // the authorized host panel service attaches the panel after callback construction
-        if kind != "field"
+        if kind == "page" {
+            // A page may hide per record (an expression lowered with the page); only a static
+            // `invisible="1"` page is pruned here.
+            if page_invisible(node) == Some(true) {
+                return Ok(());
+            }
+        } else if kind != "field"
             && kind != "calendar_field"
             && kind != "button"
             && kind != "stat_button"
@@ -2171,6 +2186,13 @@ fn build_entry<'a, N: Node<'a>>(
                         value.text(if label.trim().is_empty() { name } else { label })
                     })?;
                     set_children(object, plan, index)?;
+                    if let (None, Some(source)) = (page_invisible(node), node.attr("invisible")) {
+                        object.set("invisible", |value| {
+                            source_expression(source, value, |expr| {
+                                invisible_expression(expr, "Page", name, plan)
+                            })
+                        })?;
+                    }
                 }
                 "separator" => object.set("label", |value| value.text(label))?,
                 "field" => {
@@ -2714,45 +2736,58 @@ fn button_expression<'a, N: Node<'a>>(
     method: &str,
     plan: &Plan<N>,
 ) -> ViewResult<()> {
+    invisible_expression(expr, "Button", method, plan)
+}
+
+/// An `invisible` expression of a button or a page reads only fields this view shows (the client
+/// evaluates it on the record's values) through names, literals, comparisons, not/and/or,
+/// arithmetic and conditionals.
+fn invisible_expression<'a, N: Node<'a>>(
+    expr: &erp_sdk::expr::Expr,
+    owner: &str,
+    name: &str,
+    plan: &Plan<N>,
+) -> ViewResult<()> {
     use erp_sdk::expr::Expr;
+    let walk = |expr: &Expr| invisible_expression(expr, owner, name, plan);
     match expr {
         Expr::Literal(_) => {}
-        Expr::Name(name) => {
+        Expr::Name(field) => {
             if !plan.entries.iter().any(|entry| {
-                entry.kind == "field" && entry.node.attr("name") == Some(name.as_str())
+                entry.kind == "field" && entry.node.attr("name") == Some(field.as_str())
             }) {
                 return Err(layout_error(format!(
-                    "Button '{method}' invisible expression uses '{name}', which is not a field shown by this view."
+                    "{owner} '{name}' invisible expression uses '{field}', which is not a field shown by this view."
                 )));
             }
         }
-        Expr::Unary { operand, .. } => button_expression(operand, method, plan)?,
+        Expr::Unary { operand, .. } => walk(operand)?,
         Expr::Binary { left, right, .. } => {
-            button_expression(left, method, plan)?;
-            button_expression(right, method, plan)?;
+            walk(left)?;
+            walk(right)?;
         }
         Expr::BoolOp { values, .. } | Expr::List(values) | Expr::Tuple(values) => {
             for value in values {
-                button_expression(value, method, plan)?;
+                walk(value)?;
             }
         }
         Expr::Compare {
             left, comparators, ..
         } => {
-            button_expression(left, method, plan)?;
+            walk(left)?;
             for value in comparators {
-                button_expression(value, method, plan)?;
+                walk(value)?;
             }
         }
         Expr::IfExp { test, body, orelse } => {
             for part in [test, body, orelse] {
-                button_expression(part, method, plan)?;
+                walk(part)?;
             }
         }
         _ => {
-            return Err(layout_error(
-                "Button invisible expressions support names, literals, comparisons, not/and/or, arithmetic and conditionals only.",
-            ));
+            return Err(layout_error(format!(
+                "{owner} invisible expressions support names, literals, comparisons, not/and/or, arithmetic and conditionals only.",
+            )));
         }
     }
     Ok(())
@@ -4331,6 +4366,53 @@ mod tests {
         ] {
             let xml = format!(
                 "<form><header><button name=\"confirm\" type=\"object\" string=\"Confirm\" invisible=\"{source}\"/></header><field name=\"count\"/></form>"
+            );
+            let error = fixture(&xml, "form").unwrap_err();
+            assert!(matches!(error, ViewError::InvalidDescription(_)));
+            assert_eq!(error.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn builtin_h18_page_invisible_expression_lowers_per_record() {
+        let value = fixture(
+            "<form><field name=\"count\"/><notebook><page name=\"main\" string=\"Main\"><field name=\"name\"/></page><page name=\"more\" string=\"More\" invisible=\"count &lt; 1\"><field name=\"state\"/></page><page name=\"shown\" invisible=\"0\"><field name=\"state\"/></page><page name=\"gone\" invisible=\"1\"><field name=\"state\"/></page></notebook></form>",
+            "form",
+        )
+        .unwrap();
+        let pages: Vec<&Value> = value["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|node| node["kind"] == "page")
+            .collect();
+        // the static invisible page is pruned; the static visible one carries no expression
+        assert_eq!(
+            pages
+                .iter()
+                .map(|page| page["name"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["main", "more", "shown"]
+        );
+        assert!(pages[0].get("invisible").is_none());
+        assert_eq!(pages[1]["invisible"]["schema"], 1);
+        assert!(pages[2].get("invisible").is_none());
+    }
+
+    #[test]
+    fn builtin_h18_page_invisible_reads_only_shown_fields_and_plain_expressions() {
+        for (source, expected) in [
+            (
+                "name == 'x'",
+                "Page 'more' invisible expression uses 'name', which is not a field shown by this view. Unsupported form layout requires a later release.",
+            ),
+            (
+                "check(count)",
+                "Page invisible expressions support names, literals, comparisons, not/and/or, arithmetic and conditionals only. Unsupported form layout requires a later release.",
+            ),
+        ] {
+            let xml = format!(
+                "<form><field name=\"count\"/><notebook><page name=\"more\" invisible=\"{source}\"><field name=\"state\"/></page></notebook></form>"
             );
             let error = fixture(&xml, "form").unwrap_err();
             assert!(matches!(error, ViewError::InvalidDescription(_)));

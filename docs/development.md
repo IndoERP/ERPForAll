@@ -115,6 +115,13 @@ read-only and cannot declare read mode. A field widget of the record form receiv
 `onRecordEvent(listener)`, which returns an unsubscribe function and reports `saved` (with the record id),
 `saveFailed`, `discarded` and `modeChanged` after the form has shown the outcome; subscriptions end with the widget.
 
+A notebook `<page>` may hide per record: `<page name="history" string="History" invisible="state == 'draft'">`. The
+expression reads fields this view shows (names, literals, comparisons, `not`/`and`/`or`, arithmetic and conditionals,
+as for button `invisible`), and the client evaluates it on the record's current values: while it is true the page has
+no tab and its content is not rendered, and a selected page that hides gives way to the nearest shown page before it.
+`invisible="1"` still removes the page from the description. A page is not a security boundary: use `groups` to keep
+its fields from users who may not read them.
+
 ## The web client
 
 The client is TypeScript, compiled ahead of time:

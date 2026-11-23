@@ -829,7 +829,12 @@ label: string,
 /**
  * Child arena indexes.
  */
-children: Array<number>, } | { "kind": "separator",
+children: Array<number>,
+/**
+ * Per-record visibility: the page and its tab are hidden while this expression is true.
+ * Absent means always shown (a static `invisible="1"` page is pruned before the wire).
+ */
+invisible?: WireDocument, } | { "kind": "separator",
 /**
  * Display caption.
  */

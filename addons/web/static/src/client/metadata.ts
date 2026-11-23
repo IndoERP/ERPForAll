@@ -89,7 +89,7 @@ export type Node = { kind: "field"; field: Field; label: string; widget: string 
   | {kind: "notification_alert"}
   | ChatterNode
   | { kind: "notebook"; children: Node[] }
-  | { kind: "page"; name: string; label: string; children: Node[] }
+  | PageNode
   | { kind: "separator"; label: string }
   | SearchFieldNode | SearchFilterNode | SearchSeparatorNode | SearchGroupNode
   | PivotNode | PivotFieldNode | CalendarNode | CalendarFieldNode | GraphNode | GraphFieldNode | { kind: "dashboard"; config: DashboardConfig }
@@ -119,6 +119,9 @@ export interface GraphNode { kind: "graph"; children: Node[]; mode: "bar" | "lin
 /** One field of a graph: a grouping (the axis, then the series) or a measure. */
 export interface GraphFieldNode { kind: "graph_field"; field: Field; label: string; role: "group" | "measure"; interval: string | null }
 /** Search field filter occurrence. */
+/** A notebook page. `invisible` hides it per record (evaluated on the record's values); `hidden` is that outcome on an
+ *  effective node (field-modifiers.ts), absent on a declared one. */
+export interface PageNode { kind: "page"; name: string; label: string; children: Node[]; invisible: ValidatedAst | null; hidden?: boolean }
 export interface SearchFieldNode { kind: "search_field"; field: Field; label: string; filterDomain: ValidatedAst | null; operator: string | null }
 /** Predefined search filter or group-by filter. */
 export interface SearchFilterNode { kind: "search_filter"; name: string; label: string; domain: ValidatedAst | null; context: ValidatedAst | null }
@@ -329,7 +332,7 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
       else if (kind === "sheet" || kind === "header" || kind === "footer" || kind === "aside" || kind === "title" || kind === "notebook" || kind === "button_box") closed(node, ["kind", "children"], "view node");
       else if (kind === "heading") closed(node, ["kind", "level", "children"], "view node");
       else if (kind === "group") closed(node, ["kind", "label", "columns", "colspan", "children"], "view node");
-      else if (kind === "page") closed(node, ["kind", "name", "label", "children"], "view node");
+      else if (kind === "page") closed(node, ["kind", "name", "label", "children", ...(Object.hasOwn(node, "invisible") ? ["invisible"] : [])], "view node");
       else if (kind === "separator") closed(node, ["kind", "label"], "view node");
       else if (kind === "pivot") closed(node, ["kind", "children", "disable_linking", "display_quantity", ...(Object.hasOwn(node, "default_order") ? ["default_order"] : [])], "view node");
       else if (kind === "pivot_field") closed(node, ["kind", "field", "label", "role", ...(Object.hasOwn(node, "interval") ? ["interval"] : [])], "view node");
@@ -641,7 +644,8 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
       if (kind === "page") {
         const name = text(node["name"], "page name"), label = text(node["label"], "page label");
         if (!name.trim() || !label.trim()) throw new ClientError("server", "Notebook pages require a name and label.");
-        return { kind, name, label, children };
+        const invisible = Object.hasOwn(node, "invisible") ? decodeAst(parseBoundedJson(JSON.stringify(node["invisible"]))) : null;
+        return { kind, name, label, children, invisible };
       }
       if (kind === "notebook") {
         const names = children.map(child => child.kind === "page" ? child.name : "");
