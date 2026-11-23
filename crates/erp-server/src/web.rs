@@ -1895,9 +1895,23 @@ impl WebApp {
                 "The user has no allowed company",
             ));
         }
+        let active: Vec<i64> = env
+            .companies()
+            .map_err(auth_error)?
+            .iter()
+            .map(|id| id.get())
+            .collect();
+        // The read check covers the active companies only. Company rules (for `res.company`
+        // itself, `[('id', 'in', company_ids)]`) bind `company_ids` to the active companies, so
+        // an allowed company the user did not tick is not readable through the ORM, and checking
+        // it here refused the whole shell to every non-administrator who ticked fewer companies
+        // than allowed. The switcher still lists every allowed company: its ids and names come
+        // from the subject's resolved company set (`ids`, the server's own list, never the
+        // address), and they are the companies this user may switch to anyway. Ordinary reads
+        // keep the active-company rules.
         env.records("res.company")
             .map_err(auth_error)?
-            .browse(ids.iter().copied())
+            .browse(active.iter().copied())
             .map_err(auth_error)?
             .check_access(tx, erp_orm::Operation::Read)
             .await
@@ -1940,12 +1954,6 @@ impl WebApp {
         })?;
         let grouping: String = language.try_get(2).map_err(|_| internal())?;
         let grouping: Vec<u8> = serde_json::from_str(&grouping).map_err(|_| internal())?;
-        let active: Vec<i64> = env
-            .companies()
-            .map_err(auth_error)?
-            .iter()
-            .map(|id| id.get())
-            .collect();
         let current = env.company_id().map_err(auth_error)?.ok_or_else(internal)?;
         let attachment_limits = match &self.attachment_policy {
             Some(provider) => Some(provider.load(tx).await.map_err(auth_error)?),

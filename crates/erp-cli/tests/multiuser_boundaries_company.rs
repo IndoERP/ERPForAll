@@ -247,3 +247,80 @@ fn a_write_capable_manager_cannot_move_records_outside_allowed_companies() {
         assert_eq!(row["fixed_price"].as_f64(), Some(12.0));
     });
 }
+
+/// A user allowed in two companies who ticks one gets the shell, and the switcher still offers
+/// both; the ticked selection keeps narrowing ordinary reads, `res.company` included.
+#[test]
+fn shell_opens_with_fewer_active_companies_than_allowed_without_widening_reads() {
+    run(|f| {
+        let s = Categories::seed(f);
+        let a = f.user(Subject::A).company;
+        let b = f.user(Subject::B).company;
+        let user = multi_user(f);
+        for (active, other) in [(a, b), (b, a)] {
+            let reply = user.page_on(f.native.port, &format!("/erp?cids={active}"));
+            assert_eq!(
+                reply.status, 200,
+                "shell refused with one of two companies ticked"
+            );
+            let bootstrap = native_http::embedded(&reply, "erp-bootstrap");
+            assert_eq!(bootstrap["current_company_id"], active);
+            assert_eq!(bootstrap["active_company_ids"], json!([active]));
+            let mut allowed = ids(&bootstrap["allowed_company_ids"]);
+            allowed.sort_unstable();
+            let mut expected = vec![a, b];
+            expected.sort_unstable();
+            assert_eq!(allowed, expected);
+            let mut listed: Vec<i64> = bootstrap["companies"]
+                .as_array()
+                .expect("switcher companies")
+                .iter()
+                .map(|company| company["id"].as_i64().expect("company id"))
+                .collect();
+            listed.sort_unstable();
+            assert_eq!(listed, expected, "the switcher lists every allowed company");
+
+            // Ordinary reads stay on the ticked company.
+            let context = json!({"allowed_company_ids":[active]});
+            let own = if active == a { s.own } else { s.foreign };
+            let rows = success(&user.rpc_on(
+                f.native.port,
+                CATEGORY,
+                "search",
+                json!({"domain":[["id","in",s.ids()]],"context":context,"order":"id"}),
+            ));
+            let mut expected_rows = vec![own, s.shared];
+            expected_rows.sort_unstable();
+            assert_eq!(ids(&rows), expected_rows);
+            let companies = success(&user.rpc_on(
+                f.native.port,
+                "res.company",
+                "search",
+                json!({"domain":[["id","in",[a,b]]],"context":context}),
+            ));
+            assert_eq!(
+                ids(&companies),
+                vec![active],
+                "res.company reads are not widened"
+            );
+            let unticked = user.rpc_on(
+                f.native.port,
+                "res.company",
+                "read",
+                json!({"ids":[other],"fields":["name"],"context":context}),
+            );
+            assert_eq!(
+                unticked.status, 403,
+                "an unticked company is not readable (body redacted)"
+            );
+            let body: serde_json::Value = serde_json::from_str(&unticked.body).expect("error JSON");
+            assert_eq!(body["name"], ACCESS);
+        }
+        // A company the user is not in stays refused in the address.
+        let admin_only = relation_id(
+            &admin_read(f, "res.users", f.user(Subject::Admin).id, &["company_id"])["company_id"],
+        );
+        let refused = user.page_on(f.native.port, &format!("/erp?cids={admin_only}"));
+        assert_eq!(refused.status, 403, "an address cannot add a company");
+    });
+}

@@ -69,6 +69,10 @@ impl User {
             &body.to_string(),
         )
     }
+    /// `GET path` (a shell address such as `/erp?cids=1`) with this real session. No cookie getter.
+    pub fn page_on(&self, port: u16, path: &str) -> Reply {
+        native_http::request(port, "GET", path, &[("cookie", &self.cookies)], "")
+    }
 }
 
 /// Borrowed owner keeps the provisioning session separate from every acceptance subject.
