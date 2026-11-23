@@ -836,10 +836,8 @@ async fn spec_prefs_home_action_is_the_users_own_choice_and_clears_with_its_acti
         .web_read(&mut tx, erp_orm::Spec::new().field("action_id"))
         .await
         .unwrap();
-    let Value::Map(row) = &read[0] else {
-        panic!("web_read answers one map per record, got {read:?}");
-    };
-    assert_eq!(row.get("action_id"), Some(&Value::Int(action)));
+    let row = read[0].dict().unwrap();
+    assert_eq!(row.get("action_id").unwrap(), Value::Int(action));
     // nobody else's home action is within reach
     let foreign = users.browse([f.other]).unwrap();
     let err = foreign
@@ -917,7 +915,8 @@ async fn assert_refused_write(f: &Fixture, vals: &BTreeMap<String, Value>, messa
 
 /// The fields a user outside `base.group_system` may write on their own `res.users` record,
 /// sorted. `mail` adds `notification_type`; this database has `base` only.
-const SELF_WRITEABLE: [&str; 7] = [
+const SELF_WRITEABLE: [&str; 8] = [
+    "action_id",
     "color_scheme",
     "company_id",
     "email",
@@ -978,6 +977,9 @@ async fn spec_prefs_017_the_self_write_set_is_exactly_the_user_writeable_fields(
             "tz" => s("Asia/Jakarta"),
             "color_scheme" => s("dark"),
             "company_id" => Value::Int(company),
+            // no home action: a valid value without creating an action (the home action test
+            // writes a real one)
+            "action_id" => Value::False,
             other => panic!("no sample value for the user_writeable field {other}"),
         };
         vals.insert(field.to_owned(), value);
