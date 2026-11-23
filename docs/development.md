@@ -111,6 +111,14 @@ The client is TypeScript, compiled ahead of time:
 - XML templates are compiled by `erp-ui-compile` and bundled by `web/scripts/build-human-ui.mjs`, as shown in the
   installation guide.
 
+When the server refuses the window action an address names (403, for example a bookmark to an app the user may no
+longer open), the shell keeps its header and menus and shows "You do not have access to this page." with a "Go to
+home" button; the address becomes the home address with the same companies, so Back does not return to the refusal.
+Nothing the server said about the action is shown. Other failures still open the error dialog. An addon may replace
+the body of that page (at most one page is registered) with `registerRefusedActionPage(key, { create(env) })` from
+`public.ts`: `env` has `rpc` and `navigate(route)`, never the refused action; `create` returns
+`{ element, dispose }`, and a `create` that throws is reported and the fixed page is shown instead.
+
 Checks (after `eval "$(scripts/web-toolchain.sh env)"` and `pnpm --dir web install --frozen-lockfile`):
 
 ```sh

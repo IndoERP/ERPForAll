@@ -536,6 +536,8 @@ tbody tr:hover { background: var(--hover); }
 td button.link { border: 0; background: transparent; color: var(--accent); padding: 0; text-align: left; white-space: normal; }
 .empty-state { text-align: center; padding: 48px 24px; color: var(--muted); }
 .empty-state h2 { color: var(--text); font-size: 20px; font-weight: 500; }
+.refused-action { text-align: center; padding: 48px 24px; color: var(--muted); }
+.refused-action-text { color: var(--text); font-size: 18px; margin: 0 0 16px; }
 .action-help-text { margin-top: 8px; font-size: 13px; color: var(--muted); }
 
 .list-table { --list-cell-x: 12px; width: 100%; table-layout: fixed; border-collapse: separate; border-spacing: 0; text-align: left; font-size: 14px; line-height: 22px; }

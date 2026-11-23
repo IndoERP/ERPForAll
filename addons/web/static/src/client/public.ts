@@ -7,6 +7,8 @@ export {
   registerUserMenuItem, registerDebugSection, registerDebugItemProvider
 } from "./registry.js";
 export type { FieldWidgetProps, WidgetEnvironment, WidgetHandle, WidgetDraft, FieldWidget, ServiceEnvironment, ServiceFactory, ClientActionDescriptor, ClientActionEnvironment, ClientActionHandle, ClientActionFactory } from "./registry.js";
+export { registerRefusedActionPage } from "./refused-action.js";
+export type { RefusedActionPage, RefusedActionEnvironment, RefusedActionHandle } from "./refused-action.js";
 export type { CogMenuItem, CogMenuItemEnvironment } from "./cog-menu.js";
 export { prepareCogMenu, renderCogMenu, getPrintItemAriaLabel } from "./cog-menu.js";
 export type { SystrayItem, SystrayEnvironment, SystrayHandle } from "./systray.js";

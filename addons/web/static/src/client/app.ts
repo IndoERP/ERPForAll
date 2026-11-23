@@ -55,6 +55,7 @@ import { clientActions, serviceControllers, type ClientActionHandle } from "./re
 import { mountControlPanel } from "./control-panel.js";
 import { printDropdown, printRecords } from "./report-print.js";
 import { requestLoading } from "./loading.js";
+import { RefusedAction, isActionRefusal, mountRefusedActionPage } from "./refused-action.js";
 import { actionResult } from "./actions.js";
 import { CompanySelector, type CompanyItem } from "./company-selector.js";
 import { reorderApps } from "./reorder-apps.js";
@@ -2039,7 +2040,7 @@ export class HumanApp {
         if (entry && entry.origin.action !== route.action) throw new ClientError("validation", "Related action does not belong to this route.");
         const action: Record<string, unknown> = entry
           ? { ...entry.result, wire_major: 1, target: "current", id: rpcId(route.action) }
-          : await this.windowAction(actionId);
+          : await this.windowAction(actionId).catch((error: unknown) => { throw isActionRefusal(error) ? new RefusedAction() : error; });
         if (action["wire_major"] !== 1 || action["target"] !== "current" || action["id"] !== rpcId(route.action)) {
           throw new ClientError("unsupported", "Unsupported or mismatched window action.");
         }
@@ -2183,6 +2184,11 @@ export class HumanApp {
       this.content.focus({ preventScroll: true });
       documentScroller().scrollTop = 0;
       nextRestore?.();
+    } catch (error) {
+      if (!(error instanceof RefusedAction)) throw error;
+      if (generation !== this.generation || this.expired) return;
+      this.showRefusedAction(route, initial, fromHistory);
+      committed = true;
     } finally {
       for (const dispose of stagedDisposers) dispose();
       if (!committed && generation === this.generation) {
@@ -2195,6 +2201,38 @@ export class HumanApp {
       if (this.navigationInFlight === inFlight) this.navigationInFlight = undefined;
       settle();
     }
+  }
+
+  /**
+   * Commit the refused-action page in place of the previous content: the shell stays, no menu entry is current, and the
+   * address becomes the home route (same companies), replacing a first load or a history step so Back does not return to
+   * the refusal. Nothing the server said about the action is shown.
+   */
+  private showRefusedAction(route: Route, initial: boolean, fromHistory: boolean): void {
+    const home: Route = { cids: route.cids, debug: route.debug };
+    const page = mountRefusedActionPage({
+      rpc: this.rpc,
+      navigate: next => this.navigate(next),
+      goHome: () => this.run(() => this.navigate(home)),
+      report: error => this.reportError(error),
+    });
+    this.captureClientState();
+    this.clientMounted = undefined;
+    for (const dispose of this.disposeWidgets) dispose();
+    this.disposeWidgets = [() => page.dispose()];
+    this.record = undefined;
+    this.service = undefined;
+    this.breadcrumbs.clear();
+    this.current = home;
+    this.renderNavigation(home);
+    this.content.replaceChildren(page.element);
+    this.currentUrl = routeUrl(home);
+    if (initial || fromHistory) history.replaceState({ erpIndex: this.historyIndex }, "", this.currentUrl);
+    else history.pushState({ erpIndex: ++this.historyIndex }, "", this.currentUrl);
+    this.notice("");
+    this.messages.navigation();
+    this.content.setAttribute("data-navigation-focus", "");
+    this.content.focus({ preventScroll: true });
   }
 
   /** The bounds of the pivot table, from Settings (`web.pivot_*`): each has a default, a floor and a hard bound declared by the web addon. */
