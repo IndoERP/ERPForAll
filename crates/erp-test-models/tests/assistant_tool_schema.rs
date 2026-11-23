@@ -269,6 +269,16 @@ fn schemas_are_portable_and_accept_real_payloads() {
         ("test_rpc.effects", "conflict_once", r#"{"name": "once"}"#),
         (
             "test_rpc.effects",
+            "keyed_bump",
+            r#"{"name": "keyed-seen"}"#,
+        ),
+        (
+            "test_rpc.effects",
+            "keyed_bump",
+            r#"{"name": "keyed-retry", "conflict_first": true}"#,
+        ),
+        (
+            "test_rpc.effects",
             "gated_bump",
             r#"{"name": "raced", "gate": 9009, "millis": 30000}"#,
         ),

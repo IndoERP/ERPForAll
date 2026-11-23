@@ -358,3 +358,88 @@ async fn replays_need_unchanged_access_inside_the_window() {
     );
     h.cleanup().await.unwrap();
 }
+
+const KEYED_BUMP: &str = "/json/2/test_rpc.effects/keyed_bump";
+
+/// The keys `keyed_bump` saw for `name`, one per attempt.
+fn keyed_attempts(name: &str) -> Vec<Option<String>> {
+    erp_test_models::test_rpc::KEYED_ATTEMPTS
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(n, _)| n == name)
+        .map(|(_, key)| key.clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn the_method_sees_the_key_it_runs_under() {
+    let h = harness().await;
+    let k = key("018F3A1C-7B2D-7C4E-9A10-000000000201");
+    let canonical = "018f3a1c-7b2d-7c4e-9a10-000000000201";
+    let body = r#"{"name": "keyed-seen"}"#;
+    let first = call_keyed(&h, KEYED_BUMP, body, alice(), &k).await;
+    assert_eq!(ok(&first), json!(canonical), "canonical lower case");
+    // a replay answers from the store: the method does not run again
+    let again = call_keyed(&h, KEYED_BUMP, body, alice(), &k).await;
+    assert!(again.replayed());
+    assert_eq!(again.body(), first.body());
+    assert_eq!(keyed_attempts("keyed-seen"), [Some(canonical.to_owned())]);
+    // without the header the method sees none
+    let unkeyed = call(&h, KEYED_BUMP, r#"{"name": "keyed-none"}"#, alice()).await;
+    assert_eq!(ok(&unkeyed), json!(false));
+    assert_eq!(keyed_attempts("keyed-none"), [None]);
+    assert_eq!(count(&h, "test_rpc_effects").await, 2);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_retried_attempt_sees_the_same_key() {
+    let h = harness().await;
+    let k = key("018f3a1c-7b2d-7c4e-9a10-000000000202");
+    let r = call_keyed(
+        &h,
+        KEYED_BUMP,
+        r#"{"name": "keyed-retry", "conflict_first": true}"#,
+        alice(),
+        &k,
+    )
+    .await;
+    assert_eq!(ok(&r), json!(k.as_str()));
+    assert_eq!(r.attempts(), 2);
+    let seen = Some(k.as_str().to_owned());
+    assert_eq!(keyed_attempts("keyed-retry"), [seen.clone(), seen]);
+    assert_eq!(count(&h, "test_rpc_effects").await, 1, "one effect");
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn other_transactions_carry_no_key_and_a_key_binds_once() {
+    let h = harness().await;
+    // a job, a cron run or a script opens its own transaction: no key is ever inherited
+    let mut tx = h.harness().begin().await.unwrap();
+    assert_eq!(tx.idempotency_key(), None);
+    for bad in [
+        "018F3A1C-7B2D-7C4E-9A10-000000000203",
+        "018f3a1c7b2d7c4e9a10000000000203",
+        "not-a-uuid",
+    ] {
+        let error = tx.bind_idempotency_key(bad).unwrap_err();
+        assert_eq!(error.kind(), erp_fields::ErrorKind::Programming, "{bad}");
+        assert_eq!(tx.idempotency_key(), None);
+    }
+    let canonical = "018f3a1c-7b2d-7c4e-9a10-000000000203";
+    tx.bind_idempotency_key(canonical).unwrap();
+    assert_eq!(tx.idempotency_key(), Some(canonical));
+    let error = tx
+        .bind_idempotency_key("018f3a1c-7b2d-7c4e-9a10-000000000204")
+        .unwrap_err();
+    assert_eq!(
+        error.message(),
+        "this transaction already has an Idempotency-Key bound"
+    );
+    assert_eq!(tx.idempotency_key(), Some(canonical));
+    tx.rollback().await.unwrap();
+    drop(tx);
+    h.cleanup().await.unwrap();
+}

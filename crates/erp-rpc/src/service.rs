@@ -1610,7 +1610,11 @@ impl RpcService {
     ) -> std::result::Result<Work, RpcFailure> {
         let claim = match (plan.key, plan.request_digest) {
             (Some(key), Some(digest)) => match self.claim(tx, orm, plan, key, &digest).await? {
-                (Claim::Claimed { id }, _) => Some(id),
+                (Claim::Claimed { id }, _) => {
+                    // the method sees the key it runs under (Transaction::idempotency_key)
+                    tx.bind_idempotency_key(key.as_str())?;
+                    Some(id)
+                }
                 // a replay answers from the store: the hook does not run
                 (Claim::Existing(row), policy_now) => return Ok(Work::Replay(row, policy_now)),
             },

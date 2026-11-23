@@ -101,6 +101,63 @@ To add a native addon to this repository, put the crate under `addons/`, list it
 
 To try an addon: install it into a database as shown in the [installation guide](install.md#install-an-addon-from-a-folder).
 
+### Retried writes: `Idempotency-Key`
+
+A client that may send the same change twice (a phone with an offline outbox, a script that retries on a timeout)
+sends an `Idempotency-Key` header with a JSON-2 call that changes data:
+
+```text
+POST /json/2/my_addon.record/submit
+Authorization: Bearer <api key>
+Idempotency-Key: 6f1c0a7e-1b8e-4a33-9a1f-2a6c4d1e9b10
+```
+
+- The key is a UUID (any version; v7 is recommended), one per user action, reused unchanged on every retry of
+  that action. It is claimed in the same transaction as the change, so the change and its key commit or roll back
+  together; a failed call stores nothing and may be sent again.
+- Keys are private to the caller: the user, and for a Bearer request also the API key. The same key from another
+  user or another API key is a different key.
+- A retry with the same body within one hour gets the first answer again, byte for byte, with the response header
+  `Idempotent-Replayed: true`; the method does not run again. Key order and whitespace of the JSON body do not
+  matter.
+- A key stays claimed for 24 hours. A retry after the first hour, or of an answer larger than 1 MiB, gets 409
+  `erp.idempotency_result_expired` ("the original call committed; its result is no longer available"): the
+  change happened, read it back instead. After 24 hours the key is free again and the request executes as new.
+- The same key with a different body is refused with 422 `erp.idempotency_mismatch`; a retry while the first
+  request still runs gets 409 `erp.idempotency_in_progress` with `Retry-After`; a key on a call whose effect is
+  `read` is refused with 422 `erp.idempotency_not_allowed`. A malformed key, or the header sent twice, is 400.
+
+A method reads the key it runs under with `tx.idempotency_key()` (`None` without the header, and in every
+transaction the RPC layer did not open: jobs, cron runs and scripts never inherit it). Every retried attempt of
+the same call sees the same key. Storing it on the record the method creates lets the client show which
+submission a record came from, and lets the method answer the existing record when a retry arrives after the
+24 hours instead of creating a second one:
+
+```rust
+#[method]
+#[rpc(effect = write, model)]
+async fn submit(
+    this: &RecordSet<Request>,
+    tx: &mut Transaction,
+    note: String,
+) -> Result<RecordSet<Request>> {
+    let key = tx.idempotency_key().map(str::to_owned);
+    if let Some(key) = &key {
+        let existing = this
+            .search(tx, &Domain::field("submission_key")?.eq(key.as_str()))
+            .await?;
+        if !existing.as_records().is_empty() {
+            return Ok(existing);
+        }
+    }
+    let mut vals = this.vals().set(Request::NOTE, note.as_str());
+    if let Some(key) = &key {
+        vals = vals.set(Request::SUBMISSION_KEY, key.as_str());
+    }
+    this.create(tx, vec![vals]).await
+}
+```
+
 ## The web client
 
 The client is TypeScript, compiled ahead of time:

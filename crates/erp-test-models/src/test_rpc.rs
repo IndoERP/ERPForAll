@@ -16,6 +16,10 @@ pub static ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
 pub static READS: AtomicUsize = AtomicUsize::new(0);
 /// After-commit hooks run by `conflict_once`.
 pub static HOOKS: AtomicUsize = AtomicUsize::new(0);
+/// What every attempt of `keyed_bump` saw: `(name, Transaction::idempotency_key)`. Tests use
+/// names of their own, so parallel tests do not read each other's entries.
+pub static KEYED_ATTEMPTS: std::sync::Mutex<Vec<(String, Option<String>)>> =
+    std::sync::Mutex::new(Vec::new());
 
 /// `test_rpc.model_a`, with a unique name ('s integrity error).
 #[model(
@@ -229,6 +233,33 @@ impl Effects {
         name: String,
     ) -> Result<RecordSet<Effects>> {
         create_named(this, tx, &name).await
+    }
+
+    /// Creates a record named `name` and answers the `Idempotency-Key` the call runs under
+    /// (`false` without one). Every attempt is recorded in [`KEYED_ATTEMPTS`]; with
+    /// `conflict_first`, the first attempt for `name` fails with a serialization failure.
+    #[method]
+    #[rpc(effect = write, model)]
+    async fn keyed_bump(
+        this: &RecordSet<Effects>,
+        tx: &mut Transaction,
+        name: String,
+        conflict_first: Option<bool>,
+    ) -> Result<Value> {
+        let key = tx.idempotency_key().map(str::to_owned);
+        let first = {
+            let mut seen = KEYED_ATTEMPTS
+                .lock()
+                .map_err(|_| Error::programming("KEYED_ATTEMPTS is poisoned"))?;
+            let first = !seen.iter().any(|(n, _)| *n == name);
+            seen.push((name.clone(), key.clone()));
+            first
+        };
+        create_named(this, tx, &name).await?;
+        if first && conflict_first == Some(true) {
+            return Err(serialization_failure());
+        }
+        Ok(key.map_or(Value::False, Value::str))
     }
 
     /// Creates a record, then fails: nothing may stay.
