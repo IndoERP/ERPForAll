@@ -1013,7 +1013,7 @@ mod tests {
             ),
             (
                 "context",
-                json!({"search_default_mine":9_007_199_254_740_992_u64}),
+                json!({"search_default_mine":1.5}),
                 "Context key 'search_default_mine' must be a boolean, a safe integer or a text of at most 256 bytes.",
             ),
             (
