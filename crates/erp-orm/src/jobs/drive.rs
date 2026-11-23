@@ -77,9 +77,15 @@ struct RunState {
 async fn drive(
     mut ctx: JobContext<'static>,
 ) -> (std::result::Result<RunOutcome, JobError>, RunState) {
-    let result = match ctx.claimed.decl.handler {
+    let decl: &'static super::JobKindDecl = ctx.claimed.decl;
+    let result = match decl.handler {
         HandlerRef::Native(handler) => handler.run(&mut ctx).await,
-        HandlerRef::Step { model, method } => run_step(&mut ctx, model, method).await,
+        HandlerRef::Step { model, method } => match &decl.schedule {
+            Some(schedule) => {
+                super::schedule::run_scheduled_step(&mut ctx, schedule, model, method).await
+            }
+            None => run_step(&mut ctx, model, method).await,
+        },
     };
     let state = RunState {
         completed: ctx.completed,
@@ -121,7 +127,7 @@ async fn run_step(
     }
 }
 
-async fn call_step(
+pub(super) async fn call_step(
     tx: &mut Transaction,
     model: &'static str,
     method: &'static str,

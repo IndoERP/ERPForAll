@@ -13,7 +13,7 @@ use std::ops::RangeInclusive;
 
 use erp_fields::{Error, Result};
 
-use super::{Backoff, JobHandler, Priority};
+use super::{Backoff, JobHandler, Priority, Schedule};
 
 /// How a kind's work is run.
 #[derive(Clone, Copy)]
@@ -187,6 +187,9 @@ pub struct JobKindDecl {
     /// [`JobRunnerBuilder::exclude_elevated`](super::JobRunnerBuilder::exclude_elevated) never
     /// claims it. Default `false`.
     pub elevated: bool,
+    /// A step kind that runs on its own schedule as a technical user: the module system keeps
+    /// its one job row (see [`Schedule`]). `None` (the default): jobs are enqueued by code.
+    pub schedule: Option<Schedule>,
 }
 
 impl JobKindDecl {
@@ -209,6 +212,7 @@ impl JobKindDecl {
             max_concurrency: None,
             triggers: &[],
             elevated: false,
+            schedule: None,
         }
     }
 
@@ -293,6 +297,14 @@ impl JobKindDecl {
     #[must_use]
     pub const fn elevated(mut self) -> Self {
         self.elevated = true;
+        self
+    }
+
+    /// Run this step kind on `schedule` (see [`Schedule`]); it can then no longer be enqueued
+    /// by code.
+    #[must_use]
+    pub const fn schedule(mut self, schedule: Schedule) -> Self {
+        self.schedule = Some(schedule);
         self
     }
 
@@ -393,7 +405,8 @@ pub fn is_valid_kind_name(name: &str) -> bool {
 /// `<addon>.<name>` or does not start with its addon, a duplicate name, a version or accepted
 /// range or attempt count outside its bounds, a backoff outside its bounds, `System` principal
 /// for an addon outside [`SYSTEM_PRINCIPAL_ADDONS`], outbox triggers, a
-/// `READ COMMITTED` kind outside the maintenance class, and a required kind nobody registered.
+/// `READ COMMITTED` kind outside the maintenance class, a schedule on a native or system kind or
+/// with an invalid recurrence or user id, and a required kind nobody registered.
 pub fn validate(kinds: &[&JobKindDecl], required: &[&JobKindRequirement]) -> Result<()> {
     let mut seen: Vec<&JobKindDecl> = Vec::with_capacity(kinds.len());
     for decl in kinds {
@@ -477,6 +490,9 @@ pub fn validate(kinds: &[&JobKindDecl], required: &[&JobKindRequirement]) -> Res
             return Err(Error::programming(format!(
                 "job kind '{name}' is a step kind without a model or a method name"
             )));
+        }
+        if let Some(schedule) = &decl.schedule {
+            super::schedule::validate(decl, schedule)?;
         }
         seen.push(decl);
     }

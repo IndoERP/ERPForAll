@@ -57,7 +57,8 @@ pub mod jobs {
         HistoryPolicy, ItemKey, ItemsChunk, JobContext, JobError, JobHandler, JobKey, JobKindDecl,
         JobKindRequirement, JobRef, JobSettings, JobSettingsCompatibility, JobSettingsSnapshot,
         JobSettingsSource, KindIsolation, MAX_CANCEL_KEYS, OnDuplicate, PrincipalPolicy, Priority,
-        RecurringSpec, RunAs, RunOutcome, Setting, StepArgs, StepOutcome, TimeoutClass, When,
+        Recurrence, RecurringSpec, RunAs, RunOutcome, Schedule, Setting, StepArgs, StepOutcome,
+        TimeoutClass, When,
     };
     pub use erp_orm::register_job_kind;
 }

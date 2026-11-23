@@ -24,6 +24,7 @@ mod kind;
 mod principal;
 mod retention;
 mod runner;
+mod schedule;
 pub(crate) mod schema;
 mod settings;
 mod settings_source;
@@ -56,6 +57,9 @@ pub use retention::{
 #[cfg(feature = "test-faults")]
 pub use runner::RunnerHooks;
 pub use runner::{JobMetrics, JobRunner, JobRunnerBuilder, LiveNodes, ReapReport};
+pub use schedule::{
+    MAX_SCHEDULE_INTERVAL, MIN_SCHEDULE_INTERVAL, Recurrence, Schedule, sync_addon_schedules,
+};
 pub use settings::{JobSettings, JobSettingsBuilder, Setting};
 pub use wake::JOBS_CHANNEL;
 #[cfg(feature = "test-faults")]

@@ -49,6 +49,43 @@ pub mod test_jobs {
                 StepOutcome::more(progress, 1, Some(total - next))
             })
         }
+
+        /// The step of a scheduled kind: one row `at:<scheduled_for>|prev:<previous>` per
+        /// chunk, finished after `chunks` chunks (2 when the progress says nothing).
+        #[method]
+        async fn run_scheduled_step(
+            this: &RecordSet<Recount>,
+            tx: &mut Transaction,
+            args: StepArgs,
+        ) -> Result<StepOutcome> {
+            let n = args
+                .progress
+                .as_ref()
+                .and_then(|p| p["n"].as_u64())
+                .unwrap_or(0);
+            let text = |key: &str| args.payload[key].as_str().unwrap_or("none").to_owned();
+            let name: Arc<str> = format!(
+                "at:{}|prev:{}|n:{n}",
+                text("scheduled_for"),
+                text("previous")
+            )
+            .into();
+            this.env()
+                .records("test_jobs.recount")?
+                .create_values(
+                    tx,
+                    &[[("name".to_owned(), Value::str(&name))]
+                        .into_iter()
+                        .collect()],
+                )
+                .await?;
+            let progress = erp_sdk::serde_json::json!({ "n": n + 1 });
+            Ok(if n + 1 >= 2 {
+                StepOutcome::done(progress, 1)
+            } else {
+                StepOutcome::more(progress, 1, Some(1))
+            })
+        }
     }
 }
 

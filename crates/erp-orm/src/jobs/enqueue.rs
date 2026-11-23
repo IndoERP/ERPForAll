@@ -299,7 +299,8 @@ impl Transaction {
     /// # Errors
     ///
     /// `Programming` for an environment outside its elevation block or widened,
-    /// an unregistered kind, or `run_as` on a kind that runs as the system;
+    /// an unregistered kind, a scheduled kind (`JobKindDecl::schedule`), or `run_as` on a kind
+    /// that runs as the system;
     /// `Validation` for an oversized payload or a batch over the limit; `Access` for `run_as` by a
     /// principal that may not (naming) and for a public or link principal; the
     /// database's errors.
@@ -308,6 +309,14 @@ impl Transaction {
         env: &Env,
         requests: Vec<EnqueueRequest>,
     ) -> Result<Vec<EnqueueOutcome>> {
+        // a scheduled kind has exactly the one row its schedule keeps (`job_upsert_recurring`)
+        if let Some(request) = requests.iter().find(|r| {
+            kind_map()
+                .get(r.kind)
+                .is_some_and(|decl| decl.schedule.is_some())
+        }) {
+            return Err(super::schedule::refuse_enqueue(request.kind));
+        }
         self.enqueue_many_by(env, requests, None).await
     }
 

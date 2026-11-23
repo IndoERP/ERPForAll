@@ -101,6 +101,42 @@ To add a native addon to this repository, put the crate under `addons/`, list it
 
 To try an addon: install it into a database as shown in the [installation guide](install.md#install-an-addon-from-a-folder).
 
+### Recurring jobs of an addon
+
+A native addon runs work on a schedule by giving one of its step job kinds a `Schedule`:
+
+```rust
+use erp_sdk::jobs::{HandlerRef, JobKindDecl, Schedule};
+
+erp_sdk::jobs::register_job_kind!(
+    DAILY_REFRESH,
+    JobKindDecl::new(
+        "my_addon",
+        "my_addon.daily_refresh",
+        HandlerRef::Step { model: "my_addon.record", method: "refresh_step" },
+    )
+    .schedule(Schedule::daily_at(1, 0, "Asia/Jakarta", "my_addon.user_scheduler"))
+);
+```
+
+- The recurrence is `Schedule::daily_at(hour, minute, time_zone, run_as)` (wall-clock time in an IANA zone) or
+  `Schedule::every(interval, run_as)` / `Schedule::every_from(interval, offset, run_as)` (every 60 s to 31 days,
+  aligned to the Unix epoch plus the offset).
+- `run_as` is the external id of an active internal `res.users` record the addon ships in its data, a technical
+  user whose access rights the job runs with. A scheduled kind never runs as the system.
+- Installing or upgrading the addon creates the kind's one job row, due at the next instant; uninstalling it removes
+  the row (refused while it runs). A row that already exists keeps its due time, and a row an operator held stays held.
+  The row cannot be enqueued by code.
+- The row runs on whichever node runs jobs (a server with `jobs_run_in_app = true`); with several nodes it still runs once per
+  due time. The step receives the payload `{"scheduled_for": "<RFC 3339>", "previous": "<RFC 3339>" | null}`:
+  the instant this run stands for and the one the last completed run stood for. Runs missed while no node ran jobs
+  collapse into one run for the latest missed instant, so a step that processes "the period since `previous`" stays
+  correct and idempotent.
+- When the step reports `finished`, the row is rescheduled to the next instant instead of being removed, and a kind
+  that keeps history writes one `done` row per run. A failing run is retried with the kind's backoff and, when its
+  attempts run out, dead-lettered like any job; the schedule then waits for an operator to requeue it, and resumes the
+  same run.
+
 ## The web client
 
 The client is TypeScript, compiled ahead of time:

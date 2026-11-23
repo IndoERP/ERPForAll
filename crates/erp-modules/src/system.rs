@@ -5444,6 +5444,7 @@ impl<'s> Run<'s> {
             runtime.before_commit(tx, change).await?;
             self.checkpoint(tx).await?;
         }
+        self.sync_job_schedules(tx).await?;
         if !self.system.parts.lifecycle_hooks.is_empty() {
             let active: Vec<&AddonEntry> = self.active.iter().collect();
             let context = LifecycleChange::new(change, &active);
@@ -5455,6 +5456,25 @@ impl<'s> Run<'s> {
         tx.refuse_deferred_sql_objects(&self.system.parts.schema_sync)
             .await?;
         Ok(())
+    }
+
+    /// Keep the job rows of the scheduled job kinds of the changed addons
+    /// ([`erp_orm::jobs::sync_addon_schedules`]): installed and upgraded addons get theirs,
+    /// uninstalled ones lose them, in the operation's transaction.
+    async fn sync_job_schedules(&self, tx: &mut Transaction) -> Result<()> {
+        let kept: Vec<&str> = self
+            .installed
+            .iter()
+            .chain(&self.upgraded)
+            .map(ModuleName::as_str)
+            .collect();
+        let removed: Vec<&str> = self.uninstalled.iter().map(ModuleName::as_str).collect();
+        if kept.is_empty() && removed.is_empty() {
+            return Ok(());
+        }
+        let env = tx.env();
+        erp_orm::jobs::sync_addon_schedules(tx, &env, &kept, &removed).await?;
+        self.checkpoint(tx).await
     }
 
     /// Check that the operation's transaction is still the one it began, after code of a hook,
