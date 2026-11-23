@@ -1962,6 +1962,11 @@ const SUDO_SITES: &[(&str, usize, &str)] = &[
         1,
         "opening the password reset wizard creates its lines in superuser mode, after the actor's manager authority and every target were checked: the line model refuses every other creation, and `create_uid` stays the actor",
     ),
+    (
+        "erp-test-models/test_rpc.rs::client_address",
+        1,
+        "test-model probe `test_rpc.effects.client_address`: derives a superuser environment only to show that `sudo()` keeps the request's client address; it reads nothing and writes nothing through it",
+    ),
 ];
 
 // ----- discovery ---------------------------------------------------------------------------------
