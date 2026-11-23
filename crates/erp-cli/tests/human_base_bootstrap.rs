@@ -614,7 +614,7 @@ const TECHNICAL_CATEGORIES: [&str; 9] = [
     "technical_reporting_menu",
 ];
 
-const TECHNICAL_SCREENS: [Screen; 22] = {
+const TECHNICAL_SCREENS: [Screen; 23] = {
     use AdminRead::{Granted, Managed, ReadOnly};
     const fn s(
         menu: &'static str,
@@ -768,6 +768,14 @@ const TECHNICAL_SCREENS: [Screen; 22] = {
             "technical_privilege_action",
             "res.groups.privilege",
             "technical_privilege",
+            Granted,
+        ),
+        s(
+            "technical_field_access_menu",
+            "technical_security_menu",
+            "technical_field_access_action",
+            "ir.field.access",
+            "technical_field_access",
             Granted,
         ),
         s(
@@ -2161,8 +2169,8 @@ async fn technical_menu_and_views() {
         );
         action_probes += 1;
     }
-    // every one of the 22 own screens was probed (a short `loaded_screens` would end the zip early)
-    assert_eq!(action_probes, 22, "internal-user action probes");
+    // every one of the 23 own screens was probed (a short `loaded_screens` would end the zip early)
+    assert_eq!(action_probes, 23, "internal-user action probes");
     let mut read_probes = 0usize;
     for screen in &TECHNICAL_SCREENS {
         let groups: &[&str] = match screen.admin {

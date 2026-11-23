@@ -1859,6 +1859,19 @@ async fn assert_field_access_overrides(orm: &Orm, db: &TestDb, ordinary: erp_orm
     .await;
     assert!(fields.contains(&"body".to_owned()), "{fields:?}");
     assert!(!fields.contains(&"internal_memo".to_owned()), "{fields:?}");
+
+    // the fixture form must not become the model's default form for the checks that follow
+    let mut drop_form = orm.begin(SUPERUSER_ID).await.unwrap();
+    drop_form
+        .env()
+        .records("ir.ui.view")
+        .unwrap()
+        .browse([form])
+        .unwrap()
+        .unlink(&mut drop_form)
+        .await
+        .unwrap();
+    drop_form.commit().await.unwrap();
 }
 
 async fn stored_form(
