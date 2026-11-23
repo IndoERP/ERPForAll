@@ -1,4 +1,5 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
+import { t } from "./translate.js";
 import { actionButton, button, el } from "./dom.js";
 import { renderFormLayout } from "./form-layout.js";
 import { icon } from "./icons.js";
@@ -134,7 +135,7 @@ export function one2manyField(environment: WidgetEnvironment): WidgetHandle {
     const width = (columns.length || 1) + (editable ? 1 : 0);
     const searchColumn = columns.find(column => column.name === searchField && column.kind === "many2one" && !column.readonly);
     if (!items.length && !(editable && searchColumn)) {
-      const row = el("tr", undefined, "x2many-empty"), cell = el("td", field.readonly ? "No lines." : "No lines yet.", "muted");
+      const row = el("tr", undefined, "x2many-empty"), cell = el("td", field.readonly ? t("No lines.") : t("No lines yet."), "muted");
       cell.colSpan = width; row.append(cell); body.append(row);
     }
     items.forEach((line, index) => {
@@ -201,7 +202,7 @@ export function one2manyField(environment: WidgetEnvironment): WidgetHandle {
       cell.colSpan = width; cell.className = "x2many-entry";
       const actions = el("div", undefined, "x2many-entry-actions");
       const detail = (): void => run(() => openLine(environment, items, null));
-      const add = button("Add a line", searchColumn ? () => run(startSearch) : detail, "x2many-add link-button");
+      const add = button(t("Add a line"), searchColumn ? () => run(startSearch) : detail, "x2many-add link-button");
       add.prepend(icon("plus"));
       actions.append(add);
       if (searchColumn) {

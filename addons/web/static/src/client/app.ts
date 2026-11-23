@@ -1,4 +1,5 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
+import { setClientLanguage, t } from "./translate.js";
 import { clearProtectedTabState } from "./session-boundary.js";
 import { PanelCompatibilityError, PanelRecoverySafety, attemptPanelRecovery } from "./panel-recovery.js";
 import { unavailablePanelMessage } from "./panel-metadata.js";
@@ -272,6 +273,8 @@ export class HumanApp {
     this.userId = integer(identity["uid"], "user id");
     this.companyId = integer(bootstrap["current_company_id"], "current company id");
     this.editorLocale = readEditorLocale(locale);
+    // The client's own texts follow the user's language (translate.ts).
+    setClientLanguage(this.editorLocale.lang);
     // Numeric capabilities are validated by the consuming codec, preserving unrelated shell/editor usability.
     this.numericLocale = { decimal_point: locale["decimal_point"], thousands_sep: locale["thousands_sep"], grouping: locale["grouping"] } as NumericLocale;
     this.companies = array(bootstrap["companies"], "companies").map(raw => {
@@ -2767,7 +2770,7 @@ export class HumanApp {
       if (!page.records.length) {
         cards = undefined;
         const empty = noContentHelp();
-        empty.replaceChildren(...(searchModel.getFacets().length ? [el("h2", "No matching records"), el("p", "Try another search or clear the filter.")] : [el("h2", "No records yet"), el("p", hasForm ? "Create a record to begin working here." : "Records appear here once they exist.")]));
+        empty.replaceChildren(...(searchModel.getFacets().length ? [el("h2", t("No matching records")), el("p", t("Try another search or clear the filter."))] : [el("h2", t("No records yet")), el("p", hasForm ? t("Create a record to begin working here.") : t("Records appear here once they exist."))]));
         body.replaceChildren(empty);
         return;
       }
@@ -3648,20 +3651,20 @@ export class HumanApp {
         empty.replaceChildren();
         if (searchModel.getFacets().length > 0) {
           empty.append(
-            el("h2", "No matching records"),
-            el("p", "Try another search or clear the filter.")
+            el("h2", t("No matching records")),
+            el("p", t("Try another search or clear the filter."))
           );
         } else if (actionHelp) {
           const helpDiv = el("div", undefined, "action-help-text");
           helpDiv.textContent = actionHelp;
           empty.append(
-            el("h2", `No ${actionTitle} records yet`),
+            el("h2", t("No {name} records yet", { name: actionTitle })),
             helpDiv
           );
         } else {
           empty.append(
-            el("h2", `No ${actionTitle} records yet`),
-            el("p", canCreate ? `Create your first ${actionTitle} record with New.` : "There is nothing to show here yet.")
+            el("h2", t("No {name} records yet", { name: actionTitle })),
+            el("p", canCreate ? t("Create your first {name} record with New.", { name: actionTitle }) : t("There is nothing to show here yet."))
           );
         }
         results.append(empty);
@@ -4158,7 +4161,7 @@ export class HumanApp {
     const discardBtn = actionButton("Discard", () => runFormAction(discard), "status-btn-discard");
     statusActions.append(saveBtn, discardBtn);
     // A read-first form (`edit_mode="read"`) shows its saved record as read values with Edit; Save or Discard return to it.
-    const editBtn = button("Edit", () => runFormAction(edit), "primary status-btn-edit");
+    const editBtn = button(t("Edit"), () => runFormAction(edit), "primary status-btn-edit");
     editBtn.hidden = true; editBtn.title = "Edit (E)";
     const statusIndicator = el("div", undefined, "form-status-indicator");
     statusIndicator.append(statusBadge, archivedBadge, editBtn, statusActions);

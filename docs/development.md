@@ -142,6 +142,24 @@ A menu's icon (`web_icon` on `<menuitem>` or `ir.ui.menu`) is one of:
 The same icon is drawn on the home screen, in the navigation and in Settings. Any other value fails the write that
 stores it, so an addon with a mistyped icon fails to install.
 
+The client's own texts (empty states, the New, Save, Discard and Edit buttons, the built-in commands, one2many
+lines) are written in English and passed through `t()` (`addons/web/static/src/client/translate.ts`, exported by
+`@erpforall/client`): `t("No records yet")`, or `t("No {name} records yet", { name })` with named placeholders. They
+follow the user's language, the `lang` of the bootstrap locale: a text is shown from the catalog of that language,
+else of its base language (`id` for `id_ID`), else in English. An addon ships a catalog, an object from English text
+to translation, and registers it from its client entry:
+
+```ts
+import { registerTranslations } from "@erpforall/client";
+registerTranslations("id_ID", { "No records yet": "…", "No {name} records yet": "… {name} …" });
+```
+
+A catalog that is not such an object, an empty translation, a translation that drops or adds a placeholder, and a
+text two catalogs translate differently are refused with the text named, and nothing of the refused catalog is
+kept. `node scripts/extract-client-strings.mjs [addon]` (in `web/`, default `web`) prints every `t()` text of an
+addon's client sources as a catalog skeleton; a `t()` call whose text is not one plain string literal is refused,
+so every text stays extractable. This repository ships the English sources only.
+
 Checks (after `eval "$(scripts/web-toolchain.sh env)"` and `pnpm --dir web install --frozen-lockfile`):
 
 ```sh

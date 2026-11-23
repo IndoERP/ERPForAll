@@ -1,12 +1,19 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import { DialogService, type DialogHandle } from "./dialog-service.js";
 import { icon, type IconName } from "./icons.js";
+import { t } from "./translate.js";
 
 /** Built-in commands with a fixed icon. Only code opts in through `actionButton`: a label that comes from data
  *  (a menu, view, page or arch button that happens to read "Actions" or "Delete") never gets one. */
 const actionIcons = {New:"plus", Save:"save", Discard:"rotate-ccw", Reload:"refresh-cw", Archive:"archive", Unarchive:"archive-restore", Delete:"trash", Duplicate:"files", Search:"search", Previous:"chevron-left", Next:"chevron-right", Actions:"chevron-down"} as const satisfies Readonly<Record<string, IconName>>;
 export type ActionLabel = keyof typeof actionIcons;
 export function isActionLabel(label: string): label is ActionLabel { return Object.hasOwn(actionIcons, label); }
+/** The shown text of each built-in command, in the user's language (translate.ts); written as literal calls so they extract. */
+const actionTexts: { readonly [K in ActionLabel]: () => string } = {
+  New: () => t("New"), Save: () => t("Save"), Discard: () => t("Discard"), Reload: () => t("Reload"), Archive: () => t("Archive"),
+  Unarchive: () => t("Unarchive"), Delete: () => t("Delete"), Duplicate: () => t("Duplicate"), Search: () => t("Search"),
+  Previous: () => t("Previous"), Next: () => t("Next"), Actions: () => t("Actions"),
+};
 
 export function el<K extends keyof HTMLElementTagNameMap>(tag: K, label?: string, className?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
@@ -19,7 +26,7 @@ export function button(label: string, action: () => void, className?: string): H
   node.type = "button"; node.addEventListener("click", action); return node;
 }
 export function actionButton(label: ActionLabel, action: () => void, className?: string): HTMLButtonElement {
-  const node = button(label, action, className);
+  const node = button(actionTexts[label](), action, className);
   node.classList.add("has-action-icon");
   if (label === "Actions") node.append(icon(actionIcons[label]));
   else node.prepend(icon(actionIcons[label]));
@@ -27,7 +34,7 @@ export function actionButton(label: ActionLabel, action: () => void, className?:
 }
 /** Swaps the label of an `actionButton` and its icon together (Archive becomes Unarchive); a bare textContent would drop the icon. */
 export function relabelActionButton(node: HTMLButtonElement, label: Exclude<ActionLabel, "Actions">): void {
-  node.replaceChildren(label); node.prepend(icon(actionIcons[label]));
+  node.replaceChildren(actionTexts[label]()); node.prepend(icon(actionIcons[label]));
 }
 export function labelled(label: string, control: HTMLElement): HTMLElement {
   const wrapper = el("label", undefined, "field-label"); wrapper.append(el("span", label), control); return wrapper;

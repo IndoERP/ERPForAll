@@ -1,4 +1,5 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
+import { t } from "./translate.js";
 import { Component, type TemplateModule } from "@erpforall/elang";
 import { button, el } from "./dom.js";
 import { ClientError } from "./transport.js";
@@ -39,7 +40,7 @@ export function noContentHelp(title?: string, description?: string): HTMLElement
   if (title !== undefined) boundedText(title, "No-content title", 4096);
   if (description !== undefined) boundedText(description, "No-content description", 8192);
   const host = el("div", undefined, "empty-state message-no-content"); host.setAttribute("role", "alert");
-  host.append(el("h2", title === undefined ? "No records yet" : title), el("p", description === undefined ? "Create a record to begin working here." : description));
+  host.append(el("h2", title === undefined ? t("No records yet") : title), el("p", description === undefined ? t("Create a record to begin working here.") : description));
   return host;
 }
 export class Ribbon extends Component<RibbonProps> { static override template = "web.MessageRibbon"; }

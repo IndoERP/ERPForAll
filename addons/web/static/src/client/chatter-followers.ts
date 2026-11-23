@@ -1,4 +1,5 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
+import { t as translateText } from "./translate.js";
 import type { MessagingStore } from "@erpforall/mail-store";
 import { applyStorePayload } from "@erpforall/mail-thread-view";
 import { el, errorMessage } from "./dom.js";
@@ -57,7 +58,8 @@ export class Followers {
 
   constructor(private readonly o: FollowersOptions) {
     const tr = o.translate;
-    this.t = tr ? (s) => String(tr(s)) : (s) => s;
+    // Without a translator of its host the panel's texts follow the client catalogs (translate.ts).
+    this.t = tr ? (s) => String(tr(s)) : (s) => translateText(s);
     this.element = el("div", undefined, "erp-mail-followers");
     this.button = el("button", undefined, "erp-mail-followers-button");
     this.button.type = "button";

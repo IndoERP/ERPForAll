@@ -1,4 +1,5 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
+import { t } from "./translate.js";
 import { button, el, errorMessage } from "./dom.js";
 import { DialogService, messageOptions, messageSignal, plainMessageObject, type DialogHandle } from "./dialog-service.js";
 import { checkedRelationChoice, searchRelation, type RelationChoice } from "./relation-picker.js";
@@ -53,7 +54,7 @@ export function selectCreateDialog(options: SelectCreateDialogOptions): DialogHa
     results.replaceChildren();
     // A shown error stays until the next search replaces it.
     const counted = status.getAttribute("role") === "status";
-    if (!rows.length) { if (counted) status.textContent = ""; results.append(el("p", "No matching records.", "muted")); return; }
+    if (!rows.length) { if (counted) status.textContent = ""; results.append(el("p", t("No matching records."), "muted")); return; }
     if (small()) {
       const cards = el("div", undefined, "select-create-cards");
       rows.forEach(row => { const card = el("article", undefined, "select-create-card"); const choice = button(row.display_name, () => select(row)); choice.dataset["recordId"] = String(row.id); card.append(choice); cards.append(card); });
