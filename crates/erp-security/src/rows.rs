@@ -827,13 +827,37 @@ impl CapabilityRow {
     }
 }
 
-/// The groups of one custom field (`ir_model_fields` with `ir_model_fields_group_rel`,
-/// ), the database overlay of field groups that
-/// merges with the registry's.
+/// What a [`FieldGroupsRow`] does to the field's declared groups.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
+pub enum FieldGroupsMode {
+    /// The groups of a custom field (`ir_model_fields_group_rel`): required as well as any
+    /// declared ones.
+    Custom,
+    /// An administrator's override (`ir_field_access`, mode `extend`): its groups are required
+    /// as well as the declared ones; it can only narrow who reads and writes the field.
+    Extend,
+    /// An administrator's override (`ir_field_access`, mode `replace`): its groups take the place
+    /// of the declared ones (no group: everyone with the model's rights). Never applied to a field
+    /// declared for nobody (`groups = "."`).
+    Replace,
+}
+
+impl FieldGroupsMode {
+    /// Whether the row is an administrator's override (one per field).
+    pub fn is_override(self) -> bool {
+        matches!(self, Self::Extend | Self::Replace)
+    }
+}
+
+/// The groups of one field stored in the database, merged with the registry's: the groups of a
+/// custom field (`ir_model_fields` with `ir_model_fields_group_rel`) or an administrator's
+/// override of any field (`ir_field_access`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldGroupsRow {
     model: Box<str>,
     field: Box<str>,
+    mode: FieldGroupsMode,
     groups: Vec<GroupId>,
 }
 
@@ -848,6 +872,21 @@ impl FieldGroupsRow {
         field: &str,
         groups: impl IntoIterator<Item = GroupId>,
     ) -> Result<Self, RowError> {
+        Self::with_mode(model, field, FieldGroupsMode::Custom, groups)
+    }
+
+    /// An administrator's override of `model`.`field` (`mode` is [`FieldGroupsMode::Extend`] or
+    /// [`FieldGroupsMode::Replace`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`FieldGroupsRow::new`].
+    pub fn with_mode(
+        model: &str,
+        field: &str,
+        mode: FieldGroupsMode,
+        groups: impl IntoIterator<Item = GroupId>,
+    ) -> Result<Self, RowError> {
         let label = || format!("{model}.{field}");
         let model = check_identifier(RowKind::FieldGroups, label, "model", model)?;
         let field = check_identifier(RowKind::FieldGroups, label, "field", field)?;
@@ -857,6 +896,7 @@ impl FieldGroupsRow {
         Ok(Self {
             model,
             field,
+            mode,
             groups,
         })
     }
@@ -869,6 +909,11 @@ impl FieldGroupsRow {
     /// The field name.
     pub fn field(&self) -> &str {
         &self.field
+    }
+
+    /// What the row does to the declared groups.
+    pub fn mode(&self) -> FieldGroupsMode {
+        self.mode
     }
 
     /// The groups, sorted.
@@ -1091,7 +1136,7 @@ impl PolicyRowsBuilder {
         rows.privileges.sort_by_key(PrivilegeRow::id);
         rows.capabilities.sort_by(|a, b| a.name.cmp(&b.name));
         rows.field_groups
-            .sort_by(|a, b| (&a.model, &a.field).cmp(&(&b.model, &b.field)));
+            .sort_by(|a, b| (&a.model, &a.field, a.mode).cmp(&(&b.model, &b.field, b.mode)));
         for group in &mut rows.groups {
             group.xmlids.sort();
         }
@@ -1103,8 +1148,15 @@ impl PolicyRowsBuilder {
         unique_sorted(RowKind::Implication, &rows.implied, |i| {
             format!("({}, {})", i.group, i.implies)
         })?;
+        // one custom-field row and one override per field (an override is `extend` or `replace`,
+        // never both: they sort next to each other and share the key)
         unique_sorted(RowKind::FieldGroups, &rows.field_groups, |f| {
-            format!("{}.{}", f.model, f.field)
+            let source = if f.mode.is_override() {
+                " (override)"
+            } else {
+                ""
+            };
+            format!("{}.{}{source}", f.model, f.field)
         })?;
         unique_xmlids(&rows)?;
 

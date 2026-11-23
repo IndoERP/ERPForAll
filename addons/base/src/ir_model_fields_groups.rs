@@ -1,7 +1,8 @@
 //! The groups of a field stored in the database (`ir.model.fields.groups`, relation
 //! `ir_model_fields_group_rel`): the overlay of
 //! field groups for custom `x_` fields that the access engine reads with the policy (
-//! design note §2.3). The registry's own fields keep their `groups` in the declaration.
+//! design note §2.3). The registry's own fields keep their `groups` in the declaration; an
+//! administrator overrides those with `ir.field.access` ([`crate::ir_field_access`]).
 //!
 //! Both tables bump the `policy` generation (Revision 3): the relation on
 //! every change, `ir_model_fields` on insert, delete and truncate only, so renaming a field or

@@ -572,12 +572,10 @@ async fn path_allowed(env: &Env, tx: &mut Transaction, model: &str, path: &str) 
         let field = spec
             .field(segment)
             .ok_or_else(|| Error::invariant("validated description field disappeared"))?;
-        if let Some(groups) = field.groups
-            && !tx.has_groups(env, groups).await?
-        {
-            allowed = false;
-        }
-        // Every segment uses caller-bound ORM model+field read checks, including comodels.
+        // Every segment uses caller-bound ORM model+field read checks, including comodels. They
+        // apply the field's groups as the access engine sees them: the declaration, the groups of
+        // a custom field and an administrator's override (`ir.field.access`), so the declared
+        // text alone is not consulted here.
         match env.records(current)?.read(tx, &[field.name]).await {
             Ok(_) => {}
             Err(error) if error.kind() == ErrorKind::Access => allowed = false,

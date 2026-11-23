@@ -93,27 +93,65 @@ impl ViewResponse {
     }
 }
 
-/// What [`GuardedArch::capture`] needs from the registry of the transaction.
-struct RegistryGuardLookup<'r>(&'r Registry);
+/// What [`GuardedArch::capture`] needs from the registry of the transaction, with the fields
+/// whose declared groups an administrator replaced (`ir.field.access`, mode `replace`).
+struct RegistryGuardLookup<'r> {
+    registry: &'r Registry,
+    replaced: &'r std::collections::HashSet<(String, String)>,
+}
 
 impl GuardLookup for RegistryGuardLookup<'_> {
     fn registry_generation(&self) -> u64 {
-        self.0.generation()
+        self.registry.generation()
     }
 
+    /// The declared groups, except for a field whose groups an administrator replaced: its node
+    /// takes no guard from the declaration, and the access engine, which applies the override,
+    /// decides per caller whether the field is shown (a description leaves out a field its
+    /// caller may not read). A field declared for nobody keeps its guard: no override opens it.
     fn field_groups(&self, model: &str, field: &str) -> Option<&str> {
-        self.0.model(model)?.field(field)?.groups
+        let groups = self.registry.model(model)?.field(field)?.groups?;
+        if groups.trim() != "."
+            && self
+                .replaced
+                .contains(&(model.to_owned(), field.to_owned()))
+        {
+            return None;
+        }
+        Some(groups)
     }
 
     fn comodel(&self, model: &str, field: &str) -> Option<&str> {
-        self.0.model(model)?.field(field)?.ty.comodel()
+        self.registry.model(model)?.field(field)?.ty.comodel()
     }
 
     fn has_field(&self, model: &str, field: &str) -> bool {
-        self.0
+        self.registry
             .model(model)
             .is_some_and(|m| m.field(field).is_some())
     }
+}
+
+/// The fields whose declared groups an administrator replaced (`ir.field.access`). Writing an
+/// override clears the compiled views, so a bundle never outlives the overrides it was captured
+/// with.
+async fn replaced_fields(
+    tx: &mut Transaction,
+) -> Result<std::collections::HashSet<(String, String)>> {
+    let rows = tx
+        .query(
+            "SELECT f.model::text, f.name::text FROM ir_field_access o \
+             JOIN ir_model_fields f ON f.id = o.field_id WHERE o.mode = 'replace'",
+            &[],
+        )
+        .await?;
+    let mut replaced = std::collections::HashSet::with_capacity(rows.len());
+    for row in rows {
+        let model: String = row.try_get(0).map_err(|e| Error::db(e.to_string()))?;
+        let field: String = row.try_get(1).map_err(|e| Error::db(e.to_string()))?;
+        replaced.insert((model, field));
+    }
+    Ok(replaced)
 }
 
 /// The error of a view-engine step of the compilation: a broken engine invariant is a
@@ -148,11 +186,15 @@ async fn compile_view(tx: &mut Transaction, view_id: ViewId, model: &str) -> Res
         .map(|v| (v.id, v.group_ids.as_slice()))
         .collect();
 
+    let replaced = replaced_fields(tx).await?;
     let guarded = GuardedArch::capture(
         combined,
         model,
         &record_guards,
-        &RegistryGuardLookup(tx.registry()),
+        &RegistryGuardLookup {
+            registry: tx.registry(),
+            replaced: &replaced,
+        },
         &ViewLimits::default(),
     )
     .map_err(engine_error)?;

@@ -33,8 +33,9 @@ pub const MIN_HOURLY_PREMAKE: u32 = 2;
 pub const MAX_PARTITIONED_TABLE_LEN: usize = 51;
 
 /// The policy-source and membership models of the access engine: never partitioned.
-pub const POLICY_SOURCE_MODELS: [&str; 6] = [
+pub const POLICY_SOURCE_MODELS: [&str; 7] = [
     "ir.access",
+    "ir.field.access",
     "res.groups",
     "res.groups.privilege",
     "ir.capability",

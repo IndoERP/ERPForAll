@@ -37,6 +37,11 @@ policy_source!(
 );
 
 policy_source!(
+    /// Administrators' overrides of field groups.
+    IR_FIELD_ACCESS = PolicySourceWrite::new("ir.field.access", SourceKind::Policy)
+);
+
+policy_source!(
     /// Deleting a model deletes its rules and fields (foreign-key cascade); its other writes do
     /// not touch the policy.
     IR_MODEL = PolicySourceWrite::new("ir.model", SourceKind::Policy).fields(&[])

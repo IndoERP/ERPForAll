@@ -8,7 +8,7 @@
 //! | 2 | groups with their XML ids and implied ids (`array_agg`) | [`GroupRow`], [`Implication`] |
 //! | 3 | active `ir.access` rows and archived generated company restrictions, with their model name and XML id, and the generation as a scalar on a one-row driver (so it is read also when there is no rule) | [`RuleRow`], [`PolicyRows::generation`] |
 //! | 4 | privileges | [`PrivilegeRow`] |
-//! | 5 | `ir_capability` and the field-groups overlay of custom fields (`UNION ALL`) | [`CapabilityRow`], [`FieldGroupsRow`] |
+//! | 5 | `ir_capability`, the field-groups overlay of custom fields and the field group overrides (`UNION ALL`) | [`CapabilityRow`], [`FieldGroupsRow`] |
 //!
 //! The snapshot is the caller's: [`load_rows`] runs the statements on whatever [`RowSource`]
 //! it gets. A shared build opens its own `REPEATABLE READ READ ONLY` transaction on a connection
@@ -29,13 +29,14 @@ use tokio_postgres::Row;
 
 use crate::company_access::GeneratedRow;
 use crate::rows::{
-    CapabilityRow, FieldGroupsRow, GroupRow, Implication, MAX_CAPABILITIES, MAX_FIELD_GROUPS,
-    MAX_GROUPS, MAX_IMPLICATIONS, MAX_PRIVILEGES, MAX_RULES, MAX_TOTAL_TEXT_BYTES, PolicyRows,
-    PrivilegeId, PrivilegeRow, RowError, RowKind, RuleId, RuleRow, group_id,
+    CapabilityRow, FieldGroupsMode, FieldGroupsRow, GroupRow, Implication, MAX_CAPABILITIES,
+    MAX_FIELD_GROUPS, MAX_GROUPS, MAX_IMPLICATIONS, MAX_PRIVILEGES, MAX_RULES,
+    MAX_TOTAL_TEXT_BYTES, PolicyRows, PrivilegeId, PrivilegeRow, RowError, RowKind, RuleId,
+    RuleRow, group_id,
 };
 
 /// The models (and their tables) the loader reads, with the addon that brings each one.
-const SOURCES: [(&str, &str, &str); 7] = [
+const SOURCES: [(&str, &str, &str); 8] = [
     ("ir.access", "ir_access", "the base addon (erp_addon_base)"),
     ("ir.model", "ir_model", "the base addon (erp_addon_base)"),
     (
@@ -59,6 +60,11 @@ const SOURCES: [(&str, &str, &str); 7] = [
         "the base addon (erp_addon_base)",
     ),
     (
+        "ir.field.access",
+        "ir_field_access",
+        "the base addon (erp_addon_base)",
+    ),
+    (
         "ir.model.data",
         "ir_model_data",
         "erp_data::model_data::ADDON with the declaration erp_data::IR_MODEL_DATA",
@@ -73,9 +79,10 @@ SELECT (SELECT count(*) FROM ir_access a WHERE a.active OR a.generated IS TRUE):
        (SELECT count(*) FROM res_groups_implied_rel)::int8,
        (SELECT count(*) FROM res_groups_privilege)::int8,
        (SELECT count(*) FROM ir_capability)::int8,
-       (SELECT count(*) FROM ir_model_fields f
-         WHERE f.state = 'manual'
-           AND EXISTS (SELECT FROM ir_model_fields_group_rel r WHERE r.field_id = f.id))::int8,
+       (  (SELECT count(*) FROM ir_model_fields f
+            WHERE f.state = 'manual'
+              AND EXISTS (SELECT FROM ir_model_fields_group_rel r WHERE r.field_id = f.id))
+        + (SELECT count(*) FROM ir_field_access))::int8,
        (  COALESCE((SELECT sum(octet_length(a.name) + octet_length(m.model)
                                + COALESCE(octet_length(a.domain), 0))
                       FROM ir_access a JOIN ir_model m ON m.id = a.model_id
@@ -120,7 +127,8 @@ SELECT gen.generation, a.id::int8, a.name, m.model::text, a.group_id::int8, a.op
 pub(crate) const PRIVILEGES_SQL: &str = "\
 SELECT p.id::int8, p.name, p.sequence FROM res_groups_privilege p ORDER BY p.id";
 
-/// Statement 5: capability mappings and the groups of custom fields, in two typed branches.
+/// Statement 5: capability mappings, the groups of custom fields and the administrators' field
+/// group overrides (the mode in the third column), in three typed branches.
 pub(crate) const CAPABILITIES_SQL: &str = "\
 SELECT 'capability'::text, c.name::text, c.groups::text, NULL::text, NULL::int8[]
   FROM ir_capability c
@@ -130,7 +138,12 @@ SELECT 'field'::text, f.model::text, NULL::text, f.name::text,
               WHERE r.field_id = f.id ORDER BY 1)
   FROM ir_model_fields f
  WHERE f.state = 'manual'
-   AND EXISTS (SELECT FROM ir_model_fields_group_rel r WHERE r.field_id = f.id)";
+   AND EXISTS (SELECT FROM ir_model_fields_group_rel r WHERE r.field_id = f.id)
+UNION ALL
+SELECT 'override'::text, f.model::text, o.mode::text, f.name::text,
+       ARRAY(SELECT r.group_id::int8 FROM ir_field_access_group_rel r
+              WHERE r.access_id = o.id ORDER BY 1)
+  FROM ir_field_access o JOIN ir_model_fields f ON f.id = o.field_id";
 
 /// The statements of one load, in the order they run.
 pub const STATEMENTS: [&str; 5] = [
@@ -230,7 +243,8 @@ pub async fn load_rows<S: RowSource>(source: &mut S) -> Result<PolicyRows> {
         builder = match get::<String>(row, 0, "ir_capability")?.as_str() {
             "capability" => builder.capability(capability_row(row)?),
             "field" => builder.field_group(field_groups_row(row)?),
-            // `CAPABILITIES_SQL` produces exactly the two kinds above
+            "override" => builder.field_group(field_override_row(row)?),
+            // `CAPABILITIES_SQL` produces exactly the three kinds above
             other => {
                 return Err(Error::programming(format!(
                     "the policy loader read a mapping row of unknown kind {other:?}"
@@ -460,4 +474,25 @@ fn field_groups_row(row: &Row) -> Result<FieldGroupsRow> {
         .map(group_id)
         .collect::<std::result::Result<Vec<GroupId>, _>>()?;
     Ok(FieldGroupsRow::new(&model, &field, groups)?)
+}
+
+fn field_override_row(row: &Row) -> Result<FieldGroupsRow> {
+    const T: &str = "ir_field_access";
+    let model: String = get(row, 1, T)?;
+    let mode = match get::<String>(row, 2, T)?.as_str() {
+        "extend" => FieldGroupsMode::Extend,
+        "replace" => FieldGroupsMode::Replace,
+        other => {
+            return Err(Error::programming(format!(
+                "the field access override of {model} has the unknown mode {other:?}"
+            )));
+        }
+    };
+    let field: String = get(row, 3, T)?;
+    let groups: Vec<i64> = get(row, 4, T)?;
+    let groups = groups
+        .into_iter()
+        .map(group_id)
+        .collect::<std::result::Result<Vec<GroupId>, _>>()?;
+    Ok(FieldGroupsRow::with_mode(&model, &field, mode, groups)?)
 }

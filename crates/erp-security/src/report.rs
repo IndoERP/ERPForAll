@@ -113,6 +113,8 @@ pub enum GroupsSource {
     Registry,
     /// The group list of a custom field (`ir.model.fields`).
     Overlay,
+    /// An administrator's field group override (`ir.field.access`).
+    Override,
 }
 
 impl fmt::Display for GroupsSource {
@@ -120,6 +122,7 @@ impl fmt::Display for GroupsSource {
         f.write_str(match self {
             Self::Registry => "declared groups",
             Self::Overlay => "custom field groups",
+            Self::Override => "field group override",
         })
     }
 }
@@ -136,6 +139,9 @@ pub enum FieldGroupsProblem {
     /// A custom-field row names a field the model does not have (it restricts nothing; an error
     /// of the build).
     UnknownField,
+    /// A `replace` override names a field declared for nobody (`groups = "."`): it is ignored and
+    /// the field stays closed.
+    Protected,
 }
 
 /// A field whose group rule is broken or dangling.
@@ -207,6 +213,12 @@ impl fmt::Display for FieldGroupsIssue {
             FieldGroupsProblem::UnknownField => write!(
                 f,
                 "{} for '{}' on {}: the model has no such field",
+                self.source, self.field, self.model
+            ),
+            FieldGroupsProblem::Protected => write!(
+                f,
+                "{} for '{}' on {}: the field is declared for nobody and cannot be opened \
+                 [ignored, the field stays closed]",
                 self.source, self.field, self.model
             ),
         }

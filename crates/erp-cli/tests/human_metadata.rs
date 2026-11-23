@@ -1568,6 +1568,299 @@ fn result(response: &erp_rpc::RpcResponse) -> serde_json::Value {
     serde_json::from_slice(response.body()).unwrap()
 }
 
+async fn ir_field_id(tx: &mut erp_orm::Transaction, model: &str, name: &str) -> i64 {
+    tx.query(
+        "SELECT id FROM ir_model_fields WHERE model = $1 AND name = $2",
+        &[&model, &name],
+    )
+    .await
+    .unwrap()[0]
+        .get(0)
+}
+
+fn field_access(
+    field: i64,
+    mode: &str,
+    groups: &[i64],
+) -> std::collections::BTreeMap<String, erp_sdk::Value> {
+    let mut values: std::collections::BTreeMap<String, erp_sdk::Value> = [
+        ("field_id".to_owned(), erp_sdk::Value::Int(field)),
+        ("mode".to_owned(), erp_sdk::Value::str(mode)),
+    ]
+    .into_iter()
+    .collect();
+    values.insert(
+        "group_ids".to_owned(),
+        erp_sdk::Value::List(
+            vec![erp_sdk::Value::List(
+                vec![
+                    erp_sdk::Value::Int(6),
+                    erp_sdk::Value::Int(0),
+                    erp_sdk::Value::List(groups.iter().map(|g| erp_sdk::Value::Int(*g)).collect()),
+                ]
+                .into(),
+            )]
+            .into(),
+        ),
+    );
+    values
+}
+
+/// The field names of the stored form `form` that `principal`'s `get_views` describes.
+async fn described_form(
+    service: &RpcService,
+    form: i64,
+    principal: erp_orm::Principal,
+) -> Vec<String> {
+    let response = service
+        .call(RpcCall::json2(
+            "/json/2/acceptance_notes.note/get_views",
+            serde_json::to_vec(&serde_json::json!({
+                "views": [[form, "form"]], "wire_major": 1, "options": {"mobile": false}
+            }))
+            .unwrap(),
+            Caller::Principal(principal),
+        ))
+        .await;
+    assert_eq!(
+        response.status(),
+        200,
+        "{}",
+        String::from_utf8_lossy(response.body())
+    );
+    described_fields(&result(&response))
+}
+
+async fn search_notes(
+    service: &RpcService,
+    principal: erp_orm::Principal,
+    domain: serde_json::Value,
+) -> erp_rpc::RpcResponse {
+    service
+        .call(RpcCall::json2(
+            "/json/2/acceptance_notes.note/search_read",
+            serde_json::to_vec(&serde_json::json!({"domain": domain, "fields": ["name"]})).unwrap(),
+            Caller::Principal(principal),
+        ))
+        .await
+}
+
+/// The field names of the form a caller's `get_views` describes.
+fn described_fields(body: &serde_json::Value) -> Vec<String> {
+    body["views"][0]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|node| node["kind"] == "field")
+        .map(|node| node["field"]["name"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+// An administrator's field access override (`ir.field.access`) applies where declared groups do:
+// `replace` opens `internal_memo` (declared for administrators) to internal users, `extend` closes
+// `body` to them; reads, searches and the described form follow. A field declared for nobody
+// cannot be overridden, and an `extend` override needs a group.
+async fn assert_field_access_overrides(orm: &Orm, db: &TestDb, ordinary: erp_orm::Principal) {
+    let mut setup = orm.begin(SUPERUSER_ID).await.unwrap();
+    let form = setup
+        .env()
+        .records("ir.ui.view")
+        .unwrap()
+        .create_values(
+            &mut setup,
+            &[[
+                (
+                    "name".to_owned(),
+                    erp_sdk::Value::str("Field access override fixture"),
+                ),
+                (
+                    "model".to_owned(),
+                    erp_sdk::Value::str("acceptance_notes.note"),
+                ),
+                (
+                    "arch_db".to_owned(),
+                    erp_sdk::Value::str(
+                        "<form><sheet><field name='name'/><field name='body'/>\
+                         <field name='internal_memo'/></sheet></form>",
+                    ),
+                ),
+            ]
+            .into_iter()
+            .collect()],
+        )
+        .await
+        .unwrap()
+        .ids()[0];
+    let note = setup
+        .env()
+        .records("acceptance_notes.note")
+        .unwrap()
+        .create_values(
+            &mut setup,
+            &[[
+                (
+                    "name".to_owned(),
+                    erp_sdk::Value::str("Field access override note"),
+                ),
+                ("body".to_owned(), erp_sdk::Value::str("visible body")),
+                ("internal_memo".to_owned(), erp_sdk::Value::str("memo")),
+                (
+                    "company_id".to_owned(),
+                    erp_sdk::Value::Int(ordinary.companies().current().unwrap().get()),
+                ),
+                (
+                    "owner_id".to_owned(),
+                    erp_sdk::Value::Int(ordinary.subject().get()),
+                ),
+            ]
+            .into_iter()
+            .collect()],
+        )
+        .await
+        .unwrap()
+        .ids()[0];
+    setup.commit().await.unwrap();
+    drop(setup);
+    let before = fresh_metadata_policy_orm(orm, db).await;
+    let fields = described_form(
+        &RpcService::new(before.clone(), Host, RpcConfig::default()),
+        form,
+        ordinary.clone(),
+    )
+    .await;
+    assert!(fields.contains(&"body".to_owned()), "{fields:?}");
+    assert!(!fields.contains(&"internal_memo".to_owned()), "{fields:?}");
+
+    let mut admin = orm.begin(SUPERUSER_ID).await.unwrap();
+    let user_group = relation_id(&mut admin, "group_user", "res.groups").await;
+    let system_group = relation_id(&mut admin, "group_system", "res.groups").await;
+    let memo = ir_field_id(&mut admin, "acceptance_notes.note", "internal_memo").await;
+    let body = ir_field_id(&mut admin, "acceptance_notes.note", "body").await;
+    let created = admin
+        .env()
+        .records("ir.field.access")
+        .unwrap()
+        .create_values(
+            &mut admin,
+            &[
+                field_access(memo, "replace", &[user_group]),
+                field_access(body, "extend", &[system_group]),
+            ],
+        )
+        .await
+        .unwrap()
+        .ids();
+    admin.commit().await.unwrap();
+    drop(admin);
+
+    // one override per field
+    let mut refused = orm.begin(SUPERUSER_ID).await.unwrap();
+    let twice = refused
+        .env()
+        .records("ir.field.access")
+        .unwrap()
+        .create_values(
+            &mut refused,
+            &[field_access(memo, "extend", &[system_group])],
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(twice.kind(), erp_sdk::ErrorKind::Validation, "{twice}");
+    refused.rollback().await.unwrap();
+    // a field declared for nobody cannot be overridden, and `extend` needs a group
+    let mut refused = orm.begin(SUPERUSER_ID).await.unwrap();
+    let secret = ir_field_id(&mut refused, "res.users.apikeys", "legacy_hash").await;
+    let error = refused
+        .env()
+        .records("ir.field.access")
+        .unwrap()
+        .create_values(&mut refused, &[field_access(secret, "replace", &[])])
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), erp_sdk::ErrorKind::Validation, "{error}");
+    assert!(error.message().contains("cannot be overridden"), "{error}");
+    refused.rollback().await.unwrap();
+    let mut refused = orm.begin(SUPERUSER_ID).await.unwrap();
+    let name = ir_field_id(&mut refused, "acceptance_notes.note", "name").await;
+    let error = refused
+        .env()
+        .records("ir.field.access")
+        .unwrap()
+        .create_values(&mut refused, &[field_access(name, "extend", &[])])
+        .await
+        .unwrap_err();
+    assert!(error.message().contains("at least one group"), "{error}");
+    refused.rollback().await.unwrap();
+    drop(refused);
+
+    let after = fresh_metadata_policy_orm(orm, db).await;
+    let mut tx = after.begin(ordinary.subject()).await.unwrap();
+    let records = tx
+        .env()
+        .records("acceptance_notes.note")
+        .unwrap()
+        .browse([note])
+        .unwrap();
+    let rows = records.read(&mut tx, &["internal_memo"]).await.unwrap();
+    assert_eq!(rows[0]["internal_memo"], erp_sdk::Value::str("memo"));
+    let error = records.read(&mut tx, &["body"]).await.unwrap_err();
+    assert_eq!(error.kind(), erp_sdk::ErrorKind::Access, "{error}");
+    tx.rollback().await.unwrap();
+    drop(tx);
+    let service = RpcService::new(after.clone(), Host, RpcConfig::default());
+    let opened = search_notes(
+        &service,
+        ordinary.clone(),
+        serde_json::json!([["internal_memo", "=", "memo"]]),
+    )
+    .await;
+    assert_eq!(
+        opened.status(),
+        200,
+        "{}",
+        String::from_utf8_lossy(opened.body())
+    );
+    assert_eq!(result(&opened).as_array().unwrap().len(), 1);
+    let closed = search_notes(
+        &service,
+        ordinary.clone(),
+        serde_json::json!([["body", "=", "visible body"]]),
+    )
+    .await;
+    assert_eq!(
+        closed.status(),
+        403,
+        "{}",
+        String::from_utf8_lossy(closed.body())
+    );
+    let fields = described_form(&service, form, ordinary.clone()).await;
+    assert!(fields.contains(&"internal_memo".to_owned()), "{fields:?}");
+    assert!(!fields.contains(&"body".to_owned()), "{fields:?}");
+
+    // removing the overrides restores the declared groups
+    let mut cleanup = orm.begin(SUPERUSER_ID).await.unwrap();
+    cleanup
+        .env()
+        .records("ir.field.access")
+        .unwrap()
+        .browse(created)
+        .unwrap()
+        .unlink(&mut cleanup)
+        .await
+        .unwrap();
+    cleanup.commit().await.unwrap();
+    drop(cleanup);
+    let restored = fresh_metadata_policy_orm(orm, db).await;
+    let fields = described_form(
+        &RpcService::new(restored, Host, RpcConfig::default()),
+        form,
+        ordinary,
+    )
+    .await;
+    assert!(fields.contains(&"body".to_owned()), "{fields:?}");
+    assert!(!fields.contains(&"internal_memo".to_owned()), "{fields:?}");
+}
+
 async fn stored_form(
     orm: &Orm,
     service: &RpcService,
@@ -3634,6 +3927,7 @@ async fn installed_metadata_rpc_uses_authenticated_acl_and_field_groups_async() 
     )
     .await;
     assert_list_count_rpc_scope(&orm, &service, ordinary.clone(), company).await;
+    assert_field_access_overrides(&orm, &db, ordinary.clone()).await;
     assert_list_filter_metadata(&orm, &service, ordinary.clone(), list_view, search_view).await;
     panel_contract_custom::run(&orm, &db, ordinary.clone(), admin.clone(), search_view).await;
     assert_action_list_presentation(

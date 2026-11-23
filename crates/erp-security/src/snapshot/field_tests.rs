@@ -16,7 +16,8 @@ use erp_registry::{
 use super::*;
 use crate::report::{FieldGroupsProblem, GroupsSource};
 use crate::rows::{
-    CapabilityRow, FieldGroupsRow, Implication, PolicyRows, PrivilegeId, PrivilegeRow,
+    CapabilityRow, FieldGroupsMode, FieldGroupsRow, Implication, PolicyRows, PrivilegeId,
+    PrivilegeRow,
 };
 use crate::testing::{BOB, EVERYONE, NO_ONE, PORTAL, USER, bind, g, group, principal_in, xid};
 
@@ -621,4 +622,127 @@ fn the_closure_of_a_deleted_group_is_an_access_error_and_implied_groups_are_adde
         err.message(),
         "The group 9999 does not exist (any more): the user's groups cannot be resolved."
     );
+}
+
+fn override_row(field: &str, mode: FieldGroupsMode, groups: &[i64]) -> FieldGroupsRow {
+    FieldGroupsRow::with_mode(OBJ, field, mode, groups.iter().map(|id| g(*id))).unwrap()
+}
+
+#[test]
+fn an_extend_override_adds_its_groups_to_the_declared_ones() {
+    let rows = rows(|b| {
+        b.field_groups([
+            // an open field becomes the test group's; a declared one needs both
+            override_row("name", FieldGroupsMode::Extend, &[TEST_GROUP]),
+            override_row("both", FieldGroupsMode::Extend, &[TEST_GROUP]),
+        ])
+    });
+    let policy = snapshot_with(&rows, |c| c);
+    let read = |p: &Principal| allowed(&policy, &mask_of(&policy, p, OBJ), OBJ, FieldOp::Read);
+    let write = |p: &Principal| allowed(&policy, &mask_of(&policy, p, OBJ), OBJ, FieldOp::Write);
+    let internal = principal_in(&policy, BOB, &[USER], false);
+    let member = principal_in(&policy, BOB, &[USER, TEST_GROUP], false);
+    let other = principal_in(&policy, OTHER, &[TEST_GROUP], false);
+    assert!(!read(&internal).contains(&"name"));
+    assert!(!write(&internal).contains(&"name"));
+    assert!(read(&member).contains(&"name"));
+    assert!(read(&other).contains(&"name"));
+    assert!(!read(&internal).contains(&"both"));
+    assert!(read(&member).contains(&"both"));
+    assert!(
+        !read(&other).contains(&"both"),
+        "the declared group is still required"
+    );
+    assert!(
+        read(&internal).contains(&"val"),
+        "other fields are untouched"
+    );
+    assert!(
+        policy
+            .report()
+            .field_group_issues()
+            .iter()
+            .all(|i| i.source() != GroupsSource::Override)
+    );
+}
+
+#[test]
+fn a_replace_override_takes_the_place_of_the_declared_groups() {
+    let rows = rows(|b| {
+        b.field_groups([
+            // `forbidden2` (test group) opened to internal users; `both` (internal) opened to all
+            override_row("forbidden2", FieldGroupsMode::Replace, &[USER]),
+            override_row("both", FieldGroupsMode::Replace, &[]),
+            // `name` (open) closed to everyone but the test group
+            override_row("name", FieldGroupsMode::Replace, &[TEST_GROUP]),
+        ])
+    });
+    let policy = snapshot_with(&rows, |c| c);
+    let read = |p: &Principal| allowed(&policy, &mask_of(&policy, p, OBJ), OBJ, FieldOp::Read);
+    let internal = principal_in(&policy, BOB, &[USER], false);
+    let other = principal_in(&policy, OTHER, &[TEST_GROUP], false);
+    let portal = principal_in(&policy, BOB, &[PORTAL], false);
+    assert!(read(&internal).contains(&"forbidden2"));
+    assert!(!read(&other).contains(&"forbidden2"), "replaced, not added");
+    assert!(read(&portal).contains(&"both"));
+    assert!(read(&other).contains(&"name"));
+    assert!(!read(&internal).contains(&"name"));
+}
+
+#[test]
+fn a_replace_override_never_opens_a_field_declared_for_nobody() {
+    let rows = rows(|b| {
+        b.field_groups([
+            override_row("forbidden3", FieldGroupsMode::Replace, &[USER]),
+            override_row("forbidden", FieldGroupsMode::Replace, &[]),
+        ])
+    });
+    let policy = snapshot_with(&rows, |c| c);
+    let internal = principal_in(&policy, BOB, &[USER], false);
+    let mask = mask_of(&policy, &internal, OBJ);
+    let spec = model_of(&policy, OBJ);
+    assert!(mask.never(spec.field_id("forbidden3").unwrap()));
+    assert!(allowed(&policy, &mask, OBJ, FieldOp::Read).contains(&"forbidden"));
+    let issues: Vec<String> = policy
+        .report()
+        .field_group_issues()
+        .iter()
+        .filter(|i| i.source() == GroupsSource::Override)
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(
+        issues,
+        [
+            "field group override for 'forbidden3' on test_access_right.some_obj: the field is \
+          declared for nobody and cannot be opened [ignored, the field stays closed]"
+        ]
+    );
+    assert!(policy.report().has_errors());
+}
+
+#[test]
+fn a_field_has_one_override_and_may_keep_its_custom_field_groups() {
+    let twice = PolicyRows::builder(1)
+        .groups([group(USER, "Internal User").with_xmlid(xid("base.group_user"))])
+        .field_groups([
+            FieldGroupsRow::with_mode(OBJ, "name", FieldGroupsMode::Extend, [g(USER)]).unwrap(),
+            FieldGroupsRow::with_mode(OBJ, "name", FieldGroupsMode::Replace, [g(USER)]).unwrap(),
+        ])
+        .build()
+        .unwrap_err();
+    assert!(
+        twice
+            .to_string()
+            .contains("test_access_right.some_obj.name (override)"),
+        "{twice}"
+    );
+    PolicyRows::builder(1)
+        .groups([group(USER, "Internal User").with_xmlid(xid("base.group_user"))])
+        .field_groups([
+            FieldGroupsRow::new(OBJ, "x_custom", [g(USER)]).unwrap(),
+            FieldGroupsRow::with_mode(OBJ, "x_custom", FieldGroupsMode::Replace, [g(USER)])
+                .unwrap(),
+        ])
+        .build()
+        .unwrap();
 }

@@ -108,6 +108,18 @@ application) answer with its images; an image it does not ship keeps the built-i
 `ETag` and `Cache-Control: no-cache`, and SVG is sent with a sandboxing `Content-Security-Policy`. Only one
 installed addon may ship brand images: installing a second one fails.
 
+A field's `groups` (`#[field(..., groups = "base.group_system")]`) say who may read and write it. An administrator
+can change that without changing the addon, in Settings › Technical › Security › Field Access (`ir.field.access`,
+one override per field): **Also require these groups** (`extend`) requires one of its groups as well as one of the
+declared ones, so it only narrows; **Replace the declared groups** (`replace`) puts its groups in their place (no
+group: everyone who may access the model). The groups of a custom `x_` field stay in both cases. An override applies
+wherever declared groups do: reads, writes, searches, `fields_get`, and the fields a view description shows (a
+replaced field's view node takes no guard from the declaration; the description leaves the field out for a caller
+who may not read it). A field declared for nobody (`groups = "."`, such as key digests) cannot be overridden, and
+the policy ignores and reports a stored `replace` row for one. An override names one field: a related or delegated
+(`_inherits`) copy keeps its own groups and needs its own override. Overrides are policy rows: a write rebuilds the
+policy (the `policy` generation) and is audited like every write.
+
 A form view opens a saved record editable. `<form edit_mode="read">` opens it read-first instead: the fields show as
 read values with an Edit button (or the E key outside a field); a successful Save or a Discard return to read mode,
 a refused save stays in edit mode with its errors, and a new record opens editable. A form with `edit="0"` is always
