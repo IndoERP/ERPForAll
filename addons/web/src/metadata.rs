@@ -3013,6 +3013,8 @@ async fn get_views(
     }
     let caller_model = require_model_read(env, tx, model).await?;
     let spec = caller_model.spec();
+    // One check per call: every requested view describes this same root model.
+    let rights = crate::view_rights::ModelRights::of(&caller_model, tx).await?;
     let mut requested = admission.vector::<(Option<i64>, &str)>(views.len())?;
     let mut types = admission.vector::<&str>(views.len())?;
     for item in &views {
@@ -3107,6 +3109,7 @@ async fn get_views(
             crate::h18_authorize::Request::new(&payload, declaration, model, env, &budget)
                 .authorize(&mut view, tx)
                 .await?;
+        crate::view_rights::restrict_root(&mut view, rights)?;
         let (fields, storage) = authorized.into_parts();
         admission.hold(storage)?;
         admission.phase("views:aggregate-fields:reserve");

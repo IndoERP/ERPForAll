@@ -115,6 +115,12 @@ read-only and cannot declare read mode. A field widget of the record form receiv
 `onRecordEvent(listener)`, which returns an unsubscribe function and reports `saved` (with the record id),
 `saveFailed`, `discarded` and `modeChanged` after the form has shown the outcome; subscriptions end with the widget.
 
+The `create`, `edit` and `delete` a list, form, kanban or calendar view describes are narrowed to the caller's
+model rights by `get_views`: without the create right a view answers `create: false` (no New, no Duplicate, no
+quick create), without the write right `edit: false` (a read-only form without read mode, no Archive, no dragging
+cards), without the unlink right `delete: false` (no Delete). A view's own `create="0"` stays off for every caller.
+Only the model-level rights are used; a record rule can still refuse one record when the command runs.
+
 ## The web client
 
 The client is TypeScript, compiled ahead of time:

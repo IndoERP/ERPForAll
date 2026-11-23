@@ -1568,6 +1568,101 @@ fn result(response: &erp_rpc::RpcResponse) -> serde_json::Value {
     serde_json::from_slice(response.body()).unwrap()
 }
 
+// The view root's create/edit/delete follow the caller's model rights: an internal user may only read
+// currencies, so New, Edit, Archive and Delete are not offered; an administrator keeps the view's own.
+async fn assert_view_commands_follow_model_rights(
+    orm: &Orm,
+    service: &RpcService,
+    admin: erp_orm::Principal,
+    ordinary: erp_orm::Principal,
+) {
+    let mut setup = orm.begin(SUPERUSER_ID).await.unwrap();
+    let view = |kind: &str, arch: &str| {
+        [
+            (
+                "name".to_owned(),
+                erp_sdk::Value::str(format!("Model rights fixture {kind}")),
+            ),
+            ("model".to_owned(), erp_sdk::Value::str("res.currency")),
+            ("arch_db".to_owned(), erp_sdk::Value::str(arch)),
+        ]
+        .into_iter()
+        .collect::<std::collections::BTreeMap<String, erp_sdk::Value>>()
+    };
+    let rows = [
+        view("list", "<list><field name='name'/></list>"),
+        view(
+            "form",
+            "<form edit_mode='read'><sheet><field name='name'/></sheet></form>",
+        ),
+    ];
+    let ids = setup
+        .env()
+        .records("ir.ui.view")
+        .unwrap()
+        .create_values(&mut setup, &rows)
+        .await
+        .unwrap()
+        .ids();
+    setup.commit().await.unwrap();
+    drop(setup);
+    let roots = |principal: erp_orm::Principal| {
+        let request = serde_json::json!({
+            "views": [[ids[0], "list"], [ids[1], "form"]],
+            "wire_major": 1,
+            "options": {"mobile": false},
+        });
+        async move {
+            let response = service
+                .call(RpcCall::json2(
+                    "/json/2/res.currency/get_views",
+                    serde_json::to_vec(&request).unwrap(),
+                    Caller::Principal(principal),
+                ))
+                .await;
+            assert_eq!(
+                response.status(),
+                200,
+                "{}",
+                String::from_utf8_lossy(response.body())
+            );
+            let body = result(&response);
+            let root = |index: usize| {
+                let view = &body["views"][index];
+                view["nodes"][view["root"].as_u64().unwrap() as usize].clone()
+            };
+            (root(0), root(1))
+        }
+    };
+    let (list, form) = roots(ordinary).await;
+    assert_eq!(list["kind"], "list");
+    assert_eq!(
+        (&list["create"], &list["edit"], &list["delete"]),
+        (
+            &serde_json::json!(false),
+            &serde_json::json!(false),
+            &serde_json::json!(false)
+        )
+    );
+    assert_eq!(form["kind"], "form");
+    assert_eq!(
+        (&form["create"], &form["edit"], &form["delete"]),
+        (
+            &serde_json::json!(false),
+            &serde_json::json!(false),
+            &serde_json::json!(false)
+        )
+    );
+    // a read-only form has no Edit command, so the read-first mode is dropped with the right
+    assert!(form.get("edit_mode").is_none(), "{form}");
+    let (list, form) = roots(admin).await;
+    for key in ["create", "edit", "delete"] {
+        assert!(list.get(key).is_none(), "{list}");
+        assert!(form.get(key).is_none(), "{form}");
+    }
+    assert_eq!(form["edit_mode"], "read");
+}
+
 async fn stored_form(
     orm: &Orm,
     service: &RpcService,
@@ -3634,6 +3729,7 @@ async fn installed_metadata_rpc_uses_authenticated_acl_and_field_groups_async() 
     )
     .await;
     assert_list_count_rpc_scope(&orm, &service, ordinary.clone(), company).await;
+    assert_view_commands_follow_model_rights(&orm, &service, admin.clone(), ordinary.clone()).await;
     assert_list_filter_metadata(&orm, &service, ordinary.clone(), list_view, search_view).await;
     panel_contract_custom::run(&orm, &db, ordinary.clone(), admin.clone(), search_view).await;
     assert_action_list_presentation(

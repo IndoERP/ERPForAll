@@ -77,6 +77,7 @@ mod h18_transport_unit;
 mod metadata;
 pub mod pivot_export;
 pub mod table_xlsx;
+mod view_rights;
 mod view_types;
 
 /// `web.menu_icon`: the client's icon picker for a menu's `web_icon` text (`lucide:<name>`).

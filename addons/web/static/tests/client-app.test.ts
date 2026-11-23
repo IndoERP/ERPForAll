@@ -3448,14 +3448,14 @@ test("the command palette lists authorized menus, finds Notes from 'No', and hin
 
 
 /** An existing, archivable record in the default theme; `writes` collects every write-method call. */
-async function startArchivableForm(): Promise<{ root: HTMLElement; writes: string[] }> {
+async function startArchivableForm(rootFlags: Record<string, boolean> = {}): Promise<{ root: HTMLElement; writes: string[] }> {
   history.replaceState(null, "", "/erp/action-20?id=5&view_type=form");
   const writes: string[] = [];
   const note = description.fields["test.note"];
   const archivable = {
     ...description, fields: { "test.note": { ...note, active: { type: "boolean", label: "Active", required: false, readonly: false, relation: null, relation_field: null, selection: null } } },
     views: description.views.map(view => view.type !== "form" ? view : {
-      ...view, nodes: [{ kind: "form", record_mode: "record", children: [1, 2] }, view.nodes[1],
+      ...view, nodes: [{ kind: "form", record_mode: "record", children: [1, 2], ...rootFlags }, view.nodes[1],
         { kind: "field", force_save: false, field: { model: "test.note", name: "active" }, widget: "boolean_toggle", options: {}, modifiers: { readonly: null, required: null, invisible: null }, label: "Active" }]
     })
   };
@@ -3490,6 +3490,31 @@ test("an unknown action outcome disables the record menu writes and their jobs r
   for (const entry of entries()) { entry.disabled = false; entry.click(); }
   await new Promise(done => setTimeout(done, 20));
   expect(writes).toEqual([]);
+});
+
+/// The server narrows create/edit/delete to the caller's model rights (`get_views`); the form then offers none of the
+/// record commands those rights refuse.
+test("a form whose caller may not create, write or delete offers no New, Duplicate, Archive or Delete", async () => {
+  const { root } = await startArchivableForm({ create: false, edit: false, delete: false });
+  const content = root.querySelector<HTMLElement>("[data-client-content]")!;
+  expect([...content.querySelectorAll("button")].some(button => button.textContent === "New")).toBe(false);
+  root.querySelector<HTMLButtonElement>(".record-menu-btn")!.click();
+  expect(root.querySelector<HTMLElement>(".form-duplicate-btn")!.hidden).toBe(true);
+  expect(root.querySelector<HTMLElement>(".form-archive-btn")!.hidden).toBe(true);
+  expect(root.querySelector(".form-delete-btn")).toBeNull();
+  expect(root.querySelector<HTMLElement>(".form-reload-btn")!.hidden).toBe(false);
+  // without the write right the record is shown read-only
+  expect([...content.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("form input, form textarea")].every(control => control.disabled || control.readOnly)).toBe(true);
+});
+
+test("a form whose caller has every right offers New, Duplicate, Archive and Delete", async () => {
+  const { root } = await startArchivableForm();
+  const content = root.querySelector<HTMLElement>("[data-client-content]")!;
+  expect([...content.querySelectorAll("button")].some(button => button.textContent === "New")).toBe(true);
+  root.querySelector<HTMLButtonElement>(".record-menu-btn")!.click();
+  expect(root.querySelector<HTMLElement>(".form-duplicate-btn")!.hidden).toBe(false);
+  expect(root.querySelector<HTMLElement>(".form-archive-btn")!.hidden).toBe(false);
+  expect(root.querySelector(".form-delete-btn")).not.toBeNull();
 });
 
 /// CYCLE3 SHOULD 5: the record menu is the shared dropdown (roles, aria-expanded, roving focus, Escape).
