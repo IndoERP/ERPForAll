@@ -212,6 +212,7 @@ export function createSearchMenuPanel(model: SearchModel, onUpdate: () => void, 
     filtersSection.append(filterList);
     container.append(filtersSection);
     if (model.hasGroupBy()) container.append(groupBySection());
+    if (model.hasFavorites()) container.append(favoritesSection());
 
     panel.append(container, errorNotice);
   };
@@ -289,6 +290,122 @@ export function createSearchMenuPanel(model: SearchModel, onUpdate: () => void, 
     }
     return section;
   };
+  // The Favorites section: the saved searches of this list, then "Save current search". Read on the first open, like Group By.
+  let favoritesLoading = false, saveOpen = false;
+  const favoritesSection = (): HTMLElement => {
+    const section = document.createElement("div");
+    section.className = "erp-search-section erp-favorites-section";
+    const header = document.createElement("div");
+    header.className = "erp-search-section-header";
+    header.innerHTML = `
+      <svg class="erp-section-icon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+        <path fill="currentColor" d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/>
+      </svg>
+      <span>Favorites</span>
+    `;
+    const list = document.createElement("div");
+    list.className = "erp-search-section-list";
+    section.append(header, list);
+    if (!model.favoritesReady()) {
+      const status = document.createElement("p");
+      status.className = "erp-search-section-status muted";
+      status.setAttribute("role", "status");
+      status.textContent = favoritesLoading ? "Loading favorites…" : "Favorites are unavailable.";
+      list.append(status);
+      return section;
+    }
+    for (const item of model.getFavorites()) {
+      const line = document.createElement("div");
+      line.className = "erp-favorite-line";
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = `erp-search-menu-item ${item.isActive ? "active" : ""}`;
+      row.setAttribute("role", "checkbox");
+      row.setAttribute("aria-checked", String(item.isActive));
+      row.disabled = item.problem !== undefined;
+      const check = document.createElement("span");
+      check.className = "erp-check-icon";
+      check.classList.toggle("is-on", item.isActive);
+      const label = document.createElement("span");
+      label.className = "erp-item-label";
+      const marks = [item.isDefault ? "default" : "", item.isShared ? "shared" : ""].filter(Boolean);
+      label.textContent = marks.length ? `${item.name} (${marks.join(", ")})` : item.name;
+      row.append(check, label);
+      row.addEventListener("click", () => apply(() => model.toggleFavorite(item.id)));
+      line.append(row);
+      if (item.isOwn) {
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "erp-favorite-delete";
+        remove.setAttribute("aria-label", `Delete favorite ${item.name}`);
+        remove.textContent = "✕";
+        remove.addEventListener("click", () => run(model.deleteFavorite(item.id), "Unable to delete this favorite."));
+        line.append(remove);
+      }
+      const note = item.problem ? `Cannot be applied: ${item.problem}.` : item.sort.length ? "Its list order is not applied." : "";
+      if (note) {
+        const muted = document.createElement("p");
+        muted.className = "erp-search-section-status muted";
+        muted.textContent = note;
+        line.append(muted);
+      }
+      list.append(line);
+    }
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "erp-search-toggle-form-btn";
+    toggle.textContent = saveOpen ? "− Save current search" : "+ Save current search";
+    toggle.addEventListener("click", () => { saveOpen = !saveOpen; render(); });
+    list.append(toggle);
+    if (saveOpen) {
+      const form = document.createElement("form");
+      form.className = "erp-save-favorite-form";
+      const name = document.createElement("input");
+      name.type = "text"; name.required = true; name.maxLength = 256;
+      name.className = "erp-favorite-name";
+      name.setAttribute("aria-label", "Favorite name");
+      name.placeholder = "Name…";
+      const option = (text: string, className: string): HTMLInputElement => {
+        const box = document.createElement("input");
+        box.type = "checkbox"; box.className = className;
+        const wrap = document.createElement("label");
+        wrap.append(box, ` ${text}`);
+        form.append(wrap);
+        return box;
+      };
+      form.append(name);
+      const asDefault = option("Default filter", "erp-favorite-default"), shared = option("Shared", "erp-favorite-shared");
+      const save = document.createElement("button");
+      save.type = "submit";
+      save.className = "erp-btn erp-btn-sm erp-btn-primary";
+      save.textContent = "Save";
+      form.append(save);
+      form.addEventListener("submit", event => {
+        event.preventDefault(); event.stopPropagation();
+        if (!name.value.trim()) return;
+        saveOpen = false;
+        run(model.saveFavorite(name.value, asDefault.checked, shared.checked), "Unable to save this favorite.");
+      });
+      list.append(form);
+    }
+    return section;
+  };
+  /** Finish an asynchronous change: redraw and refresh the list, or show why it failed. */
+  const run = (change: Promise<unknown>, fallback: string): void => {
+    change.then(() => { errorNotice.hidden = true; if (isOpen()) render(); onUpdate(); }, error => {
+      errorNotice.hidden = false;
+      errorNotice.textContent = error instanceof Error ? error.message : fallback;
+      if (isOpen()) render();
+    });
+  };
+  const loadFavorites = (): void => {
+    if (!model.hasFavorites() || model.favoritesReady() || favoritesLoading) return;
+    favoritesLoading = true;
+    model.loadFavorites().then(() => undefined, error => {
+      errorNotice.hidden = false;
+      errorNotice.textContent = error instanceof Error ? error.message : "Unable to load the favorites.";
+    }).finally(() => { favoritesLoading = false; if (isOpen()) render(); });
+  };
   let viewFiltersLoading = false;
   const loadViewFilters = (): void => {
     if (model.viewFiltersReady() || viewFiltersLoading) return;
@@ -343,6 +460,7 @@ export function createSearchMenuPanel(model: SearchModel, onUpdate: () => void, 
     hotkeys?.dispose(); hotkeys = undefined;
     loadGroupBy();
     loadViewFilters();
+    loadFavorites();
     render();
     panel.style.display = "block";
     trigger?.setAttribute("aria-expanded", "true");

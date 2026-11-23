@@ -21,6 +21,8 @@ export interface SearchFacet {
   /** Every grouping of a `groupBy` facet in the order chosen (`field` or `field:interval`); the first is `groupByField`. */
   groupByFields?: string[];
   groupByIds?: string[];
+  /** The saved favorite a `favorite` facet stands for. */
+  favoriteId?: string;
 }
 
 export interface AutocompleteItem {
@@ -87,6 +89,22 @@ export interface FavoriteItem {
   isDefault: boolean;
   isShared: boolean;
   isActive: boolean;
+  /** The caller's own favorite: the caller may delete it. */
+  isOwn: boolean;
+  /** The list order the favorite was saved with; the search panel does not apply it yet. */
+  sort: string[];
+  /** Why the favorite cannot be applied, when it cannot. */
+  problem?: string;
+}
+
+/** What to save: the current search under a name. */
+export interface FavoriteDraft { name: string; domain: unknown[]; groupBy: string[]; isDefault: boolean; isShared: boolean }
+
+/** Where an owner keeps the favorites of its list (`ir.filters` for the action). */
+export interface FavoriteStore {
+  load(): Promise<FavoriteItem[]>;
+  save(draft: FavoriteDraft): Promise<FavoriteItem>;
+  remove(id: string): Promise<void>;
 }
 
 export interface SearchModelOptions {

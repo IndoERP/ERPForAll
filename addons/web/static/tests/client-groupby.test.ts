@@ -937,3 +937,46 @@ test("the search view's named filters are read when the menu opens and narrow th
   const again = await startNotes(notesWithContext(null), { path: `${location.pathname}${location.search}` });
   await vi.waitFor(() => expect(again.rows()).toBe(1));
 });
+
+// ---- saved favorites on a real list ----
+
+const favoriteRow = (id: number, name: string, extra: Record<string, unknown> = {}) =>
+  ({ id, name, is_default: false, shared: false, own: true, domain: [["priority", "=", "normal"]], group_by: [], sort: [], ...extra });
+
+/// (partial: the user's default favorite is applied on first open in place of the action's search defaults; not after the user changes the search)
+test("the user's default favorite opens the list in place of the action's search defaults", async () => {
+  const handle = notesWithContext(searchDefaults(["search_default_high", 1]));
+  const { root, of, rows } = await startNotes(call => call.method === "erp_get_favorites" ? [favoriteRow(5, "Normal ones", { is_default: true })] : handle(call));
+  await vi.waitFor(() => expect(rows()).toBe(2));
+  expect(of("erp_get_favorites").map(call => [call.body["model"], call.body["action_id"]])).toEqual([["test.note", 20]]);
+  expect(root.querySelector(".erp-facet-favorite .erp-facet-values")!.textContent).toBe("Normal ones");
+  expect(root.querySelector(".erp-facet-filter")).toBeNull();
+  root.querySelector<HTMLButtonElement>(".erp-facet-favorite .chip-remove-btn")!.click();
+  await vi.waitFor(() => expect(rows()).toBe(4));
+  // The emptied search stays empty on reload: the default is not applied again.
+  app!.dispose(); app = undefined;
+  const again = await startNotes(call => call.method === "erp_get_favorites" ? [favoriteRow(5, "Normal ones", { is_default: true })] : handle(call), { path: `${location.pathname}${location.search}` });
+  await vi.waitFor(() => expect(again.rows()).toBe(4));
+  expect(again.root.querySelector(".erp-facet-favorite")).toBeNull();
+});
+
+/// (partial: saving from the menu sends the facets' domain to create_or_replace and shows the saved favorite)
+test("the current search is saved as a favorite through create_or_replace", async () => {
+  const { root, of, groupByPriority } = await startNotes(call => {
+    if (call.method === "erp_get_favorites") return [];
+    if (call.method === "create_or_replace") return favoriteRow(9, String(call.body["name"]), { domain: call.body["domain"], group_by: call.body["group_by"], is_default: call.body["is_default"] });
+    return undefined;
+  });
+  const panel = await groupByPriority();
+  root.querySelector<HTMLButtonElement>(".search-menu-toggle")!.click();
+  await vi.waitFor(() => expect(panel.querySelector(".erp-favorites-section .erp-search-toggle-form-btn")).not.toBeNull());
+  panel.querySelector<HTMLButtonElement>(".erp-favorites-section .erp-search-toggle-form-btn")!.click();
+  panel.querySelector<HTMLInputElement>(".erp-favorite-name")!.value = "By priority";
+  panel.querySelector<HTMLInputElement>(".erp-favorite-default")!.checked = true;
+  panel.querySelector<HTMLFormElement>(".erp-save-favorite-form")!.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(of("create_or_replace")).toHaveLength(1));
+  const body = of("create_or_replace")[0]!.body;
+  expect([body["name"], body["model"], body["action_id"], body["domain"], body["group_by"], body["is_default"], body["shared"]])
+    .toEqual(["By priority", "test.note", 20, [], ["priority"], true, false]);
+  await vi.waitFor(() => expect(root.querySelector(".erp-facet-favorite .erp-facet-values")?.textContent).toBe("By priority"));
+});

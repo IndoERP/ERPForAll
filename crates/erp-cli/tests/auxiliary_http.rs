@@ -605,6 +605,8 @@ async fn run_test() {
         "View descriptions must remain identical!"
     );
 
+    favorites(&loaded.orm, &service, &principal_a, &principal_b, action_1).await;
+
     // Deleting an action removes the filters scoped to it through the foreign key's cascade, with
     // no clean-up statement of its own in the action unlink.
     let mut tx_del = loaded.orm.begin(SUPERUSER_ID).await.unwrap();
@@ -629,5 +631,157 @@ async fn run_test() {
     assert_eq!(
         left, 0,
         "the filter scoped to a deleted action goes with it"
+    );
+}
+
+/// The web client's favorites: `erp_get_favorites` and `create_or_replace`.
+async fn favorites(
+    orm: &Orm,
+    service: &RpcService,
+    principal_a: &erp_orm::Principal,
+    principal_b: &erp_orm::Principal,
+    action: i64,
+) {
+    let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+    create(
+        &mut tx,
+        "ir.filters",
+        RawVals::new()
+            .set_cell("name", Cell::Str("Other context".into()))
+            .set_cell("model_id", Cell::Str("res.partner".into()))
+            .set_cell("action_id", Cell::Id(action))
+            .set_cell("domain", Cell::Str("[]".into()))
+            .set_cell("context", Cell::Str("{'lang': 'fr_FR'}".into()))
+            .set_cell("sort", Cell::Str("[]".into())),
+    )
+    .await;
+    tx.commit().await.unwrap();
+
+    let list = |principal: &erp_orm::Principal| {
+        let principal = principal.clone();
+        async move {
+            let (status, body) = rpc(
+                service,
+                &principal,
+                "/json/2/ir.filters/erp_get_favorites",
+                json!({"model": "res.partner", "action_id": action}),
+            )
+            .await;
+            assert_eq!(status, 200, "{body}");
+            body.as_array().unwrap().clone()
+        }
+    };
+    let named = |rows: &[Value], name: &str| rows.iter().find(|row| row["name"] == name).cloned();
+    let rows = list(principal_a).await;
+    // Stored literal texts come back as JSON; shared and own are told apart.
+    let public = named(&rows, "Public Customers").unwrap();
+    assert_eq!(public["domain"], json!([["is_company", "=", true]]));
+    assert_eq!(
+        (public["shared"].clone(), public["own"].clone()),
+        (json!(true), json!(false))
+    );
+    let private = named(&rows, "User A Private Leads").unwrap();
+    assert_eq!(
+        (private["shared"].clone(), private["own"].clone()),
+        (json!(false), json!(true))
+    );
+    assert_eq!(private["group_by"], json!([]));
+    let odd = named(&rows, "Other context").unwrap();
+    assert_eq!(
+        odd["problem"],
+        "its context sets 'lang', which the search panel does not apply"
+    );
+
+    let save = |principal: &erp_orm::Principal, params: Value| {
+        let principal = principal.clone();
+        async move {
+            rpc(
+                service,
+                &principal,
+                "/json/2/ir.filters/create_or_replace",
+                params,
+            )
+            .await
+        }
+    };
+    let params = |name: &str, default: bool, shared: bool| {
+        json!({"name": name, "model": "res.partner", "action_id": action,
+            "domain": [["name", "ilike", "a"]], "group_by": ["company_id"],
+            "is_default": default, "shared": shared})
+    };
+    let (status, first) = save(principal_a, params("Mine", true, false)).await;
+    assert_eq!(status, 200, "{first}");
+    assert_eq!(first["domain"], json!([["name", "ilike", "a"]]));
+    assert_eq!(first["group_by"], json!(["company_id"]));
+    assert_eq!(
+        (first["is_default"].clone(), first["own"].clone()),
+        (json!(true), json!(true))
+    );
+    // The same name, in another case, replaces the user's own favorite.
+    let (status, replaced) = save(principal_a, params("mine", true, false)).await;
+    assert_eq!(status, 200, "{replaced}");
+    assert_eq!(replaced["id"], first["id"]);
+    // A second default takes the place of the first.
+    let (status, second) = save(principal_a, params("Second", true, false)).await;
+    assert_eq!(status, 200, "{second}");
+    let own_defaults = |rows: &[Value]| {
+        rows.iter()
+            .filter(|row| row["own"] == true && row["is_default"] == true)
+            .map(|row| row["name"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(own_defaults(&list(principal_a).await), ["Second"]);
+    // Another user does not see them.
+    assert!(named(&list(principal_b).await, "Second").is_none());
+
+    // Two saves at once still leave one default.
+    let (one, two) = tokio::join!(
+        save(principal_a, params("Race one", true, false)),
+        save(principal_a, params("Race two", true, false))
+    );
+    assert_eq!((one.0, two.0), (200, 200), "{} {}", one.1, two.1);
+    assert_eq!(own_defaults(&list(principal_a).await).len(), 1);
+
+    // Refusals: a shared default, an unknown field in the domain or the grouping, an empty name.
+    for (params, expected) in [
+        (
+            params("Team", true, true),
+            "A shared favorite cannot be a default",
+        ),
+        (
+            json!({"name": "Bad", "model": "res.partner", "action_id": action, "domain": [["no_such_field", "=", 1]],
+                "group_by": [], "is_default": false, "shared": false}),
+            "no_such_field",
+        ),
+        (
+            json!({"name": "Bad", "model": "res.partner", "action_id": action, "domain": [],
+                "group_by": ["no_such_field"], "is_default": false, "shared": false}),
+            "A favorite cannot group by 'no_such_field'",
+        ),
+        (params("  ", false, false), "A favorite needs a name"),
+    ] {
+        let (status, body) = save(principal_a, params).await;
+        assert_ne!(status, 200, "{body}");
+        assert!(
+            body["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(expected),
+            "{expected}: {body}"
+        );
+    }
+    // A shared favorite is visible to the other user, and its name cannot be taken twice.
+    let (status, team) = save(principal_a, params("Team", false, true)).await;
+    assert_eq!(status, 200, "{team}");
+    assert_eq!(
+        (team["shared"].clone(), team["own"].clone()),
+        (json!(true), json!(false))
+    );
+    assert!(named(&list(principal_b).await, "Team").is_some());
+    let (status, body) = save(principal_b, params("team", false, true)).await;
+    assert_ne!(status, 200);
+    assert!(
+        body["message"].as_str().unwrap().contains("already exists"),
+        "{body}"
     );
 }

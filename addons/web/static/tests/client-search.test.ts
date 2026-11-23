@@ -169,10 +169,11 @@ describe("SearchModel State and Domain Construction", () => {
     expect(() => model.addCustomFilter("body", "invalid_op", "x")).toThrowError(expect.objectContaining({ kind: "validation", message: "Unsupported operator 'invalid_op'." }));
   });
 
-  test("unavailable grouping and server favorites fail explicitly", () => {
+  test("unavailable grouping and a list without a favorite store fail explicitly", async () => {
     const model = setupModel();
     expect(() => model.toggleGroupBy("priority")).toThrowError(expect.objectContaining({ kind: "unsupported", message: "Grouped lists are not available yet." }));
-    expect(() => model.saveFavorite("Saved", true, true)).toThrowError(expect.objectContaining({ kind: "unsupported", message: "Saved favorites are not available yet." }));
+    await expect(model.saveFavorite("Saved", true, true)).rejects.toMatchObject({ kind: "unsupported", message: "Saved favorites are not available for this list." });
+    expect(() => model.toggleFavorite("1")).toThrowError(expect.objectContaining({ kind: "unsupported", message: "Saved favorites are not available for this list." }));
     expect(model.getFacets()).toEqual([]);
   });
 
@@ -494,11 +495,11 @@ describe("search revision regressions", () => {
     document.body.click(); expect(menu.isOpen()).toBe(false); menu.dispose();
   });
 
-  test("unavailable favorites never read or overwrite legacy browser storage", () => {
+  test("unavailable favorites never read or overwrite legacy browser storage", async () => {
     localStorage.setItem("erp_favorites_test.record_2_1", "broken");
     const read = vi.spyOn(Storage.prototype, "getItem"), write = vi.spyOn(Storage.prototype, "setItem");
     const model = setupModel(); expect(model.getFavorites()).toEqual([]);
-    expect(() => model.saveFavorite("Saved", false, false)).toThrowError(expect.objectContaining({kind:"unsupported", message:"Saved favorites are not available yet."}));
+    await expect(model.saveFavorite("Saved", false, false)).rejects.toMatchObject({kind:"unsupported", message:"Saved favorites are not available for this list."});
     expect(read).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
   });
 

@@ -1,7 +1,7 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import type { Field } from "../metadata.js";
 import { ClientError } from "../transport.js";
-import type { AutocompleteItem, FavoriteItem, FilterItem, GroupableField, GroupByCatalogue, GroupByItem, SearchFacet, SearchModelOptions } from "./types.js";
+import type { AutocompleteItem, FavoriteItem, FavoriteStore, FilterItem, GroupableField, GroupByCatalogue, GroupByItem, SearchFacet, SearchModelOptions } from "./types.js";
 
 /** The search view's filters the Filters menu offers, and the ones it leaves out with their reasons. */
 export interface ViewFilters { filters: readonly FilterItem[]; skipped: readonly { description: string; reason: string }[] }
@@ -21,7 +21,9 @@ function defaultOperator(field: Field | undefined): string {
 const groupingUnavailable = (): never => { throw new ClientError("unsupported", "Grouped lists are not available yet."); };
 const groupingFromAddress = (): never => { throw new ClientError("unsupported", "Restoring a grouping from the address is not available yet."); };
 const GROUP_BY_FACET = "groupby";
-const favoritesUnavailable = (): never => { throw new ClientError("unsupported", "Saved favorites are not available yet."); };
+const favoritesUnavailable = (): never => { throw new ClientError("unsupported", "Saved favorites are not available for this list."); };
+/** The prefix of a favorite in the address's `search_filters`. */
+export const FAVORITE_PREFIX = "favorite_";
 const invalid = (label: string): never => { throw new ClientError("validation", `Invalid ${label}.`); };
 function record(raw: unknown, keys: string[], label: string): Record<string, unknown> {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return invalid(label);
@@ -65,6 +67,9 @@ export class SearchModel {
   /** Set when the action preselects search items: an emptied search is then kept in the address as `search_filters=[]`,
    *  so a reload or the way back shows what the user left instead of applying the defaults again. */
   private keepEmpty = false;
+  private favoriteStore: FavoriteStore | undefined;
+  private favorites: FavoriteItem[] | undefined;
+  private favoriteLoad: Promise<void> | undefined;
   private viewFilterLoader: (() => Promise<ViewFilters>) | undefined;
   private viewFiltersLoaded = false;
   private viewFilterLoad: Promise<void> | undefined;
@@ -208,13 +213,39 @@ export class SearchModel {
   }
   /** Declared group-by items the menu leaves out, each with its reason. */
   getSkippedGroupBys(): { description: string; reason: string }[] { return structuredClone(this.catalogue?.skipped ?? []); }
-  getFavorites(): FavoriteItem[] { return []; }
+  /** Name where this list's favorites are kept; without a store the list offers none. */
+  declareFavorites(store: FavoriteStore): void {
+    if (this.favoriteStore) throw new ClientError("validation", "The favorites of this list are already declared.");
+    this.favoriteStore = store;
+  }
+  hasFavorites(): boolean { return this.favoriteStore !== undefined; }
+  favoritesReady(): boolean { return this.favorites !== undefined; }
+  /** Read the favorites once; a failure is returned to the caller and the next call tries again. */
+  loadFavorites(): Promise<void> {
+    const store = this.favoriteStore;
+    if (!store) return Promise.reject(new ClientError("unsupported", "Saved favorites are not available for this list."));
+    if (this.favorites) return Promise.resolve();
+    this.favoriteLoad ??= store.load().then(items => { this.favorites = items.map(item => ({ ...item, isActive: false })); this.notify(); },
+      error => { this.favoriteLoad = undefined; throw error; });
+    return this.favoriteLoad;
+  }
+  /** The favorites, each marked active when its facet is in the search. */
+  getFavorites(): FavoriteItem[] {
+    const active = new Set(this.facets.flatMap(facet => facet.favoriteId === undefined ? [] : [facet.favoriteId]));
+    return (this.favorites ?? []).map(item => ({ ...structuredClone(item), isActive: active.has(item.id) }));
+  }
+  /** The caller's default favorite; none when there is none, and a refusal when the store marks several. */
+  defaultFavorite(): FavoriteItem | undefined {
+    const defaults = (this.favorites ?? []).filter(item => item.isDefault && item.isOwn);
+    if (defaults.length > 1) throw new ClientError("validation", `Several of your favorites are marked as the default (${defaults.map(item => item.name).join(", ")}); none was applied. Save one of them as the default again.`);
+    return defaults[0] && structuredClone(defaults[0]);
+  }
   clearListState(): void { this.listState = undefined; }
   getListState(): ListGroupState | undefined { return this.listState && structuredClone(this.listState); }
   setListState(state: ListGroupState): void { this.listState = decodeListState(state); }
   getGroupAggregates() { return structuredClone(this.catalogue?.aggregates ?? []); }
   /** The groupings, outermost first: `field`, or `field:interval` for a date grouped by an interval. One at most unless the owner groups by several. */
-  getGroupBy(): string[] { return [...this.activeGroupBy()?.groupByFields ?? []]; }
+  getGroupBy(): string[] { return [...this.activeGroupBy()?.groupByFields ?? this.facets.find(facet => facet.type === "favorite" && facet.groupByFields?.length)?.groupByFields ?? []]; }
   private activateGroupBy(id: string, spec: string, label: string): void {
     const active = this.activeGroupBy();
     if (active?.groupByFields?.includes(spec)) return;
@@ -259,9 +290,53 @@ export class SearchModel {
       this.activateGroupBy(`custom:${spec}`, spec, intervalLabel ? `${field.label}: ${intervalLabel}` : field.label);
     });
   }
-  saveFavorite(_name: string, _isDefault: boolean, _isShared: boolean): FavoriteItem { return favoritesUnavailable(); }
-  toggleFavorite(_id: string): void { favoritesUnavailable(); }
-  deleteFavorite(_id: string): void { favoritesUnavailable(); }
+  private favorite(id: string): FavoriteItem {
+    const found = this.favorites?.find(item => item.id === id);
+    if (!found) return invalid("favorite");
+    if (found.problem) throw new ClientError("unsupported", `The favorite “${found.name}” cannot be applied: ${found.problem}.`);
+    return found;
+  }
+  /** Add one favorite's facet next to the others (an address restores it this way). */
+  private addFavoriteFacet(item: FavoriteItem): void {
+    if (this.facets.some(facet => facet.favoriteId === item.id)) return;
+    this.checkCapacity();
+    this.listState = undefined;
+    this.facets.push({ id: `${FAVORITE_PREFIX}${item.id}`, type: "favorite", title: "Favorite", values: [item.name], separator: "or",
+      domain: structuredClone(item.domain), favoriteId: item.id, ...(item.groupBy.length ? { groupByFields: [...item.groupBy] } : {}) });
+    this.notify();
+  }
+  /** Apply a favorite in place of the current search, or remove it when it is applied. */
+  toggleFavorite(id: string): void {
+    if (!this.favoriteStore) return favoritesUnavailable();
+    this.commitMutation(() => {
+      const facet = this.facets.find(candidate => candidate.favoriteId === id);
+      if (facet) { this.removeFacet(facet.id); return; }
+      const item = this.favorite(id);
+      this.resetFacets();
+      this.addFavoriteFacet(item);
+    });
+  }
+  /** Save the current search (its facets' domain and grouping) as a favorite, then show the search as that favorite. */
+  async saveFavorite(name: string, isDefault: boolean, isShared: boolean): Promise<FavoriteItem> {
+    const store = this.favoriteStore;
+    if (!store) return favoritesUnavailable();
+    const saved = await store.save({ name, domain: this.facetDomain(), groupBy: this.getGroupBy(), isDefault, isShared });
+    const others = (this.favorites ?? []).filter(item => item.id !== saved.id).map(item => saved.isDefault && item.isOwn ? { ...item, isDefault: false } : item);
+    this.favorites = [...others, { ...saved, isActive: false }];
+    this.commitMutation(() => { this.resetFacets(); this.addFavoriteFacet(saved); });
+    return structuredClone(saved);
+  }
+  /** Delete one of the caller's own favorites; its facet leaves the search. */
+  async deleteFavorite(id: string): Promise<void> {
+    const store = this.favoriteStore;
+    if (!store) return favoritesUnavailable();
+    const item = this.favorites?.find(candidate => candidate.id === id);
+    if (!item?.isOwn) return invalid("favorite to delete");
+    await store.remove(id);
+    this.favorites = this.favorites!.filter(candidate => candidate.id !== id);
+    const facet = this.facets.find(candidate => candidate.favoriteId === id);
+    if (facet) this.removeFacet(facet.id); else this.notify();
+  }
 
   getSearchableFields(): Field[] {
     const seen = new Set<string>();
@@ -456,9 +531,11 @@ export class SearchModel {
       this.facets.push({ id, filterId: id, type: "filter", title: description, values: [description], separator: "or", domain }); this.notify();
     });
   }
-  getDomain(): unknown[] {
+  getDomain(): unknown[] { return [...structuredClone(this.initialDomain), ...this.facetDomain()]; }
+  /** The domain of the facets alone, without the owner's initial domain: what a favorite saves. */
+  private facetDomain(): unknown[] {
     this.refreshDates();
-    const domain = structuredClone(this.initialDomain), groups = new Map<number | string, unknown[][]>();
+    const domain: unknown[] = [], groups = new Map<number | string, unknown[][]>();
     for (const facet of this.facets) {
       if (!facet.domain?.length) continue;
       const filter = this.filters.find(f => f.id === facet.filterId);
@@ -471,16 +548,17 @@ export class SearchModel {
     for (const group of groups.values()) domain.push(...orDomains(group));
     return structuredClone(domain);
   }
-  clearAll(): void {
+  clearAll(): void { this.resetFacets(); this.notify(); }
+  private resetFacets(): void {
     this.listState = undefined;
     this.facets = []; this.filters = this.filters.filter(f => !f.custom);
     for (const filter of this.filters) { filter.isActive = false; for (const option of filter.dateOptions ?? []) option.isActive = false; }
-    this.notify();
   }
 
   serializeToUrlParams(params: URLSearchParams): void {
     const fields = this.facets.filter(f => f.type === "field").map(f => ({ field: f.fieldName, values: f.values, operator: f.operator }));
-    const filters = this.facets.filter(f => f.type === "filter").map(f => {
+    const filters = this.facets.filter(f => f.type === "filter" || f.type === "favorite").map(f => {
+      if (f.type === "favorite") return `${FAVORITE_PREFIX}${f.favoriteId}`;
       const filter = this.filters.find(item => item.id === f.filterId)!;
       return filter.custom ?? (f.optionId ? `${f.filterId}:${f.optionId}` : f.filterId);
     });
@@ -488,8 +566,10 @@ export class SearchModel {
     const encoded = entries.map(([key, value]) => [key, value.length || this.keepEmpty && key === "search_filters" ? JSON.stringify(value) : ""] as const);
     for (const [key, value] of encoded) if (value.length > MAX_PARAM) invalid(`${key}: exceeds 2048 characters`);
     for (const [key, value] of encoded) { if (value) params.set(key, value); else params.delete(key); }
-    if (this.groupByLoader?.persist && this.getGroupBy().length) {
-      const state = this.listState ? { ...this.listState, by: this.getGroupBy() } : this.getGroupBy();
+    // A favorite's grouping comes back with the favorite: only a Group By facet is kept in search_groupby.
+    const grouping = [...this.activeGroupBy()?.groupByFields ?? []];
+    if (this.groupByLoader?.persist && grouping.length) {
+      const state = this.listState ? { ...this.listState, by: grouping } : grouping;
       const value = JSON.stringify(state);
       if (value.length > MAX_PARAM) invalid("search_groupby: exceeds 2048 characters");
       params.set("search_groupby", value);
@@ -503,6 +583,7 @@ export class SearchModel {
     if (!keys.some(key => params.has(key))) return false;
     const staging = new SearchModel({ model: this.model, fields: this.fields, viewFields: this.viewFields, initialDomain: this.initialDomain, groupBy: this.groupByLoader, filters: this.declaredFilters });
     staging.catalogue = this.catalogue;
+    staging.favoriteStore = this.favoriteStore; staging.favorites = this.favorites;
     for (const key of keys) {
       const raw = params.get(key);
       if (raw === null) continue;
@@ -530,6 +611,8 @@ export class SearchModel {
             const terms = items(entry["values"], key);
             if (!terms.length || new Set(terms).size !== terms.length) invalid(key);
             for (const value of terms) staging.addFieldFacet(field, term(value, key), operator);
+          } else if (typeof item === "string" && item.startsWith(FAVORITE_PREFIX)) {
+            staging.addFavoriteFacet(staging.favorite(item.slice(FAVORITE_PREFIX.length)));
           } else if (typeof item === "string") {
             const parts = item.split(":");
             if (parts.length === 1) staging.toggleFilter(item);

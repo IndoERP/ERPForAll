@@ -4,3 +4,4 @@ export * from "./search-model.js";
 export * from "./search-menu-panel.js";
 export * from "./search-bar.js";
 export * from "./search-arch.js";
+export * from "./favorites.js";

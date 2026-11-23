@@ -9,7 +9,7 @@ import { createHotkeyController, type HotkeyBinding } from "@erpforall/elang";
 import { reportHotkeyError } from "../../../../../web/src/runtime/hotkeys.js";
 import { dropAbsentDashboardFilters, mountDashboard } from "./dashboard.js";
 import { admitRequestContext } from "./dashboard-card.js";
-import { SearchModel, createSearchBar, readSearchArch, applySearchDefaults, splitSearchDefaults, namesViewFilter, SEARCH_DEFAULT_PREFIX, type SearchArch } from "./search/index.js";
+import { SearchModel, createSearchBar, readSearchArch, applySearchDefaults, splitSearchDefaults, namesViewFilter, namesFavorite, favoriteStore, SEARCH_DEFAULT_PREFIX, type SearchArch, type FavoriteItem } from "./search/index.js";
 import { readMenuModule, readSettingsTarget } from "./settings-items.js";
 import { icon, menuIcon } from "./icons.js";
 import { MessageServices } from "./messages.js";
@@ -2839,11 +2839,32 @@ export class HumanApp {
     let arch: Promise<SearchArch> | undefined;
     const readArch = (): Promise<SearchArch> => arch ??= this.searchViewNodes(model, context).then(nodes => readSearchArch(nodes, this.searchExpression(context)), error => { arch = undefined; throw error; });
     searchModel.declareViewFilters(readArch);
+    // A list of a saved action keeps its favorites in `ir.filters`; a related list (opened by a button) has none.
+    const actionId = route.method_action === undefined && route.action !== undefined ? rpcId(route.action) : undefined;
+    if (actionId !== undefined) searchModel.declareFavorites(favoriteStore(this.rpc, model, actionId, context));
     const restored = await params();
-    // An address that names one of the view's filters needs them before it can be restored.
+    // An address that names one of the view's filters or a favorite needs them before it can be restored.
     if (defaults.size || namesViewFilter(restored)) await searchModel.loadViewFilters();
-    if (defaults.size) searchModel.keepEmptySearch();
-    if (searchModel.loadFromUrlParams(restored) || route.search || !defaults.size) return restored;
+    if (namesFavorite(restored)) await searchModel.loadFavorites();
+    if (searchModel.loadFromUrlParams(restored) || route.search) { if (defaults.size) searchModel.keepEmptySearch(); return restored; }
+    // A first open: the caller's default favorite wins over the action's search defaults, as in the reference ERP.
+    let favorite: FavoriteItem | undefined;
+    if (searchModel.hasFavorites()) {
+      try { await searchModel.loadFavorites(); favorite = searchModel.defaultFavorite(); }
+      catch (error) {
+        if (!(error instanceof ClientError) || error.kind === "session") throw error;
+        if (generation === this.generation && !this.expired) this.messages.notifications.add(`Your default favorite could not be applied: ${error.message}`, { level: "warning" });
+      }
+    }
+    if (favorite || defaults.size) searchModel.keepEmptySearch();
+    if (favorite) {
+      try { searchModel.toggleFavorite(favorite.id); return restored; }
+      catch (error) {
+        if (!(error instanceof ClientError) || (error.kind !== "validation" && error.kind !== "unsupported")) throw error;
+        if (generation === this.generation && !this.expired) this.messages.notifications.add(`Your default favorite could not be applied: ${error.message}`, { level: "warning" });
+      }
+    }
+    if (!defaults.size) return restored;
     const unapplied = await applySearchDefaults(searchModel, await readArch(), defaults, async (relation, id) => {
       const rows = array(await this.rpc.call(relation, "web_read", { ids: [id], specification: { display_name: {} }, context }), "default record");
       if (rows.length !== 1) throw new ClientError("validation", `Record ${id} of ${relation} is not available.`);
