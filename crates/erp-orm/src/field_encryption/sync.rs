@@ -75,7 +75,7 @@ impl Transaction {
                 keys_for(spec.name, column)?;
                 out.push(ClearColumn {
                     table: spec.table.clone(),
-                    column: *column,
+                    column,
                     sealed: *sealed,
                 });
             }
