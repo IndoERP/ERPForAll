@@ -52,6 +52,8 @@ pub mod compute;
 mod context;
 mod correlation;
 pub use correlation::{CorrelationId, OperationId, OperationIdentity};
+mod request;
+pub use request::RequestInfo;
 pub(crate) mod copy;
 mod core_ddl;
 mod database_generated;

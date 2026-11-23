@@ -48,6 +48,9 @@ mod descriptor;
 
 pub use descriptor::{DESCRIBE_SCHEMA, describe};
 
+/// Network ranges for rules over a request's client address (both backends).
+pub mod net;
+
 #[cfg(not(target_family = "wasm"))]
 mod native;
 #[cfg(not(target_family = "wasm"))]

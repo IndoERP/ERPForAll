@@ -1291,7 +1291,9 @@ impl WebApp {
                 bytes.to_vec(),
                 erp_rpc::Caller::Principal(principal),
             )
-            .credential(credential);
+            .credential(credential)
+            // the address the proxy gate resolved above: a forwarded one only from a trusted proxy
+            .client_address(client);
             if let Some(id) = parts.extensions.get::<erp_rpc::CorrelationId>() {
                 call = call.correlation(id.clone());
             }

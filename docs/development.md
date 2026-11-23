@@ -101,6 +101,29 @@ To add a native addon to this repository, put the crate under `addons/`, list it
 
 To try an addon: install it into a database as shown in the [installation guide](install.md#install-an-addon-from-a-folder).
 
+### The request's client address
+
+A method called over JSON-2 can read where the request came from: `env.request()` is the client address the server
+resolved, the peer or, behind a [trusted proxy](deployment.md#https-behind-a-reverse-proxy), the address the proxy
+forwarded. It is `None` for jobs, the command line, tests and internal calls, so a rule must decide what "unknown"
+means. A client cannot set it: it is not part of the context, and a forwarded address from a peer that is not a
+trusted proxy is refused before any method runs. `erp_sdk::net::IpNetwork` parses CIDR ranges and matches IPv4
+clients seen through an IPv6 socket (`::ffff:a.b.c.d`).
+
+```rust
+use erp_sdk::net::IpNetwork;
+
+let office: Vec<IpNetwork> = ["10.20.0.0/16", "2001:db8:20::/48"]
+    .iter()
+    .map(|text| text.parse())
+    .collect::<Result<_>>()?;
+match tx.env().request().map(|request| request.client_address()) {
+    Some(address) if office.iter().any(|network| network.contains(address)) => {}
+    Some(_) => return Err(Error::user("Clock-in is allowed only from the office network.")),
+    None => return Err(Error::user("The network of this request is unknown.")),
+}
+```
+
 ## The web client
 
 The client is TypeScript, compiled ahead of time:

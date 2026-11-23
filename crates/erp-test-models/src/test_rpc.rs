@@ -159,6 +159,26 @@ impl Effects {
         probe_value(this, tx).await
     }
 
+    /// `read`: the client address of the request (`False` when unknown), as this environment,
+    /// its `sudo()`, a `with_user` and a `with_context` derivation see it, and the context's own
+    /// `client_address` key (which a client may send and which must change nothing).
+    #[method]
+    #[rpc(effect = read, model)]
+    async fn client_address(this: &RecordSet<Effects>, _tx: &mut Transaction) -> Result<Value> {
+        let env = this.as_records().env().clone();
+        let seen = |env: &Env| {
+            env.request()
+                .map_or(Value::False, |r| Value::str(r.client_address().to_string()))
+        };
+        Ok(Value::list([
+            seen(&env),
+            seen(&env.sudo(true)),
+            seen(&env.with_user(env.uid())),
+            seen(&env.with_context([("lang", Value::str("en_US"))])),
+            env.context().get("client_address").unwrap_or(Value::False),
+        ]))
+    }
+
     /// Mislabelled `read` that creates.
     #[method]
     #[rpc(effect = read, model)]

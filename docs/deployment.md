@@ -162,6 +162,11 @@ The proxy checks themselves were run without nginx, with `curl` from the listed 
 page is served (HTTP 200); without the token or with a wrong one, HTTP 403; with the token and a `Forwarded` header,
 HTTP 400. The health route answers without the token, so a supervisor can probe it directly.
 
+`X-Forwarded-For` must carry exactly one address, the client's (`$remote_addr` above, not
+`$proxy_add_x_forwarded_for`, which appends to what the client sent). The server uses it for the sign-in and API key
+throttles and hands it to model methods as the request's client address (`env.request()`), so a proxy that passes
+on a client-supplied value would let clients choose the address business rules see.
+
 ## Health
 
 `GET /erp/health/ready` answers HTTP 200 when the node is ready and 503 while it settles, cannot renew its lease, or

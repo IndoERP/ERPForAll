@@ -26,6 +26,9 @@ pub struct Env {
     registry: Arc<Registry>,
     /// Trace metadata, excluded from environment equality/cache identity: never authorization.
     operation_identity: Option<Arc<crate::OperationIdentity>>,
+    /// The request this environment's transaction serves, set by the transport; excluded from
+    /// equality and cache identity, never authorization by itself.
+    request: Option<Arc<crate::RequestInfo>>,
     generation_attachments: Arc<crate::generation::GenerationAttachments>,
     principal: Arc<Principal>,
     context: Arc<Context>,
@@ -150,6 +153,7 @@ impl Env {
             generation_attachments: Arc::default(),
             registry,
             operation_identity: None,
+            request: None,
             principal,
             context: Arc::new(context),
             company_error,
@@ -198,6 +202,19 @@ impl Env {
         self
     }
 
+    /// The request this transaction serves, as the server resolved it: `None` for jobs, the
+    /// command line, tests and internal transactions, so code that depends on it must handle
+    /// "unknown". Never read from the context: a client cannot set or override it. Kept by every
+    /// environment derived from this one (`with_user`, `sudo`, `with_context`, ...).
+    pub fn request(&self) -> Option<&crate::RequestInfo> {
+        self.request.as_deref()
+    }
+
+    pub(crate) fn with_request(mut self, request: Option<Arc<crate::RequestInfo>>) -> Self {
+        self.request = request;
+        self
+    }
+
     /// Whether `orm` is of the lineage this environment was made in: both come, directly or
     /// through [`crate::Orm::rebuild`], from one [`crate::Orm::builder`]. `false` for an
     /// environment of another ORM lineage, whatever its registry.
@@ -240,6 +257,7 @@ impl Env {
             generation_attachments: attachments,
             label_reader: self.label_reader.as_ref().map(Arc::clone),
             operation_identity: self.operation_identity.clone(),
+            request: self.request.clone(),
             block: self.block.clone(),
             switches: self.switches.clone(),
             ignore_default_overrides: self.ignore_default_overrides,
@@ -267,6 +285,7 @@ impl Env {
             generation_attachments: Arc::clone(&self.generation_attachments),
             label_reader: self.label_reader.as_ref().map(Arc::clone),
             operation_identity: self.operation_identity.clone(),
+            request: self.request.clone(),
             block: self.block.clone(),
             switches: self.switches.clone(),
             ignore_default_overrides: self.ignore_default_overrides,
@@ -483,6 +502,7 @@ impl Env {
             generation_attachments: Arc::clone(&self.generation_attachments),
             label_reader: self.label_reader.as_ref().map(Arc::clone),
             operation_identity: self.operation_identity.clone(),
+            request: self.request.clone(),
             block: self.block.clone(),
             switches: self.switches.clone(),
             ignore_default_overrides: self.ignore_default_overrides,
@@ -518,6 +538,7 @@ impl Env {
             generation_attachments: Arc::clone(&self.generation_attachments),
             label_reader: self.label_reader.as_ref().map(Arc::clone),
             operation_identity: self.operation_identity.clone(),
+            request: self.request.clone(),
             block: self.block.clone(),
             switches,
             ignore_default_overrides: self.ignore_default_overrides,
@@ -613,6 +634,7 @@ impl Env {
             generation_attachments: Arc::clone(&self.generation_attachments),
             label_reader: self.label_reader.as_ref().map(Arc::clone),
             operation_identity: self.operation_identity.clone(),
+            request: self.request.clone(),
             block: self.block.clone(),
             switches: self.switches.clone(),
             ignore_default_overrides: self.ignore_default_overrides,
@@ -626,6 +648,7 @@ impl Env {
         Self {
             registry: Arc::clone(&self.registry),
             operation_identity: self.operation_identity.clone(),
+            request: self.request.clone(),
             generation_attachments: Arc::clone(&self.generation_attachments),
             principal: Arc::new(Principal::system()),
             context: Arc::new(Context::new()),
@@ -676,6 +699,7 @@ impl Env {
             generation_attachments: Arc::clone(&self.generation_attachments),
             label_reader: self.label_reader.as_ref().map(Arc::clone),
             operation_identity: self.operation_identity.clone(),
+            request: self.request.clone(),
             block: self.block.clone(),
             switches: self.switches.clone(),
             ignore_default_overrides: self.ignore_default_overrides,
@@ -778,6 +802,7 @@ impl Env {
             generation_attachments: Arc::clone(&self.generation_attachments),
             label_reader: self.label_reader.as_ref().map(Arc::clone),
             operation_identity: self.operation_identity.clone(),
+            request: self.request.clone(),
             block: self.block.clone(),
             switches: self.switches.clone(),
             ignore_default_overrides: self.ignore_default_overrides,

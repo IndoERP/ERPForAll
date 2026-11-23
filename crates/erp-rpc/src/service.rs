@@ -223,6 +223,7 @@ pub struct RpcCall {
     capture: bool,
     credential: Option<Arc<dyn RpcCredential>>,
     attempt_hook: Option<Arc<dyn AttemptHook>>,
+    request: Option<erp_orm::RequestInfo>,
 }
 
 impl std::fmt::Debug for RpcCall {
@@ -247,6 +248,7 @@ impl RpcCall {
             capture: false,
             credential: None,
             attempt_hook: None,
+            request: None,
         }
     }
 
@@ -294,6 +296,16 @@ impl RpcCall {
     #[must_use]
     pub fn deadline(mut self, deadline: Duration) -> Self {
         self.deadline = Some(deadline);
+        self
+    }
+
+    /// The client address the transport resolved for this request: the peer, or the forwarded
+    /// client when the peer is a trusted proxy. Every attempt's transaction carries it
+    /// ([`erp_orm::Env::request`]); it is not part of the context or of the idempotency binding,
+    /// and no body field, context key or header reaches it.
+    #[must_use]
+    pub fn client_address(mut self, address: std::net::IpAddr) -> Self {
+        self.request = Some(erp_orm::RequestInfo::new(address));
         self
     }
 
@@ -438,6 +450,8 @@ struct Plan<'a> {
     credential: Option<&'a dyn RpcCredential>,
     /// [`RpcCall::attempt_hook`]: only on a keyed call with a write effect.
     hook: Option<&'a dyn AttemptHook>,
+    /// [`RpcCall::client_address`].
+    request: Option<&'a erp_orm::RequestInfo>,
     /// The execution identity shared by every attempt of the call (correlation and operation
     /// ids); retried attempts keep it, a new call gets a fresh one.
     identity: OperationIdentity,
@@ -999,6 +1013,7 @@ impl RpcService {
             capture: call.capture,
             credential: call.credential.as_deref(),
             hook: call.attempt_hook.as_deref(),
+            request: call.request.as_ref(),
             identity: match call.correlation.as_ref() {
                 Some(correlation) => OperationIdentity::new(correlation.clone()),
                 None => OperationIdentity::generate(),
@@ -1168,6 +1183,9 @@ impl RpcService {
         let mut options = BeginOptions::for_principal(plan.principal.clone())
             .context(plan.bound.context.context.clone())
             .operation_identity(plan.identity.clone());
+        if let Some(request) = plan.request {
+            options = options.request(request.clone());
+        }
         if exposed.effect() == Effect::Read {
             // the service is the read-audit owner of every read-effect call: it writes the attempt
             // evidence as one `read_ok` row before the body is released (A2)
@@ -1187,6 +1205,9 @@ impl RpcService {
                     let mut options = erp_orm::CredentialOptions::new()
                         .context(plan.bound.context.context.clone())
                         .operation_identity(plan.identity.clone());
+                    if let Some(request) = plan.request {
+                        options = options.request(request.clone());
+                    }
                     if exposed.effect() == Effect::Read {
                         options = options.read_only_audited(
                             plan.entry.as_str(),

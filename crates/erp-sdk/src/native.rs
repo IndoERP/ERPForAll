@@ -118,9 +118,9 @@ pub use erp_orm::{
     Inherits, Isolation, Load, MAX_NOTICE_MESSAGE_BYTES, MAX_NOTICES_PER_TRANSACTION, Many2one,
     Mapped, MemoStats, Model, NAME_SEARCH_LIMIT, NameSearch, Notice, NoticeKind, OnchangeResult,
     OnchangeWarning, Operation, OperationIdentity, Orm, OrmBuilder, OrmCacheKey, OrmConfig, Page,
-    RawVals, ReadGroup, ReadGroupingSets, ReadTx, RecordSet, Records, RecordsAs, ResCompany,
-    ResUsers, Row, RowsStream, SUPERUSER_ID, SavepointOutcome, SearchOptions, SearchQuery,
-    SelectionContext, SelectionLimits, SelectionSuper, SqlRow, SqlValue, StaticPolicy,
+    RawVals, ReadGroup, ReadGroupingSets, ReadTx, RecordSet, Records, RecordsAs, RequestInfo,
+    ResCompany, ResUsers, Row, RowsStream, SUPERUSER_ID, SavepointOutcome, SearchOptions,
+    SearchQuery, SelectionContext, SelectionLimits, SelectionSuper, SqlRow, SqlValue, StaticPolicy,
     StreamOptions, Super, Transaction, TypedRelation, UnlinkHook, UserId, Vals, X2many,
     X2manyValue, missing_reset_target,
 };

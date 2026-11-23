@@ -1504,6 +1504,7 @@ impl Orm {
             on_primary,
             credential: _,
             operation_identity,
+            request,
             #[cfg(feature = "test-faults")]
             import_snapshot,
             #[cfg(feature = "test-faults")]
@@ -1554,6 +1555,7 @@ impl Orm {
             env: Env::new(Arc::clone(&self.shared.registry), principal, context)
                 .with_lineage(Arc::clone(&self.shared.database.lineage))
                 .with_operation_identity(operation_identity)
+                .with_request(request)
                 .with_generation_attachments(Arc::clone(&self.shared.generation_attachments)),
             policy: self.shared.policy.current(),
             access: crate::access::AccessState::default(),
@@ -1973,6 +1975,8 @@ impl ReadAuditOwner {
 #[must_use = "pass it to Orm::begin_opts"]
 pub struct BeginOptions {
     operation_identity: Option<Arc<crate::OperationIdentity>>,
+    /// [`BeginOptions::request`].
+    request: Option<Arc<crate::RequestInfo>>,
     principal: Principal,
     /// What to resolve at the start (with an installed resolver), when built from a hint.
     hint: Option<PrincipalHint>,
@@ -2027,6 +2031,7 @@ impl BeginOptions {
     pub fn for_principal(principal: Principal) -> Self {
         Self {
             operation_identity: None,
+            request: None,
             principal,
             hint: None,
             context: Context::new(),
@@ -2052,6 +2057,15 @@ impl BeginOptions {
     /// a new execution. This grants no access and changes no idempotency binding.
     pub fn operation_identity(mut self, identity: crate::OperationIdentity) -> Self {
         self.operation_identity = Some(Arc::new(identity));
+        self
+    }
+
+    /// The request the transaction serves, as the server's transport resolved it
+    /// ([`crate::Env::request`]). Only the transport sets it, from what it trusts (the peer, or
+    /// the forwarded client of a trusted proxy); it grants no access and changes no idempotency
+    /// binding.
+    pub fn request(mut self, request: crate::RequestInfo) -> Self {
+        self.request = Some(Arc::new(request));
         self
     }
 
@@ -2207,6 +2221,11 @@ impl CredentialOptions {
     /// Attach the server's correlation/execution metadata to the credential transaction.
     pub fn operation_identity(self, identity: crate::OperationIdentity) -> Self {
         Self(self.0.operation_identity(identity))
+    }
+
+    /// The request the transaction serves ([`BeginOptions::request`]).
+    pub fn request(self, request: crate::RequestInfo) -> Self {
+        Self(self.0.request(request))
     }
 
     /// These limits instead of [`OrmConfig::timeouts`].
@@ -3626,6 +3645,7 @@ impl Transaction {
     /// The transaction's environment with `principal` (the resolver's at the start).
     pub(crate) fn replace_principal(&mut self, principal: Principal) {
         let identity = self.env.operation_identity().cloned().map(Arc::new);
+        let request = self.env.request().cloned().map(Arc::new);
         self.env = Env::new(
             Arc::clone(&self.shared.registry),
             principal,
@@ -3633,6 +3653,7 @@ impl Transaction {
         )
         .with_lineage(Arc::clone(&self.shared.database.lineage))
         .with_operation_identity(identity)
+        .with_request(request)
         .with_generation_attachments(Arc::clone(&self.shared.generation_attachments));
     }
 
