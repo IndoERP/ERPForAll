@@ -2705,6 +2705,31 @@ fn line_columns(fc: &FieldCompute, field: (ModelId, FieldId)) -> Vec<(ModelId, F
     out
 }
 
+/// A refusal of a constraint method names the fields whose change ran it, unless it names fields
+/// of its own: the constraint's declared fields that this write changed (or all of them).
+fn constraint_fields(
+    error: Error,
+    records: &Records,
+    fields: &[FieldId],
+    changed: &FxHashSet<FieldId>,
+) -> Error {
+    if !matches!(
+        error.kind(),
+        erp_fields::ErrorKind::Validation | erp_fields::ErrorKind::UserError
+    ) || !error.fields().is_empty()
+    {
+        return error;
+    }
+    let spec = records.env().registry().model_by_id(records.model_id());
+    let touched: Vec<&FieldId> = fields.iter().filter(|f| changed.contains(f)).collect();
+    let named = if touched.is_empty() {
+        fields.iter().collect()
+    } else {
+        touched
+    };
+    error.with_fields(named.into_iter().map(|id| spec.field_by_id(*id).name))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2817,29 +2842,4 @@ mod tests {
         memo.clear();
         assert!(memo.is_empty());
     }
-}
-
-/// A refusal of a constraint method names the fields whose change ran it, unless it names fields
-/// of its own: the constraint's declared fields that this write changed (or all of them).
-fn constraint_fields(
-    error: Error,
-    records: &Records,
-    fields: &[FieldId],
-    changed: &FxHashSet<FieldId>,
-) -> Error {
-    if !matches!(
-        error.kind(),
-        erp_fields::ErrorKind::Validation | erp_fields::ErrorKind::UserError
-    ) || !error.fields().is_empty()
-    {
-        return error;
-    }
-    let spec = records.env().registry().model_by_id(records.model_id());
-    let touched: Vec<&FieldId> = fields.iter().filter(|f| changed.contains(f)).collect();
-    let named = if touched.is_empty() {
-        fields.iter().collect()
-    } else {
-        touched
-    };
-    error.with_fields(named.into_iter().map(|id| spec.field_by_id(*id).name))
 }
