@@ -595,14 +595,15 @@ fn coerce(field: FieldRef<'_>, ty: &FieldType, value: &Value) -> Result<Cell> {
             Ok(Cell::Str(key))
         }
         FieldType::Date => match value {
-            Value::False => Ok(Cell::Null),
+            // JSON `false` arrives as `Bool(false)` (RPC binding): empty, as in Odoo
+            Value::False | Value::Bool(false) => Ok(Cell::Null),
             Value::Date(d) => Ok(Cell::Date(*d)),
             Value::DateTime(d) => Ok(Cell::Date(d.date())),
             Value::Str(s) => Date::parse_odoo(s).map(Cell::Date).ok_or_else(invalid),
             _ => Err(invalid()),
         },
         FieldType::Datetime => match value {
-            Value::False => Ok(Cell::Null),
+            Value::False | Value::Bool(false) => Ok(Cell::Null),
             Value::DateTime(d) => Ok(Cell::DateTime(*d)),
             Value::Date(d) => d
                 .checked_at_midnight()
@@ -662,7 +663,8 @@ fn coerce(field: FieldRef<'_>, ty: &FieldType, value: &Value) -> Result<Cell> {
         }),
         FieldType::Binary { .. } => binary_cell(field, value),
         FieldType::Many2one { .. } => match value {
-            Value::False => Ok(Cell::Null),
+            // JSON `false` arrives as `Bool(false)` (RPC binding): no record, as in Odoo
+            Value::False | Value::Bool(false) => Ok(Cell::Null),
             Value::Int(i) if *i > 0 => Ok(Cell::Id(*i)),
             // an `(id, display_name)` pair as `read()` returns it
             // the read format `[id, display_name]` (the name may be False), nothing else (
@@ -675,7 +677,7 @@ fn coerce(field: FieldRef<'_>, ty: &FieldType, value: &Value) -> Result<Cell> {
             _ => Err(invalid()),
         },
         FieldType::Many2oneReference { .. } => match value {
-            Value::False | Value::Int(0) => Ok(Cell::Null),
+            Value::False | Value::Bool(false) | Value::Int(0) => Ok(Cell::Null),
             Value::Int(i) if *i > 0 => Ok(Cell::Id(*i)),
             _ => Err(invalid()),
         },
@@ -1188,15 +1190,31 @@ mod tests {
     }
 
     #[test]
-    fn many2one_rejects_lossy_inputs() {
+    fn many2one_takes_false_as_empty_and_rejects_lossy_inputs() {
         let ty = FieldType::Many2one {
             comodel: "res.users".into(),
             ondelete: crate::OnDelete::SetNull,
         };
         assert_eq!(cell(&ty, Value::Int(5)).unwrap(), Cell::Id(5));
+        // `false` from JSON (`Bool(false)`) and the ORM's own `False` both mean "no record"
+        assert_eq!(cell(&ty, Value::Bool(false)).unwrap(), Cell::Null);
+        assert_eq!(cell(&ty, Value::False).unwrap(), Cell::Null);
         for v in [Value::str("5"), Value::Bool(true), Value::Float(5.0)] {
             assert!(cell(&ty, v).is_err());
         }
+    }
+
+    #[test]
+    fn dates_and_references_take_json_false_as_empty() {
+        assert_eq!(
+            cell(&FieldType::Date, Value::Bool(false)).unwrap(),
+            Cell::Null
+        );
+        assert_eq!(
+            cell(&FieldType::Datetime, Value::Bool(false)).unwrap(),
+            Cell::Null
+        );
+        assert!(cell(&FieldType::Date, Value::Bool(true)).is_err());
     }
 
     #[test]
