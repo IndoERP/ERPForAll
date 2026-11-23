@@ -2777,6 +2777,89 @@ async fn assert_current_list_scope(
     );
 }
 
+// `export_data` and `erp_impex_rights` name `base.group_allow_export`: base defines it, so an internal
+// user outside it is refused export (not a programming error) and a member may export what they may read.
+async fn assert_export_follows_the_base_export_group(
+    orm: &Orm,
+    auth: &Auth,
+    service: &RpcService,
+    ordinary: erp_orm::Principal,
+    company: i64,
+) {
+    let mut setup = orm.begin(SUPERUSER_ID).await.unwrap();
+    let user_group = relation_id(&mut setup, "group_user", "res.groups").await;
+    let export_group = relation_id(&mut setup, "group_allow_export", "res.groups").await;
+    create_user(
+        &mut setup,
+        "metadata-exporter",
+        "metadata-exporter-password",
+        company,
+        &[user_group, export_group],
+    )
+    .await;
+    let currency = setup
+        .query(
+            "SELECT id FROM res_currency WHERE active ORDER BY id LIMIT 1",
+            &[],
+        )
+        .await
+        .unwrap()[0]
+        .get::<_, i64>(0);
+    setup.commit().await.unwrap();
+    drop(setup);
+    let exporter = principal(auth, "metadata-exporter", "metadata-exporter-password").await;
+    let call = |principal: erp_orm::Principal, method: &str, body: serde_json::Value| {
+        service.call(RpcCall::json2(
+            &format!("/json/2/res.currency/{method}"),
+            serde_json::to_vec(&body).unwrap(),
+            Caller::Principal(principal),
+        ))
+    };
+    let rights = call(ordinary.clone(), "erp_impex_rights", serde_json::json!({})).await;
+    assert_eq!(
+        rights.status(),
+        200,
+        "{}",
+        String::from_utf8_lossy(rights.body())
+    );
+    assert_eq!(
+        result(&rights),
+        serde_json::json!({"export": false, "import": false})
+    );
+    let rights = call(exporter.clone(), "erp_impex_rights", serde_json::json!({})).await;
+    assert_eq!(
+        rights.status(),
+        200,
+        "{}",
+        String::from_utf8_lossy(rights.body())
+    );
+    assert_eq!(
+        result(&rights),
+        serde_json::json!({"export": true, "import": false})
+    );
+
+    let export = serde_json::json!({"ids": [currency], "fields_to_export": ["name"]});
+    let refused = call(ordinary, "export_data", export.clone()).await;
+    assert_eq!(
+        refused.status(),
+        422,
+        "{}",
+        String::from_utf8_lossy(refused.body())
+    );
+    assert_eq!(
+        result(&refused)["message"],
+        "You don't have the rights to export data. Please contact an Administrator."
+    );
+    let exported = call(exporter, "export_data", export).await;
+    assert_eq!(
+        exported.status(),
+        200,
+        "{}",
+        String::from_utf8_lossy(exported.body())
+    );
+    assert_eq!(result(&exported)["datas"].as_array().map(Vec::len), Some(1));
+}
+
 #[test]
 fn installed_metadata_rpc_uses_authenticated_acl_and_field_groups() {
     thread::Builder::new()
@@ -3647,6 +3730,8 @@ async fn installed_metadata_rpc_uses_authenticated_acl_and_field_groups_async() 
     .await;
 
     assert_action_result_contract(&orm, &service, admin.clone(), ordinary.clone()).await;
+    assert_export_follows_the_base_export_group(&orm, &auth, &service, ordinary.clone(), company)
+        .await;
     assert_action_bundle(
         &orm,
         &service,

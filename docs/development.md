@@ -117,7 +117,7 @@ read-only and cannot declare read mode. A field widget of the record form receiv
 
 A list's control row has an Import / Export menu beside New. When first opened it asks the model's
 `erp_impex_rights` (`{export, import}`): export needs the read right and the export right `export_data` checks (a member
-of `base.group_allow_export` or `base.group_erp_manager`), import needs the create and write rights. Import is also
+of `base.group_allow_export` (Export Records, defined by base) or `base.group_erp_manager`), import needs the create and write rights. Import is also
 offered only when the list allows creating and editing. Export writes the chosen columns of the selected records, or of
 every record of the current search (at most 10,000), as CSV with a byte order mark; text that a spreadsheet could read as
 a formula gets a leading apostrophe. Import reads a CSV file (at most 10 MB and 10,000 rows) whose first line names the

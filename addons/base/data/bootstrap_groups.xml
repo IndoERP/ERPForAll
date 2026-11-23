@@ -27,4 +27,8 @@
     <field name="name">Settings Administration</field>
     <field name="implied_ids" eval="[(4, ref('base.group_erp_manager'), 0)]"/>
   </record>
+  <!-- export_data and erp_impex_rights name it: its members may export the records they may read. -->
+  <record id="group_allow_export" model="res.groups">
+    <field name="name">Export Records</field>
+  </record>
 </erp>
