@@ -146,6 +146,20 @@ async fn fixture() -> Fixture {
     );
     let visible = create(&mut tx, "res.partner", &[("name", "visible partner")]).await;
     let hidden = create(&mut tx, "res.partner", &[("name", HIDDEN)]).await;
+    // the report actions name templates that must be active QWeb views of the database
+    for key in ["test_report.partner_card", "test_report.partner_audit"] {
+        create(
+            &mut tx,
+            "ir.ui.view",
+            &[
+                ("name", key),
+                ("type", "qweb"),
+                ("key", key),
+                ("arch_db", &format!("<t t-name=\"{key}\"><div/></t>")),
+            ],
+        )
+        .await;
+    }
     let open = create(
         &mut tx,
         "ir.actions.report",
