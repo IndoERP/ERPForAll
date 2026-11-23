@@ -586,6 +586,8 @@ pub struct Auth {
     config: AuthConfig,
     pool: &'static HashPool,
     prefilter: Prefilter,
+    bearer_prefilter: Prefilter,
+    api_key_budget: Prefilter,
     check_sql: String,
     api_key_sql: String,
     legacy_memo: super::apikey_legacy::LegacyMemo,
@@ -1969,6 +1971,18 @@ impl Auth {
                 config.login_burst(),
                 config.login_rate_per_sec(),
             ),
+            bearer_prefilter: Prefilter::named(
+                "Bearer pre-filter",
+                config.throttle_entries(),
+                config.bearer_burst(),
+                config.bearer_rate_per_sec(),
+            ),
+            api_key_budget: Prefilter::named(
+                "API key budget",
+                config.throttle_entries(),
+                config.api_key_burst(),
+                config.api_key_rate_per_sec(),
+            ),
             orm,
             config,
             pool,
@@ -2016,9 +2030,22 @@ impl Auth {
         &self.counters.retries
     }
 
-    /// The pre-filter (its refusal counters).
+    /// The pre-filter of password logins (its refusal counters).
     pub fn prefilter(&self) -> &Prefilter {
         &self.prefilter
+    }
+
+    /// The per-address screen of JSON-2 requests with `Authorization: Bearer`, charged once per
+    /// request before any credential SQL (`throttle.bearer_*`). A failed key still counts
+    /// against the address cooldown in the database, as before.
+    pub fn bearer_prefilter(&self) -> &Prefilter {
+        &self.bearer_prefilter
+    }
+
+    /// The per-key budget of verified API keys, charged once per request after the key was
+    /// accepted (`throttle.api_key_*`).
+    pub fn api_key_budget(&self) -> &Prefilter {
+        &self.api_key_budget
     }
 
     /// The counters.
@@ -4408,7 +4435,9 @@ impl Auth {
 #[cfg(feature = "test-support")]
 impl Auth {
     pub(super) fn freeze_prefilter(&self, now: std::time::Instant) -> Result<()> {
-        self.prefilter.freeze_at(now)
+        self.prefilter.freeze_at(now)?;
+        self.bearer_prefilter.freeze_at(now)?;
+        self.api_key_budget.freeze_at(now)
     }
 
     pub(super) fn api_key_verdict_gate(

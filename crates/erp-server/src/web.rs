@@ -1085,13 +1085,24 @@ impl WebApp {
             // An ambiguous/non-ASCII header remains a failed key attempt; its text is never
             // retained, and it still receives cookie precedence and address throttling.
             let bearer = if json2 && headers.contains_key(header::AUTHORIZATION) {
-                // Charge external requests once, before any credential/settings SQL. The
-                // execution adapter rechecks authority without charging retries again.
+                // Screen external requests once, before any credential/settings SQL. An address
+                // whose refused keys spent the password login's bucket is refused here like a
+                // password guesser; every request then takes one token of the address's Bearer
+                // bucket. The execution adapter rechecks authority without charging retries.
                 let address = erp_security::auth::throttle::address_key(client);
-                if !auth.prefilter().admit(&address) {
+                let guessing = auth.prefilter();
+                let screen = auth.bearer_prefilter();
+                let refused = if !guessing.has_token(&address) {
+                    Some(guessing.retry_after_secs())
+                } else if !screen.admit(&address) {
+                    Some(screen.retry_after_secs())
+                } else {
+                    None
+                };
+                if let Some(retry_after) = refused {
                     return Err(self
                         .render_bearer_failure(
-                            erp_rpc::InfraError::RateLimited { retry_after: 1 }.into(),
+                            erp_rpc::InfraError::RateLimited { retry_after }.into(),
                         )
                         .await);
                 }
@@ -1123,6 +1134,13 @@ impl WebApp {
                 match credential.open(CredentialOptions::new()).await {
                     Ok(tx) => (tx, None),
                     Err(error) => {
+                        if error.kind() == erp_fields::ErrorKind::AccessDenied {
+                            // A refused key (or cooldown) spends a token of the address's
+                            // password-login bucket: guessing keys is screened like guessing
+                            // passwords, while verified keys never touch that bucket.
+                            let address = erp_security::auth::throttle::address_key(client);
+                            auth.prefilter().admit(&address);
+                        }
                         let mut result = self.bearer_error(error).await;
                         if credential.drop_cookie.load(Ordering::Relaxed) {
                             self.set_cookie(&mut result, "session_id", "", 0)?;
@@ -1151,6 +1169,29 @@ impl WebApp {
             };
             let principal = request_tx.env().principal().clone();
             request_tx.rollback().await.map_err(auth_error)?;
+            if bearer.is_some() {
+                // Once per request, after the key verified: the key's own budget, so one busy
+                // device does not spend the address bucket of its neighbours.
+                let key = principal.scope().map(erp_orm::Scope::key).ok_or_else(|| {
+                    tracing::error!(
+                        target: "erp::auth",
+                        "a verified Bearer credential carried no API key scope"
+                    );
+                    internal()
+                })?;
+                let budget = auth.api_key_budget();
+                if !budget.admit_api_key(key) {
+                    drop(request_tx);
+                    return Err(self
+                        .render_bearer_failure(
+                            erp_rpc::InfraError::RateLimited {
+                                retry_after: budget.retry_after_secs(),
+                            }
+                            .into(),
+                        )
+                        .await);
+                }
+            }
             // A Transaction retains its pooled connection after rollback for reuse. RPC or
             // lifecycle execution must be able to acquire that slot after this preflight.
             drop(request_tx);

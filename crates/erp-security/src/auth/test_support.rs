@@ -72,7 +72,8 @@ pub fn api_key_verdict_gate(
     auth.api_key_verdict_gate(reached, release)
 }
 
-/// Freeze one Auth's existing prefilter clock; uses its production bucket algorithm.
+/// Freeze the clocks of one Auth's pre-filters (password login, Bearer address and API key
+/// budget); they keep their production bucket algorithm.
 /// This default-off seam keeps logical admission tests independent of host scheduling/refill.
 ///
 /// # Errors

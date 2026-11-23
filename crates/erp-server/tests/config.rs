@@ -722,7 +722,7 @@ fn read_audit_policy_configuration_is_strict_and_additive() {
 fn auth_configuration_accepts_operator_options() {
     let (dir, text) = fixture();
     let path = dir.path().join("server.toml");
-    fs::write(&path, format!("{text}[auth]\n\"limits.credential_bytes\"=64\n\"throttle.login_burst\"=5\n\"throttle.login_rate_per_sec\"=0.5\n\"throttle.table_entries\"=64\n\"limits.cooldown_hook_deadline_ms\"=20\n\"limits.token_plan_hook_deadline_ms\"=30\n")).unwrap();
+    fs::write(&path, format!("{text}[auth]\n\"limits.credential_bytes\"=64\n\"throttle.login_burst\"=5\n\"throttle.login_rate_per_sec\"=0.5\n\"throttle.table_entries\"=64\n\"limits.cooldown_hook_deadline_ms\"=20\n\"limits.token_plan_hook_deadline_ms\"=30\n\"throttle.bearer_burst\"=200\n\"throttle.bearer_rate_per_sec\"=50\n\"throttle.api_key_burst\"=7\n\"throttle.api_key_rate_per_sec\"=0.5\n")).unwrap();
     let auth = ServerConfig::load(&path)
         .expect("bounded operator auth options must reach server configuration")
         .auth();
@@ -732,6 +732,14 @@ fn auth_configuration_accepts_operator_options() {
     assert_eq!(auth.throttle_entries(), 64);
     assert_eq!(auth.cooldown_hook_deadline().as_millis(), 20);
     assert_eq!(auth.token_plan_hook_deadline().as_millis(), 30);
+    assert_eq!(
+        (auth.bearer_burst(), auth.bearer_rate_per_sec()),
+        (200, 50.0)
+    );
+    assert_eq!(
+        (auth.api_key_burst(), auth.api_key_rate_per_sec()),
+        (7, 0.5)
+    );
 }
 
 #[test]
@@ -762,6 +770,8 @@ fn auth_configuration_refuses_types_bounds_and_unknowns_without_input() {
     for (name, min, max) in [
         ("limits.credential_bytes", 64, 4096),
         ("throttle.login_burst", 5, 1000),
+        ("throttle.bearer_burst", 5, 10_000),
+        ("throttle.api_key_burst", 5, 10_000),
         ("throttle.table_entries", 64, 1_048_576),
         ("limits.cooldown_hook_deadline_ms", 10, 60_000),
         ("limits.token_plan_hook_deadline_ms", 10, 60_000),
@@ -821,6 +831,39 @@ fn auth_configuration_refuses_types_bounds_and_unknowns_without_input() {
         assert_eq!(
             error.to_string(),
             format!("throttle.login_rate_per_sec = {rendered} is outside 0.1..=1000")
+        );
+    }
+    for name in [
+        "throttle.bearer_rate_per_sec",
+        "throttle.api_key_rate_per_sec",
+    ] {
+        for value in ["0.1", "10000", "10000.0"] {
+            fs::write(&path, format!("{text}[auth]\n\"{name}\"={value}\n")).unwrap();
+            ServerConfig::load(&path).unwrap();
+        }
+        for (value, rendered) in [
+            ("0", "0"),
+            ("0.09", "0.09"),
+            ("10001", "10001"),
+            ("nan", "NaN"),
+        ] {
+            fs::write(&path, format!("{text}[auth]\n\"{name}\"={value}\n")).unwrap();
+            let error = ServerConfig::load(&path).unwrap_err();
+            assert!(matches!(error, ConfigError::Auth(_)));
+            assert_eq!(
+                error.to_string(),
+                format!("{name} = {rendered} is outside 0.1..=10000")
+            );
+        }
+        fs::write(
+            &path,
+            format!("{text}[auth]\n\"{name}\"='SENTINEL-PRIVATE'\n"),
+        )
+        .unwrap();
+        let error = ServerConfig::load(&path).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!("auth {name} must be a finite number in 0.1..=10000")
         );
     }
     for (input, message) in [

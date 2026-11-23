@@ -297,6 +297,8 @@ ON CONFLICT (kind, key_hash) DO UPDATE
 /// addresses degrades to a smaller window per address, it never refuses everyone new).
 #[derive(Debug)]
 pub struct Prefilter {
+    /// What the table guards, named in its log line.
+    name: &'static str,
     slots: Mutex<Vec<Slot>>,
     burst: f64,
     rate: f64,
@@ -321,8 +323,14 @@ const PROBE: usize = 8;
 impl Prefilter {
     /// A table of `entries` slots, `burst` tokens per address refilled at `rate_per_sec`.
     pub fn new(entries: usize, burst: u32, rate_per_sec: f64) -> Self {
+        Self::named("login pre-filter", entries, burst, rate_per_sec)
+    }
+
+    /// [`Prefilter::new`] for another budget; `name` appears in the eviction log line.
+    pub fn named(name: &'static str, entries: usize, burst: u32, rate_per_sec: f64) -> Self {
         let now = Instant::now();
         Self {
+            name,
             slots: Mutex::new(vec![
                 Slot {
                     key: 0,
@@ -350,6 +358,51 @@ impl Prefilter {
         #[cfg(not(feature = "test-support"))]
         let now = Instant::now();
         self.admit_at(address.as_str(), now)
+    }
+
+    /// Whether `address` has a token now, without taking it: an address that spent this bucket
+    /// is screened out before work that only a later failure would charge.
+    pub fn has_token(&self, address: &AddressKey) -> bool {
+        #[cfg(feature = "test-support")]
+        let now = self.fixed_now.get().copied().unwrap_or_else(Instant::now);
+        #[cfg(not(feature = "test-support"))]
+        let now = Instant::now();
+        self.has_token_at(address.as_str(), now)
+    }
+
+    pub(crate) fn has_token_at(&self, address: &str, now: Instant) -> bool {
+        let key = self.hasher.hash_one(address);
+        let slots = self
+            .slots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let len = slots.len();
+        let start = (key % (len as u64)) as usize;
+        (0..PROBE)
+            .map(|i| slots[(start + i) % len])
+            .find(|slot| slot.used && slot.key == key)
+            .is_none_or(|slot| self.refill(slot, now) >= 1.0)
+    }
+
+    /// Take one token for the verified API key `key`; `false` when its bucket is empty.
+    pub fn admit_api_key(&self, key: erp_orm::ApiKeyId) -> bool {
+        #[cfg(feature = "test-support")]
+        let now = self.fixed_now.get().copied().unwrap_or_else(Instant::now);
+        #[cfg(not(feature = "test-support"))]
+        let now = Instant::now();
+        self.admit_at(&key.get().to_string(), now)
+    }
+
+    /// Whole seconds until an empty bucket holds a token again (at least 1): the
+    /// `Retry-After` of a refusal.
+    pub fn retry_after_secs(&self) -> u32 {
+        // rate is at least 0.1 per second (AuthConfig), so this is at most 10
+        let secs = (1.0 / self.rate).ceil();
+        if secs.is_finite() && secs >= 1.0 && secs <= f64::from(u32::MAX) {
+            secs as u32
+        } else {
+            1
+        }
     }
 
     /// Fix this prefilter's clock for deterministic integration contracts, default-off.
@@ -409,8 +462,9 @@ impl Prefilter {
                 if evicted == 1 || evicted.is_multiple_of(1_024) {
                     tracing::info!(
                         target: "erp::auth",
-                        "login pre-filter full: {evicted} buckets taken over from other addresses \
-                         so far (throttle.table_entries)"
+                        "{} full: {evicted} buckets taken over from other keys so far \
+                         (throttle.table_entries)",
+                        self.name
                     );
                 }
                 least_recent.0
@@ -515,6 +569,43 @@ mod tests {
         );
         assert!(p.admit_at("192.0.2.1", t0 + Duration::from_millis(1_001)));
         assert_eq!((p.refused(), p.evicted()), (1, 0));
+    }
+
+    #[test]
+    fn api_keys_have_their_own_buckets_and_retry_after_follows_the_rate() {
+        let p = Prefilter::named("API key budget", 64, 5, 0.1);
+        let (one, two) = (
+            erp_orm::ApiKeyId::new(1).unwrap(),
+            erp_orm::ApiKeyId::new(2).unwrap(),
+        );
+        let t0 = Instant::now();
+        for _ in 0..5 {
+            assert!(p.admit_at(&one.get().to_string(), t0));
+        }
+        assert!(!p.admit_at(&one.get().to_string(), t0));
+        assert!(p.admit_at(&two.get().to_string(), t0), "another key");
+        assert!(p.admit_at(&one.get().to_string(), t0 + Duration::from_secs(10)));
+        assert_eq!(p.retry_after_secs(), 10);
+        assert_eq!(Prefilter::new(64, 5, 30.0).retry_after_secs(), 1);
+        assert_eq!(Prefilter::new(64, 5, 0.3).retry_after_secs(), 4);
+    }
+
+    #[test]
+    fn has_token_looks_without_taking() {
+        let p = Prefilter::new(64, 5, 1.0);
+        let t0 = Instant::now();
+        assert!(
+            p.has_token_at("192.0.2.1", t0),
+            "an unknown address has a full bucket"
+        );
+        for _ in 0..5 {
+            assert!(p.has_token_at("192.0.2.1", t0));
+            assert!(p.admit_at("192.0.2.1", t0));
+        }
+        assert!(!p.has_token_at("192.0.2.1", t0));
+        assert!(p.has_token_at("192.0.2.2", t0));
+        assert!(p.has_token_at("192.0.2.1", t0 + Duration::from_millis(1_001)));
+        assert_eq!(p.refused(), 0, "looking never counts as a refusal");
     }
 
     /// Security review M5: a full table never refuses a new address; the least recently used

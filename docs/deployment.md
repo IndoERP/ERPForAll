@@ -61,6 +61,29 @@ role, and a `NOLOGIN` maintenance role. Notes for a real deployment:
 Secret files must be regular files with mode 600, not symbolic links. In `direct` mode `bind` must be a loopback
 address and the proxy keys must be absent.
 
+### Request throttling (`[auth]`)
+
+Three per-process token buckets screen requests before the database is asked; a value outside its bounds stops
+the start with an error naming the key. Each bucket table holds `throttle.table_entries` keys (default 4096).
+
+| Key | Default | Bounds | What it limits |
+|---|---|---|---|
+| `throttle.login_burst`, `throttle.login_rate_per_sec` | 20, 2.0 | 5 – 1000, 0.1 – 1000 | Password logins per source address. A JSON-2 request whose API key is refused also spends a token here, and an address with an empty bucket is refused before its key is read, so guessing keys is screened like guessing passwords. |
+| `throttle.bearer_burst`, `throttle.bearer_rate_per_sec` | 120, 30.0 | 5 – 10000, 0.1 – 10000 | JSON-2 requests with `Authorization: Bearer` per source address, one token per request. |
+| `throttle.api_key_burst`, `throttle.api_key_rate_per_sec` | 60, 10.0 | 5 – 10000, 0.1 – 10000 | Requests per verified API key, from any address, one token per request. |
+
+A JSON-2 request refused by a bucket gets 429 `erp.rate_limited` with `Retry-After` set to the seconds one token
+takes to refill.
+Many devices behind one address (an office NAT) share the Bearer bucket of that address, but each key has its own
+budget, so one busy device does not slow its neighbours. Failed keys also count towards the address cooldown stored
+in the database, as failed passwords do.
+
+```toml
+[auth]
+"throttle.bearer_burst" = 240
+"throttle.api_key_rate_per_sec" = 20.0
+```
+
 ## Run it as a service
 
 Run the server under a supervisor that restarts it: a database outage of more than about a minute makes it exit by

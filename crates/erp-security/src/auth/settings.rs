@@ -624,6 +624,10 @@ pub struct AuthConfig {
     credential_bytes: usize,
     login_burst: u32,
     login_rate_per_sec: f64,
+    bearer_burst: u32,
+    bearer_rate_per_sec: f64,
+    api_key_burst: u32,
+    api_key_rate_per_sec: f64,
     throttle_entries: usize,
     cooldown_hook_deadline: Duration,
     token_plan_hook_deadline: Duration,
@@ -635,6 +639,10 @@ impl AuthConfig {
         credential_bytes: 1_024,
         login_burst: 20,
         login_rate_per_sec: 2.0,
+        bearer_burst: 120,
+        bearer_rate_per_sec: 30.0,
+        api_key_burst: 60,
+        api_key_rate_per_sec: 10.0,
         throttle_entries: 4_096,
         cooldown_hook_deadline: Duration::from_secs(5),
         token_plan_hook_deadline: Duration::from_secs(10),
@@ -665,6 +673,46 @@ impl AuthConfig {
         bound("throttle.login_rate_per_sec", rate_per_sec, 0.1, 1_000.0)?;
         self.login_burst = burst;
         self.login_rate_per_sec = rate_per_sec;
+        Ok(self)
+    }
+
+    /// `throttle.bearer_burst` (5 – 10,000) and `throttle.bearer_rate_per_sec` (0.1 – 10,000):
+    /// the per-address screen every JSON-2 request with `Authorization: Bearer` passes before its
+    /// key is read. Separate from the password login's bucket, so API traffic and password
+    /// guessing do not share one budget.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError`] naming the setting.
+    pub fn with_bearer_prefilter(
+        mut self,
+        burst: u32,
+        rate_per_sec: f64,
+    ) -> Result<Self, ConfigError> {
+        bound("throttle.bearer_burst", f64::from(burst), 5.0, 10_000.0)?;
+        bound("throttle.bearer_rate_per_sec", rate_per_sec, 0.1, 10_000.0)?;
+        self.bearer_burst = burst;
+        self.bearer_rate_per_sec = rate_per_sec;
+        Ok(self)
+    }
+
+    /// `throttle.api_key_burst` (5 – 10,000) and `throttle.api_key_rate_per_sec`
+    /// (0.1 – 10,000): the budget of one verified API key, charged once per request after the
+    /// key was accepted. One busy device behind a shared address is throttled without its
+    /// neighbours.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError`] naming the setting.
+    pub fn with_api_key_budget(
+        mut self,
+        burst: u32,
+        rate_per_sec: f64,
+    ) -> Result<Self, ConfigError> {
+        bound("throttle.api_key_burst", f64::from(burst), 5.0, 10_000.0)?;
+        bound("throttle.api_key_rate_per_sec", rate_per_sec, 0.1, 10_000.0)?;
+        self.api_key_burst = burst;
+        self.api_key_rate_per_sec = rate_per_sec;
         Ok(self)
     }
 
@@ -733,7 +781,27 @@ impl AuthConfig {
         self.login_rate_per_sec
     }
 
-    /// Pre-filter table size.
+    /// Bearer pre-filter burst per address.
+    pub const fn bearer_burst(&self) -> u32 {
+        self.bearer_burst
+    }
+
+    /// Bearer pre-filter refill per address, per second.
+    pub const fn bearer_rate_per_sec(&self) -> f64 {
+        self.bearer_rate_per_sec
+    }
+
+    /// Request burst per verified API key.
+    pub const fn api_key_burst(&self) -> u32 {
+        self.api_key_burst
+    }
+
+    /// Request refill per verified API key, per second.
+    pub const fn api_key_rate_per_sec(&self) -> f64 {
+        self.api_key_rate_per_sec
+    }
+
+    /// Pre-filter table size (each of the login, Bearer and API key tables).
     pub const fn throttle_entries(&self) -> usize {
         self.throttle_entries
     }
@@ -816,6 +884,42 @@ mod tests {
                 .unwrap_err();
             assert_eq!(e.setting(), "limits.cooldown_hook_deadline_ms");
         }
+    }
+
+    #[test]
+    fn the_bearer_and_api_key_budgets_are_bounded_and_independent() {
+        let d = AuthConfig::DEFAULT;
+        assert_eq!((d.login_burst(), d.login_rate_per_sec()), (20, 2.0));
+        assert_eq!((d.bearer_burst(), d.bearer_rate_per_sec()), (120, 30.0));
+        assert_eq!((d.api_key_burst(), d.api_key_rate_per_sec()), (60, 10.0));
+        let ok = d
+            .with_bearer_prefilter(5, 0.1)
+            .unwrap()
+            .with_api_key_budget(10_000, 10_000.0)
+            .unwrap();
+        assert_eq!((ok.bearer_burst(), ok.bearer_rate_per_sec()), (5, 0.1));
+        assert_eq!(
+            (ok.api_key_burst(), ok.api_key_rate_per_sec()),
+            (10_000, 10_000.0)
+        );
+        assert_eq!((ok.login_burst(), ok.login_rate_per_sec()), (20, 2.0));
+        for (burst, rate, setting) in [
+            (4, 1.0, "throttle.bearer_burst"),
+            (10_001, 1.0, "throttle.bearer_burst"),
+            (5, 0.09, "throttle.bearer_rate_per_sec"),
+            (5, 10_000.1, "throttle.bearer_rate_per_sec"),
+            (5, f64::NAN, "throttle.bearer_rate_per_sec"),
+        ] {
+            let e = d.with_bearer_prefilter(burst, rate).unwrap_err();
+            assert_eq!(e.setting(), setting);
+            let e = d.with_api_key_budget(burst, rate).unwrap_err();
+            assert_eq!(e.setting(), setting.replace("bearer", "api_key"));
+        }
+        let e = d.with_bearer_prefilter(4, 1.0).unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            "throttle.bearer_burst = 4 is outside 5..=10000"
+        );
     }
 
     #[test]

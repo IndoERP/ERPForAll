@@ -46,6 +46,8 @@ struct Fixture {
     key_id: i64,
     /// The user that owns the fixture's key and the cookie session.
     owner_uid: i64,
+    /// The administrator that issued the fixture's key.
+    admin: i64,
     session: String,
     other_session: String,
     user_count: i64,
@@ -137,6 +139,7 @@ async fn fixture() -> Fixture {
         serde_json::to_vec(&serde_json::json!({"schema":1,"assets":assets})).unwrap(),
     )
     .unwrap();
+    let admin = world.admin;
     let support::World { h, auth, .. } = world;
     let auth = Arc::new(auth);
     let rpc = Arc::new(erp_rpc::RpcService::new(
@@ -158,6 +161,7 @@ async fn fixture() -> Fixture {
         key,
         key_id,
         owner_uid: uid,
+        admin,
         session,
         other_session,
         user_count,
@@ -681,12 +685,9 @@ async fn preflight_releases_its_connection_before_bearer_or_cookie_dispatch() {
     );
 }
 
-/// process flood admission runs once before external bearer database work.
-#[tokio::test]
-async fn bearer_prefilter_charges_once_and_refuses_floods_without_database_work() {
-    use erp_security::auth::{AuthConfig, HashPoolConfig, throttle::address_key};
-    let f = fixture().await;
-    let config = AuthConfig::DEFAULT.with_login_prefilter(5, 0.1).unwrap();
+/// A router over a fresh `Auth` with `config` and frozen pre-filter clocks.
+async fn router_with(f: &Fixture, config: erp_security::auth::AuthConfig) -> (Arc<Auth>, Router) {
+    use erp_security::auth::HashPoolConfig;
     let auth = Arc::new(
         Auth::new(
             support::orm_on(&f.h, support::pool_of(&f.h, 4)).await,
@@ -710,7 +711,48 @@ async fn bearer_prefilter_charges_once_and_refuses_floods_without_database_work(
         .unwrap()
         .with_rpc(rpc),
     );
-    let router = app.router("127.0.0.1".parse().unwrap());
+    (auth, app.router("127.0.0.1".parse().unwrap()))
+}
+
+async fn status_of(
+    router: &Router,
+    request: Request<Body>,
+) -> (StatusCode, Option<String>, Vec<u8>) {
+    let reply = router.clone().oneshot(request).await.unwrap();
+    let (parts, body) = reply.into_parts();
+    let body = to_bytes(body, 1 << 20).await.unwrap().to_vec();
+    let retry = parts
+        .headers
+        .get("retry-after")
+        .map(|v| v.to_str().unwrap().to_owned());
+    (parts.status, retry, body)
+}
+
+#[track_caller]
+fn rate_limited(status: StatusCode, retry: Option<String>, body: &[u8], seconds: u32) {
+    assert_eq!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "{}",
+        String::from_utf8_lossy(body)
+    );
+    assert_eq!(retry.as_deref(), Some(seconds.to_string().as_str()));
+    let json: serde_json::Value = serde_json::from_slice(body).unwrap();
+    assert_eq!(json["name"], "erp.rate_limited");
+    assert_eq!(
+        json["message"],
+        format!("Rate limit exceeded; retry after {seconds} seconds.")
+    );
+}
+
+/// process flood admission runs once before external bearer database work, in the Bearer
+/// bucket of the address, never in the password login's.
+#[tokio::test]
+async fn bearer_prefilter_charges_once_and_refuses_floods_without_database_work() {
+    use erp_security::auth::{AuthConfig, throttle::address_key};
+    let f = fixture().await;
+    let config = AuthConfig::DEFAULT.with_bearer_prefilter(5, 0.1).unwrap();
+    let (auth, router) = router_with(&f, config).await;
     // One actual request performs preflight and execution credential checks, yet takes one token.
     let reply = router
         .clone()
@@ -719,15 +761,19 @@ async fn bearer_prefilter_charges_once_and_refuses_floods_without_database_work(
         .unwrap();
     assert_eq!(reply.status(), StatusCode::OK);
     let address = address_key("192.0.2.91".parse().unwrap());
-    for _ in 1..config.login_burst() {
+    for _ in 1..config.bearer_burst() {
         assert!(
-            auth.prefilter().admit(&address),
+            auth.bearer_prefilter().admit(&address),
             "RPC rechecks must not charge extra flood tokens"
         );
     }
     assert!(
-        !auth.prefilter().admit(&address),
+        !auth.bearer_prefilter().admit(&address),
         "the external bearer request must charge its flood token"
+    );
+    assert!(
+        auth.prefilter().has_token(&address) && auth.prefilter().refused() == 0,
+        "a verified Bearer request leaves the password login's bucket alone"
     );
     let mut tx = f.h.begin().await.unwrap();
     let before: i64 = tx
@@ -749,21 +795,10 @@ async fn bearer_prefilter_charges_once_and_refuses_floods_without_database_work(
         } else {
             request
         };
-        let reply = router
-            .clone()
-            .oneshot(request.body(Body::from(BODY)).unwrap())
-            .await
-            .unwrap();
-        let (parts, body) = reply.into_parts();
-        let body = to_bytes(body, 1 << 20).await.unwrap();
-        assert_eq!(parts.headers["retry-after"], "1");
-        error(
-            &Response::from_parts(parts, Body::empty()),
-            &body,
-            StatusCode::TOO_MANY_REQUESTS,
-            "erp.rate_limited",
-            "Rate limit exceeded; retry after 1 seconds.",
-        );
+        let (status, retry, body) =
+            status_of(&router, request.body(Body::from(BODY)).unwrap()).await;
+        // 0.1 tokens per second: the next one is 10 seconds away
+        rate_limited(status, retry, &body, 10);
     }
     let mut tx = f.h.begin().await.unwrap();
     let after: i64 = tx
@@ -788,6 +823,137 @@ async fn bearer_prefilter_charges_once_and_refuses_floods_without_database_work(
         StatusCode::OK,
         "another address retains its own bucket"
     );
+}
+
+impl Fixture {
+    /// A second RPC key of the fixture's user, as its bearer secret.
+    async fn second_key(&self) -> String {
+        let mut tx = self.h.begin().await.unwrap();
+        let secret: String = tx
+            .query(
+                "SELECT value FROM ir_config_parameter WHERE key='database.secret'",
+                &[],
+            )
+            .await
+            .unwrap()[0]
+            .get(0);
+        let expiry = DateTime::from_micros(
+            tx.query(
+                "SELECT (extract(epoch FROM now()) * 1000000)::int8 + 3600000000",
+                &[],
+            )
+            .await
+            .unwrap()[0]
+                .get(0),
+        );
+        tx.rollback().await.unwrap();
+        let hasher = ApiKeyHasher::derive(&DatabaseSecret::from_stored(&secret).unwrap()).unwrap();
+        let mut tx = self.h.begin_as(self.admin).await.unwrap();
+        let issued = issue(
+            &mut tx,
+            &hasher,
+            &IssueRequest::new(
+                UserId::new(self.owner_uid).unwrap(),
+                "Second device",
+                KeyKind::User,
+                KeyScope::Rpc,
+                Some(expiry),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        issued.into_secret().expose().to_owned()
+    }
+}
+
+/// A verified key spends its own budget, once per request: a busy device is throttled without
+/// its neighbours behind the same address, and the same key is throttled from any address.
+#[tokio::test]
+async fn each_verified_key_has_its_own_budget() {
+    use erp_security::auth::AuthConfig;
+    let f = fixture().await;
+    let config = AuthConfig::DEFAULT.with_api_key_budget(5, 0.1).unwrap();
+    let (auth, router) = router_with(&f, config).await;
+    let second = f.second_key().await;
+    for _ in 0..5 {
+        let (status, _, body) =
+            status_of(&router, f.bearer(95).body(Body::from(BODY)).unwrap()).await;
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    }
+    let (status, retry, body) =
+        status_of(&router, f.bearer(95).body(Body::from(BODY)).unwrap()).await;
+    rate_limited(status, retry, &body, 10);
+    // the same key from another address: the budget belongs to the key
+    let (status, retry, body) =
+        status_of(&router, f.bearer(96).body(Body::from(BODY)).unwrap()).await;
+    rate_limited(status, retry, &body, 10);
+    // another key behind the first address still works
+    let other = f
+        .post(PATH, 95)
+        .header("authorization", format!("Bearer {second}"))
+        .body(Body::from(BODY))
+        .unwrap();
+    let (status, _, body) = status_of(&router, other).await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    // neither verified traffic nor its refusals touched the password login's bucket
+    assert_eq!(auth.prefilter().refused(), 0);
+}
+
+/// Refused keys keep the per-address protection of the password login: each spends a token of
+/// the address's login bucket, and once it is empty the address is refused before any SQL,
+/// even with a valid key, while other addresses are unaffected.
+#[tokio::test]
+async fn refused_keys_spend_the_login_bucket_of_their_address() {
+    use erp_security::auth::{AuthConfig, throttle::address_key};
+    let f = fixture().await;
+    let config = AuthConfig::DEFAULT.with_login_prefilter(5, 0.1).unwrap();
+    let (auth, router) = router_with(&f, config).await;
+    let address = address_key("192.0.2.97".parse().unwrap());
+    for _ in 0..config.login_burst() {
+        let request = f
+            .post(PATH, 97)
+            .header("authorization", "Bearer not-a-valid-key")
+            .body(Body::from(BODY))
+            .unwrap();
+        let (status, _, body) = status_of(&router, request).await;
+        // 401 for the key, 429 once the database address cooldown answers
+        assert!(
+            status.is_client_error(),
+            "{status}: {}",
+            String::from_utf8_lossy(&body)
+        );
+        assert!(auth.prefilter().refused() == 0);
+    }
+    assert!(!auth.prefilter().has_token(&address));
+    let mut tx = f.h.begin().await.unwrap();
+    let before: i64 = tx
+        .query(
+            "SELECT coalesce(sum(failures), 0)::int8 FROM erp_login_throttle",
+            &[],
+        )
+        .await
+        .unwrap()[0]
+        .get(0);
+    tx.rollback().await.unwrap();
+    // the valid key is refused too from this address, before the database is asked
+    let (status, retry, body) =
+        status_of(&router, f.bearer(97).body(Body::from(BODY)).unwrap()).await;
+    rate_limited(status, retry, &body, 10);
+    let mut tx = f.h.begin().await.unwrap();
+    let after: i64 = tx
+        .query(
+            "SELECT coalesce(sum(failures), 0)::int8 FROM erp_login_throttle",
+            &[],
+        )
+        .await
+        .unwrap()[0]
+        .get(0);
+    tx.rollback().await.unwrap();
+    assert_eq!(after, before, "a pre-SQL refusal writes no failure");
+    let (status, _, body) = status_of(&router, f.bearer(98).body(Body::from(BODY)).unwrap()).await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
 }
 
 impl Fixture {
