@@ -27,6 +27,13 @@ pub(crate) struct ClearColumn {
     sealed: Sealed,
 }
 
+impl ClearColumn {
+    /// Whether this is the column `column` of `table`.
+    pub(crate) fn is(&self, table: &str, column: &str) -> bool {
+        self.table == table && self.column == column
+    }
+}
+
 fn db_error(what: &'static str) -> impl Fn(tokio_postgres::Error) -> Error {
     move |error| Error::new(ErrorKind::Database, what).with_source(error)
 }

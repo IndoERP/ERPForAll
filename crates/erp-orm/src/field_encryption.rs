@@ -26,7 +26,8 @@
 //!
 //! An envelope is opaque to SQL: conditions, ordering, grouping and aggregates on an encrypted
 //! field are refused with an error naming the field, never answered with a result computed on
-//! ciphertext.
+//! ciphertext. A field declared `blind_index = true` also keeps a keyed hash of its value in a
+//! companion column, which equality conditions and typed keys use ([`blind`]).
 
 use std::fmt;
 use std::sync::{Arc, OnceLock};
@@ -38,7 +39,12 @@ use erp_registry::{FieldSpec, ModelSpec, Registry, TableObjectKind};
 use sha2::{Digest as _, Sha256};
 use zeroize::Zeroizing;
 
+mod blind;
 mod sync;
+
+pub use blind::BLIND_INDEX_LABEL;
+pub(crate) use blind::{Blind, key_columns};
+pub(crate) use sync::ClearColumn;
 
 /// The first two bytes of every envelope.
 const MAGIC: &[u8; 2] = b"EF";
@@ -62,6 +68,8 @@ const AAD_LABEL: &[u8] = b"erpforall.field.v1";
 struct FieldKey {
     id: String,
     cipher: XChaCha20Poly1305,
+    /// The key bytes, kept (wiped on drop) to derive the blind index keys.
+    bytes: Zeroizing<[u8; KEY_LEN]>,
 }
 
 /// The field keys of this node: the first one seals, all of them open.
@@ -143,12 +151,15 @@ impl FieldKeys {
             }
             let cipher = XChaCha20Poly1305::new_from_slice(&bytes)
                 .map_err(|_| key_file_error(format!("line {number}: unusable key")))?;
+            let mut kept = Zeroizing::new([0u8; KEY_LEN]);
+            kept.copy_from_slice(&bytes);
             digest.update((id.len() as u64).to_le_bytes());
             digest.update(id.as_bytes());
             digest.update(&bytes[..]);
             keys.push(FieldKey {
                 id: id.to_owned(),
                 cipher,
+                bytes: kept,
             });
         }
         if keys.is_empty() {
@@ -175,6 +186,19 @@ impl FieldKeys {
     /// The id of the key new values are sealed with.
     pub fn sealing_id(&self) -> &str {
         &self.keys[0].id
+    }
+
+    /// The id of the key blind indexes are derived from: the last key of the file (the oldest
+    /// one). Putting a new sealing key first leaves it in place, so a rotation does not change
+    /// the blind indexes; removing the last line does, and the next module upgrade recomputes
+    /// them.
+    pub fn index_id(&self) -> &str {
+        &self.index_key().id
+    }
+
+    fn index_key(&self) -> &FieldKey {
+        // `parse` refuses a file without keys
+        &self.keys[self.keys.len() - 1]
     }
 
     /// Seal `clear` for `model.field` with the sealing key and a fresh random nonce.
@@ -389,6 +413,8 @@ pub fn install(keys: FieldKeys) -> Result<()> {
             "another set of field keys is already installed in this process",
         ));
     }
+    // conditions on blind-indexed fields hash their values with these keys
+    erp_sql::blind::install(blind::hash_installed);
     Ok(())
 }
 
@@ -430,8 +456,11 @@ pub fn require_keys(registry: &Registry, keys: Option<&FieldKeys>) -> Result<()>
 /// The ORM's checks of a registry with encrypted fields: the keys are installed
 /// ([`require_keys`]), and no typed key, index or exclusion constraint names an encrypted field
 /// (its column holds envelopes with random nonces: equal values never compare equal, so a unique
-/// key would accept duplicates and an index would serve nothing). Keys and indexes written as SQL
-/// text are not parsed: an addon must not name an encrypted column in them.
+/// key would accept duplicates and an index would serve nothing). A typed key may name a
+/// blind-indexed field: it is built on the field's companion column, which holds equal hashes for
+/// equal values. Keys and indexes written as SQL text are not parsed: an addon must not name an
+/// encrypted column (or a companion column) in them. No field may be named like the companion
+/// column of a blind-indexed field.
 ///
 /// # Errors
 ///
@@ -440,24 +469,44 @@ pub fn validate(registry: &Registry) -> Result<()> {
     require_keys(registry, installed().map(AsRef::as_ref))?;
     for model in registry.models() {
         for object in &model.table_objects {
-            let named: Vec<&str> = match &object.kind {
-                TableObjectKind::Key(key) => key.fields.to_vec(),
-                TableObjectKind::TypedIndex(index) => {
-                    index.fields.iter().chain(index.include).copied().collect()
-                }
-                TableObjectKind::Exclusion(exclusion) => exclusion.equal.to_vec(),
-                TableObjectKind::TemporalKey(key) => key.fields.to_vec(),
+            let (named, blind_allowed): (Vec<&str>, bool) = match &object.kind {
+                TableObjectKind::Key(key) => (key.fields.to_vec(), true),
+                TableObjectKind::TypedIndex(index) => (
+                    index.fields.iter().chain(index.include).copied().collect(),
+                    false,
+                ),
+                TableObjectKind::Exclusion(exclusion) => (exclusion.equal.to_vec(), false),
+                TableObjectKind::TemporalKey(key) => (key.fields.to_vec(), false),
                 _ => continue,
             };
-            if let Some(field) = named
+            let refused = named
                 .iter()
                 .filter_map(|name| model.field(name))
-                .find(|field| field.encrypted)
-            {
+                .find(|field| {
+                    field.encrypted && !(blind_allowed && field.blind_index_column().is_some())
+                });
+            if let Some(field) = refused {
+                let hint = if field.blind_index_column().is_some() {
+                    " (the companion column of a blind-indexed field is indexed by the ORM, and a \
+                     typed key may name the field)"
+                } else {
+                    " (declare `blind_index = true` for a typed key on it)"
+                };
                 return Err(Error::programming(format!(
                     "{}.{}: the table object '{}' names the encrypted field '{}'; a key, index or \
-                     exclusion constraint cannot use an encrypted field",
+                     exclusion constraint cannot use an encrypted field{hint}",
                     model.name, field.name, object.name, field.name
+                )));
+            }
+        }
+        for field in &model.fields {
+            if let Some(column) = field.blind_index_column()
+                && model.field(&column).is_some()
+            {
+                return Err(Error::programming(format!(
+                    "{}.{column}: this field has the name of the blind index column of the \
+                     encrypted field '{}'",
+                    model.name, field.name
                 )));
             }
         }

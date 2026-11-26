@@ -277,3 +277,86 @@ fn declarations_an_encrypted_field_cannot_have_are_refused() {
         assert!(error.message().contains(expected), "{}", error.message());
     }
 }
+
+#[test]
+fn a_blind_index_is_deterministic_and_does_not_contain_the_value() {
+    let keys = keys(TWO_KEYS);
+    let clear = "3201012345670001";
+    let a = keys
+        .blind_index("hr.employee", "national_id", clear.as_bytes())
+        .unwrap();
+    let b = keys
+        .blind_index("hr.employee", "national_id", clear.as_bytes())
+        .unwrap();
+    assert_eq!(a, b, "equal values have equal blind indexes");
+    assert!(!a.contains(clear));
+    // the last key of the file derives the index: k1
+    assert_eq!(keys.index_id(), "k1");
+    let (id, hex) = a.split_once(':').unwrap();
+    assert_eq!(id, "k1");
+    assert_eq!(hex.len(), 64);
+    assert!(
+        hex.bytes()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    );
+    assert_ne!(
+        a,
+        keys.blind_index("hr.employee", "national_id", b"3201012345670002")
+            .unwrap()
+    );
+}
+
+#[test]
+fn each_field_and_model_has_its_own_blind_index_key() {
+    let keys = keys(TWO_KEYS);
+    let value = b"same value";
+    let base = keys.blind_index("m", "f", value).unwrap();
+    assert_ne!(base, keys.blind_index("m", "g", value).unwrap());
+    assert_ne!(base, keys.blind_index("n", "f", value).unwrap());
+    // the length prefixes keep ("ab", "c") and ("a", "bc") apart
+    assert_ne!(
+        keys.blind_index("ab", "c", value).unwrap(),
+        keys.blind_index("a", "bc", value).unwrap()
+    );
+}
+
+#[test]
+fn a_new_sealing_key_leaves_the_blind_indexes_unchanged() {
+    // TWO_KEYS is ONLY_K1 after a rotation that put k2 first
+    let before = keys(ONLY_K1).blind_index("m", "f", b"v").unwrap();
+    let after = keys(TWO_KEYS).blind_index("m", "f", b"v").unwrap();
+    assert_eq!(before, after);
+    // another key under the same id gives another index
+    assert_ne!(before, keys(OTHER_K1).blind_index("m", "f", b"v").unwrap());
+}
+
+#[test]
+fn blind_index_needs_an_encrypted_field() {
+    let error = registry(const { &[FieldDecl::char("n").blind_index(true)] }).unwrap_err();
+    assert!(
+        error
+            .message()
+            .contains("blind_index is for an encrypted field"),
+        "{}",
+        error.message()
+    );
+    let with = registry(
+        const {
+            &[FieldDecl::char("national_id")
+                .encrypted(true)
+                .blind_index(true)]
+        },
+    )
+    .unwrap();
+    let model = with.model("crypt_test.person").unwrap();
+    let field = model.field("national_id").unwrap();
+    assert_eq!(
+        field.blind_index_column().as_deref(),
+        Some("national_id__bidx")
+    );
+    assert_eq!(
+        key_columns(model, &["name", "national_id"]),
+        ["name", "national_id__bidx"]
+    );
+    assert!(Blind::of(model, field).is_some());
+}

@@ -2308,6 +2308,7 @@ dependencies = [
  "erp-sql",
  "erp-store-wire",
  "getrandom 0.4.3",
+ "hkdf",
  "hmac",
  "image",
  "jiff",

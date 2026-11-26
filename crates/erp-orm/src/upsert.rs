@@ -709,6 +709,22 @@ fn plan<'s>(spec: &'s ModelSpec, call: &UpsertCall) -> Result<Plan<'s>> {
             ),
         ));
     }
+    if let Some(field) = spec
+        .fields
+        .iter()
+        .find(|f| f.blind_index_column().is_some())
+    {
+        // the upsert statement writes the field columns only: it would leave the companion
+        // column of the blind index behind
+        return Err(upsert_error(
+            spec,
+            format!(
+                "rows of a model with a blind-indexed field ('{}') are written with create and \
+                 write, not upserted (an upsert does not maintain the blind index yet)",
+                field.name
+            ),
+        ));
+    }
     let key = spec.business_key(call.key()).ok_or_else(|| {
         let declared: Vec<&str> = spec.business_keys().iter().map(|k| k.name).collect();
         upsert_error(

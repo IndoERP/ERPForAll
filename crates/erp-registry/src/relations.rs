@@ -808,6 +808,9 @@ fn related_encrypted(
     by_name: &FxHashMap<&'static str, ModelId>,
 ) -> Result<()> {
     propagate_along_related(models, by_name, |f| f.encrypted, |f| f.encrypted = true);
+    // a related field of a blind-indexed field is searched like its target (a stored one keeps
+    // a companion column of its own)
+    propagate_along_related(models, by_name, |f| f.blind_index, |f| f.blind_index = true);
     for model in models.iter() {
         for field in model
             .fields

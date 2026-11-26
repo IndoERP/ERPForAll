@@ -750,6 +750,10 @@ pub struct FieldDecl {
     /// (an envelope in a `bytea` column, sealed with the node's field key). Only ever turns on:
     /// an extension cannot switch it off.
     pub encrypted: Option<bool>,
+    /// `blind_index`: an `encrypted` field also keeps a keyed hash (HMAC-SHA256) of its value in a
+    /// companion column, so that equality conditions and keys can use it (see
+    /// `erp_orm::field_encryption`).
+    pub blind_index: Option<bool>,
     /// `tracking`: `Some(Some(sequence))` tracks the field with that display
     /// sequence (`tracking = true` is [`DEFAULT_TRACKING_SEQUENCE`]); `Some(None)` is an explicit
     /// `tracking = false`, which switches tracking off when an extension re-declares the field.
@@ -832,6 +836,7 @@ impl FieldDecl {
             user_writeable: None,
             secret: None,
             encrypted: None,
+            blind_index: None,
             tracking: None,
             translate: None,
             collation: None,
@@ -1303,6 +1308,15 @@ impl FieldDecl {
     /// `collation` or a generated column.
     pub const fn encrypted(mut self, on: bool) -> Self {
         self.encrypted = Some(on);
+        self
+    }
+
+    /// Keep a blind index of an `encrypted` field: a companion column holds an HMAC-SHA256 of the
+    /// value under a key derived from the node's field keys, so that `=`, `!=`, `in` and
+    /// `not in` conditions, typed keys and typed indexes work on the field while the database
+    /// still holds no clear value. Registry build refuses it on a field that is not encrypted.
+    pub const fn blind_index(mut self, on: bool) -> Self {
+        self.blind_index = Some(on);
         self
     }
 

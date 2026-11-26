@@ -1680,7 +1680,10 @@ impl Transaction {
                 erp_sql::conflict::ConflictObject::Key,
                 erp_sql::conflict::key_conflict_query(
                     &spec.table,
-                    key.fields,
+                    &crate::field_encryption::key_columns(spec, key.fields)
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>(),
                     if key.nulls_distinct {
                         erp_sql::conflict::KeyMatch::Equal
                     } else {
@@ -1932,6 +1935,7 @@ impl Transaction {
                         crate::schema_sqlobj::SqlObjectScope::Subset
                     },
                 },
+                &clear,
             )
             .await?;
         self.seal_clear_columns(&clear).await?;
@@ -2064,6 +2068,7 @@ impl Transaction {
                     replan: Some(&target),
                     sql_objects: crate::schema_sqlobj::SqlObjectScope::Full,
                 },
+                &clear,
             )
             .await?;
         self.seal_clear_columns(&clear).await?;
@@ -2464,6 +2469,7 @@ impl Transaction {
         registry: &erp_registry::Registry,
         options: &SchemaSyncOptions,
         mode: SchemaPlanMode<'_>,
+        clear: &[crate::field_encryption::ClearColumn],
     ) -> Result<Vec<SchemaStep>> {
         let replan = mode.replan;
         let mut tables: Vec<String> = specs.iter().map(|m| m.table.clone()).collect();
@@ -3799,6 +3805,8 @@ impl Transaction {
         // S1: independent functions before the tables
         self.install_sql_objects_early(&mut sql_objects).await?;
         self.run_phase(phase1, None).await?;
+        // the companion columns of blind indexes are filled before phase 2 builds the keys on them
+        self.sync_blind_indexes(specs, clear).await?;
         self.record_generated_provenance(&pending_provenance)
             .await?;
         for (table, col) in &pending_analyzes {
@@ -4666,7 +4674,10 @@ fn key_work(
     existed: bool,
     cat: &Catalog,
 ) -> Result<Vec<Work>> {
-    let definition = erp_sql::upsert::key_definition(key.fields, key.nulls_distinct);
+    // a blind-indexed field is keyed by its companion column
+    let columns = crate::field_encryption::key_columns(spec, key.fields);
+    let column_names: Vec<&str> = columns.iter().map(String::as_str).collect();
+    let definition = erp_sql::upsert::key_definition(&column_names, key.nulls_distinct);
     let constraints = cat.constraints.get(&spec.table);
     let replaced = match constraints.and_then(|c| c.get(full_name)) {
         None => false,
@@ -4711,7 +4722,7 @@ fn key_work(
                         cat.schema.as_deref(),
                         &spec.table,
                         full_name,
-                        key.fields,
+                        &column_names,
                         key.nulls_distinct,
                     )
                 });
@@ -4737,7 +4748,7 @@ fn key_work(
             model: spec.name,
             declared: declared.to_owned(),
             constraint: full_name.to_owned(),
-            columns: key.fields.iter().map(|f| (*f).to_owned()).collect(),
+            columns,
             nulls_distinct: key.nulls_distinct,
             definition,
             add,

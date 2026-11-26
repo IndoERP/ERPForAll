@@ -82,9 +82,9 @@ pub use partition::{
 pub use rpc::{ArgShape, Effect, ParamSpec, Receiver};
 pub use share::{Databases, RegistryCache};
 pub use spec::{
-    CheckCompany, CompanyDelegation, CompanyMatch, CompanyScope, ComputeRead, EVENT_SCHEMA,
-    FieldDefault, FieldId, FieldSpec, Inherited, ManyMatch, ModelId, ModelSpec, Registry,
-    SingleMatch, TableNamespace, TableObject,
+    BLIND_INDEX_SUFFIX, CheckCompany, CompanyDelegation, CompanyMatch, CompanyScope, ComputeRead,
+    EVENT_SCHEMA, FieldDefault, FieldId, FieldSpec, Inherited, ManyMatch, ModelId, ModelSpec,
+    Registry, SingleMatch, TableNamespace, TableObject,
 };
 pub use sqlobj::SqlObjectLimits;
 pub use sqlobj::decl::{

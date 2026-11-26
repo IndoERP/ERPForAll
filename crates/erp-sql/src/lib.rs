@@ -20,6 +20,7 @@
 //! - [`delta`]: validated projection shapes for transactional deltas, canonical
 //!   nullable grain order, exact measure admission and their SQL fragments.
 
+pub mod blind;
 pub mod company;
 pub mod conflict;
 pub mod constant_filter;
