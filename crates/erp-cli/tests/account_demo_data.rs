@@ -158,10 +158,12 @@ fn account_demo_ledger_and_journals_load_with_demo() {
         assert_eq!(
             rows[0],
             [
-                "account.account=24",
+                "account.account=25",
                 "account.account.tag=3",
                 "account.journal=6",
                 "account.journal.group=1",
+                "account.tax=2",
+                "account.tax.group=1",
             ],
             "demo records per model"
         );
@@ -174,6 +176,7 @@ fn account_demo_ledger_and_journals_load_with_demo() {
                 "101300 Outstanding Receipts asset_current []",
                 "101400 Outstanding Payments asset_current []",
                 "121000 Trade Receivables asset_receivable [Operating Activities]",
+                "122000 Purchase Tax Receivable asset_current []",
                 "131000 Goods for Resale asset_current []",
                 "141000 Prepaid Rent asset_prepayments [Premises Costs]",
                 "151000 Office Equipment asset_fixed [Investing & Extraordinary Activities]",
@@ -226,5 +229,152 @@ fn account_demo_absent_without_demo() {
         assert_eq!(rows[0], Vec::<String>::new(), "account demo external ids");
         // accounts / journals / ledgers / tags: only the three master tags of the default data
         assert_eq!(rows[1], ["0/0/0/3"]);
+    });
+}
+
+#[test]
+fn force_demo_reloads_cleanly_on_demo_database_and_ships_complete_demo_defaults() {
+    big_stack(async {
+        let db = TestDb::create().await.unwrap();
+        let mut index = AddonIndex::new(true);
+        index.add_dev_path(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("addons"),
+        );
+        let identities = index
+            .discover_entries()
+            .unwrap()
+            .into_iter()
+            .map(|(name, entry)| {
+                let snapshot = erp_modules::artifact_identity::ArtifactSnapshot::capture(
+                    name.as_str(),
+                    Path::new(entry.source_location()),
+                )
+                .unwrap();
+                (name, snapshot.digest().to_owned())
+            })
+            .collect();
+        let sys = ModuleSystem::builder(db.pool().clone(), index)
+            .require_sql_objects([&erp_addon_account::reconcile::history_guard::MANIFEST])
+            .require_sql_uninstall_guards([&erp_addon_account::reconcile::history_guard::UNINSTALL])
+            .view_types(erp_addon_web::view_type_contributions())
+            .native_artifact_identities(identities)
+            .code([
+                &erp_addon_base::ADDON,
+                &erp_addon_web::ADDON,
+                &erp_addon_mail::ADDON,
+                &erp_addon_uom::ADDON,
+                &erp_addon_product::ADDON,
+                &erp_addon_product_mail::ADDON,
+                &erp_addon_analytic::ADDON,
+                &erp_addon_account::ADDON,
+                &erp_addon_account_mail::ADDON,
+                &erp_addon_reporting::ADDON,
+                &erp_addon_hr::ADDON,
+                &erp_addon_purchase::ADDON,
+                &erp_addon_purchase_mail::ADDON,
+            ])
+            .require_core_tables(erp_addon_base::partner_hierarchy::core_tables())
+            .require_core_tables(erp_security::auth::core_tables())
+            .build()
+            .unwrap();
+
+        let init = Box::pin(
+            sys.initialize(
+                InitOptions::new()
+                    .with_demo(true)
+                    .with_skip_auto_install(true),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(init.data_notices.is_empty(), "{:?}", init.data_notices);
+
+        let env = sys.system_env(Context::new());
+        let installed = Box::pin(sys.button_immediate_install(
+            &env,
+            &[
+                ModuleName::new("account").unwrap(),
+                ModuleName::new("hr").unwrap(),
+                ModuleName::new("purchase").unwrap(),
+            ],
+        ))
+        .await
+        .unwrap();
+        assert!(
+            installed.data_notices.is_empty(),
+            "initial demo notices: {:?}",
+            installed.data_notices
+        );
+
+        // Reload demo data via force_demo on an already-demo database (no active company).
+        let reloaded = Box::pin(sys.force_demo(&env)).await.unwrap();
+        assert!(
+            reloaded.data_notices.is_empty(),
+            "force_demo reload notices must be empty: {:?}",
+            reloaded.data_notices
+        );
+
+        let mut tx = reloaded.orm.begin(SUPERUSER_ID).await.unwrap();
+        // Verify demo taxes carry explicit tax payable / tax receivable repartition accounts.
+        let missing_tax_acc: i64 = tx
+            .query(
+                "SELECT count(*)::int8 FROM account_tax_repartition_line r \
+                 JOIN ir_model_data d ON d.model = 'account.tax' AND d.res_id = r.tax_id \
+                  AND d.module = 'account' AND d.name IN ('tax_demo_sale_11', 'tax_demo_purchase_11') \
+                 WHERE r.repartition_type = 'tax' AND r.account_id IS NULL",
+                &[],
+            )
+            .await
+            .unwrap()[0]
+            .get(0);
+        assert_eq!(missing_tax_acc, 0, "demo tax repartition lines must set account_id");
+
+        // Verify main_company has transfer_account_id, anglo_saxon_accounting, cost_method='average',
+        // and stock valuation default account configured.
+        let row = tx
+            .query(
+                "SELECT c.id::int8, c.transfer_account_id IS NOT NULL, c.anglo_saxon_accounting \
+                 FROM res_company c \
+                 JOIN ir_model_data d ON d.model = 'res.company' AND d.module = 'base' \
+                  AND d.name = 'main_company' AND d.res_id = c.id",
+                &[],
+            )
+            .await
+            .unwrap();
+        let main_id: i64 = row[0].get(0);
+        assert!(row[0].get::<_, bool>(1), "main_company transfer_account_id must be set in demo");
+        assert!(row[0].get::<_, bool>(2), "main_company anglo_saxon_accounting must be true in demo");
+
+        let main_rec = tx
+            .env()
+            .records("res.company")
+            .unwrap()
+            .browse([main_id])
+            .unwrap();
+        assert_eq!(
+            main_rec.cell(&mut tx, "cost_method").await.unwrap(),
+            erp_sdk::Cell::Str("average".into()),
+            "main_company cost_method must be average in demo"
+        );
+        assert!(
+            matches!(
+                main_rec
+                    .cell(&mut tx, "account_stock_valuation_id")
+                    .await
+                    .unwrap(),
+                erp_sdk::Cell::Id(_)
+            ),
+            "main_company must have account_stock_valuation_id set in demo"
+        );
+
+        tx.rollback().await.unwrap();
+        drop(tx);
+        drop(reloaded);
+        db.cleanup().await.unwrap();
     });
 }

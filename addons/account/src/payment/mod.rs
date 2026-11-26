@@ -158,13 +158,21 @@ pub struct AccountPaymentMethodLine {
 /// is set; changes nothing on a database without the demo records. Run by the demo data and again
 /// by the 1.4 upgrade step, which creates those lines after the demo data has loaded.
 const DEMO_OUTSTANDING: &str = "UPDATE account_payment_method_line l SET payment_account_id = acc.res_id \
-     FROM ir_model_data jd, ir_model_data acc \
-     WHERE jd.module = 'account' AND jd.model = 'account.journal' \
-     AND jd.name IN ('journal_demo_bank', 'journal_demo_cash') AND l.journal_id = jd.res_id \
+     FROM account_journal j, ir_model_data mc, ir_model_data acc \
+     WHERE mc.module = 'base' AND mc.model = 'res.company' AND mc.name = 'main_company' \
+     AND j.id = l.journal_id AND j.company_id = mc.res_id AND j.type IN ('bank', 'cash') \
      AND acc.module = 'account' AND acc.model = 'account.account' \
      AND acc.name = CASE l.payment_type WHEN 'inbound' \
          THEN 'account_demo_outstanding_receipts' ELSE 'account_demo_outstanding_payments' END \
      AND l.payment_account_id IS NULL";
+
+const DEMO_TRANSFER_ACCOUNT: &str = "UPDATE res_company c SET transfer_account_id = acc.res_id \
+     FROM ir_model_data mc, ir_model_data acc \
+     WHERE mc.module = 'base' AND mc.model = 'res.company' AND mc.name = 'main_company' \
+     AND c.id = mc.res_id \
+     AND acc.module = 'account' AND acc.model = 'account.account' \
+     AND acc.name = 'account_demo_outstanding_payments' \
+     AND c.transfer_account_id IS NULL";
 
 #[methods(AccountPaymentMethodLine, addon = "account")]
 impl AccountPaymentMethodLine {
@@ -242,7 +250,10 @@ impl AccountPaymentMethodLine {
             return Err(Error::access("Demo data is loaded by the installer only."));
         }
         tx.execute(DEMO_OUTSTANDING, &[]).await?;
+        tx.execute(DEMO_TRANSFER_ACCOUNT, &[]).await?;
         tx.invalidate_model("account.payment.method.line", Some(&["payment_account_id"]))
+            .await?;
+        tx.invalidate_model("res.company", Some(&["transfer_account_id"]))
             .await
     }
 

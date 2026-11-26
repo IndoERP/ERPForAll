@@ -391,13 +391,57 @@ impl AccountAccount {
     }
 
     /// Writing the code stores it for the root company of the active company, whichever branch
-    /// the user works; an empty code removes the entry. At create the given
-    /// value is not readable here, so `create` stores it itself ([`store_code`]).
+    /// the user works; an empty code removes the entry. During superuser data/demo loads without
+    /// an active company, each account's own root company is used (matching [`Self::create`]).
+    /// At create the given value is not readable here, so `create` stores it itself ([`store_code`]).
     #[method]
     async fn _inverse_code(this: &RecordSet<AccountAccount>, tx: &mut Transaction) -> Result<()> {
-        let root = active_root_company(tx, this.env()).await?;
+        let active_root = if this.env().company_id()?.is_some() {
+            Some(active_root_company(tx, this.env()).await?)
+        } else if this.env().su() {
+            None
+        } else {
+            return Err(Error::validation(
+                "Account codes belong to a company: select an active company first.",
+            ));
+        };
+        let mut fallback_roots: BTreeMap<i64, i64> = BTreeMap::new();
+        if active_root.is_none() {
+            let ids = this.as_records().ids();
+            if !ids.is_empty() {
+                tx.flush().await?;
+                let rows = tx
+                    .query(
+                        "SELECT r.account_account_id, \
+                                COALESCE(NULLIF(split_part(c.parent_path, '/', 1), ''), c.id::text)::int8 \
+                         FROM account_account_res_company_rel r \
+                         JOIN res_company c ON c.id = r.res_company_id \
+                         WHERE r.account_account_id = ANY($1::int8[]) \
+                         ORDER BY r.account_account_id, c.id",
+                        &[&ids],
+                    )
+                    .await?;
+                for row in &rows {
+                    let aid: i64 = row
+                        .try_get(0)
+                        .map_err(|e| Error::db(format!("Account id could not be read: {e}")))?;
+                    let root_id: i64 = row
+                        .try_get(1)
+                        .map_err(|e| Error::db(format!("Root company could not be read: {e}")))?;
+                    fallback_roots.entry(aid).or_insert(root_id);
+                }
+            }
+        }
         for account in this.iter() {
             let id = account.as_records().ids()[0];
+            let root = match active_root {
+                Some(root) => root,
+                None => *fallback_roots.get(&id).ok_or_else(|| {
+                    Error::validation(
+                        "Account codes belong to a company: select an active company first.",
+                    )
+                })?,
+            };
             let code = account.get(tx, AccountAccount::CODE).await?;
             store_code(tx, this.env(), root, id, text_of(&code), false).await?;
         }

@@ -42,6 +42,12 @@
     <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
     <field name="tag_ids" eval="[(6, 0, [ref('account_tag_operating')])]"/>
   </record>
+  <record id="account_demo_tax_receivable" model="account.account">
+    <field name="name">Purchase Tax Receivable</field>
+    <field name="code">122000</field>
+    <field name="account_type">asset_current</field>
+    <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
+  </record>
   <record id="account_demo_goods" model="account.account">
     <field name="name">Goods for Resale</field>
     <field name="code">131000</field>

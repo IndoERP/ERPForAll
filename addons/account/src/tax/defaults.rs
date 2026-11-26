@@ -26,7 +26,9 @@ pub(super) async fn complete(
     mut values: ValueMap,
     tax: bool,
 ) -> Result<ValueMap> {
-    if needs_company(names) {
+    if needs_company(names)
+        && (values.contains_key("company_id") || model.env().company_id()?.is_some())
+    {
         let mut company_values = ValueMap::new();
         for field in ["company_id", "country_id", "tax_group_id"] {
             if (tax || field != "tax_group_id")

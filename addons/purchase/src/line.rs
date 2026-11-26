@@ -416,16 +416,25 @@ impl PurchaseOrderLine {
     async fn write(
         this: &RecordSet<PurchaseOrderLine>,
         tx: &mut Transaction,
-        vals: RawVals,
+        mut vals: RawVals,
         sup: Super,
     ) -> Result<()> {
         refuse_line_fields(&vals, true)?;
-        if vals.contains("order_id") {
-            return Err(Error::validation(
-                "A purchase order line cannot move to another order; delete it and add a new one.",
-            ));
-        }
         let lines = this.as_records().clone();
+        if let Some(target_order) = vals.get("order_id").cloned() {
+            if lines.is_empty() {
+                return Err(Error::validation(
+                    "A purchase order line cannot move to another order; delete it and add a new one.",
+                ));
+            }
+            let current_orders = lines.cells(tx, "order_id").await?;
+            if current_orders.iter().any(|cur| cur != &target_order) {
+                return Err(Error::validation(
+                    "A purchase order line cannot move to another order; delete it and add a new one.",
+                ));
+            }
+            vals.remove("order_id");
+        }
         if lines.is_empty() {
             return sup.call(tx, &lines, (vals,)).await;
         }

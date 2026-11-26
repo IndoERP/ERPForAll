@@ -5,6 +5,7 @@
   <record id="purchase_order_demo_1" model="purchase.order">
     <field name="company_id" ref="base.main_company"/>
     <field name="partner_id" ref="base.partner_demo_mitra_kayu"/>
+    <field name="user_id" eval="False"/>
     <field name="currency_id" ref="base.USD"/>
     <field name="date_order">2026-11-19 08:30:00</field>
     <field name="origin">RESTOCK-2026-11</field>
@@ -27,6 +28,7 @@
   <record id="purchase_order_demo_2" model="purchase.order">
     <field name="company_id" ref="base.main_company"/>
     <field name="partner_id" ref="base.partner_demo_kopi_gunung"/>
+    <field name="user_id" eval="False"/>
     <field name="currency_id" ref="base.USD"/>
     <field name="date_order">2026-11-20 14:00:00</field>
     <field name="origin">PANTRY-2026-11</field>

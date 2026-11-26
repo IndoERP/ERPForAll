@@ -434,6 +434,23 @@ impl CompanyChartTemplateAction {
                 tx.execute(&sql, &[&company_id, &account_id]).await?;
             }
 
+            // Wire unset payment method line outstanding accounts on the company's bank/cash
+            // journals using the company's transfer account so payments can be registered right
+            // after chart activation.
+            tx.execute(
+                "UPDATE account_payment_method_line l \
+                 SET payment_account_id = c.transfer_account_id \
+                 FROM account_journal j, res_company c \
+                 WHERE j.id = l.journal_id AND j.company_id = $1 \
+                   AND j.type IN ('bank', 'cash') \
+                   AND c.id = $1 AND c.transfer_account_id IS NOT NULL \
+                   AND l.payment_account_id IS NULL",
+                &[&company_id],
+            )
+            .await?;
+            tx.invalidate_model("account.payment.method.line", Some(&["payment_account_id"]))
+                .await?;
+
             // Populate exchange difference journal if unset and a general journal exists.
             let jrows = tx
                 .query(
