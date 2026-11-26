@@ -94,7 +94,7 @@ impl Node {
         baseline: Option<Generations>,
     ) -> Result<Self> {
         Self::open_composed(
-            crate::access::pool_with_size(config.owner_connection(), 4)?,
+            crate::access::lifecycle_pool(config.owner_connection(), 4)?,
             config.addons(),
             baseline,
             true,
@@ -192,6 +192,7 @@ impl Node {
                 .code(crate::native_addons::DESCRIPTORS.iter().copied())
                 .not_linked(crate::native_addons::NOT_LINKED.iter().copied())
                 .view_types(erp_addon_web::view_type_contributions())
+                .view_types(erp_addon_web_map::view_type_contributions())
                 .lifecycle_hook(Arc::new(crate::ui_assets::AssetLifecycle::new(
                     crate::ui_assets::host_options()?,
                 )))

@@ -64,4 +64,76 @@ pub trait LifecycleHook: Send + Sync {
         tx: &'a mut Transaction,
         change: LifecycleChange<'a>,
     ) -> BoxFuture<'a, Result<()>>;
+
+    /// Opt into confirmed uninstall by preparing every effect before the engine compares
+    /// the fingerprint. Other lifecycle hooks retain the default refusal.
+    fn uninstall_planner(&self) -> Option<&dyn UninstallPlanner> {
+        None
+    }
+}
+
+/// One public effect, included in the canonical uninstall fingerprint.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[non_exhaustive]
+pub struct UninstallEffect {
+    component: String,
+    description: String,
+    previous: Option<String>,
+    next: Option<String>,
+}
+
+impl UninstallEffect {
+    /// Describe an effect and the optional state identities it replaces and publishes.
+    pub fn new(component: impl Into<String>, description: impl Into<String>) -> Self {
+        Self {
+            component: component.into(),
+            description: description.into(),
+            previous: None,
+            next: None,
+        }
+    }
+
+    /// Bind the effect to the previous and next durable identities.
+    #[must_use]
+    pub fn identities(mut self, previous: impl Into<String>, next: impl Into<String>) -> Self {
+        self.previous = Some(previous.into());
+        self.next = Some(next.into());
+        self
+    }
+}
+
+/// An effect prepared from locked database state and admitted addon bytes. Planning does not
+/// write, invoke addon hooks or release transaction locks, even in a dry-run preview.
+pub trait UninstallPlanner: Send + Sync {
+    /// Prepare the exact effect that would execute on confirmation.
+    ///
+    /// # Errors
+    /// A failure to describe or admit the complete effect refuses the operation.
+    fn prepare_uninstall<'a>(
+        &'a self,
+        tx: &'a mut Transaction,
+        change: LifecycleChange<'a>,
+    ) -> BoxFuture<'a, Result<Box<dyn PreparedUninstall>>>;
+}
+
+/// A host effect admitted by the preview and confirmation planner.
+pub trait PreparedUninstall: Send {
+    /// Describe the exact transaction effect for the operator and the fingerprint.
+    fn effect(&self) -> UninstallEffect;
+
+    /// Apply the prepared effect in the same transaction after the fingerprint matched.
+    ///
+    /// # Errors
+    /// An error rolls back the module operation.
+    fn apply(self: Box<Self>, tx: &mut Transaction) -> BoxFuture<'_, Result<()>>;
+}
+
+impl PreparedUninstall for UninstallEffect {
+    fn effect(&self) -> UninstallEffect {
+        self.clone()
+    }
+
+    fn apply(self: Box<Self>, _tx: &mut Transaction) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
 }

@@ -214,6 +214,11 @@ impl<'a> CheckedNode<'a> {
     pub fn attr(&self, name: &str) -> Option<&'a str> {
         self.input.arch.attr(self.id, name)
     }
+    /// Original 1-based column of the start tag in its authoring view.
+    pub fn source_column(&self) -> u32 {
+        self.input.arch.source_column(self.id)
+    }
+
     /// Attributes in document order. Group attributes have already been captured and stripped.
     pub fn attributes(&self) -> impl Iterator<Item = (&'a str, &'a str)> + 'a + use<'a> {
         self.input

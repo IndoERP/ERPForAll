@@ -2058,6 +2058,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "erp-addon-web-map"
+version = "0.1.0"
+dependencies = [
+ "erp-sdk",
+]
+
+[[package]]
 name = "erp-alloc-budget"
 version = "0.1.0"
 dependencies = [
@@ -2130,6 +2137,7 @@ dependencies = [
  "erp-addon-uom",
  "erp-addon-valuation",
  "erp-addon-web",
+ "erp-addon-web-map",
  "erp-data",
  "erp-expr",
  "erp-fields",
@@ -2147,6 +2155,7 @@ dependencies = [
  "erp-sql",
  "erp-test-models",
  "erp-testkit",
+ "erp-ui-compiler-host",
  "erp-views",
  "erp-wasm-host",
  "hmac",
@@ -2334,10 +2343,12 @@ dependencies = [
 name = "erp-pdf"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "hayro 0.8.0",
  "lopdf",
  "roxmltree 0.21.1",
  "thiserror",
+ "weezl 0.2.1",
 ]
 
 [[package]]
@@ -2354,6 +2365,7 @@ dependencies = [
 name = "erp-report"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "datamatrix",
  "erp-expr",
  "erp-html",
@@ -2756,7 +2768,23 @@ dependencies = [
  "erp-ui-compiler",
  "markup5ever_rcdom",
  "proptest",
+ "roxmltree 0.21.1",
+ "serde_json",
+ "sha2 0.11.1",
  "wasmi 2.0.0",
+]
+
+[[package]]
+name = "erp-ui-compiler-host"
+version = "0.1.0"
+dependencies = [
+ "erp-ui-compiler",
+ "erp-ui-compiler-cli",
+ "sha2 0.11.1",
+ "thiserror",
+ "wasmi 2.0.0",
+ "wasmi_core 2.0.0",
+ "wat",
 ]
 
 [[package]]

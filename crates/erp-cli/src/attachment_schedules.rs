@@ -2,7 +2,10 @@
 //! The attachment schedules kept by a module operation of the native compositions: installing or
 //! upgrading `base` creates the recurring attachment rows that are missing, in the operation's
 //! own transaction. No runner is started here; the rows run only where a job runner runs.
-use erp_modules::{LifecycleChange, LifecycleHook};
+use erp_modules::{
+    LifecycleChange, LifecycleHook,
+    lifecycle_hook::{PreparedUninstall, UninstallEffect, UninstallPlanner},
+};
 use erp_orm::{BoxFuture, PrincipalKind, Transaction};
 
 /// Host lifecycle service registered next to the asset lifecycle in both native compositions
@@ -17,6 +20,10 @@ use erp_orm::{BoxFuture, PrincipalKind, Transaction};
 pub(crate) struct AttachmentScheduleLifecycle;
 
 impl LifecycleHook for AttachmentScheduleLifecycle {
+    fn uninstall_planner(&self) -> Option<&dyn UninstallPlanner> {
+        Some(self)
+    }
+
     fn before_commit<'a>(
         &'a self,
         tx: &'a mut Transaction,
@@ -42,6 +49,21 @@ impl LifecycleHook for AttachmentScheduleLifecycle {
             }
             erp_addon_base::attachments::gc::ensure_missing_schedules(tx, &env).await?;
             Ok(())
+        })
+    }
+}
+
+impl UninstallPlanner for AttachmentScheduleLifecycle {
+    fn prepare_uninstall<'a>(
+        &'a self,
+        _tx: &'a mut Transaction,
+        _change: LifecycleChange<'a>,
+    ) -> BoxFuture<'a, erp_modules::Result<Box<dyn PreparedUninstall>>> {
+        Box::pin(async {
+            Ok(Box::new(UninstallEffect::new(
+                "Attachment maintenance",
+                "Base attachment schedules stay in place",
+            )) as Box<dyn PreparedUninstall>)
         })
     }
 }

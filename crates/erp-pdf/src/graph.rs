@@ -205,6 +205,9 @@ pub(crate) fn pages(
     profile: PageProfile,
 ) -> Result<Vec<(ObjectId, Dictionary)>> {
     let root = catalog(doc, l)?;
+    if profile == PageProfile::Overlay {
+        crate::signatures::Assessment::read(doc, l)?.rewrite()?;
+    }
     forms::admit(doc, root, l, profile)?;
     // A form field without its catalog form is half a form, also when everything is written again.
     let fields_owned = root.has(b"AcroForm");
@@ -377,28 +380,7 @@ pub(crate) fn decoded(
     let s = resolve(doc, o, l)?
         .as_stream()
         .map_err(|e| malformed("PDF expected content stream").source(e))?;
-    if s.dict.has(b"Filter") {
-        s.filters()
-            .map_err(|e| malformed("PDF invalid stream filter").source(e))?;
-    }
-    if let Ok(params) = s.dict.get(b"DecodeParms")
-        && !matches!(resolve(doc, params, l)?, Object::Null)
-    {
-        return Err(unsupported("content decoding parameters", owner::FILTERS));
-    }
-    s.decompressed_content_with_limit(cap).map_err(|e| match e {
-        lopdf::Error::Decompress(lopdf::DecompressError::MemoryLimitExceeded { .. }) => {
-            PdfError::new(
-                PdfErrorKind::Limit,
-                format!("PDF {} limit exceeded", dimension.name()),
-            )
-            .source(e)
-        }
-        lopdf::Error::Unimplemented(_) => {
-            unsupported("content stream filter", owner::FILTERS).source(e)
-        }
-        _ => malformed("PDF stream decoding failed").source(e),
-    })
+    crate::decode::stream(doc, s, l, cap, dimension)
 }
 pub(crate) fn page_content(doc: &Document, page: &Dictionary, l: &Context<'_>) -> Result<Vec<u8>> {
     let mut out = Vec::new();

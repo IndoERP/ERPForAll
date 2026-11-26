@@ -238,6 +238,7 @@ export class Activities {
 
   /** A change went through: reload the card and tell the host. */
   private async changed(logged: boolean): Promise<void> {
+    document.dispatchEvent(new Event("erp:activities-changed"));
     await this.load();
     if (logged) await this.o.onLogged?.();
     await this.o.onChange?.();

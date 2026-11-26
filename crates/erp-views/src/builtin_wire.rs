@@ -51,10 +51,7 @@ impl DescriptionPayload {
                 ));
             }
             let root_schema = crate::builtin_schemas::builtin_root(kind).ok_or_else(|| {
-                refuse(
-                    budget,
-                    "Builtin wire adapter supports only list, form, search, pivot, calendar, graph and kanban",
-                )
+                refuse(budget, "The gantt view type has no builtin wire adapter.")
             })?;
             if !std::ptr::eq(self.schema.root_node(), root_schema) {
                 return Err(refuse(
@@ -72,10 +69,11 @@ impl DescriptionPayload {
                 wire::ViewType::Graph => "web.graph",
                 wire::ViewType::Hierarchy => "web.hierarchy",
                 wire::ViewType::Activity => "web.activity",
+                wire::ViewType::Map => "web.map",
                 _ => {
                     return Err(refuse(
                         budget,
-                        "Builtin wire adapter supports only list, form, search, pivot, calendar, graph, kanban, hierarchy and activity; later types require a later release",
+                        "The gantt view type has no builtin wire adapter.",
                     ));
                 }
             };
@@ -110,10 +108,11 @@ impl DescriptionPayload {
                 wire::ViewType::Graph => "graph",
                 wire::ViewType::Hierarchy => "hierarchy",
                 wire::ViewType::Activity => "activity",
+                wire::ViewType::Map => "map",
                 _ => {
                     return Err(refuse(
                         budget,
-                        "Builtin wire adapter supports only list, form, search, pivot, calendar, graph, kanban, hierarchy and activity; later types require a later release",
+                        "The gantt view type has no builtin wire adapter.",
                     ));
                 }
             };
@@ -1126,6 +1125,7 @@ impl Output {
                 disable_linking: boolean(required(object, "disable_linking")?)?,
                 display_quantity: boolean(required(object, "display_quantity")?)?,
                 default_order: self.optional_text(object, "default_order")?,
+                variant: self.optional_text(object, "variant")?,
             },
             "pivot_field" => wire::ViewNode::PivotField {
                 field: self.field(required(object, "field")?)?,
@@ -1160,6 +1160,7 @@ impl Output {
                 delete: optional(object, "delete").map(boolean).transpose()?,
             },
             "kanban_card" => wire::ViewNode::KanbanCard {
+                restricted: None,
                 children: self.indices(object)?,
             },
             "hierarchy" => {
@@ -1179,6 +1180,10 @@ impl Output {
                     label: self.optional_text(object, "label")?,
                 }
             }
+            "map" => wire::ViewNode::Map {
+                latitude: self.field(required(object, "latitude")?)?,
+                longitude: self.field(required(object, "longitude")?)?,
+            },
             "activity" => wire::ViewNode::Activity {
                 children: self.indices(object)?,
                 avatar_field: optional(object, "avatar_field")
@@ -1454,14 +1459,15 @@ fn children(node: &wire::ViewNode) -> &[u32] {
         | wire::ViewNode::Search { children, .. }
         | wire::ViewNode::Pivot { children, .. }
         | wire::ViewNode::Kanban { children, .. }
-        | wire::ViewNode::KanbanCard { children }
+        | wire::ViewNode::KanbanCard { children, .. }
         | wire::ViewNode::KanbanSection { children, .. }
         | wire::ViewNode::Calendar { children, .. }
         | wire::ViewNode::Graph { children, .. }
         | wire::ViewNode::Hierarchy { children, .. }
         | wire::ViewNode::Activity { children, .. }
         | wire::ViewNode::SearchGroup { children, .. } => children,
-        wire::ViewNode::Dashboard { .. }
+        wire::ViewNode::Map { .. }
+        | wire::ViewNode::Dashboard { .. }
         | wire::ViewNode::Field { .. }
         | wire::ViewNode::Chatter { .. }
         | wire::ViewNode::Button { .. }
@@ -1552,6 +1558,7 @@ fn validate_layout(
     use wire::ViewNode as N;
     let valid = match node {
         N::Form { .. }
+        | N::Map { .. }
         | N::List { .. }
         | N::Search { .. }
         | N::Pivot { .. }
@@ -1681,7 +1688,7 @@ fn validate_layout(
                 "A kanban view has exactly one card and at most one progress bar",
             ));
         }
-        N::KanbanCard { children } => {
+        N::KanbanCard { children, .. } => {
             let mut seen = [false; 3];
             for index in children {
                 if let Some(N::KanbanSection { region, .. }) = nodes.get(*index as usize) {

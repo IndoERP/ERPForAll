@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! The `qweb-html` converter: the same validated [`DocTree`] the PDF engine lays out, written as one
 //! self-contained HTML page with a fixed stylesheet. Text is escaped data; styles come only from the
-//! validated [`Style`] values; the page loads nothing (its content security policy forbids it).
+//! validated [`Style`] values. Raster bytes come from the authorized document; previews do not load external resources.
 use crate::{
     Alignment, DocTree, Node, NodeId, PageCounter, ReportError, Style, TableLook, error::invalid,
 };
-use std::fmt::Write;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use std::{collections::BTreeMap, fmt::Write};
 
 /// The fixed preview stylesheet. Screen-only presentation of the paper document: a page-sized sheet,
 /// page breaks as visible separators, table borders like the native renderer's default table stroke.
@@ -27,7 +28,7 @@ body{margin:0;background:#e8e8e8}\
 .erp-image{display:inline-block;box-sizing:border-box;border:1pt dashed #999;color:#666;font-size:8pt;overflow:hidden}\
 @media print{body{background:#fff}.erp-report-warnings{display:none}.erp-document{box-shadow:none;margin:0}.erp-page-break{border:0;margin:0}}";
 
-/// Content security policy of the preview page: inline styles only, no script, image, font or frame.
+/// The base policy permits only the renderer's inline stylesheet.
 const POLICY: &str = "default-src 'none'; style-src 'unsafe-inline'";
 
 /// Render `document` as an HTML preview page. `warnings` are the caller's warning texts for this
@@ -62,10 +63,16 @@ pub fn render_html(document: &DocTree, warnings: &[String]) -> Result<String, Re
         "\"><head><meta charset=\"utf-8\"><meta http-equiv=\"Content-Security-Policy\" content=\"",
     );
     out.push_str(POLICY);
+    let policy_end = out.len();
     out.push_str("\"><title>");
     escape(&mut out, options.title());
     out.push_str("</title><style>");
     out.push_str(HTML_STYLESHEET);
+    let raster_style_start = out.len();
+    raster_styles(document, &mut out)?;
+    if out.len() > raster_style_start {
+        out.insert_str(policy_end, "; img-src data:");
+    }
     out.push_str("</style></head><body>");
     // The caller's warnings, then the reason of every picture that prints as a placeholder: the
     // PDF engine returns those with its result, and the preview shows the same list.
@@ -119,6 +126,55 @@ pub fn render_html(document: &DocTree, warnings: &[String]) -> Result<String, Re
     }
     out.push_str("</div></body></html>");
     Ok(out)
+}
+
+/// Emit each reachable raster once, even when several records reuse the same logo.
+fn raster_styles(document: &DocTree, out: &mut String) -> Result<(), ReportError> {
+    let nodes = document.nodes();
+    if !nodes.iter().any(|node| matches!(node, Node::Image { .. })) {
+        return Ok(());
+    }
+    let mut visited = vec![false; nodes.len()];
+    let mut groups: BTreeMap<&[u8], Vec<usize>> = BTreeMap::new();
+    let mut pending: Vec<_> = [document.header(), Some(document.body()), document.footer()]
+        .into_iter()
+        .flatten()
+        .collect();
+    while let Some(id) = pending.pop() {
+        let index = id.index();
+        if std::mem::replace(&mut visited[index], true) {
+            continue;
+        }
+        if let Node::Image { data, .. } = &nodes[index] {
+            groups.entry(data).or_default().push(index);
+        }
+        pending.extend(nodes[index].children());
+    }
+    for (data, placements) in groups {
+        let image = crate::probe_image(data, &document.limits)?;
+        let media = match image.format() {
+            crate::ImageFormat::Png => "image/png",
+            crate::ImageFormat::Jpeg => "image/jpeg",
+            crate::ImageFormat::Gif => "image/gif",
+            crate::ImageFormat::WebP => "image/webp",
+            crate::ImageFormat::UntrustedSvg => continue,
+        };
+        for (position, index) in placements.iter().enumerate() {
+            if position > 0 {
+                out.push(',');
+            }
+            let _ = write!(out, ".erp-raster-{index}");
+        }
+        let _ = write!(
+            out,
+            "{{border:0;font-size:0;background-position:center;background-repeat:no-repeat;width:{}px;height:{}px;background-image:url(data:{media};base64,",
+            image.width(),
+            image.height()
+        );
+        STANDARD.encode_string(data, out);
+        out.push_str(")}");
+    }
+    Ok(())
 }
 
 fn escape(out: &mut String, text: &str) {
@@ -379,15 +435,25 @@ fn node(out: &mut String, nodes: &[Node], id: &NodeId) {
             children(out, nodes, items, "li");
             let _ = write!(out, "</{tag}>");
         }
-        // The preview loads nothing (POLICY), so a raster or user SVG image is a sized box with its
-        // alt text, like the in-process engine's placeholder for user SVG.
         Node::Image {
-            width, height, alt, ..
+            width,
+            height,
+            fit,
+            alt,
+            ..
         } => {
-            out.push_str("<span class=\"erp-image\" role=\"img\" aria-label=\"");
+            let _ = write!(
+                out,
+                "<span class=\"erp-image erp-raster-{}\" role=\"img\" aria-label=\"",
+                id.index()
+            );
             escape(out, alt);
             out.push_str("\" style=\"");
             size(out, *width, *height);
+            out.push_str(match fit {
+                crate::ImageFit::Contain => "background-size:contain;",
+                crate::ImageFit::Cover => "background-size:cover;",
+            });
             out.push_str("\">");
             escape(out, alt);
             out.push_str("</span>");

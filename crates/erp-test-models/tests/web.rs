@@ -2169,6 +2169,22 @@ async fn spec_grp_046_read_progress_bar() {
         .await
         .unwrap();
     assert_eq!(got, obj(&[("False", obj(&[("a", int(2)), ("b", int(1))]))]));
+    let same_field = model
+        .web_call(
+            &mut tx,
+            "read_progress_bar",
+            &obj(&[
+                ("domain", Value::list([])),
+                ("group_by", s("sel")),
+                (
+                    "progress_bar",
+                    obj(&[("field", s("sel")), ("colors", obj(&[("a", s("success"))]))]),
+                ),
+            ]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(same_field, obj(&[("a", obj(&[("a", int(2))]))]));
     let _ = p;
     drop(tx);
     h.cleanup().await.unwrap();

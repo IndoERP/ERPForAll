@@ -814,7 +814,8 @@ test("line dialog recovers after a failed onchange and preserves newer local edi
     label: "Order Lines", relation: "sale.order.line", relationField: null,
     subview: { model: "sale.order.line", list: [title, qty, subtotal], form: lineForm, fields: new Map([[title.name, title], [qty.name, qty], [subtotal.name, subtotal]]) }
   });
-  const rpc = new RpcClient(async (path, init) => {
+  const rpc = new RpcClient(async (input, init) => {
+    const path = String(input);
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
     let data: unknown = {};
     if (path.endsWith("/default_get")) data = { product_uom_qty: 1 };
@@ -827,7 +828,7 @@ test("line dialog recovers after a failed onchange and preserves newer local edi
       } else data = { value: {} };
     }
     return new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json" } });
-  });
+  }, () => {});
   const localRun = (job: () => Promise<void>): void => { jobs.push(job().catch(error => { reports.push(error); })); };
   const change = vi.fn(), messages = new MessageServices(document.body, error => { reports.push(error); });
   const handle = fieldWidgets.get("one2many").render({

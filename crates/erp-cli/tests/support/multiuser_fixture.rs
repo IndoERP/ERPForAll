@@ -198,12 +198,23 @@ impl<'a> MultiuserFixture<'a> {
             }
         }
         if !missing.is_empty() {
-            success(&native_http::json_post(
+            let reply = native_http::json_post(
                 native.port,
                 &native.cookies,
                 "/erp/module/install",
                 &json!({"modules":missing}).to_string(),
-            ));
+            );
+            if reply.status != 200 {
+                // This request contains only module names. Expose the install diagnostic, never
+                // the submitted credentials, cookies or a successful bootstrap response.
+                if let Ok(error) = serde_json::from_str::<Value>(&reply.body) {
+                    panic!(
+                        "native module install returned HTTP {}: {}",
+                        reply.status, error["message"]
+                    );
+                }
+                panic!("native module install returned HTTP {}", reply.status);
+            }
         }
         let after = native_http::catalogue(native.port, &native.cookies);
         let installed: BTreeSet<String> = after["addons"]
@@ -647,7 +658,7 @@ pub fn run_with_setup<T: Send + 'static>(
     setup: impl FnOnce(&NativeFixture) + Send + 'static,
     body: impl FnOnce(&MultiuserFixture<'_>) -> T + Send + 'static,
 ) -> T {
-    run_configured(None, setup, body)
+    run_configured(None, "", setup, body)
 }
 
 /// Run the same multiuser setup with an isolated, compiled web client.
@@ -655,11 +666,19 @@ pub fn run_with_assets<T: Send + 'static>(
     assets: PathBuf,
     body: impl FnOnce(&MultiuserFixture<'_>) -> T + Send + 'static,
 ) -> T {
-    run_configured(Some(assets), |_| {}, body)
+    run_configured(Some(assets), "", |_| {}, body)
+}
+
+pub fn run_with_config<T: Send + 'static>(
+    extra: &'static str,
+    body: impl FnOnce(&MultiuserFixture<'_>) -> T + Send + 'static,
+) -> T {
+    run_configured(None, extra, |_| {}, body)
 }
 
 fn run_configured<T: Send + 'static>(
     assets: Option<PathBuf>,
+    extra: &'static str,
     setup: impl FnOnce(&NativeFixture) + Send + 'static,
     body: impl FnOnce(&MultiuserFixture<'_>) -> T + Send + 'static,
 ) -> T {
@@ -672,7 +691,7 @@ fn run_configured<T: Send + 'static>(
                 .build()
                 .expect("fixture runtime");
             let native =
-                runtime.block_on(NativeFixture::start_with_assets(|_| {}, assets.as_deref()));
+                runtime.block_on(NativeFixture::start_full(|_| {}, assets.as_deref(), extra));
             let result = catch_unwind(AssertUnwindSafe(|| {
                 setup(&native);
                 let fixture = runtime.block_on(MultiuserFixture::prepare(&native));

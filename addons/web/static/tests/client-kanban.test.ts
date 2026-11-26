@@ -300,19 +300,42 @@ test("a dashboard card kept in the address narrows the kanban too", async () => 
   expect([...root.querySelectorAll(".search-facet-chip")].map(item => item.textContent)).toEqual(expect.arrayContaining([expect.stringContaining("Done notes")]));
 });
 
-test("a default grouping the board cannot draw yet is said, and cards that cannot open are not links", async () => {
-  options.root = { default_group_by: ref("state"), can_open: false, create: false };
+test("cards that cannot open are not links, and a view that cannot create shows no New", async () => {
+  options.root = { can_open: false, create: false };
   const { root } = await startApp("/erp/action-20?view_type=kanban");
   await vi.waitFor(() => expect(cards(root)).toHaveLength(40));
-  expect(root.querySelector(".kanban-notice")!.textContent).toBe("Grouped columns are not available yet, so the cards are not grouped by State.");
+  expect(root.querySelector(".kanban-notice")).toBeNull(); // the grouped board is client-kanban-columns.test.ts
   expect(root.querySelector(".kanban-card-open")).toBeNull();
   expect([...root.querySelectorAll("[data-control-actions] button")].map(button => button.textContent)).not.toContain("New");
 });
 
-test("a switch from a grouped list to the kanban drops the list's grouping from the address", async () => {
+test("a switch from a list whose grouping state names no field leaves no grouping in the kanban's address", async () => {
   const { root } = await startApp(`/erp/action-20?search_groupby=${encodeURIComponent(JSON.stringify({ v: 1, by: [], offset: 0, order: "", open: [] }))}`);
   await vi.waitFor(() => expect(root.querySelector(".list-table")).not.toBeNull());
   root.querySelector<HTMLButtonElement>('.view-btn[aria-label="kanban view"]')!.click();
   await vi.waitFor(() => expect(cards(root).length).toBeGreaterThan(0));
   expect(query().has("search_groupby")).toBe(false);
+});
+
+test("the served restricted plan renders the card for each permitted record and retains keyboard opening", () => {
+  const source = kanbanDescription();
+  const digest = "b".repeat(64), arch = "t.note.kanban.7", language = "en_US";
+  const plan = { abi: "erpforall.card.v1", policy: "1", arch, language, source_sha256: digest, fields: ["name", "state"],
+    templates: { card: { tag: "strong", attrs: { class: "test-card" }, children: [
+      { tag: "t", field: ["name", "value"] }, { text: " · " }, { tag: "t", field: ["state", "raw_value"] },
+    ] } } };
+  const restricted = { arch, language, source_sha256: digest, plan: JSON.stringify(plan) };
+  Object.assign(source.views[0]!.nodes[1]!, { restricted });
+  const describe = (): View => describeViews(source, "t.note", "r1").views.get("kanban")!;
+  const open = vi.fn();
+  const grid = renderKanbanCards({ layout: kanbanLayout(describe()), records: rows, open, renderField: plain });
+  document.body.append(grid.node);
+  expect([...grid.node.querySelectorAll(".test-card")].map(e => e.textContent)).toEqual(rows.map(r => r.name + " · " + r.state));
+  const first = grid.node.querySelector<HTMLElement>(".kanban-card")!;
+  first.focus();
+  first.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  expect(open).toHaveBeenCalledWith(1);
+  grid.dispose(); grid.node.remove();
+  restricted.source_sha256 = "c".repeat(64);
+  expect(() => kanbanLayout(describe())).toThrow(/identity or compiler policy/);
 });

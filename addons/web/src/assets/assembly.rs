@@ -556,6 +556,7 @@ pub struct AssemblyOptions {
     language: String,
     group: String,
     compile: CompileOptions,
+    catalogue: Option<compiler::TranslationCatalogue>,
 }
 impl AssemblyOptions {
     /// Declare the running compiler/runtime identities, language and group.
@@ -581,8 +582,26 @@ impl AssemblyOptions {
             runtime: runtime.to_owned(),
             language: language.to_owned(),
             group: group.to_owned(),
+            catalogue: None,
             compile,
         })
+    }
+    /// Select an immutable catalogue for this language's publication.
+    /// # Errors
+    /// A catalogue for a different language is refused.
+    pub fn with_catalogue(
+        mut self,
+        catalogue: compiler::TranslationCatalogue,
+    ) -> Result<Self, AssemblyError> {
+        if catalogue.language() != self.language {
+            return Err(invalid(
+                "catalogue language",
+                catalogue.language(),
+                "does not match the bundle language",
+            ));
+        }
+        self.catalogue = Some(catalogue);
+        Ok(self)
     }
     /// Running runtime identity.
     pub fn runtime(&self) -> &str {
@@ -1465,6 +1484,14 @@ pub fn assemble(
     ] {
         key.field(field.as_bytes())?;
     }
+    if let Some(catalogue) = &options.catalogue {
+        key.field(b"template-catalogue-v1")?;
+        for (addon, source, value) in catalogue.entries() {
+            key.field(addon.as_bytes())?;
+            key.field(source.as_bytes())?;
+            key.field(value.as_bytes())?;
+        }
+    }
     // Encoding settings affect emitted representation bytes even when source hashes do not.
     // Include them as length-prefixed key inputs so a codec-setting rollout never reuses the
     // earlier assembly identity. Existing durable hash rows may retain verified older forms.
@@ -1622,8 +1649,11 @@ pub fn assemble(
         }
     }
     check_brand_owners(&static_files)?;
-    let compiled = compiler::compile(&set, &options.compile)
-        .map_err(|source| AssemblyError::Compile { source })?;
+    let compiled = match &options.catalogue {
+        Some(catalogue) => compiler::compile_localized(&set, &options.compile, catalogue),
+        None => compiler::compile(&set, &options.compile),
+    }
+    .map_err(|source| AssemblyError::Compile { source })?;
     if !compiled.modules().is_empty() && !imports.contains_key(compiler::ABI_MODULE) {
         return Err(AssemblyError::MissingRuntime {
             specifier: compiler::ABI_MODULE.to_owned(),

@@ -40,6 +40,7 @@ export interface GraphTarget { domain: unknown[]; labels: string[] }
 export interface GraphView { element: HTMLElement; render(): void; dispose(): void }
 export interface GraphViewOptions {
   model: GraphModel;
+  download?: (file: Blob) => void;
   locale: NumericLocale;
   run: (job: () => Promise<void>) => void;
   /** Open the records of a bar or slice. Absent, or `disable_linking`: nothing opens. Lines open nothing (reference `graph_renderer.js`). */
@@ -118,6 +119,22 @@ export function mountGraph(options: GraphViewOptions): GraphView {
   const tableToggle = toggle("Show data", () => { asTable = !asTable; render(); });
   const end = el("div", undefined, "pivot-toolbar-end");
   end.append(stacked, cumulated, order, modes, tableToggle);
+  const download = button("Export chart", "pivot-tool graph-download", () => {
+    const chart = figure.querySelector("svg");
+    if (!chart || !options.download) return;
+    // Resolve the live theme into presentation attributes for a standalone SVG.
+    const copy = chart.cloneNode(true) as SVGSVGElement;
+    const sources = [...chart.querySelectorAll("*")], targets = [...copy.querySelectorAll("*")];
+    for (const [index, source] of sources.entries()) {
+      const style = getComputedStyle(source);
+      for (const property of ["fill", "stroke", "stroke-width", "font-family", "font-size"]) {
+        const value = style.getPropertyValue(property);
+        if (value) targets[index]!.setAttribute(property, value);
+      }
+    }
+    options.download(new Blob([new XMLSerializer().serializeToString(copy)], { type: "image/svg+xml" }));
+  });
+  if (options.download) end.append(download);
   toolbar.append(wrap, end);
 
   const figure = el("div", undefined, "graph-figure");
@@ -278,6 +295,7 @@ export function mountGraph(options: GraphViewOptions): GraphView {
     tableToggle.setAttribute("aria-pressed", String(asTable));
     tableToggle.textContent = asTable ? "Show chart" : "Show data";
     status.textContent = "";
+    download.disabled = asTable || data.unavailable || data.empty || (state.mode === "pie" && !data.slices.length);
     figure.replaceChildren(); legend.replaceChildren(); legend.hidden = true;
     if (data.unavailable) { status.textContent = "Unable to load the chart. Adjust the search or reload the page."; return; }
     if (data.empty) { status.textContent = "There is nothing to show: no record matches the search."; return; }

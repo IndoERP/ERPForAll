@@ -98,6 +98,7 @@ struct RawConfig {
     /// Run the job queue's runner in this process (4); absent means off.
     jobs_run_in_app: Option<bool>,
     attachment_maintenance_run_in_app: Option<bool>,
+    mail_delivery_dir: Option<PathBuf>,
     outbox_retention_days: Option<u32>,
     audit_retention_days: Option<u16>,
     audit_witness_file: Option<PathBuf>,
@@ -233,6 +234,7 @@ pub struct ServerConfig {
     connections: ConnectionLimits,
     jobs_run_in_app: bool,
     attachment_maintenance_run_in_app: bool,
+    mail_delivery_dir: Option<PathBuf>,
     outbox_retention_days: Option<u32>,
     audit_retention_days: Option<u16>,
     audit_witness_file: Option<PathBuf>,
@@ -517,6 +519,7 @@ impl ServerConfig {
             attachment_maintenance_run_in_app: raw
                 .attachment_maintenance_run_in_app
                 .unwrap_or(false),
+            mail_delivery_dir: raw.mail_delivery_dir.as_deref().map(resolve),
             outbox_retention_days: raw.outbox_retention_days,
             audit_retention_days: raw.audit_retention_days,
             audit_witness_file: raw.audit_witness_file.as_deref().map(resolve),
@@ -638,6 +641,11 @@ impl ServerConfig {
         self.attachment_maintenance_run_in_app
     }
 
+    /// Private local Maildir to receive outgoing message notices.
+    pub fn mail_delivery_dir(&self) -> Option<&Path> {
+        self.mail_delivery_dir.as_deref()
+    }
+
     /// Shared outbox retention policy; absent disables automatic retirement.
     pub fn outbox_retention_days(&self) -> Option<u32> {
         self.outbox_retention_days
@@ -700,6 +708,7 @@ impl erp_orm::node::SharedSettings for ServerConfig {
             connections,
             jobs_run_in_app: _,
             attachment_maintenance_run_in_app: _,
+            mail_delivery_dir: _,
             outbox_retention_days,
             audit_retention_days,
             audit_witness_file,

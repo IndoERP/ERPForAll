@@ -1,0 +1,53 @@
+{
+  "utc": "2026-11-19T13:06:10.501512+00:00",
+  "host": "arkana-MS-7D77",
+  "python": "3.10.12 (main, Aug 31 2026, 10:18:17) [GCC 11.4.0]",
+  "producer": "9.55.0\n",
+  "commands": [
+    {
+      "argv": [
+        "gs",
+        "-q",
+        "-dNODISPLAY",
+        "-dNOSAFER",
+        "-dBATCH",
+        "/tmp/erp-pdf-filters-gs/gs-lzw-early-0.ps"
+      ],
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "gs",
+        "-q",
+        "-dNODISPLAY",
+        "-dNOSAFER",
+        "-dBATCH",
+        "/tmp/erp-pdf-filters-gs/gs-lzw-early-1.ps"
+      ],
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "gs",
+        "-q",
+        "-dNODISPLAY",
+        "-dNOSAFER",
+        "-dBATCH",
+        "/tmp/erp-pdf-filters-gs/gs-flate-png.ps"
+      ],
+      "stdout": "",
+      "stderr": ""
+    }
+  ],
+  "sha256": {
+    "gs-flate-png.bin": "a9d4c8de6b43c7d1a0605009c4cb3ad64977aa5c50aff295beef0f31bc8c7e0f",
+    "gs-flate-png.ps": "644899c777dbfb50e0efa5aab45e0370a5c9f9420c47fad799e059e8654fb270",
+    "gs-lzw-early-0.bin": "54836e5044d5eb7af36a0264922859c5e1f01aa1f9649883d1fe2db1ae9857c1",
+    "gs-lzw-early-0.ps": "ad2ce55c9223aa705fafd719d60d5103d9829a2a0298944b5da7023e1989970a",
+    "gs-lzw-early-1.bin": "123b27cdf0bcae0274dbfc1c1f0f2852979847e2336307122216cf48c48f7616",
+    "gs-lzw-early-1.ps": "3873950993ef1670fb47236f11879e58b13a0dfb93dc18efed5e4f2292ce8759",
+    "payload.bin": "7c2e7057a39bb871acfdb95fb789ae817fef477e1cd049639b445c78d9cf8839"
+  }
+}

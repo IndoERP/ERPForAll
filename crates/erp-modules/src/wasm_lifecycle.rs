@@ -2192,6 +2192,10 @@ fn package_data_files(package: &ErpAddonPackage) -> Result<PackageFiles> {
 }
 
 impl PackageRuntime for WasmPackages {
+    fn supports_native_uninstall(&self) -> bool {
+        true
+    }
+
     fn model_defs(&self, module: &ModuleName) -> Result<Vec<ModelDef>> {
         match self.current(module) {
             Some(loaded) => Ok(loaded.defs.clone()),

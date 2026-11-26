@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-use crate::error::{Result, invalid, malformed, owner, refused, unsupported};
+use crate::dest::Names;
+use crate::error::{Result, invalid, malformed, refused, unsupported};
 use crate::limits::{Budget, Context};
-use crate::{AnnotationPolicy, FormPolicy, Limit, PdfError, PdfErrorKind, annot, forms, graph};
+use crate::{
+    AnnotationPolicy, FormPolicy, Limit, PdfError, PdfErrorKind, annot, forms, graph, outline,
+};
 use lopdf::{Dictionary, Document, Object, ObjectId, Stream};
 use std::collections::{BTreeMap, BTreeSet};
 /// A caller-owned output destination. No resource is opened by this crate.
@@ -206,6 +209,8 @@ pub(crate) struct Importer<'d, 'b, 'a, 'c> {
     map: BTreeMap<ObjectId, ObjectId>,
     /// Source pages of this copy; a destination may name one that is written later.
     pages: BTreeSet<ObjectId>,
+    /// Destination names of the source catalog, read when a link or bookmark uses one.
+    names: &'b Names<'d>,
     budget: Budget<'a>,
     plain: bool,
     policy: AnnotationPolicy,
@@ -225,7 +230,7 @@ pub(crate) struct Importer<'d, 'b, 'a, 'c> {
 }
 impl<'d, 'b, 'a, 'c> Importer<'d, 'b, 'a, 'c> {
     pub fn new(
-        doc: &'d Document,
+        names: &'b Names<'d>,
         writer: &'b mut Writer<'a, 'c>,
         limits: &'a Context<'a>,
         plain: bool,
@@ -233,10 +238,11 @@ impl<'d, 'b, 'a, 'c> Importer<'d, 'b, 'a, 'c> {
         ordinal: usize,
     ) -> Self {
         Self {
-            doc,
+            doc: names.document(),
             writer,
             map: BTreeMap::new(),
             pages: BTreeSet::new(),
+            names,
             budget: Budget::new(limits),
             plain,
             policy,
@@ -270,6 +276,13 @@ impl<'d, 'b, 'a, 'c> Importer<'d, 'b, 'a, 'c> {
             self.pages.insert(old);
         }
         Ok(())
+    }
+    /// The bookmarks of the source document that stand on their own in this copy.
+    pub fn outline(&self) -> Result<outline::Entries<'d>> {
+        let pages = &self.pages;
+        outline::read(self.doc, self.names, self.budget.limits, &|id| {
+            pages.contains(&id)
+        })
     }
     /// Write one reserved page; `number` is its one-based position in the source document.
     pub fn page(
@@ -318,7 +331,7 @@ impl<'d, 'b, 'a, 'c> Importer<'d, 'b, 'a, 'c> {
     where
         'd: 'x,
     {
-        let doc: &'x Document = self.doc;
+        let doc = self.doc;
         let l = self.budget.limits;
         let items = graph::resolve(doc, value, l)?
             .as_array()
@@ -336,9 +349,9 @@ impl<'d, 'b, 'a, 'c> Importer<'d, 'b, 'a, 'c> {
         for item in items {
             l.step()?;
             let pages = &self.pages;
-            let mut e = annot::entry(doc, item, l, &|id| pages.contains(&id))?;
+            let mut e = annot::entry(doc, item, l, &|id| pages.contains(&id), self.names)?;
             if flatten && e.widget {
-                match forms::widget(doc, e.dict, self.viewer_builds, turned, l)? {
+                match forms::widget(doc, &e.dict, self.viewer_builds, turned, l)? {
                     Ok(flat) => {
                         e.why = None;
                         e.flat = Some(flat);
@@ -430,6 +443,8 @@ impl<'d, 'b, 'a, 'c> Importer<'d, 'b, 'a, 'c> {
         page: ObjectId,
         number: usize,
     ) -> Result<Vec<Object>> {
+        let doc = self.doc;
+        let l = self.budget.limits;
         // Identifiers first: a note and its popup name each other.
         for e in entries {
             if e.flat.is_some() {
@@ -463,13 +478,41 @@ impl<'d, 'b, 'a, 'c> Importer<'d, 'b, 'a, 'c> {
         let carried = annot::carried(entries);
         let mut out = Vec::new();
         for e in entries.iter().filter(|e| e.carried()) {
-            let mut d = e.dict.clone();
+            let mut d = e.dict.clone().into_owned();
             // The owning page is set below; a popup that is not carried is not named.
             d.remove(b"P");
             if !matches!(d.get(b"Popup"), Ok(Object::Reference(id)) if carried.contains(id)) {
                 d.remove(b"Popup");
             }
+            // Only these destination positions may remap source page identifiers. Removing
+            // them before the generic copy prevents arbitrary annotation keys granting access.
+            let destination = d.remove(b"Dest");
+            let action = d.remove(b"A");
             let mut copy = self.copy_dict(&d, 0)?;
+            if let Some(destination) = destination {
+                copy.set("Dest", self.destination(&destination)?);
+            }
+            if let Some(action) = action {
+                let action = graph::dict(doc, &action, l)?;
+                let mut action = action.clone();
+                let kind = graph::resolve(
+                    doc,
+                    action
+                        .get(b"S")
+                        .map_err(|e| malformed("PDF annotation action lacks a type").source(e))?,
+                    l,
+                )?;
+                if matches!(kind.as_name(), Ok(b"GoTo")) {
+                    let destination = action
+                        .remove(b"D")
+                        .ok_or_else(|| malformed("PDF GoTo action lacks a destination"))?;
+                    let mut copied_action = self.copy_dict(&action, 0)?;
+                    copied_action.set("D", self.destination(&destination)?);
+                    copy.set("A", copied_action);
+                } else {
+                    copy.set("A", self.copy_dict(&action, 0)?);
+                }
+            }
             copy.set("P", page);
             self.kept = count(self.kept)?;
             match e.id {
@@ -486,7 +529,30 @@ impl<'d, 'b, 'a, 'c> Importer<'d, 'b, 'a, 'c> {
         }
         Ok(out)
     }
+    /// Copy a validated destination, granting page remapping only to its first operand.
+    pub fn destination(&mut self, value: &Object) -> Result<Object> {
+        let array = graph::resolve(self.doc, value, self.budget.limits)?
+            .as_array()
+            .map_err(|e| malformed("PDF destination must be an array").source(e))?;
+        let Some(Object::Reference(page)) = array.first() else {
+            return Err(malformed("PDF destination must start with a copied page"));
+        };
+        if !self.pages.contains(page) {
+            return Err(refused("cross-document page reference"));
+        }
+        let id = *self
+            .map
+            .get(page)
+            .ok_or_else(|| malformed("PDF destination page was not reserved"))?;
+        let mut copied = Vec::with_capacity(array.len());
+        copied.push(Object::Reference(id));
+        for operand in &array[1..] {
+            copied.push(self.copy(operand, 1)?);
+        }
+        Ok(Object::Array(copied))
+    }
     fn copy_dict(&mut self, d: &Dictionary, depth: usize) -> Result<Dictionary> {
+        crate::signatures::copy_dictionary(self.doc, d, self.budget.limits)?;
         let mut out = Dictionary::new();
         for (k, v) in d.iter() {
             // A merged reading copy intentionally contains no archival metadata or associations.
@@ -510,6 +576,9 @@ impl<'d, 'b, 'a, 'c> Importer<'d, 'b, 'a, 'c> {
         self.budget.limits.check(Limit::Depth, depth + 1)?;
         Ok(match o {
             Object::Reference(old) => {
+                if self.pages.contains(old) {
+                    return Err(refused("cross-document page reference"));
+                }
                 if let Some(new) = self.map.get(old) {
                     return Ok(Object::Reference(*new));
                 }
@@ -522,7 +591,9 @@ impl<'d, 'b, 'a, 'c> Importer<'d, 'b, 'a, 'c> {
                     && let Ok(kind) = d.get(b"Type")
                     && matches!(kind.as_name(), Ok(b"Page" | b"Pages" | b"Catalog"))
                 {
-                    return Err(unsupported("cross-document page reference", owner::DEST));
+                    // Links and bookmarks name pages through destinations, which are remapped;
+                    // any other object that names a page would pull the source page tree along.
+                    return Err(refused("cross-document page reference"));
                 }
                 // A group without a catalog that lists it is shown by viewers whatever the
                 // source configuration said, so it is never copied.

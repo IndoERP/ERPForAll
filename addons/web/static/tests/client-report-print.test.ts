@@ -185,3 +185,42 @@ test("a Print button disposed before the reports arrive adds nothing", async () 
   expect(print.node.querySelector(".print-report-btn")).toBeNull();
   expect(print.node.hidden).toBe(true);
 });
+
+test("a small print opens in the document viewer when the server asks for a preview", async () => {
+  const { rpc } = fakeRpc(() => ({ mode: "sync", url: "/erp/report/pdf/sale.order.document/1,2", open: "preview" }));
+  const download = vi.fn(), view = vi.fn();
+  expect(await printRecords({ rpc, dialogs, download, view }, order, "sale.order", [1, 2])).toBeUndefined();
+  expect(view).toHaveBeenCalledWith({ name: "Order.pdf", kind: "pdf", url: "/erp/report/pdf/sale.order.document/1,2", downloadUrl: "/erp/report/pdf/sale.order.document/1,2?download=1" });
+  expect(download).not.toHaveBeenCalled();
+});
+
+test("a small print is saved as a file when the server asks for a download", async () => {
+  const { rpc } = fakeRpc(() => ({ mode: "sync", url: "/erp/report/pdf/sale.order.document/1", open: "download" }));
+  const download = vi.fn(), view = vi.fn();
+  await printRecords({ rpc, dialogs, download, view }, order, "sale.order", [1]);
+  expect(download).toHaveBeenCalledWith("/erp/report/pdf/sale.order.document/1");
+  expect(view).not.toHaveBeenCalled();
+});
+
+test("an unknown way to open the printed document is refused", async () => {
+  const { rpc } = fakeRpc(() => ({ mode: "sync", url: "/erp/report/pdf/sale.order.document/1", open: "window" }));
+  const download = vi.fn(), view = vi.fn();
+  await expect(printRecords({ rpc, dialogs, download, view }, order, "sale.order", [1])).rejects.toThrow("The server answered the print request with an unknown way to open the document.");
+  expect(download).not.toHaveBeenCalled();
+  expect(view).not.toHaveBeenCalled();
+});
+
+test("a finished background print opens in the document viewer; a preview makes Open the main action", async () => {
+  const { rpc } = fakeRpc(({ method }) => method === "erp_print"
+    ? { mode: "job", id: 7, poll_ms: 1, open: "preview" }
+    : [{ state: "done", total: 51, processed: 51, failed: 0, failures: "[]", warnings: "[]", error: false, attachment_id: [88, "Order.pdf"] }]);
+  const view = vi.fn();
+  const handle = (await printRecords({ rpc, dialogs, download: vi.fn(), view }, order, "sale.order", Array.from({ length: 51 }, (_, i) => i + 1)))!;
+  const buttons = (): HTMLButtonElement[] => [...handle.dialog.querySelectorAll<HTMLButtonElement>(".message-dialog-footer button")];
+  await vi.waitFor(() => expect(buttons().find(node => node.textContent === "Open")?.hidden).toBe(false));
+  const open = buttons().find(node => node.textContent === "Open")!;
+  expect(open.classList.contains("primary")).toBe(true);
+  expect(buttons().find(node => node.textContent === "Download PDF")!.classList.contains("primary")).toBe(false);
+  open.click();
+  expect(view).toHaveBeenCalledWith({ name: "Order.pdf", kind: "pdf", url: "/erp/content/88", downloadUrl: "/erp/content/88?download=true" });
+});

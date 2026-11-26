@@ -1,10 +1,18 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 // The pivot view's DOM: toolbar, the table with its header buttons, the expand menu and the
 // keyboard. The model (`pivot.ts`) owns every read; this file only draws its state and asks it for changes.
+import { Registry } from "./registry.js";
+
 import { icon } from "./icons.js";
 import { formatNumeric, type NumericLocale } from "./numeric-values.js";
 import { attachMenuDropdown } from "./menu-dropdown.js";
 import { PIVOT_INTERVALS, groupingKey, pivotExportDocument, type PivotExportDocument, type PivotField, type PivotInterval, type PivotMeasure, type PivotModel, type PivotTable } from "./pivot.js";
+
+export interface PivotVariant {
+  formatMeasure(measure: Readonly<PivotMeasure>, value: number, formatted: string): string;
+}
+export const pivotVariants = new Registry<PivotVariant>("pivot variant");
+export function registerPivotVariant(name: string, variant: PivotVariant): void { pivotVariants.add(name, variant); }
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, className?: string): HTMLElementTagNameMap[K] => {
   const node = document.createElement(tag);
@@ -35,6 +43,7 @@ export interface PivotViewOptions {
   model: PivotModel;
   locale: NumericLocale;
   title: string;
+  variant?: string;
   /** The application's job runner: it reports a failed read. The model queues its own jobs, so two actions in flight end in the state of the last one. */
   run: (job: () => Promise<void>) => void;
   /** Open the records of a cell. Absent: cells are not links (the arch's `disable_linking` does the same). */
@@ -47,6 +56,7 @@ export interface PivotViewOptions {
 
 export function mountPivot(options: PivotViewOptions): PivotView {
   const { model, locale, title, run } = options;
+  const variant = options.variant === undefined ? undefined : pivotVariants.get(options.variant);
   const root = el("div", undefined, "pivot-view");
   const toolbar = el("div", undefined, "pivot-toolbar");
   toolbar.setAttribute("role", "toolbar"); toolbar.setAttribute("aria-label", "Main actions");
@@ -90,8 +100,11 @@ export function mountPivot(options: PivotViewOptions): PivotView {
   const dropdown = attachMenuDropdown({ trigger, menu, mode: "class-open", items: () => [...menu.querySelectorAll<HTMLElement>("[role=menuitemcheckbox]")] });
 
   // A zero is shown for a group that has records whose measure holds no value; a group with no records is left blank.
-  const format = (measure: PivotMeasure, value: number | null | undefined): string =>
-    value === undefined ? "" : formatNumeric(value ?? 0, measure.kind, locale, measure.kind === "float" ? 2 : undefined);
+  const format = (measure: PivotMeasure, value: number | null | undefined): string => {
+    if (value === undefined) return "";
+    const formatted = formatNumeric(value ?? 0, measure.kind, locale, measure.kind === "float" ? 2 : undefined);
+    return variant ? variant.formatMeasure(measure, value ?? 0, formatted) : formatted;
+  };
 
   const drawMenu = (): void => {
     menu.replaceChildren(...model.config.measures.map(measure => {

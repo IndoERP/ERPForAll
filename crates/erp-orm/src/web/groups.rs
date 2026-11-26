@@ -1300,12 +1300,16 @@ pub(crate) async fn read_progress_bar(
     records: &Records,
     args: super::ProgressBar,
 ) -> Result<Value> {
+    let mut groupby = vec![args.group_by.clone()];
+    if args.group_by != args.field {
+        groupby.push(args.field.clone());
+    }
     let groups = records
         .formatted_read_group(
             tx,
             FormattedReadGroup {
                 domain: args.domain.clone(),
-                groupby: vec![args.group_by.clone(), args.field.clone()],
+                groupby,
                 aggregates: vec!["__count".to_owned()],
                 having: Vec::new(),
                 offset: 0,

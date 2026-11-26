@@ -9,7 +9,7 @@ import type { MessageLevel } from "./message-widgets.js";
 import { codeEditorMode } from "./code-editor-session.js";
 import { validateSelectionTabField } from "./list-tabs.js";
 import { readFieldOptions, type FieldPresentationOptions } from "./field-options.js";
-import type { FieldDescription, ButtonDetails as WireButtonDetails, ButtonPrompt, ButtonTarget as WireButtonTarget } from "../generated/human-ui.js";
+import type { FieldDescription, RestrictedCard, ButtonDetails as WireButtonDetails, ButtonPrompt, ButtonTarget as WireButtonTarget } from "../generated/human-ui.js";
 import { fieldWidgets, serviceControllers } from "./registry.js";
 import { ClientError } from "./transport.js";
 import { decodeAst, parseBoundedJson, type ValidatedAst } from "../../../../../web/packages/expr/src/index.js";
@@ -94,7 +94,7 @@ export type Node = { kind: "field"; field: Field; label: string; widget: string 
   | SearchFieldNode | SearchFilterNode | SearchSeparatorNode | SearchGroupNode
   | PivotNode | PivotFieldNode | CalendarNode | CalendarFieldNode | GraphNode | GraphFieldNode | { kind: "dashboard"; config: DashboardConfig }
   | KanbanNode | KanbanCardNode | KanbanSectionNode | KanbanProgressbarNode
-  | HierarchyNode | ActivityNode;
+  | HierarchyNode | ActivityNode | { kind: "map"; latitude: Field; longitude: Field };
 /** Hierarchy (org chart / tree) root. */
 export interface HierarchyNode {
   kind: "hierarchy";
@@ -116,12 +116,12 @@ export interface ActivityNode {
 /** Kanban root: the arch flags; its children are one `kanban_card` and at most one `kanban_progressbar`. */
 export interface KanbanNode { kind: "kanban"; children: Node[]; quickCreate: boolean; recordsDraggable: boolean; groupsDraggable: boolean; archivable: boolean; canOpen: boolean; /** The field the board opens grouped by, when the caller may read it. */ defaultGroupBy: Field | null }
 /** The card: field nodes and the `main`, `aside` and `footer` regions. */
-export interface KanbanCardNode { kind: "kanban_card"; children: Node[] }
+export interface KanbanCardNode { kind: "kanban_card"; children: Node[]; restricted?: RestrictedCard }
 export interface KanbanSectionNode { kind: "kanban_section"; region: "main" | "aside" | "footer"; children: Node[] }
 /** A progress bar declaration; grouped columns draw it. */
 export interface KanbanProgressbarNode { kind: "kanban_progressbar"; field: Field; colors: readonly { value: string; tone: "success" | "warning" | "danger" | "info" | "muted" }[]; sumField: Field | null; help: string | null }
 /** Pivot root: the two flags of the arch; the grouping and measure fields are its `pivot_field` children. */
-export interface PivotNode { kind: "pivot"; children: Node[]; disableLinking: boolean; displayQuantity: boolean; /** `<measure> asc|desc` as the server normalized it. */ defaultOrder: string | null }
+export interface PivotNode { kind: "pivot"; variant?: string; children: Node[]; disableLinking: boolean; displayQuantity: boolean; /** `<measure> asc|desc` as the server normalized it. */ defaultOrder: string | null }
 /** One field of a pivot: a row grouping, a column grouping or a measure. */
 export interface PivotFieldNode { kind: "pivot_field"; field: Field; label: string; role: "row" | "col" | "measure"; /** Date grouping interval of a date or datetime row or column field. */ interval: string | null }
 export type CalendarScale = "day" | "week" | "month" | "year";
@@ -156,7 +156,7 @@ export type ListSearchPanel = { kind: "selection"; field: Field; label: string; 
 export interface View {
   id?: number;
   dashboard?: DashboardConfig;
-  type: "list" | "form" | "search" | "pivot" | "calendar" | "graph" | "kanban" | "hierarchy" | "activity";
+  type: "list" | "form" | "search" | "pivot" | "calendar" | "graph" | "kanban" | "hierarchy" | "activity" | "map";
   mode: "record" | "service";
   nodes: Node[];
   fields: Field[];
@@ -309,7 +309,7 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
     else unsupported("Unknown view identity kind.");
     const sectionRenderer=(type==="list"&&renderer==="web.list_sections_v1")||(type==="search"&&renderer==="web.search_sections_v1");
     if ((type==="list"||type==="search") && renderer.startsWith(`web.${type}_sections_`) && !sectionRenderer) throw new PanelCompatibilityError();
-    if ((type !== "list" && type !== "form" && type !== "search" && type !== "pivot" && type !== "calendar" && type !== "graph" && type !== "kanban" && type !== "hierarchy" && type !== "activity") || (!sectionRenderer&&renderer !== `web.${type}`) || v["schema_major"] !== 1) unsupported(`Unsupported view renderer: ${renderer}.`);
+    if ((type !== "list" && type !== "form" && type !== "search" && type !== "pivot" && type !== "calendar" && type !== "graph" && type !== "kanban" && type !== "hierarchy" && type !== "activity" && type !== "map") || (!sectionRenderer&&renderer !== `web.${type}`) || v["schema_major"] !== 1) unsupported(`Unsupported view renderer: ${renderer}.`);
     if (views.has(type)) throw new ClientError("server", "Duplicate view type.");
     const arena = array(v["nodes"], "view nodes"), root = integer(v["root"], "view root");
     if (!arena.length || arena.length > 4096) throw new ClientError("server", "View node limit exceeded.");
@@ -353,7 +353,7 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
       else if (kind === "group") closed(node, ["kind", "label", "columns", "colspan", "children"], "view node");
       else if (kind === "page") closed(node, ["kind", "name", "label", "children", ...(Object.hasOwn(node, "invisible") ? ["invisible"] : [])], "view node");
       else if (kind === "separator") closed(node, ["kind", "label"], "view node");
-      else if (kind === "pivot") closed(node, ["kind", "children", "disable_linking", "display_quantity", ...(Object.hasOwn(node, "default_order") ? ["default_order"] : [])], "view node");
+      else if (kind === "pivot") closed(node, ["kind", "children", "disable_linking", "display_quantity", ...["variant", "default_order"].filter(key => Object.hasOwn(node, key))], "view node");
       else if (kind === "pivot_field") closed(node, ["kind", "field", "label", "role", ...(Object.hasOwn(node, "interval") ? ["interval"] : [])], "view node");
       else if (kind === "calendar") closed(node, ["kind", "children", "date_start", ...["date_stop", "all_day", "color"].filter(key => Object.hasOwn(node, key)), "mode", "scales", "create", "edit", "delete", "quick_create", "hide_date", "hide_time", "month_overflow", "event_limit"], "view node");
       else if (kind === "calendar_field") closed(node, ["kind", "field", "label", "invisible", "filters"], "view node");
@@ -361,10 +361,11 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
       else if (kind === "graph_field") closed(node, ["kind", "field", "label", "role", ...(Object.hasOwn(node, "interval") ? ["interval"] : [])], "view node");
       else if (kind === "search") closed(node, ["kind", "children", ...(Object.hasOwn(node, "search_panel") ? ["search_panel"] : [])], "view node");
       else if (kind === "kanban") closed(node, ["kind", "children", "quick_create", "records_draggable", "groups_draggable", "archivable", "can_open", ...["page_limit", "default_group_by", "create", "edit", "delete"].filter(key => Object.hasOwn(node, key))], "view node");
-      else if (kind === "kanban_card") closed(node, ["kind", "children"], "view node");
+      else if (kind === "kanban_card") closed(node, ["kind", "children", ...(Object.hasOwn(node, "restricted") ? ["restricted"] : [])], "view node");
       else if (kind === "kanban_section") closed(node, ["kind", "region", "children"], "view node");
       else if (kind === "kanban_progressbar") closed(node, ["kind", "field", "colors", ...["sum_field", "help"].filter(key => Object.hasOwn(node, key))], "view node");
       else if (kind === "hierarchy") closed(node, ["kind", "children", "parent_field", "draggable", ...["child_field", "avatar_field", "color_field", "count_field", "label"].filter(key => Object.hasOwn(node, key))], "view node");
+      else if (kind === "map") closed(node, ["kind", "latitude", "longitude"], "map node");
       else if (kind === "activity") closed(node, ["kind", "children", ...(Object.hasOwn(node, "avatar_field") ? ["avatar_field"] : [])], "view node");
       else if (kind === "search_field") closed(node, ["kind", "field", "label", ...(Object.hasOwn(node, "filter_domain") ? ["filter_domain"] : []), ...(Object.hasOwn(node, "operator") ? ["operator"] : [])], "view node");
       else if (kind === "search_filter") closed(node, ["kind", "name", "label", ...(Object.hasOwn(node, "domain") ? ["domain"] : []), ...(Object.hasOwn(node, "context") ? ["context"] : [])], "view node");
@@ -372,8 +373,9 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
       else if (kind === "search_group") closed(node, ["kind", "label", ...(Object.hasOwn(node, "expand") ? ["expand"] : []), "children"], "view node");
       else unsupported(`Unsupported view node: ${String(kind)}.`);
       const kanbanKind = kind === "kanban" || kind === "kanban_card" || kind === "kanban_section" || kind === "kanban_progressbar";
-      if (depth > 1 && (kind === "form" || kind === "list" || kind === "search" || kind === "pivot" || kind === "calendar" || kind === "graph" || kind === "kanban" || kind === "hierarchy" || kind === "activity")
+      if (depth > 1 && (kind === "form" || kind === "list" || kind === "search" || kind === "pivot" || kind === "calendar" || kind === "graph" || kind === "kanban" || kind === "hierarchy" || kind === "activity" || kind === "map")
         || type === "hierarchy" && kind !== "hierarchy" && kind !== "field" || type !== "hierarchy" && kind === "hierarchy"
+        || (type === "map") !== (kind === "map")
         || type === "activity" && kind !== "activity" && kind !== "field" || type !== "activity" && kind === "activity"
         || type === "calendar" && kind !== "calendar" && kind !== "calendar_field" || type !== "calendar" && (kind === "calendar" || kind === "calendar_field") || kind === "calendar_field" && parentKind !== "calendar"
         || type === "graph" && kind !== "graph" && kind !== "graph_field" || type !== "graph" && (kind === "graph" || kind === "graph_field") || kind === "graph_field" && parentKind !== "graph" || type === "pivot" && kind !== "pivot" && kind !== "pivot_field"
@@ -611,6 +613,12 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
       if (kind === "search_separator") {
         return { kind: "search_separator" };
       }
+      if (kind === "map") {
+        const latitude = rootField(node["latitude"]), longitude = rootField(node["longitude"]);
+        if (latitude.kind !== "float" || longitude.kind !== "float" || latitude.name === longitude.name) throw new ClientError("server", "Invalid map coordinate fields.");
+        selected.push(latitude, longitude);
+        return {kind, latitude, longitude};
+      }
       const children = array(node["children"], "children").map(child => visit(integer(child, "child index"), depth + 1, kind));
       if (kind === "heading") {
         const level = integer(node["level"], "heading level");
@@ -633,6 +641,14 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
       if (kind === "kanban_card") {
         const regions = children.flatMap(child => child.kind === "kanban_section" ? [child.region] : []);
         if (new Set(regions).size !== regions.length) throw new ClientError("server", "A kanban card region is declared twice.");
+        if (Object.hasOwn(node, "restricted")) {
+          const artifact = object(node["restricted"], "restricted card");
+          closed(artifact, ["arch", "language", "source_sha256", "plan"], "restricted card");
+          return { kind, children, restricted: {
+            arch: text(artifact["arch"], "card identity"), language: text(artifact["language"], "card language"),
+            source_sha256: text(artifact["source_sha256"], "card digest"), plan: text(artifact["plan"], "card plan"),
+          } };
+        }
         return { kind, children };
       }
       if (kind === "kanban_section") {
@@ -640,7 +656,7 @@ export function describeViews(raw: unknown, model: string, registryVersion: stri
         if (region !== "main" && region !== "aside" && region !== "footer") unsupported("Unsupported kanban card region.");
         return { kind, region, children };
       }
-      if (kind === "pivot") return { kind, children, disableLinking: boolean(node["disable_linking"], "pivot disable_linking"), displayQuantity: boolean(node["display_quantity"], "pivot display_quantity"), defaultOrder: Object.hasOwn(node, "default_order") ? text(node["default_order"], "pivot default_order") : null };
+      if (kind === "pivot") return { kind, children, ...(Object.hasOwn(node, "variant") ? { variant: text(node["variant"], "pivot variant") } : {}), disableLinking: boolean(node["disable_linking"], "pivot disable_linking"), displayQuantity: boolean(node["display_quantity"], "pivot display_quantity"), defaultOrder: Object.hasOwn(node, "default_order") ? text(node["default_order"], "pivot default_order") : null };
       if (kind === "calendar") {
         const optional = (key: string): Field | null => Object.hasOwn(node, key) ? rootField(node[key]) : null;
         const dateStart = rootField(node["date_start"]), dateStop = optional("date_stop"), allDay = optional("all_day"), color = optional("color");

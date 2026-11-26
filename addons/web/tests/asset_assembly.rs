@@ -1024,3 +1024,60 @@ fn new_blobs_use_declared_gzip9_brotli11_forms_and_keep_old_stored_variants() {
     assert_eq!(admitted.gzip(), older_gzip);
     assert_eq!(admitted.brotli(), older_brotli);
 }
+
+#[test]
+fn catalogue_publication_is_keyed_by_language_and_entries() {
+    use erp_sdk::ui_compiler::{AddonName, TranslationCatalogue};
+    let mut addon = AddonAssets::new("web", "1", "runtime-1").unwrap();
+    addon
+        .push(
+            AssetInput::module(
+                "static/dist/abi.js",
+                "@erpforall/elang/abi",
+                b"export {};".to_vec(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    addon
+        .push(
+            AssetInput::template(
+                "static/src/view.xml",
+                "<templates><t t-name='web.Greeting'><p>Hello</p></t></templates>",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let inputs = [addon];
+    let publish = |translation| {
+        let dictionary = TranslationCatalogue::new("fr_FR")
+            .unwrap()
+            .with_term(AddonName::new("web").unwrap(), "Hello", translation)
+            .unwrap();
+        let opts = AssemblyOptions::new(
+            "compiler-1",
+            "runtime-1",
+            "fr_FR",
+            "main",
+            CompileOptions::new(BuildMode::Prod),
+        )
+        .unwrap();
+        assemble(&inputs, &opts.with_catalogue(dictionary).unwrap()).unwrap()
+    };
+    let first = publish("Bonjour");
+    let revised = publish("Salut");
+    assert_ne!(first.key(), revised.key());
+    assert_eq!(first.key(), publish("Bonjour").key());
+    assert!(
+        first
+            .blobs()
+            .iter()
+            .any(|blob| String::from_utf8_lossy(blob.bytes()).contains("Bonjour"))
+    );
+    assert!(
+        revised
+            .blobs()
+            .iter()
+            .any(|blob| String::from_utf8_lossy(blob.bytes()).contains("Salut"))
+    );
+}

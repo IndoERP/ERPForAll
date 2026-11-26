@@ -543,3 +543,18 @@ test("a bar opens its records as a list under another menu and keeps that menu l
   await vi.waitFor(() => expect(root.querySelector(".list-table")).not.toBeNull());
   expect([...root.querySelectorAll(".form-breadcrumb-path button.link")].map(link => link.textContent)).toEqual(["Other", "Notes"]);
 });
+
+test("export uses the displayed series and measure without another grouped read", async () => {
+  const { model, requests } = await made();
+  const download = vi.fn();
+  const view = mountGraph({ model, locale: american, run: job => { void job(); }, download });
+  view.element.querySelector<HTMLButtonElement>(".graph-download")!.click();
+  expect(requests).toHaveLength(1);
+  const file = download.mock.calls[0]![0] as Blob;
+  expect(file.type).toBe("image/svg+xml");
+  const reader = new FileReader();
+  const svg = new Promise<string>(resolve => { reader.onload = () => resolve(String(reader.result)); });
+  reader.readAsText(file);
+  expect(await svg).toContain('class="graph-chart"');
+  view.dispose();
+});

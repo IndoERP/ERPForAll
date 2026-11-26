@@ -13,6 +13,7 @@ use crate::names::is_anchor_name;
 use crate::source::Trust;
 use crate::xml;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 /// The model name every template descriptor carries: the engine only applies extensions whose
 /// model equals their parent's.
@@ -77,13 +78,24 @@ pub(crate) struct Entry<'s> {
 /// The engine's result for one template.
 #[derive(Debug, Clone)]
 pub(crate) struct Combined {
-    pub(crate) xml: String,
+    /// Analysis and scoped variants share the serialized XML and its diagnostic offsets.
+    pub(crate) xml: Rc<String>,
     /// The entries applied, in order: the template's own chain of parents and every extension.
     pub(crate) applied: Vec<EntryId>,
     /// The least trusted mode of the applied entries: the combined template is analysed in it.
     pub(crate) trust: Trust,
     /// One engine origin for each element, in serialized document order.
-    pub(crate) origins: Vec<(erp_views::NodeOrigin, Option<u32>)>,
+    pub(crate) origins: Vec<ElementOrigin>,
+}
+
+pub(crate) type LiteralOrigin = Option<(i64, u32)>;
+#[derive(Debug, Clone)]
+pub(crate) struct ElementOrigin {
+    pub node: erp_views::NodeOrigin,
+    pub ordinal: Option<u32>,
+    pub text: LiteralOrigin,
+    pub tail: LiteralOrigin,
+    pub attributes: BTreeMap<String, LiteralOrigin>,
 }
 
 /// Why a combination failed: the engine's error and the entry it points at, if any.
@@ -255,12 +267,27 @@ pub(crate) fn combine(
                     let mut origins = Vec::new();
                     let mut pending = vec![c.arch().root()];
                     while let Some(node) = pending.pop() {
-                        origins.push((node.origin(), node.source_node_index()));
+                        let original = node
+                            .source_node_index()
+                            .map(|index| (node.origin().view_id(), index));
+                        origins.push(ElementOrigin {
+                            node: node.origin(),
+                            ordinal: node.source_node_index(),
+                            text: node.text_source(),
+                            tail: node.tail_source(),
+                            attributes: node
+                                .attributes()
+                                .filter_map(|(key, _)| {
+                                    let source = node.attribute_source(key);
+                                    (source != original).then(|| (key.to_owned(), source))
+                                })
+                                .collect(),
+                        });
                         let children: Vec<_> = node.children().collect();
                         pending.extend(children.into_iter().rev());
                     }
                     Ok(Combined {
-                        xml: c.to_xml(),
+                        xml: Rc::new(c.to_xml()),
                         applied,
                         trust,
                         origins,
@@ -533,7 +560,7 @@ mod tests {
         assert_eq!(parent.applied, vec![1, 0, 2, 5]);
         assert_eq!(parent.trust, Trust::Trusted);
         assert_eq!(
-            parent.xml,
+            parent.xml.as_str(),
             "<t t-name=\"a.T\"><div><i>1</i><i>2</i><i>4</i></div></t>"
         );
         let child = out[1].as_ref().unwrap();
@@ -541,7 +568,7 @@ mod tests {
         // then its own extension.
         assert_eq!(child.applied, vec![1, 0, 2, 5, 3, 4]);
         assert_eq!(
-            child.xml,
+            child.xml.as_str(),
             "<t t-name=\"b.P\"><div><i>1</i><i>2</i><i>4</i><i>p</i><i>3</i></div></t>"
         );
         // An excluded extension is not applied.

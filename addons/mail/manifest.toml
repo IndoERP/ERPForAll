@@ -1,9 +1,9 @@
 name = "Discuss"
-summary = "Messages, followers and subtypes behind the chatter of any document"
+summary = "Document chatter, private conversations, activities and message delivery"
 category = "Productivity/Discuss"
 author = "Arkana"
 license = "MIT OR Apache-2.0"
-version = "1.1.1"
+version = "1.2.0"
 depends = ["base"]
 data = [
     "security/ir.access.csv",
@@ -13,4 +13,5 @@ data = [
     "views/res_partner_views.xml",
     "views/res_company_views.xml",
     "views/res_users_views.xml",
+    "views/technical_views.xml",
 ]

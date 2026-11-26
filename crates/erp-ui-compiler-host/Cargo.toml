@@ -1,0 +1,34 @@
+[package]
+name = "erp-ui-compiler-host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Bounded WASM execution host for database-sourced (restricted) arch template compilation"
+
+[lints]
+workspace = true
+
+[features]
+# Test-only: exposes `WasmCompilerHost::run_raw_for_tests`, which runs framed bytes that are not
+# an arch request (the env-gated artefact test compares a trusted request with native respond()).
+# Production dependencies leave this feature disabled.
+test-raw-input = []
+
+[dependencies]
+erp-ui-compiler-cli.workspace = true
+wasmi.workspace = true
+wasmi_core.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+erp-ui-compiler.workspace = true
+wat.workspace = true
+
+# Build the wasm32-wasip1 compiler and set ERP_UI_COMPILE_WASM before running these tests.
+[[test]]
+name = "wasm_artifact"
+required-features = ["test-raw-input"]

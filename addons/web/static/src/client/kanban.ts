@@ -1,13 +1,15 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 // The kanban view's cards: the card layout read from the
 // description, the ungrouped card grid and its keyboard. The application owns every read; this file only draws records.
+import { prepareRestrictedCard } from "@erpforall/elang";
+import { displayValue } from "./fields.js";
 import { icon, type IconName } from "./icons.js";
 import { ClientError } from "./transport.js";
 import type { Field, Node, View } from "./metadata.js";
 
 /** Where each card field goes: the first field of the card (or of `<main>`) is the title, `<aside>` is the leading tile.
  *  `accent` is an integer `color` field the card declares invisible: it colours the card's edge and is not a line. */
-export interface KanbanCardLayout { title: Field | undefined; lines: Field[]; aside: Field | undefined; footer: Field[]; accent: Field | undefined }
+export interface KanbanCardLayout { title: Field | undefined; lines: Field[]; aside: Field | undefined; footer: Field[]; accent: Field | undefined; restricted?: (record: Record<string, unknown>) => DocumentFragment }
 
 /** The kanban root of a described view (`describeViews` already checked its shape). */
 export function kanbanRoot(view: View): Extract<Node, { kind: "kanban" }> {
@@ -31,7 +33,26 @@ export function kanbanLayout(view: View): KanbanCardLayout {
   // attribute instead once the server sends one.
   const declared = [...card.children, ...card.children.flatMap(child => child.kind === "kanban_section" ? child.children : [])];
   const accent = declared.flatMap(node => node.kind === "field" && node.field.invisible && node.field.name === "color" && node.field.kind === "integer" ? [node.field] : [])[0];
-  return { title, lines, aside: region("aside")[0], footer: region("footer"), accent };
+  const layout: KanbanCardLayout = { title, lines, aside: region("aside")[0], footer: region("footer"), accent };
+  if (card.restricted) {
+    const { arch, language, source_sha256, plan } = card.restricted;
+    const render = prepareRestrictedCard(plan, { arch, language, sourceSha256: source_sha256 });
+    const locale = language.replaceAll("_", "-");
+    layout.restricted = record => {
+      const projected: Record<string, unknown> = Object.create(null);
+      for (const field of view.fields) {
+        if (!Object.hasOwn(record, field.name)) continue;
+        const value = record[field.name];
+        const raw = value !== null && typeof value === "object" && field.kind === "many2one"
+          ? (value as Record<string, unknown>)["id"] : value;
+        if (raw === null || typeof raw === "boolean" || typeof raw === "number" || typeof raw === "string") {
+          projected[field.name] = { raw_value: raw, value: displayValue(field, value, locale) };
+        }
+      }
+      return render("card", JSON.stringify(projected), document);
+    };
+  }
+  return layout;
 }
 
 /** Up to two initials of a value, for the tile that stands where an image will go (is Proposed). */
@@ -80,14 +101,9 @@ function isEmptyCardValue(value: unknown): boolean {
   return false;
 }
 
-/** The card grid: one focusable article per record, roving focus by the arrow keys, Enter opens. */
-export function renderKanbanCards(options: KanbanCardsOptions): KanbanRendered {
-  const { layout, records, renderField, open } = options;
-  const stops: (() => void)[] = [];
+export function kanbanCard(options: Pick<KanbanCardsOptions, "layout" | "renderField" | "open">, record: Record<string, unknown>, stops: (() => void)[]): HTMLElement {
+  const {layout, renderField, open} = options;
   const hasMediaAside = layout.aside !== undefined && (layout.aside.widget === "image" || layout.aside.kind === "binary");
-  const grid = el("div", `kanban-grid${hasMediaAside ? " kanban-grid-profile" : ""}`);
-  grid.setAttribute("role", "list");
-  grid.setAttribute("aria-label", "Records");
   const field = (target: HTMLElement, item: Field, record: Record<string, unknown>, className: string, withIcon = false): void => {
     const shown = renderField(item, record);
     stops.push(shown.dispose);
@@ -103,15 +119,18 @@ export function renderKanbanCards(options: KanbanCardsOptions): KanbanRendered {
     slot.append(shown.node);
     target.append(slot);
   };
-  const cards: HTMLElement[] = records.map((record, index) => {
-    const id = record["id"];
-    if (typeof id !== "number") throw new ClientError("server", "A kanban record has no id.");
-    const rawColor = layout.accent ? record[layout.accent.name] : undefined;
-    const colorClass = typeof rawColor === "number" && rawColor > 0 ? ` kanban-card-accent-${Math.abs(Math.trunc(rawColor)) % 12}` : "";
-    const card = el("article", `kanban-card${open ? " kanban-card-open" : ""}${hasMediaAside ? " kanban-card-has-media" : ""}${colorClass}`);
-    card.setAttribute("role", "listitem");
-    card.dataset["id"] = String(id);
-    card.tabIndex = index === 0 ? 0 : -1;
+  const id = record["id"];
+  if (typeof id !== "number") throw new ClientError("server", "A kanban record has no id.");
+  const rawColor = layout.accent ? record[layout.accent.name] : undefined;
+  const colorClass = typeof rawColor === "number" && rawColor > 0 ? ` kanban-card-accent-${Math.abs(Math.trunc(rawColor)) % 12}` : "";
+  const card = el("article", `kanban-card${open ? " kanban-card-open" : ""}${hasMediaAside ? " kanban-card-has-media" : ""}${colorClass}`);
+  card.setAttribute("role", "listitem");
+  card.dataset["id"] = String(id);
+  card.tabIndex = -1;
+  if (layout.restricted) {
+    card.append(layout.restricted(record));
+    card.setAttribute("aria-label", card.textContent?.trim() || `Record ${id}`);
+  } else {
     if (layout.aside) {
       if (hasMediaAside) {
         const media = el("div", "kanban-card-media");
@@ -152,12 +171,24 @@ export function renderKanbanCards(options: KanbanCardsOptions): KanbanRendered {
     card.append(body);
     const title = layout.title ? body.querySelector(".kanban-card-title")?.textContent?.trim() : "";
     card.setAttribute("aria-label", title || `Record ${id}`);
-    if (open) card.addEventListener("click", event => {
-      if ((event.target as HTMLElement).closest("a, button, input, select, textarea")) return;
-      open(id);
-    });
-    return card;
+  }
+  if (open) card.addEventListener("click", event => {
+    if ((event.target as HTMLElement).closest("a, button, input, select, textarea")) return;
+    open(id);
   });
+  return card;
+}
+
+/** The card grid: one focusable article per record, roving focus by the arrow keys, Enter opens. */
+export function renderKanbanCards(options: KanbanCardsOptions): KanbanRendered {
+  const { layout, records, open } = options;
+  const stops: (() => void)[] = [];
+  const hasMediaAside = layout.aside !== undefined && (layout.aside.widget === "image" || layout.aside.kind === "binary");
+  const grid = el("div", `kanban-grid${hasMediaAside ? " kanban-grid-profile" : ""}`);
+  grid.setAttribute("role", "list");
+  grid.setAttribute("aria-label", "Records");
+  const cards = records.map(record => kanbanCard(options, record, stops));
+  if (cards[0]) cards[0].tabIndex = 0;
   grid.append(...cards);
   // Rows come from the layout, so Up and Down follow what the user sees at any width.
   const move = (from: number, key: string): number => {

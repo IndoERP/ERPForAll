@@ -1,5 +1,4 @@
 //! Native lifecycle HTTP boundaries using the actual binary and a nonowner runtime role.
-//! Native upgrade installation of a newly introduced dependency remains unverified.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -147,7 +146,7 @@ async fn native_lifecycle_denials_have_no_effects() {
     assert_eq!(value["name"], "erp.exceptions.ValidationError");
     assert_eq!(
         value["message"],
-        "Uninstall impact cannot describe package runtime lifecycle callbacks; unsupported until a later release"
+        "Uninstall cannot remove addon 'base' required by protected addon 'web'"
     );
     assert!(value.get("fingerprint").is_none());
     let uninstall_body = format!(
@@ -269,88 +268,175 @@ async fn native_lifecycle_denials_have_no_effects() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn native_uninstall_reports_engine_composition_refusal_without_effects() {
-    let fixture = NativeFixture::start().await;
-    let installed = json_post(
-        fixture.port,
-        &fixture.cookies,
-        "/erp/module/install",
-        r#"{"modules":["sample_library"]}"#,
+async fn native_lifecycle_previews_dependencies_and_publishes_only_the_fresh_plan() {
+    let fixture = NativeFixture::start_with_addons(|addons| {
+        for (name, depends) in [("life_notes", "web"), ("life_notes_extra", "life_notes")] {
+            let addon = addons.join(name);
+            std::fs::create_dir_all(addon.join("models")).unwrap();
+            std::fs::write(
+                addon.join("manifest.toml"),
+                format!("name='{name}'\nversion='1.0.0'\nlicense='MIT'\ndepends=['{depends}']\n"),
+            )
+            .unwrap();
+            std::fs::write(
+                addon.join("models/notes.toml"),
+                format!(
+                    r#"
+[[model]]
+name = "{name}.note"
+description = "Note"
+
+[[model.field]]
+name = "name"
+type = "char"
+required = true
+"#
+                ),
+            )
+            .unwrap();
+        }
+    })
+    .await;
+
+    let post = |path: &str, body: &str| json_post(fixture.port, &fixture.cookies, path, body);
+    let install = post("/erp/module/install", r#"{"modules":["life_notes_extra"]}"#);
+    assert_eq!(install.status, 200, "install: {}", install.body);
+    let installed: serde_json::Value = serde_json::from_str(&install.body).unwrap();
+    for name in ["life_notes", "life_notes_extra"] {
+        assert!(
+            installed["installed"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == name)
+        );
+    }
+
+    let upgrade = post("/erp/module/upgrade", r#"{"modules":["life_notes"]}"#);
+    assert_eq!(upgrade.status, 200, "upgrade: {}", upgrade.body);
+    let upgraded: serde_json::Value = serde_json::from_str(&upgrade.body).unwrap();
+    assert!(
+        upgraded["upgraded"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "life_notes")
     );
-    assert_eq!(installed.status, 200, "install fixture: {}", installed.body);
-    let snapshot = "SELECT jsonb_build_object('modules',(SELECT jsonb_agg(to_jsonb(m) ORDER BY id) FROM ir_module_module m),'audit',(SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM erp_module_lifecycle_audit a),'identities',(SELECT jsonb_agg(to_jsonb(i) ORDER BY name) FROM installed_addon_identity i),'identity_audit',(SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM installed_addon_identity_audit a),'xmlids',(SELECT jsonb_agg(to_jsonb(x) ORDER BY id) FROM ir_model_data x WHERE module='sample_library'),'books',(SELECT jsonb_agg(to_jsonb(b) ORDER BY id) FROM sample_library_book b),'signals',(SELECT jsonb_agg(to_jsonb(g) ORDER BY key,id) FROM erp_signal_generation g))";
-    let before: serde_json::Value = fixture
-        .client
-        .query_one(snapshot, &[])
-        .await
-        .unwrap()
-        .get(0);
-    let expected = "Uninstall impact cannot describe package runtime lifecycle callbacks; unsupported until a later release";
-    let detail = json_post(
-        fixture.port,
-        &fixture.cookies,
+    let detail = post(
         "/erp/json/2/ir.module.module/erp_addon_detail",
-        r#"{"name":"sample_library"}"#,
+        r#"{"name":"life_notes"}"#,
     );
     assert_eq!(detail.status, 200, "detail: {}", detail.body);
     let document: serde_json::Value = serde_json::from_str(&detail.body).unwrap();
-    assert_eq!(document["state"], "installed");
-    assert_eq!(document["uninstall_refusal"], expected);
-    let fingerprint = format!("uninstall-v1:{}", "0".repeat(64));
-    for (body, expected_message) in [
-        (
-            serde_json::json!({"modules":["sample_library"],"impact":"invalid"}),
-            "Invalid uninstall impact fingerprint",
-        ),
-        (
-            serde_json::json!({"modules":[],"impact":fingerprint}),
-            "Uninstall requires between 1 and 64 addon names",
-        ),
-        (
-            serde_json::json!({"modules":["sample_library","sample_library"],"impact":fingerprint}),
-            "Uninstall contains an invalid or duplicate addon name",
-        ),
-    ] {
-        let reply = json_post(
-            fixture.port,
-            &fixture.cookies,
-            "/erp/module/uninstall",
-            &body.to_string(),
-        );
-        assert_eq!(reply.status, 400, "invalid confirmation: {}", reply.body);
-        assert_eq!(reply.body, expected_message);
-    }
-    let confirmation =
-        serde_json::json!({"modules":["sample_library"],"impact":fingerprint}).to_string();
-    for (path, body, expected_message) in [
-        (
+    assert!(document["uninstall_refusal"].is_null());
+    assert_eq!(
+        document["dependents"]["items"],
+        serde_json::json!(["life_notes_extra"])
+    );
+
+    const SNAPSHOT: &str = "SELECT jsonb_build_object(
+        'modules',(SELECT jsonb_agg(to_jsonb(m) ORDER BY id) FROM ir_module_module m),
+        'audit',(SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM erp_module_lifecycle_audit a),
+        'identities',(SELECT jsonb_agg(to_jsonb(i) ORDER BY name) FROM installed_addon_identity i),
+        'assets',(SELECT jsonb_agg(bundle_key ORDER BY bundle_key) FROM ir_ui_asset_bundle WHERE expires_at IS NULL),
+        'signals',(SELECT jsonb_agg(to_jsonb(g) ORDER BY key,id) FROM erp_signal_generation g))";
+    let snapshot = || async {
+        fixture
+            .client
+            .query_one(SNAPSHOT, &[])
+            .await
+            .unwrap()
+            .get::<_, serde_json::Value>(0)
+    };
+    let before = snapshot().await;
+    let preview = || {
+        let reply = post(
             "/erp/json/2/ir.module.module/erp_preview_uninstall",
-            r#"{"modules":["sample_library"]}"#,
-            expected,
-        ),
-        (
-            "/erp/module/uninstall",
-            confirmation.as_str(),
-            "Uninstall impact cannot describe custom index support on table 'ir_dated_parameter'; unsupported until a later release",
-        ),
-    ] {
-        let refused = json_post(fixture.port, &fixture.cookies, path, body);
-        assert_eq!(refused.status, 422, "{path}: {}", refused.body);
-        let error: serde_json::Value = serde_json::from_str(&refused.body).unwrap();
-        assert_eq!(error["name"], "erp.exceptions.ValidationError");
-        assert_eq!(error["message"], expected_message);
-        assert!(error.get("fingerprint").is_none());
-    }
-    let after: serde_json::Value = fixture
+            r#"{"modules":["life_notes"]}"#,
+        );
+        assert_eq!(reply.status, 200, "preview: {}", reply.body);
+        serde_json::from_str::<serde_json::Value>(&reply.body).unwrap()
+    };
+    let first = preview();
+    assert_eq!(
+        first["resolved"],
+        serde_json::json!(["life_notes", "life_notes_extra"])
+    );
+    let effects = first["effects"].as_array().unwrap();
+    assert!(
+        effects
+            .iter()
+            .any(|effect| effect["component"] == "Addon packages")
+    );
+    let assets = effects
+        .iter()
+        .find(|effect| effect["component"] == "Web assets")
+        .unwrap();
+    assert_eq!(assets["previous"], before["assets"][0]);
+    assert_ne!(assets["previous"], assets["next"]);
+    assert_eq!(preview(), first);
+    // Dismissing the dialog submits no write. Repeated previews preserve every durable effect.
+    assert_eq!(snapshot().await, before);
+
+    fixture
         .client
-        .query_one(snapshot, &[])
+        .execute(
+            "INSERT INTO life_notes_note (name) VALUES ('new note')",
+            &[],
+        )
+        .await
+        .unwrap();
+    let confirm = |preview: &serde_json::Value| {
+        post(
+            "/erp/module/uninstall",
+            &serde_json::json!({
+                "modules":["life_notes"],
+                "impact": preview["fingerprint"],
+            })
+            .to_string(),
+        )
+    };
+    let stale = confirm(&first);
+    assert_eq!(stale.status, 409, "stale preview: {}", stale.body);
+    assert!(stale.body.contains("preview again"), "{}", stale.body);
+    assert_eq!(snapshot().await, before);
+    let name: String = fixture
+        .client
+        .query_one("SELECT name FROM life_notes_note", &[])
         .await
         .unwrap()
         .get(0);
+    assert_eq!(name, "new note");
+
+    let fresh = preview();
+    assert_ne!(fresh["fingerprint"], first["fingerprint"]);
     assert_eq!(
-        after, before,
-        "native uninstall refusal changed durable state, data, identity, audit or generation"
+        fresh["dropped_models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|model| model["model"] == "life_notes.note")
+            .unwrap()["row_count"],
+        "1"
     );
+    let success = confirm(&fresh);
+    assert_eq!(success.status, 200, "uninstall: {}", success.body);
+    let removed: serde_json::Value = serde_json::from_str(&success.body).unwrap();
+    assert_eq!(removed["uninstalled"], fresh["resolved"]);
+    assert_eq!(snapshot().await["assets"][0], assets["next"]);
+    for name in ["life_notes", "life_notes_extra"] {
+        assert_eq!(
+            state_of(&catalogue(fixture.port, &fixture.cookies), name).as_deref(),
+            Some("uninstalled")
+        );
+    }
+    let durable: bool = fixture.client.query_one(
+        "SELECT to_regclass('life_notes_note') IS NULL AND
+                to_regclass('life_notes_extra_note') IS NULL AND
+                EXISTS (SELECT 1 FROM erp_module_lifecycle_audit WHERE operation='uninstall' AND fingerprint=$1)",
+        &[&fresh["fingerprint"].as_str().unwrap()],
+    ).await.unwrap().get(0);
+    assert!(durable, "confirmed effects and audit must commit together");
     fixture.cleanup().await;
 }
 

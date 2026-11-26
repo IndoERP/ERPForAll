@@ -3,6 +3,7 @@ import { button, el, errorMessage } from "./dom.js";
 import { icon } from "./icons.js";
 import { attachMenuDropdown } from "./menu-dropdown.js";
 import type { DialogHandle, DialogService } from "./dialog-service.js";
+import { attachmentViewerFile, openDocumentViewer, reportViewerFile, type ViewerFile } from "./document-viewer.js";
 import { saveFile } from "./file-save.js";
 import { ClientError, type CallOptions, type RpcClient } from "./transport.js";
 
@@ -14,6 +15,10 @@ export interface PrintServices {
   readonly dialogs: DialogService;
   /** Downloads a same-origin address and rejects when the server refuses it; the default fetches the file and saves it. */
   readonly download?: (url: string) => Promise<void>;
+  /** Shows a printed document in the page; the document viewer when omitted. */
+  readonly view?: (file: ViewerFile) => void;
+  /** Receives failures the viewer also shows in place, for the client error log. */
+  readonly report?: (error: unknown) => void;
 }
 
 const MODEL = "report.job";
@@ -37,6 +42,23 @@ async function fetchAndSave(services: PrintServices, url: string): Promise<void>
   saveFile(blob, fileName);
 }
 
+/** Show a printed document in the document viewer (or the caller's own `view`). */
+function showDocument(services: PrintServices, file: ViewerFile): void {
+  if (services.view) return services.view(file);
+  openDocumentViewer({ rpc: services.rpc, dialogs: services.dialogs, ...(services.report ? { report: services.report } : {}) }, [file]);
+}
+
+/**
+ * Whether the server asks for the printed document to be shown in the page (`open: "preview"`, the system
+ * parameter `base.report_print_preview`) or saved as a file (`"download"`, also when the answer names neither).
+ */
+function previewAsked(answer: Record<string, unknown>): boolean {
+  const open = answer["open"];
+  if (open === undefined || open === "download") return false;
+  if (open === "preview") return true;
+  throw new ClientError("server", "The server answered the print request with an unknown way to open the document.");
+}
+
 /** The reports offered for `model`; empty when the server has no report runtime yet. */
 export async function loadPrintReports(rpc: RpcClient, model: string, options: CallOptions = {}): Promise<PrintableReport[]> {
   const answer = await rpc.call(MODEL, "erp_print_reports", { res_model: model }, options);
@@ -49,16 +71,22 @@ export async function loadPrintReports(rpc: RpcClient, model: string, options: C
 }
 
 /**
- * Print `report` for `ids`. A small request downloads at once; a large one becomes a background
- * print whose progress, failures and result the returned dialog shows.
+ * Print `report` for `ids`. A small request is saved as a file at once, or shown in the document viewer when the
+ * server asks for a preview; a large one becomes a background print whose progress, failures and result the
+ * returned dialog shows.
  */
 export async function printRecords(services: PrintServices, report: PrintableReport, model: string, ids: readonly number[]): Promise<DialogHandle | undefined> {
   if (!ids.length) throw new ClientError("validation", "Select at least one record to print.");
   const answer = object(await services.rpc.call(MODEL, "erp_print", { report: report.report, res_model: model, res_ids: [...ids] }, { write: true }), "the print request");
-  if (answer["mode"] === "sync") { await fetchAndSave(services, samePath(answer["url"])); return undefined; }
+  const preview = previewAsked(answer);
+  if (answer["mode"] === "sync") {
+    const url = samePath(answer["url"]);
+    if (preview) showDocument(services, reportViewerFile(url, report.name)); else await fetchAndSave(services, url);
+    return undefined;
+  }
   const id = answer["id"], poll = answer["poll_ms"];
   if (answer["mode"] !== "job" || typeof id !== "number" || typeof poll !== "number") throw new ClientError("server", "The server answered the print request in an unknown form.");
-  return printJobDialog(services, report.name, id, poll);
+  return printJobDialog(services, report.name, id, poll, preview);
 }
 
 function jsonList(value: unknown): unknown[] {
@@ -67,8 +95,11 @@ function jsonList(value: unknown): unknown[] {
   return Array.isArray(parsed) ? parsed : [];
 }
 
-/** The dialog of one background print: it reads the job row every `pollMs` until the print ends or the dialog closes. */
-export function printJobDialog(services: PrintServices, title: string, id: number, pollMs: number): DialogHandle {
+/**
+ * The dialog of one background print: it reads the job row every `pollMs` until the print ends or the dialog
+ * closes. The finished file can be opened in the document viewer or saved; `preview` makes Open the main action.
+ */
+export function printJobDialog(services: PrintServices, title: string, id: number, pollMs: number, preview = false): DialogHandle {
   const body = el("div", undefined, "print-job-body");
   const progress = el("progress", undefined, "print-job-progress");
   progress.setAttribute("aria-label", "Print progress");
@@ -79,10 +110,11 @@ export function printJobDialog(services: PrintServices, title: string, id: numbe
   const warnings = el("ul", undefined, "print-job-warnings"); warnings.hidden = true;
   body.append(status, progress, problem, failures, warnings);
   const footer = el("div", undefined, "actions");
-  const downloadBtn = button("Download PDF", () => {}, "primary");
-  downloadBtn.hidden = true;
+  const openBtn = button("Open", () => {}, preview ? "primary" : undefined);
+  const downloadBtn = button("Download PDF", () => {}, preview ? undefined : "primary");
+  openBtn.hidden = true; downloadBtn.hidden = true;
   let handle: DialogHandle | undefined;
-  footer.append(downloadBtn, button("Close", () => handle?.close()));
+  footer.append(...(preview ? [downloadBtn, openBtn] : [openBtn, downloadBtn]), button("Close", () => handle?.close()));
   let closed = false, timer: ReturnType<typeof setTimeout> | undefined;
   handle = services.dialogs.open({ title: `Print: ${title}`, body, footer, size: "md", onClose: () => { closed = true; if (timer) clearTimeout(timer); } });
   const list = (host: HTMLUListElement, items: string[], more = 0): void => {
@@ -111,7 +143,15 @@ export function printJobDialog(services: PrintServices, title: string, id: numbe
           problem.hidden = true;
           fetchAndSave(services, `/erp/content/${attachment}?download=true`).catch((error: unknown) => { problem.textContent = errorMessage(error); problem.hidden = false; });
         };
-        downloadBtn.hidden = false;
+        const file = attachmentViewerFile({ id: attachment, name: `${title}.pdf`, mimetype: "application/pdf" });
+        openBtn.onclick = () => {
+          problem.hidden = true;
+          try { if (file) showDocument(services, file); }
+          catch (error) { problem.textContent = errorMessage(error); problem.hidden = false; }
+        };
+        openBtn.hidden = false; downloadBtn.hidden = false;
+        // Ctrl+Enter presses the main action, now that it shows (a hidden button cannot be a dialog's default).
+        (preview ? openBtn : downloadBtn).dataset["defaultAction"] = "";
         return;
       }
       if (state === "failed") {

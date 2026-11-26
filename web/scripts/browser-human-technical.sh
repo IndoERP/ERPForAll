@@ -17,6 +17,8 @@
 #          web/scripts/browser-human-technical.sh <output-dir> [--allow-dirty]
 # The DATABASE_URL role needs CREATEDB and CREATEROLE (the dev cluster's `erpforall` role).
 # Without --allow-dirty the run refuses a source tree whose REVISION is dirty.
+# Set ERP_BROWSER_BIN_DIR to reuse erp and erp-ui-compile built from this revision.
+# ERP_BROWSER_ADDONS_DIR can select the paired addon snapshot for those binaries.
 set -euo pipefail
 umask 077
 
@@ -56,18 +58,20 @@ export CHROME_BIN
 echo "== chrome $("$CHROME_BIN" --version)"
 command -v psql >/dev/null || die "psql is required"
 
-echo "== build: cargo build --locked -p erp-cli --bin erp -p erp-ui-compiler-cli --bin erp-ui-compile"
-cargo build --locked -p erp-cli --bin erp -p erp-ui-compiler-cli --bin erp-ui-compile
-TARGET_DIR="$(cargo metadata --locked --format-version 1 --no-deps | python3 -I -c 'import json,sys;print(json.load(sys.stdin)["target_directory"])')"
-ERP_BIN="$TARGET_DIR/debug/erp"
+if [ -n "${ERP_BROWSER_BIN_DIR:-}" ]; then
+  BIN_DIR="$(cd "$ERP_BROWSER_BIN_DIR" && pwd)"
+  echo "== using prebuilt erp and erp-ui-compile from $BIN_DIR"
+else
+  echo "== build: cargo build --locked -p erp-cli --bin erp -p erp-ui-compiler-cli --bin erp-ui-compile"
+  cargo build --locked --jobs 4 -p erp-cli --bin erp -p erp-ui-compiler-cli --bin erp-ui-compile
+  TARGET_DIR="$(cargo metadata --locked --format-version 1 --no-deps | python3 -I -c 'import json,sys;print(json.load(sys.stdin)["target_directory"])')"
+  BIN_DIR="$TARGET_DIR/debug"
+fi
+ERP_BIN="$BIN_DIR/erp"
 [ -x "$ERP_BIN" ] || die "server binary missing at $ERP_BIN"
+[ -x "$BIN_DIR/erp-ui-compile" ] || die "template compiler missing at $BIN_DIR/erp-ui-compile"
 echo "== build: pnpm --dir web install --frozen-lockfile"
 pnpm --dir web install --frozen-lockfile
-echo "== build: node web/scripts/build-human-ui.mjs --addons web"
-ERP_UI_COMPILER="$TARGET_DIR/debug/erp-ui-compile" node web/scripts/build-human-ui.mjs --addons web
-MANIFEST="$ROOT/web/dist/human-ui/manifest.json"
-[ -s "$MANIFEST" ] || die "compiled client manifest missing"
-
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/erp-m4tech-browser.XXXXXX")"
 DB="erp_m4tech_browser_$(date -u +%Y%m%d%H%M%S)_$$"
 ROLE="${DB}_web"
@@ -142,6 +146,11 @@ trap cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 
+echo "== build: node web/scripts/build-human-ui.mjs --addons web"
+ERP_UI_OUTPUT_DIR="$WORK/assets" ERP_UI_COMPILER="$BIN_DIR/erp-ui-compile" node web/scripts/build-human-ui.mjs --addons web
+MANIFEST="$WORK/assets/manifest.json"
+[ -s "$MANIFEST" ] || die "compiled client manifest missing"
+
 echo "== database $DB (fresh, template0, C collation, pg_trgm) and runtime role $ROLE"
 admin_sql "CREATE DATABASE \"$DB\" TEMPLATE template0 ENCODING 'UTF8' LC_COLLATE 'C'"
 DB_CREATED=1
@@ -162,7 +171,15 @@ openssl rand -hex 24 > "$WORK/admin-password"
 chmod 600 "$WORK/owner-url" "$WORK/runtime-url" "$WORK/node-url" "$WORK/admin-password"
 STAGED_ADDONS="$WORK/addons"
 mkdir -p "$STAGED_ADDONS"
-rsync -a --exclude='node_modules/' "$ROOT/addons/" "$STAGED_ADDONS/"
+rsync -a --exclude='node_modules/' "${ERP_BROWSER_ADDONS_DIR:-$ROOT/addons}/" "$STAGED_ADDONS/"
+mkdir "$STAGED_ADDONS/technical_lifecycle"
+cat > "$STAGED_ADDONS/technical_lifecycle/manifest.toml" <<'EOF'
+name = "Lifecycle browser fixture"
+version = "1.0.0"
+license = "MIT"
+depends = ["web"]
+application = true
+EOF
 cat > "$WORK/server.toml" <<EOF
 database = "$DB"
 database_url_file = "runtime-url"
@@ -185,22 +202,25 @@ DATABASE_URL="$(owner_url "$DB")" "$ERP_BIN" cluster login-selection publish -d 
 echo "== erp server --config <work>/server.toml (127.0.0.1:$PORT)"
 "$ERP_BIN" server --config "$WORK/server.toml" > "$WORK/server.log" 2>&1 &
 SERVER_PID=$!
+ready() {
+  python3 -I -c 'import sys, urllib.request; sys.exit(urllib.request.urlopen("http://127.0.0.1:"+sys.argv[1]+"/erp/health/ready",timeout=1).status!=200)' "$PORT" 2>/dev/null
+}
 for _ in $(seq 1 600); do
-  if python3 -I -c 'import socket,sys;socket.create_connection(("127.0.0.1",int(sys.argv[1])),timeout=1).close()' "$PORT" 2>/dev/null; then
+  if ready; then
     break
   fi
-  kill -0 "$SERVER_PID" 2>/dev/null || { cat "$WORK/server.log" >&2; die "server exited before listening"; }
+  kill -0 "$SERVER_PID" 2>/dev/null || { cat "$WORK/server.log" >&2; die "server exited before readiness"; }
   sleep 0.2
 done
-python3 -I -c 'import socket,sys;socket.create_connection(("127.0.0.1",int(sys.argv[1])),timeout=1).close()' "$PORT" \
-  || { cat "$WORK/server.log" >&2; die "server did not listen within 120 s"; }
+ready || { cat "$WORK/server.log" >&2; die "server did not become ready"; }
 
 echo "== node web/scripts/browser-human-technical.mjs --origin http://127.0.0.1:$PORT --login $ADMIN_LOGIN --output $OUT"
-node web/scripts/browser-human-technical.mjs \
+ERP_TECHNICAL_REVISION="$REVISION_FULL" node web/scripts/browser-human-technical.mjs \
   --origin "http://127.0.0.1:$PORT" \
   --login "$ADMIN_LOGIN" \
   --password-file "$WORK/admin-password" \
-  --technical-xml "$ROOT/addons/base/data/technical_views.xml" \
+  --technical-xml "$STAGED_ADDONS/base/data/technical_views.xml" \
+  --mail-technical-xml "$STAGED_ADDONS/mail/views/technical_views.xml" \
   --output "$OUT"
 echo "== server log (stderr/stdout of erp server)"
 cat "$WORK/server.log"

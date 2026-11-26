@@ -24,6 +24,7 @@ import { Followers } from "./chatter-followers.js";
 import { el } from "./dom.js";
 import { ClientError, type RpcClient } from "./transport.js";
 import { attachmentLimitHint, checkAttachmentFile, checkAttachmentRequest } from "./attachment-policy.js";
+import { attachmentViewerFile, type ViewerFile } from "./document-viewer.js";
 
 import { watchChatterThread } from "./chatter-realtime.js";
 
@@ -71,6 +72,11 @@ export interface ChatterOptions {
   readonly userName?: string;
   /** Asks the user to confirm a deletion; resolves true to go on. Deleting attachments fails loudly without it. */
   readonly confirm?: (message: string) => Promise<boolean>;
+  /**
+   * Shows the record's PDF documents and pictures in the document viewer, starting with `files[index]`. Without it
+   * a file name downloads the file, as every other file type does.
+   */
+  readonly openFiles?: (files: readonly ViewerFile[], index: number) => void;
 }
 
 /** Fills `%s` placeholders in order; the host's translator does this when one is passed, this one only when none is. */
@@ -485,6 +491,19 @@ export class Chatter {
       }
       const groups = Array.from(groupMap.values());
       selectFilesBtn.hidden = groups.length <= 1;
+      // The files the viewer shows (PDF documents and pictures), in the order of the panel: it moves between them.
+      const viewable = new Map<number, ViewerFile>();
+      // A row without a usable id still lists and downloads; it is only left out of the viewer.
+      if (options.openFiles) for (const group of groups) {
+        const first = group[0]!;
+        const file = Number.isSafeInteger(first.id) && first.id > 0 ? attachmentViewerFile(first) : undefined;
+        if (file) viewable.set(first.id, file);
+      }
+      const view = (id: number) => (event: Event): void => {
+        event.preventDefault();
+        const files = [...viewable.values()];
+        try { options.openFiles!(files, files.indexOf(viewable.get(id)!)); } catch (err) { showInline(err); }
+      };
 
       if (selectionMode) {
         filesToolbar.classList.add("is-selection-mode");
@@ -532,12 +551,16 @@ export class Chatter {
           img.setAttribute("src", `/erp/content/${primary.id}`);
           img.alt = ""; // decorative: the file name link follows
           img.addEventListener("error", () => img.replaceWith(fileIcon("image")), { once: true });
+          // The name link beside it is the keyboard way in; the picture is a second place to click.
+          if (viewable.has(primary.id)) { img.classList.add("is-viewable"); img.addEventListener("click", view(primary.id)); }
           groupEl.append(img);
         } else groupEl.append(fileIcon("file-text"));
 
         const link = el("a", primary.name, "erp-mail-chatter-file-name");
         link.setAttribute("href", `/erp/content/${primary.id}?download=true`);
         link.setAttribute("download", primary.name);
+        // A PDF or a picture opens in the viewer (which offers the download); the address stays for "open in a new tab".
+        if (viewable.has(primary.id)) { link.removeAttribute("download"); link.setAttribute("aria-haspopup", "dialog"); link.addEventListener("click", view(primary.id)); }
         groupEl.append(link);
 
         if (primary.fileSize !== undefined) {
@@ -639,7 +662,7 @@ export class Chatter {
         };
 
         let res = await fetchLatest(store.generation === null);
-        if (request !== latestLoad) return;
+        if (this.disposed || request !== latestLoad) return;
         // An install, upgrade or uninstall that changes the threaded models gives the server a new schema
         // generation: renew the schema once; a second mismatch is refused when the payload is applied.
         let renew = false;
@@ -647,7 +670,7 @@ export class Chatter {
         if (store.generation !== null && answered !== undefined && answered !== store.generation) {
           renew = true;
           res = await fetchLatest(true);
-          if (request !== latestLoad) return;
+          if (this.disposed || request !== latestLoad) return;
         }
         const topicNamed = topicsOf(res);
 
@@ -726,6 +749,7 @@ export class Chatter {
           "store_fetch"
         );
 
+        if (this.disposed) return;
         const messagesTopic = topicsOf(res)("thread.messages");
         if (!messagesTopic) throw new ClientError("server", "store_fetch answered no thread.messages topic");
         if (messagesTopic["ok"] === false) {

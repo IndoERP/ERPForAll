@@ -271,7 +271,14 @@ fn store() -> Arc<RecordStore> {
             "res.partner",
             7,
             "Agrolait, Belgium",
-            vec![("name", FieldValue::char("Agrolait"))],
+            vec![
+                ("name", FieldValue::char("Agrolait")),
+                ("email", FieldValue::char("orders@example.test")),
+                ("street", FieldValue::char("Kerkstraat 1")),
+                ("street2", FieldValue::char("")),
+                ("zip", FieldValue::char("1000")),
+                ("city", FieldValue::char("Brussel")),
+            ],
         )
         .unwrap();
     for (id, name, qty) in [(31, "Desk", 2), (32, "Chair", 5)] {
@@ -941,14 +948,6 @@ fn what_later_slices_add_is_refused_by_task() {
             "report images read by their path while printing requires a later release",
         ),
         (
-            "<p><span t-field='doc.partner_id' t-options=\"{'widget': 'contact'}\"/></p>",
-            "report contact, duration and relative widgets requires a later release",
-        ),
-        (
-            "<p><span t-out='doc.weight' t-options=\"{'widget': 'duration'}\"/></p>",
-            "report contact, duration and relative widgets requires a later release",
-        ),
-        (
             "<p><img src='/web/image/1'/></p>",
             "report images read by their path while printing requires a later release",
         ),
@@ -964,12 +963,6 @@ fn what_later_slices_add_is_refused_by_task() {
         let err = print_order(arch, &EvalOptions::default()).unwrap_err();
         assert_eq!(err.to_string(), message, "{arch}");
     }
-    let err = LangFormat::new(".", ",", &[3, 0], "%d %B %Y", "%H:%M:%S").unwrap_err();
-    assert!(matches!(err, ReportError::Unsupported { .. }), "{err:?}");
-    assert_eq!(
-        err.to_string(),
-        "report month and weekday names in date formats requires a later release"
-    );
     let err = compile_all(
         "test.report",
         &[("test.report", "<t t-call='{{ name }}'/>")],
@@ -2066,16 +2059,23 @@ fn an_embedded_image_is_decoded_and_an_img_without_a_source_prints_nothing() {
 }
 
 #[test]
-fn the_html_preview_shows_the_box_of_an_image() {
+fn html_preview_embeds_a_repeated_authorized_raster_once_and_keeps_each_placement() {
     let doc = order_doc(
-        "<p><img t-att-src='image_data_uri(doc.logo)' style='max-height: 45px' alt='Logo'/></p>",
+        "<p><img t-att-src='image_data_uri(doc.logo)' style='max-height: 45px' alt='Logo'/><img t-att-src='image_data_uri(doc.logo)' alt='Another logo'/></p>",
         &EvalOptions::default(),
-    )
-    .unwrap();
+    ).unwrap();
     let page = render_html(&doc, &[]).unwrap();
-    let expected = "<span class=\"erp-image\" role=\"img\" aria-label=\"Logo\" \
-                    style=\"width:67.5pt;height:33.75pt;\">Logo</span>";
-    assert!(page.contains(expected), "{page}");
+    assert_eq!(
+        page.matches("background-image:url(data:image/png;base64,")
+            .count(),
+        1
+    );
+    assert_eq!(page.matches("class=\"erp-image erp-raster-").count(), 2);
+    assert!(page.contains(
+        "aria-label=\"Logo\" style=\"width:67.5pt;height:33.75pt;background-size:contain;"
+    ));
+    assert!(page.contains("aria-label=\"Another logo\""));
+    assert!(page.contains("img-src data:"));
 }
 
 #[test]
@@ -2162,5 +2162,72 @@ fn an_image_that_cannot_be_printed_is_an_error_naming_why() {
         let err = order_doc(arch, &options).unwrap_err();
         assert!(matches!(err, ReportError::DocumentLimit { .. }), "{err:?}");
         assert_eq!(err.to_string(), message, "{arch}");
+    }
+}
+
+#[test]
+fn a_contact_widget_prints_the_authorized_relation_label() {
+    assert_eq!(
+        order(
+            "<p><span t-field='doc.partner_id' t-options=\"{'widget': 'contact', 'fields': ['name']}\"/></p>"
+        ),
+        order("<p><span t-field='doc.partner_id'/></p>")
+    );
+}
+
+#[test]
+fn contact_reads_the_requested_fields_and_reports_missing_data() {
+    let arch = |fields: &str| {
+        format!(
+            r#"<p><span t-field='doc.partner_id' t-options="{{'widget':'contact','fields':[{fields}]}}"/></p>"#
+        )
+    };
+    let text = order(&arch("'address','email'"));
+    for item in ["Kerkstraat 1", "1000 Brussel", "orders@example.test"] {
+        assert!(text.contains(item), "{text}");
+    }
+    let missing = order_doc(&arch("'vat'"), &EvalOptions::default()).unwrap_err();
+    assert!(
+        missing
+            .to_string()
+            .contains("res.partner.vat was not loaded"),
+        "{missing}"
+    );
+}
+
+#[test]
+fn audience_selection_and_markup_slots_are_checked_before_rendering() {
+    let sources = [TemplateSource::new(
+        "test",
+        r#"<div><p groups="base.private">Private</p><p>One <b>A</b> and <i>B</i></p></div>"#,
+    )];
+    let build = |line: &str, member: bool| {
+        ReportProgram::compile_for_groups(
+            "test",
+            &sources,
+            &english().with_template_term("test", "One {0} and {1}", line),
+            ReportLimits::default(),
+            &std::collections::BTreeMap::from([("base.private".into(), member)]),
+        )
+    };
+    for member in [false, true] {
+        let doc = build("{1} before {0}", member)
+            .unwrap()
+            .evaluate(
+                &EvalContext::standard(),
+                &RecordStore::new(),
+                &EvalOptions::default(),
+                options(),
+            )
+            .unwrap();
+        let html = render_html(&doc, &[]).unwrap();
+        assert_eq!(html.contains("Private"), member);
+        assert!(
+            html.find(">B<").unwrap() < html.find(">A<").unwrap(),
+            "{html}"
+        );
+    }
+    for term in ["{0}", "{1} {1}", "{2} {0}"] {
+        assert!(build(term, true).is_err(), "{term}");
     }
 }

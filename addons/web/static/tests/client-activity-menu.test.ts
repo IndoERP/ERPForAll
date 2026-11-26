@@ -105,6 +105,17 @@ describe("Activity menu client", () => {
     handle.dispose();
   });
 
+  test("a successful chatter activity change refreshes the closed badge until disposal", async () => {
+    const { rpc, call } = rpcReturning(answer([partner], 1));
+    const handle = renderActivityMenu(envFor(rpc), parseActivityMenuData(answer([], 0)));
+    container.append(handle.node);
+    document.dispatchEvent(new Event("erp:activities-changed"));
+    await vi.waitFor(() => expect(badge(handle.node)?.textContent).toBe("1"));
+    handle.dispose();
+    document.dispatchEvent(new Event("erp:activities-changed"));
+    expect(call).toHaveBeenCalledTimes(1);
+  });
+
   /// (partial: opening the panel fetches again and repaints badge and rows)
   test("opening the panel fetches again", async () => {
     const { rpc, call } = rpcReturning(answer([partner], 2), answer([other], 4));

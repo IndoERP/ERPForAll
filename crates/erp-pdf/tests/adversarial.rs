@@ -373,7 +373,7 @@ fn decoded_and_metadata_limits_name_their_dimension() {
     error(e, PdfErrorKind::Limit, "PDF metadata_bytes limit exceeded");
 }
 #[test]
-fn stream_decoding_parameters_are_explicitly_refused() {
+fn decoding_parameters_require_a_matching_filter() {
     let mut d = document();
     let page = d.get_pages()[&1];
     let content = d
@@ -404,7 +404,7 @@ fn stream_decoding_parameters_are_explicitly_refused() {
     .unwrap_err();
     error(
         e,
-        PdfErrorKind::Unsupported,
-        "PDF feature content decoding parameters is unsupported (a later release)",
+        PdfErrorKind::Malformed,
+        "PDF DecodeParms must have one entry per filter",
     );
 }

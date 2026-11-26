@@ -18,6 +18,7 @@ pub const SHELL_VIEW_TYPES: &[&str] = &[
     "kanban",
     "hierarchy",
     "activity",
+    "map",
 ];
 
 /// Startup-bound canonical origin and registered view capabilities.
@@ -170,6 +171,7 @@ impl RedirectPolicy {
                 "graph_groupby" => pivot_specs(value, false) && value.split(',').count() <= 2,
                 "graph_order" => matches!(value.as_str(), "asc" | "desc" | "none"),
                 "graph_stacked" | "graph_cumulated" => matches!(value.as_str(), "0" | "1"),
+                "kanban_fold" => kanban_fold(value),
                 "method_action" => method_identity(value),
                 "cids" => {
                     let parts: Vec<_> = value.split(',').collect();
@@ -214,6 +216,7 @@ impl RedirectPolicy {
             "graph_order",
             "graph_stacked",
             "graph_cumulated",
+            "kanban_fold",
             "cids",
         ] {
             if let Some(value) = state.get(key) {
@@ -304,11 +307,40 @@ fn pivot_specs(value: &str, measures: bool) -> bool {
             ok && unique.insert(*part)
         })
 }
+/// Match the client’s encodeURIComponent spelling for an escaped pivot header.
+fn pivot_text(encoded: &str) -> bool {
+    let Ok(text) = decode(encoded) else {
+        return false;
+    };
+    if text.encode_utf16().count() > 256 {
+        return false;
+    }
+    let mut input = encoded.bytes();
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&byte) {
+            if input.next() != Some(byte) {
+                return false;
+            }
+        } else if input.next() != Some(b'%')
+            || input.next() != Some(HEX[usize::from(byte >> 4)])
+            || input.next() != Some(HEX[usize::from(byte & 15)])
+        {
+            return false;
+        }
+    }
+    input.next().is_none()
+}
+
 fn pivot_path(value: &serde_json::Value) -> bool {
     value.as_array().is_some_and(|keys| {
         keys.len() <= PIVOT_MAX_DEPTH
             && keys.iter().all(|key| match key {
-                serde_json::Value::String(text) => text.len() <= 256,
+                serde_json::Value::String(text) => text.encode_utf16().count() <= 256,
+                serde_json::Value::Object(fields) if fields.len() == 1 => fields
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(pivot_text),
                 serde_json::Value::Number(number) => number
                     .as_i64()
                     .is_some_and(|n| n.unsigned_abs() <= 9_007_199_254_740_991),
@@ -372,6 +404,70 @@ fn search_panel(value: &str) -> bool {
                 })
         })
 }
+/// The kanban board keeps the columns its user folded or opened in the address, for one grouping
+/// (M4.KANBAN-CLIENT-COLUMNS; the client's `validKanbanFold` in `kanban-fold.ts` admits the same):
+/// `{"by": "<field or field:interval>", "f": [key, ...], "o": [key, ...]}`. A key is a group value: a short text
+/// with nothing an address or JSON would escape, a browser-safe integer or a boolean; no key twice and none in
+/// both lists; only the canonical text the client writes is admitted (no spaces, no other member order, no
+/// other spelling of a number). What a field or a value means is the client's to check against the model.
+const KANBAN_FOLD_UNITS: usize = 1024;
+const KANBAN_FOLD_KEYS: usize = 64;
+const KANBAN_FOLD_KEY_UNITS: usize = 64;
+fn kanban_fold(value: &str) -> bool {
+    // The client bounds the value in UTF-16 code units (a JavaScript string length).
+    if value.encode_utf16().count() > KANBAN_FOLD_UNITS {
+        return false;
+    }
+    let Ok(serde_json::Value::Object(state)) = serde_json::from_str::<serde_json::Value>(value)
+    else {
+        return false;
+    };
+    let (
+        3,
+        Some(serde_json::Value::String(by)),
+        Some(serde_json::Value::Array(folded)),
+        Some(serde_json::Value::Array(opened)),
+    ) = (state.len(), state.get("by"), state.get("f"), state.get("o"))
+    else {
+        return false;
+    };
+    let grouping = match by.split_once(':') {
+        None => pivot_field(by),
+        Some((name, interval)) => {
+            pivot_field(name) && matches!(interval, "day" | "week" | "month" | "quarter" | "year")
+        }
+    };
+    let key = |key: &serde_json::Value| match key {
+        serde_json::Value::String(text) => {
+            text.encode_utf16().count() <= KANBAN_FOLD_KEY_UNITS
+                && !text.contains("//")
+                && !text
+                    .chars()
+                    .any(|c| c.is_control() || c == '\\' || c == '"')
+        }
+        serde_json::Value::Number(number) => number
+            .as_i64()
+            .is_some_and(|n| n.unsigned_abs() <= 9_007_199_254_740_991),
+        serde_json::Value::Bool(_) => true,
+        _ => false,
+    };
+    let mut seen = BTreeSet::new();
+    grouping
+        && folded.len() <= KANBAN_FOLD_KEYS
+        && opened.len() <= KANBAN_FOLD_KEYS
+        && folded
+            .iter()
+            .chain(opened)
+            .all(|item| key(item) && seen.insert(item.to_string()))
+        // Only the text the client writes: members in the order `by`, `f`, `o`, no spaces, integers written plainly.
+        && format!(
+            r#"{{"by":{},"f":{},"o":{}}}"#,
+            serde_json::Value::String(by.clone()),
+            serde_json::Value::Array(folded.clone()),
+            serde_json::Value::Array(opened.clone())
+        ) == value
+}
+
 fn method_identity(value: &str) -> bool {
     let Some((uuid, counter)) = value.split_once(':') else {
         return false;

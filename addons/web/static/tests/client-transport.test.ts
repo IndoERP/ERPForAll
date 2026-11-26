@@ -9,7 +9,7 @@ const recordFields: Field[] = [{ name: "name", kind: "char", label: "Name", read
 
 test("newRequestId generates a valid v4 UUID via getRandomValues when randomUUID is absent", () => {
   const realCrypto = globalThis.crypto;
-  const fallbackCrypto = { getRandomValues: (arr: Uint8Array) => realCrypto.getRandomValues(arr) };
+  const fallbackCrypto = { getRandomValues: realCrypto.getRandomValues.bind(realCrypto) };
   vi.stubGlobal("crypto", fallbackCrypto);
   try {
     const id = newRequestId();

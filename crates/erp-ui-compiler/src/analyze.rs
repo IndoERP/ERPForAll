@@ -94,7 +94,7 @@ pub(crate) fn analyze_template(
     parser: &mut ExprParser,
     options: &CompileOptions,
     trust: Trust,
-    templates: &BTreeSet<TemplateName>,
+    template_exists: &dyn Fn(&TemplateName) -> bool,
     name: &TemplateName,
     root: &XElement<'_>,
     loc: &LocCtx<'_>,
@@ -103,7 +103,7 @@ pub(crate) fn analyze_template(
         parser,
         options,
         trust,
-        templates,
+        template_exists,
         loc,
         template: name,
         frames: vec![Vec::new()],
@@ -252,7 +252,7 @@ struct Walker<'a, 'p> {
     parser: &'p mut ExprParser,
     options: &'a CompileOptions,
     trust: Trust,
-    templates: &'a BTreeSet<TemplateName>,
+    template_exists: &'a dyn Fn(&TemplateName) -> bool,
     loc: &'a LocCtx<'a>,
     template: &'a TemplateName,
     /// Scopes that `t-set` declares into: the template, each loop body, slot body and call body;
@@ -1213,16 +1213,27 @@ impl<'s> Walker<'_, '_> {
         match self.split(a, "t-call") {
             None => {}
             Some(parts) if parts.iter().any(|(dynamic, _)| *dynamic) => {
-                for (dynamic, part) in parts {
-                    if dynamic
-                        && let Some(expr) = self.expr(part, ExprContext::Render, "t-call", a.offset)
-                    {
-                        target = Some(CallTarget::Dynamic(expr));
-                    }
-                }
+                let value = match parts.as_slice() {
+                    [(true, expr)] => self
+                        .expr(expr, ExprContext::Render, "t-call", a.offset)
+                        .map(AttrValue::Expr),
+                    _ => parts
+                        .into_iter()
+                        .map(|(dynamic, part)| {
+                            if dynamic {
+                                self.expr(part, ExprContext::Render, "t-call", a.offset)
+                                    .map(InterpPart::Expr)
+                            } else {
+                                Some(InterpPart::Lit(part.into()))
+                            }
+                        })
+                        .collect::<Option<Vec<_>>>()
+                        .map(AttrValue::Interp),
+                };
+                target = value.map(CallTarget::Dynamic);
             }
             Some(_) => match TemplateName::new(&a.value) {
-                Ok(name) if self.templates.contains(&name) => {
+                Ok(name) if (self.template_exists)(&name) => {
                     callee = Some(name.clone());
                     target = Some(CallTarget::Static(name));
                 }
@@ -2313,13 +2324,11 @@ mod tests {
         let options = CompileOptions::new(BuildMode::Prod).with_limits(limits);
         let mut parser = ExprParser::new(&limits);
         let name = TemplateName::new("t").unwrap();
-        let mut templates = BTreeSet::new();
-        templates.insert(name.clone());
         analyze_template(
             &mut parser,
             &options,
             Trust::Trusted,
-            &templates,
+            &|target| target == &name,
             &name,
             &tops[0].element,
             &loc,

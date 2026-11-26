@@ -58,6 +58,22 @@ impl StampPlacement {
         Ok(Self(matrix))
     }
 }
+/// What a reading copy (merge, extract, split) does with the bookmarks (document outline).
+///
+/// A bookmark stands on its own in a copy when it leads to a page of the copy, opens a URI or
+/// has no target. Its page is found through a named destination too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum OutlinePolicy {
+    /// Write no outline. The default: a reading copy is pages only.
+    #[default]
+    Omit,
+    /// Carry the bookmarks that stand on their own. One whose target is not in the copy stays as
+    /// a heading while a bookmark below it is carried and is left out otherwise; the summary
+    /// counts the bookmarks written and left out. In a merge the outlines follow each other in
+    /// input order.
+    Keep,
+}
 /// What a reading copy (merge, extract, split) does with page annotations.
 ///
 /// A reading copy has a fresh catalog: no form and no name trees. An annotation is
@@ -65,6 +81,7 @@ impl StampPlacement {
 /// and the markup types (notes, highlights, shapes, ink, stamps, free text with its own
 /// appearance) with their popups and replies. An annotation that belongs to a layer is carried
 /// with its group, which the copy lists in its rebuilt optional-content configuration.
+/// A named destination is carried as the explicit destination it stands for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum AnnotationPolicy {
@@ -97,4 +114,26 @@ pub enum FormPolicy {
     /// annotation that is not self-contained; other annotations follow that policy as before.
     /// Field actions and scripts are not carried. An XFA form is refused.
     Flatten,
+}
+/// Whether a fresh, unsigned reading copy may use a source with signature structures.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SignedCopyPolicy {
+    /// Refuse signature-marked input. The default never drops a signature unnoticed.
+    #[default]
+    Refuse,
+    /// Create an unsigned copy and disclose the signed source count in its summary.
+    /// Other feature policies, including form and annotation admission, still apply.
+    UnsignedCopy,
+}
+/// Admission for edits that append a revision without changing any original byte.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SignedEditPolicy {
+    /// Refuse signature-marked input.
+    #[default]
+    Refuse,
+    /// Permit bounded byte-range structures without declared modification restrictions.
+    /// This neither validates signatures nor makes the new revision signed.
+    AppendOnly,
 }

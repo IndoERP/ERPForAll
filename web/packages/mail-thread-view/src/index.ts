@@ -57,7 +57,7 @@ export type {
   ThreadViewServices,
 } from "./registries";
 export { BODY_MAX_DEPTH, BODY_MAX_LENGTH, BODY_MAX_WALK_DEPTH, BODY_MAX_NODES, MENTION_CLASS, MENTION_ID_ATTRIBUTE, bodyText, bodyTextOf, mentionPartnerId, renderBody, safeHref } from "./sanitize";
-export { MAX_PENDING, PENDING_MODEL, THREAD_UI_MODEL, pendingUids, threadKey, threadState, uiModels } from "./state";
+export { MAX_PENDING, PENDING_MODEL, THREAD_UI_MODEL, forgetDraft, pendingUids, threadKey, threadState, uiModels } from "./state";
 export type { ComposerKind, PendingState } from "./state";
 export { MAX_TERM_LENGTH, findTrigger } from "./suggestions";
 export type { Trigger } from "./suggestions";

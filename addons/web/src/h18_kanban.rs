@@ -2,9 +2,9 @@
 //! Kanban admission and lowering (design).
 //!
 //! The card is a closed declaration: `<templates><t t-name="card">` holding `<field>` nodes and at
-//! most one each of `<main>`, `<aside>` and `<footer>`. Free template markup is refused by name until
-//! the restricted template compiler exists. Card fields lower to the ordinary `field`
-//! node, so every registered field widget is available.
+//! most one each of `<main>`, `<aside>` and `<footer>`. These declarations select the readable
+//! fields and their widgets. An optional `<restricted_templates>` sibling supplies custom markup
+//! for the card through the pinned WASI compiler.
 
 use super::{
     DescriptionBudget, DescriptionReservation, ModelSpec, Node, Plan, ViewResult, boolean,
@@ -47,8 +47,7 @@ const MAX_COLORS: usize = 64;
 const MAX_COLOR_BYTES: usize = 4096;
 const MAX_COLOR_DEPTH: usize = 4;
 const MAX_VALUE_BYTES: usize = 256;
-const MARKUP: &str =
-    "free template markup needs the restricted template compiler (a later release).";
+const MARKUP: &str = "Put custom card markup inside <restricted_templates> under <kanban>.";
 
 fn limit<'a>(node: impl Node<'a>) -> ViewResult<Option<i64>> {
     let Some(raw) = node.attr("limit") else {
@@ -102,6 +101,14 @@ pub(super) fn root<'a, N: Node<'a>>(node: N, spec: &ModelSpec) -> ViewResult<()>
             "The kanban card template belongs inside <templates>.",
         ));
     }
+    if node
+        .children()
+        .filter(|child| child.tag() == "restricted_templates")
+        .count()
+        > 1
+    {
+        return Err(invalid("A kanban has at most one restricted template set."));
+    }
     let cards = node
         .children()
         .filter(|child| child.tag() == "templates")
@@ -134,6 +141,18 @@ pub(super) fn classify<'a, N: Node<'a>>(
         "t" => "card",
         _ => "card region",
     };
+    if parent.tag() == "kanban" && node.tag() == "restricted_templates" {
+        super::attrs(node, &[])?;
+        if !node
+            .children()
+            .any(|child| child.tag() == "t" && child.attr("t-name") == Some("card"))
+        {
+            return Err(invalid(
+                "A restricted template set requires a template named card.",
+            ));
+        }
+        return Ok("restricted_templates");
+    }
     let allowed = matches!(
         (parent.tag(), node.tag()),
         ("kanban", "templates" | "t" | "progressbar")
@@ -142,8 +161,8 @@ pub(super) fn classify<'a, N: Node<'a>>(
     );
     if !allowed {
         return Err(invalid(match (parent.tag(), node.tag()) {
-            ("kanban", "field") => "A <field> directly under <kanban> is only read by template expressions, which need the restricted template compiler (a later release); declare it inside the card.".to_owned(),
-            (_, tag) => format!("<{tag}> is not allowed in a kanban {place}: a card holds <field> nodes and one each of <main>, <aside> and <footer>; {MARKUP}"),
+            ("kanban", "field") => "A <field> directly under <kanban> is unsupported. Declare its field inside <templates><t t-name=\"card\"> so restricted templates can project it.".to_owned(),
+            (_, tag) => format!("<{tag}> is not allowed in a kanban {place}: a card holds <field> nodes and one each of <main>, <aside> and <footer>. {MARKUP}"),
         }));
     }
     match node.tag() {
@@ -155,7 +174,7 @@ pub(super) fn classify<'a, N: Node<'a>>(
             super::attrs(node, &["t-name"])?;
             if node.attr("t-name") != Some("card") {
                 return Err(invalid(format!(
-                    "Kanban template \"{}\" is not supported: only t-name=\"card\" is; {MARKUP}",
+                    "Kanban template \"{}\" is not supported: the field declaration requires t-name=\"card\". {MARKUP}",
                     node.attr("t-name").unwrap_or("")
                 )));
             }
@@ -207,7 +226,7 @@ pub(super) fn classify<'a, N: Node<'a>>(
             }
             boolean(node, "invisible", false).map_err(|_| {
                 invalid(
-                    "A dynamic 'invisible' on a kanban card field needs per-card evaluation (a later release); use a static value.",
+                    "Use a static value for 'invisible' on a kanban field declaration. A restricted template can conditionally display a field with t-if.",
                 )
             })?;
             Ok("field")

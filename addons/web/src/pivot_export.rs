@@ -2,7 +2,7 @@
 //! The spreadsheet download of the pivot view.
 //!
 //! The browser posts the table as it is on screen; the server formats what was posted and reads no
-//! data. This module owns the five declared bounds (`web.pivot_export_*` settings), the typed
+//! data. This module owns the six declared bounds (`web.pivot_export_*` settings), the typed
 //! document parser (every refusal names the path of the offending value) and the access check; the
 //! workbook itself is written by [`crate::table_xlsx`]. The route (`POST /erp/pivot/export`) lives
 //! in `erp-server`, composed in `erp-cli` the way the attachment content route is.
@@ -49,10 +49,20 @@ pub const MAX_LABEL_BYTES: &str = "web.pivot_export_max_label_bytes";
 /// Maximum bytes of the posted document.
 pub const MAX_REQUEST_BYTES: &str = "web.pivot_export_max_request_bytes";
 
+/// Maximum simultaneous exports per server process.
+pub const MAX_CONCURRENT: &str = "web.pivot_export_max_concurrent";
+
 // Hard bounds: a spreadsheet has 16,384 columns (one is the label column) and 1,048,576 rows; the
 // cell and byte bounds keep one export well inside the memory of a request (the document is parsed
 // whole, about ten times its size, and the workbook is built in memory).
-const BOUNDS: [Bound; 5] = [
+const BOUNDS: [Bound; 6] = [
+    Bound {
+        key: MAX_CONCURRENT,
+        label: "Pivot download: maximum simultaneous exports",
+        default: 4,
+        floor: 1,
+        hard: 32,
+    },
     Bound {
         key: MAX_CELLS,
         label: "Pivot download: maximum cells",
@@ -108,9 +118,10 @@ fn settings() -> Result<Vec<SettingDecl>> {
 }
 erp_sdk::setting_declarations!(settings);
 
-/// The five bounds as read from the settings (or their defaults).
+/// The six bounds as read from the settings (or their defaults).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
+    pub concurrent: usize,
     pub cells: usize,
     pub header_depth: usize,
     pub columns: usize,
@@ -143,6 +154,7 @@ pub async fn limits(tx: &mut Transaction) -> Result<Limits> {
             })
     };
     Ok(Limits {
+        concurrent: value(MAX_CONCURRENT)?,
         cells: value(MAX_CELLS)?,
         header_depth: value(MAX_HEADER_DEPTH)?,
         columns: value(MAX_COLUMNS)?,

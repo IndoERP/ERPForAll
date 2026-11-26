@@ -14,7 +14,8 @@ use lopdf::{Dictionary, Document, Object, ObjectId, Stream, dictionary};
 use support::*;
 
 const REFUSED: &str = "PDF page annotations are refused by the reading-copy annotation policy";
-const SIGNED: &str = "PDF feature signed document is unsupported (a later release)";
+const SIGNED_REWRITE: &str = "PDF feature signed document rewrite or overlay is refused by design";
+const SIGNED_COPY: &str = "PDF feature signed document by reading-copy policy is refused by design";
 const FORM_REFUSED: &str = "PDF forms are refused by the reading-copy form policy";
 const OVERLAY_FORM: &str = "PDF feature overlay form is refused by design";
 
@@ -413,41 +414,35 @@ fn a_signed_document_is_refused_by_rewrites_and_copies() {
     ];
     let limits = PdfLimits::default();
     let plain = fixture(&["PLAIN"]);
-    // The most permissive reading copy there is: nothing in it accepts a signature.
+    // Flattening fields does not authorize removing a signature.
     let permissive = copy(AnnotationPolicy::KeepOrDrop, FormPolicy::Flatten);
     for (label, build) in cases {
         let (mut d, _) = document(&["ONE", "TWO"]);
         build(&mut d);
         let input = bytes(d);
-        let refused = |e: PdfError| {
-            assert_eq!(e.to_string(), SIGNED, "{label}");
+        let refused = |e: PdfError, expected: &str| {
+            assert_eq!(e.to_string(), expected, "{label}");
             assert_eq!(e.kind(), PdfErrorKind::Unsupported, "{label}");
         };
-        refused(turn(&input).unwrap_err());
-        refused(stamped(&input, &plain).unwrap_err());
-        // As an overlay source it is refused too: by its form when the mark sits in one.
-        let e = stamped(&plain, &input).unwrap_err();
-        let in_form = label != "byte range outside any form"
-            && label != "nested byte range"
-            && label != "permissions"
-            && label != "security store";
-        assert_eq!(
-            e.to_string(),
-            if in_form { OVERLAY_FORM } else { SIGNED },
-            "{label}"
+        refused(turn(&input).unwrap_err(), SIGNED_REWRITE);
+        refused(stamped(&input, &plain).unwrap_err(), SIGNED_REWRITE);
+        refused(stamped(&plain, &input).unwrap_err(), SIGNED_REWRITE);
+        refused(
+            merged(&permissive, vec![plain.clone(), input.clone()]).unwrap_err(),
+            SIGNED_COPY,
         );
-        assert_eq!(e.kind(), PdfErrorKind::Unsupported, "{label}");
-        refused(merged(&permissive, vec![plain.clone(), input.clone()]).unwrap_err());
         let one = PageSelection::new(vec![1], &limits).unwrap();
         refused(
             permissive
                 .extract(&input, &one, &limits, &mut |_| Ok(()))
                 .unwrap_err(),
+            SIGNED_COPY,
         );
         refused(
             permissive
                 .split(&input, &[1..=1, 2..=2], &limits, &mut |_| Ok(()))
                 .unwrap_err(),
+            SIGNED_COPY,
         );
     }
     // Without a form the plain functions name the signature too.
@@ -455,7 +450,7 @@ fn a_signed_document_is_refused_by_rewrites_and_copies() {
     catalog(&mut d).set("DSS", dictionary! {});
     let input = bytes(d);
     let e = merge([&input], &limits, &mut |_| Ok(())).unwrap_err();
-    error(e, PdfErrorKind::Unsupported, SIGNED);
+    error(e, PdfErrorKind::Unsupported, SIGNED_COPY);
 }
 
 #[test]
@@ -759,7 +754,7 @@ fn malformed_forms_fail_explicitly() {
         ),
         (
             |d| form(d, &[], dictionary! {"SigFlags"=>"yes"}),
-            "PDF SigFlags must be an integer",
+            "PDF SigFlags must be a nonnegative integer",
         ),
         (
             |d| catalog(d).set("AcroForm", dictionary! {"Fields"=>7}),

@@ -122,14 +122,21 @@ pub enum Caller {
 }
 
 /// What the server knows besides the database: active languages and the subject's capabilities.
-/// Both answer from memory (named caches, the resolved principal); neither takes a transaction.
 pub trait RpcHost: Send + Sync + 'static {
     /// Whether `code` is an active language (`en_US` always is; the service checks that first).
     ///
     /// # Errors
     ///
     /// Any error of the language source; the call fails with it.
-    fn language_active(&self, code: &str) -> Result<bool>;
+    fn language_active(&self, code: &str) -> Result<bool> {
+        Ok(code == "en_US")
+    }
+
+    /// Validate a requested language using the host's current source. Static hosts can keep
+    /// implementing [`RpcHost::language_active`]. The native host reads its live tenant catalogue.
+    fn check_language<'a>(&'a self, code: &'a str) -> erp_orm::BoxFuture<'a, Result<bool>> {
+        Box::pin(std::future::ready(self.language_active(code)))
+    }
 
     /// Whether `principal` holds `capability` (provides the real check).
     ///
@@ -1015,7 +1022,20 @@ impl RpcService {
         if let Some(lang) = &bound.context.lang
             && lang != "en_US"
         {
-            match self.host.language_active(lang) {
+            let checked = tokio::time::timeout_at(
+                (started + deadline).into(),
+                self.host.check_language(lang),
+            )
+            .await
+            .map_err(|_| {
+                plain(
+                    InfraError::DeadlineExceeded {
+                        secs: deadline.as_secs(),
+                    }
+                    .into(),
+                )
+            })?;
+            match checked {
                 Ok(true) => {}
                 Ok(false) => {
                     return Err(plain(

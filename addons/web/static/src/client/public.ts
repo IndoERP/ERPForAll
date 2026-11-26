@@ -1,5 +1,6 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 // The trusted addon entry surface. Registration precedes shell boot; identities are unique.
+export { registerPivotVariant, type PivotVariant } from "./pivot-view.js";
 export { Component, signal, onMounted, onWillDestroy } from "@erpforall/elang";
 export {
   registerFieldWidget, resolveFieldWidget, registerServiceController, registerClientAction, registerControlPanelExtension, registerListHeaderExtension, elangFieldWidget,
@@ -27,6 +28,9 @@ export { MessageServices } from "./messages.js";
 export type { NotificationLevel, NotificationOptions, DialogHandle, DialogOptions, ConfirmationOptions, ConfirmationHandle } from "./message-types.js";
 export { selectCreateDialog } from "./select-create-dialog.js";
 export { exportDialog } from "./export-dialog.js";
+export { openDocumentViewer, attachmentViewerFile, reportViewerFile, viewerKind, readViewerLimits } from "./document-viewer.js";
+export type { ViewerFile, ViewerKind, ViewerServices, ViewerLimits } from "./document-viewer.js";
+export type { PdfDocument, PdfOpen, PdfPageSize, PdfRotation } from "./pdf-document.js";
 export type { SelectCreateDialogOptions } from "./select-create-dialog.js";
 export type { ExportDialogOptions } from "./export-dialog.js";
 export { createDateTimeEditor, createDateTimeRangeEditor } from "./datetime-editor.js";

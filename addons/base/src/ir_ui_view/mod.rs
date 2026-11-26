@@ -102,6 +102,9 @@ pub struct IrUiView {
     /// The stored architecture.
     #[field(text, string = "Arch Blob")]
     pub arch_db: Option<Arc<str>>,
+    /// Structured gettext terms by language and source phrase. Managed by addon data imports.
+    #[field(json, groups = ".")]
+    pub template_translations: Option<erp_sdk::serde_json::Value>,
     /// The architecture as written and read (stored in `arch_db`).
     #[field(
         text,

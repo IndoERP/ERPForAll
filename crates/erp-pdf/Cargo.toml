@@ -11,6 +11,9 @@ publish.workspace = true
 
 [dependencies]
 lopdf = { version = "=0.45.0", default-features = false }
+# Strict bounded adapters use the existing compression dependencies directly.
+flate2 = "1.1"
+weezl = "0.2.1"
 thiserror.workspace = true
 roxmltree.workspace = true
 

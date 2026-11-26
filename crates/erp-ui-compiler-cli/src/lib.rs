@@ -9,8 +9,10 @@
 //!
 //! | Tag | Count | Value |
 //! |---|---|---|
-//! | `op` | 1 | `analyze` or `compile` |
+//! | `op` | 1 | `analyze`, `extract` or `compile` |
 //! | `mode` | 1 | `prod` or `dev` |
+//! | `language` | 0..1 | an immutable translation catalogue for compilation |
+//! | `term` | 0..n | addon (empty for global), followed by `original` and `translated`, sorted by addon and original |
 //! | `directive` | 0..256 | a custom directive name ([`DirectiveName`]), each name once ([`erp_ui_compiler::MAX_CUSTOM_DIRECTIVES`]) |
 //! | `limit` | 0..n | `name=value`: a lowered compiler limit ([`LimitKind::name`]), each limit once; the value is decimal without leading zeros, `1..=default` |
 //! | `file` | 0..n | the source kind of one file: `addon_file`, followed by its `addon`, `path` and `source` records |
@@ -20,6 +22,14 @@
 //! request: decoding never drops or rewrites a record, so a
 //! decoded request encodes back to the same bytes. New inputs (the restricted source kind of,
 //! declared contexts) are new tags or `file` kinds, not a new magic.
+//!
+//! # Arch requests
+//!
+//! A database-stored arch travels as an [`ArchCompileRequest`] (ADR 0118 D1): the same magic and
+//! record encoding, with `arch_id` as the third record and one `file arch_data`. The trusted
+//! decoder ([`Request::decode`]) refuses an `arch_id` record or an `arch_data` file wherever it
+//! appears. Native processing refuses database templates. The WASI guest checks the request
+//! and produces a bounded, data-only card plan.
 //!
 //! The response is the canonical byte form of the result. The binary exits [`EXIT_CLEAN`] when the
 //! set has no error, [`EXIT_ERRORS`] when the result carries errors (a rejected template, a set
@@ -56,7 +66,7 @@
 //! );
 //! let bytes = request.encode()?;
 //! let response = respond(&bytes)?;
-//! assert_eq!(response.exit_status(), EXIT_CLEAN);
+//! assert_eq!(response.exit_status(), 0);
 //! assert!(String::from_utf8(response.into_bytes())?.contains("templates 1 passed 1 rejected 0"));
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
@@ -65,6 +75,8 @@ use erp_ui_compiler::{
     AddonName, BuildMode, CompileOptions, DirectiveName, LimitKind, Origin, TemplatePath,
     TemplateSet, TemplateSource,
 };
+use sha2::{Digest, Sha256};
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::fmt;
 use std::io::Read;
@@ -109,6 +121,8 @@ pub const EXIT_MALFORMED: u8 = 2;
 pub enum Operation {
     /// [`erp_ui_compiler::analyze`].
     Analyze,
+    /// Extract source strings and their original locations as a JSON catalogue.
+    Extract,
     /// [`erp_ui_compiler::compile`].
     Compile,
 }
@@ -118,6 +132,7 @@ impl Operation {
         match self {
             Operation::Analyze => "analyze",
             Operation::Compile => "compile",
+            Operation::Extract => "extract",
         }
     }
 }
@@ -126,6 +141,7 @@ impl Operation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
     operation: Operation,
+    catalogue: Option<erp_ui_compiler::TranslationCatalogue>,
     /// The options the records build (mode, directives, limits).
     options: CompileOptions,
     /// The directive records, in request order (the options keep them sorted).
@@ -171,6 +187,7 @@ impl Request {
     pub fn new(operation: Operation, mode: BuildMode) -> Self {
         Self {
             operation,
+            catalogue: None,
             options: CompileOptions::new(mode),
             custom_directives: Vec::new(),
             directive_set: BTreeSet::new(),
@@ -285,6 +302,14 @@ impl Request {
             }
         };
         push_record(&mut out, "mode", mode)?;
+        if let Some(catalogue) = &self.catalogue {
+            push_record(&mut out, "language", catalogue.language())?;
+            for (addon, source, value) in catalogue.entries() {
+                push_record(&mut out, "term", addon)?;
+                push_record(&mut out, "original", source)?;
+                push_record(&mut out, "translated", value)?;
+            }
+        }
         for d in &self.custom_directives {
             push_record(&mut out, "directive", d.as_str())?;
         }
@@ -323,6 +348,7 @@ impl Request {
         let operation = match records.expect("op")? {
             "analyze" => Operation::Analyze,
             "compile" => Operation::Compile,
+            "extract" => Operation::Extract,
             other => return Err(RequestError::new(format!("unknown operation '{other}'"))),
         };
         let mode = match records.expect("mode")? {
@@ -333,12 +359,20 @@ impl Request {
         let mut request = Request::new(operation, mode);
         // Stages, in this order: directives, limits, files. A record of an earlier stage after a
         // later one is out of order, so every accepted request is in `encode`'s order.
-        let mut stage = Stage::Directives;
+        let mut stage = Stage::Catalogue;
+        let mut previous_term: Option<(&str, &str)> = None;
         while let Some((tag, value)) = records.next()? {
             let record_stage = match tag {
+                "language" | "term" => Stage::Catalogue,
                 "directive" => Stage::Directives,
                 "limit" => Stage::Limits,
                 "file" => Stage::Files,
+                "arch_id" => {
+                    return Err(RequestError::new(format!(
+                        "record {}: unexpected tag 'arch_id' (use ArchCompileRequest to decode arch requests)",
+                        records.index
+                    )));
+                }
                 _ => {
                     return Err(RequestError::new(format!(
                         "record {}: unexpected tag '{tag}'",
@@ -355,6 +389,41 @@ impl Request {
             }
             stage = record_stage;
             match tag {
+                "language" => {
+                    if operation != Operation::Compile || request.catalogue.is_some() {
+                        return Err(RequestError::new(
+                            "a single language is allowed for compilation",
+                        ));
+                    }
+                    request.catalogue = Some(
+                        erp_ui_compiler::TranslationCatalogue::new(value)
+                            .map_err(|e| RequestError::new(e.to_string()))?,
+                    );
+                }
+                "term" => {
+                    let catalogue = request
+                        .catalogue
+                        .take()
+                        .ok_or_else(|| RequestError::new("a term requires a preceding language"))?;
+                    let source = records.expect("original")?;
+                    let translated = records.expect("translated")?;
+                    if previous_term.is_some_and(|last| last >= (value, source)) {
+                        return Err(RequestError::new(
+                            "catalogue entries must be unique and sorted by addon and source",
+                        ));
+                    }
+                    previous_term = Some((value, source));
+                    request.catalogue = Some(
+                        if value.is_empty() {
+                            catalogue.with_global_term(source, translated)
+                        } else {
+                            let addon = AddonName::new(value)
+                                .map_err(|e| RequestError::new(e.to_string()))?;
+                            catalogue.with_term(addon, source, translated)
+                        }
+                        .map_err(|e| RequestError::new(e.to_string()))?,
+                    );
+                }
                 "directive" => {
                     let name = DirectiveName::new(value)
                         .map_err(|e| RequestError::new(format!("record {}: {e}", records.index)))?;
@@ -373,6 +442,12 @@ impl Request {
                         let source = records.expect("source")?;
                         request = request.with_addon_file(addon, path, source);
                     }
+                    "arch_data" => {
+                        return Err(RequestError::new(format!(
+                            "record {}: unexpected file kind 'arch_data' in addon Request (use ArchCompileRequest)",
+                            records.index
+                        )));
+                    }
                     other => {
                         return Err(RequestError::new(format!("unknown file kind '{other}'")));
                     }
@@ -383,9 +458,407 @@ impl Request {
     }
 }
 
+/// The largest encoded arch request: the whole frame (magic, every record and its length field)
+/// is bounded by the compiler's input-bytes ceiling ([`LimitKind::InputBytes`]), not only each
+/// field.
+pub const MAX_ARCH_FRAME_BYTES: usize = LimitKind::InputBytes.default_value();
+
+/// An immutable request to compile database-stored arch data (ADR 0118 D1).
+///
+/// The canonical records, in this order: `op`, `mode`, `arch_id`, `source_digest`, `language`,
+/// `host_schema`, `compiler_policy`, `limit` (0..n, each limit once), `file arch_data`, `source`.
+/// The fields are validated on construction and private, and the source kind alone selects
+/// restricted mode: there is no trust switch.
+///
+/// `source_digest` must be the SHA-256 of `source`: [`ArchCompileRequest::new`] and
+/// [`ArchCompileRequest::decode`] recompute it and refuse a mismatch. That catches damaged bytes
+/// only; it does not authenticate the source. The consumer binds the digest to its
+/// authorization-filtered arch generation.
+///
+/// Native [`respond`] refuses the request before parsing any XML. The WASI guest validates
+/// the source against the supplied field schema and emits a restricted card plan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchCompileRequest {
+    operation: Operation,
+    mode: BuildMode,
+    arch_id: Box<str>,
+    source_digest: Box<str>,
+    language: Box<str>,
+    host_schema: Box<str>,
+    compiler_policy: Box<str>,
+    limits: Vec<(LimitKind, usize)>,
+    source: Box<str>,
+}
+
+impl ArchCompileRequest {
+    /// Construct a policy-1 production card request from the caller-authorized schema.
+    ///
+    /// # Errors
+    /// Returns the same identity and framing errors as [`Self::new`].
+    pub fn card(
+        arch: String,
+        language: String,
+        fields: &[String],
+        source: String,
+    ) -> Result<Self, RequestError> {
+        let digest = sha256_hex(source.as_bytes());
+        let schema = serde_json::json!({ "fields": fields }).to_string();
+        Self::new(
+            Operation::Compile,
+            BuildMode::Prod,
+            arch,
+            digest,
+            language,
+            schema,
+            "1",
+            source,
+        )
+    }
+
+    /// Creates a validated arch compile request with the default limits.
+    ///
+    /// # Errors
+    /// [`RequestError`] when an identifier is empty, too long or holds a control character, the
+    /// digest is not 64 lowercase hexadecimal characters or is not the SHA-256 of `source`, the
+    /// build mode has no request name, or the encoded frame would exceed
+    /// [`MAX_ARCH_FRAME_BYTES`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        operation: Operation,
+        mode: BuildMode,
+        arch_id: impl Into<Box<str>>,
+        source_digest: impl Into<Box<str>>,
+        language: impl Into<Box<str>>,
+        host_schema: impl Into<Box<str>>,
+        compiler_policy: impl Into<Box<str>>,
+        source: impl Into<Box<str>>,
+    ) -> Result<Self, RequestError> {
+        if operation == Operation::Extract {
+            return Err(RequestError::new(
+                "restricted arch requests support analyze and compile",
+            ));
+        }
+        mode_name(mode)?;
+        let arch_id = arch_id.into();
+        validate_identifier("arch_id", &arch_id, 256)?;
+        let source_digest = source_digest.into();
+        validate_sha256("source_digest", &source_digest)?;
+        let language = language.into();
+        validate_identifier("language", &language, 256)?;
+        let host_schema = host_schema.into();
+        if host_schema.is_empty() {
+            return Err(RequestError::new("host_schema cannot be empty"));
+        }
+        let compiler_policy = compiler_policy.into();
+        validate_identifier("compiler_policy", &compiler_policy, 32)?;
+        let source = source.into();
+        let request = Self {
+            operation,
+            mode,
+            arch_id,
+            source_digest,
+            language,
+            host_schema,
+            compiler_policy,
+            limits: Vec::new(),
+            source,
+        };
+        // The frame bound first: it also bounds the digest's work.
+        request.check_frame()?;
+        let computed = sha256_hex(request.source.as_bytes());
+        if *request.source_digest != *computed {
+            return Err(RequestError::new(format!(
+                "source_digest {} is not the SHA-256 of the source ({computed})",
+                request.source_digest
+            )));
+        }
+        Ok(request)
+    }
+
+    /// Lowers one compiler limit.
+    ///
+    /// # Errors
+    /// [`RequestError`] when the limit is already in the request, `value` is zero or above the
+    /// limit's default, or the record would push the frame over [`MAX_ARCH_FRAME_BYTES`].
+    pub fn with_limit(mut self, kind: LimitKind, value: usize) -> Result<Self, RequestError> {
+        if self.limits.iter().any(|(k, _)| *k == kind) {
+            return Err(RequestError::new(format!("limit {kind} is given twice")));
+        }
+        // The same rule as the trusted decoder: limits can only be lowered (one source of truth).
+        CompileOptions::new(self.mode)
+            .limits()
+            .lowered(kind, value)
+            .map_err(|e| RequestError::new(e.to_string()))?;
+        self.limits.push((kind, value));
+        self.check_frame()?;
+        Ok(self)
+    }
+
+    /// The operation.
+    #[must_use]
+    pub fn operation(&self) -> Operation {
+        self.operation
+    }
+
+    /// The build mode.
+    #[must_use]
+    pub fn mode(&self) -> BuildMode {
+        self.mode
+    }
+
+    /// The arch identifier.
+    #[must_use]
+    pub fn arch_id(&self) -> &str {
+        &self.arch_id
+    }
+
+    /// The SHA-256 of the source (64 lowercase hexadecimal characters).
+    #[must_use]
+    pub fn source_digest(&self) -> &str {
+        &self.source_digest
+    }
+
+    /// The language code.
+    #[must_use]
+    pub fn language(&self) -> &str {
+        &self.language
+    }
+
+    /// The declared host schema.
+    #[must_use]
+    pub fn host_schema(&self) -> &str {
+        &self.host_schema
+    }
+
+    /// The compiler policy.
+    #[must_use]
+    pub fn compiler_policy(&self) -> &str {
+        &self.compiler_policy
+    }
+
+    /// The lowered limits, in request order.
+    #[must_use]
+    pub fn limits(&self) -> &[(LimitKind, usize)] {
+        &self.limits
+    }
+
+    /// The arch source text.
+    #[must_use]
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    /// The canonical records of this request, in frame order.
+    fn records(&self) -> Result<Vec<(&'static str, Cow<'_, str>)>, RequestError> {
+        let mut records = vec![
+            ("op", Cow::Borrowed(self.operation.name())),
+            ("mode", Cow::Borrowed(mode_name(self.mode)?)),
+            ("arch_id", Cow::Borrowed(&*self.arch_id)),
+            ("source_digest", Cow::Borrowed(&*self.source_digest)),
+            ("language", Cow::Borrowed(&*self.language)),
+            ("host_schema", Cow::Borrowed(&*self.host_schema)),
+            ("compiler_policy", Cow::Borrowed(&*self.compiler_policy)),
+        ];
+        for (kind, value) in &self.limits {
+            records.push(("limit", Cow::Owned(format!("{}={value}", kind.name()))));
+        }
+        records.push(("file", Cow::Borrowed("arch_data")));
+        records.push(("source", Cow::Borrowed(&*self.source)));
+        Ok(records)
+    }
+
+    /// Refuses a request whose encoded frame exceeds [`MAX_ARCH_FRAME_BYTES`].
+    fn check_frame(&self) -> Result<(), RequestError> {
+        let mut len = MAGIC.len();
+        for (tag, value) in self.records()? {
+            len = 4usize
+                .checked_add(tag.len())
+                .and_then(|n| n.checked_add(1))
+                .and_then(|n| n.checked_add(value.len()))
+                .and_then(|n| n.checked_add(len))
+                .ok_or_else(|| RequestError::new("the arch request frame length overflows"))?;
+        }
+        if len > MAX_ARCH_FRAME_BYTES {
+            return Err(RequestError::new(format!(
+                "the arch request frame of {len} bytes exceeds the input-bytes ceiling of {MAX_ARCH_FRAME_BYTES} bytes"
+            )));
+        }
+        Ok(())
+    }
+
+    /// The canonical framed bytes of this request.
+    ///
+    /// # Errors
+    /// [`RequestError`] when a record is longer than the `u32` length field (unreachable for a
+    /// request within [`MAX_ARCH_FRAME_BYTES`]).
+    pub fn encode(&self) -> Result<Vec<u8>, RequestError> {
+        let mut out = MAGIC.to_vec();
+        for (tag, value) in self.records()? {
+            push_record(&mut out, tag, &value)?;
+        }
+        Ok(out)
+    }
+
+    /// Decodes canonical framed bytes. A decoded request encodes back to the same bytes.
+    ///
+    /// # Errors
+    /// [`RequestError`] for a frame over [`MAX_ARCH_FRAME_BYTES`] (refused before any record is
+    /// read), a wrong magic, a truncated record, a missing, unknown, repeated or out-of-order
+    /// record, an invalid field, or a `source_digest` that is not the SHA-256 of the source.
+    pub fn decode(bytes: &[u8]) -> Result<Self, RequestError> {
+        if bytes.len() > MAX_ARCH_FRAME_BYTES {
+            return Err(RequestError::new(format!(
+                "the arch request frame of {} bytes exceeds the input-bytes ceiling of {MAX_ARCH_FRAME_BYTES} bytes",
+                bytes.len()
+            )));
+        }
+        let rest = bytes
+            .strip_prefix(MAGIC)
+            .ok_or_else(|| RequestError::new("missing ERPUI2 magic"))?;
+        let mut records = Records { rest, index: 0 };
+        let operation = match records.expect("op")? {
+            "analyze" => Operation::Analyze,
+            "compile" => Operation::Compile,
+            other => {
+                return Err(RequestError::new(format!(
+                    "unknown operation '{}'",
+                    echo(other)
+                )));
+            }
+        };
+        let mode = match records.expect("mode")? {
+            "prod" => BuildMode::Prod,
+            "dev" => BuildMode::Dev,
+            other => return Err(RequestError::new(format!("unknown mode '{}'", echo(other)))),
+        };
+        let arch_id = records.expect("arch_id")?;
+        let source_digest = records.expect("source_digest")?;
+        let language = records.expect("language")?;
+        let host_schema = records.expect("host_schema")?;
+        let compiler_policy = records.expect("compiler_policy")?;
+
+        let mut limits = Vec::new();
+        let mut source = None;
+        while let Some((tag, value)) = records.next()? {
+            if source.is_some() {
+                return Err(RequestError::new(format!(
+                    "record {}: '{tag}' after the arch file",
+                    records.index
+                )));
+            }
+            match tag {
+                "limit" => limits.push(parse_limit(value)?),
+                "file" => match value {
+                    "arch_data" => source = Some(records.expect("source")?),
+                    other => {
+                        return Err(RequestError::new(format!(
+                            "record {}: unknown file kind '{}' in an arch request",
+                            records.index,
+                            echo(other)
+                        )));
+                    }
+                },
+                _ => {
+                    return Err(RequestError::new(format!(
+                        "record {}: unexpected tag '{}' in an arch request",
+                        records.index,
+                        echo(tag)
+                    )));
+                }
+            }
+        }
+        let Some(source) = source else {
+            return Err(RequestError::new("missing 'file arch_data' record"));
+        };
+        let mut request = Self::new(
+            operation,
+            mode,
+            arch_id,
+            source_digest,
+            language,
+            host_schema,
+            compiler_policy,
+            source,
+        )?;
+        for (kind, value) in limits {
+            request = request.with_limit(kind, value)?;
+        }
+        Ok(request)
+    }
+}
+
+/// The request name of a build mode.
+fn mode_name(mode: BuildMode) -> Result<&'static str, RequestError> {
+    match mode {
+        BuildMode::Prod => Ok("prod"),
+        BuildMode::Dev => Ok("dev"),
+        other => Err(RequestError::new(format!(
+            "build mode {other:?} has no request name"
+        ))),
+    }
+}
+
+/// Lowercase hexadecimal SHA-256 of `bytes`.
+fn sha256_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let digest = Sha256::digest(bytes);
+    let mut out = String::with_capacity(64);
+    for b in digest {
+        out.push(char::from(HEX[usize::from(b >> 4)]));
+        out.push(char::from(HEX[usize::from(b & 0x0f)]));
+    }
+    out
+}
+
+/// The longest untrusted value an arch-request error repeats, in characters.
+const ECHO_MAX_CHARS: usize = 80;
+
+/// An untrusted value as an arch-request error shows it: at most [`ECHO_MAX_CHARS`] characters,
+/// then a marker with the full byte length, so a refusal stays small inside the WASM host's
+/// output cap (ADR 0118 D1: bounded diagnostics).
+fn echo(value: &str) -> Cow<'_, str> {
+    match value.char_indices().nth(ECHO_MAX_CHARS) {
+        None => Cow::Borrowed(value),
+        Some((cut, _)) => Cow::Owned(format!("{}... ({} bytes)", &value[..cut], value.len())),
+    }
+}
+
+fn validate_identifier(name: &str, value: &str, max_len: usize) -> Result<(), RequestError> {
+    if value.is_empty() {
+        return Err(RequestError::new(format!("{name} cannot be empty")));
+    }
+    if value.len() > max_len {
+        return Err(RequestError::new(format!(
+            "{name} length must be 1..={max_len}, got {}",
+            value.len()
+        )));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(RequestError::new(format!(
+            "{name} cannot contain control characters"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_sha256(name: &str, value: &str) -> Result<(), RequestError> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err(RequestError::new(format!(
+            "{name} must be a 64-character lowercase hexadecimal SHA-256 digest, got '{}'",
+            echo(value)
+        )));
+    }
+    Ok(())
+}
+
 /// The record stages of a request, in their order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Stage {
+    Catalogue,
     Directives,
     Limits,
     Files,
@@ -394,6 +867,7 @@ enum Stage {
 impl Stage {
     fn after(self) -> &'static str {
         match self {
+            Stage::Catalogue => "a catalogue record",
             Stage::Directives => "a directive",
             Stage::Limits => "a limit",
             Stage::Files => "the first file",
@@ -503,6 +977,9 @@ pub fn read_request(input: impl Read) -> Result<Vec<u8>, RequestError> {
 }
 
 /// The result of a request: the canonical bytes and whether they carry an error.
+///
+/// Only [`respond`] builds one: no caller can construct a compiler response. The WASM host
+/// (`erp-ui-compiler-host`) returns its own response type built from the guest's output.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Response {
     bytes: Vec<u8>,
@@ -536,14 +1013,58 @@ impl Response {
     }
 }
 
+/// Whether `bytes` frame an arch request: the third record carries the `arch_id` tag. Reads only
+/// record headers, never a value's XML. A frame that is not an arch request by this test, but
+/// carries an `arch_id` record or an `arch_data` file anywhere else, is refused by
+/// [`Request::decode`].
+fn is_arch_request(bytes: &[u8]) -> bool {
+    let Some(rest) = bytes.strip_prefix(MAGIC) else {
+        return false;
+    };
+    let mut records = Records { rest, index: 0 };
+    for tag in ["op", "mode", "arch_id"] {
+        match records.next() {
+            Ok(Some((t, _))) if t == tag => {}
+            // Not an arch request; the trusted decoder reports what is wrong with it.
+            Ok(_) | Err(_) => return false,
+        }
+    }
+    true
+}
+
+/// The native refusal of an arch request (ADR 0118 D1, SPEC-UIRESTRICT-001).
+#[cfg(not(target_arch = "wasm32"))]
+fn respond_arch(_bytes: &[u8]) -> Result<Response, RequestError> {
+    Err(RequestError::new(
+        "native processing refuses arch requests before parsing them: database-stored arch is compiled only by the WASM build in the compiler host (SPEC-UIRESTRICT-001)",
+    ))
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+mod restricted;
+
+/// Only the WASI guest accepts a database arch. Native reference compilation is test-only.
+#[cfg(target_arch = "wasm32")]
+fn respond_arch(bytes: &[u8]) -> Result<Response, RequestError> {
+    restricted::compile(bytes)
+}
+
 /// Runs a framed request.
 ///
+/// Trusted addon files can be analysed, compiled or extracted. Restricted database cards
+/// can be analysed or compiled only in the WASI guest.
+///
 /// # Errors
-/// [`RequestError`] when the request is malformed.
+/// [`RequestError`] for an invalid request or restricted XML, or a native arch request.
 pub fn respond(bytes: &[u8]) -> Result<Response, RequestError> {
+    if is_arch_request(bytes) {
+        return respond_arch(bytes);
+    }
+
     let Request {
         operation,
         options,
+        catalogue,
         files,
         ..
     } = Request::decode(bytes)?;
@@ -558,7 +1079,25 @@ pub fn respond(bytes: &[u8]) -> Result<Response, RequestError> {
             analysis.write_canonical(&mut out);
             analysis.is_clean()
         }
-        Operation::Compile => match erp_ui_compiler::compile(&set, &options) {
+        Operation::Extract => match erp_ui_compiler::extract_translations(&set, &options) {
+            Ok(extracted) => {
+                let terms: Vec<_> = extracted.terms().iter().map(|term| serde_json::json!({
+                    "addon": term.addon().as_str(), "source": term.source(),
+                    "locations": term.locations().iter().map(ToString::to_string).collect::<Vec<_>>(),
+                })).collect();
+                out = serde_json::to_string(&terms)
+                    .map_err(|error| RequestError::new(error.to_string()))?;
+                true
+            }
+            Err(errors) => {
+                errors.write_canonical(&mut out);
+                false
+            }
+        },
+        Operation::Compile => match match catalogue {
+            Some(catalogue) => erp_ui_compiler::compile_localized(&set, &options, &catalogue),
+            None => erp_ui_compiler::compile(&set, &options),
+        } {
             Ok(compiled) => {
                 compiled.write_canonical(&mut out);
                 true
@@ -581,6 +1120,44 @@ mod tests {
 
     use super::*;
     use proptest::prelude::*;
+
+    #[test]
+    fn catalogue_extract_and_compile_use_the_same_framed_contract() {
+        let xml = "<templates><t t-name='web.X'><p>Hello</p></t></templates>";
+        let inputs = [
+            ("file", "addon_file"),
+            ("addon", "web"),
+            ("path", "a.xml"),
+            ("source", xml),
+        ];
+        let mut records = vec![("op", "extract"), ("mode", "prod")];
+        records.extend(inputs);
+        let terms: serde_json::Value =
+            serde_json::from_slice(respond(&framed(&records)).unwrap().bytes()).unwrap();
+        assert_eq!(terms[0]["source"], "Hello");
+        assert_eq!(terms[0]["addon"], "web");
+        let mut records = vec![
+            ("op", "compile"),
+            ("mode", "prod"),
+            ("language", "fr_FR"),
+            ("term", "web"),
+            ("original", "Hello"),
+            ("translated", "Bonjour"),
+        ];
+        records.extend(inputs);
+        let payload = framed(&records);
+        assert_eq!(
+            Request::decode(&payload).unwrap().encode().unwrap(),
+            payload
+        );
+        let response = respond(&payload).unwrap();
+        assert_eq!(response.exit_status(), 0);
+        assert!(
+            String::from_utf8(response.into_bytes())
+                .unwrap()
+                .contains("Bonjour")
+        );
+    }
 
     fn sample() -> Request {
         Request::new(Operation::Compile, BuildMode::Dev)
@@ -739,6 +1316,57 @@ mod tests {
         assert!(
             text.contains("files limit exceeded: maximum 1, got 2"),
             "{text}"
+        );
+    }
+
+    fn arch_request(digest: Option<&str>) -> Vec<u8> {
+        let source = "<kanban><templates><t t-name=\"card\"><div/></t></templates></kanban>";
+        let computed = sha256_hex(source.as_bytes());
+        let digest = digest.unwrap_or(&computed);
+        framed(&[
+            ("op", "compile"),
+            ("mode", "prod"),
+            ("arch_id", "res.partner.kanban"),
+            ("source_digest", digest),
+            ("language", "en_US"),
+            ("host_schema", r#"{"fields":[]}"#),
+            ("compiler_policy", "1"),
+            ("file", "arch_data"),
+            ("source", source),
+        ])
+    }
+
+    /// The guest emits a declarative plan only after checking source identity.
+    #[test]
+    fn guest_checks_source_identity_before_emitting_a_card_plan() {
+        let bytes = arch_request(None);
+        assert!(is_arch_request(&bytes));
+        let result = restricted::compile(&bytes).unwrap();
+        let plan: serde_json::Value = serde_json::from_slice(result.bytes()).unwrap();
+        assert_eq!(plan["abi"], "erpforall.card.v1");
+        assert_eq!(plan["templates"]["card"]["children"][0]["tag"], "div");
+
+        let zeros = "0".repeat(64);
+        let err = restricted::compile(&arch_request(Some(&zeros))).unwrap_err();
+        assert!(
+            err.message().starts_with(&format!(
+                "source_digest {zeros} is not the SHA-256 of the source ("
+            )),
+            "{}",
+            err.message()
+        );
+    }
+
+    /// The native arm refuses the same request without decoding it.
+    ///
+    /// SPEC-UIRESTRICT-001 (partial: native processing refuses arch requests before XML parsing; trusted requests unaffected; view adapter not implemented)
+    #[test]
+    fn native_arm_refuses_without_decoding() {
+        let zeros = "0".repeat(64);
+        let err = respond(&arch_request(Some(&zeros))).unwrap_err();
+        assert_eq!(
+            err.message(),
+            "native processing refuses arch requests before parsing them: database-stored arch is compiled only by the WASM build in the compiler host (SPEC-UIRESTRICT-001)"
         );
     }
 

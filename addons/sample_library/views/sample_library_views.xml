@@ -144,6 +144,28 @@
             </calendar>
         </field>
     </record>
+    <!-- Loans as a board: one column per status (the arch's default grouping). The Group By menu regroups it; a folded
+         column, load more and the way back from a loan are the kanban's own. -->
+    <record id="loan_kanban" model="ir.ui.view">
+        <field name="name">sample_library.loan.kanban</field>
+        <field name="model">sample_library.loan</field>
+        <field name="arch" type="xml">
+            <kanban string="Loans" default_group_by="state">
+                <templates>
+                    <t t-name="card">
+                        <main>
+                            <field name="book_id"/>
+                            <field name="borrower_id"/>
+                        </main>
+                        <footer>
+                            <field name="loan_date"/>
+                            <field name="due_date"/>
+                        </footer>
+                    </t>
+                </templates>
+            </kanban>
+        </field>
+    </record>
     <record id="loan_form" model="ir.ui.view">
         <field name="name">sample_library.loan.form</field>
         <field name="model">sample_library.loan</field>
@@ -307,7 +329,7 @@
     <record id="loan_action" model="ir.actions.act_window">
         <field name="name">Loans</field>
         <field name="res_model">sample_library.loan</field>
-        <field name="view_mode">list,form,calendar,graph</field>
+        <field name="view_mode">list,kanban,form,calendar,graph</field>
     </record>
     <record id="genre_action" model="ir.actions.act_window">
         <field name="name">Genres</field>

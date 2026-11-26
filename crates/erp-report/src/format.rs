@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Number and date formatting by a language's settings (the `res.lang` row of the document's
-//! language, read by the data stage). No locale database is consulted here.
-use crate::{ReportError, error::invalid, program::FORMATS_TASK};
+//! language, read by the data stage). Calendar names and duration labels use bundled locale data.
+use crate::{
+    ReportError,
+    error::invalid,
+    locale::{self, LocaleText},
+};
 
 /// How one language writes numbers, dates and times.
 #[derive(Debug, Clone)]
@@ -11,6 +15,8 @@ pub struct LangFormat {
     grouping: Vec<i8>,
     date_format: String,
     time_format: String,
+    language: String,
+    locale: Option<std::sync::Arc<LocaleText>>,
 }
 impl Default for LangFormat {
     /// The settings of `en_US`.
@@ -21,13 +27,15 @@ impl Default for LangFormat {
             grouping: vec![3, 0],
             date_format: "%m/%d/%Y".into(),
             time_format: "%H:%M:%S".into(),
+            language: "en_US".into(),
+            locale: None,
         }
     }
 }
 impl LangFormat {
     /// `grouping` lists digit group sizes from the right: `0` repeats the size before it, `-1` ends
     /// grouping, and a list that ends without either groups no further. The two formats use the
-    /// directives `%d %m %Y %y %H %M %S %I %p %j %%`.
+    /// directives `%d %m %Y %y %H %M %S %I %p %j %a %A %b %B %%`.
     pub fn new(
         decimal_point: &str,
         thousands_sep: &str,
@@ -53,13 +61,10 @@ impl LangFormat {
                     continue;
                 }
                 match chars.next() {
-                    Some('d' | 'm' | 'Y' | 'y' | 'H' | 'M' | 'S' | 'I' | 'p' | 'j' | '%') => {}
-                    Some('a' | 'A' | 'b' | 'B') => {
-                        return Err(ReportError::Unsupported {
-                            feature: "month and weekday names in date formats",
-                            task: FORMATS_TASK,
-                        });
-                    }
+                    Some(
+                        'd' | 'm' | 'Y' | 'y' | 'H' | 'M' | 'S' | 'I' | 'p' | 'j' | '%' | 'a' | 'A'
+                        | 'b' | 'B',
+                    ) => {}
                     _ => return Err(invalid("date format directive is not supported")),
                 }
             }
@@ -70,7 +75,35 @@ impl LangFormat {
             grouping: grouping.to_vec(),
             date_format: date_format.into(),
             time_format: time_format.into(),
+            language: "en_US".into(),
+            locale: None,
         })
+    }
+    /// Select textual calendar names and duration labels independently of numeric patterns.
+    /// Built-ins: en/en_US, fr/fr_FR, id/id_ID. An unprovided locale is refused only when
+    /// textual names or duration labels are requested; numeric formats remain usable.
+    pub fn with_language(mut self, code: &str) -> Result<Self, ReportError> {
+        crate::Language::new(code)?;
+        self.language = code.into();
+        self.locale = None;
+        Ok(self)
+    }
+    /// Supply a custom locale resource in the documented report-locale JSON format.
+    /// Fixed array sizes, seven duration units, widths and literal slots are validated;
+    /// input is limited to 65536 bytes and each name/pattern to 256 bytes.
+    pub fn with_locale_data(mut self, code: &str, json: &str) -> Result<Self, ReportError> {
+        crate::Language::new(code)?;
+        let locale = LocaleText::parse(json).map_err(invalid)?;
+        self.language = code.into();
+        self.locale = Some(std::sync::Arc::new(locale));
+        Ok(self)
+    }
+    pub(crate) fn locale(&self) -> Result<&LocaleText, String> {
+        if let Some(locale) = &self.locale {
+            return Ok(locale);
+        }
+        locale::builtin(&self.language)
+            .map_err(|reason| format!("locale `{}`: {reason}", self.language))
     }
     pub(crate) fn date_format(&self) -> &str {
         &self.date_format
@@ -150,11 +183,12 @@ pub(crate) fn split(value: f64, digits: usize) -> Result<(bool, String, String),
 }
 /// Write a date and time by a `strftime`-style pattern whose directives [`LangFormat::new`] checked.
 pub(crate) fn datetime(
+    formats: &LangFormat,
     pattern: &str,
     (year, month, day): (i32, u8, u8),
     (hour, minute, second): (u8, u8, u8),
     ordinal: u16,
-) -> String {
+) -> Result<String, String> {
     let mut out = String::new();
     let mut chars = pattern.chars();
     while let Some(c) = chars.next() {
@@ -162,7 +196,13 @@ pub(crate) fn datetime(
             out.push(c);
             continue;
         }
-        let part = match chars.next() {
+        let token = chars.next();
+        let (token, unpadded) = if token == Some('_') {
+            (chars.next(), true)
+        } else {
+            (token, false)
+        };
+        let part = match token {
             Some('d') => format!("{day:02}"),
             Some('m') => format!("{month:02}"),
             Some('Y') => format!("{year:04}"),
@@ -171,12 +211,96 @@ pub(crate) fn datetime(
             Some('M') => format!("{minute:02}"),
             Some('S') => format!("{second:02}"),
             Some('I') => format!("{:02}", (hour + 11) % 12 + 1),
-            Some('p') => String::from(if hour < 12 { "AM" } else { "PM" }),
+            Some('p') => formats.locale()?.periods[usize::from(hour >= 12)].clone(),
+            Some(kind @ ('a' | 'A' | 'b' | 'B')) => {
+                let locale = formats.locale()?;
+                let month_value =
+                    time::Month::try_from(month).map_err(|_| "invalid calendar month")?;
+                let date = time::Date::from_calendar_date(year, month_value, day)
+                    .map_err(|_| "invalid calendar date")?;
+                match kind {
+                    'a' => locale.days_short[usize::from(date.weekday().number_days_from_sunday())]
+                        .clone(),
+                    'A' => locale.days_long[usize::from(date.weekday().number_days_from_sunday())]
+                        .clone(),
+                    'b' => locale.months_short[usize::from(month - 1)].clone(),
+                    _ => locale.months_long[usize::from(month - 1)].clone(),
+                }
+            }
             Some('j') => format!("{ordinal:03}"),
-            Some(other) => String::from(other),
-            None => String::from('%'),
+            Some('%') => String::from('%'),
+            _ => return Err("date format directive is not supported".into()),
         };
-        out.push_str(&part);
+        if unpadded {
+            let digits = part.trim_start_matches('0');
+            out.push_str(if digits.is_empty() { "0" } else { digits });
+        } else {
+            out.push_str(&part);
+        }
     }
-    out
+    Ok(out)
+}
+
+/// Widget overrides use a bounded LDML subset or the language's percent-style dialect.
+/// Unsupported alphabetic tokens fail rather than printing a plausible but wrong date.
+pub(crate) fn widget_pattern(input: &str) -> Result<String, &'static str> {
+    if input.is_empty() || input.len() > 64 {
+        return Err("date format must be 1..=64 bytes");
+    }
+    if input.contains('%') {
+        LangFormat::new(".", "", &[], input, "%H:%M:%S")
+            .map_err(|_| "unsupported percent directive in date format")?;
+        return Ok(input.into());
+    }
+    let mut out = String::new();
+    let mut chars = input.chars().peekable();
+    let mut quoted = false;
+    while let Some(c) = chars.next() {
+        if c == '\'' {
+            if chars.peek() == Some(&'\'') {
+                chars.next();
+                out.push('\'');
+            } else {
+                quoted = !quoted;
+            }
+            continue;
+        }
+        if quoted || !c.is_ascii_alphabetic() {
+            out.push(c);
+            continue;
+        }
+        let mut count = 1;
+        while chars.peek() == Some(&c) {
+            chars.next();
+            count += 1;
+        }
+        let token = match (c, count) {
+            ('y', 2) => "%y",
+            ('y', 1) => "%_Y",
+            ('y', 4) => "%Y",
+            ('M', 1) => "%_m",
+            ('M', 2) => "%m",
+            ('M', 3) => "%b",
+            ('M', 4) => "%B",
+            ('d', 1) => "%_d",
+            ('d', 2) => "%d",
+            ('E', 1..=3) => "%a",
+            ('E', 4) => "%A",
+            ('H', 1) => "%_H",
+            ('H', 2) => "%H",
+            ('h', 1) => "%_I",
+            ('h', 2) => "%I",
+            ('m', 1) => "%_M",
+            ('m', 2) => "%M",
+            ('s', 1) => "%_S",
+            ('s', 2) => "%S",
+            ('a', 1) => "%p",
+            _ => return Err("unsupported LDML token in date format"),
+        };
+        out.push_str(token);
+    }
+    if quoted {
+        return Err("unclosed quote in date format");
+    }
+    Ok(out)
 }

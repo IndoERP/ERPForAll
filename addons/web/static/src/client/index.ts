@@ -6,6 +6,8 @@ import { parseBoundedJson } from "../../../../../web/packages/expr/src/index.js"
 import { configureClientTemplates, systrayItems } from "./registry.js";
 import { registerBuiltinSystrayItems } from "./activity-menu.js";
 import { HumanApp } from "./app.js";
+import "./technical-sessions.js";
+import "./translation-catalog.js";
 import { el, errorMessage } from "./dom.js";
 import { guardSubmit, setSubmitBusy, togglePasswordReveal, updateCapsLockHint } from "./login.js";
 import { object, text } from "./metadata.js";

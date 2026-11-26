@@ -169,10 +169,35 @@ async fn a_small_print_is_the_synchronous_download() {
         .unwrap();
     assert_eq!(
         answer,
-        serde_json::json!({"mode": "sync", "url": "/report/pdf/sale.order.document/3,1,2"})
+        serde_json::json!({"mode": "sync", "url": "/report/pdf/sale.order.document/3,1,2", "open": "download"})
     );
     assert_eq!(cell(&h, "SELECT count(*)::text FROM report_job").await, "0");
     assert_eq!(cell(&h, "SELECT count(*)::text FROM erp_job").await, "0");
+}
+
+/// With `base.report_print_preview` on, every print answer asks the client to show the document
+/// in its viewer; the default (the reference behaviour) asks for a download.
+#[tokio::test]
+async fn the_preview_parameter_decides_how_the_printed_document_opens() {
+    let (h, uid) = world().await;
+    exec(
+        &h,
+        "WITH updated AS (UPDATE ir_config_parameter SET value = 'True' \
+         WHERE key = 'base.report_print_preview' RETURNING 1) \
+         INSERT INTO ir_config_parameter (key, value) \
+         SELECT 'base.report_print_preview', 'True' WHERE NOT EXISTS (SELECT 1 FROM updated)",
+    )
+    .await;
+    let small = print(&h, uid, "sale.order.document", vec![1])
+        .await
+        .unwrap();
+    assert_eq!(small["mode"], "sync");
+    assert_eq!(small["open"], "preview");
+    let large = print(&h, uid, "sale.order.document", (1..=51).collect())
+        .await
+        .unwrap();
+    assert_eq!(large["mode"], "job");
+    assert_eq!(large["open"], "preview");
 }
 
 /// 51 records (one over the default threshold of 50) print in the background, in chunks of 20;
@@ -184,6 +209,7 @@ async fn a_large_print_is_a_job_that_lists_the_failure_and_merges_the_rest() {
     let answer = print(&h, uid, "sale.order.document", ids).await.unwrap();
     assert_eq!(answer["mode"], "job");
     assert_eq!(answer["poll_ms"], 1000);
+    assert_eq!(answer["open"], "download");
     let id = answer["id"].as_i64().unwrap();
     for _ in 0..10 {
         runner(&h).tick().await.unwrap();

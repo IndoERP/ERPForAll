@@ -479,6 +479,27 @@ async fn world() -> World {
             ),
         ),
         (
+            "model_discuss_channel",
+            (
+                "discuss.channel",
+                model_row(&client, "discuss.channel", "Conversation").await,
+            ),
+        ),
+        (
+            "model_discuss_channel_member",
+            (
+                "discuss.channel.member",
+                model_row(&client, "discuss.channel.member", "Conversation Member").await,
+            ),
+        ),
+        (
+            "model_mail_notification",
+            (
+                "mail.notification",
+                model_row(&client, "mail.notification", "Message Delivery").await,
+            ),
+        ),
+        (
             "model_mail_message_subtype",
             (
                 "mail.message.subtype",
@@ -524,7 +545,7 @@ async fn world() -> World {
     company_rows_support::insert_generated(
         &client,
         h.registry(),
-        &company_rows_support::PARTNER_AND_USERS,
+        &company_rows_support::MAIL_POLICY_MODELS,
     )
     .await;
     rule(&client, "internal doc a", doc_a, g_user, "crud", None).await;

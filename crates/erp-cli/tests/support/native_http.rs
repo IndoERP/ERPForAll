@@ -388,7 +388,11 @@ impl NativeFixture {
         Self::start_full(|_| {}, None, extra).await
     }
 
-    async fn start_full(prepare: impl FnOnce(&Path), assets: Option<&Path>, extra: &str) -> Self {
+    pub(super) async fn start_full(
+        prepare: impl FnOnce(&Path),
+        assets: Option<&Path>,
+        extra: &str,
+    ) -> Self {
         let db = TestDb::create().await.unwrap();
         let role = format!("{}_web", db.name());
         let client = db.client().await.unwrap();

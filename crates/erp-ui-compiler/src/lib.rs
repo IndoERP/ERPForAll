@@ -63,8 +63,9 @@ use analyze::{LocCtx, T_MARKERS, TemplateAnalysis, UI3_DONE, analyze_template};
 use expr::ExprParser;
 use inherit::{Entry, EntryId, Role};
 use ir::Pos;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write as _;
+use std::rc::Rc;
 use xml::{LineIndex, TopLevel};
 
 // Every entry of a set gets a `u32` id: the `templates` limit keeps the count below it.
@@ -361,7 +362,7 @@ pub fn compile(set: &TemplateSet, options: &CompileOptions) -> Result<CompiledSe
 ///
 /// # Errors
 /// [`CompileErrors`] for the usual compiler failures, ambiguous inherited literal ownership,
-/// unsupported caller-context propagation, unproven text/attribute mutation through inheritance,
+/// unproven text/attribute mutation through inheritance,
 /// or translation admission limits. Untranslated semantic and HTML/codegen admission happens
 /// before substitutions; the generated preflight output is discarded before localized output.
 ///
@@ -570,7 +571,7 @@ enum AnalysedText {
     /// The combined template the inheritance engine produced, and the note naming the parts it
     /// was built from (appended to its diagnostics, which carry no position).
     Combined {
-        xml: String,
+        xml: Rc<String>,
         provenance: provenance::Mapping,
     },
 }
@@ -1086,17 +1087,20 @@ fn run_with_translation(
     let mut parser = ExprParser::new(limits);
     let mut reports: Vec<TemplateReport> = Vec::new();
     let mut analysed: Vec<(usize, Analysed)> = Vec::new();
-    for (i, t) in tops.iter().enumerate() {
-        let Some(name) = t.role.as_ref().and_then(Role::name) else {
-            // Extensions and unreadable entries: their problems are set diagnostics already.
-            continue;
-        };
-        let name = name.clone();
+    let mut originals = tops
+        .iter()
+        .enumerate()
+        .filter_map(|(index, top)| Some((index, top.role.as_ref()?.name()?.clone(), None)));
+    let mut variants = VecDeque::new();
+    // Scoped variants can themselves request further variants. Analyse them in discovery
+    // order after the original templates, consuming the original entries directly.
+    while let Some((i, name, scope)) = originals.next().or_else(|| variants.pop_front()) {
+        let t = &tops[i];
         let f = &files[t.file];
         let mut diagnostics = extra.remove(&i).unwrap_or_default();
         let mut result = None;
         if diagnostics.is_empty() {
-            match combined.remove(&i) {
+            match combined.get(&i) {
                 None => {
                     let loc = LocCtx {
                         origin: f.origin(),
@@ -1106,7 +1110,9 @@ fn run_with_translation(
                     let analysis = (|| {
                         let translated = translation
                             .as_deref_mut()
-                            .map(|pass| pass.transform(&t.top.element, &loc, None))
+                            .map(|pass| {
+                                pass.transform(&t.top.element, &loc, None, scope.as_ref(), &names)
+                            })
                             .transpose()?;
                         // No pass means the existing source-mode tree is used unchanged.
                         let root = match &translated {
@@ -1117,7 +1123,10 @@ fn run_with_translation(
                             &mut parser,
                             options,
                             f.kind().trust(),
-                            &names,
+                            &|target| {
+                                names.contains(target)
+                                    || translation.as_deref().is_some_and(|p| p.has_alias(target))
+                            },
                             &name,
                             root,
                             &loc,
@@ -1227,7 +1236,15 @@ fn run_with_translation(
                                 let analysis = (|| {
                                     let translated = translation
                                         .as_deref_mut()
-                                        .map(|pass| pass.transform(&root, &loc, Some(&provenance)))
+                                        .map(|pass| {
+                                            pass.transform(
+                                                &root,
+                                                &loc,
+                                                Some(&provenance),
+                                                scope.as_ref(),
+                                                &names,
+                                            )
+                                        })
                                         .transpose()?;
                                     // Source-mode analysis retains the original combined tree.
                                     let root = match &translated {
@@ -1238,7 +1255,12 @@ fn run_with_translation(
                                         &mut parser,
                                         options,
                                         c.trust,
-                                        &names,
+                                        &|target| {
+                                            names.contains(target)
+                                                || translation
+                                                    .as_deref()
+                                                    .is_some_and(|p| p.has_alias(target))
+                                        },
                                         &name,
                                         root,
                                         &loc,
@@ -1262,7 +1284,7 @@ fn run_with_translation(
                         (
                             a,
                             AnalysedText::Combined {
-                                xml: c.xml,
+                                xml: Rc::clone(&c.xml),
                                 provenance,
                             },
                         )
@@ -1282,6 +1304,21 @@ fn run_with_translation(
                     analysis: a,
                 },
             ));
+        }
+        if let Some(pass) = translation.as_deref_mut() {
+            for (target, caller_scope, alias) in pass.pending.drain(..) {
+                if let Some(&index) = by_name.get(&target) {
+                    variants.push_back((index as usize, alias, Some(caller_scope)));
+                } else {
+                    diagnostics.push(
+                        Diagnostic::error(
+                            DiagnosticKind::MissingTemplate,
+                            format!("t-call: template '{target}' is not in the template set"),
+                        )
+                        .with_template(Some(&name)),
+                    );
+                }
+            }
         }
         reports.push(TemplateReport {
             name,

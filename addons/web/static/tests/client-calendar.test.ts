@@ -172,7 +172,7 @@ test("the scale and the day travel in the page address", () => {
 
 // ---- the DOM ----
 
-async function mounted(options: Parameters<typeof made>[0] = {}, view: { remove?: boolean } = {}) {
+async function mounted(options: Parameters<typeof made>[0] = {}, view: { remove?: boolean; mutations?: Partial<Pick<Parameters<typeof mountCalendar>[0], "access" | "update" | "create">> } = {}) {
   const { model } = made(options);
   await model.load();
   const host = document.createElement("div");
@@ -181,7 +181,7 @@ async function mounted(options: Parameters<typeof made>[0] = {}, view: { remove?
   const open = vi.fn(async () => {}), changed = vi.fn(), remove = vi.fn(async () => true), errors: unknown[] = [];
   const pending: Promise<void>[] = [];
   const calendar = mountCalendar({ model, locale: { lang: "en_US", tz: ZONE, date_format: "%m/%d/%Y", time_format: "%H:%M:%S" }, popovers,
-    run: job => { pending.push(job().catch(error => { errors.push(error); })); }, open, changed, ...(view.remove === false ? {} : { remove }) });
+    run: job => { pending.push(job().catch(error => { errors.push(error); })); }, open, changed, ...view.mutations, ...(view.remove === false ? {} : { remove }) });
   disposers.push(() => calendar.dispose());
   host.append(calendar.element);
   const settle = async () => { while (pending.length) await pending.shift(); };
@@ -350,5 +350,68 @@ test("the calendar passes the component accessibility audit in each scale", asyn
     const { element } = await mounted({ scale });
     await auditComponent(element);
     document.body.replaceChildren();
+  }
+});
+
+test("an event moves across a month in local time, resizes independently and keeps its dates on refusal", async () => {
+  const source = [{ ...records[0], start: "2026-11-29 17:30:00", stop: "2026-11-29 19:00:00" }];
+  const update = vi.fn(async (_event: unknown, vals: Record<string, string>) => { Object.assign(source[0]!, vals); });
+  const { element, settle, errors } = await mounted({ source, scale: "month", date: "2026-11-30" }, {
+    mutations: { update, access: async () => ({ edit: true, remove: false }) }
+  });
+  const editor = async (): Promise<HTMLFormElement> => {
+    element.querySelector<HTMLButtonElement>(".calendar-event")!.click(); await settle();
+    [...document.querySelectorAll("button")].find(btn => btn.textContent === "Change dates")!.click();
+    return document.querySelector(".calendar-editor")!;
+  };
+  const form = await editor(), [start, end] = form.querySelectorAll("input");
+  expect(start!.value).toMatch(/^2026-11-30T00:30/);
+  start!.value = "2026-12-01T00:30"; start!.dispatchEvent(new Event("change"));
+  expect(end!.value).toMatch(/^2026-12-01T02:00/);
+  form.requestSubmit(); await settle();
+  expect(update.mock.calls[0]![1]).toEqual({ start: "2026-11-30 17:30:00", stop: "2026-11-30 19:00:00" });
+  const resize = await editor(); resize.querySelectorAll("input")[1]!.value = "2026-12-01T03:00";
+  resize.requestSubmit(); await settle();
+  expect(update.mock.calls[1]![1]).toEqual({ start: "2026-11-30 17:30:00", stop: "2026-11-30 20:00:00" });
+  update.mockRejectedValueOnce(new Error("write refused"));
+  const denied = await editor(); denied.querySelectorAll("input")[0]!.value = "2026-11-30T00:30";
+  denied.requestSubmit(); await settle();
+  expect(errors).toEqual([expect.objectContaining({ message: "write refused" })]);
+  expect(source[0]!.start).toBe("2026-11-30 17:30:00");
+});
+
+test("read-only record opens without mutation controls and quick creation uses local midnight across a UTC date boundary", async () => {
+  const create = vi.fn(async () => {}), update = vi.fn(async () => {});
+  const { element, settle, open } = await mounted({}, { mutations: { create, update, access: async () => ({ edit: false, remove: false }) } });
+  element.querySelector<HTMLButtonElement>(".calendar-event")!.click(); await settle();
+  expect(document.querySelector(".calendar-popover-actions")!.textContent).toBe("Open");
+  document.querySelector<HTMLButtonElement>(".calendar-popover-actions button")!.click(); await settle();
+  expect(open).toHaveBeenCalledTimes(1);
+  [...element.querySelectorAll("button")].find(btn => btn.textContent === "New event")!.click();
+  const form = document.querySelector<HTMLFormElement>(".calendar-editor")!;
+  const [name, start, end] = form.querySelectorAll("input");
+  name!.value = "Early visit"; start!.value = "2026-12-01T00:30"; end!.value = "2026-12-01T01:00";
+  form.requestSubmit(); await settle();
+  expect(create).toHaveBeenCalledWith({ start: "2026-11-30 17:30:00", stop: "2026-11-30 18:00:00" }, "Early visit");
+  expect(update).not.toHaveBeenCalled();
+});
+
+test("multi-day bars split at the week boundary and cross into the adjacent month", async () => {
+  const { element } = await mounted({ scale: "month", source: [{ ...records[2], start: "2026-11-27 17:00:00", stop: "2026-12-02 05:00:00" }] });
+  const bars = [...element.querySelectorAll<HTMLElement>(".calendar-month-event")];
+  expect(bars.map(bar => bar.style.getPropertyValue("--span-days"))).toEqual(["2", "3"]);
+  expect(bars[0]!.classList.contains("continues-after")).toBe(true);
+  expect(bars[1]!.classList.contains("continues-before")).toBe(true);
+});
+
+test("the hourly grid uses local clock labels on spring-forward and fall-back days", () => {
+  const zone = "America/New_York", cfg = config();
+  for (const [date, from, to] of [
+    ["2026-03-08","2026-03-08 14:15:00","2026-03-08 14:45:00"],
+    ["2026-11-01","2026-11-01 15:15:00","2026-11-01 15:45:00"],
+  ] as const) {
+    const event = decodeEvent(cfg.root, { ...records[0], start: from, stop: to }, zone)!;
+    const placed = layoutDay([event], DateTime.fromISO(date, {zone}));
+    expect([placed[0]!.top, placed[0]!.height]).toEqual([615,30]);
   }
 });

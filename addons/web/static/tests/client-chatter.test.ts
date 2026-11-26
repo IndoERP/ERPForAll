@@ -878,6 +878,7 @@ test("AT-01: chatter top bar paperclip button with count toggles files panel or 
 /// (partial: chatter files panel AT-03 bulk delete and individual delete unlink RPC)
 test("AT-02 and AT-03: files panel lists grouped attachments with duplicate count, select mode, bulk unlink and individual unlink RPC", async () => {
   const calls: { path: string; body: Record<string, unknown> }[] = [];
+  const openedFiles: { names: string[]; index: number }[] = [];
   let currentAttachments = [
     { id: 501, name: "invoice.pdf", mimetype: "application/pdf", file_size: 4096, checksum: "hash_inv" },
     { id: 502, name: "invoice_copy.pdf", mimetype: "application/pdf", file_size: 4096, checksum: "hash_inv" }, // Duplicate by checksum!
@@ -932,6 +933,7 @@ test("AT-02 and AT-03: files panel lists grouped attachments with duplicate coun
     recordId: 42,
     rpc,
     confirm: async () => true,
+    openFiles: (files, index) => { openedFiles.push({ names: files.map(file => `${file.kind}:${file.name}:${file.url}`), index }); },
   });
 
   await flushAsync();
@@ -940,6 +942,14 @@ test("AT-02 and AT-03: files panel lists grouped attachments with duplicate coun
   const paperclipBtn = host.querySelector<HTMLButtonElement>(".erp-mail-chatter-attachment-btn");
   paperclipBtn?.click();
   expect(filesPanel.hidden).toBe(false);
+
+  // A PDF or a picture opens in the document viewer with the record's other viewable files; the click downloads nothing.
+  const photoLink = filesPanel.querySelectorAll<HTMLAnchorElement>(".erp-mail-chatter-file-name")[1]!;
+  const photoClick = new MouseEvent("click", { bubbles: true, cancelable: true });
+  photoLink.dispatchEvent(photoClick);
+  expect(photoClick.defaultPrevented).toBe(true);
+  expect(photoLink.hasAttribute("download")).toBe(false);
+  expect(openedFiles).toEqual([{ names: ["pdf:invoice.pdf:/erp/content/501", "image:photo.jpg:/erp/content/503"], index: 1 }]);
 
   // Groups: 2 groups (invoice group with 2 files, photo group with 1 file)
   const fileGroups = filesPanel.querySelectorAll<HTMLElement>(".erp-mail-chatter-file-group");

@@ -184,6 +184,24 @@ pub fn einvoice(
     limits: &PdfLimits,
     emit: &mut Emitter<'_>,
 ) -> Result<ConformanceLevel> {
+    einvoice_with_policy(
+        input,
+        xml,
+        options,
+        limits,
+        emit,
+        crate::SignedEditPolicy::Refuse,
+    )
+    .map(|(level, _)| level)
+}
+pub(crate) fn einvoice_with_policy(
+    input: &[u8],
+    xml: &[u8],
+    options: &EInvoiceOptions,
+    limits: &PdfLimits,
+    emit: &mut Emitter<'_>,
+    policy: crate::SignedEditPolicy,
+) -> Result<(ConformanceLevel, crate::IncrementalEditSummary)> {
     guard(|| {
         let context = Context::new(limits);
         let l = &context;
@@ -200,6 +218,7 @@ pub fn einvoice(
             )));
         }
         let mut u = Update::load(input, l)?;
+        let summary = u.admit(policy, input.len())?;
         let packet = u
             .xmp(l)?
             .ok_or_else(|| conformance("input has no XMP metadata"))?;
@@ -277,7 +296,7 @@ pub fn einvoice(
         };
         apply(&mut u, &MetadataUpdate::new(), &[fx], Some(&schema), l)?;
         u.save(input, l, emit)?;
-        Ok(level)
+        Ok((level, summary))
     })
 }
 fn conformance(what: &str) -> PdfError {

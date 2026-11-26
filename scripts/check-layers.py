@@ -82,8 +82,11 @@ LAYERS = {
     "erp-sdk": 10,
     "erp-cli": 12,
     "erp-ui-compiler-cli": 12,
+    "erp-ui-compiler-host": 12,
 }
 SAME_LAYER_EDGES = {
+    ("erp-cli", "erp-ui-compiler-host"),  # server composition binds the standalone compiler host
+    ("erp-ui-compiler-host", "erp-ui-compiler-cli"),  # consumes the framed compiler protocol
     ("erp-report-typst", "erp-report"),  # isolated layout adapter
     ("erp-report-worker", "erp-report"),  # the render worker pool and frame protocol
     ("erp-report", "erp-views"),  # pure print validation.

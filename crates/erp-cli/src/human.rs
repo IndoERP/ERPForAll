@@ -1134,6 +1134,17 @@ async fn grant_runtime_with_registry(
             /*end attachment_owner_grants*/
         )).await?;
     }
+    let delivery_installed: bool = tx
+        .query(
+            "SELECT to_regclass('public.mail_delivery_request') IS NOT NULL",
+            &[],
+        )
+        .await?[0]
+        .try_get(0)
+        .map_err(|_| failed("invalid mail delivery schema state"))?;
+    if delivery_installed {
+        tx.install_event_schema().await?;
+    }
     // Every publication installs or verifies the audit table and refreshes its partition window,
     // then grants the runtime role its insert-only rights on every installed event
     // table. The outbox table is installed by its own lifecycle step; the grant covers it when it
@@ -1238,6 +1249,8 @@ fn server_orm_builder(
         // the record history in the chatter (creation lines, tracked changes); returns at once
         // when `mail` is not installed
         .precommit_hook(erp_addon_mail::TRACKING_HOOK)
+        .precommit_hook(erp_addon_mail::notification::DELIVERY_HOOK)
+        .require_job_kinds(erp_addon_mail::job_kinds())
         .wasm_methods(wasm_methods)
         .computes(checks.computes)
         .constraints(checks.constraints)
@@ -1442,11 +1455,7 @@ async fn runtime_auth(
         .job_settings_source(jobs)
         .resolver(resolver)
         .policy(provider)
-        .rpc_impls([
-            &CATALOG_RPC,
-            &addon_detail::DETAIL_RPC,
-            &addon_detail::PREVIEW_RPC,
-        ])
+        .rpc_impls([&CATALOG_RPC, &addon_detail::DETAIL_RPC])
         .signal(Signal::new(baseline).with_refresh(NativeRefresh { source }))
         .build()?;
     orm.job_settings_snapshot().await?;
@@ -1462,6 +1471,10 @@ pub(crate) fn serve(args: &ServerArgs) -> Result<()> {
     // Before anything else: until the subscriber is installed every `tracing` event is dropped.
     // `RUST_LOG` defaults to `warn`; an unusable value stops the start.
     erp_server::logging::install_from_env().map_err(failed)?;
+    crate::restricted_cards::install(
+        std::env::var_os("ERP_UI_CARD_GUEST"),
+        std::env::var_os("ERP_UI_CARD_GUEST_SHA256"),
+    )?;
     let runtime = runtime()?;
     let mut shutdown_deadline = None;
     let result = runtime.block_on(async {
@@ -1915,7 +1928,7 @@ impl NativeLifecycle {
         if let Some(reader) = &self.audit_reader {
             reader.verify().await?;
         }
-        let rpc = runtime_rpc(&auth, &self.config).await?;
+        let rpc = runtime_rpc(&auth, &self.config, self.runtime_pool.clone())?;
         Ok((auth, rpc, asset_admission))
     }
 }
@@ -2035,6 +2048,27 @@ impl erp_modules::install::InstallAuthorizer for SessionAuthorizer<'_> {
     }
 }
 impl erp_server::web::WebLifecycle for NativeLifecycle {
+    fn preview_uninstall<'a>(
+        &'a self,
+        auth: &'a Arc<Auth>,
+        secret: &'a erp_security::auth::SessionSecret,
+        names: Vec<String>,
+    ) -> erp_orm::BoxFuture<'a, erp_fields::Result<serde_json::Value>> {
+        Box::pin(async move {
+            authorize_uninstall_request(auth, secret).await?;
+            let modules = addon_detail::modules(names)?;
+            let authorizer = SessionAuthorizer { auth, secret };
+            let impact = self
+                .system
+                .preview_uninstall_authorized(&modules, &authorizer)
+                .await
+                .map_err(module_error)?;
+            serde_json::to_value(impact).map_err(|source| {
+                erp_fields::Error::programming("Cannot encode uninstall impact").with_source(source)
+            })
+        })
+    }
+
     fn refresh<'a>(
         &'a self,
         auth: &'a Arc<Auth>,
@@ -2175,6 +2209,24 @@ fn committed(
 ) -> erp_server::web::LifecycleFailure {
     erp_server::web::LifecycleFailure::Committed { stage, error }
 }
+
+async fn authorize_uninstall_request(
+    auth: &Auth,
+    secret: &erp_security::auth::SessionSecret,
+) -> erp_fields::Result<()> {
+    // The engine opens and rechecks a separate owner-side transaction. Preflight authenticates
+    // through the request role before exposing any engine or composition diagnostic.
+    let mut begun = auth
+        .begin_session(
+            secret,
+            erp_orm::CredentialOptions::new().read_only("native uninstall admission"),
+        )
+        .await?;
+    let records = begun.tx.env().records("ir.module.module")?;
+    addon_detail::authorize(&mut begun.tx, &records).await?;
+    begun.tx.rollback().await
+}
+
 impl NativeLifecycle {
     async fn mutate_native(
         &self,
@@ -2198,6 +2250,9 @@ impl NativeLifecycle {
             addon_detail::modules(names).map_err(LifecycleFailure::Refused)?
         };
         if let NativeOperation::Uninstall { impact } = &operation {
+            authorize_uninstall_request(auth, secret)
+                .await
+                .map_err(LifecycleFailure::Refused)?;
             let digest = impact.strip_prefix("uninstall-v1:").ok_or_else(|| {
                 LifecycleFailure::Refused(erp_fields::Error::validation(
                     "Invalid uninstall impact fingerprint",
@@ -2212,28 +2267,6 @@ impl NativeLifecycle {
                     "Invalid uninstall impact fingerprint",
                 )));
             }
-            // Source preflight can refuse before the engine reaches its authorizer. Admit
-            // the primary administrator session before any composition diagnostic is exposed.
-            let mut begun = auth
-                .begin_session(
-                    secret,
-                    erp_orm::CredentialOptions::new().read_only("native uninstall admission"),
-                )
-                .await
-                .map_err(LifecycleFailure::Refused)?;
-            let records = begun
-                .tx
-                .env()
-                .records("ir.module.module")
-                .map_err(LifecycleFailure::Refused)?;
-            addon_detail::authorize(&mut begun.tx, &records)
-                .await
-                .map_err(LifecycleFailure::Refused)?;
-            begun
-                .tx
-                .rollback()
-                .await
-                .map_err(LifecycleFailure::Refused)?;
         }
         let authorizer = SessionAuthorizer { auth, secret };
         let outcome = match &operation {
@@ -2363,6 +2396,9 @@ impl NativeLifecycle {
 fn module_error(error: erp_modules::Error) -> erp_fields::Error {
     match error {
         erp_modules::Error::Orm(error) => error,
+        erp_modules::Error::OperationInProgress => erp_fields::Error::conflict(
+            "Another addon operation is in progress. Try again when it finishes",
+        ),
         erp_modules::Error::UnknownModule { names } => erp_fields::Error::validation(format!(
             "Unknown linked addons: {}",
             names
@@ -2425,11 +2461,29 @@ fn cli_field_error(error: CliError) -> erp_fields::Error {
     }
 }
 struct NativeHost {
-    languages: Vec<String>,
+    primary: deadpool_postgres::Pool,
 }
 impl erp_rpc::RpcHost for NativeHost {
-    fn language_active(&self, code: &str) -> erp_fields::Result<bool> {
-        Ok(self.languages.iter().any(|language| language == code))
+    fn check_language<'a>(
+        &'a self,
+        code: &'a str,
+    ) -> erp_orm::BoxFuture<'a, erp_fields::Result<bool>> {
+        Box::pin(async move {
+            let db = self.primary.get().await.map_err(|error| {
+                erp_fields::Error::db("Could not open the language catalogue.").with_source(error)
+            })?;
+            // res.lang changes independently of registry publication. A single indexed read on
+            // the tenant primary observes committed activations and withdrawals across workers.
+            db.query_opt(
+                "SELECT 1 FROM res_lang WHERE code=$1 AND active LIMIT 1",
+                &[&code],
+            )
+            .await
+            .map(|row| row.is_some())
+            .map_err(|error| {
+                erp_fields::Error::db("Could not read the active language.").with_source(error)
+            })
+        })
     }
     fn has_capability(
         &self,
@@ -2443,17 +2497,15 @@ impl erp_rpc::RpcHost for NativeHost {
         ))
     }
 }
-async fn runtime_rpc(
+fn runtime_rpc(
     auth: &Arc<Auth>,
     config: &ServerConfig,
+    primary: deadpool_postgres::Pool,
 ) -> erp_fields::Result<Arc<erp_rpc::RpcService>> {
-    let mut tx = auth.orm().begin(SUPERUSER_ID).await?;
-    let languages = erp_security::auth::context::installed_languages(&mut tx).await?;
-    tx.rollback().await?;
     Ok(Arc::new(
         erp_rpc::RpcService::new(
             auth.orm().clone(),
-            NativeHost { languages },
+            NativeHost { primary },
             crate::server_runtime::rpc_config(config)?,
         )
         .attempt_gate(crate::approval_rpc::ApprovalGate),

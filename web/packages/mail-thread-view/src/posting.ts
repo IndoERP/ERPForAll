@@ -141,6 +141,7 @@ async function sendNow(ctx: ThreadViewContext, uid: string): Promise<"sent" | "f
   try {
     const dto = buildPostDto(input, uid);
     const answer = checkPostAnswer(await ctx.transport.post(ctx.ref, dto));
+    if (!pending.has(uid)) return "sent"; // The thread was revoked while the request was outstanding.
     const placed = { reload: false };
     const result = applyStorePayload(ctx.store, answer.store, () => {
       const outcome = ctx.store.windows.appendLive(ctx.ref, answer.message_id);
@@ -155,6 +156,7 @@ async function sendNow(ctx: ThreadViewContext, uid: string): Promise<"sent" | "f
       );
     }
     if (placed.reload) await ctx.pager.loadLatest(ctx.ref);
+    if (!pending.has(uid)) return "sent";
     removePending(ctx, uid);
     ctx.announce(t(ctx, "Message sent"));
     return "sent";

@@ -2,7 +2,7 @@
 // @vitest-environment node
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -29,7 +29,7 @@ async function fixture() {
 async function failedRun(root: string, output: string, browser: string, timeout = 15000) {
   try {
     await run(process.execPath, [path.join(root, "web/scripts/browser-human-ui.mjs")], {
-      env: { ...process.env, CLIENT_BROWSER_CDP: "", CLIENT_BROWSER_OUTPUT: output, CHROME_BIN: browser },
+      env: { ...process.env, TMPDIR: root, CLIENT_BROWSER_CDP: "", CLIENT_BROWSER_OUTPUT: output, CHROME_BIN: browser },
       timeout, maxBuffer: 1024 * 1024,
     });
     throw new Error("Expected browser harness refusal");
@@ -46,12 +46,11 @@ test("missing Chrome names the executable and terminates without a PASS receipt"
   await expect(readFile(path.join(output, "result.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
 }, 15000);
 test("a browser that exits before CDP is reported without hanging in teardown", async () => {
-  const { root, output } = await fixture(), browser = path.join(root, "exits-chrome");
-  await writeFile(browser, "#!/bin/sh\nexit 23\n", { mode: 0o700 });
-  const error = await failedRun(root, output, browser);
+  const { root, output } = await fixture();
+  const error = await failedRun(root, output, "/usr/bin/false");
   expect(error.killed).not.toBe(true);
   expect(error.code).toBe(1);
-  expect(error.stderr).toContain("Chrome exited before connection: 23");
+  expect(error.stderr).toContain("Chrome exited before connection: 1");
 }, 15000);
 test("an existing evidence directory is refused without preserving a stale PASS as a new result", async () => {
   const { root, output } = await fixture();
@@ -65,14 +64,16 @@ test("an existing evidence directory is refused without preserving a stale PASS 
 
 test("a browser with no CDP endpoint reaches the startup deadline and releases its profile", async () => {
   const { root, output } = await fixture(), browser = path.join(root, "silent-chrome");
-  await writeFile(browser, '#!/bin/sh\nfor arg do case "$arg" in --user-data-dir=*) printf "%s" "${arg#*=}" > "' + path.join(root, "profile.txt") + '" ;; esac; done\nexec /bin/sleep 30\n', { mode: 0o700 });
-  const error = await failedRun(root, output, browser, 25000);
+  await writeFile(browser, "#!/bin/sh\nexec /bin/sleep 30\n", { mode: 0o700 });
+  const finished = failedRun(root, output, browser, 25000);
+  // The harness owns the profile even when the child never reaches its first instruction.
+  const profiles = () => readdir(root).then(entries => entries.filter(name => name.startsWith("erp-client-chrome-")));
+  await expect.poll(profiles, { timeout: 20000 }).toHaveLength(1);
+  const error = await finished;
   expect(error.killed).not.toBe(true);
   expect(error.code).toBe(1);
   expect(error.stderr).toContain("Chrome startup deadline exceeded");
-  const profile = await readFile(path.join(root, "profile.txt"), "utf8");
   await expect(readFile(path.join(output, "result.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   expect(JSON.parse(await readFile(path.join(output, "failure.json"), "utf8"))).toMatchObject({ status: "FAIL", message: "Error: Chrome startup deadline exceeded" });
-  const { access } = await import("node:fs/promises");
-  await expect(access(profile)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await profiles()).toEqual([]);
 }, 35000);

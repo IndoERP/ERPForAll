@@ -979,15 +979,26 @@ async fn message_post_inner(
     )
     .await?;
     tx.flush().await?;
-    let notified = recipients(
-        tx,
-        &model,
-        res_id,
-        subtype,
-        &checked.recipients,
-        Some(author),
-    )
-    .await?;
+    let notified = if model == "discuss.channel" {
+        crate::thread_discuss::recipient_partners(
+            tx,
+            res_id,
+            env.uid(),
+            author,
+            &checked.recipients,
+        )
+        .await?
+    } else {
+        recipients(
+            tx,
+            &model,
+            res_id,
+            subtype,
+            &checked.recipients,
+            Some(author),
+        )
+        .await?
+    };
     let mut vals = RawVals::new()
         .set_cell("model", Cell::Str(model.as_str().into()))
         .set_cell("res_id", Cell::Id(res_id))
@@ -1057,6 +1068,10 @@ async fn message_post_inner(
     record
         .call::<_, ()>(tx, "_message_post_after_hook", (message,))
         .await?;
+    // The installed delivery hook persists one names-only outbox request for each addressed post.
+    if !notified.is_empty() {
+        crate::notification::posted(tx, message)?;
+    }
     // PostgreSQL delivers this payload-free signal only on commit. A rolled-back post stays invisible.
     tx.notify_once(&erp_sdk::NotifyChannel::new("erp_thread_changed")?)
         .await?;

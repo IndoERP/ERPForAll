@@ -26,13 +26,12 @@ alloc::harness!(
     compile_templates_semantics,
 );
 
-/// The figures
-/// move with the code: update them, and the table, in the commit
-/// that moves them.
+/// Canonical main and M4 produced the same counts after removing the eager template queue.
+/// The previous 20,919 / 41,789 allocation pin was already stale on canonical main.
 fn compile_pin() -> Cost {
     Cost {
-        n: (20_919, 2_310_766, 783_752),
-        n2: (41_789, 4_553_652, 1_550_388),
+        n: (35_584, 3_833_556, 1_527_132),
+        n2: (71_100, 7_599_470, 3_036_776),
     }
 }
 

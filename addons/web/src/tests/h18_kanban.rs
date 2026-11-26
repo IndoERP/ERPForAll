@@ -112,17 +112,17 @@ fn kanban_root_flags_limit_and_actions() {
 fn kanban_refuses_what_the_card_cannot_carry() {
     let card = kanban_arch;
     for (xml, expected) in [
-        (card(r#"<div><field name="name"/></div>"#), "<div> is not allowed in a kanban card"),
+        (card(r#"<div><field name="name"/></div>"#), "Put custom card markup inside <restricted_templates> under <kanban>."),
         (card(r#"<field name="name" class="fw-bold"/>"#), "'class'"),
         (card(r#"<main t-if="record.name"><field name="name"/></main>"#), "'t-if'"),
-        (card(r#"<field name="name" invisible="not name"/>"#), "a later release"),
+        (card(r#"<field name="name" invisible="not name"/>"#), "Use a static value"),
         (card(r#"<field name="child_ids"/>"#), "one2many"),
         (card(r#"<main/><main/>"#), "at most once"),
         (card(r#"<field name="nope"/>"#), "unknown field 'h18.fixture.nope'"),
         (card("text"), "Text content"),
         (
             r#"<kanban><templates><t t-name="menu"><field name="name"/></t></templates></kanban>"#.to_owned(),
-            "a later release",
+            "the field declaration requires t-name=\"card\"",
         ),
         (
             r#"<kanban><field name="name"/><templates><t t-name="card"><field name="name"/></t></templates></kanban>"#.to_owned(),

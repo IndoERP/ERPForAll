@@ -66,6 +66,7 @@ mod calendar_settings;
 mod dashboard;
 mod dashboard_period;
 mod dashboard_settings;
+mod document_viewer_settings;
 mod h18_authorize;
 mod h18_lower;
 mod h18_storage;
@@ -74,8 +75,10 @@ mod h18_storage_unit;
 mod h18_transport;
 #[cfg(test)]
 mod h18_transport_unit;
+mod kanban_settings;
 mod metadata;
 pub mod pivot_export;
+pub mod restricted_card;
 pub mod table_xlsx;
 mod view_rights;
 mod view_types;

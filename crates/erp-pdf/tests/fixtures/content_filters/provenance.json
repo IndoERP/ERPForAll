@@ -1,0 +1,85 @@
+{
+  "utc": "2026-11-19T13:10:08.923203+00:00",
+  "host": "Arkanas-Mac-mini.local",
+  "python": "3.14.2 (main, Dec  5 2025, 16:49:16) [Clang 17.0.0 (clang-1700.4.4.1)]",
+  "producer": "LIBTIFF, Version 4.7.2\nCopyright (c) 1988-1996 Sam Leffler\nCopyright (c) 1991-1996 Silicon Graphics, Inc.\n\nCreate a TIFF file from raw data\n\nusage: raw2tiff [options] input.raw output.tif\nwhere options are:\n -L\t\tinput data has LSB2MSB bit order (default)\n -M\t\tinput data has MSB2LSB bit order\n -r #\t\tmake each strip have no more than # rows\n -H #\t\tsize of input image file header in bytes (0 by default)\n -w #\t\twidth of input image in pixels\n -l #\t\tlength of input image in lines\n -b #\t\tnumber of bands in input image (1 by default)\n\n -d data_type\ttype of samples in input image\nwhere data_type may be:\n byte\t\t8-bit unsigned integer (default)\n short\t\t16-bit unsigned integer\n long\t\t32-bit unsigned integer\n sbyte\t\t8-bit signed integer\n sshort\t\t16-bit signed integer\n slong\t\t32-bit signed integer\n float\t\t32-bit IEEE floating point\n double\t\t64-bit IEEE floating point\n\n -p photo\tphotometric interpretation (color space) of the input image\nwhere photo may be:\n miniswhite\twhite color represented with 0 value\n minisblack\tblack color represented with 0 value (default)\n rgb\t\timage has RGB color model\n cmyk\t\timage has CMYK (separated) color model\n ycbcr\t\timage has YCbCr color model\n cielab\t\timage has CIE L*a*b color model\n icclab\t\timage has ICC L*a*b color model\n itulab\t\timage has ITU L*a*b color model\n\n -s\t\tswap bytes fetched from input file\n\n -i config\ttype of samples interleaving in input image\nwhere config may be:\n pixel\t\tpixel interleaved data (default)\n band\t\tband interleaved data\n\n -c lzw[:opts]\tcompress output with Lempel-Ziv & Welch encoding\n    #  set predictor value\n    For example, -c lzw:2 for LZW-encoded data with horizontal differencing\n -c zip[:opts]\tcompress output with deflate encoding\n    #  set predictor value\n -c jpeg[:opts]\tcompress output with JPEG encoding\n    #  set compression quality level (0-100, default 75)\n    r  output color image as RGB rather than YCbCr\n    For example, -c jpeg:r:50 for JPEG-encoded RGB data with 50% comp. quality\n -c packbits\tcompress output with packbits encoding\n -c none\tuse no compression algorithm on output\n\n -o out.tif\twrite output to out.tif\n -h\t\tthis help message\n",
+  "commands": [
+    {
+      "argv": [
+        "raw2tiff",
+        "-M",
+        "-w",
+        "64",
+        "-l",
+        "64",
+        "-r",
+        "64",
+        "-c",
+        "lzw:1",
+        "/private/tmp/erp-pdf-filters-independent/payload.bin",
+        "/private/tmp/erp-pdf-filters-independent/libtiff-lzw-predictor-1.tif"
+      ],
+      "stdout": "",
+      "stderr": "",
+      "tiff_tags": {
+        "256": 64,
+        "257": 64,
+        "258": 8,
+        "259": 5,
+        "262": 1,
+        "266": 1,
+        "273": 8,
+        "274": 1,
+        "277": 1,
+        "278": 64,
+        "279": 5572,
+        "284": 1,
+        "317": 1,
+        "339": 1
+      },
+      "tiff_byte_order": "<"
+    },
+    {
+      "argv": [
+        "raw2tiff",
+        "-M",
+        "-w",
+        "64",
+        "-l",
+        "64",
+        "-r",
+        "64",
+        "-c",
+        "lzw:2",
+        "/private/tmp/erp-pdf-filters-independent/payload.bin",
+        "/private/tmp/erp-pdf-filters-independent/libtiff-lzw-predictor-2.tif"
+      ],
+      "stdout": "",
+      "stderr": "",
+      "tiff_tags": {
+        "256": 64,
+        "257": 64,
+        "258": 8,
+        "259": 5,
+        "262": 1,
+        "266": 1,
+        "273": 8,
+        "274": 1,
+        "277": 1,
+        "278": 64,
+        "279": 5589,
+        "284": 1,
+        "317": 2,
+        "339": 1
+      },
+      "tiff_byte_order": "<"
+    }
+  ],
+  "sha256": {
+    "libtiff-lzw-predictor-1.bin": "063fc7a24f4b7a70e4f369c58e9523801d3025ae5b885fb2b550d844b4948601",
+    "libtiff-lzw-predictor-1.tif": "4993e677c710a6e5d06851fd52183a7fb3e64f021781ed13ddaffc652de68404",
+    "libtiff-lzw-predictor-2.bin": "18f1ee90bf1f46251eb6a25ac4b11eb8dc2e79ed169cca177365920d6f5dece0",
+    "libtiff-lzw-predictor-2.tif": "46379e8d2a69b6bd2ea89f54c72f3434e08a3ec4bf7d7ecb97ac3e4e3a00d4ba",
+    "payload.bin": "7c2e7057a39bb871acfdb95fb789ae817fef477e1cd049639b445c78d9cf8839"
+  }
+}

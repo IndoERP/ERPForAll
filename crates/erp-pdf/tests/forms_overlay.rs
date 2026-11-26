@@ -238,7 +238,7 @@ fn transformed_stamp_keeps_signature_and_overlay_form_refusals() {
     assert_eq!(err.kind(), PdfErrorKind::Unsupported);
     assert_eq!(
         err.to_string(),
-        "PDF feature signed document is unsupported (a later release)"
+        "PDF feature signed document rewrite or overlay is refused by design"
     );
     let err = stamped(&bytes(target()), &bytes(target())).unwrap_err();
     assert_eq!(err.kind(), PdfErrorKind::Unsupported);

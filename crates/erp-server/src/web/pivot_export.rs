@@ -5,6 +5,27 @@
 //! bounds, the caller's read access to its model and the workbook belong to the `web` addon behind
 //! [`WebPivotExport`] (addons cannot depend on this crate: layer check).
 use super::*;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// Holds an export slot across buffering, authorization and blocking workbook construction.
+pub struct PivotExportPermit(Arc<AtomicUsize>);
+
+impl PivotExportPermit {
+    fn acquire(active: &Arc<AtomicUsize>, limit: usize) -> Option<Arc<Self>> {
+        active
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                (count < limit).then_some(count + 1)
+            })
+            .ok()?;
+        Some(Arc::new(Self(Arc::clone(active))))
+    }
+}
+
+impl Drop for PivotExportPermit {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
 
 /// The workbook a download answers with.
 #[derive(Debug)]
@@ -17,18 +38,19 @@ pub struct PivotWorkbook {
 
 /// Trusted composition adapter of the pivot download (the `web` addon's checked export).
 pub trait WebPivotExport: Send + Sync {
-    /// The largest document, in bytes, the route may buffer: the declared setting, read for the
+    /// The maximum request bytes and concurrent jobs, read in the
     /// caller's session transaction (the route rolls it back afterwards).
-    fn request_limit<'a>(
+    fn request_limits<'a>(
         &'a self,
         tx: &'a mut erp_orm::Transaction,
-    ) -> erp_orm::BoxFuture<'a, erp_fields::Result<usize>>;
+    ) -> erp_orm::BoxFuture<'a, erp_fields::Result<(usize, usize)>>;
     /// Check the caller's read access to the document's model, bound and parse the document, write
     /// the workbook. Refusals are `Validation` (names the path or the setting) and `Access`.
     fn export<'a>(
         &'a self,
         tx: &'a mut erp_orm::Transaction,
         body: &'a [u8],
+        permit: Arc<PivotExportPermit>,
     ) -> erp_orm::BoxFuture<'a, erp_fields::Result<PivotWorkbook>>;
 }
 
@@ -90,14 +112,17 @@ impl WebApp {
             .begin_session(&secret, CredentialOptions::new())
             .await
             .map_err(auth_error)?;
-        let limit = exporter.request_limit(&mut begun.tx).await;
+        let limits = exporter.request_limits(&mut begun.tx).await;
         let rolled_back = begun.tx.rollback().await;
         drop(begun);
-        let limit = match limit {
+        let (limit, concurrent) = match limits {
             Ok(limit) => limit,
             Err(error) => return Err(self.rpc_error(error).await),
         };
         rolled_back.map_err(auth_error)?;
+        let permit = PivotExportPermit::acquire(&self.active_pivot_exports, concurrent).ok_or_else(|| {
+            response(StatusCode::TOO_MANY_REQUESTS, "The simultaneous pivot download limit (web.pivot_export_max_concurrent) has been reached. Try again after a download finishes.")
+        })?;
         let bytes = to_bytes(body, limit).await.map_err(|_| {
             response(
                 StatusCode::PAYLOAD_TOO_LARGE,
@@ -110,7 +135,7 @@ impl WebApp {
             .begin_session(&secret, CredentialOptions::new())
             .await
             .map_err(auth_error)?;
-        let written = exporter.export(&mut begun.tx, &bytes).await;
+        let written = exporter.export(&mut begun.tx, &bytes, permit).await;
         let rolled_back = begun.tx.rollback().await;
         drop(begun);
         let workbook = match written {
@@ -135,5 +160,24 @@ impl WebApp {
             HeaderValue::from_static("nosniff"),
         );
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn export_slots_follow_the_live_limit_and_outlive_cancelled_waiters() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let first = PivotExportPermit::acquire(&active, 1).unwrap();
+        let worker = first.clone();
+        drop(first);
+        assert!(PivotExportPermit::acquire(&active, 1).is_none());
+        let second = PivotExportPermit::acquire(&active, 2).unwrap();
+        drop(worker);
+        assert!(PivotExportPermit::acquire(&active, 1).is_none());
+        drop(second);
+        assert!(PivotExportPermit::acquire(&active, 1).is_some());
     }
 }

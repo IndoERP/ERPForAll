@@ -30,6 +30,26 @@ fn image_node(data: Vec<u8>) -> Node {
         alt: "logo".into(),
     }
 }
+#[test]
+fn html_preview_excludes_unplaced_rasters_and_keeps_uploaded_svg_as_alt_text() {
+    let mut builder = DocumentBuilder::new(Limits::default());
+    let _unplaced = builder.add(image_node(png_header(3, 2))).unwrap();
+    let body = builder
+        .add(image_node(
+            b"<svg><title>Uploaded file</title></svg>".to_vec(),
+        ))
+        .unwrap();
+    let options = DocumentOptions::new(
+        "test.preview",
+        "Preview",
+        PageSetup::new(300.0, 400.0, 20.0).unwrap(),
+    );
+    let html = erp_report::render_html(&builder.finish(body, options).unwrap(), &[]).unwrap();
+    assert!(html.contains("aria-label=\"logo\""));
+    assert!(!html.contains("background-image:url("));
+    assert!(!html.contains("Uploaded file"));
+}
+
 fn limited(kind: LimitKind, value: usize) -> Limits {
     Limits::default().lowered(kind, value).unwrap()
 }

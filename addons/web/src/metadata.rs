@@ -3060,11 +3060,45 @@ async fn get_views(
             std::sync::atomic::AtomicUsize,
         )>(1)?;
         let ty = ViewType::new(tx, view_type)?;
+        // A missing default search still offers the caller's groupable fields. Keep explicit
+        // identities and context refs on the checked selection path so their failures surface.
+        let id = if view_type == "search"
+            && id.is_none()
+            && env.context().get("search_view_ref").is_none()
+        {
+            if let Some(stored) =
+                erp_addon_base::ir_ui_view::select::default_view(tx, Some(model), &ty).await?
+            {
+                Some(stored.get())
+            } else {
+                let mut nodes = admission.vector::<wire::ViewNode>(1)?;
+                nodes.push(wire::ViewNode::Search {
+                    children: Vec::new(),
+                    search_panel: None,
+                });
+                serialized.push(wire::View::new(
+                    wire::ViewIdentity::generated(),
+                    kind,
+                    admission.format(format_args!("{}", declaration.renderer()))?,
+                    0,
+                    nodes,
+                ));
+                total_nodes += 1;
+                if total_nodes > MAX_VIEW_NODES {
+                    return Err(fail(
+                        "Requested views exceed the 4096-node aggregate limit.",
+                    ));
+                }
+                continue;
+            }
+        } else {
+            id
+        };
         let selected = match id {
             Some(id) => ViewRequest::new(model, &ty).view_id(ViewId::new(id)?),
             None => ViewRequest::new(model, &ty).context(env.context()),
         };
-        let (payload, selected_id, selected_notices) =
+        let (payload, selected_id, selected_notices, restricted_source) =
             erp_addon_base::ir_ui_view::with_checked_panel_view(
                 tx,
                 env,
@@ -3092,7 +3126,12 @@ async fn get_views(
                         let message = admission.format(format_args!("{notice}"))?;
                         notices.push(wire::Notice::new(code, message));
                     }
-                    Ok((payload, selected_id, notices))
+                    let source = if view_type == "kanban" {
+                        crate::restricted_card::Source::checked(&input)?
+                    } else {
+                        None
+                    };
+                    Ok((payload, selected_id, notices, source))
                 },
             )
             .await?;
@@ -3112,6 +3151,52 @@ async fn get_views(
                 .await?;
         crate::view_rights::restrict_root(&mut view, rights)?;
         let (fields, storage) = authorized.into_parts();
+        if let Some(source) = restricted_source {
+            let arch = format!("{model}.kanban.{}", selected_id.get());
+            let model_spec = env.records(model)?;
+            let declarations = view
+                .nodes
+                .iter()
+                .filter_map(|node| {
+                    let wire::ViewNode::Field {
+                        field,
+                        widget,
+                        options,
+                        ..
+                    } = node
+                    else {
+                        return None;
+                    };
+                    let spec = model_spec.spec().field(&field.name)?;
+                    let supported = !matches!(
+                        spec.ty,
+                        FieldType::Binary { .. }
+                            | FieldType::Json
+                            | FieldType::One2many { .. }
+                            | FieldType::Many2many { .. }
+                    );
+                    (supported
+                        && widget != "password"
+                        && !matches!(options, wire::FieldOptions::Presentation(p) if p.password == Some(true))
+                        && fields.contains(&field.name))
+                    .then(|| field.name.clone())
+                })
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            let artifact = source
+                .compile(arch, env.lang().unwrap_or("en_US").to_owned(), declarations)
+                .await?;
+            admission.charge(artifact.plan.len())?;
+            let Some(wire::ViewNode::KanbanCard { restricted, .. }) = view
+                .nodes
+                .iter_mut()
+                .find(|node| matches!(node, wire::ViewNode::KanbanCard { .. }))
+            else {
+                return Err(fail("Restricted kanban has no authorized card."));
+            };
+            *restricted = Some(artifact);
+        }
         admission.hold(storage)?;
         admission.phase("views:aggregate-fields:reserve");
         admission.fields(&mut all_fields, fields)?;

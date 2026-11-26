@@ -8,7 +8,8 @@ import {
   applyContext, archState, decodePivotAnswer, decodePivotFields, paramsState, PIVOT_MAX_MEASURES, PivotModel, readPivotView, resolveSpec, snapshotParams, specOf,
   type PivotConfig, type PivotField, type PivotGroupItem, type PivotLimits, type PivotTable
 } from "../src/client/pivot.js";
-import { mountPivot, type PivotCellTarget } from "../src/client/pivot-view.js";
+import { routeUrl, parseRoute } from "../src/client/route.js";
+import { registerPivotVariant, mountPivot, type PivotCellTarget } from "../src/client/pivot-view.js";
 import { auditComponent } from "../../../../web/testing/axe.js";
 import { answer, filterRecords, gated, recorder, records, type Rec } from "./pivot-fixture.js";
 
@@ -40,11 +41,11 @@ export const fieldsReply = {
 };
 const ref = (name: string) => ({ model: "t.note", name });
 const pivotField = (name: string, role: string, label: string, interval?: string) => ({ kind: "pivot_field", field: ref(name), label, role, ...(interval ? { interval } : {}) });
-type Flags = { disable_linking?: boolean; display_quantity?: boolean; default_order?: string };
+type Flags = { variant?: string; disable_linking?: boolean; display_quantity?: boolean; default_order?: string };
 const pivotDescription = (fields: unknown[], flags: Flags = {}) => ({
   wire_major: 1, registry_version: "r1", description_version: "d1", model: "t.note", fields: { "t.note": modelFields }, notices: [],
   views: [{ identity: { kind: "stored", id: 5 }, type: "pivot", schema_major: 1, renderer: "web.pivot", root: 0,
-    nodes: [{ kind: "pivot", children: fields.map((_, index) => index + 1), disable_linking: flags.disable_linking ?? false, display_quantity: flags.display_quantity ?? false, ...(flags.default_order ? { default_order: flags.default_order } : {}) }, ...fields] }]
+    nodes: [{ kind: "pivot", ...(flags.variant ? {variant: flags.variant} : {}), children: fields.map((_, index) => index + 1), disable_linking: flags.disable_linking ?? false, display_quantity: flags.display_quantity ?? false, ...(flags.default_order ? { default_order: flags.default_order } : {}) }, ...fields] }]
 });
 const view = (fields: unknown[], flags?: Flags): View => describeViews(pivotDescription(fields, flags), "t.note", "r1").views.get("pivot")!;
 const catalogue = (items: PivotGroupItem[] = []) => ({ ...decodePivotFields(fieldsReply), items });
@@ -1099,7 +1100,7 @@ async function startApp(path: string, options: { tolerant?: boolean } = {}) {
     }
     if (method === "get_views") {
       const asked = body["views"] as unknown[][];
-      if (noSearchView && asked.some(item => item[1] === "search")) return reply({ message: "No default view of type 'search' could be found! (generated default views come with the model)" }, 422);
+      if (noSearchView && asked.some(item => item[1] === "search")) return reply({ ...full, views: [{ type: "search", identity: { kind: "generated" }, renderer: "web.search", schema_major: 1, root: 0, nodes: [{ kind: "search", children: [] }] }] });
       return reply(dashboardRead ? withDashboard(full) : full);
     }
     if (method === "erp_read_dashboard") {
@@ -1693,4 +1694,30 @@ test("a dashboard card in the address of an action without a strip is dropped an
   expect(of("erp_read_dashboard")).toHaveLength(0);
   expect(query().has("search_filters")).toBe(false);
   expect(root.textContent).not.toContain("Invalid search_filters");
+});
+
+test("a named pivot variant formats aggregate values and a missing variant is reported by name", async () => {
+  const name = "fixture.accounting", { model } = await made(standard(), { flags: { variant: name } });
+  const options = { model, locale: american, title: "Notes", run: (job: () => Promise<void>) => { void job(); } };
+  registerPivotVariant(name, { formatMeasure: (_measure, _value, formatted) => `Units ${formatted}` });
+  const variantRoot = view(standard(), { variant: name }).nodes[0]!;
+  expect(variantRoot).toMatchObject({ kind: "pivot", variant: name });
+  expect(mountPivot({ ...options, variant: name }).element.textContent).toContain("Units 1,525");
+  expect(() => mountPivot({ ...options, variant: "fixture.missing" })).toThrow("Unknown pivot variant: fixture.missing");
+});
+
+test("quoted, slashed and escaped group labels round-trip through both expanded and sorted header addresses", async () => {
+  const special = 'A//B "C"\\D\nΩ', source = records.map(row => ({ ...row, name: special }));
+  const cfg = config([pivotField("name","col","Name"), pivotField("size","measure","Size")]);
+  const first = new PivotModel(cfg, recorder(source).call, () => [], LIMITS);
+  await first.load(); await first.expand("col", [k(special)], field("published","month")); await first.sortBy("size", [k(special)]);
+  const params = snapshotParams(first.snapshot());
+  const path = routeUrl({ action: "20", view_type: "pivot", ...params });
+  const route = parseRoute(new URL(path, "https://erp.test"));
+  const requests = recorder(source);
+  const resumed = new PivotModel(cfg, requests.call, () => [], LIMITS, paramsState(route, cfg));
+  await resumed.load();
+  expect(requests.requests).toHaveLength(1);
+  expect(resumed.snapshot().open.col).toContainEqual([special]);
+  expect(resumed.snapshot().sort?.path).toEqual([special]);
 });

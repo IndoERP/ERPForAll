@@ -5,10 +5,13 @@
 //! only when everything it means lives in the annotation and in pages of the same copy; one that
 //! needs a form, a name tree or a script is named, never carried with a dangling dependency.
 //! Optional-content membership is carried: the copy lists the group in its rebuilt configuration.
-use crate::error::{Result, malformed, owner};
+//! Named destinations are rewritten as explicit destinations.
+use crate::dest::{self, Names, Target};
+use crate::error::{Result, malformed};
 use crate::graph;
 use crate::limits::Context;
 use lopdf::{Dictionary, Document, Object, ObjectId};
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 /// Annotation types whose meaning needs nothing outside the annotation and its page.
@@ -41,20 +44,15 @@ pub(crate) struct Why {
 const fn never(text: &'static str) -> Option<Why> {
     Some(Why { text, owner: None })
 }
-/// Not carried until `owner` lands.
-const fn until(owner: &'static str, text: &'static str) -> Option<Why> {
-    Some(Why {
-        text,
-        owner: Some(owner),
-    })
-}
+/// A child annotation cannot refer to a parent omitted from the copy.
 const ORPHAN: Option<Why> = never("a parent annotation that is not carried");
 
 /// One entry of a page's `Annots` array while its fate is decided.
 pub(crate) struct Entry<'d> {
     /// Object identifier when the array holds a reference; popups and replies name it.
     pub id: Option<ObjectId>,
-    pub dict: &'d Dictionary,
+    /// The source dictionary, or a copy of it in which a named destination is explicit.
+    pub dict: Cow<'d, Dictionary>,
     popup: bool,
     /// A form field annotation.
     pub widget: bool,
@@ -71,21 +69,25 @@ impl Entry<'_> {
 }
 
 /// Read one `Annots` entry and decide whether it stands on its own.
-/// `copied` answers whether an object is a page of this reading copy.
-pub(crate) fn entry<'d>(
+/// `copied` answers whether an object is a page of this reading copy; `names` resolves the
+/// destination names of the source document.
+pub(crate) fn entry<'d: 'i, 'i>(
     doc: &'d Document,
-    item: &'d Object,
+    item: &'i Object,
     l: &Context<'_>,
     copied: &dyn Fn(ObjectId) -> bool,
-) -> Result<Entry<'d>> {
+    names: &Names<'d>,
+) -> Result<Entry<'i>> {
     let dict = graph::annotation(doc, item, l)?;
     let subtype = graph::annotation_type(doc, dict, l)?;
+    let mut explicit = None;
+    let why = dependency(doc, dict, subtype, l, copied, names, &mut explicit)?;
     Ok(Entry {
         id: item.as_reference().ok(),
-        dict,
+        dict: explicit.map_or(Cow::Borrowed(dict), Cow::Owned),
         popup: subtype == b"Popup",
         widget: subtype == b"Widget",
-        why: dependency(doc, dict, subtype, l, copied)?,
+        why,
         flat: None,
     })
 }
@@ -103,12 +105,16 @@ fn name<'d>(
         .map_err(|e| malformed(message).source(e))
 }
 
-fn dependency(
-    doc: &Document,
-    d: &Dictionary,
+/// Why `d` is not self-contained. When it is and a destination of it is a name, `explicit`
+/// receives the dictionary with the explicit destination in the name's place.
+fn dependency<'d: 'i, 'i>(
+    doc: &'d Document,
+    d: &'i Dictionary,
     subtype: &[u8],
     l: &Context<'_>,
     copied: &dyn Fn(ObjectId) -> bool,
+    names: &Names<'d>,
+    explicit: &mut Option<Dictionary>,
 ) -> Result<Option<Why>> {
     if subtype == b"Widget" {
         // Painted into the page under `FormPolicy::Flatten`; never an annotation of a copy.
@@ -125,10 +131,14 @@ fn dependency(
     if subtype == b"FreeText" && !d.has(b"AP") {
         return Ok(never("no appearance stream"));
     }
-    if let Ok(dest) = d.get(b"Dest")
-        && let Some(why) = destination(doc, dest, l, copied)?
-    {
-        return Ok(Some(why));
+    if let Ok(dest) = d.get(b"Dest") {
+        match destination(doc, dest, l, copied, names)? {
+            Reach::Not(why) => return Ok(Some(why)),
+            Reach::Named(array) => explicit
+                .get_or_insert_with(|| d.clone())
+                .set("Dest", array.to_vec()),
+            Reach::Explicit => {}
+        }
     }
     if let Ok(action) = d.get(b"A") {
         let action = graph::resolve(doc, action, l)?
@@ -147,8 +157,15 @@ fn dependency(
                 let dest = action
                     .get(b"D")
                     .map_err(|e| malformed("PDF GoTo action lacks a destination").source(e))?;
-                if let Some(why) = destination(doc, dest, l, copied)? {
-                    return Ok(Some(why));
+                match destination(doc, dest, l, copied, names)? {
+                    Reach::Not(why) => return Ok(Some(why)),
+                    // The action is written inside the annotation, with the explicit destination.
+                    Reach::Named(array) => {
+                        let mut action = action.clone();
+                        action.set("D", array.to_vec());
+                        explicit.get_or_insert_with(|| d.clone()).set("A", action);
+                    }
+                    Reach::Explicit => {}
                 }
             }
             _ => return Ok(never("an action other than URI or GoTo")),
@@ -157,25 +174,41 @@ fn dependency(
     Ok(None)
 }
 
-fn destination(
-    doc: &Document,
-    o: &Object,
+/// What a destination means for the annotation that uses it.
+enum Reach<'d> {
+    /// Its page is in the copy and the destination is written as it is.
+    Explicit,
+    /// Its page is in the copy; the name is replaced by this explicit destination.
+    Named(&'d [Object]),
+    /// Not self-contained.
+    Not(Why),
+}
+
+fn destination<'d: 'i, 'i>(
+    doc: &'d Document,
+    o: &'i Object,
     l: &Context<'_>,
     copied: &dyn Fn(ObjectId) -> bool,
-) -> Result<Option<Why>> {
-    match graph::resolve(doc, o, l)? {
-        Object::Array(a) => match a.first() {
-            Some(Object::Reference(page)) if copied(*page) => Ok(None),
-            // Another page, a page number of another file, or anything else that is not ours.
-            Some(_) => Ok(never("a destination outside the copied pages")),
-            None => Err(malformed("PDF destination array is empty")),
-        },
-        // Named destinations live in the catalog, which a reading copy does not carry.
-        Object::Name(_) | Object::String(_, _) => Ok(until(owner::DEST, "a named destination")),
-        _ => Err(malformed(
-            "PDF destination must be an array, a name or a string",
-        )),
-    }
+    names: &Names<'d>,
+) -> Result<Reach<'i>> {
+    Ok(match dest::target(doc, o, names, l)? {
+        Target::Page { page, array, named } if copied(page) => {
+            if named {
+                Reach::Named(array)
+            } else {
+                Reach::Explicit
+            }
+        }
+        // Another page, a page number of another file, or anything else that is not ours.
+        Target::Page { .. } | Target::Elsewhere => Reach::Not(Why {
+            text: "a destination outside the copied pages",
+            owner: None,
+        }),
+        Target::Undefined => Reach::Not(Why {
+            text: "a named destination that the document does not define",
+            owner: None,
+        }),
+    })
 }
 
 /// Identifiers of the entries that are carried.

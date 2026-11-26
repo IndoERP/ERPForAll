@@ -130,6 +130,10 @@ lang: string,
  */
 tz: string,
 /**
+ *Wire member `direction`.
+ */
+direction?: TextDirection | null,
+/**
  *Wire member `decimal_point`.
  */
 decimal_point: string,
@@ -149,6 +153,7 @@ date_format: string,
  *Wire member `time_format`.
  */
 time_format: string, };
+export type TextDirection = "ltr" | "rtl";
 export type Csrf = {
 /**
  *Wire member `logout`.
@@ -217,7 +222,7 @@ action_kind: MenuActionKind | null,
 module: string | null, };
 export type MenuActionKind = "window" | "client";
 export type ActionTarget = "current" | "main" | "new";
-export type ViewType = "list" | "form" | "search" | "kanban" | "calendar" | "pivot" | "graph" | "gantt" | "activity" | "hierarchy";
+export type ViewType = "list" | "form" | "search" | "kanban" | "calendar" | "pivot" | "graph" | "gantt" | "activity" | "map" | "hierarchy";
 export type WindowAction = {
 /**
  *Wire member `wire_major`.
@@ -298,6 +303,23 @@ views: Array<View>,
  *Wire member `notices`.
  */
 notices: Array<Notice>, };
+export type RestrictedCard = {
+/**
+ *Wire member `arch`.
+ */
+arch: string,
+/**
+ *Wire member `source_sha256`.
+ */
+source_sha256: string,
+/**
+ *Wire member `language`.
+ */
+language: string,
+/**
+ *Wire member `plan`.
+ */
+plan: string, };
 export type FieldKind = "char" | "text" | "html" | "boolean" | "integer" | "float" | "monetary" | "date" | "datetime" | "selection" | "many2one" | "one2many" | "many2many" | "binary" | "json";
 export type FieldDescription = {
 /**
@@ -1259,7 +1281,11 @@ search_panel?: ListSearchPanel, } | { "kind": "pivot",
 /**
  * Child arena indexes (only `pivot_field`).
  */
-children: Array<number>, disable_linking: boolean, display_quantity: boolean, default_order?: string, } | { "kind": "pivot_field",
+children: Array<number>, disable_linking: boolean, display_quantity: boolean, default_order?: string,
+/**
+ * Optional, named client extension for displaying measures.
+ */
+variant?: string, } | { "kind": "pivot_field",
 /**
  * Accessible field handle.
  */
@@ -1296,6 +1322,10 @@ edit?: boolean,
  * Whether records can be deleted from this view.
  */
 delete?: boolean, } | { "kind": "kanban_card",
+/**
+ * Optional host-produced plan after field authorization.
+ */
+restricted?: RestrictedCard,
 /**
  * Child arena indexes (`field`, `kanban_section`).
  */
@@ -1375,7 +1405,7 @@ draggable: boolean,
 /**
  * Optional plural noun for child count pills (e.g. `"people"`).
  */
-label?: string, } | { "kind": "activity",
+label?: string, } | { "kind": "map", latitude: FieldRef, longitude: FieldRef, } | { "kind": "activity",
 /**
  * Child arena indexes (record summary `field` nodes).
  */

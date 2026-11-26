@@ -84,3 +84,12 @@ export function pendingUids(store: MessagingStore, ref: ThreadRef): readonly str
   const value = model.get(id, "pending");
   return Array.isArray(value) ? (value as readonly string[]) : [];
 }
+
+/** Remove private drafts and unsent posts when the session can no longer read this thread. */
+export function forgetDraft(store: MessagingStore, ref: ThreadRef): void {
+  const models = defined.get(store);
+  const key = threadKey(ref);
+  if (!models?.thread.has(key)) return;
+  for (const uid of pendingUids(store, ref)) if (models.pending.has(uid)) models.pending.delete(uid);
+  models.thread.delete(key);
+}

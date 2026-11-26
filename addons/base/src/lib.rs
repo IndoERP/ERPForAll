@@ -88,6 +88,8 @@ pub mod res_users_settings;
 pub mod server_action;
 mod settings_general;
 mod system_parameters;
+mod technical_sessions;
+mod translation_catalog;
 pub mod warning_text;
 
 pub use dated_parameter::IrDatedParameter;

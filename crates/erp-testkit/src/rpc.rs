@@ -213,6 +213,13 @@ impl RpcHost for BoxedHost {
         self.0.language_active(code)
     }
 
+    fn check_language<'a>(
+        &'a self,
+        code: &'a str,
+    ) -> erp_orm::BoxFuture<'a, erp_fields::Result<bool>> {
+        self.0.check_language(code)
+    }
+
     fn has_capability(
         &self,
         principal: &erp_orm::Principal,

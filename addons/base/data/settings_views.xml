@@ -25,6 +25,13 @@ Each
   <menuitem id="settings_people_menu" name="Users &amp; Companies" parent="settings_menu" groups="base.group_system" sequence="10"/>
   <record id="settings_people_menu" model="ir.ui.menu"><field name="web_icon">lucide:users</field></record>
   <menuitem id="settings_reference_menu" name="Reference Data" parent="settings_menu" groups="base.group_system" sequence="20"/>
+
+  <record id="translation_catalog_action" model="ir.actions.client">
+    <field name="name">Translation Catalog</field>
+    <field name="tag">base.translation_catalog</field>
+  </record>
+  <menuitem id="translation_catalog_menu" name="Translation Catalog" parent="settings_reference_menu"
+            action="translation_catalog_action" groups="base.group_system" sequence="90"/>
   <record id="settings_reference_menu" model="ir.ui.menu"><field name="web_icon">lucide:library</field></record>
 
   <record id="settings_users_list" model="ir.ui.view">

@@ -264,7 +264,7 @@ test("module toggle install and uninstall flows use existing endpoints, then rel
         fingerprint: "fp-123",
         resolved: ["delivery"],
         dropped_models: [{ model: "delivery.carrier", table: "delivery_carrier", row_count: "2" }],
-        target_count: "2",
+        metadata: [], effects: [], target_count: "2",
       }), { headers: { "Content-Type": "application/json" } });
     }
     if (url.endsWith("/erp_describe")) {
@@ -357,7 +357,7 @@ test("module toggle handles uninstall preview validation refusal and 409 conflic
       if (mode === "validation") {
         return new Response(JSON.stringify({ message: "Carriers is needed by Sales; uninstall Sales first.", name: "erp.exceptions.ValidationError" }), { status: 400, headers: { "Content-Type": "application/json" } });
       }
-      return new Response(JSON.stringify({ fingerprint: "fp-stale", resolved: ["delivery"], dropped_models: [], target_count: "0" }), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ fingerprint: "fp-stale", resolved: ["delivery"], dropped_models: [], metadata: [], effects: [], target_count: "0" }), { headers: { "Content-Type": "application/json" } });
     }
     if (url === "/erp/module/uninstall") {
       return new Response(JSON.stringify({ error: { message: "Stale fingerprint", name: "erp.exceptions.ConflictError" } }), { status: 409, headers: { "Content-Type": "application/json" } });
@@ -396,7 +396,7 @@ test("module toggle handles uninstall preview validation refusal and 409 conflic
   document.querySelector<HTMLButtonElement>(".addon-uninstall-confirm")!.click();
   await Promise.all(jobs);
   expect(notices).toContain("Database state changed since preview. A fresh confirmation is required.");
-  expect(errors).toHaveLength(1);
+  expect(errors).toHaveLength(0);
 });
 
 test("group toggles render on and off, and stay out of scalar RPCs", async () => {

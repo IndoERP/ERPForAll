@@ -4,7 +4,7 @@
 use crate::analyze::LocCtx;
 use crate::diag::{Diagnostic, DiagnosticKind, Location};
 use crate::limits::{CompilerLimits, LimitKind};
-use crate::names::AddonName;
+use crate::names::{AddonName, TemplateName};
 use crate::provenance::Mapping;
 use crate::xml::{XElement, XNode, is_xml_space};
 use std::borrow::Cow;
@@ -157,6 +157,18 @@ impl TranslationCatalogue {
         &self.language
     }
 
+    /// Immutable catalogue entries in canonical order. The empty addon identifies a global term.
+    pub fn entries(&self) -> impl Iterator<Item = (&str, &str, &str)> {
+        self.global
+            .iter()
+            .map(|(key, value)| ("", key.as_ref(), value.as_ref()))
+            .chain(self.modules.iter().flat_map(|(addon, terms)| {
+                terms
+                    .iter()
+                    .map(move |(key, value)| (addon.as_str(), key.as_ref(), value.as_ref()))
+            }))
+    }
+
     fn admit(
         &mut self,
         addon_bytes: usize,
@@ -265,10 +277,24 @@ impl ExtractedTranslations {
     }
 }
 
+/// A static call can render the same template under different caller translation scopes.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum CallScope {
+    Off,
+    Addon(AddonName),
+}
+
 pub(crate) struct Pass<'a> {
     catalogue: Option<&'a TranslationCatalogue>,
     /// Source admission validates/consumes new context declarations without changing literals.
     validation_only: bool,
+    aliases: BTreeSet<TemplateName>,
+    prefixes: BTreeMap<CallScope, String>,
+    dynamic_scopes: BTreeSet<CallScope>,
+    variants: BTreeMap<(TemplateName, CallScope), TemplateName>,
+    pub(crate) pending: Vec<(TemplateName, CallScope, TemplateName)>,
+    sequence: usize,
+    max_templates: usize,
     terms: BTreeMap<AddonName, BTreeMap<Box<str>, BTreeSet<Location>>>,
     term_count: usize,
     charged: usize,
@@ -284,6 +310,13 @@ impl<'a> Pass<'a> {
         Self {
             catalogue,
             validation_only: false,
+            aliases: BTreeSet::new(),
+            prefixes: BTreeMap::new(),
+            dynamic_scopes: BTreeSet::new(),
+            variants: BTreeMap::new(),
+            pending: Vec::new(),
+            sequence: 0,
+            max_templates: limits.get(LimitKind::Templates),
             terms: BTreeMap::new(),
             term_count: 0,
             charged: 0,
@@ -300,6 +333,10 @@ impl<'a> Pass<'a> {
 
     pub(crate) fn tracks_literal_ownership(&self) -> bool {
         !self.validation_only
+    }
+
+    pub(crate) fn has_alias(&self, name: &TemplateName) -> bool {
+        self.aliases.contains(name)
     }
 
     pub(crate) fn finish(self) -> ExtractedTranslations {
@@ -410,26 +447,104 @@ impl<'a> Pass<'a> {
         Ok(replacement.map(str::to_owned))
     }
 
+    fn prefix(&mut self, scope: &CallScope, source_names: &BTreeSet<TemplateName>) -> String {
+        if let Some(prefix) = self.prefixes.get(scope) {
+            return prefix.clone();
+        }
+        loop {
+            let prefix = format!("__erp_locale.C{}.", self.sequence);
+            self.sequence += 1;
+            if source_names
+                .range::<str, _>((
+                    std::ops::Bound::Included(prefix.as_str()),
+                    std::ops::Bound::Unbounded,
+                ))
+                .next()
+                .is_none_or(|name| !name.as_str().starts_with(&prefix))
+            {
+                self.prefixes.insert(scope.clone(), prefix.clone());
+                return prefix;
+            }
+        }
+    }
+
+    fn dynamic_call(
+        &mut self,
+        value: &str,
+        scope: CallScope,
+        source_names: &BTreeSet<TemplateName>,
+    ) -> Result<String, Diagnostic> {
+        let prefix = self.prefix(&scope, source_names);
+        if self.dynamic_scopes.insert(scope.clone()) {
+            for target in source_names {
+                self.specialize(target.clone(), scope.clone(), source_names)?;
+            }
+        }
+        Ok(format!("{prefix}{value}"))
+    }
+
+    fn specialize(
+        &mut self,
+        target: TemplateName,
+        scope: CallScope,
+        source_names: &BTreeSet<TemplateName>,
+    ) -> Result<TemplateName, Diagnostic> {
+        let key = (target, scope);
+        if let Some(name) = self.variants.get(&key) {
+            return Ok(name.clone());
+        }
+        let template_count = source_names.len() + self.aliases.len();
+        if template_count >= self.max_templates {
+            return Err(Diagnostic::over(
+                LimitKind::Templates,
+                self.max_templates,
+                template_count + 1,
+            ));
+        }
+        let prefix = self.prefix(&key.1, source_names);
+        let name = TemplateName::new(&format!("{prefix}{}", key.0)).map_err(|_| {
+            Diagnostic::error(
+                DiagnosticKind::InvalidDirectiveValue,
+                "scoped template name exceeds 256 bytes",
+            )
+            .with_directive("t-call")
+        })?;
+        self.aliases.insert(name.clone());
+        self.pending
+            .push((key.0.clone(), key.1.clone(), name.clone()));
+        self.variants.insert(key, name.clone());
+        Ok(name)
+    }
+
     /// Clone only the new APIs' tree, preserving source-mode parsing, analysis and output.
     pub(crate) fn transform<'s>(
         &mut self,
         original: &XElement<'s>,
         loc: &LocCtx<'_>,
         provenance: Option<&Mapping>,
+        scope: Option<&CallScope>,
+        source_names: &BTreeSet<TemplateName>,
     ) -> Result<XElement<'s>, Diagnostic> {
+        if scope.is_some() {
+            self.charge(loc.text.len())?;
+        }
         let mut root = original.clone();
-        self.walk(&mut root, true, None, loc, provenance)?;
+        let enabled = scope != Some(&CallScope::Off);
+        let context = match scope {
+            Some(CallScope::Addon(addon)) => Some(addon),
+            _ => None,
+        };
+        self.walk(&mut root, enabled, context, loc, provenance, source_names)?;
         Ok(root)
     }
 
     fn location(
         loc: &LocCtx<'_>,
         provenance: Option<&Mapping>,
-        owner_offset: u32,
         literal_offset: u32,
     ) -> Result<Location, Diagnostic> {
         match provenance {
-            Some(mapping) => mapping.translation_attribute_location(owner_offset),
+            Some(mapping) => mapping.literal_location(literal_offset),
             None => Ok(loc.at(literal_offset)),
         }
     }
@@ -453,6 +568,7 @@ impl<'a> Pass<'a> {
         context: Option<&AddonName>,
         loc: &LocCtx<'_>,
         provenance: Option<&Mapping>,
+        source_names: &BTreeSet<TemplateName>,
     ) -> Result<(), Diagnostic> {
         let enabled = enabled && node.attr("t-translation") != Some("off");
         let own_context = match node.attr_node("t-translation-context") {
@@ -474,13 +590,24 @@ impl<'a> Pass<'a> {
             None => None,
         };
         let context = own_context.as_ref().or(context);
-        if !self.validation_only && node.has("t-call") && (context.is_some() || !enabled) {
-            return Err(Self::diagnostic(
-                loc,
-                provenance,
-                node.offset,
-                Diagnostic::error(DiagnosticKind::NotSupportedUntil, "caller translation context/off propagation into t-call is not supported until a later release").with_directive("translation"),
-            ));
+        if !self.validation_only
+            && let Some(call) = node.attrs.iter_mut().find(|attr| attr.name == "t-call")
+            && let Some(scope) = if enabled {
+                context.cloned().map(CallScope::Addon)
+            } else {
+                Some(CallScope::Off)
+            }
+        {
+            let name = if let Ok(target) = TemplateName::new(&call.value) {
+                self.specialize(target, scope, source_names)?
+                    .as_str()
+                    .to_owned()
+            } else {
+                // The analyzer still parses the original format expression. Prefix its result
+                // with the issued scope so dynamic and static calls choose the same modules.
+                self.dynamic_call(&call.value, scope, source_names)?
+            };
+            call.value = Cow::Owned(name);
         }
         let component = node
             .name
@@ -537,7 +664,7 @@ impl<'a> Pass<'a> {
                         && !attr.name.starts_with("t-")
                         && attr.name.ends_with(".translate")));
             if selected {
-                let location = Self::location(loc, provenance, node.offset, attr.offset)?;
+                let location = Self::location(loc, provenance, attr.offset)?;
                 let addon = attribute_contexts
                     .get(attr.name)
                     .or(context)
@@ -555,14 +682,16 @@ impl<'a> Pass<'a> {
         }
         for child in &mut node.children {
             match child {
-                XNode::Element(element) => self.walk(element, enabled, context, loc, provenance)?,
+                XNode::Element(element) => {
+                    self.walk(element, enabled, context, loc, provenance, source_names)?;
+                }
                 XNode::Text { text, offset } if enabled && !self.validation_only => {
                     let source = text.trim_matches(is_xml_space);
                     if source.is_empty() {
                         continue;
                     }
                     let location = match provenance {
-                        Some(mapping) => mapping.translation_text_location(node.offset)?,
+                        Some(mapping) => mapping.literal_location(*offset)?,
                         None => loc.at(*offset),
                     };
                     let addon = context.unwrap_or(location.origin().addon());

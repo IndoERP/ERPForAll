@@ -191,7 +191,7 @@ pub(crate) enum InterpPart {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum CallTarget {
     Static(TemplateName),
-    Dynamic(Expr),
+    Dynamic(AttrValue),
 }
 
 /// A target of a `t-slot` / `t-call-slot` invocation.

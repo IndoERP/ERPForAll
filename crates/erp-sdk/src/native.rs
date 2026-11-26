@@ -381,7 +381,7 @@ pub mod views {
         ValidateView, ViewSchema, ViewTypeContribution, ViewTypeDecl, ViewTypeDeclBuilder,
         ViewTypeDeclFn, activity_schema, calendar_schema, find_view_type, form_schema,
         graph_schema, hierarchy_schema, is_valid_view_type_key, kanban_schema, list_schema,
-        pivot_schema, search_schema, validate_view_types,
+        map_schema, pivot_schema, search_schema, validate_view_types,
     };
 
     /// Every native addon-declared view type linked into the application (H18).
@@ -500,6 +500,11 @@ pub mod auth {
 /// common `Into<Value>` conversions.
 pub mod domain {
     pub use erp_domain::*;
+}
+
+/// Parser for existing gettext catalogs of stored record translations.
+pub mod translations {
+    pub use erp_data::i18n::TranslationImporter;
 }
 pub use erp_registry::{
     AddonDescriptor, CheckCompany, CompanyAccessState, CompanyMatch, CompanyScope, Databases,

@@ -1,4 +1,6 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
+import { readAddressKey } from "./pivot-address.js";
+import { KANBAN_FOLD_BOUNDS, validKanbanFold } from "./kanban-fold.js";
 import { ClientError } from "./transport.js";
 export interface Route {
   action?: string;
@@ -7,7 +9,7 @@ export interface Route {
   menu?: string;
   model?: string;
   id?: string;
-  view_type?: "list" | "form" | "pivot" | "calendar" | "graph" | "kanban" | "hierarchy" | "activity";
+  view_type?: "list" | "form" | "pivot" | "calendar" | "graph" | "kanban" | "hierarchy" | "activity" | "map";
   active_id?: string;
   cids?: string[];
   search?: string;
@@ -35,6 +37,8 @@ export interface Route {
   graph_order?: string;
   graph_stacked?: string;
   graph_cumulated?: string;
+  /** Kanban board state (M4.KANBAN-CLIENT-COLUMNS): the columns the user folded or opened, for one grouping (kanban-fold.ts). */
+  kanban_fold?: string;
 }
 // Refusals that mean "this state is too large for an address" (one value or the whole address past 2,048, an expanded
 // pivot header deeper or longer than its bound), as opposed to a malformed parameter. (1,024 expanded pivot headers
@@ -59,7 +63,7 @@ export function rpcId(value: string): number {
   if (!Number.isSafeInteger(id)) throw new ClientError("unsupported", "This record identifier exceeds the browser's safe integer range.");
   return id;
 }
-const queryKeys = ["debug", "menu", "model", "id", "view_type", "active_id", "search", "search_facets", "search_filters", "search_groupby", "method_action", "list_tab", "search_panel", "pivot_rows", "pivot_cols", "pivot_measures", "pivot_open", "pivot_sort", "calendar_scale", "calendar_date", "graph_mode", "graph_measure", "graph_groupby", "graph_order", "graph_stacked", "graph_cumulated"] as const;
+const queryKeys = ["debug", "menu", "model", "id", "view_type", "active_id", "search", "search_facets", "search_filters", "search_groupby", "method_action", "list_tab", "search_panel", "pivot_rows", "pivot_cols", "pivot_measures", "pivot_open", "pivot_sort", "calendar_scale", "calendar_date", "graph_mode", "graph_measure", "graph_groupby", "graph_order", "graph_stacked", "graph_cumulated", "kanban_fold"] as const;
 const routeKeys = new Set<string>(["action", ...queryKeys, "cids"]);
 const diagnosticKeys = new Set<string>([...routeKeys, "url", "path", "hash"]);
 const byteLength = (value: string): number => new TextEncoder().encode(value).length;
@@ -88,7 +92,7 @@ function pivotSpecs(value: string, measures: boolean): boolean {
   });
 }
 const pivotPath = (value: unknown): boolean => Array.isArray(value) && value.length <= 16
-  && value.every(key => typeof key === "string" ? key.length <= 256 : typeof key === "boolean" || Number.isSafeInteger(key));
+  && value.map(readAddressKey).every(key => typeof key === "string" ? key.length <= 256 : typeof key === "boolean" || Number.isSafeInteger(key));
 /** A real calendar day as `YYYY-MM-DD` (years 1000 to 9999). */
 function calendarDate(value: string): boolean {
   const match = /^([1-9]\d{3})-(\d{2})-(\d{2})$/.exec(value);
@@ -104,7 +108,7 @@ function pivotOpen(value: string): boolean {
   return Object.entries(parsed).every(([axis, list]) => (axis === "r" || axis === "c") && Array.isArray(list) && (paths += list.length) <= 1024 && list.every(pivotPath));
 }
 /** A `pivot_open` value past a bound of its paths (depth 16, a header key of 256 characters): that state is too large for an address, not malformed. */
-const pathOversize = (path: unknown): boolean => Array.isArray(path) && (path.length > 16 || path.some(key => typeof key === "string" && key.length > 256));
+const pathOversize = (path: unknown): boolean => Array.isArray(path) && (path.length > 16 || path.map(readAddressKey).some(key => typeof key === "string" && key.length > 256));
 function pivotOpenOversize(value: string): boolean {
   const parsed = pivotJson(value);
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return false;
@@ -143,7 +147,7 @@ function validate(route: Route): void {
       case "model":
         if (value.length > 128 || !/^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$/.test(value)) return fail(key);
         break;
-      case "view_type": if (value !== "list" && value !== "form" && value !== "pivot" && value !== "calendar" && value !== "graph" && value !== "kanban" && value !== "hierarchy" && value !== "activity") return fail(key); break;
+      case "view_type": if (value !== "list" && value !== "form" && value !== "pivot" && value !== "calendar" && value !== "graph" && value !== "kanban" && value !== "hierarchy" && value !== "activity" && value !== "map") return fail(key); break;
       case "calendar_scale": if (value !== "day" && value !== "week" && value !== "month" && value !== "year") return fail(key); break;
       case "calendar_date": if (!calendarDate(value)) return fail(key); break;
       case "graph_mode": if (value !== "bar" && value !== "line" && value !== "pie") return fail(key); break;
@@ -151,6 +155,7 @@ function validate(route: Route): void {
       case "graph_groupby": if (!pivotSpecs(value, false) || value.split(",").length > 2) return fail(key); break;
       case "graph_order": if (value !== "asc" && value !== "desc" && value !== "none") return fail(key); break;
       case "graph_stacked": case "graph_cumulated": if (value !== "0" && value !== "1") return fail(key); break;
+      case "kanban_fold": if (!validKanbanFold(value)) return fail(key, value.length > KANBAN_FOLD_BOUNDS.length); break;
       case "pivot_rows": case "pivot_cols": if (!pivotSpecs(value, false)) return fail(key); break;
       case "pivot_measures": if (!pivotSpecs(value, true)) return fail(key); break;
       case "search_panel": if (!searchPanel(value)) return fail(key); break;

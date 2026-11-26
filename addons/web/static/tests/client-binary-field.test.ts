@@ -197,3 +197,16 @@ describe("binary widget metadata and save", () => {
     await expect(record.save()).rejects.toThrow("Document is required.");
   });
 });
+
+test("offers PDF preview only for a saved, unchanged PDF on a record", () => {
+  const field = makeField({ filename: { name: "filename" } });
+  const rpc = { call: vi.fn() } as unknown as RpcClient;
+  const editor = { messages: { dialogs: {}, popovers: {} }, report: vi.fn() } as unknown as import("../src/client/editor-types.js").EditorEnvironment;
+  for (const [filename, id, changed, visible] of [["scan.PDF", 9, false, true], ["scan.pdf", 9, true, false],
+    ["scan.pdf", 0, false, false], ["scan.txt", 9, false, false]] as const) {
+    const control = createFieldControl({ field, rpc, model: "hr.employee", value: "2.00 Kb", editor, changed,
+      values: { id, filename }, change() {}, changeValues() {}, context: {}, run() {} });
+    expect(Boolean(control.node.querySelector(".field-binary-preview"))).toBe(visible);
+    control.dispose();
+  }
+});

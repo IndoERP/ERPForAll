@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Incremental-update edits shared by attachments, metadata and e-invoice containers.
-use crate::error::{Result, malformed, owner, unsupported};
+use crate::error::{Result, malformed};
 use crate::limits::Context;
 use crate::writer::Writer;
 use crate::{Emitter, Limit, graph, xmp};
@@ -12,6 +12,8 @@ pub(crate) struct Update {
     pub doc: Document,
     changed: BTreeSet<ObjectId>,
     pub catalog: ObjectId,
+    signatures: crate::signatures::Assessment,
+    policy: crate::SignedEditPolicy,
 }
 impl Update {
     pub fn load(input: &[u8], l: &Context<'_>) -> Result<Self> {
@@ -21,14 +23,23 @@ impl Update {
             .get(b"Root")
             .and_then(Object::as_reference)
             .map_err(|e| malformed("PDF catalog must be an indirect reference").source(e))?;
-        if graph::catalog(&doc, l)?.has(b"Perms") {
-            return Err(unsupported("signed document", owner::SIGNED));
-        }
+        let signatures = crate::signatures::Assessment::read(&doc, l)?;
         Ok(Self {
             doc,
             changed: BTreeSet::new(),
             catalog,
+            signatures,
+            policy: crate::SignedEditPolicy::Refuse,
         })
+    }
+    pub fn admit(
+        &mut self,
+        policy: crate::SignedEditPolicy,
+        input_len: usize,
+    ) -> Result<crate::IncrementalEditSummary> {
+        self.signatures.append(policy, input_len)?;
+        self.policy = policy;
+        Ok(crate::IncrementalEditSummary::new(self.signatures.marked))
     }
     pub fn add(&mut self, o: Object, l: &Context<'_>) -> Result<ObjectId> {
         let id = graph::add(&mut self.doc, o, l)?;
@@ -88,6 +99,8 @@ impl Update {
     }
     /// Emit the original bytes unchanged followed by one update section.
     pub fn save(self, original: &[u8], l: &Context<'_>, emit: &mut Emitter<'_>) -> Result<()> {
+        self.signatures.append(self.policy, original.len())?;
+        self.signatures.changed(&self.changed)?;
         let mut w = Writer::append(l, emit, original)?;
         for id in &self.changed {
             let o = self

@@ -1,0 +1,28 @@
+<erp>
+  <record id="partner_map" model="ir.ui.view">
+    <field name="name">res.partner.map</field>
+    <field name="model">res.partner</field>
+    <field name="arch" type="xml"><map latitude="map_latitude" longitude="map_longitude"/></field>
+  </record>
+  <record id="contact_map_action" model="ir.actions.act_window">
+    <field name="name">Contact Map</field>
+    <field name="res_model">res.partner</field>
+    <field name="view_mode">map,form</field>
+    <field name="domain">[('map_located', '=', True)]</field>
+  </record>
+  <record id="partner_map_coordinates" model="ir.ui.view">
+    <field name="name">res.partner.form.coordinates</field>
+    <field name="model">res.partner</field>
+    <field name="inherit_id" ref="base.partner_form"/>
+    <field name="arch" type="xml">
+      <xpath expr="//page[@name='details']" position="inside">
+        <group string="Map coordinates">
+          <field name="map_located"/>
+          <field name="map_latitude"/>
+          <field name="map_longitude"/>
+        </group>
+      </xpath>
+    </field>
+  </record>
+  <menuitem id="contact_map_menu" name="Contact Map" parent="contacts.menu_contacts_root" action="contact_map_action" sequence="30" groups="base.group_user"/>
+</erp>

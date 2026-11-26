@@ -1,0 +1,4 @@
+/src (/tmp/erp-pdf-filters-gs/payload.bin) (r) file def
+/dst (/tmp/erp-pdf-filters-gs/gs-lzw-early-1.bin) (w) file << /EarlyChange 1 >> /LZWEncode filter def
+src 4096 string readstring pop dst exch writestring dst closefile src closefile
+quit

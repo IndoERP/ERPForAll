@@ -379,7 +379,7 @@ fn catalogue_has_a_term_count_budget() {
 }
 
 #[test]
-fn caller_scope_specialization_is_refused_explicitly() {
+fn caller_selects_specialized_translation_module() {
     let set = sources(&[
         (
             "web",
@@ -392,14 +392,26 @@ fn caller_scope_specialization_is_refused_explicitly() {
             r#"<templates><t t-name="other.Callee"><p>Hello</p></t></templates>"#,
         ),
     ]);
-    let errors = compile_localized(&set, &options(), &catalogue(&[])).unwrap_err();
-    assert_eq!(errors.errors()[0].kind(), DiagnosticKind::NotSupportedUntil);
-    assert_eq!(
-        errors.errors()[0].message(),
-        "caller translation context/off propagation into t-call is not supported until a later release"
+    let localized = compile_localized(
+        &set,
+        &options(),
+        &catalogue(&[("other", "Hello", "Bonjour")]),
+    )
+    .unwrap();
+    assert_eq!(localized.modules().len(), 3);
+    let variant = localized
+        .modules()
+        .iter()
+        .find(|m| m.name().as_str().starts_with("__erp_locale."))
+        .unwrap();
+    assert!(variant.code().contains("Bonjour"));
+    assert!(
+        localized
+            .module(&erp_ui_compiler::TemplateName::new("web.A").unwrap())
+            .unwrap()
+            .code()
+            .contains(variant.name().as_str())
     );
-    // Existing source compilation retains its historical behavior.
-    assert!(compile(&set, &options()).is_ok());
 }
 
 #[test]
@@ -497,7 +509,7 @@ fn inherited_translation_attribute_error_names_the_extension_source() {
 }
 
 #[test]
-fn inherited_translation_specialization_error_names_the_extension_source() {
+fn inherited_call_selects_extension_catalogue() {
     let set = sources(&[
         (
             "web",
@@ -510,22 +522,29 @@ fn inherited_translation_specialization_error_names_the_extension_source() {
             r#"<templates><t t-inherit="web.A" t-inherit-mode="extension"><xpath expr="//div" position="inside"><t t-call="web.Target" t-translation-context="other"/></xpath></t></templates>"#,
         ),
     ]);
-    let errors = compile_localized(&set, &options(), &catalogue(&[])).unwrap_err();
-    let error = &errors.errors()[0];
-    assert_eq!(error.kind(), DiagnosticKind::NotSupportedUntil);
-    assert_eq!(error.location().unwrap().origin().addon().as_str(), "other");
-    assert_eq!(
-        error.location().unwrap().origin().path().as_str(),
-        "static/src/b.xml"
-    );
-    assert_eq!(
-        error.message(),
-        "caller translation context/off propagation into t-call is not supported until a later release (inheritance spec 1 at other/static/src/b.xml:1:60; node <t> at other/static/src/b.xml:1:98)"
+    let localized = compile_localized(
+        &set,
+        &options(),
+        &catalogue(&[("other", "Hello", "Extension"), ("web", "Hello", "Root")]),
+    )
+    .unwrap();
+    let variant = localized
+        .modules()
+        .iter()
+        .find(|m| m.name().as_str().starts_with("__erp_locale."))
+        .unwrap();
+    assert!(variant.code().contains("Extension"));
+    assert!(
+        localized
+            .module(&erp_ui_compiler::TemplateName::new("web.Target").unwrap())
+            .unwrap()
+            .code()
+            .contains("Root")
     );
 }
 
 #[test]
-fn mutated_inherited_literal_refuses_unproven_ownership() {
+fn attribute_and_element_text_retain_independent_writers() {
     let set = sources(&[
         (
             "web",
@@ -538,25 +557,19 @@ fn mutated_inherited_literal_refuses_unproven_ownership() {
             r#"<templates><t t-inherit="web.A" t-inherit-mode="extension"><xpath expr="//p" position="attributes"><attribute name="title">New</attribute></xpath></t></templates>"#,
         ),
     ]);
-    let errors = compile_localized(&set, &options(), &catalogue(&[])).unwrap_err();
-    let error = &errors.errors()[0];
-    assert_eq!(error.kind(), DiagnosticKind::Inheritance);
-    let expected = "translation literal has no unique inherited source owner (inheritance source unresolved; candidates: inheritance spec n/a (declaration); node <t> at web/static/src/a.xml:1:12 | inheritance spec 1 at other/static/src/b.xml:1:60; node <xpath> at other/static/src/b.xml:1:60)";
-    assert_eq!(error.message(), expected);
-    assert!(
-        error.location().is_none(),
-        "unproven source must not be reported as exact"
+    let terms = extract_translations(&set, &options()).unwrap();
+    let owners: Vec<_> = terms
+        .terms()
+        .iter()
+        .map(|t| (t.source(), t.addon().as_str()))
+        .collect();
+    assert!(owners.contains(&("New", "other")));
+    assert!(owners.contains(&("Stable", "web")));
+    let output = code(
+        &set,
+        &[("other", "New", "Nouveau"), ("web", "Stable", "Fixe")],
     );
-    let extraction_errors = extract_translations(&set, &options()).unwrap_err();
-    assert_eq!(
-        extraction_errors.errors()[0].kind(),
-        DiagnosticKind::Inheritance
-    );
-    assert_eq!(extraction_errors.errors()[0].message(), expected);
-    assert!(
-        compile(&set, &options()).is_ok(),
-        "source compilation must retain its old behavior"
-    );
+    assert!(output.contains("Nouveau") && output.contains("Fixe"));
 }
 
 #[test]
@@ -652,26 +665,30 @@ fn review_r1_raw_inherited_text_never_uses_containing_element_owner() {
             compile(&set, &options()).is_ok(),
             "source fixture: {operation}"
         );
-        let terms = catalogue(&[
-            ("web", "Hello", "WRONG_ROOT"),
-            ("other", "Hello", "CONTRIBUTOR"),
-        ]);
-        let localized = compile_localized(&set, &options(), &terms).unwrap_err();
-        let extracted = extract_translations(&set, &options()).unwrap_err();
-        for errors in [&localized, &extracted] {
-            let error = &errors.errors()[0];
-            assert_eq!(error.kind(), DiagnosticKind::Inheritance, "{operation}");
-            let column = 60 + operation.find("<xpath").unwrap();
-            let expected = format!(
-                "translation text ownership after inheritance mutation is not supported until a later release (inheritance source unresolved; candidates: inheritance spec n/a (declaration); node <t> at web/static/src/a.xml:1:12 | inheritance spec 1 at other/static/src/b.xml:1:{column}; node <xpath> at other/static/src/b.xml:1:{column})"
-            );
-            assert_eq!(error.message(), expected);
-            assert!(error.location().is_none());
+        if body == "<p>Old</p>" && operation.contains("inside") {
+            let errors = extract_translations(&set, &options()).unwrap_err();
+            assert_eq!(errors.errors()[0].kind(), DiagnosticKind::Inheritance);
+            continue;
         }
-        assert_eq!(
-            localized.errors()[0].message(),
-            extracted.errors()[0].message()
-        );
+        let extracted = extract_translations(&set, &options()).unwrap();
+        let owner = if body.contains("<div>") {
+            "web"
+        } else {
+            "other"
+        };
+        let literal = if operation.contains('\u{a0}') {
+            "\u{a0}"
+        } else {
+            "Hello"
+        };
+        let term = extracted
+            .terms()
+            .iter()
+            .find(|t| t.source() == literal)
+            .unwrap();
+        assert_eq!(term.addon().as_str(), owner, "{operation}");
+        let output = code(&set, &[(owner, literal, "Expected")]);
+        assert!(output.contains("Expected"), "{operation}");
     }
 }
 
@@ -801,20 +818,21 @@ fn review_r3_attribute_writes_cannot_reuse_an_equal_original_signature() {
             ("web", "Hello", "WRONG_ROOT"),
             ("other", "Hello", "CONTRIBUTOR"),
         ]);
-        let localized = compile_localized(&set, &options(), &dictionary).unwrap_err();
-        let extracted = extract_translations(&set, &options()).unwrap_err();
-        let mut expected = "translation attribute ownership after inheritance mutation is not supported until a later release (inheritance source unresolved; candidates: inheritance spec n/a (declaration); node <t> at web/static/src/a.xml:1:12".to_owned();
-        for (index, (offset, _)) in operations.match_indices("<xpath").enumerate() {
-            let column = 60 + offset;
-            expected.push_str(&format!(" | inheritance spec {} at other/static/src/b.xml:1:{column}; node <xpath> at other/static/src/b.xml:1:{column}", index + 1));
-        }
-        expected.push(')');
-        for errors in [&localized, &extracted] {
-            let error = &errors.errors()[0];
-            assert_eq!(error.kind(), DiagnosticKind::Inheritance);
-            assert_eq!(error.message(), expected);
-            assert!(error.location().is_none());
-        }
+        let localized = compile_localized(&set, &options(), &dictionary).unwrap();
+        let extracted = extract_translations(&set, &options()).unwrap();
+        assert!(
+            localized
+                .modules()
+                .iter()
+                .any(|m| m.code().contains("CONTRIBUTOR")),
+            "{operations}"
+        );
+        let term = extracted
+            .terms()
+            .iter()
+            .find(|t| t.source() == "Hello")
+            .unwrap();
+        assert_eq!(term.addon().as_str(), "other");
     }
 }
 
@@ -844,15 +862,10 @@ fn review_r3_attribute_restoration_across_extensions_is_not_proven_original() {
         ("web", "Hello", "WRONG_ROOT"),
         ("third", "Hello", "CONTRIBUTOR"),
     ]);
-    let localized = compile_localized(&set, &options(), &dictionary).unwrap_err();
-    let extracted = extract_translations(&set, &options()).unwrap_err();
-    let expected = "translation attribute ownership after inheritance mutation is not supported until a later release (inheritance source unresolved; candidates: inheritance spec n/a (declaration); node <t> at web/static/src/a.xml:1:12 | inheritance spec 1 at other/static/src/b.xml:1:60; node <xpath> at other/static/src/b.xml:1:60 | inheritance spec 1 at third/static/src/c.xml:1:60; node <xpath> at third/static/src/c.xml:1:60)";
-    for errors in [&localized, &extracted] {
-        let error = &errors.errors()[0];
-        assert_eq!(error.kind(), DiagnosticKind::Inheritance);
-        assert_eq!(error.message(), expected);
-        assert!(error.location().is_none());
-    }
+    let localized = compile_localized(&set, &options(), &dictionary).unwrap();
+    assert!(localized.modules()[0].code().contains("CONTRIBUTOR"));
+    let extracted = extract_translations(&set, &options()).unwrap();
+    assert_eq!(extracted.terms()[0].addon().as_str(), "third");
 }
 
 #[test]
@@ -888,4 +901,67 @@ fn catalogue_rejects_nul_before_html_can_silently_alter_the_literal() {
             );
         }
     }
+}
+
+#[test]
+fn translation_off_propagates_across_nested_calls_without_affecting_direct_calls() {
+    let set = one(
+        r#"<templates><t t-name="web.Root"><t t-translation="off"><t t-call="web.Middle"/></t><t t-call="web.Leaf"/></t><t t-name="web.Middle"><t t-call="web.Leaf"/></t><t t-name="web.Leaf"><p>Hello</p></t></templates>"#,
+    );
+    let compiled =
+        compile_localized(&set, &options(), &catalogue(&[("web", "Hello", "Bonjour")])).unwrap();
+    assert_eq!(compiled.modules().len(), 5);
+    assert!(
+        compiled
+            .modules()
+            .iter()
+            .any(|m| m.name().as_str().starts_with("__erp_locale.") && m.code().contains("Hello"))
+    );
+    assert!(
+        compiled
+            .module(&erp_ui_compiler::TemplateName::new("web.Leaf").unwrap())
+            .unwrap()
+            .code()
+            .contains("Bonjour")
+    );
+}
+
+#[test]
+fn dynamic_calls_resolve_only_within_their_translation_scope() {
+    let set = one(r#"<templates>
+            <t t-name="web.Root"><t t-translation-context="sale" t-call="{{this.card}}"/></t>
+            <t t-name="web.Card"><p>Hello</p></t>
+            <t t-name="__erp_locale.C0.Existing"><p>Existing template</p></t>
+        </templates>"#);
+    let localized =
+        compile_localized(&set, &options(), &catalogue(&[("sale", "Hello", "Salam")])).unwrap();
+    let card = localized
+        .modules()
+        .iter()
+        .find(|m| m.name().as_str().ends_with(".web.Card"))
+        .unwrap();
+    let prefix = card.name().as_str().strip_suffix("web.Card").unwrap();
+    assert_ne!(prefix, "__erp_locale.C0.");
+    assert!(card.code().contains("Salam"));
+    assert!(
+        localized
+            .module(&erp_ui_compiler::TemplateName::new("web.Root").unwrap())
+            .unwrap()
+            .code()
+            .contains(prefix)
+    );
+    assert!(
+        localized
+            .module(&erp_ui_compiler::TemplateName::new("web.Card").unwrap())
+            .unwrap()
+            .code()
+            .contains("Hello")
+    );
+    assert!(
+        localized
+            .module(&erp_ui_compiler::TemplateName::new("__erp_locale.C0.Existing").unwrap())
+            .unwrap()
+            .code()
+            .contains("Existing template")
+    );
 }

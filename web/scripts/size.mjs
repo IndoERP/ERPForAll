@@ -1,9 +1,6 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
-// Size of the runtime as shipped: the public API and the ABI module
-// with the vendored signal core and reconciler, bundled and minified by esbuild (legal comments kept
-// inline), gzip level 9. tests/size-budget.test.ts pins the result at milestone end; size.test.ts keeps legal notices mandatory.
-//
-//   node scripts/size.mjs            prints {minified, gzip} bytes as JSON
+// Measure the public runtime and compiled-template ABI together with inline legal notices.
+// Pass --inputs for esbuild's per-module minified byte contributions.
 
 import { gzipSync } from "node:zlib";
 import { dirname, resolve } from "node:path";
@@ -11,11 +8,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 
 const web = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const runtimeEntry = 'export * from "./src/index.ts";\nexport * as abi from "./src/runtime/abi-impl.ts";\n';
 
-export async function bundle() {
+export async function analyzeEntry(contents = runtimeEntry) {
   const result = await build({
+    absWorkingDir: web,
     stdin: {
-      contents: 'export * from "./src/index.ts";\nexport * as abi from "./src/runtime/abi-impl.ts";\n',
+      contents,
       resolveDir: web,
       loader: "ts",
       sourcefile: "size-entry.ts",
@@ -25,22 +24,29 @@ export async function bundle() {
     format: "esm",
     target: "es2023",
     legalComments: "inline",
+    metafile: true,
     write: false,
     logLevel: "silent",
   });
-  return result.outputFiles[0].contents;
+  const { inputs } = Object.values(result.metafile.outputs)[0];
+  return { bytes: result.outputFiles[0].contents, inputs };
+}
+
+export async function bundle() {
+  return (await analyzeEntry()).bytes;
 }
 
 export async function measure() {
-  const code = await bundle();
+  const { bytes: code, inputs } = await analyzeEntry();
   return {
     code: Buffer.from(code).toString("utf8"),
     minified: code.byteLength,
     gzip: gzipSync(code, { level: 9 }).byteLength,
+    inputs,
   };
 }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const { minified, gzip } = await measure();
-  console.log(JSON.stringify({ minified, gzip }));
+  const { minified, gzip, inputs } = await measure();
+  console.log(JSON.stringify(process.argv.includes("--inputs") ? { minified, gzip, inputs } : { minified, gzip }));
 }

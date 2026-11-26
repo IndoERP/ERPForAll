@@ -1,4 +1,5 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
+import { ClientError } from "./transport.js";
 import type { ThreadRef } from "@erpforall/mail-store";
 
 /** The socket carries invalidations. Only the existing permitted mail.store read populates the UI. */
@@ -45,7 +46,7 @@ export function watchChatterThread(ref: ThreadRef, policy: { company: number; cs
     current.addEventListener("close", event => {
       if (closed) return;
       if (event.code === 1008) {
-        report(new Error("Live thread updates are unavailable for this record. Refresh to check access."));
+        report(new ClientError("permission", "Live thread updates are unavailable for this record. Refresh to check access."));
         return;
       }
       // Transport recovery uses bounded exponential backoff with jitter to avoid synchronized reconnects.

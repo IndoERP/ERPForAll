@@ -103,6 +103,30 @@ pub(crate) fn pool_with_size(
     })
 }
 
+/// The native module owner pool keeps schema probes' temporary namespace after a connection
+/// is recycled. Search it last so a later lifecycle request keeps the configured tenant
+/// schemas and PostgreSQL's ordinary catalog precedence.
+pub(crate) fn lifecycle_pool(
+    config: tokio_postgres::Config,
+    size: usize,
+) -> Result<deadpool_postgres::Pool> {
+    use deadpool_postgres::{Hook, HookError, Runtime};
+    erp_orm::pool::pool_builder(config)
+        .max_size(size)
+        .runtime(Runtime::Tokio1)
+        .post_create(Hook::async_fn(|client, _| {
+            Box::pin(async move {
+                client.query_one(
+                    "SELECT pg_catalog.set_config('search_path', pg_catalog.current_setting('search_path') OPERATOR(pg_catalog.||) ', pg_temp', false)",
+                    &[],
+                ).await.map_err(HookError::Backend)?;
+                Ok(())
+            })
+        }))
+        .build()
+        .map_err(|e| CliError::Execution(format!("could not build the lifecycle owner pool: {e}")))
+}
+
 async fn report(args: &AccessArgs) -> Result<String> {
     let config = config(args)?;
     let registry = registry()?;
@@ -124,4 +148,51 @@ async fn disable(args: &AccessArgs, xmlid: &erp_orm::QualifiedXmlId) -> Result<S
     let rule = disable_rule(&mut tx, xmlid).await?;
     tx.commit().await?;
     Ok(rule.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, reason = "PostgreSQL fixture assertions")]
+
+    #[tokio::test]
+    async fn lifecycle_pool_preserves_tenant_lookup_after_a_temporary_schema_probe() {
+        let db = erp_testkit::TestDb::create().await.unwrap();
+        db.client()
+            .await
+            .unwrap()
+            .batch_execute("CREATE SCHEMA lifecycle_tenant; CREATE TABLE lifecycle_tenant.signal_probe (marker bigint)")
+            .await
+            .unwrap();
+        let mut config = db.config();
+        config.options("-csearch_path=lifecycle_tenant,public");
+        let pool = super::lifecycle_pool(config, 1).unwrap();
+        let client = pool.get().await.unwrap();
+        let pid: i32 = client
+            .query_one("SELECT pg_catalog.pg_backend_pid()", &[])
+            .await
+            .unwrap()
+            .get(0);
+        client
+            .batch_execute("BEGIN; CREATE TEMP TABLE signal_probe (unplanned text) ON COMMIT DROP; SET LOCAL search_path=public; COMMIT")
+            .await
+            .unwrap();
+        drop(client);
+
+        let client = pool.get().await.unwrap();
+        let row = client
+            .query_one("SELECT pg_catalog.pg_backend_pid(), pg_catalog.current_schema(), pg_catalog.current_schemas(true)", &[])
+            .await
+            .unwrap();
+        assert_eq!(row.get::<_, i32>(0), pid);
+        assert_eq!(row.get::<_, String>(1), "lifecycle_tenant");
+        let effective = row.get::<_, Vec<String>>(2);
+        assert_eq!(
+            &effective[..3],
+            ["pg_catalog", "lifecycle_tenant", "public"]
+        );
+        assert!(effective[3].starts_with("pg_temp_"));
+        drop(client);
+        drop(pool);
+        db.cleanup().await.unwrap();
+    }
 }

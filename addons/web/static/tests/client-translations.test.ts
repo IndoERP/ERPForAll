@@ -143,3 +143,16 @@ test("the core client texts are extractable from the web addon", () => {
   expect(Object.keys(skeleton)).toEqual([...Object.keys(skeleton)].sort());
   expect(() => clientCatalogSkeleton("../web")).toThrow("Invalid addon name");
 });
+
+test("the document follows installed language direction, script and live language changes", () => {
+  setClientLanguage("ar_001", "rtl");
+  expect([document.documentElement.lang, document.documentElement.dir]).toEqual(["ar-001", "rtl"]);
+  setClientLanguage("he_IL");
+  expect(document.documentElement.dir).toBe("rtl");
+  setClientLanguage("sr@latin", "ltr");
+  expect([document.documentElement.lang, document.documentElement.dir]).toEqual(["sr-Latn", "ltr"]);
+  setClientLanguage("sr@Cyrl", "ltr");
+  expect(document.documentElement.lang).toBe("sr-Cyrl");
+  expect(() => setClientLanguage("en_US", "sideways")).toThrow("Invalid language direction");
+  expect(clientLanguage()).toBe("sr@Cyrl");
+});

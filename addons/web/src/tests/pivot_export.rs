@@ -3,6 +3,7 @@
 use super::*;
 
 const LIMITS: Limits = Limits {
+    concurrent: 4,
     cells: 1000,
     header_depth: 8,
     columns: 50,
@@ -169,7 +170,7 @@ fn each_bound_is_refused_by_the_name_of_its_setting() {
 #[test]
 fn the_declared_bounds_are_valid_settings_with_default_between_floor_and_hard_bound() {
     let declared = settings().unwrap();
-    assert_eq!(declared.len(), 5);
+    assert_eq!(declared.len(), 6);
     for bound in &BOUNDS {
         assert!(
             bound.floor <= bound.default && bound.default <= bound.hard,
@@ -195,6 +196,7 @@ fn a_header_of_the_largest_span_and_depth_is_refused_by_the_cells_setting_before
         columns: 16_383,
         label_bytes: 64,
         request_bytes: 1 << 30,
+        ..LIMITS
     };
     assert!(parse(&document, &admitting).is_ok());
     let message = parse(

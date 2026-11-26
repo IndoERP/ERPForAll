@@ -218,3 +218,19 @@ test("leases are counted, released once, and refused for unknown or local models
   failsWith(() => h.store.hold("ui.draft", 1), "unknown_model", "hold(ui.draft): local records are never collected, hold server records only");
   failsWith(() => h.store.hold("res.partner", "1" as never), "bad_id", "hold(res.partner): a server record id must be a safe integer, got 1");
 });
+
+test("revoking a private conversation drops its record, messages and attachment metadata", () => {
+  const h = new Harness();
+  const ref = {model:"discuss.channel", id:3};
+  h.answer(10, {
+    "discuss.channel":[{id:3,name:"Private"}],
+    "mail.message":[{id:17,body:"Private text",attachments:[8]}],
+    "ir.attachment":[{id:8,name:"Private attachment"}]
+  });
+  h.store.windows.replace(ref,[17],false);
+  h.store.forgetThread(ref);
+  expect(h.store.windows.get(ref)).toBeUndefined();
+  expect(h.store.record(ref.model,ref.id).exists).toBe(false);
+  expect(h.store.record("mail.message",17).exists).toBe(false);
+  expect(h.store.record("ir.attachment",8).exists).toBe(false);
+});

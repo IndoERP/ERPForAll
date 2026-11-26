@@ -239,6 +239,114 @@ async fn assert_loan_calendar(orm: &Orm) {
     );
 }
 
+async fn assert_loan_kanban(orm: &Orm) {
+    let view = model_view(orm, "sample_library.loan", "kanban").await;
+    assert_eq!(view["views"][0]["renderer"], "web.kanban");
+    let nodes = view["views"][0]["nodes"].as_array().unwrap();
+    assert_eq!(nodes[0]["kind"], "kanban");
+    assert_eq!(nodes[0]["default_group_by"]["name"], "state");
+    let draft = |answer: &serde_json::Value| {
+        let groups = answer["groups"].as_array().unwrap();
+        assert_eq!(answer["length"], groups.len());
+        groups
+            .iter()
+            .find(|group| group["state"] == "draft")
+            .unwrap()
+            .clone()
+    };
+    let column = draft(&loan_board(orm, None).await);
+    let count = column["__count"].as_i64().unwrap();
+    assert!(count >= 1, "the loan created above is a draft");
+    let cards = column["__records"].as_array().unwrap();
+    assert_eq!(cards.len() as i64, count.min(40));
+    assert!(cards[0]["id"].as_i64().unwrap() > 0);
+    assert!(cards[0].get("book_id").is_some());
+    // The client admits exactly these members on a column (`decodeKanbanGroups` in kanban-columns.ts).
+    let mut members: Vec<_> = column.as_object().unwrap().keys().cloned().collect();
+    members.sort_unstable();
+    assert_eq!(members, ["__count", "__extra_domain", "__records", "state"]);
+    let folded = draft(
+        &loan_board(
+            orm,
+            Some(serde_json::json!([{"value": "draft", "folded": true}])),
+        )
+        .await,
+    );
+    assert_eq!(folded["__count"], count);
+    assert!(folded.get("__records").is_none());
+    let opened = draft(
+        &loan_board(
+            orm,
+            Some(
+                serde_json::json!([{"value": "draft", "folded": false, "limit": 40, "offset": 0}]),
+            ),
+        )
+        .await,
+    );
+    assert_eq!(opened["__records"].as_array().unwrap().len(), cards.len());
+}
+
+/// The grouped read of the Loans board with the arguments the web client sends (`loadBoard` in
+/// addons/web/static/src/client/app.ts): every status, its count, and the first cards of each open column.
+async fn loan_board(orm: &Orm, opening_info: Option<serde_json::Value>) -> serde_json::Value {
+    let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+    let records = tx.env().records("sample_library.loan").unwrap();
+    let Exposure::Exposed(method) = tx
+        .exposure()
+        .get(records.model_id(), "web_read_group")
+        .unwrap()
+        .clone()
+    else {
+        panic!("web_read_group is exposed")
+    };
+    let mut args = serde_json::json!({
+        "domain": [],
+        "groupby": ["state"],
+        "aggregates": ["__count"],
+        "limit": 100,
+        "auto_unfold": true,
+        "unfold_read_specification": {
+            "book_id": {"fields": {"display_name": {}}},
+            "borrower_id": {"fields": {"display_name": {}}},
+            "loan_date": {},
+            "due_date": {}
+        },
+        "unfold_read_default_limit": 40
+    });
+    if let Some(info) = opening_info {
+        args["opening_info"] = info;
+    }
+    let Value::Map(args) = rpc_value(&args) else {
+        panic!("the arguments are an object")
+    };
+    let value = method
+        .call(&mut tx, records, RpcArgs::new((*args).clone()))
+        .await
+        .unwrap();
+    tx.rollback().await.unwrap();
+    erp_fields::convert::value_to_json(&value).unwrap()
+}
+
+/// JSON arguments as the RPC values a request carries (booleans, integers, text, lists and objects only).
+fn rpc_value(value: &serde_json::Value) -> Value {
+    match value {
+        serde_json::Value::Bool(flag) => Value::Bool(*flag),
+        serde_json::Value::Number(number) => Value::Int(number.as_i64().unwrap()),
+        serde_json::Value::String(text) => Value::str(text.as_str()),
+        serde_json::Value::Array(items) => {
+            Value::List(items.iter().map(rpc_value).collect::<Vec<_>>().into())
+        }
+        serde_json::Value::Object(members) => {
+            Value::Map(Arc::new(erp_fields::ValueMap::from_iter(
+                members
+                    .iter()
+                    .map(|(name, item)| (name.as_str().into(), rpc_value(item))),
+            )))
+        }
+        serde_json::Value::Null => panic!("these arguments hold no null"),
+    }
+}
+
 /// regions, field widgets and progress bar; the cards themselves are the client's)
 async fn assert_book_kanban(orm: &Orm) {
     let view = book_view(orm, "kanban").await;
@@ -446,7 +554,7 @@ async fn install_use_upgrade_uninstall() {
     let candidate_manifest = fs::read_to_string(&manifest_path).unwrap();
     fs::write(
         &manifest_path,
-        candidate_manifest.replace("version = \"1.0.13\"", "version = \"1.0.1\""),
+        candidate_manifest.replace("version = \"1.0.14\"", "version = \"1.0.1\""),
     )
     .unwrap();
     let db = TestDb::create().await.unwrap();
@@ -616,7 +724,7 @@ async fn install_use_upgrade_uninstall() {
     let text = fs::read_to_string(&manifest).unwrap();
     fs::write(
         &manifest,
-        text.replace("version = \"1.0.13\"", "version = \"1.1.0\""),
+        text.replace("version = \"1.0.14\"", "version = \"1.1.0\""),
     )
     .unwrap();
     let candidate = system_builder(&db, work.path())
@@ -640,6 +748,7 @@ async fn install_use_upgrade_uninstall() {
     assert_book_pivot(&orm).await;
     assert_loan_calendar(&orm).await;
     assert_book_kanban(&orm).await;
+    assert_loan_kanban(&orm).await;
     assert_book_graph(&orm).await;
     assert_book_search(&orm).await;
     assert!(columns(&orm, "sample_library_book").await.contains("shelf"));

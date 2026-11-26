@@ -188,6 +188,11 @@ pub(crate) fn declarations() -> Result<Vec<ParameterDecl>> {
     for (key, label, default, floor, bound) in crate::report_job::PARAMETERS {
         out.push(ParameterDecl::integer(key, label, default, (floor, bound))?);
     }
+    out.push(ParameterDecl::boolean(
+        crate::report_job::PREVIEW_KEY,
+        crate::report_job::PREVIEW_LABEL,
+        crate::report_job::PREVIEW_DEFAULT,
+    )?);
     for (key, default, floor, bound) in crate::attachments::settings::PARAMETERS {
         out.push(ParameterDecl::integer(
             key,

@@ -94,7 +94,7 @@ fn children(node: &wire::ViewNode) -> Result<&[u32]> {
         | Search { children, .. }
         | Pivot { children, .. }
         | Kanban { children, .. }
-        | KanbanCard { children }
+        | KanbanCard { children, .. }
         | KanbanSection { children, .. }
         | Calendar { children, .. }
         | Graph { children, .. }
@@ -112,7 +112,8 @@ fn children(node: &wire::ViewNode) -> Result<&[u32]> {
         | Notebook { children }
         | Page { children, .. }
         | SearchGroup { children, .. } => Ok(children),
-        Dashboard { .. }
+        Map { .. }
+        | Dashboard { .. }
         | Field { .. }
         | Button { .. }
         | CancelButton { .. }
@@ -142,7 +143,7 @@ fn children_mut(node: &mut wire::ViewNode) -> Result<Option<&mut Vec<u32>>> {
         | Search { children, .. }
         | Pivot { children, .. }
         | Kanban { children, .. }
-        | KanbanCard { children }
+        | KanbanCard { children, .. }
         | KanbanSection { children, .. }
         | Calendar { children, .. }
         | Graph { children, .. }
@@ -160,7 +161,8 @@ fn children_mut(node: &mut wire::ViewNode) -> Result<Option<&mut Vec<u32>>> {
         | Notebook { children }
         | Page { children, .. }
         | SearchGroup { children, .. } => Ok(Some(children)),
-        Dashboard { .. }
+        Map { .. }
+        | Dashboard { .. }
         | Field { .. }
         | Button { .. }
         | CancelButton { .. }
@@ -407,6 +409,12 @@ fn validate_builtin_field_models(model: &str, node: &wire::ViewNode) -> Result<(
         .into_iter()
         .flatten()
         .try_for_each(|field| require_builtin_root_field(model, "hierarchy", field)),
+        wire::ViewNode::Map {
+            latitude,
+            longitude,
+        } => [latitude, longitude]
+            .into_iter()
+            .try_for_each(|field| require_builtin_root_field(model, "map", field)),
         wire::ViewNode::Activity {
             avatar_field: Some(field),
             ..
@@ -1348,6 +1356,7 @@ mod tests {
                     disable_linking: false,
                     display_quantity: false,
                     default_order: Some("count desc".to_owned()),
+                    variant: None,
                 },
                 node("state", wire::PivotRole::Row, None),
                 node("stage", wire::PivotRole::Col, None),

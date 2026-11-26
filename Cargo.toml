@@ -10,6 +10,7 @@ members = [
     "addons/mail",
     "addons/product_mail",
     "addons/web",
+    "addons/web_map",
     "addons/theme_office_blue",
     "addons/acceptance_notes",
     "addons/barcodes",
@@ -93,6 +94,8 @@ erp-report = { path = "crates/erp-report" }
 erp-report-data = { path = "crates/erp-report-data" }
 erp-report-typst = { path = "crates/erp-report-typst" }
 erp-report-worker = { path = "crates/erp-report-worker" }
+erp-ui-compiler-host = { path = "crates/erp-ui-compiler-host" }
+erp-ui-compiler-cli = { path = "crates/erp-ui-compiler-cli" }
 erp-ui-compiler = { path = "crates/erp-ui-compiler" }
 erp-expr = { path = "crates/erp-expr" }
 erp-script = { path = "crates/erp-script" }
@@ -110,6 +113,7 @@ erp-addon-product = { path = "addons/product" }
 erp-addon-product-mail = { path = "addons/product_mail" }
 erp-addon-mail = { path = "addons/mail" }
 erp-addon-web = { path = "addons/web" }
+erp-addon-web-map = { path = "addons/web_map" }
 erp-addon-theme-office-blue = { path = "addons/theme_office_blue" }
 erp-addon-acceptance-notes = { package = "addon-acceptance_notes", path = "addons/acceptance_notes" }
 erp-addon-barcodes = { path = "addons/barcodes" }
@@ -254,10 +258,9 @@ oxc_ast_visit = "=0.154.0"
 oxc_parser = { version = "=0.154.0", default-features = false }
 oxc_span = "=0.154.0"
 oxc_syntax = "=0.154.0"
-# Pure-Rust WebAssembly interpreter (MIT OR Apache-2.0), tests only: runs the wasm32-wasip1 build
-# of erp-ui-compile in the native/WASM identity test (design note §11). `portable-dispatch`
-# selects its loop interpreter: the default tail-call dispatch needs optimised builds and overflows
-# the stack in the unoptimised test profile.
+# Pure-Rust WebAssembly interpreter (MIT OR Apache-2.0) for the pinned restricted-card compiler
+# and native/WASM identity tests. The portable loop interpreter also works in debug builds.
+wasmi_core = { version = "=2.0.0", default-features = false }
 wasmi = { version = "=2.0.0", default-features = false, features = ["std", "validate", "portable-dispatch"] }
 # HTML5 parser (MIT OR Apache-2.0, Servo): the static-HTML round-trip test of the template compiler
 # parses what codegen serialises and compares it to the IR (design note §8); erp-html uses the

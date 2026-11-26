@@ -2,6 +2,7 @@
 // The calendar view's DOM: toolbar, the day, week, month and year grids, the side panel
 // with its mini calendar and filters, and the event popover. The model (`calendar.ts`) owns every read; this file draws its
 // state and asks it for changes. Creating, moving and resizing events comes with.
+import { calendarEditor } from "./calendar-edit.js";
 import { DateTime, Interval } from "luxon";
 import { CALENDAR_SCALES, computeRange, eventsOn, layoutDay, step, type CalendarEvent, type CalendarModel } from "./calendar.js";
 import { formatEditorValue, type EditorLocale } from "./datetime-values.js";
@@ -32,6 +33,9 @@ export interface CalendarViewOptions {
   /** Open the event's record (the form view). */
   open: (event: CalendarEvent) => Promise<void>;
   /** Ask and delete the event's record; true when it was deleted. Absent: no Delete button. */
+  create?: (values: Record<string, string>, title?: string) => Promise<void>;
+  update?: (event: CalendarEvent, values: Record<string, string>) => Promise<void>;
+  access?: (event: CalendarEvent) => Promise<{ edit: boolean; remove: boolean }>;
   remove?: (event: CalendarEvent) => Promise<boolean>;
   /** Called after the scale or the date changed and the range is drawn (the application keeps the address current). */
   changed: () => void;
@@ -121,16 +125,36 @@ export function mountCalendar(options: CalendarViewOptions): CalendarView {
       row(item.label, value);
     }
     const actions = el("div", undefined, "calendar-popover-actions");
-    actions.append(button(root.edit ? "Edit" : "Open", () => { closePopover(); run(() => options.open(event)); }, "erp-button erp-button-primary"));
-    const remove = options.remove;
-    if (remove && root.delete) {
-      const del = button("Delete", () => {
-        closePopover();
-        act(async () => { if (await remove(event)) await model.load(); });
-      }, "erp-button calendar-delete");
-      del.prepend(icon("trash"));
-      actions.append(del);
-    }
+    const record = button(root.edit && !options.access ? "Edit" : "Open", () => { closePopover(); run(() => options.open(event)); }, "erp-button erp-button-primary");
+    actions.append(record);
+    const permitted = (edit: boolean, unlink: boolean): void => {
+      record.textContent = edit ? "Edit" : "Open";
+      if (options.update && edit && (!root.dateStart.readonly || (root.dateStop && !root.dateStop.readonly))) {
+        const change = button("Change dates", () => {
+          const form = calendarEditor(root, locale, event.start, event, async values => {
+            await options.update!(event, values);
+            closePopover(); await model.load(); render();
+          }, run);
+          actions.replaceChildren(form); form.querySelector("input")?.focus();
+        }, "erp-button");
+        actions.append(change);
+      }
+      const remove = options.remove;
+      if (remove && unlink) {
+        const del = button("Delete", () => {
+          closePopover();
+          act(async () => { if (await remove(event)) await model.load(); });
+        }, "erp-button calendar-delete");
+        del.prepend(icon("trash"));
+        actions.append(del);
+      }
+    };
+    if (options.access && (root.edit || root.delete)) {
+      run(async () => {
+        const access = await options.access!(event);
+        if (!disposed && body.isConnected) permitted(root.edit && access.edit, root.delete && access.remove);
+      });
+    } else permitted(root.edit, root.delete);
     body.append(head, details, actions);
     anchor.setAttribute("aria-haspopup", "dialog");
     popover = popovers.open(anchor, body, { placement: "right", role: "dialog", dismissOnOutside: true, restoreFocus: true, onClose: () => { popover = null; } });
@@ -196,6 +220,18 @@ export function mountCalendar(options: CalendarViewOptions): CalendarView {
     const label = el("h2", rangeLabel(), "calendar-range-label");
     label.setAttribute("aria-live", "polite");
     bar.append(today, previous, next, label);
+    if (root.create && options.create && !root.dateStart.readonly) {
+      const create = button("New event", () => {
+        closePopover();
+        const form = calendarEditor(root, locale, model.state.date.startOf("day").set({ hour: root.dateStart.kind === "date" ? 0 : 9 }), undefined, async (values, name) => {
+          await options.create!(values, name);
+          closePopover(); if (!disposed) { await model.load(); render(); }
+        }, run);
+        popover = popovers.open(create, form, { placement: "bottom", role: "dialog", restoreFocus: true, onClose: () => { popover = null; } });
+        form.querySelector("input")?.focus();
+      }, "erp-button");
+      bar.prepend(create);
+    }
     if (model.state.scale === "day" || model.state.scale === "week") {
       const week = model.range.start.weekNumber;
       const badge = el("span", `Week ${week}`, "calendar-week-number");
@@ -310,6 +346,18 @@ export function mountCalendar(options: CalendarViewOptions): CalendarView {
       const week = el("div", String(day.weekNumber), "calendar-week-cell");
       week.setAttribute("role", "rowheader"); week.setAttribute("aria-label", `Week ${day.weekNumber}`);
       row.append(week);
+      const weekStart = day, weekEnd = day.plus({ weeks: 1 });
+      const lanes: DateTime[] = [];
+      const spans = events.filter(event => event.start < weekEnd && event.end > weekStart && event.start < range.end && event.end > range.start)
+        .sort((a, b) => a.start.startOf("day").toMillis() - b.start.startOf("day").toMillis() || Number(b.allDay) - Number(a.allDay) || a.start.toMillis() - b.start.toMillis() || a.id - b.id)
+        .map(event => {
+          const start = DateTime.max(weekStart, range.start, event.start.startOf("day"));
+          const end = DateTime.min(weekEnd, range.end, event.end.minus({ milliseconds: 1 }).startOf("day").plus({ days: 1 }));
+          let lane = lanes.findIndex(until => until <= start);
+          if (lane === -1) lane = lanes.length;
+          lanes[lane] = end;
+          return { event, start, end, lane };
+        });
       for (let index = 0; index < 7; index++, day = day.plus({ days: 1 })) {
         const cell = el("div", undefined, "calendar-month-cell");
         cell.setAttribute("role", "gridcell");
@@ -320,10 +368,22 @@ export function mountCalendar(options: CalendarViewOptions): CalendarView {
         const cellDay = day;
         number.setAttribute("aria-label", dayTitle(day));
         cell.append(number);
-        const onDay = eventsOn(events, day), shown = onDay.slice(0, root.eventLimit);
-        for (const event of shown) cell.append(chip(event, true));
+        const onDay = spans.filter(span => span.start <= day && span.end > day);
+        const shown = onDay.filter(span => span.lane < root.eventLimit);
+        for (const span of shown) {
+          if (!span.start.equals(day)) continue;
+          const bar = chip(span.event, true);
+          const width = Math.round(span.end.diff(day, "days").days);
+          bar.style.setProperty("--span-days", String(width));
+          bar.style.setProperty("--span-lane", String(span.lane));
+          bar.classList.add("calendar-month-event");
+          if (span.event.start < span.start) bar.classList.add("continues-before");
+          if (span.event.end > span.end) bar.classList.add("continues-after");
+          cell.append(bar);
+        }
+        cell.style.setProperty("--event-lanes", String(shown.length ? Math.max(...shown.map(span => span.lane)) + 1 : 0));
         if (onDay.length > shown.length) {
-          const more = button(`+${onDay.length - shown.length} more`, () => moreList(cellDay, onDay, more), "calendar-more");
+          const more = button(`+${onDay.length - shown.length} more`, () => moreList(cellDay, onDay.map(span => span.event), more), "calendar-more");
           cell.append(more);
         }
         row.append(cell);

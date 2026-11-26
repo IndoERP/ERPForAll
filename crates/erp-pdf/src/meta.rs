@@ -191,6 +191,15 @@ pub fn update_metadata(
     limits: &PdfLimits,
     emit: &mut Emitter<'_>,
 ) -> Result<()> {
+    update_with_policy(input, update, limits, emit, crate::SignedEditPolicy::Refuse).map(|_| ())
+}
+pub(crate) fn update_with_policy(
+    input: &[u8],
+    update: &MetadataUpdate,
+    limits: &PdfLimits,
+    emit: &mut Emitter<'_>,
+    policy: crate::SignedEditPolicy,
+) -> Result<crate::IncrementalEditSummary> {
     guard(|| {
         if update.0.is_empty() {
             return Err(invalid("PDF metadata update sets no field"));
@@ -198,8 +207,10 @@ pub fn update_metadata(
         let context = Context::new(limits);
         let l = &context;
         let mut u = Update::load(input, l)?;
+        let summary = u.admit(policy, input.len())?;
         apply(&mut u, update, &[], None, l)?;
-        u.save(input, l, emit)
+        u.save(input, l, emit)?;
+        Ok(summary)
     })
 }
 /// Apply `update`, any extra XMP descriptions and a bag item in one packet revision.

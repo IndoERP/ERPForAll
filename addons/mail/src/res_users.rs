@@ -1,7 +1,7 @@
 //! The extension lives here; `base` is not edited.
 //!
 //! The notification choice (`notification_type`) is stored here and shown in the
-//! My Preferences dialog by `views/res_users_views.xml`. No delivery step reads it yet.
+//! My Preferences dialog by `views/res_users_views.xml`. The notification consumer reads it after commit.
 
 use erp_sdk::Operation;
 use erp_sdk::prelude::*;

@@ -16,7 +16,11 @@
   <record id="technical_model_form" model="ir.ui.view">
     <field name="name">ir.model.technical.form</field>
     <field name="model">ir.model</field>
-    <field name="arch" type="xml"><form record_mode="record"><field name="name"/><field name="model"/><field name="state"/><field name="transient"/><field name="info"/></form></field>
+    <field name="arch" type="xml"><form record_mode="record"><sheet><group>
+      <field name="name"/><field name="model"/><field name="state"/><field name="transient"/>
+      <field name="info"/><field name="company_restriction"/></group>
+      <notebook><page name="fields" string="Fields"><field name="field_id" readonly="1"/>
+      </page></notebook></sheet></form></field>
   </record>
   <record id="technical_model_search" model="ir.ui.view">
     <field name="name">ir.model.technical.search</field>
@@ -586,6 +590,52 @@
   </record>
   <menuitem id="technical_defaults_menu" name="User-defined Defaults" parent="technical_actions_menu" action="technical_default_action" groups="base.group_system" sequence="60"/>
 
+  <!-- ir.attachment -->
+  <record id="technical_attachments_list" model="ir.ui.view">
+    <field name="name">ir.attachment.technical.list</field>
+    <field name="model">ir.attachment</field>
+    <field name="arch" type="xml"><list create="false" edit="false" delete="false"><field name="name"/><field name="type"/><field name="res_model"/><field name="mimetype"/><field name="file_size"/><field name="create_date"/></list></field>
+  </record>
+  <record id="technical_attachments_form" model="ir.ui.view">
+    <field name="name">ir.attachment.technical.form</field>
+    <field name="model">ir.attachment</field>
+    <field name="arch" type="xml"><form record_mode="record" create="false" edit="false" delete="false">
+      <sheet>
+        <div class="oe_title"><h1><field name="name" widget="technical_attachment"/></h1></div>
+        <group><group string="Content"><field name="type"/><field name="url" invisible="type != 'url'"/>
+          <field name="mimetype"/><field name="file_size"/><field name="checksum"/><field name="description"/></group>
+          <group string="Record"><field name="res_model"/><field name="res_field"/>
+          <field name="company_id"/><field name="create_uid"/><field name="create_date"/></group></group>
+      </sheet>
+    </form></field>
+  </record>
+  <record id="technical_attachments_search" model="ir.ui.view">
+    <field name="name">ir.attachment.technical.search</field>
+    <field name="model">ir.attachment</field>
+    <field name="arch" type="xml"><search><field name="name"/><field name="res_model"/><field name="mimetype"/><field name="create_uid"/></search></field>
+  </record>
+  <record id="technical_attachments_action" model="ir.actions.act_window">
+    <field name="name">Attachments</field>
+    <field name="res_model">ir.attachment</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="technical_attachments_list"/>
+    <field name="search_view_id" ref="technical_attachments_search"/>
+    <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
+  </record>
+  <record id="technical_attachments_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_attachments_action"/>
+    <field name="view_id" ref="technical_attachments_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="technical_attachments_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_attachments_action"/>
+    <field name="view_id" ref="technical_attachments_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="technical_attachments_menu" name="Attachments" parent="technical_db_menu" action="technical_attachments_action" groups="base.group_system" sequence="70"/>
+
   <!-- Parameters Category -->
   <menuitem id="technical_params_menu" name="Parameters" parent="technical_menu" sequence="50"/>
 
@@ -598,7 +648,7 @@
   <record id="technical_config_param_form" model="ir.ui.view">
     <field name="name">ir.config_parameter.technical.form</field>
     <field name="model">ir.config_parameter</field>
-    <field name="arch" type="xml"><form record_mode="record"><field name="key"/><field name="value" help="For base.partition_upkeep_interval_secs: 60 to 3600 whole seconds; default 3600."/></form></field>
+    <field name="arch" type="xml"><form record_mode="record"><field name="key"/><field name="value"/><field name="declared_bounds" string="Accepted values" readonly="1"/></form></field>
   </record>
   <record id="technical_config_param_search" model="ir.ui.view">
     <field name="name">ir.config_parameter.technical.search</field>
@@ -753,6 +803,12 @@
   </record>
   <menuitem id="technical_modules_act_menu" name="Modules" parent="technical_modules_menu" action="technical_module_action" groups="base.group_system" sequence="10"/>
 
+  <record id="technical_sessions_action" model="ir.actions.client">
+    <field name="name">Sessions and Devices</field>
+    <field name="tag">base.technical_sessions</field>
+  </record>
+  <menuitem id="technical_sessions_menu" name="Sessions and Devices" parent="technical_security_menu" action="technical_sessions_action" groups="base.group_system" sequence="40"/>
+
   <!-- Automation Category & Menu -->
   <menuitem id="technical_automation_menu" name="Automation" parent="technical_menu" sequence="55"/>
 
@@ -843,6 +899,47 @@
     <field name="view_id" ref="technical_jobs_settings_form"/>
   </record>
   <menuitem id="technical_jobs_settings_menu" name="Background Job Settings" parent="technical_automation_menu" action="technical_jobs_settings_action" groups="base.group_system" sequence="15"/>
+
+  <!-- ir.config.setting.audit -->
+  <record id="technical_settings_changes_list" model="ir.ui.view">
+    <field name="name">ir.config.setting.audit.technical.list</field>
+    <field name="model">ir.config.setting.audit</field>
+    <field name="arch" type="xml"><list create="false" edit="false" delete="false"><field name="setting_key"/><field name="actor"/><field name="create_date"/><field name="revision"/></list></field>
+  </record>
+  <record id="technical_settings_changes_form" model="ir.ui.view">
+    <field name="name">ir.config.setting.audit.technical.form</field>
+    <field name="model">ir.config.setting.audit</field>
+    <field name="arch" type="xml"><form record_mode="record" create="false" edit="false" delete="false">
+      <sheet><group><field name="setting_key"/><field name="actor"/><field name="subject_uid"/>
+        <field name="revision"/><field name="create_date"/></group></sheet>
+    </form></field>
+  </record>
+  <record id="technical_settings_changes_search" model="ir.ui.view">
+    <field name="name">ir.config.setting.audit.technical.search</field>
+    <field name="model">ir.config.setting.audit</field>
+    <field name="arch" type="xml"><search><field name="setting_key"/><field name="actor"/><field name="create_date"/></search></field>
+  </record>
+  <record id="technical_settings_changes_action" model="ir.actions.act_window">
+    <field name="name">Settings Changes</field>
+    <field name="res_model">ir.config.setting.audit</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="technical_settings_changes_list"/>
+    <field name="search_view_id" ref="technical_settings_changes_search"/>
+    <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
+  </record>
+  <record id="technical_settings_changes_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_settings_changes_action"/>
+    <field name="view_id" ref="technical_settings_changes_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="technical_settings_changes_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_settings_changes_action"/>
+    <field name="view_id" ref="technical_settings_changes_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="technical_settings_changes_menu" name="Settings Changes" parent="technical_automation_menu" action="technical_settings_changes_action" groups="base.group_system" sequence="30"/>
 
   <!-- Reporting Category (observed: Settings > Technical > Reporting of the reference, with Paper Format and Reports) -->
   <menuitem id="technical_reporting_menu" name="Reporting" parent="technical_menu" sequence="57"/>

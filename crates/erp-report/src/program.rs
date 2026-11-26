@@ -18,12 +18,12 @@ pub(crate) const FORMATS_TASK: &str = "a later release";
 
 /// The language a program is compiled for, with the translated terms of its templates.
 ///
-/// A term is the text of one text node, without the white space around it. Terms that span inline
-/// markup are not resolved by this slice.
+/// Terms name literal text or a phrase with numbered placeholders for its inline elements.
 #[derive(Debug, Clone)]
 pub struct Language {
     code: String,
     terms: BTreeMap<String, String>,
+    template_terms: BTreeMap<String, BTreeMap<String, String>>,
 }
 impl Language {
     pub fn new(code: &str) -> Result<Self, ReportError> {
@@ -43,6 +43,7 @@ impl Language {
         Ok(Self {
             code: code.into(),
             terms: BTreeMap::new(),
+            template_terms: BTreeMap::new(),
         })
     }
     /// Add the translation of one source term.
@@ -51,6 +52,22 @@ impl Language {
             .insert(source.trim().into(), translation.trim().into());
         self
     }
+    /// Bind a term to one report template, ahead of the language-wide fallback.
+    pub fn with_template_term(mut self, template: &str, source: &str, translated: &str) -> Self {
+        self.template_terms
+            .entry(template.to_owned())
+            .or_default()
+            .insert(source.trim().to_owned(), translated.trim().to_owned());
+        self
+    }
+
+    fn term(&self, template: &str, source: &str) -> Option<&String> {
+        self.template_terms
+            .get(template)
+            .and_then(|terms| terms.get(source))
+            .or_else(|| self.terms.get(source))
+    }
+
     /// The full code, as given.
     pub fn code(&self) -> &str {
         &self.code
@@ -205,10 +222,49 @@ impl ReportProgram {
         language: &Language,
         limits: ReportLimits,
     ) -> Result<Self, ReportError> {
+        Self::compile_for_groups(root, sources, language, limits, &BTreeMap::new())
+    }
+
+    /// Static group expressions referenced by the templates. Callers evaluate these under
+    /// the printing user's ORM environment before planning any data reads.
+    pub fn group_conditions(
+        sources: &[TemplateSource<'_>],
+        limits: ReportLimits,
+    ) -> Result<std::collections::BTreeSet<String>, ReportError> {
+        let mut conditions = std::collections::BTreeSet::new();
+        let mut work = limits.work();
+        for source in sources {
+            work.charge(source.arch().len())?;
+            if !source.arch().contains("groups") {
+                continue;
+            }
+            let arch = parse_arch(source.key(), source.arch(), limits)?;
+            let mut pending = vec![arch.root()];
+            while let Some(node) = pending.pop() {
+                work.charge(1)?;
+                if let Some(group) = node.attr("groups") {
+                    conditions.insert(group.to_owned());
+                }
+                pending.extend(node.children());
+            }
+        }
+        Ok(conditions)
+    }
+
+    /// Compile for one audience. Missing membership decisions are errors, including for
+    /// standalone callers that have no group resolver.
+    pub fn compile_for_groups(
+        root: &str,
+        sources: &[TemplateSource<'_>],
+        language: &Language,
+        limits: ReportLimits,
+        groups: &BTreeMap<String, bool>,
+    ) -> Result<Self, ReportError> {
         let mut compiler = Compiler {
             sources: sources.iter().map(|s| (s.key(), s.arch())).collect(),
             language,
             limits,
+            groups,
             templates: Vec::new(),
             depths: Vec::new(),
             index: BTreeMap::new(),
@@ -255,6 +311,7 @@ impl ReportProgram {
 }
 
 struct Compiler<'a> {
+    groups: &'a BTreeMap<String, bool>,
     sources: BTreeMap<&'a str, &'a str>,
     language: &'a Language,
     limits: ReportLimits,
@@ -375,7 +432,7 @@ impl Compiler<'_> {
             return Ok(());
         }
         let trimmed = text.trim();
-        let translated = match self.language.terms.get(trimmed) {
+        let translated = match self.language.term(&cx.template, trimmed) {
             Some(term) if cx.translate && !trimmed.is_empty() => {
                 let start = text.len() - text.trim_start().len();
                 let end = text.trim_end().len();
@@ -391,12 +448,92 @@ impl Compiler<'_> {
         Ok(())
     }
     /// The text and child elements of `node`, with `t-if` chains joined.
+    /// Keep the original markup as numbered slots. A translator can reorder those slots,
+    /// but cannot create markup, expressions, attributes, or duplicate an evaluated child.
+    fn phrase(
+        &mut self,
+        node: NodeRef<'_>,
+        cx: &Cx,
+        deepest: &mut usize,
+    ) -> Result<Option<Vec<Op>>, ReportError> {
+        if !cx.translate
+            || self.language.terms.is_empty() && self.language.template_terms.is_empty()
+        {
+            return Ok(None);
+        }
+        let kids: Vec<_> = node.children().collect();
+        if kids.is_empty()
+            || kids.iter().any(|kid| {
+                !matches!(
+                    kid.tag(),
+                    "b" | "strong" | "i" | "em" | "u" | "span" | "small" | "sub" | "sup"
+                ) || kid.attributes().any(|(name, _)| {
+                    matches!(name, "t-if" | "t-elif" | "t-else" | "t-set" | "t-foreach")
+                })
+            })
+        {
+            return Ok(None);
+        }
+        let mut source = node.text().to_owned();
+        for (index, kid) in kids.iter().enumerate() {
+            use std::fmt::Write;
+            let _ = write!(source, "{{{index}}}{}", kid.tail());
+        }
+        let Some(term) = self.language.term(&cx.template, source.trim()).cloned() else {
+            return Ok(None);
+        };
+        let at = At {
+            template: cx.template.clone(),
+            line: node.origin().line(),
+        };
+        let mut out = Vec::new();
+        let mut used = vec![false; kids.len()];
+        let leading = source.len() - source.trim_start().len();
+        let rest = format!(
+            "{}{}{}",
+            &source[..leading],
+            term,
+            &source[source.trim_end().len()..]
+        );
+        let mut input = rest.as_str();
+        while let Some(start) = input.find('{') {
+            let (text, after) = input.split_at(start);
+            let Some((index, next)) = after[1..].split_once('}') else {
+                return Err(at.compile("unclosed inline translation placeholder"));
+            };
+            let number = index
+                .parse::<usize>()
+                .ok()
+                .filter(|idx| *idx < kids.len() && idx.to_string() == index)
+                .ok_or_else(|| at.compile("invalid inline translation placeholder"))?;
+            if std::mem::replace(&mut used[number], true) {
+                return Err(at.compile("repeated inline translation placeholder"));
+            }
+            if !text.is_empty() {
+                self.count()?;
+                out.push(Op::Text(text.to_owned()));
+            }
+            self.element(kids[number], cx, false, &mut out, deepest)?;
+            input = next;
+        }
+        if used.contains(&false) {
+            return Err(at.compile("missing inline translation placeholder"));
+        }
+        if !input.is_empty() {
+            self.count()?;
+            out.push(Op::Text(input.to_owned()));
+        }
+        Ok(Some(out))
+    }
     fn children(
         &mut self,
         node: NodeRef<'_>,
         cx: &Cx,
         deepest: &mut usize,
     ) -> Result<Vec<Op>, ReportError> {
+        if let Some(phrase) = self.phrase(node, cx, deepest)? {
+            return Ok(phrase);
+        }
         let mut out = Vec::new();
         self.text(node.text(), cx, &mut out)?;
         let kids: Vec<NodeRef<'_>> = node.children().collect();
@@ -471,6 +608,20 @@ impl Compiler<'_> {
         out: &mut Vec<Op>,
         deepest: &mut usize,
     ) -> Result<(), ReportError> {
+        if let Some(condition) = node.attr("groups") {
+            match self.groups.get(condition) {
+                Some(false) => return Ok(()),
+                Some(true) => {}
+                None => {
+                    return Err(At {
+                        template: cx.template.clone(),
+                        line: node.origin().line(),
+                    }
+                    .compile(format!("missing report group decision for {condition}")));
+                }
+            }
+        }
+
         let at = At {
             template: cx.template.clone(),
             line: node.origin().line(),
@@ -562,7 +713,7 @@ impl Compiler<'_> {
                     // A `name.translate` text is a term of the language, as a text node is. A
                     // translation is data: it prints as written, never as an expression.
                     Some(true) if cx.translate && name.ends_with(".translate") => {
-                        match self.language.terms.get(value.trim()) {
+                        match self.language.term(&cx.template, value.trim()) {
                             Some(term) => Argument::Format(vec![Part::Literal(term.clone())]),
                             None => Argument::Format(self.format(at, value)?),
                         }
@@ -670,7 +821,7 @@ impl Compiler<'_> {
                 });
             } else if name == "t-att" {
                 dynamic.push(Attr::Mapping(self.code(at, value)?));
-            } else if !name.starts_with("t-") {
+            } else if name != "groups" && !name.starts_with("t-") {
                 attrs.push(Attr::Static {
                     name: name.into(),
                     value: value.into(),

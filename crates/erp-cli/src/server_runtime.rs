@@ -347,7 +347,7 @@ async fn serve_member(
             result = &mut jobs => { jobs_finished=true; result },
             result = gc_maintenance(app, &schedule) => result,
             result = event_upkeep_maintenance(app, &event_owner) => result,
-            result = outbox_job_delivery(app, &event_owner) => result,
+            result = outbox_job_delivery(app, &event_owner, config) => result,
             result = outbox_retention_maintenance(&event_owner, config.outbox_retention_days()) => result,
             result = crate::audit::supervise_retention(&event_owner, config) => result,
             result = crate::partition_upkeep::supervise(initial_upkeep_period,
@@ -593,12 +593,26 @@ async fn supervise_collection(
 /// How often every node runs the event partition upkeep.
 const EVENT_UPKEEP_PERIOD: Duration = Duration::from_secs(3_600);
 
-async fn outbox_job_delivery(app: &WebApp, owner: &erp_orm::Orm) -> std::io::Result<()> {
+async fn outbox_job_delivery(
+    app: &WebApp,
+    owner: &erp_orm::Orm,
+    config: &ServerConfig,
+) -> std::io::Result<()> {
     let mut ticks = tokio::time::interval(Duration::from_secs(2));
     ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
         ticks.tick().await;
         let auth = app.current_auth().await;
+        if auth.orm().registry().model("mail.notification").is_some() {
+            if let Err(error) = crate::mail_delivery::replay(owner).await {
+                tracing::error!(kind=?error.kind(), cause=%sanitized_cause(&error), "mail fan-out failed and will retry");
+            }
+            if let Some(maildir) = config.mail_delivery_dir()
+                && let Err(error) = crate::mail_delivery::handoff(owner, maildir).await
+            {
+                tracing::error!(kind=?error.kind(), cause=%sanitized_cause(&error), "mail handoff failed and will retry");
+            }
+        }
         match owner.deliver_outbox_jobs(auth.orm()).await {
             Ok(erp_orm::OutboxReplay::Delivered { count, cursor }) => {
                 tracing::debug!(

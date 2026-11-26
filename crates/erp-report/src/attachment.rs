@@ -449,6 +449,11 @@ pub fn check_attachment<F: Fn(&str, &str) -> Option<FieldInfo>>(
     if !policy.attachment {
         return Ok(Vec::new());
     }
+    if !crate::ReportProgram::group_conditions(sources, limits)?.is_empty() {
+        return Err(crate::error::invalid(
+            "an archived report cannot depend on the printing user's groups",
+        ));
+    }
     if policy
         .helpers
         .len()

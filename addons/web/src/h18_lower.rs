@@ -570,6 +570,7 @@ fn classify<'a, N: Node<'a>>(
                     "string",
                     "disable_linking",
                     "display_quantity",
+                    "variant",
                     "default_order",
                 ],
                 "kanban" => kanban::ROOT_ATTRS,
@@ -583,6 +584,16 @@ fn classify<'a, N: Node<'a>>(
             boolean(node, "disable_linking", false)?;
             boolean(node, "display_quantity", false)?;
             pivot_default_order(node)?;
+            if let Some(variant) = node.attr("variant")
+                && (variant.is_empty()
+                    || variant.len() > 128
+                    || !variant.as_bytes()[0].is_ascii_alphabetic()
+                    || !variant
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'.')))
+            {
+                return Err(invalid(format!("Invalid pivot variant '{variant}'.")));
+            }
         }
         if key == "kanban" {
             kanban::root(node, spec)?;
@@ -728,13 +739,15 @@ fn classify<'a, N: Node<'a>>(
                             "A pivot view declares at most {PIVOT_MAX_LEVELS} fields with type=\"{role}\"; this one has {levels}."
                         )));
                     }
-                    let (name, interval) = (node.attr("name"), node.attr("interval"));
+                    let default_interval = matches!(kind, "date" | "datetime").then_some("month");
+                    let name = node.attr("name");
+                    let interval = node.attr("interval").or(default_interval);
                     let same = parent
                         .children()
                         .filter(|sibling| {
                             sibling.attr("type") == Some(role)
                                 && sibling.attr("name") == name
-                                && sibling.attr("interval") == interval
+                                && sibling.attr("interval").or(default_interval) == interval
                         })
                         .count();
                     if same > 1 {
@@ -1461,7 +1474,7 @@ fn structure<'a, N: Node<'a>>(
     service: bool,
 ) -> ViewResult<()> {
     let kind = classify(node, parent, spec, key, service)?;
-    if matches!(kind, "searchpanel" | "dashboard") {
+    if matches!(kind, "searchpanel" | "dashboard" | "restricted_templates") {
         return Ok(());
     } // category validation produces a typed unsupported descriptor
     if kind == "unwrap" {
@@ -1590,7 +1603,7 @@ fn plan<'a, N: Node<'a>>(
             }
             return Ok(());
         }
-        if kind == "searchpanel" {
+        if matches!(kind, "searchpanel" | "restricted_templates") {
             return Ok(());
         } // the authorized host panel service attaches the panel after callback construction
         if kind == "page" || kind == "ribbon" {
@@ -2149,6 +2162,9 @@ fn build_entry<'a, N: Node<'a>>(
                     object.set("display_quantity", |value| {
                         value.boolean(boolean(node, "display_quantity", false)?)
                     })?;
+                    if let Some(variant) = node.attr("variant") {
+                        object.set("variant", |value| value.text(variant))?;
+                    }
                     if let Some(order) = pivot_order(node)? {
                         object.set("default_order", |value| value.text(&order))?;
                     }
@@ -3315,6 +3331,18 @@ mod tests {
             "pivot",
         )
         .unwrap();
+    }
+
+    #[test]
+    fn pivot_variants_and_effective_month_are_validated() {
+        let view = fixture(
+            r#"<pivot variant="library.books"><field name="deadline" type="row"/></pivot>"#,
+            "pivot",
+        )
+        .unwrap();
+        assert_eq!(view["nodes"][0]["variant"], "library.books");
+        assert!(fixture(r#"<pivot variant="../books"/>"#, "pivot").is_err());
+        assert!(fixture(r#"<pivot><field name="deadline" type="row"/><field name="deadline" type="row" interval="month"/></pivot>"#, "pivot").is_err());
     }
 
     #[test]

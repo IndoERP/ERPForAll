@@ -11,6 +11,7 @@ import { fieldTooltip } from "./field-shell.js";
 import { relationCount } from "./relation-count.js";
 import { renderFormLayout } from "./form-layout.js";
 import { Chatter } from "./chatter.js";
+import { openDocumentViewer, type ViewerFile } from "./document-viewer.js";
 import type { MessagingStore } from "@erpforall/mail-store";
 import type { ButtonNode, CancelNode, Node, View } from "./metadata.js";
 import { resolveFieldWidget, type RecordEvent, type ShellNavigation, type ViewLoader, type WidgetHandle } from "./registry.js";
@@ -450,6 +451,7 @@ export class RecordForm {
           return state.load(state.id).then(() => this.render()).finally(() => { this.chatterReloading = false; });
         },
         ...(this.env.messages ? { confirm: (message: string) => this.env.messages!.dialogs.confirm({ title: "Delete attachment", message, confirmLabel: "Delete", destructive: true }).result.then(decision => decision === "confirm") } : {}),
+        ...(this.env.messages ? { openFiles: (files: readonly ViewerFile[], index: number) => { openDocumentViewer({ rpc: this.env.rpc, dialogs: this.env.messages!.dialogs }, files, index); } } : {}),
         document: this.env.form.ownerDocument,
       });
       this.chatterMount = { id: state.id, chatter, slot };

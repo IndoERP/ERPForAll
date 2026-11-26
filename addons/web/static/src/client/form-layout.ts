@@ -334,11 +334,12 @@ export function renderFormLayout(
         panel.setAttribute("aria-labelledby", tab.id);
         tab.addEventListener("keydown", event => {
           const position = pages.findIndex(entry => entry.index === index);
+          const rtl = getComputedStyle(tab).direction === "rtl" || (!getComputedStyle(tab).direction && tab.closest("[dir]")?.getAttribute("dir") === "rtl");
           let next: number;
           if (event.key === "Home") next = 0;
           else if (event.key === "End") next = pages.length - 1;
-          else if (event.key === "ArrowRight") next = (position + 1) % pages.length;
-          else if (event.key === "ArrowLeft") next = (position + pages.length - 1) % pages.length;
+          else if (event.key === (rtl ? "ArrowLeft" : "ArrowRight")) next = (position + 1) % pages.length;
+          else if (event.key === (rtl ? "ArrowRight" : "ArrowLeft")) next = (position + pages.length - 1) % pages.length;
           else return;
           event.preventDefault(); activate(pages[next]!.index, true);
         });

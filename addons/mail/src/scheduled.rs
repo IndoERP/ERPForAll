@@ -827,6 +827,59 @@ async fn validate_vals(tx: &mut Transaction, env: &Env, vals: &RawVals) -> Resul
 
 #[methods(MailScheduledMessage, addon = "mail")]
 impl MailScheduledMessage {
+    /// Schedule a plain-text post through the same guarded lifecycle that native addons use.
+    #[method]
+    #[rpc(effect = write, model)]
+    async fn schedule_message(
+        this: &RecordSet<MailScheduledMessage>,
+        tx: &mut Transaction,
+        model: String,
+        record_id: i64,
+        body: String,
+        at: String,
+        partner_ids: Option<Vec<i64>>,
+    ) -> Result<i64> {
+        let date = DateTime::parse_odoo(&at).ok_or_else(|| {
+            Error::validation("Use a UTC date and time for the scheduled message.")
+        })?;
+        let mut request = ScheduleRequest::new(model, record_id, body, date);
+        request.partner_ids = partner_ids.unwrap_or_default();
+        let env = this.env();
+        env.records("res.partner")?
+            .browse(request.partner_ids.clone())?
+            .check_access(tx, erp_sdk::Operation::Read)
+            .await?;
+        this.as_records().call(tx, "schedule", (request,)).await
+    }
+
+    #[method]
+    #[rpc(effect = write)]
+    async fn edit_message(
+        this: &RecordSet<MailScheduledMessage>,
+        tx: &mut Transaction,
+        body: Option<String>,
+        at: Option<String>,
+    ) -> Result<()> {
+        let date = at
+            .map(|s| {
+                DateTime::parse_odoo(&s).ok_or_else(|| {
+                    Error::validation("Use a UTC date and time for the scheduled message.")
+                })
+            })
+            .transpose()?;
+        this.as_records()
+            .call(
+                tx,
+                "edit",
+                (EditRequest {
+                    body,
+                    scheduled_date: date,
+                    ..EditRequest::default()
+                },),
+            )
+            .await
+    }
+
     /// The caller must be an internal user with write access to the record; the
     /// row is created for the caller (author, creator) and its delivery job is enqueued in the
     /// same transaction. Returns the new row's id.
@@ -1008,6 +1061,7 @@ impl MailScheduledMessage {
 
     /// Returns the id of the posted message.
     #[method]
+    #[rpc(effect = write)]
     async fn send_now(this: &RecordSet<MailScheduledMessage>, tx: &mut Transaction) -> Result<i64> {
         let id = single(this)?;
         let env = this.env().clone();
@@ -1038,6 +1092,7 @@ impl MailScheduledMessage {
     /// `Missing` for an unknown id; `Access` for a caller who is not an internal user or may not
     /// write the record; `Invariant` when the job the row should have is missing.
     #[method]
+    #[rpc(effect = write)]
     async fn cancel(this: &RecordSet<MailScheduledMessage>, tx: &mut Transaction) -> Result<()> {
         let id = single(this)?;
         let env = this.env().clone();

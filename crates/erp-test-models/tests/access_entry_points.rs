@@ -1075,6 +1075,21 @@ const AUDIT_ELEVATION: &str = "returns the given environment in superuser mode, 
 /// leave the engine. replaces them with scoped elevation blocks where it can.
 const SUDO_SITES: &[(&str, usize, &str)] = &[
     (
+        "mail/notification.rs::persist_requests",
+        1,
+        "creates only fan-out requests for actually posted messages that still exist after flushing, preserving the operation identity and clearing caller defaults",
+    ),
+    (
+        "mail/thread_discuss.rs::conversation_create",
+        1,
+        "creates a private channel only for the authenticated internal caller and their active company, with a validated name and cleared defaults",
+    ),
+    (
+        "mail/thread_discuss.rs::add_member",
+        1,
+        "creates only the new channel owner or a company-eligible user invited by the current owner, with cleared defaults",
+    ),
+    (
         "sale/invoice_lineage.rs::assign_sources",
         1,
         "stores only the private source link of an invoice item after checking the caller's write access on the old and new sale lines and read access to the order and matching fields; validates document compatibility within the same savepoint",
@@ -1421,8 +1436,8 @@ const SUDO_SITES: &[(&str, usize, &str)] = &[
     ),
     (
         "erp-orm/engine.rs::apply_outputs",
-        2,
-        "old many2one inverse bookkeeping loads under sudo without returning those values; monetary output normalization uses sudo only for declared compute_sudo groups, while explicit inputs retain caller authorization",
+        3,
+        "old many2one inverse bookkeeping loads under sudo without returning those values; stored many2many output writes and monetary normalization use sudo only for declared compute_sudo groups, while explicit inputs retain caller authorization",
     ),
     (
         "erp-orm/engine.rs::compute_batch",

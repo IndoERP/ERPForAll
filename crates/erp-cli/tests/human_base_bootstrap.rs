@@ -614,7 +614,7 @@ const TECHNICAL_CATEGORIES: [&str; 9] = [
     "technical_reporting_menu",
 ];
 
-const TECHNICAL_SCREENS: [Screen; 23] = {
+const TECHNICAL_SCREENS: [Screen; 25] = {
     use AdminRead::{Granted, Managed, ReadOnly};
     const fn s(
         menu: &'static str,
@@ -800,6 +800,22 @@ const TECHNICAL_SCREENS: [Screen; 23] = {
             "technical_job_run_action",
             "ir.job.run",
             "technical_job_run",
+            Granted,
+        ),
+        s(
+            "technical_attachments_menu",
+            "technical_db_menu",
+            "technical_attachments_action",
+            "ir.attachment",
+            "technical_attachments",
+            Granted,
+        ),
+        s(
+            "technical_settings_changes_menu",
+            "technical_automation_menu",
+            "technical_settings_changes_action",
+            "ir.config.setting.audit",
+            "technical_settings_changes",
             Granted,
         ),
         s(
@@ -1482,7 +1498,14 @@ async fn technical_menu_and_views() {
     // 1. The loaded data: every technical xml id is in the table below, and each stored value
     //    (parent, action, groups, model, views) is read back from the database.
     let mut expected_ids: BTreeSet<String> = BTreeSet::new();
-    expected_ids.insert("technical_menu".to_owned());
+    expected_ids.extend(
+        [
+            "technical_menu",
+            "technical_sessions_menu",
+            "technical_sessions_action",
+        ]
+        .map(str::to_owned),
+    );
     expected_ids.extend(TECHNICAL_CATEGORIES.iter().map(|id| (*id).to_owned()));
     expected_ids.insert(TECHNICAL_ACCESS_MENU.0.to_owned());
     let (jobs_menu, jobs_category, jobs_action, jobs_form) = TECHNICAL_JOBS_SETTINGS;
@@ -1967,6 +1990,95 @@ async fn technical_menu_and_views() {
     }
     assert_eq!(admin_menus[&access_menu_id]["action_id"], access_action_id);
 
+    let client = db.client().await.unwrap();
+    let session_menu = base_xmlid(&client, "ir.ui.menu", "technical_sessions_menu").await;
+    let session_action =
+        base_xmlid(&client, "ir.actions.client", "technical_sessions_action").await;
+    assert_eq!(admin_menus[&session_menu]["action_id"], session_action);
+    let (status, session_action_body) = call(
+        "/json/2/ir.actions.client/erp_load_web_client_action".to_owned(),
+        serde_json::json!({"ids":[session_action],"wire_major":1}),
+        &admin,
+    )
+    .await;
+    assert_eq!(status, 200, "{session_action_body}");
+    let (status, listed) = call(
+        "/json/2/res.users/erp_technical_sessions".to_owned(),
+        serde_json::json!({}),
+        &admin,
+    )
+    .await;
+    assert_eq!(status, 200, "{listed}");
+    let target_session = listed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|session| session["user"] == "technical-user")
+        .unwrap();
+    assert_eq!(target_session.as_object().unwrap().len(), 7);
+    let (status, detail) = call(
+        "/json/2/res.users/erp_technical_sessions".to_owned(),
+        serde_json::json!({"session":target_session["id"]}),
+        &admin,
+    )
+    .await;
+    assert_eq!(status, 200, "{detail}");
+    assert_eq!(detail["sessions"], serde_json::json!([target_session]));
+    for (path, body) in [
+        (
+            "/json/2/ir.actions.client/erp_load_web_client_action",
+            serde_json::json!({"ids":[session_action],"wire_major":1}),
+        ),
+        (
+            "/json/2/res.users/erp_technical_sessions",
+            serde_json::json!({"session":target_session["id"]}),
+        ),
+        (
+            "/json/2/res.users/erp_revoke_technical_session",
+            serde_json::json!({"session":target_session["id"]}),
+        ),
+    ] {
+        let (status, denied) = call(path.to_owned(), body, &ordinary).await;
+        assert_eq!(status, 403, "{path}: {denied}");
+    }
+    let (status, ended) = call(
+        "/json/2/res.users/erp_revoke_technical_session".to_owned(),
+        serde_json::json!({"session":target_session["id"]}),
+        &admin,
+    )
+    .await;
+    assert_eq!(status, 200, "{ended}");
+    assert_eq!(ended, serde_json::json!(true));
+    let (status, _) = call(
+        "/json/2/res.users/erp_technical_sessions".to_owned(),
+        serde_json::json!({"session":target_session["id"]}),
+        &admin,
+    )
+    .await;
+    assert_eq!(status, 422);
+
+    let (status, parameters) = call(
+        "/json/2/ir.config_parameter/search_read".to_owned(),
+        serde_json::json!({"domain":[["key","=","base.partition_upkeep_interval_secs"]],
+            "fields":["key","value","declared_bounds"],"limit":1}),
+        &admin,
+    )
+    .await;
+    assert_eq!(status, 200, "{parameters}");
+    assert!(
+        parameters[0]["declared_bounds"]
+            .as_str()
+            .unwrap()
+            .contains("60 to 3600")
+    );
+    let (status, invalid) = call(
+        "/json/2/ir.config_parameter/set_int".to_owned(),
+        serde_json::json!({"key":"base.partition_upkeep_interval_secs","value":59}),
+        &admin,
+    )
+    .await;
+    assert_eq!(status, 422, "{invalid}");
+
     for (screen, ids) in TECHNICAL_SCREENS.iter().zip(&loaded_screens) {
         let (status, action) = call(
             "/json/2/ir.actions.act_window/erp_load_web_action".to_owned(),
@@ -2141,6 +2253,48 @@ async fn technical_menu_and_views() {
 
     secret_parameter_probes(&call, &admin, &ordinary, &secrets, &orm).await;
 
+    let french: i64 = client
+        .query_one(
+            "UPDATE res_lang SET active=true WHERE code='fr_FR' RETURNING id",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(french > 0);
+    let catalog_scope =
+        serde_json::json!({"module":"base","model":"res.country","language":"fr_FR"});
+    let export = "/json/2/res.lang/erp_export_translation_catalog";
+    let import = "/json/2/res.lang/erp_import_translation_catalog";
+    let (status, original) = call(export.to_owned(), catalog_scope.clone(), &admin).await;
+    assert_eq!(status, 200, "{original}");
+    assert!(
+        original
+            .as_str()
+            .unwrap()
+            .contains("#: model:res.country,name:base.ad")
+    );
+    let mut translation = catalog_scope.clone();
+    translation["content"] = serde_json::json!(
+        "#: model:res.country,name:base.ad\nmsgid \"Andorra\"\nmsgstr \"Andorre\"\n"
+    );
+    let (status, denied) = call(import.to_owned(), translation.clone(), &ordinary).await;
+    assert_eq!(status, 403, "{denied}");
+    let (status, count) = call(import.to_owned(), translation.clone(), &admin).await;
+    assert_eq!(status, 200, "{count}");
+    assert_eq!(count, 1);
+    let (status, exported) = call(export.to_owned(), catalog_scope.clone(), &admin).await;
+    assert_eq!(status, 200, "{exported}");
+    assert!(exported.as_str().unwrap().contains("msgstr \"Andorre\""));
+    translation["content"] = serde_json::json!(
+        "#: model:res.country,name:base.ad\nmsgid \"Stale source\"\nmsgstr \"Stale target\"\n"
+    );
+    let (status, conflict) = call(import.to_owned(), translation, &admin).await;
+    assert_eq!(status, 409, "{conflict}");
+    let (status, latest) = call(export.to_owned(), catalog_scope, &admin).await;
+    assert_eq!(status, 200, "{latest}");
+    assert_eq!(latest, exported);
+
     // 3. An internal user without base.group_system: no Technical menu, and the actions are
     //    refused even when called directly.
     let (status, tree) = call(
@@ -2169,8 +2323,12 @@ async fn technical_menu_and_views() {
         );
         action_probes += 1;
     }
-    // every one of the 23 own screens was probed (a short `loaded_screens` would end the zip early)
-    assert_eq!(action_probes, 23, "internal-user action probes");
+    // Probe every screen, including any action introduced by a new XML entry.
+    assert_eq!(
+        action_probes,
+        TECHNICAL_SCREENS.len(),
+        "internal-user action probes"
+    );
     let mut read_probes = 0usize;
     for screen in &TECHNICAL_SCREENS {
         let groups: &[&str] = match screen.admin {
@@ -2214,6 +2372,7 @@ async fn technical_menu_and_views() {
     // them, the sequence models, answer an internal user (probed above as 200)
     assert_eq!(read_probes, 11, "internal-user read probes");
 
+    drop(client);
     drop(service);
     drop(auth);
     drop(orm);

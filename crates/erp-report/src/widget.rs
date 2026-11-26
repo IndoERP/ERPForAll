@@ -6,7 +6,7 @@ use crate::{
     Limits, ModuleGrid, QrLevel, ReportError,
     code::{self, CodeAsk, PrintedCode},
     format::{self, LangFormat},
-    program::{At, FORMATS_TASK},
+    program::At,
     records::{FieldValue, Kind, RecordStore, SymbolPosition},
 };
 use erp_expr::{ExprValue, Map};
@@ -169,6 +169,93 @@ fn display_names(env: &Env<'_>, model: &str, ids: &[i64], at: &At) -> Printed {
         lines(&joined)
     })
 }
+/// Primitive fields needed for a contact line in addition to the ORM display name.
+pub(crate) fn contact_columns(field: &str) -> Option<&'static [&'static str]> {
+    Some(match field {
+        "name" => &[],
+        "address" => &["street", "street2", "zip", "city"],
+        "phone" => &["phone"],
+        "mobile" => &["mobile"],
+        "email" => &["email"],
+        "website" => &["website"],
+        "vat" => &["vat"],
+        _ => return None,
+    })
+}
+
+fn contact(env: &Env<'_>, model: &str, ids: &[i64], options: Option<&Map>, at: &At) -> Printed {
+    let fields = match option(options, "fields") {
+        None => vec!["name"],
+        Some(ExprValue::List(values) | ExprValue::Tuple(values)) => values
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .filter(|name| contact_columns(name).is_some())
+                    .ok_or_else(|| at.evaluate("contact fields must name supported contact lines"))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        _ => return Err(at.evaluate("contact fields must be a list of line names")),
+    };
+    let mut rendered = Vec::new();
+    for id in ids {
+        let record = env
+            .records
+            .get(model, *id)
+            .ok_or_else(|| at.evaluate(format!("contact {model}({id}) was not loaded")))?;
+        for field in &fields {
+            if *field == "name" {
+                let name = record
+                    .display_name
+                    .as_deref()
+                    .ok_or_else(|| at.evaluate("contact display name was not loaded"))?;
+                if !name.is_empty() {
+                    rendered.push(name.to_owned());
+                }
+                continue;
+            }
+            let mut parts = Vec::new();
+            for &column in
+                contact_columns(field).ok_or_else(|| at.evaluate("unknown contact field"))?
+            {
+                let data = record.fields.get(column).ok_or_else(|| {
+                    at.evaluate(format!("contact field {model}.{column} was not loaded"))
+                })?;
+                let value = match &data.value {
+                    ExprValue::Bool(false) | ExprValue::None => "",
+                    ExprValue::Str(value) => value.as_str(),
+                    _ => {
+                        return Err(at.evaluate(format!(
+                            "contact field {model}.{column} must contain text"
+                        )));
+                    }
+                };
+                parts.push(value);
+            }
+            if *field == "address" {
+                rendered.extend(
+                    parts[..2]
+                        .iter()
+                        .filter(|v| !v.is_empty())
+                        .map(|v| (*v).to_owned()),
+                );
+                let locality = parts[2..]
+                    .iter()
+                    .copied()
+                    .filter(|v| !v.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                if !locality.is_empty() {
+                    rendered.push(locality);
+                }
+            } else if let Some(value) = parts.first().filter(|value| !value.is_empty()) {
+                rendered.push((*value).to_owned());
+            }
+        }
+    }
+    Ok(lines(&rendered.join("\n")))
+}
+
 fn date_parts(
     value: &ExprValue,
     env: &Env<'_>,
@@ -214,6 +301,15 @@ struct Stamp {
     time: (u8, u8, u8),
     ordinal: u16,
 }
+fn date_pattern(options: Option<&Map>, default: &str, at: &At) -> Result<String, ReportError> {
+    match option(options, "format") {
+        None => Ok(default.into()),
+        Some(ExprValue::Str(pattern)) => {
+            format::widget_pattern(pattern).map_err(|reason| at.evaluate(reason))
+        }
+        Some(_) => Err(at.evaluate("date format option must be a string")),
+    }
+}
 /// Format a raw value with a named widget.
 fn raw(
     env: &Env<'_>,
@@ -224,8 +320,8 @@ fn raw(
     at: &At,
 ) -> Printed {
     let unsupported = |feature, task| Err(ReportError::Unsupported { feature, task });
-    if option(options, "format").is_some() {
-        return unsupported("the format option of date widgets", FORMATS_TASK);
+    if !["duration", "date", "datetime"].contains(&widget) && option(options, "format").is_some() {
+        return Err(at.evaluate(format!("widget `{widget}` does not accept a format option")));
     }
     if option(options, "decimal_precision").is_some() && widget != "float" {
         return Err(at.evaluate("widget option `decimal_precision` requires the float widget"));
@@ -269,12 +365,11 @@ fn raw(
         }
         "date" => {
             let stamp = date_parts(value, env, false, at)?;
-            text(format::datetime(
-                env.formats.date_format(),
-                stamp.date,
-                stamp.time,
-                stamp.ordinal,
-            ))
+            let pattern = date_pattern(options, env.formats.date_format(), at)?;
+            text(
+                format::datetime(env.formats, &pattern, stamp.date, stamp.time, stamp.ordinal)
+                    .map_err(|reason| at.evaluate(reason))?,
+            )
         }
         "datetime" => {
             let stamp = date_parts(value, env, true, at)?;
@@ -288,12 +383,11 @@ fn raw(
                 (false, true) => time,
                 (false, false) => format!("{} {time}", env.formats.date_format()),
             };
-            text(format::datetime(
-                &pattern,
-                stamp.date,
-                stamp.time,
-                stamp.ordinal,
-            ))
+            let pattern = date_pattern(options, &pattern, at)?;
+            text(
+                format::datetime(env.formats, &pattern, stamp.date, stamp.time, stamp.ordinal)
+                    .map_err(|reason| at.evaluate(reason))?,
+            )
         }
         "selection" => {
             let key = value.to_py_str();
@@ -362,8 +456,18 @@ fn raw(
                 "a later release",
             );
         }
-        "contact" | "duration" | "relative" | "float_time" => {
-            return unsupported("contact, duration and relative widgets", FORMATS_TASK);
+        "duration" => text(crate::duration::format(value, options, env.formats, at)?),
+        "contact" => {
+            let ExprValue::Object(object) = value else {
+                return Err(at.evaluate("the contact widget needs a recordset"));
+            };
+            let ids = object
+                .record_ids()
+                .ok_or_else(|| at.evaluate("the contact widget needs a recordset"))?;
+            return contact(env, object.type_name(), &ids, options, at);
+        }
+        "relative" | "float_time" => {
+            return unsupported("relative and float_time widgets", "a later release");
         }
         other => return Err(at.evaluate(format!("unknown widget `{other}`"))),
     })
@@ -566,11 +670,11 @@ pub(crate) fn field(
         Kind::Many(model, ids) if matches!(named, None | Some("many2many") | Some("one2many")) => {
             return display_names(env, model, ids, at);
         }
-        Kind::One(..) | Kind::Many(..) if named == Some("contact") => {
-            return Err(ReportError::Unsupported {
-                feature: "contact, duration and relative widgets",
-                task: FORMATS_TASK,
-            });
+        Kind::One(model, id) if named == Some("contact") => {
+            return contact(env, model, id.as_slice(), options, at);
+        }
+        Kind::Many(model, ids) if named == Some("contact") => {
+            return contact(env, model, ids, options, at);
         }
         Kind::One(..) | Kind::Many(..) => {
             return Err(at.evaluate(format!(

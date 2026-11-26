@@ -9,17 +9,6 @@ use serde_json::{Value as Json, json};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
-fn uninstall_preview_refusal(blocker: Option<erp_modules::UninstallCompositionBlocker>) -> Error {
-    // JSON-2 request owns a transaction and has no trusted session/lock bridge to the engine.
-    let message = match blocker {
-        Some(blocker) => blocker.message(),
-        None => {
-            "Native uninstall preview requires a trusted-session engine bridge; unsupported until a later release"
-        }
-    };
-    Error::validation(message)
-}
-
 fn digest_hex(input: impl AsRef<[u8]>) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut text = String::with_capacity(64);
@@ -51,20 +40,6 @@ pub(super) static DETAIL_RPC: RpcImpl = RpcImpl {
     line: line!(),
 };
 
-pub(super) static PREVIEW_RPC: RpcImpl = RpcImpl {
-    addon: "base",
-    model: "ir.module.module",
-    method: "erp_preview_uninstall",
-    decl: RpcDecl::Expose {
-        effect: Effect::Read,
-        receiver: Receiver::Model,
-        params: &[ParamSpec::new("modules", true, "array of strings")],
-        bind: preview,
-    },
-    file: file!(),
-    line: line!(),
-};
-
 pub(super) fn modules(names: Vec<String>) -> Result<Vec<erp_modules::ModuleName>, Error> {
     if names.is_empty() || names.len() > 64 {
         return Err(Error::validation(
@@ -84,24 +59,6 @@ pub(super) fn modules(names: Vec<String>) -> Result<Vec<erp_modules::ModuleName>
             erp_modules::ModuleName::new(name).map_err(module_error)
         })
         .collect()
-}
-
-fn preview<'a>(
-    tx: &'a mut Transaction,
-    records: Records,
-    mut args: RpcArgs,
-) -> erp_orm::BoxFuture<'a, Result<Value, BindError>> {
-    Box::pin(async move {
-        authorize(tx, &records).await?;
-        modules(args.take("modules")?)?;
-        if args.remaining().next().is_some() {
-            return Err(Error::validation("Unknown uninstall preview argument").into());
-        }
-        let system = CATALOG_SYSTEM.get().ok_or_else(|| {
-            Error::programming("The uninstall preview is not bound to a module system")
-        })?;
-        Err(uninstall_preview_refusal(system.uninstall_composition_blocker()).into())
-    })
 }
 
 pub(super) async fn authorize(tx: &mut Transaction, records: &Records) -> Result<(), Error> {
@@ -365,14 +322,24 @@ SELECT CASE WHEN bounds.count<=10000 AND bounds.count=bounds.admitted AND bounds
         } else {
             None
         };
-        let uninstall_refusal = uninstall_preview_refusal(system.uninstall_composition_blocker());
+        let uninstall_refusal = if !stable {
+            Some("Pending module operations require operator recovery")
+        } else if state != "installed" {
+            Some("Addon is not installed")
+        } else if matches!(name.as_str(), "base" | "web") {
+            Some("This addon is required to serve the application")
+        } else {
+            system
+                .uninstall_composition_blocker()
+                .map(|blocker| blocker.message())
+        };
         let mut document = json!({"wire_major":1,"registry_version":records.env().registry().generation().to_string(),"name":name,
             "label":match manifest {Some(m)=>m.shortdesc(),None=>text("shortdesc")?},
             "summary":match manifest {Some(m)=>m.summary(),None=>text("summary")?},
             "description":match manifest {Some(m)=>m.description(),None=>text("description")?},
             "author":match manifest {Some(m)=>m.author(),None=>text("author")?},
             "available_version":manifest.map(|m|m.version().to_string()),"installed_version":stored["latest_version"],"state":state,
-            "upgrade_refusal":upgrade_refusal,"uninstall_refusal":uninstall_refusal.message()});
+            "upgrade_refusal":upgrade_refusal,"uninstall_refusal":uninstall_refusal});
         let revision_bytes = serde_json::to_vec(&(&document, &collections)).map_err(|e| {
             Error::programming("Addon detail revision serialization failed").with_source(e)
         })?;
@@ -417,28 +384,6 @@ SELECT CASE WHEN bounds.count<=10000 AND bounds.count=bounds.admitted AND bounds
 #[allow(clippy::unwrap_used, reason = "unit test assertions")]
 mod tests {
     use super::*;
-    #[test]
-    fn absent_composition_blocker_does_not_advertise_uninstall_support() {
-        let error = uninstall_preview_refusal(None);
-        assert_eq!(error.kind(), erp_fields::ErrorKind::Validation);
-        assert_eq!(
-            error.message(),
-            "Native uninstall preview requires a trusted-session engine bridge; unsupported until a later release",
-        );
-    }
-
-    #[test]
-    fn preview_refusal_retains_engine_composition_reason() {
-        let error = uninstall_preview_refusal(Some(
-            erp_modules::UninstallCompositionBlocker::PackageRuntime,
-        ));
-        assert_eq!(error.kind(), erp_fields::ErrorKind::Validation);
-        assert_eq!(
-            error.message(),
-            "Uninstall impact cannot describe package runtime lifecycle callbacks; unsupported until a later release",
-        );
-    }
-
     fn rejection(result: Result<Json, Error>) {
         let error = result.unwrap_err();
         assert_eq!(error.kind(), erp_fields::ErrorKind::Validation);

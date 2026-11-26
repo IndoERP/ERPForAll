@@ -24,6 +24,7 @@ pub mod error;
 mod human;
 pub mod identity;
 mod live;
+mod mail_delivery;
 pub mod module;
 pub mod native_addons;
 pub mod node;
@@ -35,6 +36,7 @@ mod pivot_export;
 mod report_print;
 mod report_worker;
 mod reporting_export;
+mod restricted_cards;
 pub mod scaffold;
 mod server_runtime;
 

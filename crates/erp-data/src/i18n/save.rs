@@ -118,8 +118,19 @@ impl TranslationImporter {
         let mut grouped: BTreeMap<(&str, &str), BTreeMap<&str, RecordTranslations>> =
             BTreeMap::new();
         let mut langs: BTreeMap<&str, ()> = BTreeMap::new();
+        let mut view_terms: BTreeMap<(&str, &str), BTreeMap<&str, &str>> = BTreeMap::new();
         for entry in entries {
             langs.insert(entry.lang(), ());
+            if entry.structured {
+                let source = entry.src().ok_or_else(|| {
+                    Error::validation("a template translation requires a source phrase")
+                })?;
+                view_terms
+                    .entry((entry.xmlid(), entry.lang()))
+                    .or_default()
+                    .insert(source, entry.value());
+                continue;
+            }
             let record = grouped
                 .entry((entry.model(), entry.field()))
                 .or_default()
@@ -182,7 +193,29 @@ impl TranslationImporter {
                 summary.records_updated += updated;
             }
         }
-        // the SQL bypassed the ORM cache
+        for ((xmlid, lang), terms) in view_terms {
+            let (module, name) = xmlid.split_once('.').ok_or_else(|| {
+                Error::validation("a template term requires a qualified external id")
+            })?;
+            let terms = serde_json::to_value(terms)
+                .map_err(|error| Error::validation(error.to_string()))?;
+            let force = mode == OverwriteMode::ForceOverwrite;
+            let overwrite = mode == OverwriteMode::Overwrite;
+            let count = tx.execute(
+                "UPDATE ir_ui_view v SET template_translations = jsonb_set(COALESCE(v.template_translations,'{}'), ARRAY[$3::text],
+                 CASE WHEN $5 OR ($6 AND NOT d.noupdate) THEN COALESCE(v.template_translations->$3,'{}') || $4::jsonb
+                 ELSE $4::jsonb || COALESCE(v.template_translations->$3,'{}') END)
+                 FROM ir_model_data d WHERE d.module=$1 AND d.name=$2 AND d.model='ir.ui.view' AND v.id=d.res_id",
+                &[&module, &name, &lang, &terms, &force, &overwrite],
+            ).await?;
+            if count != 1 {
+                return Err(Error::missing(format!(
+                    "template translation target {xmlid} does not exist"
+                )));
+            }
+            summary.records_updated += 1;
+        }
+        // Both UPDATE paths bypass the ORM cache.
         tx.invalidate_all().await?;
         Ok(summary)
     }

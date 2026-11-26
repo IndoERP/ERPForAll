@@ -53,11 +53,8 @@ pub(crate) fn malformed(s: impl Into<String>) -> PdfError {
 }
 /// Tasks that own a refused feature (specification §4.4): an error names the one that adds it.
 pub(crate) mod owner {
-    pub const SIGNED: &str = "a later release";
     pub const ENCRYPT: &str = "a later release";
     pub const OVERLAY: &str = "a later release";
-    pub const DEST: &str = "a later release";
-    pub const FILTERS: &str = "a later release";
     pub const ARCHIVAL: &str = "a later release";
 }
 /// A feature outside the profile that `owner` (one of [`owner`]) will add.

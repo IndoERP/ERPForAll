@@ -1,0 +1,181 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<erp>
+  <menuitem id="technical_mail_menu" name="Messaging" parent="base.technical_menu" sequence="65"/>
+
+  <!-- mail.message -->
+  <record id="technical_messages_list" model="ir.ui.view">
+    <field name="name">mail.message.technical.list</field>
+    <field name="model">mail.message</field>
+    <field name="arch" type="xml"><list create="false" edit="false" delete="false"><field name="subject"/><field name="author_id"/><field name="message_type"/><field name="model"/><field name="date"/></list></field>
+  </record>
+  <record id="technical_messages_form" model="ir.ui.view">
+    <field name="name">mail.message.technical.form</field>
+    <field name="model">mail.message</field>
+    <field name="arch" type="xml"><form record_mode="record" create="false" edit="false" delete="false">
+      <sheet><div class="oe_title"><h1><field name="subject"/></h1></div>
+        <group><field name="author_id"/><field name="date"/><field name="message_type"/><field name="subtype_id"/>
+        <field name="model"/><field name="is_internal"/></group>
+        <field name="body"/><field name="attachment_ids" widget="many2many_tags"/>
+      </sheet>
+    </form></field>
+  </record>
+  <record id="technical_messages_search" model="ir.ui.view">
+    <field name="name">mail.message.technical.search</field>
+    <field name="model">mail.message</field>
+    <field name="arch" type="xml"><search><field name="subject"/><field name="author_id"/><field name="model"/><field name="message_type"/></search></field>
+  </record>
+  <record id="technical_messages_action" model="ir.actions.act_window">
+    <field name="name">Messages</field>
+    <field name="res_model">mail.message</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="technical_messages_list"/>
+    <field name="search_view_id" ref="technical_messages_search"/>
+    <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
+  </record>
+  <record id="technical_messages_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_messages_action"/>
+    <field name="view_id" ref="technical_messages_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="technical_messages_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_messages_action"/>
+    <field name="view_id" ref="technical_messages_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="technical_messages_menu" name="Messages" parent="technical_mail_menu" action="technical_messages_action" groups="base.group_system" sequence="10"/>
+
+  <!-- mail.message.subtype -->
+  <record id="technical_message_subtypes_list" model="ir.ui.view">
+    <field name="name">mail.message.subtype.technical.list</field>
+    <field name="model">mail.message.subtype</field>
+    <field name="arch" type="xml"><list><field name="name"/><field name="res_model"/><field name="internal"/><field name="default"/><field name="sequence"/></list></field>
+  </record>
+  <record id="technical_message_subtypes_form" model="ir.ui.view">
+    <field name="name">mail.message.subtype.technical.form</field>
+    <field name="model">mail.message.subtype</field>
+    <field name="arch" type="xml"><form record_mode="record">
+      <sheet><div class="oe_title"><h1><field name="name"/></h1></div>
+        <group><field name="res_model"/><field name="parent_id"/><field name="relation_field"/>
+        <field name="sequence"/><field name="internal"/><field name="default"/><field name="hidden"/>
+        <field name="track_recipients"/><field name="description"/></group>
+      </sheet>
+    </form></field>
+  </record>
+  <record id="technical_message_subtypes_search" model="ir.ui.view">
+    <field name="name">mail.message.subtype.technical.search</field>
+    <field name="model">mail.message.subtype</field>
+    <field name="arch" type="xml"><search><field name="name"/><field name="res_model"/><filter name="internal" string="Internal" domain="[('internal', '=', True)]"/></search></field>
+  </record>
+  <record id="technical_message_subtypes_action" model="ir.actions.act_window">
+    <field name="name">Message Subtypes</field>
+    <field name="res_model">mail.message.subtype</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="technical_message_subtypes_list"/>
+    <field name="search_view_id" ref="technical_message_subtypes_search"/>
+    <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
+  </record>
+  <record id="technical_message_subtypes_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_message_subtypes_action"/>
+    <field name="view_id" ref="technical_message_subtypes_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="technical_message_subtypes_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_message_subtypes_action"/>
+    <field name="view_id" ref="technical_message_subtypes_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="technical_message_subtypes_menu" name="Message Subtypes" parent="technical_mail_menu" action="technical_message_subtypes_action" groups="base.group_system" sequence="20"/>
+
+  <!-- mail.followers -->
+  <record id="technical_followers_list" model="ir.ui.view">
+    <field name="name">mail.followers.technical.list</field>
+    <field name="model">mail.followers</field>
+    <field name="arch" type="xml"><list create="false" edit="false" delete="false"><field name="partner_id"/><field name="res_model"/><field name="is_active"/></list></field>
+  </record>
+  <record id="technical_followers_form" model="ir.ui.view">
+    <field name="name">mail.followers.technical.form</field>
+    <field name="model">mail.followers</field>
+    <field name="arch" type="xml"><form record_mode="record" create="false" edit="false" delete="false">
+      <sheet><group><field name="partner_id"/><field name="res_model"/>
+        <field name="is_active"/><field name="subtype_ids" widget="many2many_tags"/></group></sheet>
+    </form></field>
+  </record>
+  <record id="technical_followers_search" model="ir.ui.view">
+    <field name="name">mail.followers.technical.search</field>
+    <field name="model">mail.followers</field>
+    <field name="arch" type="xml"><search><field name="partner_id"/><field name="res_model"/></search></field>
+  </record>
+  <record id="technical_followers_action" model="ir.actions.act_window">
+    <field name="name">Followers</field>
+    <field name="res_model">mail.followers</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="technical_followers_list"/>
+    <field name="search_view_id" ref="technical_followers_search"/>
+    <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
+  </record>
+  <record id="technical_followers_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_followers_action"/>
+    <field name="view_id" ref="technical_followers_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="technical_followers_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_followers_action"/>
+    <field name="view_id" ref="technical_followers_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="technical_followers_menu" name="Followers" parent="technical_mail_menu" action="technical_followers_action" groups="base.group_system" sequence="30"/>
+
+  <!-- mail.activity.type -->
+  <record id="technical_activity_types_list" model="ir.ui.view">
+    <field name="name">mail.activity.type.technical.list</field>
+    <field name="model">mail.activity.type</field>
+    <field name="arch" type="xml"><list><field name="name"/><field name="res_model"/><field name="category"/><field name="delay_count"/><field name="delay_unit"/><field name="active"/></list></field>
+  </record>
+  <record id="technical_activity_types_form" model="ir.ui.view">
+    <field name="name">mail.activity.type.technical.form</field>
+    <field name="model">mail.activity.type</field>
+    <field name="arch" type="xml"><form record_mode="record">
+      <sheet><div class="oe_title"><h1><field name="name"/></h1></div>
+        <group><group string="Activity"><field name="summary"/><field name="res_model"/><field name="category"/>
+          <field name="icon"/><field name="decoration_type"/><field name="active"/></group>
+          <group string="Defaults"><field name="default_user_id"/><field name="delay_count"/>
+          <field name="delay_unit"/><field name="delay_from"/><field name="suggested_next_type_id"/></group></group>
+        <field name="default_note"/>
+      </sheet>
+    </form></field>
+  </record>
+  <record id="technical_activity_types_search" model="ir.ui.view">
+    <field name="name">mail.activity.type.technical.search</field>
+    <field name="model">mail.activity.type</field>
+    <field name="arch" type="xml"><search><field name="name"/><field name="res_model"/><field name="category"/></search></field>
+  </record>
+  <record id="technical_activity_types_action" model="ir.actions.act_window">
+    <field name="name">Activity Types</field>
+    <field name="res_model">mail.activity.type</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="technical_activity_types_list"/>
+    <field name="search_view_id" ref="technical_activity_types_search"/>
+    <field name="group_ids" eval="[(4, ref('base.group_system'), 0)]"/>
+  </record>
+  <record id="technical_activity_types_action_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_activity_types_action"/>
+    <field name="view_id" ref="technical_activity_types_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="technical_activity_types_action_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="technical_activity_types_action"/>
+    <field name="view_id" ref="technical_activity_types_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <menuitem id="technical_activity_types_menu" name="Activity Types" parent="technical_mail_menu" action="technical_activity_types_action" groups="base.group_system" sequence="40"/>
+
+</erp>

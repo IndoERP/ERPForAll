@@ -38,6 +38,21 @@ pub use panel::{
     PanelDefaults, PanelDisplayLimit, PanelDomain, PanelSection, PanelValue, PanelVersion,
 };
 
+object!(/// A restricted card compiled from this caller's checked architecture.
+    RestrictedCard { arch: String, source_sha256: String, language: String, plan: String });
+
+impl RestrictedCard {
+    /// Bind the guest's plan to its independently computed identity.
+    pub fn new(arch: String, source_sha256: String, language: String, plan: String) -> Self {
+        Self {
+            arch,
+            source_sha256,
+            language,
+            plan,
+        }
+    }
+}
+
 /// Positive database identity representable exactly by the JSON browser client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema-gen", erp_macros::wire_ts)]
@@ -142,8 +157,11 @@ object!(/// Authorized company label.
     Company { id: WireId, name: String,
         #[serde(deserialize_with="required_nullable")] parent_id: Option<WireId> });
 object!(/// Authoritative user locale.
-    Locale { lang: String, tz: String, decimal_point: String, thousands_sep: String,
+    Locale { lang: String, tz: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")] direction: Option<TextDirection>,
+        decimal_point: String, thousands_sep: String,
         grouping: Vec<u8>, date_format: String, time_format: String });
+choice!(TextDirection { Ltr, Rtl });
 object!(/// Purpose-bound form tokens.
     Csrf { logout: String });
 object!(/// Registered renderer schema capability.
@@ -169,6 +187,7 @@ choice!(ViewType {
     Graph,
     Gantt,
     Activity,
+    Map,
     Hierarchy
 });
 impl ViewType {
@@ -184,6 +203,7 @@ impl ViewType {
             Self::Graph => "graph",
             Self::Gantt => "gantt",
             Self::Activity => "activity",
+            Self::Map => "map",
             Self::Hierarchy => "hierarchy",
         }
     }
@@ -200,6 +220,7 @@ impl ViewType {
             "graph" => Some(Self::Graph),
             "gantt" => Some(Self::Gantt),
             "activity" => Some(Self::Activity),
+            "map" => Some(Self::Map),
             "hierarchy" => Some(Self::Hierarchy),
             _ => None,
         }
@@ -1058,6 +1079,10 @@ pub enum ViewNode {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "schema-gen", ts(optional))]
         default_order: Option<String>,
+        /// Optional, named client extension for displaying measures.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "schema-gen", ts(optional))]
+        variant: Option<String>,
     },
     /// One `<field>` of a pivot: a row grouping, a column grouping or a measure.
     PivotField {
@@ -1103,6 +1128,10 @@ pub enum ViewNode {
     },
     /// The card of a kanban (`<t t-name="card">`): fields and regions.
     KanbanCard {
+        /// Optional host-produced plan after field authorization.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "schema-gen", ts(optional))]
+        restricted: Option<RestrictedCard>,
         /// Child arena indexes (`field`, `kanban_section`).
         children: Vec<u32>,
     },
@@ -1203,6 +1232,11 @@ pub enum ViewNode {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "schema-gen", ts(optional))]
         label: Option<String>,
+    },
+    /// Stored-coordinate map root.
+    Map {
+        latitude: FieldRef,
+        longitude: FieldRef,
     },
     /// Activity matrix root.
     Activity {

@@ -261,7 +261,7 @@ fn dependent_annotations_are_named_or_dropped_never_carried() {
         (
             annotation("Widget", dictionary! {"FT"=>"Tx","T"=>text("name")}),
             "a form field",
-            None,
+            None::<&str>,
         ),
         (
             annotation("FileAttachment", dictionary! {}),
@@ -288,16 +288,16 @@ fn dependent_annotations_are_named_or_dropped_never_carried() {
         ),
         (
             annotation("Link", dictionary! {"Dest"=>"chapter1"}),
-            "a named destination",
-            Some("a later release"),
+            "a named destination that the document does not define",
+            None,
         ),
         (
             annotation(
                 "Link",
                 dictionary! {"A"=>dictionary!{"S"=>"GoTo","D"=>text("chapter1")}},
             ),
-            "a named destination",
-            Some("a later release"),
+            "a named destination that the document does not define",
+            None,
         ),
         (
             annotation(

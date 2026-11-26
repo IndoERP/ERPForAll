@@ -1446,7 +1446,7 @@ impl<'i> Gen<'i, '_> {
                         push_js_string(&mut s, name.as_str());
                         s
                     }
-                    crate::ir::CallTarget::Dynamic(e) => self.expr(e),
+                    crate::ir::CallTarget::Dynamic(value) => self.attr_value(value),
                 };
                 let mut params_obj = String::from("{");
                 for (i, p) in params.iter().enumerate() {
@@ -1967,7 +1967,6 @@ mod tests {
     use html5ever::{LocalName, Namespace, ParseOpts, QualName, parse_fragment};
     use markup5ever_rcdom::{Handle, NodeData, RcDom};
     use proptest::prelude::*;
-    use std::collections::BTreeSet;
 
     const HTML_NS: &str = "http://www.w3.org/1999/xhtml";
     const SVG_NS: &str = "http://www.w3.org/2000/svg";
@@ -1993,12 +1992,11 @@ mod tests {
         let options = CompileOptions::new(BuildMode::Prod);
         let mut parser = ExprParser::new(&limits);
         let name = TemplateName::new("t").unwrap();
-        let templates: BTreeSet<TemplateName> = [name.clone()].into_iter().collect();
         let a = analyze_template(
             &mut parser,
             &options,
             Trust::Trusted,
-            &templates,
+            &|target| target == &name,
             &name,
             &tops.first()?.element,
             &loc,

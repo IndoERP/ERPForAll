@@ -1,25 +1,22 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! Interactive forms and signatures.
+//! Interactive forms and signatures (M4.RPT4.PROFILE.FORMS).
 //!
 //! A whole-document rewrite writes the catalog form and every field again, so an unsigned form
 //! stays a form. A reading copy has no catalog form: under [`FormPolicy::Flatten`] each field is
 //! drawn into its page from its current appearance stream, the way a reader shows it, and is no
-//! longer a field. A document that carries a signature is refused by both: a rewrite changes the
-//! signed bytes and a copy is no longer signed.
+//! longer a field. Signature admission is handled by the shared signatures module before
+//! form admission: a reading copy needs its own explicit unsigned-copy policy.
 use crate::annot::Why;
-use crate::error::{PdfError, Result, malformed, owner, refused, unsupported};
+use crate::error::{PdfError, Result, malformed, refused};
 use crate::graph::{self, PageProfile};
 use crate::limits::Context;
-use crate::{FormPolicy, Limit, PdfErrorKind};
+use crate::{FormPolicy, PdfErrorKind};
 use lopdf::{Dictionary, Document, Object, ObjectId};
-use std::collections::BTreeSet;
 
 /// Annotation flag bits (one-based bit positions 2, 5 and 6 of `F`).
 const HIDDEN: i64 = 1 << 1;
 const NO_ROTATE: i64 = 1 << 4;
 const NO_VIEW: i64 = 1 << 5;
-/// `SigFlags`: signatures exist, or the file must only be saved by appending.
-const SIGNATURE_FLAGS: i64 = 0b11;
 
 /// Why a field cannot be drawn into its page. No task plans to build an appearance the file
 /// does not store: that needs text layout with the form's default resources.
@@ -87,9 +84,6 @@ pub(crate) fn admit(
         // An overlay becomes page content of the target: it has no form to give.
         (PageProfile::Overlay, Some(_)) => return Err(refused("overlay form")),
     }
-    if signed(doc, root, form, l)? {
-        return Err(unsupported("signed document", owner::SIGNED));
-    }
     Ok(())
 }
 
@@ -106,89 +100,6 @@ pub(crate) fn viewer_builds(doc: &Document, l: &Context<'_>) -> Result<bool> {
     }
 }
 
-/// Whether the document carries a digital signature or a claim about one.
-fn signed(
-    doc: &Document,
-    root: &Dictionary,
-    form: Option<&Dictionary>,
-    l: &Context<'_>,
-) -> Result<bool> {
-    if root.has(b"Perms") || root.has(b"DSS") {
-        return Ok(true);
-    }
-    if let Some(form) = form {
-        if let Ok(flags) = form.get(b"SigFlags") {
-            let flags = graph::resolve(doc, flags, l)?
-                .as_i64()
-                .map_err(|e| malformed("PDF SigFlags must be an integer").source(e))?;
-            if flags & SIGNATURE_FLAGS != 0 {
-                return Ok(true);
-            }
-        }
-        if let Ok(fields) = form.get(b"Fields")
-            && signed_field(doc, fields, l)?
-        {
-            return Ok(true);
-        }
-    }
-    // Scan every admitted object, including direct nested dictionaries. References need not
-    // be followed here: every indirect object is visited once by the outer loop. Direct
-    // nesting is still charged and depth-bounded, as for the graph writer.
-    if signed_dictionary(doc, &doc.trailer, l, 0)? {
-        return Ok(true);
-    }
-    for object in doc.objects.values() {
-        if signed_object(doc, object, l, 0)? {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn signed_dictionary(
-    doc: &Document,
-    d: &Dictionary,
-    l: &Context<'_>,
-    depth: usize,
-) -> Result<bool> {
-    l.step()?;
-    l.check(Limit::Depth, depth + 1)?;
-    if d.has(b"ByteRange") || (is_name(doc, d, b"FT", b"Sig", l)? && has_value(doc, d, l)?) {
-        return Ok(true);
-    }
-    for (_, value) in d.iter() {
-        if signed_object(doc, value, l, depth + 1)? {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn signed_object(doc: &Document, object: &Object, l: &Context<'_>, depth: usize) -> Result<bool> {
-    l.step()?;
-    l.check(Limit::Depth, depth + 1)?;
-    match object {
-        Object::Dictionary(d) => signed_dictionary(doc, d, l, depth),
-        Object::Stream(s) => signed_dictionary(doc, &s.dict, l, depth),
-        Object::Array(items) => {
-            for item in items {
-                if signed_object(doc, item, l, depth + 1)? {
-                    return Ok(true);
-                }
-            }
-            Ok(false)
-        }
-        // References are covered by the outer object scan; scalar values contain no dictionary.
-        Object::Reference(_)
-        | Object::Null
-        | Object::Boolean(_)
-        | Object::Integer(_)
-        | Object::Real(_)
-        | Object::Name(_)
-        | Object::String(_, _) => Ok(false),
-    }
-}
-
 fn is_name(
     doc: &Document,
     d: &Dictionary,
@@ -200,55 +111,6 @@ fn is_name(
         Ok(v) => Ok(matches!(graph::resolve(doc, v, l)?, Object::Name(n) if n.as_slice() == name)),
         Err(_) => Ok(false), // An absent key is not that name.
     }
-}
-
-fn has_value(doc: &Document, d: &Dictionary, l: &Context<'_>) -> Result<bool> {
-    match d.get(b"V") {
-        Ok(v) => Ok(!matches!(graph::resolve(doc, v, l)?, Object::Null)),
-        Err(_) => Ok(false), // A field without V has no value.
-    }
-}
-
-/// Walk the field tree for a signature field that has a value; the field type is inherited.
-fn signed_field<'a>(doc: &'a Document, fields: &'a Object, l: &Context<'_>) -> Result<bool> {
-    let mut stack = vec![(fields, false, 0usize)];
-    let mut seen = BTreeSet::new();
-    while let Some((kids, inherited, depth)) = stack.pop() {
-        l.check(Limit::Depth, depth + 1)?;
-        let kids = graph::resolve(doc, kids, l)?
-            .as_array()
-            .map_err(|e| malformed("PDF form fields must be an array").source(e))?;
-        l.check(
-            Limit::Objects,
-            stack
-                .len()
-                .checked_add(kids.len())
-                .ok_or_else(|| malformed("PDF form field stack overflow"))?,
-        )?;
-        for kid in kids {
-            l.step()?;
-            if let Object::Reference(id) = kid
-                && !seen.insert(*id)
-            {
-                return Err(malformed("PDF cyclic or repeated form field"));
-            }
-            let d = graph::resolve(doc, kid, l)?
-                .as_dict()
-                .map_err(|e| malformed("PDF form field must be a dictionary").source(e))?;
-            let signature = if d.has(b"FT") {
-                is_name(doc, d, b"FT", b"Sig", l)?
-            } else {
-                inherited
-            };
-            if signature && has_value(doc, d, l)? {
-                return Ok(true);
-            }
-            if let Ok(kids) = d.get(b"Kids") {
-                stack.push((kids, signature, depth + 1));
-            }
-        }
-    }
-    Ok(false)
 }
 
 fn numbers<const N: usize>(

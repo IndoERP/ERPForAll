@@ -209,6 +209,8 @@ pub fn embedded_files(input: &[u8], limits: &PdfLimits) -> Result<Vec<EmbeddedFi
         let context = Context::new(limits);
         let l = &context;
         let doc = graph::load(input, l, 1)?;
+        // Inspection accepts signed input, but malformed signature structures still fail.
+        crate::signatures::Assessment::read(&doc, l)?;
         let af = associated(&doc, l)?;
         let mut total = 0usize;
         let mut out = Vec::new();
@@ -293,10 +295,31 @@ pub fn attach(
     limits: &PdfLimits,
     emit: &mut Emitter<'_>,
 ) -> Result<()> {
+    attach_with_policy(
+        input,
+        data,
+        file,
+        duplicate,
+        limits,
+        emit,
+        crate::SignedEditPolicy::Refuse,
+    )
+    .map(|_| ())
+}
+pub(crate) fn attach_with_policy(
+    input: &[u8],
+    data: &[u8],
+    file: &EmbeddedFileOptions,
+    duplicate: Duplicate,
+    limits: &PdfLimits,
+    emit: &mut Emitter<'_>,
+    policy: crate::SignedEditPolicy,
+) -> Result<crate::IncrementalEditSummary> {
     guard(|| {
         let context = Context::new(limits);
         let l = &context;
         let mut u = Update::load(input, l)?;
+        let summary = u.admit(policy, input.len())?;
         if let Some(id) = u.pdfa(l)?
             && id.part < 3
         {
@@ -306,7 +329,8 @@ pub fn attach(
             )));
         }
         embed(&mut u, data, file, duplicate, l)?;
-        u.save(input, l, emit)
+        u.save(input, l, emit)?;
+        Ok(summary)
     })
 }
 /// Add or replace one embedded file in `u`; returns the file specification object.

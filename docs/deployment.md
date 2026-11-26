@@ -529,3 +529,18 @@ email_domain = "example.com"
 Use **Disconnect** on the sign-in page to revoke your linked identities and the sessions issued through that provider. A user with the Settings administrator group can post `enabled=false` with the current session and login-page `csrf_token` to `/erp/session/external/provider`. Disabling the provider removes pending sign-in requests and revokes provider-issued sessions. Post `enabled=true` to reopen sign-in. Disable the provider before removing its configuration from the serving nodes if you need to revoke existing provider sessions at the same time.
 
 `erp db neutralize` clears external sign-in challenges and account links from the copy. A neutralized database keeps external sign-in disabled even if an issuer is configured at server startup.
+
+
+### Local delivery of mail notifications
+
+With the mail addon installed, each serving node replays committed message events through the
+`mail.notifications` outbox consumer. Recipient receipts are unique per message, partner and
+transport. Discuss refreshes its visible records after a payload-free wake. A private conversation
+checks membership again at delivery and when the recipient opens it.
+
+Set `mail_delivery_dir = "/var/lib/erpforall/outgoing-maildir"` in the server configuration to
+deliver e-mail notices to a local Maildir. Grant the server account write access to that private
+directory and configure the same shared directory on each node that performs handoff. The notices
+contain a sign-in prompt. The database keeps addressed e-mail pending until a Maildir is
+configured, and marks recipients without a usable address as failed. Relaying Maildir messages to
+external mail systems is an operator transport choice.

@@ -56,7 +56,16 @@ pub(crate) fn apply_attributes(
         if value.is_empty() {
             source.remove_attr(target, name);
         } else {
+            let owner = if (spec.attr(child, "add").is_some()
+                || spec.attr(child, "remove").is_some())
+                && source.attr(target, name).is_some()
+            {
+                None
+            } else {
+                spec.original_slot(child)
+            };
             source.set_attr(target, name, value)?;
+            source.set_attribute_slot(target, name, owner);
         }
     }
     Ok(())

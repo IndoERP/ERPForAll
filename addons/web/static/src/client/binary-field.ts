@@ -5,6 +5,7 @@ import { icon } from "./icons.js";
 import { attachmentRequestCap, humanBytes } from "./attachment-policy.js";
 import { binaryContent, isBinarySize } from "./binary-content.js";
 import { createDropzone } from "./dropzone.js";
+import { binaryPdfViewerFile, openDocumentViewer } from "./document-viewer.js";
 import { saveFile } from "./file-save.js";
 import { fileAccepted } from "./image-field.js";
 import { ClientError } from "./transport.js";
@@ -98,6 +99,15 @@ export function binaryControl(options: FieldControlOptions): FieldControl {
   summary.append(icon("file-text"), el("span", hasFile ? storedName || field.label : `No ${field.label}`, "field-binary-name"));
   if (sizeText) summary.append(el("span", sizeText, "field-binary-size"));
   const actions = el("span", undefined, "field-binary-actions");
+  const editor = options.editor;
+  if (hasFile && !options.changed && /\.pdf$/i.test(storedName) && recordModel && typeof recordId === "number" && Number.isSafeInteger(recordId) && recordId > 0 && editor && "messages" in editor) {
+    const preview = button("Preview", () => {
+      const file = binaryPdfViewerFile(recordModel, recordId, field.name, storedName);
+      openDocumentViewer({ rpc, dialogs: editor.messages.dialogs, report: editor.report }, [file]);
+    }, "field-binary-button field-binary-preview");
+    preview.setAttribute("aria-label", `Preview ${storedName}`);
+    actions.append(preview);
+  }
   actions.append(download);
   root.append(summary, actions);
 

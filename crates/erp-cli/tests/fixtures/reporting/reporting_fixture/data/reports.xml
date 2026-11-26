@@ -124,6 +124,29 @@
         <field name="field">amount</field>
     </record>
 
+    <record id="action_stock" model="ir.actions.client">
+        <field name="name">Fixture Stock</field>
+        <field name="tag">reporting.report</field>
+        <field name="params" eval="{'report': ref('stock')}"/>
+    </record>
+    <menuitem id="menu_stock" name="Fixture Stock" action="action_stock" groups="base.group_user"/>
+
+    <!-- Default views for the source records opened by the report drill. -->
+    <record id="item_list" model="ir.ui.view">
+        <field name="name">reporting.fixture.item.list</field>
+        <field name="model">reporting_fixture.item</field>
+        <field name="arch" type="xml">
+            <list><field name="name"/><field name="bin_id"/><field name="qty"/><field name="reserved"/></list>
+        </field>
+    </record>
+    <record id="item_form" model="ir.ui.view">
+        <field name="name">reporting.fixture.item.form</field>
+        <field name="model">reporting_fixture.item</field>
+        <field name="arch" type="xml">
+            <form record_mode="record"><field name="name"/><field name="bin_id"/><field name="qty"/><field name="reserved"/></form>
+        </field>
+    </record>
+
     <!-- the same unreadable line, not optional -->
     <record id="secret" model="reporting.report">
         <field name="name">Fixture Secret</field>

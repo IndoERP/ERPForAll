@@ -89,6 +89,14 @@ pub(crate) const PARAMETERS: [(&str, &str, i64, i64, i64); 6] = [
         PICTURE_JPEG.2 as i64,
     ),
 ];
+/// Whether a printed document is shown in the page (the document viewer) or saved as a file.
+pub const PREVIEW_KEY: &str = "base.report_print_preview";
+/// Label of [`PREVIEW_KEY`] (declared in `system_parameters.rs`).
+pub(crate) const PREVIEW_LABEL: &str =
+    "Printing: show the printed document in the page instead of saving it as a file";
+/// The reference client saves a printed document as a file; a database that has not chosen does
+/// the same.
+pub(crate) const PREVIEW_DEFAULT: bool = false;
 /// Failures and warnings a job keeps listed (the counts stay exact): a storage bound of the row,
 /// not a policy value.
 pub const MAX_LISTED: usize = 100;
@@ -487,6 +495,11 @@ erp_sdk::jobs::register_job_kind!(
     .max_attempts(3)
 );
 
+/// The `open` value of a print answer: what the client does with the printed document.
+fn open_as(preview: bool) -> &'static str {
+    if preview { "preview" } else { "download" }
+}
+
 async fn param(tx: &mut Transaction, key: &str) -> Result<i64> {
     erp_sdk::params::get_int(tx, &crate::ADDON, key).await
 }
@@ -527,7 +540,9 @@ impl ReportJob {
         Ok(Value::Json(Arc::new(Json::Array(list))))
     }
 
-    /// Print `report` for `res_ids` of `res_model`. Answers `{mode: "sync", url}` for a small
+    /// Print `report` for `res_ids` of `res_model`. Every answer carries `open`: `"preview"` when
+    /// `base.report_print_preview` is on (the client shows the document in its viewer), else
+    /// `"download"`. Answers `{mode: "sync", url}` for a small
     /// request, or `{mode: "job", id, poll_ms}` for a background print whose `report.job` row
     /// the caller reads for progress.
     ///
@@ -552,9 +567,10 @@ impl ReportJob {
         let dispatch = plan(res_ids.len(), sync_max, job_max)?;
         let backend = backend()?;
         let printable = backend.check(tx, &report, &res_model, &res_ids).await?;
+        let open = open_as(erp_sdk::params::get_bool(tx, &crate::ADDON, PREVIEW_KEY).await?);
         let answer = match dispatch {
             Dispatch::Sync => {
-                json!({"mode": "sync", "url": backend.download_url(&report, &res_ids)?})
+                json!({"mode": "sync", "url": backend.download_url(&report, &res_ids)?, "open": open})
             }
             Dispatch::Job => {
                 let user = RecId::from_real(tx.env().uid())
@@ -583,7 +599,7 @@ impl ReportJob {
                     EnqueueRequest::new(KIND).payload(&json!({ "id": id }))?,
                 )
                 .await?;
-                json!({"mode": "job", "id": id, "poll_ms": param(tx, POLL_KEY).await?})
+                json!({"mode": "job", "id": id, "poll_ms": param(tx, POLL_KEY).await?, "open": open})
             }
         };
         Ok(Value::Json(Arc::new(answer)))
@@ -767,6 +783,12 @@ mod tests {
             let set = erp_sdk::report::PictureQuality::new(dpi, quality).unwrap();
             assert_eq!((set.dpi(), set.jpeg_quality()), (dpi, quality));
         }
+    }
+
+    #[test]
+    fn the_print_answer_names_how_the_document_opens() {
+        assert_eq!(open_as(PREVIEW_DEFAULT), "download");
+        assert_eq!(open_as(true), "preview");
     }
 
     #[test]

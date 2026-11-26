@@ -204,3 +204,15 @@ test("a purchase comparison heading follows its nested fields while an explicit 
   expect(host.querySelector(".form-group-title")?.textContent).toBe("Purchase and receipt");
   expect(host.querySelector("input")?.name).toBe("purchase_ordered_qty");
 });
+
+test("Left moves forward across RTL notebook tabs and transfers the tab stop", () => {
+  const form = document.createElement("form"); form.dir = "rtl"; document.body.append(form);
+  const nodes = tree();
+  const notebook = (nodes[0] as unknown as {children: {children: {children: unknown[]}[]}[]}).children[0]!.children[1]!;
+  notebook.children.push({kind: "page", name: "third", label: "Third", children: []});
+  renderFormLayout(form, nodes, renderField, new Map());
+  const tabs = [...form.querySelectorAll<HTMLButtonElement>("[role=tab]")];
+  tabs[0]!.focus(); tabs[0]!.dispatchEvent(new KeyboardEvent("keydown", {key:"ArrowLeft",bubbles:true}));
+  expect(document.activeElement).toBe(tabs[1]); expect(tabs[1]!.tabIndex).toBe(0);
+  form.remove();
+});

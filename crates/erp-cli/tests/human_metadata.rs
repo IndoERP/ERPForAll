@@ -3601,6 +3601,24 @@ async fn assert_missing_search_view_is_loaded_by_upgrade(
         .unlink(&mut tx)
         .await
         .unwrap();
+    let env = tx.env().clone();
+    let empty = erp_addon_web::metadata_test_support::test_get_views(
+        &env,
+        &mut tx,
+        "acceptance_notes.note",
+        vec![erp_fields::Value::List(
+            vec![erp_fields::Value::False, erp_fields::Value::str("search")].into(),
+        )],
+        4_000_000,
+    )
+    .await
+    .unwrap();
+    let empty = serde_json::to_value(empty).unwrap();
+    assert_eq!(empty["views"][0]["identity"]["kind"], "generated");
+    assert_eq!(
+        empty["views"][0]["nodes"][0]["children"],
+        serde_json::json!([])
+    );
     tx.commit().await.unwrap();
     drop(tx);
     let caller = system.system_env(erp_orm::Context::new());

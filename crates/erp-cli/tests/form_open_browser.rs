@@ -27,72 +27,17 @@
 mod native_http;
 
 use native_http::NativeFixture;
-use serde_json::{Value, json};
+use serde_json::json;
 use std::{
     io::Write,
     path::Path,
     process::{Command, Stdio},
 };
 
-/// Lines of the two orders with lines.
-const FIFTY: usize = 50;
-const MANY: usize = 500;
-
-fn call(fixture: &NativeFixture, model: &str, method: &str, company: i64, body: Value) -> Value {
-    let mut body = body;
-    body["context"] = json!({"allowed_company_ids": [company]});
-    let reply = native_http::request_within(
-        fixture.port,
-        "POST",
-        &format!("/erp/json/2/{model}/{method}"),
-        &[
-            ("cookie", &fixture.cookies),
-            ("content-type", "application/json"),
-            ("sec-fetch-site", "same-origin"),
-        ],
-        &body.to_string(),
-        std::time::Duration::from_secs(300),
-    );
-    assert_eq!(reply.status, 200, "{model}.{method}: {}", reply.body);
-    serde_json::from_str(&reply.body).unwrap()
-}
-
-fn create(fixture: &NativeFixture, model: &str, company: i64, vals: Vec<Value>) -> Vec<i64> {
-    let ids = call(
-        fixture,
-        model,
-        "create",
-        company,
-        json!({"vals_list": vals}),
-    );
-    ids.as_array()
-        .expect("create returns record ids")
-        .iter()
-        .map(|id| id.as_i64().unwrap())
-        .collect()
-}
-
-fn order_with_lines(
-    fixture: &NativeFixture,
-    company: i64,
-    partner: i64,
-    products: &[i64],
-    lines: usize,
-) -> i64 {
-    let order = create(
-        fixture,
-        "sale.order",
-        company,
-        vec![json!({"partner_id": partner, "company_id": company})],
-    )[0];
-    let vals: Vec<Value> = (0..lines)
-        .map(|n| json!({"order_id": order, "product_id": products[n % products.len()], "product_uom_qty": 1 + n % 7, "price_unit": 3 + n % 11}))
-        .collect();
-    for chunk in vals.chunks(100) {
-        create(fixture, "sale.order.line", company, chunk.to_vec());
-    }
-    order
-}
+#[path = "support/form_browser.rs"]
+mod form_browser;
+use form_browser::FIFTY;
+use form_browser::{MANY, build_assets, call, create, order_with_lines};
 
 #[ignore = "DEFERRED_PERFORMANCE: a browser measurement for a build host, started by hand (see the module documentation)"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -116,20 +61,7 @@ async fn form_open_times_in_the_browser() {
         compiler.is_file(),
         "build erp-ui-compiler-cli --bin erp-ui-compile with the same profile ({profile}) first"
     );
-    let assets = tempfile::tempdir().unwrap();
-    let built = Command::new("bash")
-        .current_dir(root)
-        .args([
-            "-c",
-            "set -euo pipefail; scripts/web-toolchain.sh check; eval \"$(scripts/web-toolchain.sh env)\"; exec node \"$1\" --addons web,acceptance_notes,reporting,stock_account",
-            "form-open-assets",
-        ])
-        .arg(root.join("web/scripts/build-human-ui.mjs"))
-        .env("ERP_UI_COMPILER", &compiler)
-        .env("ERP_UI_OUTPUT_DIR", assets.path())
-        .status()
-        .unwrap();
-    assert!(built.success(), "client asset compilation failed");
+    let assets = build_assets(root, &compiler);
     let fixture = NativeFixture::start_with_assets(|_| {}, Some(assets.path())).await;
     let installed = native_http::request_within(
         fixture.port,

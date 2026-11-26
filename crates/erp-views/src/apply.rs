@@ -114,6 +114,13 @@ pub(crate) fn apply_primary_template(
     }
     let target = source.root_id();
     budget.charge_bytes(spec.tag(root).len())?;
+    let text_source = source.slot(target, false);
+    let tail_source = source.slot(target, true);
+    let mut attributes: Vec<_> = source
+        .attrs(target)
+        .iter()
+        .map(|(name, _)| (name.clone(), source.attribute_slot(target, name)))
+        .collect();
     source.set_tag(target, spec.tag(root))?;
     for (name, value) in spec.attrs(root) {
         budget.charge_bytes(name.len())?;
@@ -127,9 +134,15 @@ pub(crate) fn apply_primary_template(
         }
         budget.charge_bytes(value.len())?;
         source.set_attr(target, name, value.clone())?;
+        attributes.push((name.clone(), spec.attribute_slot(root, name)));
     }
     source.set_origin(target, spec.origin(root));
     source.set_source_node(target, spec.source_node(root));
+    source.set_slot(target, false, text_source);
+    source.set_slot(target, true, tail_source);
+    for (name, owner) in attributes {
+        source.set_attribute_slot(target, &name, owner);
+    }
     Ok(source)
 }
 
@@ -232,23 +245,29 @@ fn rstrip_match(s: &str) -> &str {
     }
 }
 
-fn add_text_before(source: &mut Arch, node: NodeId, text: &str) -> ViewResult<()> {
+fn add_text_before(
+    source: &mut Arch,
+    node: NodeId,
+    text: &str,
+    origin: crate::arch::LiteralSource,
+) -> ViewResult<()> {
     if text.is_empty() {
         return Ok(());
     }
     match source.prev_sibling(node) {
-        Some(prev) => source.append_tail(prev, text),
+        Some(prev) => source.append_slot(prev, true, text, origin),
         None => {
             let parent = source.attached_parent(node)?;
             source.rstrip_text(parent);
-            source.append_text(parent, text)
+            source.append_slot(parent, false, text, origin)
         }
     }
 }
 
 fn remove_element(source: &mut Arch, node: NodeId) -> ViewResult<()> {
+    let origin = source.slot(node, true);
     let tail = source.take_tail(node);
-    add_text_before(source, node, &tail)?;
+    add_text_before(source, node, &tail, origin)?;
     source.detach(node);
     Ok(())
 }
@@ -304,13 +323,13 @@ impl SpecOp<'_, '_> {
                 let parent = source.attached_parent(anchor)?;
                 let before = rstrip_match(source.text(parent)).to_owned();
                 source.rstrip_text(parent);
-                source.append_text(parent, text)?;
+                source.append_slot(parent, false, text, self.spec.slot(self.spec_id, false))?;
                 before
             }
             Some(prev) => {
                 let before = rstrip_match(source.tail(prev)).to_owned();
                 source.rstrip_tail(prev);
-                source.append_tail(prev, text)?;
+                source.append_slot(prev, true, text, self.spec.slot(self.spec_id, false))?;
                 before
             }
         };
@@ -326,6 +345,7 @@ impl SpecOp<'_, '_> {
             let node = if is_move(self.spec, child) {
                 let moved = self.extract(source, child)?;
                 source.set_tail(moved, tail)?;
+                source.set_slot(moved, true, self.spec.slot(child, true));
                 moved
             } else {
                 source.import(self.spec, child, tail, &[])?.0

@@ -223,7 +223,7 @@ async fn world() -> World {
     company_rows_support::insert_generated(
         &client,
         h.registry(),
-        &company_rows_support::PARTNER_AND_USERS,
+        &company_rows_support::MAIL_POLICY_MODELS,
     )
     .await;
     let company = company_rows_support::fixture_company(&client).await;

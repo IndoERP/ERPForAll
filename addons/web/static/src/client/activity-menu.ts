@@ -447,6 +447,8 @@ export function renderActivityMenu(env: ActivityMenuEnvironment, initial?: Activ
   trigger.removeAttribute("aria-haspopup");
   trigger.setAttribute("aria-controls", dropdown.id);
 
+  const onActivityChange = () => { void refresh(); };
+  document.addEventListener("erp:activities-changed", onActivityChange);
   container.append(trigger, dropdown);
   if (first === undefined) void refresh();
   else if ("failure" in first) announce(first.failure);
@@ -456,6 +458,7 @@ export function renderActivityMenu(env: ActivityMenuEnvironment, initial?: Activ
     dispose: () => {
       if (disposed) return;
       disposed = true;
+      document.removeEventListener("erp:activities-changed", onActivityChange);
       controller.dispose();
       container.remove();
     },

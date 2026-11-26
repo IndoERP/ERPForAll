@@ -690,6 +690,48 @@ required); the view is refused otherwise. The client checks required, length, da
 method can be called directly over RPC, so it validates its argument like any other. A prompt cannot combine with
 `confirm`, and a wizard stays the way for several fields.
 
+### Runtime bundle budget
+
+From `web/`, run `pnpm run size` to measure the complete Elang public API and compiled-template
+ABI in one ES module. Run `node scripts/size.mjs --inputs` to see each source module's minified
+byte contribution. The milestone suite pins the exact minified size and allows a 32-byte
+difference in either direction for gzip level 9. Run all three milestone suites with
+`pnpm run test:milestone`.
+
+The M4 review rebuilt these sources with Node 24.22.0 and esbuild 0.28.2. The original test
+declared a budget of 37,203 minified bytes and 13,379 compressed bytes.
+
+| Source | Minified bytes | Gzip bytes |
+| --- | ---: | ---: |
+| Initial commit `4f1b9736` | 95,287 | 30,832 |
+| Main `3215c5f8` | 95,543 | 30,926 |
+| M2/M3 tree `0e4a9557` | 95,543 | 30,926 |
+| M4 with restricted cards | 98,556 | 32,025 |
+
+The optional card renderer accounts for 2,985 of the 3,013 additional minified bytes. It checks
+the authorized card identity, field projections, HTML allowlists and output bounds. The remaining
+28 bytes export the renderer. M4 adds 1,099 bytes to the compressed full API. For a consumer
+importing only `signal`, esbuild retains just the card module's 49-byte license comment. An
+ordinary CI test checks that the allowlists and renderer are removed from that consumer.
+
+### Installed shell browser acceptance
+
+Build `erp-ui-compile` in the same Cargo profile as the server. Set `SHELL_ACCEPTANCE_OUTPUT`
+to the evidence directory and supply the approved WASI guest and its pinned digest in
+`ERP_UI_CARD_GUEST` and `ERP_UI_CARD_GUEST_SHA256`. With PostgreSQL and Chrome available,
+run the fixture through the normal installed server.
+
+```sh
+cargo test --locked -p erp-cli --test installed_shell_browser -- --ignored --nocapture
+```
+
+The shell fixture records request paths, status codes, time to ready and scoped accessibility
+results in `installed-shell.json`. It opens a 500-line sales order, pages through 600 contacts,
+and checks keyboard editing, locale direction, permitted records, preferences and logout.
+A separate base-and-web fixture records its served Kanban card checks in
+`installed-restricted-cards.json`. It renders a visible contact and checks that an administrator
+and an internal reader receive different results for a group-protected card projection.
+
 ### Form open time
 
 `crates/erp-cli/tests/form_open_browser.rs` measures how long a form takes to open in a real browser: it installs
@@ -750,3 +792,108 @@ navigation gets. The HTML preview
 - Every commit carries a sign-off (`git commit -s`).
 - This project is built with AI agents alongside people; agents follow the same rules, and the person who submits
   the change signs it off.
+
+### Grouped and analytical views
+
+Kanban groups by the first active search grouping or its declared default. Each column loads cards
+up to the configured limit. Folded columns keep their position in the page address. A card's
+move selector and drag gesture use the same record write. A refused move leaves the card in its
+original column. Quick creation passes the column value through the model's usual defaults.
+
+Calendar date inputs use the session timezone. Moving the start also moves the end.
+Changing only the end resizes an event. Open an event to see the actions its record rules allow.
+Each multi-day event occupies one bar per displayed week. A pivot can declare a named
+`variant` registered by its client bundle with `registerPivotVariant`. Date groupings default
+to month. The pivot export worker bound is `web.pivot_export_max_concurrent` per server process.
+Graph SVG export uses the chart and applied filters already on screen.
+
+Install `web_map` to add Contact Map. Mark a contact as having coordinates and enter its stored
+latitude and longitude on the Details tab. The optional addon owns the bare `map` type. Its
+`<map latitude="..." longitude="..."/>` declaration takes two distinct stored float fields.
+The action domain and the caller's usual record rules constrain the single bounded map read.
+Zero is a valid coordinate. The map's land outlines come from Natural Earth's public-domain
+1:110m land dataset, version 5.1.2. All map rendering happens locally.
+
+Native view descriptions resolve types against the installed registry generation. A missing
+declaration reports the unregistered type by name. A published custom type without a human UI
+wire adapter reports that the type is unsupported. A client without the requested renderer or
+pivot variant reports its name. A WebAssembly package can use installed view types in XML data.
+The package ABI has no callback for declaring a new view type. Module composition returns
+`GuestViewTypesUnsupported` with the package name if a package claims a native view registration.
+
+### Localized template bundles and restricted cards
+
+Extract source terms from trusted client templates with
+`node web/scripts/build-human-ui.mjs --addons web --extract-terms /tmp/web-terms.json`.
+Compile translations with `--catalogue /path/to/catalogue.json`.
+The catalogue has a `language` and a `terms` array. Each term specifies `addon`, `source`
+and `translation`. An empty addon selects a global term. Publishing through
+`AssemblyOptions::with_catalogue` includes the language and canonical entries in the immutable
+asset identity. A template call inherits the caller's translation context. Extensions retain
+the original writer of each independently replaced literal.
+
+Database card templates use the WASI build of the compiler. Build it with
+`cargo build --release --target wasm32-wasip1 -p erp-ui-compiler-cli --bin erp-ui-compile`.
+Set `ERP_UI_CARD_GUEST` to that file and `ERP_UI_CARD_GUEST_SHA256` to its approved digest on the server.
+Distribute the digest through the same trusted channel as the server configuration.
+`erp-ui-compiler-host GUEST.wasm PINNED_SHA256` accepts one framed `ArchCompileRequest` on stdin
+and returns a JSON card plan. The request binds the source digest, arch identity, language,
+field schema and compiler policy. Policy 1 accepts static same-arch template calls, ordinary
+card elements and attributes, `t-if`, `t-out`, `t-esc` and field projections.
+The browser API `prepareRestrictedCard(plan, identity)` accepts the matching authorized arch
+identity and renders individual records into detached DOM fragments. The compiler reports
+the original XML line and column for an unsupported element or field.
+
+To verify the deployed guest against the native compiler, set `ERP_UI_COMPILE_WASM` to the
+built WASI binary and run
+`cargo test -p erp-ui-compiler-host --features test-raw-input --test wasm_artifact -- --ignored`.
+
+### Report rendering and foreign PDF documents
+
+Report dates and durations use the bundled CLDR tables for English, French and Indonesian.
+Contact widgets can request address, telephone, email and tax fields through the report
+data plan. Group conditions are resolved for the printing user. Marked-up report terms in
+`model_terms:ir.ui.view,arch_db` use numbered placeholders such as `Partner {0} ready` to
+reorder inline children while retaining their original markup and field permissions.
+The HTML preview embeds each authorized raster once and reuses it at each placement. Uploaded
+SVGs remain alt-text boxes. Barcodes use vector paths generated by the report engine.
+
+The default print pool runs one worker, one document at a time, with a 30-second render
+deadline and a 1 GiB resident-memory cap. On Linux the address-space limit includes a further
+256 MiB of headroom. Operators can configure the pool separately from the ORM connection
+pool. To measure cold and warm latency on the local host, run
+`cargo test -p erp-cli --test report_print_locale -- --nocapture` with the test database
+available. It renders the same two-page localized partner report four times through the
+real print worker and reads the resulting PDF pages. On an Apple M3 Pro running macOS arm64,
+a debug build took 109 ms for the first render in a newly created pool and 3, 1 and 2 ms for
+the following renders. During concurrent workspace validation on the same host, a freshly
+linked executable took 143,369 ms on its first render and 10, 3 and 4 ms on subsequent calls.
+Both runs used an already prepared document. Each interval covers the worker call, including
+process startup on the first call, and ends before the test decodes the PDF. Measure launch
+latency separately when sizing a pool for a deployment.
+
+`erp-pdf` accepts unencrypted input. A reading copy can retain self-contained annotations,
+remap named destinations, and preserve bookmarks with `OutlinePolicy::Keep`. The default
+omits bookmarks. Supported stream-decoding stages include Flate, LZW, ASCII85, ASCIIHex and
+RunLength, with bounded buffers and supported TIFF/PNG predictors. Unsupported image codecs
+and Crypt filters return a named error when decoding is required. Signed input defaults to
+refusal. `SignedCopyPolicy::UnsignedCopy` creates a disclosed unsigned reading copy.
+`SignedEditPolicy::AppendOnly` admits a bounded subset of incremental edits and preserves
+the original file as the exact prefix. It checks declared modification restrictions and
+provides no cryptographic verification of a signature. Run foreign-document processing in
+an isolated worker and publish the result only after the full operation succeeds.
+
+A stored Kanban arch can add a `<restricted_templates>` element beside its ordinary
+`<templates>` declaration. Declare the record fields in the ordinary card and name the
+restricted entry `card`. The server passes the visible template subtree and permitted scalar
+card fields to the pinned WASI compiler. A compiler rejection identifies the source view and
+the original start tag's line and column. A missing compiler produces an explicit error.
+
+```xml
+<kanban>
+  <templates><t t-name="card"><field name="name"/></t></templates>
+  <restricted_templates>
+    <t t-name="card"><strong><t t-esc="record.name.value"/></strong></t>
+  </restricted_templates>
+</kanban>
+```

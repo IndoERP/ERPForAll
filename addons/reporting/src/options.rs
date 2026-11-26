@@ -247,7 +247,9 @@ fn bad(message: impl Into<String>) -> Error {
 
 fn date_of(value: Option<&Json>, key: &str) -> Result<Option<Date>> {
     match value {
-        None | Some(Json::Null) => Ok(None),
+        // JSON2's dynamic empty value returns through the model bridge as false.
+        // Normalized options must survive that round trip for expand and restore.
+        None | Some(Json::Null | Json::Bool(false)) => Ok(None),
         Some(Json::String(s)) => Date::parse_odoo(s).map(Some).ok_or_else(|| {
             bad(format!(
                 "{key}: '{s}' must be written as year-month-day, such as 2026-11-30."

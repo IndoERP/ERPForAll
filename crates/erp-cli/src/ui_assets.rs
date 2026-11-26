@@ -13,6 +13,7 @@ use erp_addon_web::assets::{
 use erp_fields::{Error, Result};
 use erp_modules::{
     AddonEntry, AddonSourceKind, LifecycleChange, LifecycleHook, OPERATION_LOCK, PackageFiles,
+    lifecycle_hook::{PreparedUninstall, UninstallEffect, UninstallPlanner},
 };
 use erp_orm::{BeginOptions, BoxFuture, Isolation, Orm, SUPERUSER_ID, Transaction};
 use erp_sdk::ui_compiler::{BuildMode, CompileOptions};
@@ -525,6 +526,10 @@ impl AssetLifecycle {
     }
 }
 impl LifecycleHook for AssetLifecycle {
+    fn uninstall_planner(&self) -> Option<&dyn UninstallPlanner> {
+        Some(self)
+    }
+
     fn before_commit<'a>(
         &'a self,
         tx: &'a mut Transaction,
@@ -546,6 +551,93 @@ impl LifecycleHook for AssetLifecycle {
                 .any(|n| n.as_str() == "web");
             assemble_entries(tx, change.active_addons(), &self.options, initialize).await?;
             Ok(())
+        })
+    }
+}
+
+struct UninstallAssetBundle {
+    effect: UninstallEffect,
+    bundle: AssembledBundle,
+}
+
+impl PreparedUninstall for UninstallAssetBundle {
+    fn effect(&self) -> UninstallEffect {
+        self.effect.clone()
+    }
+
+    fn apply(self: Box<Self>, tx: &mut Transaction) -> BoxFuture<'_, erp_modules::Result<()>> {
+        Box::pin(async move {
+            store::publish_preserving_history(tx, &self.bundle).await?;
+            Ok(())
+        })
+    }
+}
+
+impl UninstallPlanner for AssetLifecycle {
+    fn prepare_uninstall<'a>(
+        &'a self,
+        tx: &'a mut Transaction,
+        change: LifecycleChange<'a>,
+    ) -> BoxFuture<'a, erp_modules::Result<Box<dyn PreparedUninstall>>> {
+        Box::pin(async move {
+            if !change
+                .active_addons()
+                .iter()
+                .any(|entry| entry.name().as_str() == "web")
+            {
+                return Ok(Box::new(UninstallEffect::new(
+                    "Web assets",
+                    "No web client is installed",
+                )) as Box<dyn PreparedUninstall>);
+            }
+            admission_locks(tx).await?;
+            // The private storage has no triggers, rewrite rules or foreign keys in its
+            // declared schema. Those would add effects outside this publication.
+            let rows = tx.query(r#"
+WITH storage AS (
+    SELECT oid, relkind, relpersistence FROM pg_catalog.pg_class
+    WHERE relnamespace=pg_catalog.current_schema()::regnamespace
+      AND relname IN ('ir_ui_asset_bundle','ir_ui_asset_blob')
+)
+SELECT (SELECT count(*) FROM storage WHERE relkind='r' AND relpersistence='p')<>2 OR EXISTS (
+    SELECT 1 FROM pg_catalog.pg_inherits WHERE inhrelid IN (SELECT oid FROM storage) OR inhparent IN (SELECT oid FROM storage)
+    UNION ALL
+    SELECT 1 FROM pg_catalog.pg_trigger WHERE tgrelid IN (SELECT oid FROM storage) AND tgenabled<>'D'
+    UNION ALL SELECT 1 FROM pg_catalog.pg_rewrite WHERE ev_class IN (SELECT oid FROM storage) AND ev_enabled<>'D'
+    UNION ALL SELECT 1 FROM pg_catalog.pg_constraint WHERE contype='f'
+      AND (conrelid IN (SELECT oid FROM storage) OR confrelid IN (SELECT oid FROM storage))
+)
+"#, &[]).await?;
+            if rows[0].try_get::<_, bool>(0).map_err(|error| {
+                Error::db("Invalid web bundle storage dependencies").with_source(error)
+            })? {
+                return Err(Error::validation("Uninstall requires the standard web bundle storage without inheritance, triggers, rules or foreign keys").into());
+            }
+            let current = store::current_identity(
+                tx,
+                self.options.language(),
+                self.options.group(),
+            )
+            .await?
+            .ok_or_else(|| {
+                Error::validation(
+                    "Current web bundle is missing; restore asset publication before uninstall",
+                )
+            })?;
+            runtime_admission(&current.1, self.options.runtime())?;
+            let bundle = assemble_sources(change.active_addons(), &self.options).await?;
+            if current.2 == bundle.key() {
+                return Ok(Box::new(
+                    UninstallEffect::new("Web assets", "The current web bundle stays in place")
+                        .identities(current.2, bundle.key()),
+                ) as Box<dyn PreparedUninstall>);
+            }
+            let effect = UninstallEffect::new(
+                "Web assets",
+                "Publish the remaining addons' web bundle and keep the previous bundle for the asset grace period",
+            )
+            .identities(current.2, bundle.key());
+            Ok(Box::new(UninstallAssetBundle { effect, bundle }) as Box<dyn PreparedUninstall>)
         })
     }
 }

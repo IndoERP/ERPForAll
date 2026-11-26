@@ -214,6 +214,20 @@ pub trait AssetAuthority: Send + Sync {
 
 /// Trusted composition adapter for's sealed native installation flow.
 pub trait WebLifecycle: Send + Sync {
+    /// Preview the uninstall using the same session and engine used for confirmation.
+    fn preview_uninstall<'a>(
+        &'a self,
+        _auth: &'a Arc<Auth>,
+        _secret: &'a SessionSecret,
+        _names: Vec<String>,
+    ) -> erp_orm::BoxFuture<'a, erp_fields::Result<serde_json::Value>> {
+        Box::pin(async {
+            Err(erp_fields::Error::programming(
+                "Native uninstall preview composition is unavailable",
+            ))
+        })
+    }
+
     /// Rebuild a superseded runtime from durable primary module state. No install/upgrade or
     /// business write may be started by this refresh; pending lifecycle work returns maintenance.
     fn refresh<'a>(
@@ -279,7 +293,7 @@ pub use content::{
     ContentRange, ContentReader, FoundContent, WebAttachmentContent,
 };
 use page_brand::PageBrand;
-pub use pivot_export::{PivotWorkbook, WebPivotExport};
+pub use pivot_export::{PivotExportPermit, PivotWorkbook, WebPivotExport};
 pub use report::{PrintedReport, ReportFormat, WebReport};
 pub use reporting_export::{ReportingFile, WebReportingExport};
 
@@ -420,6 +434,7 @@ pub struct WebApp {
     attachment_content: Option<Arc<dyn WebAttachmentContent>>,
     downloads: content::Downloads,
     attachment_policy: Option<Arc<dyn WebAttachmentPolicy>>,
+    active_pivot_exports: Arc<std::sync::atomic::AtomicUsize>,
     pivot_export: Option<Arc<dyn WebPivotExport>>,
     reporting_export: Option<Arc<dyn WebReportingExport>>,
     assistant: Option<Arc<dyn WebAssistant>>,
@@ -484,6 +499,7 @@ impl WebApp {
             lifecycle: None,
             attachment_content: None,
             attachment_policy: None,
+            active_pivot_exports: Arc::default(),
             pivot_export: None,
             reporting_export: None,
             assistant: None,
@@ -1130,6 +1146,14 @@ impl WebApp {
                 ));
             }
             let operation = LifecycleOperation::from_path(path);
+            let uninstall_preview = path == routes::MODULE_UNINSTALL_PREVIEW;
+            if uninstall_preview && headers.contains_key(header::AUTHORIZATION) {
+                return Err(self
+                    .rpc_error(erp_fields::Error::access(
+                        "Addon administration requires a resolved, unelevated primary session user",
+                    ))
+                    .await);
+            }
             if matches!(
                 operation,
                 Some(
@@ -1209,6 +1233,35 @@ impl WebApp {
                     "JSON body exceeds 1048576 bytes",
                 )
             })?;
+            if uninstall_preview {
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct PreviewRequest {
+                    modules: Vec<String>,
+                    #[serde(default, rename = "context")]
+                    _context: Option<serde_json::Map<String, serde_json::Value>>,
+                }
+                let request: PreviewRequest = serde_json::from_slice(&bytes).map_err(|_| {
+                    bad("Invalid uninstall preview request: expected modules as a string array")
+                })?;
+                let lifecycle = self.lifecycle.as_ref().ok_or_else(|| {
+                    response(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "native uninstall preview composition is unavailable",
+                    )
+                })?;
+                return match lifecycle
+                    .preview_uninstall(
+                        &auth,
+                        secret.as_ref().ok_or_else(internal)?,
+                        request.modules,
+                    )
+                    .await
+                {
+                    Ok(impact) => json_response(StatusCode::OK, &impact),
+                    Err(error) => Err(self.rpc_error(error).await),
+                };
+            }
             if let Some(operation) = operation {
                 let lifecycle = self.lifecycle.as_ref().ok_or_else(|| {
                     response(
@@ -2225,7 +2278,7 @@ impl WebApp {
             .ok_or_else(internal)?
             .try_get(0)
             .map_err(|_| internal())?;
-        let language = tx.query("SELECT decimal_point,thousands_sep,grouping,date_format,time_format FROM res_lang WHERE code=$1 AND active", &[&context.lang()]).await.map_err(auth_error)?;
+        let language = tx.query("SELECT decimal_point,thousands_sep,grouping,date_format,time_format,direction FROM res_lang WHERE code=$1 AND active", &[&context.lang()]).await.map_err(auth_error)?;
         let language = language.first().ok_or_else(|| {
             response(
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -2248,6 +2301,7 @@ impl WebApp {
             "asset_version":self.assets.version(),"identity":{"uid":env.uid(),"name":name,"internal":true},
             "companies":companies,"current_company_id":current,"allowed_company_ids":ids,"active_company_ids":active,
             "locale":{"lang":context.lang(),"tz":context.tz().unwrap_or("UTC"),
+                "direction":language.try_get::<_,String>(5).map_err(|_| internal())?,
                 "decimal_point":language.try_get::<_,String>(0).map_err(|_| internal())?,
                 "thousands_sep":language.try_get::<_,String>(1).map_err(|_| internal())?,"grouping":grouping,
                 "date_format":language.try_get::<_,String>(3).map_err(|_| internal())?,

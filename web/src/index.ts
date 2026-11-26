@@ -64,3 +64,5 @@ export type { TranslationCatalogue, TranslationOptions, Translate } from "./runt
 
 export { createHotkeyController, createHotkeyBoundary } from "./runtime/hotkeys.js";
 export type { HotkeyBinding, HotkeyControllerOptions, HotkeyBoundaryOptions } from "./runtime/hotkeys.js";
+export { prepareRestrictedCard } from "./runtime/restricted-template.js";
+export type { CardIdentity } from "./runtime/restricted-template.js";

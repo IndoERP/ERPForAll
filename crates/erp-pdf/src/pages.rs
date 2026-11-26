@@ -2,6 +2,7 @@
 use crate::error::{Result, guard, invalid, malformed, owner, refused, unsupported};
 use crate::limits::Context;
 use crate::{AnnotationPolicy, Emitter, FormPolicy, Limit, PageSelection, PdfLimits, Rotation};
+use crate::{OutlinePolicy, dest::Names, outline::Outline};
 use crate::{
     graph::{self, PageProfile},
     ocg::{Layers, Source},
@@ -29,6 +30,8 @@ use lopdf::{Dictionary, Document, Object, ObjectId, dictionary};
 pub struct ReadingCopy {
     annotations: AnnotationPolicy,
     forms: FormPolicy,
+    outlines: OutlinePolicy,
+    signed: crate::SignedCopyPolicy,
 }
 /// What a finished reading copy did with page annotations.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -37,8 +40,16 @@ pub struct ReadingCopySummary {
     kept: usize,
     dropped: usize,
     flattened: usize,
+    outline_kept: usize,
+    outline_dropped: usize,
+    signed: usize,
 }
 impl ReadingCopySummary {
+    /// Source inputs copied into unsigned output; split counts its source once.
+    pub fn signed_inputs_copied(&self) -> usize {
+        self.signed
+    }
+
     /// Annotations carried into the output.
     pub fn annotations_kept(&self) -> usize {
         self.kept
@@ -46,6 +57,15 @@ impl ReadingCopySummary {
     /// Annotations left out; non-zero only under [`AnnotationPolicy::KeepOrDrop`].
     pub fn annotations_dropped(&self) -> usize {
         self.dropped
+    }
+    /// Bookmarks written into the output; non-zero only under [`OutlinePolicy::Keep`].
+    pub fn outline_entries_kept(&self) -> usize {
+        self.outline_kept
+    }
+    /// Bookmarks of the inputs left out under [`OutlinePolicy::Keep`]: their target is not in
+    /// the copy and no bookmark below them is carried.
+    pub fn outline_entries_dropped(&self) -> usize {
+        self.outline_dropped
     }
     /// Form fields painted into their pages; non-zero only under [`FormPolicy::Flatten`].
     /// A field a reader does not show counts too: it was flattened to nothing.
@@ -66,6 +86,11 @@ impl ReadingCopy {
     /// Choose what happens to page annotations.
     pub fn annotations(mut self, policy: AnnotationPolicy) -> Self {
         self.annotations = policy;
+        self
+    }
+    /// Choose what happens to bookmarks; without this call none is written.
+    pub fn outlines(mut self, policy: OutlinePolicy) -> Self {
+        self.outlines = policy;
         self
     }
     /// Choose what happens to an interactive form ([`FormPolicy::Refuse`] unless chosen).
@@ -91,6 +116,17 @@ impl ReadingCopy {
     }
     fn profile(&self) -> PageProfile {
         PageProfile::ReadingCopy(self.annotations, self.forms)
+    }
+    /// Explicitly allow unsigned copies of signature-marked inputs.
+    /// Form and annotation admission still applies; disclose the signed input count.
+    pub fn signed_documents(mut self, policy: crate::SignedCopyPolicy) -> Self {
+        self.signed = policy;
+        self
+    }
+    fn signed_input(&self, doc: &Document, l: &Context<'_>) -> Result<usize> {
+        Ok(usize::from(
+            crate::signatures::Assessment::read(doc, l)?.copy(self.signed)?,
+        ))
     }
     /// Concatenate documents lazily into a plain PDF reading copy.
     /// All emitted bytes must be discarded on error. No files, clocks or global state are used.
@@ -118,17 +154,23 @@ impl ReadingCopy {
             let catalog = w.id()?;
             let mut kids = Vec::new();
             let mut layers = Layers::default();
+            let mut outline = Outline::default();
             let mut count = 0;
             let mut summary = ReadingCopySummary::default();
             for input in inputs {
                 count += 1;
                 limits.check(Limit::Documents, count)?;
                 let doc = graph::load(input.as_ref(), limits, count)?;
+                summary.signed = summary
+                    .signed
+                    .checked_add(self.signed_input(&doc, limits)?)
+                    .ok_or_else(|| invalid("PDF signed input count overflow"))?;
                 let pages = graph::pages(&doc, limits, self.profile())?;
                 limits.check(Limit::Pages, kids.len() + pages.len())?;
                 let source = Source::read(&doc, limits)?;
+                let names = Names::new(&doc);
                 let mut importer =
-                    Importer::new(&doc, &mut w, limits, true, self.annotations, count)
+                    Importer::new(&names, &mut w, limits, true, self.annotations, count)
                         .forms(self.forms)?;
                 importer.groups.clone_from(&source.listed);
                 importer.reserve(pages.iter().map(|(id, _)| *id))?;
@@ -142,6 +184,10 @@ impl ReadingCopy {
                 }
                 source.carry(&doc, &|id| importer.copied(id), &mut layers, limits)?;
                 summary.add(&importer);
+                if self.outlines == OutlinePolicy::Keep {
+                    let entries = importer.outline()?;
+                    outline.add(&mut importer, entries)?;
+                }
             }
             if count == 0 {
                 return Err(invalid("PDF merge requires at least one document"));
@@ -152,7 +198,7 @@ impl ReadingCopy {
                     dictionary! {"Type"=>"Pages","Count"=>kids.len() as i64,"Kids"=>kids},
                 ),
             )?;
-            w.object(catalog, &Object::Dictionary(plain_catalog(root, layers)))?;
+            write_catalog(&mut w, catalog, root, layers, outline, &mut summary)?;
             w.finish(dictionary! {"Root"=>catalog})?;
             Ok(summary)
         })
@@ -172,8 +218,12 @@ impl ReadingCopy {
         guard(|| {
             let context = Context::new(l);
             let doc = graph::load(input, &context, 1)?;
+            let signed = self.signed_input(&doc, &context)?;
             let pages = graph::pages(&doc, &context, self.profile())?;
-            let mut summary = ReadingCopySummary::default();
+            let mut summary = ReadingCopySummary {
+                signed,
+                ..Default::default()
+            };
             self.extract_doc(&doc, &pages, selection, &mut summary, &context, emit)?;
             Ok(summary)
         })
@@ -193,6 +243,7 @@ impl ReadingCopy {
             let context = Context::new(l);
             let l = &context;
             let doc = graph::load(input, l, 1)?;
+            let signed = self.signed_input(&doc, l)?;
             let pages = graph::pages(&doc, l, self.profile())?;
             let mut next = 1u32;
             let mut selections = Vec::new();
@@ -215,7 +266,10 @@ impl ReadingCopy {
                 ));
             }
             let mut total = 0usize;
-            let mut summary = ReadingCopySummary::default();
+            let mut summary = ReadingCopySummary {
+                signed,
+                ..Default::default()
+            };
             for s in selections {
                 let mut bytes = Vec::new();
                 self.extract_doc(&doc, &pages, &s, &mut summary, l, &mut |b| {
@@ -250,6 +304,28 @@ where
 }
 /// The catalog of a reading copy: its page tree and, when its pages use optional content groups,
 /// the configuration rebuilt for them.
+fn total(a: usize, b: usize) -> Result<usize> {
+    a.checked_add(b)
+        .ok_or_else(|| invalid("PDF reading-copy counter overflow"))
+}
+
+fn write_catalog(
+    w: &mut Writer<'_, '_>,
+    id: ObjectId,
+    pages: ObjectId,
+    layers: Layers,
+    outline: Outline,
+    summary: &mut ReadingCopySummary,
+) -> Result<()> {
+    summary.outline_kept = total(summary.outline_kept, outline.kept)?;
+    summary.outline_dropped = total(summary.outline_dropped, outline.dropped)?;
+    let mut catalog = plain_catalog(pages, layers);
+    if let Some(outlines) = outline.finish(w)? {
+        catalog.set("Outlines", outlines);
+    }
+    w.object(id, &Object::Dictionary(catalog))
+}
+
 fn plain_catalog(root: ObjectId, layers: Layers) -> Dictionary {
     let mut catalog = dictionary! {"Type"=>"Catalog","Pages"=>root};
     if let Some(properties) = layers.properties() {
@@ -293,9 +369,11 @@ impl ReadingCopy {
         let cat = w.id()?;
         let mut kids = Vec::new();
         let mut layers = Layers::default();
+        let mut outline = Outline::default();
         let source = Source::read(doc, l)?;
+        let names = Names::new(doc);
         let mut importer =
-            Importer::new(doc, &mut w, l, true, self.annotations, 1).forms(self.forms)?;
+            Importer::new(&names, &mut w, l, true, self.annotations, 1).forms(self.forms)?;
         importer.groups.clone_from(&source.listed);
         importer.reserve(selected.iter().map(|page| page.0))?;
         for (number, (old, page)) in selection.0.iter().zip(selected) {
@@ -308,13 +386,17 @@ impl ReadingCopy {
         }
         source.carry(doc, &|id| importer.copied(id), &mut layers, l)?;
         summary.add(&importer);
+        if self.outlines == OutlinePolicy::Keep {
+            let entries = importer.outline()?;
+            outline.add(&mut importer, entries)?;
+        }
         w.object(
             root,
             &Object::Dictionary(
                 dictionary! {"Type"=>"Pages","Count"=>kids.len() as i64,"Kids"=>kids},
             ),
         )?;
-        w.object(cat, &Object::Dictionary(plain_catalog(root, layers)))?;
+        write_catalog(&mut w, cat, root, layers, outline, summary)?;
         w.finish(dictionary! {"Root"=>cat})
     }
 }
@@ -348,7 +430,7 @@ pub fn split(
 /// Page annotations stay as they are: their rectangles are in page coordinates and turn with it.
 /// Optional content stays as it is: the catalog configuration is written again unchanged.
 /// An unsigned form stays a form: the catalog form and every field are written again.
-/// Archival metadata and signed documents require their dedicated integration and are refused.
+/// Archival metadata is refused; signed documents are never rewritten.
 pub fn rotate(
     input: &[u8],
     selection: &PageSelection,
@@ -383,7 +465,8 @@ pub fn rotate(
     })
 }
 pub(crate) fn mutable(doc: &Document, l: &Context<'_>) -> Result<()> {
-    // Forms and signatures are decided with the page profile (`forms::admit`).
+    // Whole-document rewrites share the same signature assessment as copies and edits.
+    crate::signatures::Assessment::read(doc, l)?.rewrite()?;
     let catalog = graph::catalog(doc, l)?;
     // Conservatively refuse output intents: no claim of preserving an archival/colour profile.
     if catalog.has(b"OutputIntents") {

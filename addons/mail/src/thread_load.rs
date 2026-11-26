@@ -805,6 +805,9 @@ fn run_thread<'a>(
 /// Returns the thread, message ACL, or database error for the caller's active transaction.
 pub async fn thread_change_window(tx: &mut Transaction, model: &str, id: i64) -> Result<Vec<i64>> {
     let env = tx.env();
+    if model == "discuss.channel.member" {
+        return crate::thread_discuss::change_window(tx, id).await;
+    }
     require_thread_access(tx, &env, model, id).await?;
     Ok(load_page(
         tx,

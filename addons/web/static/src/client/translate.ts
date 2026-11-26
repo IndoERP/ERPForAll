@@ -13,7 +13,7 @@
 
 export type TranslationValues = Readonly<Record<string, string | number>>;
 
-const LANGUAGE = /^[a-z]{2,3}(?:_[A-Za-z0-9]{2,8}){0,2}(?:@[a-z]{2,16})?$/;
+const LANGUAGE = /^[a-z]{2,3}(?:_[A-Za-z0-9]{2,8}){0,2}(?:@[a-zA-Z]{2,16})?$/;
 const PLACEHOLDER = /\{([a-z_][a-z0-9_]*)\}/g;
 const MAX_TEXT = 4096;
 
@@ -61,8 +61,23 @@ export function registerTranslations(lang: string, catalog: unknown): void {
 }
 
 /** Select the language `t` translates into: the user's `locale.lang`. */
-export function setClientLanguage(lang: string): void {
-  language = checkLanguage(lang);
+export function setClientLanguage(lang: string, direction?: unknown): void {
+  const code = checkLanguage(lang);
+  if (direction !== undefined && direction !== "ltr" && direction !== "rtl") throw new Error("Invalid language direction.");
+  const [base, modifier] = code.split("@");
+  const pieces = base!.split("_");
+  if (modifier) {
+    const script = modifier.toLowerCase();
+    if (script === "latin" || script === "cyrl") pieces.splice(1, 0, script === "latin" ? "Latn" : "Cyrl");
+  }
+  const tag = new Intl.Locale(pieces.join("-"));
+  // Older bootstraps omit direction. Derive it from the locale's maximized script in that case.
+  const inferred = /^(Arab|Hebr|Syrc|Thaa|Nkoo|Adlm|Rohg)$/u.test(tag.maximize().script ?? "") ? "rtl" : "ltr";
+  language = code;
+  if (typeof document !== "undefined") {
+    document.documentElement.lang = tag.toString();
+    document.documentElement.dir = direction ?? inferred;
+  }
 }
 
 /** The language `t` translates into. */
@@ -86,5 +101,5 @@ export function t(source: string, values: TranslationValues = {}): string {
 /** Tests only: forget every catalog and return to English. */
 export function resetTranslations(): void {
   catalogs.clear();
-  language = "en_US";
+  setClientLanguage("en_US");
 }

@@ -18,6 +18,7 @@ mod runtime_addons;
 use erp_testkit::TestDb;
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeMap,
     fs,
     io::{Cursor, Read, Write},
     net::{TcpListener, TcpStream},
@@ -209,22 +210,32 @@ fn pdf_text(bytes: &[u8]) -> String {
 
 #[test]
 fn the_report_export_answers_files_and_refuses_what_it_must() {
+    run_native(false);
+}
+
+#[test]
+#[ignore = "requires Chrome, web dependencies and ERP_UI_COMPILER pointing to erp-ui-compile"]
+fn browser_breadcrumb_replays_real_pdf_and_xlsx_as_the_clerk() {
+    run_native(true);
+}
+
+fn run_native(browser_replay: bool) {
     std::thread::Builder::new()
         .stack_size(16 * 1024 * 1024)
-        .spawn(|| {
+        .spawn(move || {
             tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
                 .enable_all()
                 .build()
                 .unwrap()
-                .block_on(acceptance());
+                .block_on(acceptance(browser_replay));
         })
         .unwrap()
         .join()
         .unwrap();
 }
 
-async fn acceptance() {
+async fn acceptance(browser_replay: bool) {
     let db = TestDb::create().await.unwrap();
     let role = format!("{}_web", db.name());
     let client = db.client().await.unwrap();
@@ -243,6 +254,28 @@ async fn acceptance() {
     runtime_addons::stage_runtime_addons(&source, &addons).unwrap();
     let addons = addons.canonicalize().unwrap();
     let config = native_http::config(dir.path(), &db, port, &role, &addons);
+    if browser_replay {
+        let fixtures = dir.path().join("reporting-fixtures");
+        runtime_addons::stage_runtime_addons(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/reporting"),
+            &fixtures,
+        )
+        .unwrap();
+        fs::rename(
+            fixtures.join("reporting_fixture"),
+            addons.join("reporting_fixture"),
+        )
+        .unwrap();
+        let toolchain =
+            run_browser_toolchain("node web/scripts/build-human-ui.mjs --addons web,reporting")
+                .env("ERP_UI_OUTPUT_DIR", dir.path())
+                .status()
+                .unwrap();
+        assert!(
+            toolchain.success(),
+            "Reporting browser asset build failed: {toolchain}"
+        );
+    }
     client
         .batch_execute(&format!(
             "CREATE ROLE {} LOGIN PASSWORD 'fixture-runtime-password'; CREATE ROLE {} LOGIN PASSWORD 'fixture-runtime-password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION",
@@ -283,7 +316,7 @@ async fn acceptance() {
         &call(
             &admin,
             "/erp/module/install",
-            json!({"modules":["reporting"]}),
+            json!({"modules":[if browser_replay { "reporting_fixture" } else { "reporting" }]}),
         ),
         "install reporting",
     );
@@ -302,6 +335,21 @@ async fn acceptance() {
             .get(0)
     };
     let main = xid("base", "main_company").await;
+    if browser_replay {
+        let internal_group = xid("base", "group_user").await;
+        let action = xid("reporting_fixture", "action_stock").await;
+        let menu = xid("reporting_fixture", "menu_stock").await;
+        verify_browser_replay(
+            port,
+            db.name(),
+            &admin,
+            (action, menu),
+            main,
+            internal_group,
+            dir.path(),
+        );
+        return;
+    }
     let portal_group = xid("base", "group_portal").await;
     let report = xid("reporting", "report_partner_country").await;
     let open = || {
@@ -566,5 +614,172 @@ async fn acceptance() {
         over.text().contains("reporting.export_max_rows"),
         "{}",
         over.text()
+    );
+}
+
+fn run_browser_toolchain(script: &str) -> Command {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let mut command = Command::new("bash");
+    command.current_dir(root).args([
+        "-c",
+        &format!("set -euo pipefail\ntoolchain_env=$(scripts/web-toolchain.sh env)\neval \"$toolchain_env\"\nexec {script}"),
+    ]);
+    command
+}
+
+fn verify_browser_replay(
+    port: u16,
+    database: &str,
+    admin: &str,
+    (action, menu): (i64, i64),
+    company: i64,
+    internal_group: i64,
+    temp: &Path,
+) {
+    let create = |model: &str, vals: Vec<Value>| {
+        ok(
+            &native_http::json_post(
+                port,
+                admin,
+                &format!("/erp/json/2/{model}/create"),
+                &json!({"vals_list": vals}).to_string(),
+            ),
+            model,
+        )
+    };
+    let bins = create(
+        "reporting_fixture.bin",
+        (1..=12)
+            .map(|i| json!({"name":format!("B{i:02}")}))
+            .collect(),
+    );
+    let bins = bins.as_array().unwrap();
+    let item = |name: String, bin: &Value, restricted: bool| json!({"name":name,"bin_id":bin,"qty":5,"reserved":1,"day":"2000-01-01","restricted":restricted});
+    let mut items: Vec<_> = bins
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != 10)
+        .map(|(i, bin)| item(format!("Part{i:02}"), bin, false))
+        .collect();
+    items.extend((1..=23).map(|i| item(format!("Visible{i:02}"), &bins[10], false)));
+    // This would sort within the first loaded child page and add five to the total.
+    items.push(item("NoAccess".to_owned(), &bins[10], true));
+    create("reporting_fixture.item", items);
+    let clerk_partner = create(
+        "res.partner",
+        vec![json!({"name":"Replay Clerk","company_id":company})],
+    );
+    create(
+        "res.users",
+        vec![json!({
+            "name":"Replay Clerk", "login":"replay-clerk", "password":"fixture-replay-clerk",
+            "partner_id":clerk_partner[0], "company_id":company, "company_ids":[[6,0,[company]]],
+            "group_ids":[[6,0,[internal_group]]], "lang":"en_US", "tz":"UTC"
+        })],
+    );
+    let cookies = login(port, database, "replay-clerk", "fixture-replay-clerk");
+    let output =
+        std::env::var_os("ERP_REPORT_REPLAY_OUTPUT").map_or_else(|| temp.to_owned(), Into::into);
+    let mut child = run_browser_toolchain("node web/scripts/browser-reporting-replay.mjs")
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(
+            json!({
+                "origin":format!("http://127.0.0.1:{port}"), "cookies":cookies,
+                "action":action, "menu":menu, "output":output,
+            })
+            .to_string()
+            .as_bytes(),
+        )
+        .unwrap();
+    let status = child.wait().unwrap();
+    assert!(
+        status.success(),
+        "Installed report browser failed: {status}"
+    );
+    verify_replay_files(&output);
+}
+
+fn verify_replay_files(output: &Path) {
+    let expected: Vec<String> =
+        serde_json::from_slice(&fs::read(output.join("rows.json")).unwrap()).unwrap();
+    let book = fs::read(output.join("replay.xlsx")).unwrap();
+    let strings = part(&book, "xl/sharedStrings.xml");
+    let labels: Vec<_> = strings
+        .split("<si>")
+        .skip(1)
+        .map(|term| {
+            let start = term.find("<t").unwrap();
+            term[start..]
+                .split_once('>')
+                .unwrap()
+                .1
+                .split_once("</t>")
+                .unwrap()
+                .0
+        })
+        .collect();
+    let sheet = part(&book, "xl/worksheets/sheet1.xml");
+    let cells: BTreeMap<_, _> = sheet
+        .split("<c r=\"")
+        .skip(1)
+        .filter_map(|cell| {
+            let (position, rest) = cell.split_once('"').unwrap();
+            let (attributes, body) = rest.split_once('>')?;
+            if attributes.ends_with('/') {
+                return None;
+            }
+            let value = body.split_once("<v>")?.1.split_once("</v>")?.0;
+            let value = if attributes.contains("t=\"s\"") {
+                labels[value.parse::<usize>().unwrap()]
+            } else {
+                value
+            };
+            Some((position, value))
+        })
+        .collect();
+    let xlsx_rows: Vec<_> = (3..)
+        .map_while(|row| cells.get(format!("A{row}").as_str()))
+        .copied()
+        .collect();
+    assert_eq!(xlsx_rows, expected);
+    assert!(!strings.contains("NoAccess") && !strings.contains("Visible21"));
+    let row = expected
+        .iter()
+        .position(|name| name == "Total On Hand")
+        .unwrap()
+        + 3;
+    for (column, total) in [("B", 170.0), ("C", 34.0), ("D", 136.0)] {
+        assert_eq!(
+            cells[format!("{column}{row}").as_str()]
+                .parse::<f64>()
+                .unwrap(),
+            total
+        );
+    }
+
+    let pdf = fs::read(output.join("replay.pdf")).unwrap();
+    let text = pdf_text(&pdf);
+    assert!(!text.contains("NoAccess") && !text.contains("Visible21"));
+    let mut after = text.as_str();
+    for row in &expected {
+        let label: String = row.chars().filter(|ch| !ch.is_whitespace()).collect();
+        after = after
+            .split_once(&label)
+            .unwrap_or_else(|| panic!("Missing or out-of-order PDF row {row}: {text}"))
+            .1;
+    }
+    assert!(
+        text.contains("TotalOnHand170.0034.00136.00"),
+        "PDF lost or changed displayed totals: {text}"
     );
 }

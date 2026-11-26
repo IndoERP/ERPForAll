@@ -32,13 +32,16 @@ import { CALENDAR_PARAMS, CalendarModel, paramsFromState, readCalendarView, stat
 import { mountCalendar } from "./calendar-view.js";
 import { GRAPH_MAX_GROUPINGS, GRAPH_PARAMS, GraphModel, graphGrouping, graphParams, graphParamsState, readGraphView, type GraphParams } from "./graph.js";
 import { mountGraph, type GraphTarget } from "./graph-view.js";
+import { decodeKanbanGroups, kanbanOpeningInfo, renderKanbanBoard, type KanbanBoard, type KanbanColumnState } from "./kanban-columns.js";
+import { decodeKanbanFold, encodeKanbanFold, withKanbanColumn, type KanbanColumnKey, type KanbanFoldState } from "./kanban-fold.js";
 import { focusKanbanCard, kanbanLayout, kanbanRoot, renderKanbanCards } from "./kanban.js";
 import { hierarchyRoot, renderHierarchyTree, type HierarchyState } from "./hierarchy.js";
+import { readStoredMap } from "./map-view.js";
 import { renderActivityMatrix, type ActivityItemRow, type ActivityTypeRow } from "./activity-view.js";
 import { createSearchPanelSidebar, type SearchPanelSidebar } from "./search-panel.js";
 import { displayValue } from "./fields.js";
 import type { SectionsPanel } from "./panel-metadata.js";
-import type { GroupByCatalogue, GroupableField } from "./search/types.js";
+import type { GroupByCatalogue, GroupableField, ListAggregate } from "./search/types.js";
 import { createContext, decodeAst, evalAst, parseBoundedJson, type ValidatedAst } from "../../../../../web/packages/expr/src/index.js";
 import { expressionValue, jsonValue } from "./field-relations.js";
 import { array, describeViews, integer, object, text, type ButtonNode, type Description, type Field, type Node, type View } from "./metadata.js";
@@ -50,7 +53,7 @@ import { runUrlButton } from "./button-url.js";
 import { CurrencyDisplayCache } from "./field-currency.js";
 import { fieldWidgets, resolveFieldWidget, type ActionRequest, type RecordEvent, type ShellNavigation, type ViewLoader } from "./registry.js";
 import { ListGroupModel, type ListGroupNode } from "./list-group-model.js";
-import type { ListGroupState } from "./list-group-state.js";
+import { decodeListState, type ListGroupState } from "./list-group-state.js";
 import type { NumericLocale } from "./numeric-values.js";
 import "./fields.js";
 import { decodeEditorLocale as readEditorLocale, type EditorLocale } from "./datetime-values.js";
@@ -71,6 +74,7 @@ import { IDENTITY_METHOD, IDENTITY_MODEL, type Resubmission } from "./password-f
 import { WizardDialog } from "./wizard-dialog.js";
 import type { ActionResult } from "../generated/human-ui.js";
 import { RecordForm, formFocus } from "./record-form.js";
+import { renderDiscuss } from "./discuss.js";
 import { MessagingStore } from "@erpforall/mail-store";
 import { ClientError, RpcClient, newRequestId, type CallOptions } from "./transport.js";
 import { attachSubviews } from "./x2many.js";
@@ -125,13 +129,20 @@ function retagCrumb(current: HTMLElement, tag: "h1" | "span"): void {
   current.replaceWith(replacement);
 }
 
-type SwitchableView = "list" | "form" | "pivot" | "calendar" | "graph" | "kanban" | "hierarchy" | "activity";
-const SWITCHABLE_VIEWS: readonly string[] = ["list", "form", "pivot", "calendar", "graph", "kanban", "hierarchy", "activity"];
+type SwitchableView = "list" | "form" | "pivot" | "calendar" | "graph" | "kanban" | "hierarchy" | "activity" | "map";
+const SWITCHABLE_VIEWS: readonly string[] = ["list", "form", "pivot", "calendar", "graph", "kanban", "hierarchy", "activity", "map"];
 const switchable = (view: string): view is SwitchableView => SWITCHABLE_VIEWS.includes(view);
 /** The route of a view switch. The pivot, the calendar and the graph keep their own state (`pivot_*`, `calendar_*`, `graph_*`), and their search models refuse a list's `search_groupby` (so do kanban, hierarchy and activity), so that one is not carried over. */
 function switchedRoute(route: Route, view: SwitchableView): Route {
   const next: Route = { ...route, id: view === "form" ? route.id : undefined, view_type: view };
-  if (view === "pivot" || view === "calendar" || view === "graph" || view === "kanban" || view === "hierarchy" || view === "activity") delete next.search_groupby;
+  if (view === "pivot" || view === "calendar" || view === "graph" || view === "hierarchy" || view === "activity" || view === "map") delete next.search_groupby;
+  else if ((view === "kanban" || route.view_type === "kanban") && next.search_groupby !== undefined) {
+    let parsed: unknown;
+    try { parsed = JSON.parse(next.search_groupby); } catch { throw new ClientError("validation", "Invalid grouping state."); }
+    const by = decodeListState(parsed).by;
+    if (by.length) next.search_groupby = JSON.stringify(by); else delete next.search_groupby;
+  }
+  if (view !== "kanban") delete next.kanban_fold;
   if (view !== "pivot") for (const key of PIVOT_PARAMS) delete next[key];
   if (view !== "calendar") for (const key of CALENDAR_PARAMS) delete next[key];
   if (view !== "graph") for (const key of GRAPH_PARAMS) delete next[key];
@@ -140,8 +151,8 @@ function switchedRoute(route: Route, view: SwitchableView): Route {
 
 /** Labels remain available to assistive technology and tooltips. */
 function decorateViewButton(target: HTMLButtonElement, kind: SwitchableView): void {
-  const label = el("span", kind === "list" ? "List" : kind === "pivot" ? "Pivot" : kind === "calendar" ? "Calendar" : kind === "graph" ? "Graph" : kind === "kanban" ? "Kanban" : kind === "hierarchy" ? "Hierarchy" : kind === "activity" ? "Activity" : "Form", "view-button-label");
-  target.replaceChildren(icon(kind === "list" ? "list" : kind === "pivot" ? "layout-grid" : kind === "calendar" ? "calendar-days" : kind === "graph" ? "chart-column" : kind === "kanban" ? "kanban" : kind === "hierarchy" ? "network" : kind === "activity" ? "clock" : "panels-top-left"), label);
+  const label = el("span", kind === "list" ? "List" : kind === "pivot" ? "Pivot" : kind === "calendar" ? "Calendar" : kind === "graph" ? "Graph" : kind === "kanban" ? "Kanban" : kind === "hierarchy" ? "Hierarchy" : kind === "activity" ? "Activity" : kind === "map" ? "Map" : "Form", "view-button-label");
+  target.replaceChildren(icon(kind === "list" ? "list" : kind === "pivot" ? "layout-grid" : kind === "calendar" ? "calendar-days" : kind === "graph" ? "chart-column" : kind === "kanban" ? "kanban" : kind === "hierarchy" ? "network" : kind === "activity" ? "clock" : kind === "map" ? "map" : "panels-top-left"), label);
   target.title = `${label.textContent} view`;
 }
 
@@ -173,7 +184,7 @@ function actionViews(action: Record<string, unknown>): unknown[][] {
  *  is not a hierarchy or activity view opens on its list when it has one (a record id opens the first view). */
 export function defaultViewType(views: readonly unknown[][], recordId: string | undefined): string {
   const first = String(views[0]?.[1]);
-  if (first === "hierarchy" || first === "activity") return first;
+  if (first === "hierarchy" || first === "activity" || first === "map") return first;
   return !recordId && views.some(view => view[1] === "list") ? "list" : first;
 }
 
@@ -316,7 +327,9 @@ export class HumanApp {
   private currentRootId: number | undefined;
 
   /** The kanban page a card was opened from (its address, page, scroll and card), so the way back shows it as it was left. */
-  private kanbanResume?: { url: string; offset: number; scroll: number; id: number };
+  private kanbanResume?: { url: string; offset: number; scroll: number; id: number;
+    /** On a grouped board: its own scroll offsets and how many cards each open column showed. */
+    board?: { left: number; top: number; loaded: [KanbanColumnKey, number][] } };
   private listContext?: ListContext;
   private disposeWidgets: (() => void)[] = [];
   private disposeListeners: (() => void)[] = [];
@@ -340,7 +353,7 @@ export class HumanApp {
     this.companyId = integer(bootstrap["current_company_id"], "current company id");
     this.editorLocale = readEditorLocale(locale);
     // The client's own texts follow the user's language (translate.ts).
-    setClientLanguage(this.editorLocale.lang);
+    setClientLanguage(this.editorLocale.lang, locale["direction"]);
     // Numeric capabilities are validated by the consuming codec, preserving unrelated shell/editor usability.
     this.numericLocale = { decimal_point: locale["decimal_point"], thousands_sep: locale["thousands_sep"], grouping: locale["grouping"] } as NumericLocale;
     this.companies = array(bootstrap["companies"], "companies").map(raw => {
@@ -723,6 +736,11 @@ export class HumanApp {
       systray.append(debugMenuContainer);
     }
 
+    if (this.threadReconnect) {
+      const discuss = renderDiscuss({rpc:this.rpc, store:this.getMessagingStore(), uid:this.userId, userName:this.userName, policy:this.threadReconnect});
+      systray.append(discuss.node);
+      this.disposeHeader.push(discuss.dispose);
+    }
     systray.append(customSystrayContainer);
     const userMenuContainer = el("div", undefined, "user-menu");
 
@@ -2468,11 +2486,11 @@ export class HumanApp {
           const hierarchy = await this.hierarchyView(staging, panel, actionTitle, description, view, route, generation, views as [number | null, string][], {baseDomain: entry?.result.domain ?? actionDomain, context, hasForm, searchDefaults});
           nextDispose = hierarchy.dispose;
           stagedDisposers.push(nextDispose);
-        } else if (view.type === "activity") {
+        } else if (view.type === "activity" || view.type === "map") {
           const hasForm = views.some(view => view[1] === "form");
           const canCreate = hasForm && view.canCreate !== false && !isFalsy(context["create"]);
           if (canCreate) controls.append(actionButton("New", () => this.run(() => this.navigate({ ...route, id: undefined, view_type: "form" })), "primary"));
-          const activity = await this.activityView(staging, panel, actionTitle, description, view, route, generation, views as [number | null, string][], {baseDomain: entry?.result.domain ?? actionDomain, context, hasForm, searchDefaults});
+          const activity = await this.activityOrMapView(staging, panel, actionTitle, description, view, route, generation, views as [number | null, string][], {baseDomain: entry?.result.domain ?? actionDomain, context, hasForm, searchDefaults});
           nextDispose = activity.dispose;
           stagedDisposers.push(nextDispose);
         } else {
@@ -2740,7 +2758,7 @@ export class HumanApp {
       try { await this.navigate({ action: route.action, menu: route.menu, cids: route.cids, method_action: id, model: description.model, view_type: "list" }); }
       catch (error) { this.methodActions.remove(id); throw error; }
     };
-    const pivot = mountPivot({ model, locale: this.numericLocale, title: actionTitle, run: job => this.run(job), openCell, changed: writeAddress,
+    const pivot = mountPivot({ model, variant: view.nodes[0]?.kind === "pivot" ? view.nodes[0].variant : undefined, locale: this.numericLocale, title: actionTitle, run: job => this.run(job), openCell, changed: writeAddress,
       download: { model: description.model, send: async posted => { const { blob, fileName } = await this.rpc.postFile("/erp/pivot/export", posted); saveFile(blob, fileName); } } });
 
     let request = 0; // the same stale-answer guard the list uses: request number, route generation, expiry
@@ -2864,6 +2882,32 @@ export class HumanApp {
       open: async event => {
         if (!availableViews.some(item => item[1] === "form")) throw new ClientError("unsupported", "This action has no form view to open the record in.");
         await this.navigate({ ...leave(), id: String(event.id), view_type: "form" });
+      },
+      access: async event => {
+        const allowed = async (operation: string): Promise<boolean> => {
+          const value = await this.rpc.call(description.model, "has_access", { ids: [event.id], operation, context });
+          if (typeof value !== "boolean") throw new ClientError("server", "Invalid calendar record access.");
+          return value;
+        };
+        const [edit, remove] = await Promise.all([config.root.edit && allowed("write"), config.root.delete && allowed("unlink")]);
+        return { edit, remove };
+      },
+      update: async (event, vals) => { await this.rpc.call(description.model, "write", { ids: [event.id], vals, context }, { write: true }); },
+      create: async (values, name) => {
+        const defaults = Object.fromEntries(Object.entries(values).map(([key, value]) => [`default_${key}`, value]));
+        if (name) {
+          await this.rpc.call(description.model, "name_create", { name, context: { ...context, ...defaults } }, { write: true });
+          return;
+        }
+        const form = availableViews.find(item => item[1] === "form");
+        if (!form) throw new ClientError("unsupported", "This action has no form for creating an event.");
+        const list = availableViews.find(item => item[1] === "list");
+        const result = actionResult({ wire_major: 1, result: { kind: "current_window", name: actionTitle, model: description.model, domain: baseDomain, context: {},
+          views: [{ id: list?.[0] ?? null, type: "list" }, { id: form[0], type: "form" }] } });
+        if (result.kind !== "current_window") throw new ClientError("server", "Invalid calendar create action.");
+        const id = this.methodActions.add({ result, context: { ...context, ...defaults }, origin: { ...route }, originLabel: actionTitle });
+        try { await this.navigate({ action: route.action, menu: route.menu, cids: route.cids, method_action: id, model: description.model, view_type: "form" }); }
+        finally { if (this.current.method_action !== id) this.methodActions.remove(id); }
       },
       remove: async event => {
         if (await this.choose("Delete this event?", `“${event.title}” and its record are removed for good.`, ["Delete", "Cancel"]) !== "Delete") return false;
@@ -2992,7 +3036,7 @@ export class HumanApp {
       try { await this.navigate({ action: route.action, menu: route.menu, cids: route.cids, method_action: id, model: description.model, view_type: "list" }); }
       catch (error) { this.methodActions.remove(id); throw error; }
     };
-    const graph = mountGraph({ model, locale: this.numericLocale, run: job => this.run(job), open, changed: writeAddress });
+    const graph = mountGraph({ model, download: blob => saveFile(blob, `${description.model}-chart.svg`), locale: this.numericLocale, run: job => this.run(job), open, changed: writeAddress });
 
     let request = 0; // the list's stale-answer guard: request number, route generation, expiry
     let appliedGroupBy = ""; // the search's groupings the chart follows; empty: the arch's (or the address's)
@@ -3047,10 +3091,26 @@ export class HumanApp {
     return { dispose: () => { graph.dispose(); graphSidebar?.dispose(); searchBar.dispose(); } };
   }
 
-  /**
-    The kanban view, ungrouped: the search bar's domain, one page of cards, the pager and the way back to the card
-   *  that was opened. Grouped columns, drag and drop and quick create are.
-   */
+  /** The bounds of the kanban board, from Settings (`web.kanban_*`): each has a default, a floor and a hard bound declared by the web addon. */
+  private async kanbanLimits(context: Record<string, unknown>): Promise<{ maxColumns: number; maxCards: number }> {
+    const keys = ["web.kanban_max_columns", "web.kanban_max_column_cards"];
+    const response = object(await this.rpc.call("ir.config.setting", "erp_read_values", { scope: { kind: "global" }, keys, context }, { signal: this.lifetime.signal }), "kanban settings");
+    if (response["wire_major"] !== 1) throw new ClientError("unsupported", "Unsupported settings response. Reload the page.");
+    const values = array(response["values"], "kanban settings values").map(value => object(value, "kanban setting"));
+    // The hard bound of each declaration (addons/web/src/kanban_settings.rs): a value past it is refused here too, never used.
+    const read = (key: string, hardBound: number): number => {
+      const found = values.filter(value => value["key"] === key);
+      const value = found.length === 1 ? found[0]!["value"] : undefined;
+      if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > hardBound) throw new ClientError("server", `Invalid kanban setting ${key}.`);
+      return value;
+    };
+    return { maxColumns: read(keys[0]!, 1000), maxCards: read(keys[1]!, 4000) };
+  }
+
+  /** The kanban view: the search bar's domain and either the ungrouped card grid with its pager (M4.KANBAN-CLIENT-CARDS) or, when the
+   *  search groups or the arch names a default grouping, the board of columns (M4.KANBAN-CLIENT-COLUMNS: one grouped read, fold and
+   *  unfold, load more per column, the folded columns in the address). Both keep the way back to the card that was opened.
+   *  Progress bar, quick create, the column menu and drag and drop are M4.KANBAN-CLIENT-COLUMNS.PROGRESS, .QUICK-CREATE, .MENU and M4.KANBAN-CLIENT-DRAG. */
   private async kanbanView(staging: HTMLElement, panel: HTMLElement, actionTitle: string, description: Description, view: View, route: Route, generation: number, availableViews: [number | null, string][], scope: { baseDomain: unknown[]; context: Record<string, unknown>; hasForm: boolean; searchDefaults?: ReadonlyMap<string, unknown> }): Promise<{ dispose: () => void; restore: () => void }> {
     const { context, baseDomain, hasForm } = scope;
     if (route.id !== undefined) throw new ClientError("validation", "The kanban view shows many records; the address cannot name one record.");
@@ -3066,7 +3126,7 @@ export class HumanApp {
       this.breadcrumbs.clear();
       this.breadcrumbs.push({
         id: `action-${route.action}-kanban`, title: actionTitle, isFormView: false,
-        get route() { return { ...route }; }, get url() { return routeUrl(route); }
+        get route() { return { ...route }; }, get url() { return routeUrl(route); },
       });
       const title = el("h1", actionTitle, "breadcrumb-current");
       title.setAttribute("aria-current", "page");
@@ -3078,21 +3138,41 @@ export class HumanApp {
         const found = object(row);
         return { id: integer(found["id"], "relation id"), display_name: text(found["display_name"], "relation name") };
       }),
-      userId: this.userId, companyId: this.companyId, initialDomain: baseDomain
+      userId: this.userId, companyId: this.companyId, initialDomain: baseDomain,
+      // The Group By menu of the list; the board draws the first grouping (the reference's kanban does the same).
+      groupBy: { load: () => this.groupByCatalogue(description.model, context), multiple: true, maxLevels: 32, persist: true, accept: params => {
+        const proposed = { ...route };
+        for (const key of ["search", "search_facets", "search_filters", "search_groupby"] as const) { const value = params.get(key); if (value === null) delete proposed[key]; else proposed[key] = value; }
+        try { routeUrl(proposed); }
+        catch (error) {
+          if (error instanceof ClientError && error.kind === "validation") throw new ClientError("validation", "This search is too large to keep in the page address. Remove a filter or a Group By field first.");
+          throw error;
+        }
+      } }
     });
+    if (route.search_groupby || root.defaultGroupBy) await searchModel.loadGroupByCatalogue();
     await this.prepareSearch(searchModel, description.model, context, route, () => this.restoreDashboardFilters(searchModel, description, route, generation, baseDomain, context), scope.searchDefaults ?? new Map(), generation);
+    searchModel.clearListState(); // a list's open groups and paging are not the board's
     if (route.search && !new URL(routeUrl(route), window.location.origin).searchParams.has("search_facets")) {
       const field = searchModel.getSearchableFields().find(f => f.name === "name") ?? searchModel.getSearchableFields()[0];
       if (!field) throw new ClientError("unsupported", "Text search is not available for this model.");
       searchModel.addFieldFacet(field.name, route.search);
     }
+    // The arch's default grouping applies whenever the search names none; a date is grouped by month (the reference's default interval).
+    const defaultSpec = root.defaultGroupBy ? (root.defaultGroupBy.kind === "date" || root.defaultGroupBy.kind === "datetime" ? `${root.defaultGroupBy.name}:month` : root.defaultGroupBy.name) : undefined;
+    const grouping = (): { spec: string; field: GroupableField } | undefined => {
+      const spec = searchModel.getGroupBy()[0] ?? defaultSpec;
+      if (spec === undefined) return undefined;
+      const field = searchModel.getGroupableField(spec.split(":")[0]!);
+      if (!field) throw new ClientError("validation", `Cannot group by ${spec}.`);
+      return { spec, field };
+    };
 
     const sectionsPanel = await this.sectionsPanelFor(description, view, context, "kanban");
     let sidebar: SearchPanelSidebar | undefined;
     const combinedDomain = (): unknown[] => [...searchModel.getDomain(), ...(sidebar?.getDomain() ?? [])];
 
     const results = el("div", undefined, "kanban-view");
-    if (root.defaultGroupBy) results.append(el("p", `Grouped columns are not available yet, so the cards are not grouped by ${root.defaultGroupBy.label}.`, "kanban-notice muted"));
     const body = el("div", undefined, "kanban-results");
     results.append(body);
     const currencies = new CurrencyDisplayCache();
@@ -3106,6 +3186,35 @@ export class HumanApp {
     next.replaceChildren(icon("chevron-right")); next.setAttribute("aria-label", "Next page"); next.title = "Next page";
     pager.append(count, previous, next);
 
+    // The board's state. A column is the drawn state plus what its reads need; `fold` is what the user changed, for one grouping.
+    type BoardColumn = KanbanColumnState & { domain: unknown[]; value: KanbanColumnKey; unfiltered: number; sum?: number; segment?: string | null };
+    const progress = root.children.find(child => child.kind === "kanban_progressbar");
+    const sumField = progress?.sumField;
+    const sum: ListAggregate | undefined = sumField && (sumField.kind === "integer" || sumField.kind === "float" || sumField.kind === "monetary")
+      ? {field: sumField.name, kind: sumField.kind, op: "sum"} : undefined;
+    const segmentDomain = (column: BoardColumn): unknown[] => {
+      if (!progress || column.segment === undefined) return [];
+      return column.segment === null ? ["!", [progress.field.name, "in", progress.colors.map(item => item.value)]] : [[progress.field.name, "=", column.segment]];
+    };
+    let progressCounts: Record<string, unknown> = {};
+    let mutationPending = false;
+    let board: KanbanBoard | undefined, columns: BoardColumn[] = [], boardSpec: string | undefined, boardDomain: unknown[] = [];
+    let limits: { maxColumns: number; maxCards: number } | undefined;
+    let fold: KanbanFoldState | undefined = route.kanban_fold === undefined ? undefined : decodeKanbanFold(route.kanban_fold);
+    // A state of another grouping (a shared link whose Group By was changed) is dropped; `navigate` commits the address from `route`.
+    if (fold && fold.by !== grouping()?.spec) { fold = undefined; delete route.kanban_fold; }
+    let resumeLoaded = resume?.board ? new Map(resume.board.loaded) : undefined;
+    const recordCount = (value: number): string => value === 1 ? "1 record" : `${value} records`;
+    const clearBoard = (): void => { board?.dispose(); board = undefined; columns = []; boardSpec = undefined; };
+    const unavailable = (sentence: string, label: string): void => {
+      body.removeAttribute("aria-busy");
+      count.textContent = label; previous.disabled = true; next.disabled = true;
+      if (results.isConnected) this.listContext = undefined;
+      cards?.dispose(); cards = undefined; clearBoard();
+      const message = el("p", sentence, "list-load-error");
+      message.setAttribute("role", "alert"); body.replaceChildren(message);
+    };
+
     const fetchRows = async (from: number): Promise<{ records: Record<string, unknown>[]; length: number }> => {
       forgetBinaryContent(this.rpc);
       const answer = object(await this.rpc.call(description.model, "web_search_read", { domain: combinedDomain(), specification: specification(view.fields), offset: from, limit: pageSize, context: { ...context, ...BIN_SIZE_CONTEXT } }));
@@ -3113,23 +3222,245 @@ export class HumanApp {
       return { records: array(answer["records"], "records").map(row => object(row)), length: integer(answer["length"], "record count") };
     };
     const open = hasForm && root.canOpen ? (id: number): void => this.run(async () => {
-      this.kanbanResume = { url: routeUrl(route), offset, scroll: documentScroller().scrollTop, id };
+      this.kanbanResume = { url: routeUrl(route), offset, scroll: documentScroller().scrollTop, id, ...(board ? { board: {
+        left: board.node.scrollLeft, top: board.node.scrollTop, loaded: columns.flatMap(column => column.folded ? [] : [[column.value, column.records.length] as [KanbanColumnKey, number]]),
+      } } : {}) };
       await this.navigate({ ...route, id: String(id), view_type: "form" });
     }) : undefined;
+    const renderField = (field: Field, record: Record<string, unknown>): { node: HTMLElement; dispose: () => void } => {
+      const adapter = resolveFieldWidget(field.widget ?? field.kind, "card");
+      return adapter.render({
+        field: { ...field, readonly: true }, value: record[field.name], values: record, model: description.model, fields: readonlyFields, viewContext: "list",
+        rpc: this.rpc, context, currencies, numericLocale: this.numericLocale, editorLocale: this.editorLocale,
+        messages: this.messages, run: this.run, report: error => this.reportError(error), signal: this.lifetime.signal,
+        openRecord: (model, related) => this.openRelatedRecord(model, related), change: () => { throw new ClientError("validation", "Kanban card fields cannot be edited here."); },
+        ...cardNavigation,
+      });
+    };
+    const noRecords = (): HTMLElement => {
+      const empty = noContentHelp();
+      empty.replaceChildren(...(searchModel.getFacets().some(facet => facet.type !== "groupBy") ? [el("h2", "No matching records"), el("p", "Try another search or clear the filter.")] : [el("h2", "No records yet"), el("p", hasForm ? "Create a record to begin working here." : "Records appear here once they exist.")]));
+      return empty;
+    };
+
+    // ---- the board (grouped) ----
+    /** The form's pager steps through the cards the board shows, column by column; a folded column's cards are not in it. */
+    const boardChanged = (): void => {
+      const ids = columns.flatMap(column => column.folded ? [] : column.records.map(row => integer(row["id"], "record id")));
+      this.listContext = { ids, total: ids.length, offset: 0, limit: Math.max(ids.length, 1) };
+      count.textContent = recordCount(columns.reduce((sum, column) => sum + column.unfiltered, 0));
+    };
+    const writeFold = (state: KanbanFoldState): void => {
+      const value = encodeKanbanFold(state), proposed = { ...route };
+      if (value === undefined) delete proposed.kanban_fold; else proposed.kanban_fold = value;
+      let url: string;
+      try { url = routeUrl(proposed); } // validated whole before anything is committed
+      catch (error) {
+        if (isAddressSizeRefusal(error)) throw new ClientError("validation", "Too many columns are folded or opened to keep in the page address with this search. Remove a filter first.");
+        throw error;
+      }
+      if (value === undefined) delete route.kanban_fold; else route.kanban_fold = value;
+      if (url !== this.currentUrl && results.isConnected) { history.replaceState({ erpIndex: this.historyIndex }, "", url); this.currentUrl = url; }
+      fold = state;
+    };
+    /** Reads the next step of one column's cards. A failure belongs to the column: it says so there and the others stay as they are. */
+    const readColumn = async (column: BoardColumn): Promise<void> => {
+      const mine = request, shown = board, bound = limits;
+      if (!shown || !bound || column.busy) return;
+      const current = (): boolean => mine === request && shown === board && generation === this.generation && !this.expired;
+      const want = Math.min(pageSize, bound.maxCards - column.records.length);
+      if (want <= 0) return;
+      column.busy = true; delete column.error; shown.refresh(column.key);
+      try {
+        const answer = object(await this.rpc.call(description.model, "web_search_read", { domain: [...boardDomain, ...column.domain, ...segmentDomain(column)], specification: specification(view.fields), offset: column.records.length, limit: want, context: { ...context, ...BIN_SIZE_CONTEXT } }));
+        if (!current()) return;
+        const have = new Set(column.records.map(row => row["id"]));
+        // A card that moved while the user read (a record changed its place in the order) is not drawn twice.
+        column.records.push(...array(answer["records"], "records").map(row => object(row)).filter(row => !have.has(integer(row["id"], "record id"))));
+        column.count = integer(answer["length"], "record count");
+      } catch (error) {
+        if (!current()) return;
+        column.error = "Unable to load these records.";
+        throw error;
+      } finally {
+        if (current()) { column.busy = false; shown.refresh(column.key); boardChanged(); }
+      }
+    };
+    const toggleColumn = async (column: BoardColumn): Promise<void> => {
+      // The address is written first: a fold it cannot keep is refused before the board changes.
+      writeFold(withKanbanColumn(fold ?? { by: boardSpec!, folded: [], opened: [] }, column.value, !column.folded));
+      column.folded = !column.folded;
+      delete column.error;
+      if (!column.folded && !column.records.length && column.count > 0) { await readColumn(column); return; }
+      board?.refresh(column.key); boardChanged();
+    };
+    const loadBoard = async (group: { spec: string; field: GroupableField }, current: () => boolean): Promise<void> => {
+      body.setAttribute("aria-busy", "true");
+      // What each open column showed: kept across a reload of the same grouping, and on the way back from a record.
+      const loaded = resumeLoaded ?? new Map<KanbanColumnKey, number>(boardSpec === group.spec ? columns.flatMap(column => column.folded ? [] : [[column.value, column.records.length] as [KanbanColumnKey, number]]) : []);
+      resumeLoaded = undefined;
+      const domain = combinedDomain();
+      let answer: ReturnType<typeof decodeKanbanGroups>, bound: { maxColumns: number; maxCards: number };
+      try {
+        const settings = limits ??= await this.kanbanLimits(context);
+        bound = settings;
+        const step = Math.min(pageSize, settings.maxCards);
+        const info = kanbanOpeningInfo(fold, step, new Map<KanbanColumnKey, number>([...loaded].map(([value, shown]): [KanbanColumnKey, number] => [value, Math.min(shown, settings.maxCards)])));
+        answer = decodeKanbanGroups(await this.rpc.call(description.model, "web_read_group", {
+          domain, groupby: [group.spec], aggregates: sum ? ["__count", `${sum.field}:sum`] : ["__count"], limit: settings.maxColumns, auto_unfold: true, ...(info ? { opening_info: info } : {}),
+          unfold_read_specification: specification(view.fields), unfold_read_default_limit: step, context: { ...context, ...BIN_SIZE_CONTEXT }
+        }), group.field, group.spec, settings.maxColumns, settings.maxCards, sum);
+      } catch (error) {
+        if (!current()) return;
+        unavailable("Unable to load these records. Adjust the search or reload the page.", "Results unavailable");
+        throw error;
+      }
+      if (!current()) return;
+      body.removeAttribute("aria-busy");
+      pager.replaceChildren(count); // a board has no pages: Previous and Next leave the pager, the count stays
+      // More columns than the bound: said by name, never drawn in part (the search bar stays to narrow or regroup).
+      if (answer.length > bound.maxColumns) {
+        unavailable(`This grouping has ${answer.length} columns; a board shows at most ${bound.maxColumns} (Settings, "Kanban view: most columns a board may show"). Narrow the search or group by another field.`, "Too many columns");
+        return;
+      }
+      if (progress && answer.columns.length) {
+        progressCounts = object(await this.rpc.call(description.model, "read_progress_bar", {
+          domain, group_by: group.spec, progress_bar: { field: progress.field.name, colors: Object.fromEntries(progress.colors.map(item => [item.value, item.tone])) }, context
+        }), "kanban progress counts");
+        if (!current()) return;
+      }
+      cards?.dispose(); cards = undefined; clearBoard();
+      boardSpec = group.spec; boardDomain = domain;
+      columns = answer.columns.map(column => ({ key: column.key, label: column.label, count: column.count, unfiltered: column.count, sum: column.sum, domain: column.domain, value: column.value, folded: column.records === undefined, records: [...column.records ?? []], busy: false }));
+      if (!columns.length) { boardChanged(); body.replaceChildren(noRecords()); return; }
+      const byKey = (key: string): BoardColumn => {
+        const found = columns.find(column => column.key === key);
+        if (!found) throw new ClientError("validation", "This kanban column is no longer on the board.");
+        return found;
+      };
+      const field = description.fields.get(group.field.name);
+      const assignable = field && !field.readonly && field.kind !== "datetime" && field.kind !== "date";
+      const headerControls = (state: KanbanColumnState): HTMLElement => {
+        const column = byKey(state.key);
+        const controls = el("div", undefined, "kanban-column-controls");
+        if (progress) {
+          const lookup = typeof column.value === "boolean" ? (column.value ? "True" : "False") : String(column.value);
+          const counts = Object.hasOwn(progressCounts, lookup) ? object(progressCounts[lookup], "column progress counts") : {};
+          const segments: {value: string | null; label: string; n: number; tone: string}[] = progress.colors.map(item => ({
+            ...item,
+            label: progress.field.selection?.find(([key]) => key === item.value)?.[1] ?? item.value,
+            n: integer(counts[item.value] ?? 0, "progress count"),
+          }));
+          const other = column.unfiltered - segments.reduce((total, segment) => total + segment.n, 0);
+          // The grouped and progress reads take separate snapshots; concurrent writes can change their counts.
+          if (other > 0) segments.push({value: null, label: "Other", n: other, tone: "muted"});
+          if (progress.help) controls.title = progress.help;
+          if (sumField && column.sum !== undefined) controls.append(el("span", `${sumField.label}: ${column.sum.toLocaleString(this.editorLocale.lang.replaceAll("_", "-"))}`));
+          for (const item of segments) {
+            const { label, n } = item;
+            const segment = button(`${label} (${n})`, () => this.run(async () => {
+              if (column.busy) return;
+              column.segment = column.segment === item.value ? undefined : item.value;
+              column.records = [];
+              await readColumn(column);
+            }), `kanban-segment tone-${item.tone}`);
+            segment.disabled = column.busy || (n === 0 && column.segment !== item.value);
+            segment.setAttribute("aria-pressed", String(column.segment === item.value));
+            controls.append(segment);
+          }
+        }
+        if (field?.relation && typeof column.value === "number" && field.kind === "many2one") {
+          const id = column.value, relation = field.relation;
+          controls.append(button("Open column", () => this.run(() => this.openRelatedRecord(relation, id)), "erp-button"));
+        }
+        const active = description.fields.get("active");
+        if (root.archivable && active?.kind === "boolean" && !active.readonly && view.canEdit !== false && context["edit"] !== false) {
+          controls.append(button("Archive column records", () => this.run(async () => {
+            if (mutationPending) return;
+            mutationPending = true;
+            try {
+              const reply = object(await this.rpc.call(description.model, "web_search_read", {
+                domain: [...boardDomain, ...column.domain, ...segmentDomain(column), ["active", "=", true]],
+                specification: {}, limit: bound.maxCards, context,
+              }));
+              const ids = array(reply["records"], "column records").map(row => integer(object(row)["id"], "record id"));
+              if (integer(reply["length"], "column count") > ids.length) throw new ClientError("validation", "Narrow this column before archiving its records.");
+              if (!ids.length || !current()) return;
+              if (await this.rpc.call(description.model, "has_access", { ids, operation: "write", context }) !== true) throw new ClientError("permission", "You cannot archive all records in this column.");
+              if (await this.choose("Archive column records?", `Archive ${recordCount(ids.length)} in ${column.label}?`, ["Archive", "Cancel"]) !== "Archive") return;
+              await this.rpc.call(description.model, "action_archive", { ids, context }, { write: true });
+              if (current()) await load();
+            } finally { mutationPending = false; }
+          }), "erp-button"));
+        }
+        if (root.quickCreate && view.canCreate !== false && context["create"] !== false && assignable) {
+          const add = button("Add card", () => {
+            const form = el("form"), input = el("input"), submit = el("button", "Create");
+            input.required = true;
+            input.setAttribute("aria-label", `New card in ${column.label}`);
+            submit.type = "submit"; form.append(input, submit);
+            const cancel = (): void => { form.replaceWith(add); add.focus(); };
+            input.addEventListener("keydown", event => { if (event.key === "Escape") { event.preventDefault(); cancel(); } });
+            form.addEventListener("submit", event => {
+              event.preventDefault();
+              const name = input.value.trim();
+              if (!name || mutationPending) return;
+              this.run(async () => {
+                mutationPending = true; submit.disabled = true;
+                try {
+                  await this.rpc.call(description.model, "name_create", { name, context: { ...context, [`default_${field.name}`]: column.value } }, { write: true });
+                  if (current()) await load();
+                } finally { mutationPending = false; submit.disabled = false; }
+              });
+            });
+            add.replaceWith(form); input.focus();
+          }, "erp-button");
+          controls.append(add);
+        }
+        return controls;
+      };
+      board = renderKanbanBoard({
+        headerControls,
+        ...(assignable && view.canEdit !== false && context["edit"] !== false && root.recordsDraggable ? {
+          move: (id: number, target: KanbanColumnState, card: HTMLElement) => this.run(async () => {
+            if (mutationPending) return;
+            mutationPending = true;
+            const oldBoard = board?.node;
+            const left = oldBoard?.scrollLeft ?? 0, top = oldBoard?.scrollTop ?? 0;
+            try {
+              await this.rpc.call(description.model, "write", { ids: [id], vals: { [field.name]: byKey(target.key).value }, context }, { write: true });
+              if (current()) await load();
+            } finally {
+              mutationPending = false;
+              if (generation === this.generation && board) {
+                board.node.scrollLeft = left; board.node.scrollTop = top;
+                if (card.isConnected) card.focus({ preventScroll: true }); else focusKanbanCard(board.node, id);
+              }
+            }
+          })
+        } : {}),
+        columns, layout, renderField, maxCards: bound.maxCards, ...(open ? { open } : {}),
+        onToggle: column => this.run(() => toggleColumn(byKey(column.key))),
+        onLoadMore: column => this.run(() => readColumn(byKey(column.key))),
+        onRetry: column => this.run(() => readColumn(byKey(column.key))),
+      });
+      body.replaceChildren(board.node);
+      boardChanged();
+    };
+
     const load = async (): Promise<void> => {
       const mine = ++request, current = (): boolean => mine === request && generation === this.generation && !this.expired;
-      body.setAttribute("aria-busy", "true");
       void sidebar?.refresh(searchModel.getDomain());
+      const group = grouping();
+      if (group) return loadBoard(group, current);
+      clearBoard();
+      pager.replaceChildren(count, previous, next);
+      body.setAttribute("aria-busy", "true");
       let page: { records: Record<string, unknown>[]; length: number };
       try { page = await fetchRows(offset); }
       catch (error) {
         if (!current()) return;
-        body.removeAttribute("aria-busy");
-        count.textContent = "Results unavailable"; previous.disabled = true; next.disabled = true;
-        if (results.isConnected) this.listContext = undefined;
-        cards?.dispose(); cards = undefined;
-        const message = el("p", "Unable to load these records. Adjust the search or reload the page.", "list-load-error");
-        message.setAttribute("role", "alert"); body.replaceChildren(message);
+        unavailable("Unable to load these records. Adjust the search or reload the page.", "Results unavailable");
         throw error;
       }
       if (!current()) return;
@@ -3145,21 +3476,10 @@ export class HumanApp {
       cards?.dispose();
       if (!page.records.length) {
         cards = undefined;
-        const empty = noContentHelp();
-        empty.replaceChildren(...(searchModel.getFacets().length ? [el("h2", t("No matching records")), el("p", t("Try another search or clear the filter."))] : [el("h2", t("No records yet")), el("p", hasForm ? t("Create a record to begin working here.") : t("Records appear here once they exist."))]));
-        body.replaceChildren(empty);
+        body.replaceChildren(noRecords());
         return;
       }
-      cards = renderKanbanCards({ layout, records: page.records, open, renderField: (field, record) => {
-        const adapter = resolveFieldWidget(field.widget ?? field.kind, "card");
-        return adapter.render({
-          field: { ...field, readonly: true }, value: record[field.name], values: record, model: description.model, fields: readonlyFields, viewContext: "list",
-          rpc: this.rpc, context, currencies, numericLocale: this.numericLocale, editorLocale: this.editorLocale,
-          messages: this.messages, run: this.run, report: error => this.reportError(error), signal: this.lifetime.signal,
-          openRecord: (model, related) => this.openRelatedRecord(model, related), change: () => { throw new ClientError("validation", "Kanban card fields cannot be edited here."); },
-          ...cardNavigation,
-        });
-      } });
+      cards = renderKanbanCards({ layout, records: page.records, open, renderField });
       body.replaceChildren(cards.node);
     };
     if (sectionsPanel) {
@@ -3179,8 +3499,12 @@ export class HumanApp {
         const value = parameters.get(key);
         if (value === null) delete proposed[key]; else proposed[key] = value;
       }
+      // The folded columns belong to one grouping: another grouping starts from the server's defaults.
+      const regrouped = fold !== undefined && fold.by !== grouping()?.spec;
+      if (regrouped) delete proposed.kanban_fold;
       const url = routeUrl(proposed); // validated whole before anything is committed
       for (const key of ["search", "search_facets", "search_filters", "search_groupby"] as const) { if (proposed[key] === undefined) delete route[key]; else route[key] = proposed[key]; }
+      if (regrouped) { delete route.kanban_fold; fold = undefined; }
       if (url !== this.currentUrl) { history.replaceState({ erpIndex: this.historyIndex }, "", url); this.currentUrl = url; }
       offset = 0;
       await load();
@@ -3206,12 +3530,14 @@ export class HumanApp {
     }
     this.wrapWithSearchPanel(staging, results, sidebar);
     return {
-      dispose: () => { request++; cards?.dispose(); sidebar?.dispose(); searchBar.dispose(); },
+      dispose: () => { request++; cards?.dispose(); board?.dispose(); sidebar?.dispose(); searchBar.dispose(); },
       // After the page is in the document and scrolled to its top: the way back from a card restores its scroll and focus.
       restore: () => {
-        if (!resume || !cards) return;
+        const shown = board?.node ?? cards?.node;
+        if (!resume || !shown) return;
         documentScroller().scrollTop = resume.scroll;
-        focusKanbanCard(cards.node, resume.id);
+        if (board && resume.board) { board.node.scrollLeft = resume.board.left; board.node.scrollTop = resume.board.top; }
+        focusKanbanCard(shown, resume.id);
       }
     };
   }
@@ -3410,7 +3736,7 @@ export class HumanApp {
     return { dispose: () => { request++; tree?.dispose(); sidebar?.dispose(); searchBar.dispose(); } };
   }
 
-  private async activityView(staging: HTMLElement, panel: HTMLElement, actionTitle: string, description: Description, view: View, route: Route, generation: number, availableViews: [number | null, string][], scope: { baseDomain: unknown[]; context: Record<string, unknown>; hasForm: boolean; searchDefaults?: ReadonlyMap<string, unknown> }): Promise<{ dispose: () => void }> {
+  private async activityOrMapView(staging: HTMLElement, panel: HTMLElement, actionTitle: string, description: Description, view: View, route: Route, generation: number, availableViews: [number | null, string][], scope: { baseDomain: unknown[]; context: Record<string, unknown>; hasForm: boolean; searchDefaults?: ReadonlyMap<string, unknown> }): Promise<{ dispose: () => void }> {
     const { context, baseDomain, hasForm } = scope;
     if (route.id !== undefined) throw new ClientError("validation", "The activity view shows many records; the address cannot name one record.");
     panel.classList.add("control-panel-list");
@@ -3418,7 +3744,7 @@ export class HumanApp {
     if (breadcrumbs) {
       this.breadcrumbs.clear();
       this.breadcrumbs.push({
-        id: `action-${route.action}-activity`, title: actionTitle, isFormView: false,
+        id: `action-${route.action}-${view.type}`, title: actionTitle, isFormView: false,
         get route() { return { ...route }; }, get url() { return routeUrl(route); },
       });
       const title = el("h1", actionTitle, "breadcrumb-current");
@@ -3435,8 +3761,8 @@ export class HumanApp {
     });
     await this.prepareSearch(searchModel, description.model, context, route, () => this.restoreDashboardFilters(searchModel, description, route, generation, baseDomain, context), scope.searchDefaults ?? new Map(), generation);
 
-    const container = el("div", undefined, "activity-view");
-    const body = el("div", undefined, "activity-results");
+    const container = el("div", undefined, `${view.type}-view`);
+    const body = el("div", undefined, `${view.type}-results`);
     container.append(body);
     let matrix: { node: HTMLElement; dispose: () => void } | undefined;
     let request = 0;
@@ -3445,7 +3771,7 @@ export class HumanApp {
       await this.navigate({ ...route, id: String(id), view_type: "form" });
     }) : undefined;
 
-    const sectionsPanel = await this.sectionsPanelFor(description, view, context, "activity");
+    const sectionsPanel = await this.sectionsPanelFor(description, view, context, view.type);
     let sidebar: SearchPanelSidebar | undefined;
     const effectiveDomain = (): unknown[] => [...searchModel.getDomain(), ...(sidebar?.getDomain() ?? [])];
 
@@ -3458,6 +3784,11 @@ export class HumanApp {
       let activities: ActivityItemRow[] = [];
       const cut: string[] = [];
       try {
+        if (view.type === "map") {
+          const map = await readStoredMap(this.rpc, description.model, view, effectiveDomain(), context, open);
+          if (current()) { body.replaceChildren(map); body.removeAttribute("aria-busy"); }
+          return;
+        }
         const [recResp, typeResp] = await Promise.all([
           this.rpc.call(description.model, "web_search_read", { domain: effectiveDomain(), specification: specification(view.fields), offset: 0, limit: 80, context }),
           this.rpc.call("mail.activity.type", "web_search_read", {
@@ -3508,7 +3839,7 @@ export class HumanApp {
         body.removeAttribute("aria-busy");
         if (body.isConnected) this.listContext = undefined;
         matrix?.dispose(); matrix = undefined;
-        const message = el("p", "Unable to load activities. Adjust the search or reload the page.", "list-load-error");
+        const message = el("p", `Unable to load ${view.type === "map" ? "locations" : "activities"}. Adjust the search or reload the page.`, "list-load-error");
         message.setAttribute("role", "alert"); body.replaceChildren(message);
         throw error;
       }
@@ -3556,9 +3887,9 @@ export class HumanApp {
     const switcher = el("div", undefined, "view-switcher");
     for (const [, vType] of availableViews) {
       if (!switchable(vType) || availableViews.length < 2) continue;
-      const vBtn = button(vType, () => this.run(async () => { await this.navigate(switchedRoute(route, vType)); }), `view-btn ${vType === "activity" ? "active" : ""}`);
+      const vBtn = button(vType, () => this.run(async () => { await this.navigate(switchedRoute(route, vType)); }), `view-btn ${vType === view.type ? "active" : ""}`);
       vBtn.setAttribute("aria-label", `${vType} view`);
-      if (vType === "activity") vBtn.setAttribute("aria-current", "page");
+      if (vType === view.type) vBtn.setAttribute("aria-current", "page");
       decorateViewButton(vBtn, vType);
       switcher.append(vBtn);
     }
@@ -3914,7 +4245,7 @@ export class HumanApp {
       // Print is its own button before Actions, as in the reference client; it prints the selected records.
       const print = printDropdown(this.rpc, description.model, report => this.run(async () => {
         if (!selectedIds.size) return;
-        await printRecords({ rpc: this.rpc, dialogs: this.messages.dialogs }, report, description.model, Array.from(selectedIds));
+        await printRecords({ rpc: this.rpc, dialogs: this.messages.dialogs, report: error => this.reporter.report("render", error) }, report, description.model, Array.from(selectedIds));
       }), error => this.reportError(error), () => this.reportsOf(description.model));
       const dropdown = attachMenuDropdown({ trigger: actionToggle, menu: actionMenu, mode: "class-open" });
       disposeActionMenu = () => { print.dispose(); dropdown.dispose(); };
@@ -4749,7 +5080,7 @@ export class HumanApp {
       // The print request checks the report and the records again; a dialog that asked for it is done. It closes first:
       // closing it closes the dialogs above it, and the progress dialog of a large print must stay open.
       if (source) await source.close();
-      await printRecords({ rpc: this.rpc, dialogs: this.messages.dialogs }, { report: result.report, name: result.name }, result.model, result.ids);
+      await printRecords({ rpc: this.rpc, dialogs: this.messages.dialogs, report: error => this.reporter.report("render", error) }, { report: result.report, name: result.name }, result.model, result.ids);
       if (!source) await refresh();
       return;
     }
@@ -5449,7 +5780,7 @@ export class HumanApp {
       refuseUncertain();
       if ((state.dirty || !state.id) && !await trySave()) return;
       if (!state.id) throw new ClientError("validation", "Save the record before printing it.");
-      await printRecords({ rpc: this.rpc, dialogs: this.messages.dialogs }, report, state.model, [state.id]);
+      await printRecords({ rpc: this.rpc, dialogs: this.messages.dialogs, report: error => this.reporter.report("render", error) }, report, state.model, [state.id]);
     }), error => this.reportError(error), () => this.reportsOf(state.model));
     const recordMenus = el("div", undefined, "form-record-menus");
     recordMenus.append(print.node, actionDropdown);

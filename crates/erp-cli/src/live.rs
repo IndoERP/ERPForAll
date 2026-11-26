@@ -15,7 +15,7 @@ use erp_modules::{AddonIndex, ModuleSystem, OperationOutcome, PostCommitFailure,
 use erp_orm::{Context, SUPERUSER_ID, Signal};
 use erp_wasm_host::{Limits, WasmHost};
 
-use crate::access::{connection_config, pool_with_size};
+use crate::access::{connection_config, lifecycle_pool};
 use crate::args::DatabaseName;
 use crate::error::{CliError, Result};
 use crate::module::{ExecutionReport, LifecycleRequest, ModuleLifecycleExecutor, ModuleOperation};
@@ -53,7 +53,7 @@ async fn run(
     operation: ModuleOperation,
     request: &LifecycleRequest<'_>,
 ) -> Result<ExecutionReport> {
-    let pool = pool_with_size(connection_config(request.database)?, POOL_SIZE)?;
+    let pool = lifecycle_pool(connection_config(request.database)?, POOL_SIZE)?;
     // Observe before source discovery/load; every live CLI operation participates in the same
     // durable registry fence as server and package operations.
     let baseline = {
@@ -100,6 +100,7 @@ async fn run(
         .code(crate::native_addons::DESCRIPTORS.iter().copied())
         .not_linked(crate::native_addons::NOT_LINKED.iter().copied())
         .view_types(erp_addon_web::view_type_contributions())
+        .view_types(erp_addon_web_map::view_type_contributions())
         // Native lifecycle operations must retain and validate authentication's framework DDL
         // at this composition site, just as the serving node does.
         .require_core_tables(erp_security::auth::core_tables())

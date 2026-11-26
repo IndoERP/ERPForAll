@@ -262,6 +262,17 @@ async fn world() -> World {
     let mut models: BTreeMap<&str, i64> = BTreeMap::new();
     for (xmlid, name, description) in [
         ("model_mail_message", "mail.message", "Message"),
+        ("model_discuss_channel", "discuss.channel", "Conversation"),
+        (
+            "model_discuss_channel_member",
+            "discuss.channel.member",
+            "Conversation Member",
+        ),
+        (
+            "model_mail_notification",
+            "mail.notification",
+            "Message Delivery",
+        ),
         (
             "model_mail_message_subtype",
             "mail.message.subtype",
@@ -338,7 +349,7 @@ async fn world() -> World {
     company_rows_support::insert_generated(
         &client,
         h.registry(),
-        &company_rows_support::PARTNER_AND_USERS,
+        &company_rows_support::MAIL_POLICY_MODELS,
     )
     .await;
     rule(

@@ -123,12 +123,24 @@ const ENGINE_ORIGIN: NodeOrigin = NodeOrigin {
     line: 0,
 };
 
+/// Source (view id and original element ordinal) of one literal after inheritance.
+pub(crate) type LiteralSource = Option<(i64, u32)>;
+
+#[derive(Clone, Debug, Default)]
+struct LiteralEdits {
+    text: Option<LiteralSource>,
+    tail: Option<LiteralSource>,
+    attributes: HashMap<String, LiteralSource>,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct NodeData {
     kind: NodeKind,
     origin: NodeOrigin,
     /// Original parsed element ordinal in origin.view_id; copies retain it.
     source_node: Option<u32>,
+    source_column: u32,
+    literal_edits: Option<Box<LiteralEdits>>,
     tag: String,
     attrs: Vec<(String, String)>,
     text: String,
@@ -194,6 +206,8 @@ struct Snapshot {
     origin: NodeOrigin,
     /// Original parsed element ordinal in origin.view_id; copies retain it.
     source_node: Option<u32>,
+    source_column: u32,
+    literal_edits: Option<Box<LiteralEdits>>,
     tag: String,
     attrs: Vec<(String, String)>,
     text: String,
@@ -266,7 +280,9 @@ impl Arch {
         self.charge(tag.len() + attrs_len(&attrs) + text.len() + tail.len())?;
         self.nodes.push(NodeData {
             kind,
+            literal_edits: None,
             origin: ENGINE_ORIGIN,
+            source_column: 1,
             source_node: match kind {
                 NodeKind::Element => Some(id),
                 NodeKind::Sentinel => None,
@@ -359,6 +375,14 @@ impl Arch {
 
     pub(crate) fn origin(&self, id: NodeId) -> NodeOrigin {
         self.data(id).origin
+    }
+
+    pub(crate) fn source_column(&self, id: NodeId) -> u32 {
+        self.data(id).source_column
+    }
+
+    pub(crate) fn set_source_column(&mut self, id: NodeId, column: u32) {
+        self.data_mut(id).source_column = column;
     }
 
     pub(crate) fn source_node(&self, id: NodeId) -> Option<u32> {
@@ -477,6 +501,75 @@ impl Arch {
         Ok(())
     }
 
+    pub(crate) fn original_slot(&self, id: NodeId) -> LiteralSource {
+        self.source_node(id)
+            .map(|ordinal| (self.origin(id).view_id(), ordinal))
+    }
+
+    pub(crate) fn slot(&self, id: NodeId, tail: bool) -> LiteralSource {
+        self.data(id)
+            .literal_edits
+            .as_ref()
+            .and_then(|edits| if tail { edits.tail } else { edits.text })
+            .unwrap_or_else(|| self.original_slot(id))
+    }
+
+    pub(crate) fn set_slot(&mut self, id: NodeId, tail: bool, origin: LiteralSource) {
+        if self.slot(id, tail) != origin {
+            let edits = self
+                .data_mut(id)
+                .literal_edits
+                .get_or_insert_with(Default::default);
+            if tail {
+                edits.tail = Some(origin);
+            } else {
+                edits.text = Some(origin);
+            }
+        }
+    }
+
+    pub(crate) fn attribute_slot(&self, id: NodeId, name: &str) -> LiteralSource {
+        self.data(id)
+            .literal_edits
+            .as_ref()
+            .and_then(|edits| edits.attributes.get(name).copied())
+            .unwrap_or_else(|| self.original_slot(id))
+    }
+
+    pub(crate) fn set_attribute_slot(&mut self, id: NodeId, name: &str, source: LiteralSource) {
+        self.data_mut(id)
+            .literal_edits
+            .get_or_insert_with(Default::default)
+            .attributes
+            .insert(name.to_owned(), source);
+    }
+
+    /// Whitespace supplied by indentation has no translation owner. A single literal assembled
+    /// from two independent non-whitespace sources cannot select just one source catalogue.
+    pub(crate) fn append_slot(
+        &mut self,
+        id: NodeId,
+        tail: bool,
+        more: &str,
+        origin: LiteralSource,
+    ) -> ViewResult<()> {
+        let meaningful = |s: &str| s.chars().any(|c| !matches!(c, ' ' | '\t' | '\n' | '\r'));
+        if meaningful(more) {
+            let old = if tail { self.tail(id) } else { self.text(id) };
+            let owner = if !meaningful(old) || self.slot(id, tail) == origin {
+                origin
+            } else {
+                None
+            };
+            self.set_slot(id, tail, owner);
+        }
+        if tail {
+            self.append_tail(id, more)
+        } else {
+            self.append_text(id, more)
+        }
+    }
+
     pub(crate) fn set_text(&mut self, id: NodeId, text: String) -> ViewResult<()> {
         self.charge(text.len().saturating_sub(self.data(id).text.len()))?;
         self.data_mut(id).text = text;
@@ -519,6 +612,8 @@ impl Arch {
 
     /// Moves the tail of `from` to `to` (which must have none); nothing new is built.
     pub(crate) fn move_tail(&mut self, from: NodeId, to: NodeId) {
+        let origin = self.slot(from, true);
+        self.set_slot(to, true, origin);
         let tail = std::mem::take(&mut self.data_mut(from).tail);
         self.data_mut(to).tail = tail;
     }
@@ -545,6 +640,9 @@ impl Arch {
     }
 
     pub(crate) fn remove_attr(&mut self, id: NodeId, name: &str) {
+        if let Some(edits) = &mut self.data_mut(id).literal_edits {
+            edits.attributes.remove(name);
+        }
         self.data_mut(id).attrs.retain(|(k, _)| k != name);
     }
 
@@ -647,6 +745,8 @@ impl Arch {
                     kind: d.kind,
                     origin: d.origin,
                     source_node: d.source_node,
+                    source_column: d.source_column,
+                    literal_edits: d.literal_edits.clone(),
                     tag: d.tag.clone(),
                     attrs: d.attrs.clone(),
                     text: d.text.clone(),
@@ -687,6 +787,8 @@ impl Arch {
             let id = self.alloc(snap.kind, snap.tag, snap.attrs, snap.text, snap.tail)?;
             self.set_origin(id, snap.origin);
             self.set_source_node(id, snap.source_node);
+            self.set_source_column(id, snap.source_column);
+            self.data_mut(id).literal_edits = snap.literal_edits;
             ancestors.truncate(snap.depth);
             match ancestors.last() {
                 Some(&parent) => self.append_child(parent, id),
@@ -1075,6 +1177,21 @@ impl<'a> NodeRef<'a> {
     /// ```
     pub fn source_node_index(&self) -> Option<u32> {
         self.arch.source_node(self.id)
+    }
+
+    /// View id and original element ordinal owning this attribute's literal value.
+    pub fn attribute_source(&self, name: &str) -> Option<(i64, u32)> {
+        self.arch.attribute_slot(self.id, name)
+    }
+
+    /// View id and original element ordinal owning the leading text, when unique.
+    pub fn text_source(&self) -> Option<(i64, u32)> {
+        self.arch.slot(self.id, false)
+    }
+
+    /// View id and original element ordinal owning the text following this element, when unique.
+    pub fn tail_source(&self) -> Option<(i64, u32)> {
+        self.arch.slot(self.id, true)
     }
 
     /// Value of one attribute.

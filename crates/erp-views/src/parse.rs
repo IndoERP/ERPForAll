@@ -37,6 +37,7 @@ pub(crate) fn parse_arch(xml: &str, limits: &ViewLimits, view_id: i64) -> ViewRe
         xml,
         offset: 0,
         line: 1,
+        column: 1,
         view_id,
     };
     convert(doc.root_element(), limits, &mut lines)
@@ -51,6 +52,7 @@ struct Lines<'x> {
     offset: usize,
     /// The line at `offset`.
     line: u32,
+    column: u32,
     view_id: i64,
 }
 
@@ -71,6 +73,14 @@ impl Lines<'_> {
             .line
             .checked_add(newlines)
             .ok_or(ViewError::InvariantViolation("line number beyond u32"))?;
+        let gap_chars = &self.xml[self.offset..start];
+        let (base, suffix) = gap_chars
+            .rsplit_once('\n')
+            .map_or((self.column, gap_chars), |(_, line)| (1, line));
+        self.column = u32::try_from(suffix.chars().count())
+            .ok()
+            .and_then(|n| base.checked_add(n))
+            .ok_or(ViewError::InvariantViolation("column beyond u32"))?;
         self.offset = start;
         let line = NonZeroU32::new(self.line)
             .ok_or(ViewError::InvariantViolation("line numbers start at 1"))?;
@@ -400,6 +410,7 @@ fn open_element(
     let (tag, attrs) = element_parts(node, limits)?;
     let id = arch.alloc(NodeKind::Element, tag, attrs, String::new(), String::new())?;
     arch.set_origin(id, lines.origin_at(node.range().start)?);
+    arch.set_source_column(id, lines.column);
     let parent = open.last_mut().ok_or(LOST_OPEN_ELEMENT)?;
     arch.append_child(parent.id, id);
     parent.last_element = Some(id);
@@ -415,6 +426,7 @@ fn convert(
     let mut arch = Arch::with_root(tag, attrs, Caps::parsed(limits))?;
     let root_id = arch.root_id();
     arch.set_origin(root_id, lines.origin_at(root.range().start)?);
+    arch.set_source_column(root_id, lines.column);
     let mut open = vec![Open {
         id: arch.root_id(),
         last_element: None,

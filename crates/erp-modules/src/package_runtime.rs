@@ -44,6 +44,13 @@ impl PackageChecks {
 
 /// What the module system asks of the runtime of package addons.
 pub trait PackageRuntime: Send + Sync {
+    /// Whether schema-only native uninstall may leave all installed package addons intact
+    /// without invoking a package lifecycle callback. An installed package in the removal
+    /// closure still requires the separate package lifecycle.
+    fn supports_native_uninstall(&self) -> bool {
+        false
+    }
+
     /// The models and fields `module` (a package addon) declares, for the registry of a module
     /// set that contains it.
     ///

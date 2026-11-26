@@ -2,6 +2,7 @@
 // The pivot view: any depth of row and column groupings, expanded one header at a
 // time, measures, sort, flip, and the whole state kept in the page address. This file holds the pure parts (arch and
 // field list to config, the model with its reads, the table it draws, the address encoding); `pivot-view.ts` draws it.
+import { addressKey, readAddressKey } from "./pivot-address.js";
 import { ClientError } from "./transport.js";
 import { groupLabel } from "./list-groups.js";
 import type { GroupableField, GroupableKind } from "./search/types.js";
@@ -704,10 +705,10 @@ export function snapshotParams(snapshot: PivotSnapshot): PivotParams {
   if (!snapshot.layoutDefault) {
     if (snapshot.rows.length) params.pivot_rows = snapshot.rows.join(",");
     if (snapshot.cols.length) params.pivot_cols = snapshot.cols.join(",");
-    params.pivot_open = JSON.stringify({ r: snapshot.open.row, c: snapshot.open.col });
+    params.pivot_open = JSON.stringify({ r: snapshot.open.row.map(path => path.map(addressKey)), c: snapshot.open.col.map(path => path.map(addressKey)) });
   }
   if (!snapshot.measuresDefault && snapshot.measures.length) params.pivot_measures = snapshot.measures.join(",");
-  if (!snapshot.sortDefault) params.pivot_sort = JSON.stringify(snapshot.sort ? [snapshot.sort.measure, snapshot.sort.desc ? "desc" : "asc", snapshot.sort.path] : []);
+  if (!snapshot.sortDefault) params.pivot_sort = JSON.stringify(snapshot.sort ? [snapshot.sort.measure, snapshot.sort.desc ? "desc" : "asc", snapshot.sort.path.map(addressKey)] : []);
   return params;
 }
 
@@ -719,13 +720,13 @@ export function paramsState(params: PivotParams, config: PivotConfig): PivotInit
   const state: PivotInitial = { ...base, rows: specs(params.pivot_rows, explicit ? [] : base.rows), cols: specs(params.pivot_cols, explicit ? [] : base.cols) };
   if (explicit) {
     const parsed = JSON.parse(params.pivot_open!) as { r?: unknown[][]; c?: unknown[][] };
-    const keys = (paths: unknown[][] | undefined): string[][] => (paths ?? []).map(path => path.map(key => JSON.stringify(key)));
+    const keys = (paths: unknown[][] | undefined): string[][] => (paths ?? []).map(path => path.map(key => JSON.stringify(readAddressKey(key))));
     state.open = { row: keys(parsed.r), col: keys(parsed.c) };
   }
   if (params.pivot_measures !== undefined) state.active = params.pivot_measures.split(",");
   if (params.pivot_sort !== undefined) {
     const parsed = JSON.parse(params.pivot_sort) as [string, string, unknown[]] | [];
-    state.sort = parsed.length ? { measure: parsed[0], desc: parsed[1] === "desc", path: parsed[2].map(key => JSON.stringify(key)) } : null;
+    state.sort = parsed.length ? { measure: parsed[0], desc: parsed[1] === "desc", path: parsed[2].map(key => JSON.stringify(readAddressKey(key))) } : null;
   }
   return state;
 }

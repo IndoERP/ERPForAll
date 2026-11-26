@@ -196,13 +196,18 @@ export interface TimedPlacement { event: CalendarEvent; top: number; height: num
 /** Timed events of one day as minutes from midnight, overlapping ones side by side: each cluster of overlapping events shares its columns. */
 export function layoutDay(events: readonly CalendarEvent[], day: DateTime): TimedPlacement[] {
   const next = day.plus({ days: 1 });
-  const timed = eventsOn(events, day).filter(event => !event.allDay);
+  const clockMinute = (instant: DateTime): number => {
+    const local = instant.setZone(day.zone);
+    return local.hour * 60 + local.minute + local.second / 60;
+  };
+  const startMinute = (event: CalendarEvent): number => event.start <= day ? 0 : clockMinute(event.start);
+  const timed = eventsOn(events, day).filter(event => !event.allDay).sort((a, b) => startMinute(a) - startMinute(b));
   const placed: TimedPlacement[] = [];
   let cluster: TimedPlacement[] = [], clusterEnd = -1, ends: number[] = [];
   const close = (): void => { for (const item of cluster) item.columns = ends.length; cluster = []; ends = []; };
   for (const event of timed) {
-    const top = Math.max(0, event.start.diff(day, "minutes").minutes);
-    const bottom = Math.min(24 * 60, (event.end < next ? event.end : next).diff(day, "minutes").minutes);
+    const top = startMinute(event);
+    const bottom = event.end >= next ? 24 * 60 : clockMinute(event.end);
     const height = Math.max(MIN_MINUTES / 2, bottom - top);
     if (top >= clusterEnd) close();
     let column = ends.findIndex(end => end <= top);

@@ -26,6 +26,15 @@ use erp_testkit::tokio_postgres::types::ToSql;
 /// The models of `base` that declare a company restriction and that tests commonly act on.
 pub const PARTNER_AND_USERS: [&str; 2] = ["res.partner", "res.users"];
 
+/// Chatter expands thread access over every readable thread, including private conversations.
+pub const MAIL_POLICY_MODELS: [&str; 5] = [
+    "res.partner",
+    "res.users",
+    "discuss.channel",
+    "discuss.channel.member",
+    "mail.notification",
+];
+
 /// The generated restriction of each of `models`, in the order given.
 ///
 /// # Panics

@@ -81,7 +81,7 @@ function confirmUninstallDialog(
   impact: Record<string, unknown>,
   opener: HTMLElement,
   onSuccess: () => Promise<void> | void,
-  onError: (error: unknown) => Promise<void> | void
+  onError: (error: unknown) => Promise<boolean>
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const dialog = el("dialog", undefined, "addon-uninstall-dialog");
@@ -91,7 +91,7 @@ function confirmUninstallDialog(
     heading.id = "addon-uninstall-heading";
     dialog.setAttribute("aria-labelledby", heading.id);
 
-    const warning = el("div", "Uninstalling modules can be risky. We recommend testing on a staging environment first. All data associated with these modules will be permanently deleted.", "alert alert-warning addon-uninstall-warning");
+    const warning = el("div", "Uninstalling modules can be risky. This operation permanently removes the records and schema shown below.", "alert alert-warning addon-uninstall-warning");
 
     const body = el("div", undefined, "addon-uninstall-body");
     body.append(warning);
@@ -130,9 +130,42 @@ function confirmUninstallDialog(
       body.append(modelsSection);
     }
 
+    const metadata = array(impact["metadata"], "uninstall metadata effects").map(item => object(item));
+    if (metadata.length > 0) {
+      const section = el("div", undefined, "addon-impact-section");
+      section.append(el("h3", "Database effects", "addon-impact-subtitle"));
+      const effects = el("ul", undefined, "addon-impact-database");
+      const labels = new Map([
+        ["delete", "Delete records"], ["drop_schema_objects", "Remove schema objects"],
+        ["bump_policy", "Refresh access policy"], ["bump_registry", "Reload the model registry"],
+      ]);
+      for (const item of metadata) {
+        const kind = text(item["kind"], "database effect kind");
+        const target = text(item["table"], "database effect table");
+        const count = text(item["row_count"], "database effect count");
+        effects.append(el("li", `${labels.get(kind) ?? kind} · ${target} (${count})`));
+      }
+      section.append(effects);
+      body.append(section);
+    }
+
+    const host = array(impact["effects"], "uninstall package and host effects").map(item => object(item));
+    if (host.length > 0) {
+      const section = el("div", undefined, "addon-impact-section");
+      section.append(el("h3", "Package and host effects", "addon-impact-subtitle"));
+      const effects = el("dl", undefined, "addon-facts");
+      for (const item of host) {
+        const pair = el("div");
+        pair.append(el("dt", text(item["component"], "effect component")), el("dd", text(item["description"], "effect description")));
+        effects.append(pair);
+      }
+      section.append(effects);
+      body.append(section);
+    }
+
     const targetCount = text(impact["target_count"], "uninstall impact target count");
     if (targetCount) {
-      body.append(el("p", `Total affected records: ${targetCount}`, "addon-impact-summary muted"));
+      body.append(el("p", `Affected records and schema objects: ${targetCount}`, "addon-impact-summary muted"));
     }
 
     const footer = el("footer", undefined, "addon-uninstall-footer");
@@ -152,8 +185,12 @@ function confirmUninstallDialog(
       } catch (error) {
         settled = true;
         dialog.close();
-        // The dialog promise settles even when the error handler itself fails.
-        try { await onError(error); } finally { reject(error); }
+        try {
+          if (await onError(error)) resolve();
+          else reject(error);
+        } catch (handlingError) {
+          reject(handlingError);
+        }
         return;
       }
       settled = true;
@@ -906,12 +943,14 @@ export async function settingsView(
           window.location.reload();
         },
         async (error) => {
-          if (error instanceof ClientError && (error.status === 409 || (error as { kind?: string }).kind === "conflict")) {
+          const conflict = error instanceof ClientError && error.status === 409;
+          if (conflict) {
             notice("Database state changed since preview. A fresh confirmation is required.");
           } else {
             notice("Uninstall status may have changed. Reloading settings…");
           }
           await reloadAfterFailure();
+          return conflict;
         }
       );
     });
@@ -1016,8 +1055,6 @@ const ADDON_STATES: ReadonlyMap<string, { label: string; token: string }> = new 
   ["uninstallable", { label: "Not Installable", token: "uninstallable" }],
   ["unavailable", { label: "Unavailable", token: "unavailable" }],
 ]);
-const UNINSTALL_NOTE = "Uninstall is not available in the web client; use the erp module uninstall CLI command.";
-
 const INDUSTRIES = "Industries";
 const INSTALLED_STATES = new Set(["installed", "to upgrade", "to remove"]);
 const NOT_INSTALLED_STATES = new Set(["uninstalled", "uninstallable", "to install"]);
@@ -1154,7 +1191,6 @@ export async function addonsView(
     fact("Installable", row.installable ? "Yes" : "No");
     const body = el("div", undefined, "addon-info-body");
     body.append(el("p", row.summary || "No description provided.", "addon-info-summary"), facts);
-    if (row.state === "installed") body.append(el("p", UNINSTALL_NOTE, "addon-info-note muted"));
     const footer = el("footer", undefined, "addon-info-footer");
     const close = button("Close", () => dialog.close());
     footer.append(close);
@@ -1209,14 +1245,12 @@ export async function addonsView(
 
     const actions = el("div", undefined, "addon-detail-actions");
     const notes = el("div", undefined, "addon-detail-notes");
-    // The server's refusal text names internal tasks and engine parts, so the page shows its own fixed sentence; the
-    // server's wording stays in a data attribute for diagnostics and is never rendered.
-    const unavailable = (btn: HTMLButtonElement, id: string, sentence: string, serverReason: string): void => {
+    const unavailable = (btn: HTMLButtonElement, id: string, reason: string): void => {
       btn.disabled = true;
       btn.dataset["locked"] = "true"; // keeps `disable()` from enabling it again when another operation ends
       btn.setAttribute("aria-describedby", id);
-      const note = el("p", sentence, "addon-refusal-note muted");
-      note.id = id; note.dataset["reason"] = serverReason;
+      const note = el("p", reason, "addon-refusal-note muted");
+      note.id = id;
       notes.append(note);
     };
     if (stateStr === "uninstalled" && row.installable) {
@@ -1227,8 +1261,8 @@ export async function addonsView(
       actions.append(upgradeBtn, uninstallBtn);
       const refusal = (key: string): string | null => { const value = detailData[key]; return value === null || value === undefined ? null : text(value, `addon detail ${key}`); };
       const upgradeRefusal = refusal("upgrade_refusal"), uninstallRefusal = refusal("uninstall_refusal");
-      if (upgradeRefusal) unavailable(upgradeBtn, "addon-upgrade-unavailable", "Upgrade from this page is not available: this addon is not in the server's addon directory.", upgradeRefusal);
-      if (uninstallRefusal) unavailable(uninstallBtn, "addon-uninstall-unavailable", UNINSTALL_UNAVAILABLE, uninstallRefusal);
+      if (upgradeRefusal) unavailable(upgradeBtn, "addon-upgrade-unavailable", upgradeRefusal);
+      if (uninstallRefusal) unavailable(uninstallBtn, "addon-uninstall-unavailable", uninstallRefusal);
     } else if (stateStr === "uninstalled") {
       notes.append(el("p", "This addon is marked as not installable, or its version does not fit this server.", "addon-transitional-note muted"));
     } else {
@@ -1370,20 +1404,21 @@ export async function addonsView(
   };
 
   const startUninstall = async (row: AddonRow, opener: HTMLElement): Promise<void> => {
-    let impact: Record<string, unknown> | undefined;
-    await operation(async () => {
+    let reviewing = false;
+    try { await operation(async () => {
+      let impact: Record<string, unknown>;
       try {
         impact = object(await rpc.call("ir.module.module", "erp_preview_uninstall", { modules: [row.name], context }));
       } catch (error) {
-        // A validation refusal is the server declining to preview: the same fixed sentence as the detail page, nothing failed.
-        if (error instanceof ClientError && error.kind === "validation") { notice(UNINSTALL_UNAVAILABLE); return; }
+        if (error instanceof ClientError && error.kind === "validation") { notice(error.message || UNINSTALL_UNAVAILABLE); return; }
         notice(`Uninstall preview failed: ${(error as Error).message || "Unable to compute uninstall impact."}`);
         await render();
         throw error;
       }
-    });
-    if (impact) {
+      reviewing = true;
       await confirmUninstall(row, impact, opener);
+    }); } finally {
+      if (reviewing && opener.isConnected && !opener.matches(":disabled")) opener.focus();
     }
   };
 
@@ -1398,12 +1433,14 @@ export async function addonsView(
         window.location.reload();
       },
       async (error) => {
-        if (error instanceof ClientError && (error.status === 409 || (error as { kind?: string }).kind === "conflict")) {
+        const conflict = error instanceof ClientError && error.status === 409;
+        if (conflict) {
           notice("Database state changed since preview. A fresh confirmation is required.");
         } else {
           notice("Uninstall status may have changed. Reload the catalog before trying again.");
         }
         await render();
+        return conflict;
       }
     );
 

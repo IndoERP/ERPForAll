@@ -550,3 +550,418 @@ fn saved_socket_filters_hidden_wakes_and_closes_after_role_change() {
         assert_eq!(close.code, CloseCode::Policy);
     });
 }
+
+#[test]
+fn conversation_membership_replay_receipts_and_revocation() {
+    use multiuser_fixture::UserSpec;
+    use tungstenite::{Message, protocol::frame::coding::CloseCode};
+    run(|f| {
+        let a = f.user(Subject::A);
+        let participant = f.provision(UserSpec {
+            login: "discuss-member",
+            company: a.company,
+            companies: vec![a.company],
+            groups: vec![f.group("group_user")],
+        });
+        let port = f.native.port;
+        let model = "discuss.channel";
+        success(&f.user(Subject::Admin).rpc_on(
+            port,
+            "res.users",
+            "write",
+            json!({"ids":[participant.id],"vals":{"notification_type":"inbox"}}),
+        ));
+        let id = success(&a.rpc_on(
+            port,
+            model,
+            "conversation_create",
+            json!({"name":"Quarterly planning"}),
+        ))
+        .as_i64()
+        .unwrap();
+        let list = || success(&participant.rpc_on(port, model, "conversation_list", json!({})));
+        assert_eq!(list(), json!([]));
+        assert_ne!(
+            a.rpc_on(
+                port,
+                model,
+                "conversation_invite",
+                json!({"ids":[id],"user_id":f.user(Subject::B).id})
+            )
+            .status,
+            200
+        );
+        success(&a.rpc_on(
+            port,
+            model,
+            "conversation_invite",
+            json!({"ids":[id],"user_id":participant.id}),
+        ));
+        assert_eq!(list()[0]["name"], "Quarterly planning");
+        let sub = Message::Text(json!({"type":"subscribe","model":model,"id":id,"company":a.company,"csrf":participant.bootstrap(port,"/erp")["csrf"]["logout"]}).to_string().into());
+        let wake = Message::Text(r#"{"type":"resync"}"#.into());
+        let mut socket = participant.thread_socket(port);
+        socket.send(sub.clone()).unwrap();
+        assert_eq!(socket.read().unwrap(), wake);
+        let uid = "cb6b4797-ac22-4a83-b705-61c22ac51621";
+        let post = || {
+            success(&a.rpc_on(
+                port,
+                model,
+                "thread_post",
+                json!({"ids":[id],"post":{"body":"Quarterly targets", "client_uid":uid}}),
+            ))
+        };
+        let first = post();
+        let posted = first["message_id"].as_i64().unwrap();
+        assert_eq!(socket.read().unwrap(), wake);
+        let replayed = post();
+        assert_eq!(replayed["replayed"], true);
+        assert_eq!(replayed["message_id"], posted);
+        assert_eq!(
+            replayed["notified_partner_ids"],
+            first["notified_partner_ids"]
+        );
+        assert_eq!(first["notified_partner_ids"].as_array().unwrap().len(), 1);
+        let inbox = || success(&participant.rpc_on(port, model, "messaging_inbox", json!({})));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let delivery = inbox();
+            let mut transports: Vec<_> = delivery
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|row| row["message"] == posted)
+                .map(|row| row["transport"].as_str().unwrap())
+                .collect();
+            transports.sort_unstable();
+            if !transports.is_empty() {
+                assert_eq!(transports, ["inbox", "push"]);
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "post-commit notifications were not delivered"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(150));
+        }
+        let snapshot = list();
+        assert!(snapshot[0]["unread"].as_i64().unwrap() > 0);
+        for _ in 0..2 {
+            success(&participant.rpc_on(
+                port,
+                model,
+                "conversation_seen",
+                json!({"ids":[id],"message_id":posted}),
+            ));
+            success(&participant.rpc_on(
+                port,
+                model,
+                "conversation_bookmark",
+                json!({"ids":[id],"message_id":posted,"saved":true}),
+            ));
+        }
+        let snapshot = list();
+        assert_eq!(snapshot[0]["bookmarks"], 1);
+        assert_eq!(snapshot[0]["unread"], 0);
+        let receipts =
+            success(&a.rpc_on(port, model, "conversation_receipts", json!({"ids":[id]})));
+        assert!(
+            receipts
+                .as_array()
+                .unwrap()
+                .contains(&json!({"user":participant.id,"seen":posted}))
+        );
+        socket.close(None).unwrap();
+        let mut socket = participant.thread_socket(port);
+        socket.send(sub).unwrap();
+        assert_eq!(socket.read().unwrap(), wake);
+        let own = success(&participant.rpc_on(
+            port,
+            model,
+            "thread_post",
+            json!({"ids":[id],"post":{"body":"My targets"}}),
+        ))["message_id"]
+            .as_i64()
+            .unwrap();
+        assert_eq!(socket.read().unwrap(), wake);
+        success(&participant.rpc_on(port, model, "conversation_leave", json!({"ids":[id]})));
+        assert_eq!(list(), json!([]));
+        assert!(
+            !inbox()
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["message"] == posted)
+        );
+        let Message::Close(Some(reason)) = socket.read().unwrap() else {
+            panic!("Closed the revoked subscription")
+        };
+        assert_eq!(reason.code, CloseCode::Policy);
+        assert_eq!(
+            success(&participant.rpc_on(
+                port,
+                "mail.message",
+                "search",
+                json!({"domain":[["id","in",[posted,own]]]})
+            )),
+            json!([])
+        );
+        assert_ne!(
+            participant
+                .rpc_on(
+                    port,
+                    model,
+                    "thread_post",
+                    json!({"ids":[id],"post":{"body":"Denied"}})
+                )
+                .status,
+            200
+        );
+        // The successor's channel id, unread count, bookmarks and message cursor
+        // all remain stable. A role change alone must wake their subscribed page.
+        success(&a.rpc_on(
+            port,
+            model,
+            "conversation_invite",
+            json!({"ids":[id],"user_id":participant.id}),
+        ));
+        assert_eq!(list()[0]["owner"], false);
+        let mut page = participant.thread_socket(port);
+        let csrf = participant.bootstrap(port, "/erp")["csrf"]["logout"].clone();
+        page.send(Message::Text(json!({"type":"subscribe","model":"discuss.channel.member","id":1,"company":a.company,"csrf":csrf}).to_string().into())).unwrap();
+        assert_eq!(page.read().unwrap(), wake);
+        success(&a.rpc_on(port, model, "conversation_leave", json!({"ids":[id]})));
+        assert_eq!(page.read().unwrap(), wake);
+        assert_eq!(list()[0]["owner"], true);
+    });
+}
+
+#[test]
+fn conversation_membership_installed_email_and_scheduled_lifecycle() {
+    use std::time::{Duration, Instant};
+    multiuser_fixture::run_with_config(
+        "mail_delivery_dir='test-maildir'\njobs_run_in_app=true\n",
+        |f| {
+            let m = Mail::new(f);
+            let port = f.native.port;
+            let admin = f.user(Subject::Admin);
+            let partner = |name, address| {
+                success(&admin.rpc_on(
+                    port,
+                    "res.partner",
+                    "create",
+                    json!({"vals_list":[{"name":name,"email":address}]}),
+                ))[0]
+                    .as_i64()
+                    .unwrap()
+            };
+            let file = m.upload(Subject::Admin, m.shared);
+            success(&admin.rpc_on(
+                port,
+                "product.template",
+                "thread_post",
+                json!({"ids":[m.shared],"post":{"body":"Attached notes","attachment_ids":[file]}}),
+            ));
+            let thread = m.thread(Subject::A, m.shared);
+            assert!(
+                slot(&thread, 0)["data"]["attachments"]["attachment_ids"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!(file))
+            );
+            assert!(thread.to_string().contains("mail-acceptance.txt"));
+            let menu = || {
+                success(&admin.rpc_on(port,"mail.activity","erp_activity_groups",json!({})))["activity_counter"].as_i64().unwrap()
+            };
+            let before = menu();
+            let activity = success(&admin.rpc_on(port,"mail.activity","create",json!({"vals_list":[{"summary":"Review mail","date_deadline":"2000-01-01","user_id":admin.id}]})))[0].as_i64().unwrap();
+            assert_eq!(menu(), before + 1);
+            success(&admin.rpc_on(port, "mail.activity", "unlink", json!({"ids":[activity]})));
+            assert_eq!(menu(), before);
+            let good = partner("Mail recipient", "notify@example.invalid");
+            let bad = partner("Missing address", "");
+            let scheduled = "mail.scheduled.message";
+            let future = |seconds| {
+                erp_fields::DateTime::from_micros(
+                    erp_fields::DateTime::now().micros() + seconds * 1_000_000_i64,
+                )
+                .to_string()
+            };
+            let schedule = || {
+                success(&admin.rpc_on(port,scheduled,"schedule_message",json!({"model":"product.template","record_id":m.shared,"body":"Draft","at":future(300_i64),"partner_ids":[good,bad]}))).as_i64().unwrap()
+            };
+            let cancelled = schedule();
+            success(&admin.rpc_on(port, scheduled, "cancel", json!({"ids":[cancelled]})));
+            let id = schedule();
+            success(&admin.rpc_on(
+                port,
+                scheduled,
+                "edit_message",
+                json!({"ids":[id],"body":"Reviewed text"}),
+            ));
+            let message = success(&admin.rpc_on(port, scheduled, "send_now", json!({"ids":[id]})))
+                .as_i64()
+                .unwrap();
+            assert!(
+                m.read(Subject::Admin, "mail.message", &[message], &["body"])[0]["body"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Reviewed text")
+            );
+            // A due draft also runs through the installed job runner under its saved principal.
+            let timed = success(&admin.rpc_on(port,scheduled,"schedule_message",json!({"model":"product.template","record_id":m.shared,"body":"Timed agenda","at":future(300_i64)}))).as_i64().unwrap();
+            success(&admin.rpc_on(
+                port,
+                scheduled,
+                "edit_message",
+                json!({"ids":[timed],"at":future(5_i64)}),
+            ));
+            let timeout = Instant::now() + Duration::from_secs(60);
+            loop {
+                let posted = success(&admin.rpc_on(port,"mail.message","search",json!({"domain":[["model","=","product.template"],["res_id","=",m.shared],["body","ilike","Timed agenda"]]})));
+                if !posted.as_array().unwrap().is_empty() {
+                    assert_eq!(posted.as_array().unwrap().len(), 1);
+                    break;
+                }
+                assert!(
+                    Instant::now() < timeout,
+                    "the scheduled job did not post its message"
+                );
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            let until = Instant::now() + Duration::from_secs(30);
+            loop {
+                let rows=success(&admin.rpc_on(port,"mail.notification","search_read",json!({"domain":[["message_id","=",message],["transport","=","email"]],"fields":["partner_id","state"]})));
+                let states = rows.as_array().unwrap();
+                if states.iter().any(|r| r["state"] == "delivered")
+                    && states.iter().any(|r| r["state"] == "failed")
+                {
+                    assert_eq!(states.len(), 2);
+                    break;
+                }
+                assert!(
+                    Instant::now() < until,
+                    "email consumer failed to complete both recipients: {rows}"
+                );
+                std::thread::sleep(Duration::from_millis(150));
+            }
+            let new = f.native.dir.path().join("test-maildir/new");
+            // Exercise M3's owner recovery path while the live mail consumer is running.
+            let outbox = |args: &[&str]| {
+                let timeout = Instant::now() + Duration::from_secs(15);
+                loop {
+                    let result = std::process::Command::new(env!("CARGO_BIN_EXE_erp"))
+                        .arg("outbox")
+                        .args(args)
+                        .arg("--config")
+                        .arg(f.native.dir.path().join("server.toml"))
+                        .output()
+                        .unwrap();
+                    if result.status.success() {
+                        break String::from_utf8(result.stdout).unwrap();
+                    }
+                    let error = String::from_utf8_lossy(&result.stderr);
+                    assert!(
+                        error.contains("delivery or retention in progress")
+                            && Instant::now() < timeout,
+                        "outbox recovery failed: {error}"
+                    );
+                    std::thread::sleep(Duration::from_millis(150));
+                }
+            };
+            let cursor = || {
+                outbox(&["status", "--consumer", "mail.notifications"])
+                    .split_once("Consumer mail.notifications at ")
+                    .unwrap()
+                    .1
+                    .split('.')
+                    .next()
+                    .unwrap()
+                    .to_owned()
+            };
+            outbox(&["hold"]);
+            let before = cursor();
+            assert!(before.starts_with("xid ") && before != "xid 0, id 0");
+            outbox(&[
+                "restore",
+                "--consumer",
+                "mail.notifications",
+                "--xid",
+                "0",
+                "--id",
+                "0",
+            ]);
+            let timeout = Instant::now() + Duration::from_secs(30);
+            while cursor() != before {
+                assert!(
+                    Instant::now() < timeout,
+                    "the mail consumer did not replay the restored cursor"
+                );
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            outbox(&["release-hold"]);
+            let receipts = success(&admin.rpc_on(
+                port,
+                "mail.notification",
+                "search",
+                json!({"domain":[["message_id","=",message],["transport","=","email"]]}),
+            ));
+            assert_eq!(receipts.as_array().unwrap().len(), 2);
+            let mail: Vec<_> = std::fs::read_dir(new)
+                .unwrap()
+                .map(|p| std::fs::read_to_string(p.unwrap().path()).unwrap())
+                .filter(|s| s.contains("To: notify@example.invalid\r\n"))
+                .collect();
+            assert_eq!(mail.len(), 1);
+            assert!(mail[0].contains("Subject: New ERPForAll message"));
+        },
+    );
+}
+
+#[test]
+fn conversation_membership_installed_two_browser_tabs() {
+    use std::{
+        io::Write,
+        path::Path,
+        process::{Command, Stdio},
+    };
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap();
+    let assets = tempfile::tempdir().unwrap();
+    let toolchain = move || {
+        let mut bash = Command::new("bash");
+        bash.current_dir(root).args(["-ec", "toolchain_env=$(scripts/web-toolchain.sh env); eval \"$toolchain_env\"; exec node \"$1\"", "browser"]);
+        bash
+    };
+    let compiler = Path::new(env!("CARGO_BIN_EXE_erp")).with_file_name("erp-ui-compile");
+    assert!(
+        toolchain()
+            .arg("web/scripts/build-human-ui.mjs")
+            .env("ERP_UI_COMPILER", compiler)
+            .env("ERP_UI_OUTPUT_DIR", assets.path())
+            .status()
+            .unwrap()
+            .success()
+    );
+    multiuser_fixture::run_with_assets(assets.path().to_owned(), move |f| {
+        let mut browser = toolchain()
+            .arg("web/scripts/browser-discuss.mjs")
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let input = json!({"origin":format!("http://127.0.0.1:{}",f.native.port),"login":f.user(Subject::A).login,"password":format!("{} & = fixture £ password",f.native.db.name())});
+        browser
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.to_string().as_bytes())
+            .unwrap();
+        assert!(
+            browser.wait().unwrap().success(),
+            "Discuss browser flow failed"
+        );
+    });
+}

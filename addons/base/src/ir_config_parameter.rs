@@ -129,6 +129,9 @@ pub struct IrConfigParameter {
     /// digest never covers it (`secret`).
     #[field(text, secret = true)]
     pub value: Option<Arc<str>>,
+    /// Information about the declared parameter, with no metadata or defaults for secret keys.
+    #[field(text, compute = "_compute_declared_bounds", readonly, copy = false)]
+    pub declared_bounds: Option<Arc<str>>,
 }
 
 /// The types of the typed API.
@@ -633,6 +636,43 @@ fn audited_keys(env: &Env, keys: Vec<String>) -> Result<Vec<String>> {
 
 #[methods(IrConfigParameter)]
 impl IrConfigParameter {
+    #[compute(depends = ["key"])]
+    async fn _compute_declared_bounds(
+        this: &RecordSet<IrConfigParameter>,
+        tx: &mut Transaction,
+        out: &mut Assign<'_, IrConfigParameter>,
+    ) -> Result<()> {
+        let registry = crate::system_parameters::published(this.env())?;
+        for (index, record) in this.iter().enumerate() {
+            let key = record.get(tx, IrConfigParameter::KEY).await?;
+            let description = key
+                .as_deref()
+                .and_then(|key| registry.get(key))
+                .filter(|decl| !decl.is_secret())
+                .map(|decl| {
+                    use erp_sdk::settings::SettingKind;
+                    let accepted = match decl.kind() {
+                        SettingKind::Selection { choices } if choices.len() > 10 => {
+                            format!("one of {} declared choices", choices.len())
+                        }
+                        kind => kind.describe(),
+                    };
+                    let default = decl.default_text();
+                    let default = if default.len() > 128 {
+                        "declared by the addon"
+                    } else {
+                        default
+                    };
+                    Arc::<str>::from(format!(
+                        "{}. Accepts {accepted}. The default is {default}.",
+                        decl.label()
+                    ))
+                });
+            out.set(index, IrConfigParameter::DECLARED_BOUNDS, description)?;
+        }
+        Ok(())
+    }
+
     /// The text of `key`, `default` (empty) when undefined.
     #[method(sealed)]
     #[rpc(effect = read, model)]

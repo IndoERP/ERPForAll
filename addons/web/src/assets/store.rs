@@ -60,12 +60,24 @@ async fn lock(tx: &mut Transaction) -> Result<()> {
 /// # Errors
 /// Database, conflicting hash metadata, oversized manifest or invalid assembled content.
 pub async fn publish(tx: &mut Transaction, bundle: &AssembledBundle) -> Result<()> {
-    publish_with_limits(tx, bundle, RetainedLimits::default()).await
+    publish_with_limits(tx, bundle, RetainedLimits::default(), true).await
+}
+
+/// Publish a reviewed uninstall bundle without collecting previously expired generations.
+///
+/// # Errors
+/// The same storage, conflict and admission errors as [`publish`].
+pub async fn publish_preserving_history(
+    tx: &mut Transaction,
+    bundle: &AssembledBundle,
+) -> Result<()> {
+    publish_with_limits(tx, bundle, RetainedLimits::default(), false).await
 }
 async fn publish_with_limits(
     tx: &mut Transaction,
     bundle: &AssembledBundle,
     limits: RetainedLimits,
+    collect_history: bool,
 ) -> Result<()> {
     let manifest = bundle.encode_manifest().map_err(stored)?;
     if manifest.len() > MAX_MANIFEST_BYTES {
@@ -188,7 +200,9 @@ async fn publish_with_limits(
     {
         return Err(conflict());
     }
-    collect_locked(tx).await?;
+    if collect_history {
+        collect_locked(tx).await?;
+    }
     // Admission is part of publication, before the caller may commit. A bundle that would make
     // its compatible grace history unservable refuses the complete install/upgrade transaction.
     retained_with_limits(
@@ -706,7 +720,7 @@ mod retained_admission_tests {
             ..RetainedLimits::default()
         };
         let mut tx = h.begin().await.unwrap();
-        let error = publish_with_limits(&mut tx, &next, limits)
+        let error = publish_with_limits(&mut tx, &next, limits, true)
             .await
             .unwrap_err();
         assert_eq!(error.kind(), erp_sdk::ErrorKind::Validation);

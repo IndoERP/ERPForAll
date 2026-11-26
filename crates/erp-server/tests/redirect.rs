@@ -1,6 +1,78 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "tests")]
 use erp_server::redirect::{RedirectPolicy, SHELL_VIEW_TYPES};
 
+/// SPEC-VIEW-273 (partial: the kanban board's folded and opened columns in the page address are admitted on reload with their closed shape; the board itself is the client's)
+#[test]
+fn kanban_fold_state_is_admitted_with_its_closed_shape() {
+    let policy = RedirectPolicy::new("https://erp.example.test", SHELL_VIEW_TYPES).unwrap();
+    let encoded =
+        |json: &str| url::form_urlencoded::byte_serialize(json.as_bytes()).collect::<String>();
+    let address = |json: &str| {
+        format!(
+            "/erp/action-28?view_type=kanban&kanban_fold={}",
+            encoded(json)
+        )
+    };
+    let many = |count: usize| {
+        (0..count)
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    // Fourteen 64-character keys and one of `last` characters: 1,024 UTF-16 units when `last` is 60.
+    let long = |last: usize| {
+        let keys = (0..14)
+            .map(|n| format!(r#""{n:064}""#))
+            .chain([format!(r#""{}""#, "y".repeat(last))])
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(r#"{{"by":"n","f":[{keys}],"o":[]}}"#)
+    };
+    assert_eq!(long(60).encode_utf16().count(), 1024);
+    for good in [
+        r#"{"by":"stage_id","f":[7,false],"o":["draft"]}"#.to_owned(),
+        r#"{"by":"deadline:week","f":["2026-11-09"],"o":[]}"#.to_owned(),
+        format!(r#"{{"by":"stage_id","f":[{}],"o":[]}}"#, many(64)),
+        format!(r#"{{"by":"name","f":["{}"],"o":[]}}"#, "x".repeat(64)),
+        format!(r#"{{"by":"{}","f":[1],"o":[]}}"#, "a".repeat(128)),
+        long(60),
+    ] {
+        assert!(good.encode_utf16().count() <= 1024, "{good}");
+        let address = address(&good);
+        assert_eq!(policy.shell(&address).unwrap(), address, "{good}");
+    }
+    for bad in [
+        r#"[]"#.to_owned(),
+        r#"{"by":"stage_id"}"#.to_owned(),
+        r#"{"by":"stage_id","f":[],"o":[],"x":1}"#.to_owned(),
+        r#"{"by":"Stage","f":[],"o":[]}"#.to_owned(),
+        r#"{"by":"deadline:hour","f":[],"o":[]}"#.to_owned(),
+        r#"{"by":"stage_id","f":[null],"o":[]}"#.to_owned(),
+        r#"{"by":"stage_id","f":[1.5],"o":[]}"#.to_owned(),
+        r#"{"by":"stage_id","f":[[1]],"o":[]}"#.to_owned(),
+        r#"{"by":"stage_id","f":[1,1],"o":[]}"#.to_owned(),
+        r#"{"by":"stage_id","f":[1],"o":[1]}"#.to_owned(),
+        r#"{"by":"stage_id","f":["a\"b"],"o":[]}"#.to_owned(),
+        r#"{"by":"stage_id","f":["a\\b"],"o":[]}"#.to_owned(),
+        format!(r#"{{"by":"stage_id","f":[{}],"o":[]}}"#, many(65)),
+        format!(r#"{{"by":"name","f":["{}"],"o":[]}}"#, "x".repeat(65)),
+        format!(r#"{{"by":"{}","f":[1],"o":[]}}"#, "a".repeat(129)),
+        long(61),
+        // a text key an address cannot carry: a slash pair, a control character
+        r#"{"by":"name","f":["a//b"],"o":[]}"#.to_owned(),
+        "{\"by\":\"name\",\"f\":[\"a\u{85}b\"],\"o\":[]}".to_owned(),
+        // other spellings of the same state: only the text the client writes is admitted
+        r#"{"by":"stage_id","f":[1.0],"o":[]}"#.to_owned(),
+        r#"{"by":"stage_id","f":[-0],"o":[]}"#.to_owned(),
+        r#"{"by":"stage_id","f":[1e2],"o":[]}"#.to_owned(),
+        r#"{"f":[1],"o":[],"by":"stage_id"}"#.to_owned(),
+        r#"{"by":"stage_id", "f":[1],"o":[]}"#.to_owned(),
+        r#"{"by":"stage_id","f":[1],"o":[],"o":[]}"#.to_owned(),
+    ] {
+        assert!(policy.shell(&address(&bad)).is_err(), "{bad}");
+    }
+}
+
 #[test]
 fn shell_url_contract_corpus() {
     let corpus: serde_json::Value =
@@ -247,5 +319,38 @@ fn the_search_panel_selection_in_the_address_is_admitted_with_a_closed_shape() {
     ] {
         let address = format!("/erp/action-28?view_type=list&search_panel={bad}");
         assert!(policy.shell(&address).is_err(), "{address}");
+    }
+}
+
+#[test]
+fn escaped_pivot_headers_survive_an_http_reload() {
+    let policy = RedirectPolicy::new("https://erp.example.test", SHELL_VIEW_TYPES).unwrap();
+    let path = serde_json::json!([{"text":"A%2F%2FB%20%22C%22%5CD%0A%CE%A9"}]);
+    for (name, state) in [
+        ("pivot_open", serde_json::json!({"r":[path],"c":[]})),
+        ("pivot_sort", serde_json::json!(["size", "desc", path])),
+    ] {
+        let encoded =
+            url::form_urlencoded::byte_serialize(state.to_string().as_bytes()).collect::<String>();
+        let url = format!("/erp/action-28?view_type=pivot&{name}={encoded}");
+        assert_eq!(policy.shell(&url).unwrap(), url);
+    }
+}
+
+#[test]
+fn escaped_pivot_headers_require_the_client_encoding() {
+    let policy = RedirectPolicy::new("https://erp.example.test", SHELL_VIEW_TYPES).unwrap();
+    for text in ["%41", "%2f", "unescaped/slash", "%FE", "%", "Ω"] {
+        let state = serde_json::json!(["size", "desc", [{"text": text}]]);
+        let encoded =
+            url::form_urlencoded::byte_serialize(state.to_string().as_bytes()).collect::<String>();
+        assert!(
+            policy
+                .shell(&format!(
+                    "/erp/action-28?view_type=pivot&pivot_sort={encoded}"
+                ))
+                .is_err(),
+            "{text}"
+        );
     }
 }

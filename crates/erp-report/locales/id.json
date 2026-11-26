@@ -1,0 +1,145 @@
+{
+  "months_short": [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "Mei",
+    "Jun",
+    "Jul",
+    "Agu",
+    "Sep",
+    "Okt",
+    "Nov",
+    "Des"
+  ],
+  "months_long": [
+    "Januari",
+    "Februari",
+    "Maret",
+    "April",
+    "Mei",
+    "Juni",
+    "Juli",
+    "Agustus",
+    "September",
+    "Oktober",
+    "November",
+    "Desember"
+  ],
+  "days_short": [
+    "Min",
+    "Sen",
+    "Sel",
+    "Rab",
+    "Kam",
+    "Jum",
+    "Sab"
+  ],
+  "days_long": [
+    "Minggu",
+    "Senin",
+    "Selasa",
+    "Rabu",
+    "Kamis",
+    "Jumat",
+    "Sabtu"
+  ],
+  "periods": [
+    "AM",
+    "PM"
+  ],
+  "plural_rule": "other",
+  "duration": {
+    "long": {
+      "year": {
+        "one": "{0} tahun",
+        "other": "{0} tahun"
+      },
+      "month": {
+        "one": "{0} bulan",
+        "other": "{0} bulan"
+      },
+      "week": {
+        "one": "{0} minggu",
+        "other": "{0} minggu"
+      },
+      "day": {
+        "one": "{0} hari",
+        "other": "{0} hari"
+      },
+      "hour": {
+        "one": "{0} jam",
+        "other": "{0} jam"
+      },
+      "minute": {
+        "one": "{0} menit",
+        "other": "{0} menit"
+      },
+      "second": {
+        "one": "{0} detik",
+        "other": "{0} detik"
+      }
+    },
+    "short": {
+      "year": {
+        "one": "{0} thn",
+        "other": "{0} thn"
+      },
+      "month": {
+        "one": "{0} bln",
+        "other": "{0} bln"
+      },
+      "week": {
+        "one": "{0} mgg",
+        "other": "{0} mgg"
+      },
+      "day": {
+        "one": "{0} hr",
+        "other": "{0} hr"
+      },
+      "hour": {
+        "one": "{0} j",
+        "other": "{0} j"
+      },
+      "minute": {
+        "one": "{0} mnt",
+        "other": "{0} mnt"
+      },
+      "second": {
+        "one": "{0} dtk",
+        "other": "{0} dtk"
+      }
+    },
+    "narrow": {
+      "year": {
+        "one": "{0} thn",
+        "other": "{0} thn"
+      },
+      "month": {
+        "one": "{0} bln",
+        "other": "{0} bln"
+      },
+      "week": {
+        "one": "{0} mgg",
+        "other": "{0} mgg"
+      },
+      "day": {
+        "one": "{0} hr",
+        "other": "{0} hr"
+      },
+      "hour": {
+        "one": "{0} j",
+        "other": "{0} j"
+      },
+      "minute": {
+        "one": "{0} mnt",
+        "other": "{0} mnt"
+      },
+      "second": {
+        "one": "{0} dtk",
+        "other": "{0} dtk"
+      }
+    }
+  }
+}

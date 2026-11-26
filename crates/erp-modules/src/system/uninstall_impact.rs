@@ -1,5 +1,6 @@
 //! Bounded, schema-only confirmed uninstall. One immutable plan governs digest and effects.
 use super::*;
+use crate::lifecycle_hook::{PreparedUninstall, UninstallEffect};
 use erp_data::RECORD_PROTECTION_BINDING_TABLE;
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
@@ -113,6 +114,7 @@ pub struct UninstallImpact {
     resolved: Vec<ModuleName>,
     dropped_models: Vec<DroppedModelImpact>,
     metadata: Vec<MetadataImpact>,
+    effects: Vec<UninstallEffect>,
     #[serde(serialize_with = "serialize_count")]
     target_count: usize,
     fingerprint: ImpactFingerprint,
@@ -164,6 +166,7 @@ struct Plan {
     schema: String,
     drops: Vec<DropEffect>,
     deletes: Vec<DeleteEffect>,
+    host_effects: Vec<Box<dyn PreparedUninstall>>,
     remaining: Orm,
     entries: IndexMap<ModuleName, AddonEntry>,
 }
@@ -326,11 +329,21 @@ impl ModuleSystem {
     /// `None` means further transaction-bound planning is required, never that uninstall
     /// is supported. Callers still need fresh authorization and a valid confirmed impact.
     pub fn uninstall_composition_blocker(&self) -> Option<UninstallCompositionBlocker> {
-        if self.parts.package_runtime.is_some() {
+        if self
+            .parts
+            .package_runtime
+            .as_ref()
+            .is_some_and(|runtime| !runtime.supports_native_uninstall())
+        {
             Some(UninstallCompositionBlocker::PackageRuntime)
         } else if !self.parts.schema_only_loader {
             Some(UninstallCompositionBlocker::CustomDataLoader)
-        } else if !self.parts.lifecycle_hooks.is_empty() {
+        } else if self
+            .parts
+            .lifecycle_hooks
+            .iter()
+            .any(|hook| hook.uninstall_planner().is_none())
+        {
             Some(UninstallCompositionBlocker::LifecycleServices)
         } else {
             None
@@ -340,8 +353,7 @@ impl ModuleSystem {
     /// Compute a bounded uninstall impact under lifecycle, schema and membership locks.
     /// No catalog, record or audit write is performed. The trusted checker is revalidated
     /// after membership locks, so a revocation while waiting cannot authorize the preview.
-    /// This native engine seam has no HTTP exposure; installed artifact attestation is
-    /// additionally required by ENGINE.IDENTITY before browser exposure.
+    /// Installed artifact identities and planned host effects bind the preview to confirmation.
     ///
     /// ```no_run
     /// # async fn confirm(system: &erp_modules::ModuleSystem,
@@ -437,7 +449,7 @@ impl ModuleSystem {
                 ).into()));
             }
             optx.tx.operation_bind_actor(&optx.control, checked.principal.clone())?;
-            // No hook, purge callback, SQL CASCADE or registry reconciliation is allowed here.
+            // No addon hook, purge callback, SQL CASCADE or registry reconciliation is used.
             // These exact identities were counted, hashed and locked by the planner.
             for deletion in &plan.deletes {
                 let sql = format!("DELETE FROM {} WHERE id OPERATOR(pg_catalog.=) ANY($1)", qualified(&plan.schema, &deletion.table));
@@ -455,6 +467,10 @@ impl ModuleSystem {
             let resolved: Vec<_> = plan.impact.resolved.iter().map(ModuleName::as_str).collect();
             optx.tx.execute("UPDATE ir_module_module SET state='uninstalled', latest_version=NULL, demo=false, write_uid=1, write_date=(now() AT TIME ZONE 'UTC') WHERE name OPERATOR(pg_catalog.=) ANY($1)", &[&resolved]).await?;
             optx.tx.operation_switch_orm(&optx.control, &plan.remaining).await?;
+            for effect in plan.host_effects {
+                effect.apply(&mut optx.tx).await?;
+                optx.verify_intact().await?;
+            }
             // Always bump durable state, even when this process has no signal listener.
             optx.tx.signal_bump(&SignalKey::Registry, SelfApplied::No).await?;
             crate::install::record_uninstall_audit(&mut optx.tx, &checked, &plan.impact.requested, &plan.impact.resolved, fingerprint).await?;
@@ -655,6 +671,11 @@ impl ModuleSystem {
             let entry = entries.get(name).ok_or_else(|| Error::ModuleUnavailable {
                 module: name.clone(),
             })?;
+            if matches!(entry.source_kind(), AddonSourceKind::Package { .. }) {
+                return Err(erp_fields::Error::validation(format!(
+                    "Uninstall would remove package addon '{name}'; use the package lifecycle to remove it first"
+                )).into());
+            }
             if entry.manifest().uninstall_hook().is_some()
                 || self
                     .parts
@@ -689,24 +710,29 @@ impl ModuleSystem {
                 "SQL-object uninstall effects and guards ( in a later release)",
             ));
         }
-        let remaining_names: Vec<_> = installed
-            .into_iter()
-            .filter(|name| !resolved.contains(name))
-            .collect();
+        let GraphInput {
+            manifests,
+            states,
+            unavailable,
+        } = graph_input(&catalog, |state| state == ModuleState::Installed);
+        let (graph, dropped) = ModuleGraph::build(&manifests, &states, LoadMode::Load)?;
+        if !unavailable.is_empty() || !dropped.is_empty() {
+            return Err(unsupported("an unavailable remaining addon"));
+        }
+        let remaining_names = graph.plain_load_names();
         let remaining = self.orm_for(&remaining_names, &entries)?;
         let new = remaining
             .env(SUPERUSER_ID, erp_orm::Context::new())
             .registry()
             .clone();
         let removed_names: Vec<_> = resolved.iter().map(ModuleName::as_str).collect();
+        refuse_scheduled_jobs(&removed_names, &erp_orm::jobs::JOB_KINDS)?;
         for model in old.models() {
             if old_orm
                 .dispatch()
                 .implementations(model.id, model_hooks::REGISTER_HOOK)
                 .iter()
-                .any(|implementation| {
-                    implementation.addon != "base" || implementation.model != "base"
-                })
+                .any(|implementation| !unchanged_base_register_hook(implementation))
             {
                 return Err(unsupported(format!(
                     "register hook of model '{}'",
@@ -1000,6 +1026,45 @@ impl ModuleSystem {
         }
         let trusted_signals =
             check_database_effects(&mut optx.tx, &schema, &old, &drops, &deletes).await?;
+        let active = ordered_addon_entries(&remaining_names, &entries)?;
+        let active_addons: Vec<_> = active.iter().collect();
+        let change = LifecycleChange::new(
+            PackageChange {
+                installed: &[],
+                upgraded: &[],
+                uninstalled: &resolved,
+            },
+            &active_addons,
+        );
+        let mut host_effects = Vec::new();
+        let mut effects = Vec::new();
+        if self.parts.package_runtime.is_some() {
+            let packages: Vec<_> = active
+                .iter()
+                .filter(|entry| matches!(entry.source_kind(), AddonSourceKind::Package { .. }))
+                .map(|entry| entry.name().as_str())
+                .collect();
+            let description = if packages.is_empty() {
+                "No package addons are installed".to_owned()
+            } else {
+                format!(
+                    "Keep package addons and their archives ({})",
+                    packages.join(", ")
+                )
+            };
+            effects.push(UninstallEffect::new("Addon packages", description));
+        }
+        for hook in &self.parts.lifecycle_hooks {
+            let planner = hook
+                .uninstall_planner()
+                .ok_or_else(|| Error::InvariantViolation {
+                    message: "Confirmed uninstall host planner changed during planning".into(),
+                })?;
+            let effect = planner.prepare_uninstall(&mut optx.tx, change).await?;
+            optx.verify_intact().await?;
+            effects.push(effect.effect());
+            host_effects.push(effect);
+        }
         let mut requested = names.to_vec();
         requested.sort();
         let mut metadata: Vec<_> = deletes
@@ -1035,6 +1100,7 @@ impl ModuleSystem {
             resolved,
             dropped_models,
             metadata,
+            effects,
             target_count,
             fingerprint: ImpactFingerprint(String::new()),
         };
@@ -1075,6 +1141,7 @@ impl ModuleSystem {
             schema,
             drops,
             deletes,
+            host_effects,
             remaining,
             entries,
         })
@@ -1085,6 +1152,37 @@ fn fingerprint(canonical: &[u8]) -> ImpactFingerprint {
     let digest = Sha256::digest(canonical);
     let encoded = erp_orm::node::Digest::from_bytes(digest.into()).to_string();
     ImpactFingerprint(format!("uninstall-v1:{encoded}"))
+}
+
+// These surviving base hooks validate registry features or fill defaults at install/upgrade.
+// The supported uninstall subset removes whole addon models without changing a surviving model,
+// deleting view graphs or running addon data. It neither needs nor admits their writes.
+fn unchanged_base_register_hook(implementation: &MethodImpl) -> bool {
+    implementation.addon == "base"
+        && matches!(
+            implementation.model,
+            "base"
+                | "ir.actions.actions"
+                | "ir.actions.report"
+                | "ir.actions.server"
+                | "ir.config_parameter"
+                | "ir.config.setting"
+                | "ir.ui.view"
+                | "res.users"
+        )
+}
+
+fn refuse_scheduled_jobs(addons: &[&str], kinds: &[erp_orm::jobs::JobKindDecl]) -> Result<()> {
+    if let Some(kind) = kinds
+        .iter()
+        .find(|kind| kind.schedule.is_some() && addons.contains(&kind.addon))
+    {
+        return Err(unsupported(format!(
+            "scheduled job removal for addon '{}'",
+            kind.addon
+        )));
+    }
+    Ok(())
 }
 
 async fn identities(
@@ -1270,7 +1368,7 @@ async fn admit_relation_expression_dependencies(tx: &mut Transaction, schema: &s
 async fn admit_native_column_types(tx: &mut Transaction, schema: &str) -> Result<()> {
     let scalar_oids: Vec<i64> = vec![
         16, 17, 18, 19, 20, 21, 23, 25, 26, 114, 700, 701, 869, 1042, 1043, 1082, 1083, 1114, 1184,
-        1186, 1266, 1700, 2950, 3802,
+        1186, 1266, 1700, 2950, 3802, 5069, // xid8, used by durable event checkpoints
     ];
     let rows = tx.query("SELECT c.relname::text FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace JOIN pg_catalog.pg_type t ON t.oid=a.atttypid JOIN pg_catalog.pg_namespace tn ON tn.oid=t.typnamespace WHERE n.nspname=$1 AND c.relkind='r' AND a.attnum>0 AND NOT a.attisdropped AND NOT (tn.nspname='pg_catalog' AND t.oid<16384 AND t.typtype='b' AND (t.oid::bigint=ANY($2) OR (t.typcategory='A' AND t.typelem::bigint=ANY($2)))) ORDER BY c.relname,a.attnum LIMIT 1",&[&schema,&scalar_oids]).await?;
     if let Some(row) = rows.first() {
@@ -1299,7 +1397,64 @@ async fn admit_native_index_storage(tx: &mut Transaction, schema: &str) -> Resul
             row.try_get::<_, String>(0).map_err(shape)?
         )));
     }
-    let custom=tx.query("SELECT c.relname::text FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class c ON c.oid=i.indrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace JOIN pg_catalog.pg_class ix ON ix.oid=i.indexrelid JOIN pg_catalog.pg_am am ON am.oid=ix.relam JOIN pg_catalog.pg_proc handler ON handler.oid=am.amhandler JOIN pg_catalog.pg_namespace hn ON hn.oid=handler.pronamespace CROSS JOIN LATERAL pg_catalog.unnest(i.indclass) opclass(oid) JOIN pg_catalog.pg_opclass op ON op.oid=opclass.oid JOIN pg_catalog.pg_namespace onsp ON onsp.oid=op.opcnamespace JOIN pg_catalog.pg_opfamily family ON family.oid=op.opcfamily JOIN pg_catalog.pg_namespace fn ON fn.oid=family.opfnamespace WHERE n.nspname=$1 AND NOT (am.oid<16384 AND handler.oid<16384 AND hn.nspname='pg_catalog' AND op.oid<16384 AND onsp.nspname='pg_catalog' AND family.oid<16384 AND fn.nspname='pg_catalog') ORDER BY c.relname LIMIT 1",&[&schema]).await?;
+    // Base uses PostgreSQL's pg_trgm and btree_gist indexes. Admit only the extension-owned
+    // operator class and family and verify every implementation the planner could dispatch.
+    let custom = tx.query(r#"
+WITH indexes AS (
+    SELECT c.relname,am.amname,
+        am.oid<16384 AND handler.oid<16384 AND hn.nspname='pg_catalog' AS builtin_handler,
+        op.oid AS opclass,op.opcname,onsp.nspname AS op_schema,
+        family.oid AS opfamily,family.opfname,fn.nspname AS family_schema
+    FROM pg_catalog.pg_index i
+    JOIN pg_catalog.pg_class c ON c.oid=i.indrelid
+    JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+    JOIN pg_catalog.pg_class ix ON ix.oid=i.indexrelid
+    JOIN pg_catalog.pg_am am ON am.oid=ix.relam
+    JOIN pg_catalog.pg_proc handler ON handler.oid=am.amhandler
+    JOIN pg_catalog.pg_namespace hn ON hn.oid=handler.pronamespace
+    CROSS JOIN LATERAL pg_catalog.unnest(i.indclass) opclass(oid)
+    JOIN pg_catalog.pg_opclass op ON op.oid=opclass.oid
+    JOIN pg_catalog.pg_namespace onsp ON onsp.oid=op.opcnamespace
+    JOIN pg_catalog.pg_opfamily family ON family.oid=op.opcfamily
+    JOIN pg_catalog.pg_namespace fn ON fn.oid=family.opfnamespace
+    WHERE n.nspname=$1
+), support AS (
+    SELECT amprocfamily AS family,amproc::oid AS proc FROM pg_catalog.pg_amproc
+    UNION ALL
+    SELECT a.amopfamily,o.oprcode::oid FROM pg_catalog.pg_amop a
+    JOIN pg_catalog.pg_operator o ON o.oid=a.amopopr
+)
+SELECT i.relname::text FROM indexes i
+WHERE NOT i.builtin_handler OR NOT (
+    (i.opclass<16384 AND i.op_schema='pg_catalog' AND i.opfamily<16384 AND i.family_schema='pg_catalog')
+    OR EXISTS (
+        SELECT 1 FROM pg_catalog.pg_extension e
+        JOIN pg_catalog.pg_depend oc ON oc.refclassid='pg_extension'::regclass AND oc.refobjid=e.oid
+            AND oc.classid='pg_opclass'::regclass AND oc.objid=i.opclass AND oc.deptype='e'
+        JOIN pg_catalog.pg_depend ofam ON ofam.refclassid='pg_extension'::regclass AND ofam.refobjid=e.oid
+            AND ofam.classid='pg_opfamily'::regclass AND ofam.objid=i.opfamily AND ofam.deptype='e'
+        WHERE e.extowner=(SELECT oid FROM pg_catalog.pg_roles WHERE rolname=current_user)
+          AND i.opcname=i.opfname
+          AND ((e.extname='pg_trgm' AND (i.amname,i.opcname) IN (('gin','gin_trgm_ops'),('gist','gist_trgm_ops')))
+               OR (e.extname='btree_gist' AND i.amname='gist' AND pg_catalog.left(i.opcname::text,5)='gist_' AND pg_catalog.right(i.opcname::text,4)='_ops'))
+          AND NOT EXISTS (
+            SELECT 1 FROM support s
+            JOIN pg_catalog.pg_proc p ON p.oid=s.proc
+            JOIN pg_catalog.pg_namespace pn ON pn.oid=p.pronamespace
+            JOIN pg_catalog.pg_language l ON l.oid=p.prolang
+            WHERE s.family=i.opfamily AND NOT (
+                (p.oid<16384 AND pn.nspname='pg_catalog')
+                OR (l.lanname='c' AND p.probin='$libdir/'||e.extname AND NOT p.prosecdef
+                    AND p.proconfig IS NULL AND EXISTS (
+                      SELECT 1 FROM pg_catalog.pg_depend owner
+                      WHERE owner.classid='pg_proc'::regclass AND owner.objid=p.oid
+                        AND owner.refclassid='pg_extension'::regclass AND owner.refobjid=e.oid AND owner.deptype='e'
+                    ))
+            )
+          )
+    )
+) ORDER BY i.relname LIMIT 1
+"#, &[&schema]).await?;
     if let Some(row) = custom.first() {
         return Err(unsupported(format!(
             "custom index support on table '{}'",
@@ -1314,14 +1469,81 @@ async fn admit_index_expressions(
     schema: &str,
     tables: &[&str],
 ) -> Result<()> {
-    let expressions=tx.query("SELECT c.relname::text FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class c ON c.oid=i.indrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname::text OPERATOR(pg_catalog.=) ANY($2) AND (i.indexprs IS NOT NULL OR i.indpred IS NOT NULL) ORDER BY c.relname LIMIT 1",&[&schema,&tables]).await?;
-    if let Some(row) = expressions.first() {
-        return Err(unsupported(format!(
-            "executable index expression on table '{}'",
-            row.try_get::<_, String>(0).map_err(shape)?
-        )));
+    // Existing field-index declarations use a simple non-null test. Base also ships a
+    // partial index for primary views and two for the native FK lookup tables. Prove builtin
+    // dependencies before deparsing: `pg_get_expr` can invoke an application's type output.
+    let expressions = tx.query(r#"
+SELECT c.relname::text, ix.relname::text,
+    ARRAY(SELECT pg_catalog.quote_ident(a.attname::text)
+          FROM pg_catalog.unnest(i.indkey) WITH ORDINALITY AS keys(attnum,position)
+          JOIN pg_catalog.pg_attribute a ON a.attrelid=c.oid AND a.attnum=keys.attnum
+          ORDER BY keys.position),
+    CASE WHEN i.indexprs IS NULL AND pg_catalog.octet_length(i.indpred::text)<=4096
+         AND NOT EXISTS (
+           SELECT 1 FROM pg_catalog.pg_depend d
+           WHERE d.classid='pg_class'::regclass AND d.objid=i.indexrelid
+             AND NOT ((d.refclassid='pg_class'::regclass AND d.refobjid=c.oid)
+                 OR (d.refobjid<16384 AND d.refclassid IN ('pg_proc'::regclass,'pg_operator'::regclass,
+                     'pg_type'::regclass,'pg_collation'::regclass,'pg_cast'::regclass)))
+         ) THEN pg_catalog.pg_get_expr(i.indpred,i.indrelid) END
+FROM pg_catalog.pg_index i
+JOIN pg_catalog.pg_class c ON c.oid=i.indrelid
+JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+JOIN pg_catalog.pg_class ix ON ix.oid=i.indexrelid
+WHERE n.nspname=$1 AND c.relname::text OPERATOR(pg_catalog.=) ANY($2)
+  AND (i.indexprs IS NOT NULL OR i.indpred IS NOT NULL)
+ORDER BY c.relname,ix.relname LIMIT 513
+"#, &[&schema,&tables]).await?;
+    if expressions.len() > MAX_LOCKED_TABLES {
+        return Err(unsupported("more than 512 index expressions"));
+    }
+    for row in expressions {
+        let table: String = row.try_get(0).map_err(shape)?;
+        let index: String = row.try_get(1).map_err(shape)?;
+        let columns: Vec<String> = row.try_get(2).map_err(shape)?;
+        let predicate: Option<String> = row.try_get(3).map_err(shape)?;
+        if !native_index_predicate(&table, &index, &columns, predicate.as_deref()) {
+            return Err(unsupported(format!(
+                "executable index expression on table '{table}'"
+            )));
+        }
     }
     Ok(())
+}
+
+fn native_index_predicate(
+    table: &str,
+    index: &str,
+    columns: &[String],
+    predicate: Option<&str>,
+) -> bool {
+    if let [column] = columns {
+        if matches!(
+            (table, index, column.as_str(), predicate),
+            (
+                "ir_access",
+                "ir_access_generated_model_uniq",
+                "model_id",
+                Some("generated")
+            ) | (
+                "ir_actions",
+                "ir_actions_path_unique",
+                "path",
+                Some("(path IS NOT NULL)")
+            )
+        ) {
+            return true;
+        }
+        return index == erp_registry::ident::index_name(table, column.trim_matches('"'))
+            && predicate == Some(format!("({column} IS NOT NULL)").as_str());
+    }
+    table == "ir_ui_view"
+        && index == "ir_ui_view_default_view"
+        && columns == ["model", "type", "priority", "name", "id"]
+        && matches!(
+            predicate,
+            Some("(((mode)::text = 'primary'::text) AND (active IS TRUE))")
+        )
 }
 
 // Names are not authority: admitted expression text and dependency provenance both match.
@@ -1757,6 +1979,78 @@ async fn check_database_effects(
 mod tests {
     #![allow(clippy::unwrap_used, reason = "unit test assertions")]
     use super::*;
+
+    #[test]
+    fn native_index_predicates_require_the_declared_shape() {
+        let columns = ["model", "type", "priority", "name", "id"].map(str::to_owned);
+        let primary = "(((mode)::text = 'primary'::text) AND (active IS TRUE))";
+        assert!(native_index_predicate(
+            "ir_ui_view",
+            "ir_ui_view_default_view",
+            &columns,
+            Some(primary)
+        ));
+        assert!(!native_index_predicate(
+            "ir_ui_view",
+            "ir_ui_view_default_view",
+            &columns,
+            None
+        ));
+        assert!(!native_index_predicate(
+            "ir_ui_view",
+            "faked_view_default_view",
+            &columns,
+            Some(primary)
+        ));
+        let key = ["key".to_owned()];
+        let index = "ir_ui_view__key_index";
+        assert!(native_index_predicate(
+            "ir_ui_view",
+            index,
+            &key,
+            Some("(key IS NOT NULL)")
+        ));
+        assert!(!native_index_predicate(
+            "ir_ui_view",
+            index,
+            &key,
+            Some("(name IS NOT NULL)")
+        ));
+        assert!(native_index_predicate(
+            "ir_access",
+            "ir_access_generated_model_uniq",
+            &["model_id".to_owned()],
+            Some("generated")
+        ));
+        assert!(native_index_predicate(
+            "ir_actions",
+            "ir_actions_path_unique",
+            &["path".to_owned()],
+            Some("(path IS NOT NULL)")
+        ));
+    }
+
+    #[test]
+    fn only_schedules_of_removed_addons_refuse_uninstall() {
+        use erp_orm::jobs::{HandlerRef, JobKindDecl, Schedule};
+        let job = JobKindDecl::new(
+            "notes",
+            "notes.cleanup",
+            HandlerRef::Step {
+                model: "notes.note",
+                method: "cleanup",
+            },
+        );
+        let scheduled = job.schedule(Schedule::daily_at(0, 0, "UTC", "notes.scheduler"));
+        refuse_scheduled_jobs(&["other"], std::slice::from_ref(&scheduled)).unwrap();
+        let error = refuse_scheduled_jobs(&["notes"], &[scheduled]).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("scheduled job removal for addon 'notes'")
+        );
+    }
+
     #[test]
     fn exact_target_admission_boundary() {
         assert_eq!(

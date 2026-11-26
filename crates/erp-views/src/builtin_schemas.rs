@@ -361,6 +361,7 @@ static PIVOT_NODE: SchemaNode = SchemaNode::Object(&[
     SchemaProperty::required("disable_linking", &BOOL),
     SchemaProperty::required("display_quantity", &BOOL),
     SchemaProperty::optional("default_order", &SHORT),
+    SchemaProperty::optional("variant", &SHORT),
 ]);
 static PIVOT_FIELD_NODE: SchemaNode = SchemaNode::Object(&[
     SchemaProperty::required("field", &FIELD_REF),
@@ -652,6 +653,28 @@ static HIERARCHY_ROOT: SchemaNode = SchemaNode::Object(&[
     SchemaProperty::required("nodes", &HIERARCHY_NODES),
 ]);
 
+static MAP_NODE: SchemaNode = SchemaNode::Object(&[
+    SchemaProperty::required("latitude", &FIELD_REF),
+    SchemaProperty::required("longitude", &FIELD_REF),
+]);
+static MAP_UNION: SchemaNode = SchemaNode::TaggedUnion {
+    discriminator: "kind",
+    variants: &[SchemaVariant::new("map", &MAP_NODE)],
+};
+static MAP_NODES: SchemaNode = SchemaNode::Array {
+    item: &MAP_UNION,
+    max_items: 1,
+};
+static MAP_ROOT: SchemaNode = SchemaNode::Object(&[
+    SchemaProperty::required("root", &INT),
+    SchemaProperty::required("nodes", &MAP_NODES),
+]);
+
+/// Description contract for the optional stored-coordinate map addon.
+pub fn map_schema() -> ViewResult<ViewSchema> {
+    ViewSchema::new(REVISION, &MAP_ROOT)
+}
+
 // ---- activity --------------------------------------------------------------
 static ACTIVITY_NODE: SchemaNode = SchemaNode::Object(&[
     SchemaProperty::required("children", &CHILDREN),
@@ -725,6 +748,7 @@ pub(crate) fn builtin_root(kind: crate::wire::ViewType) -> Option<&'static Schem
         crate::wire::ViewType::Calendar => Some(&CALENDAR_ROOT),
         crate::wire::ViewType::Graph => Some(&GRAPH_ROOT),
         crate::wire::ViewType::Hierarchy => Some(&HIERARCHY_ROOT),
+        crate::wire::ViewType::Map => Some(&MAP_ROOT),
         crate::wire::ViewType::Activity => Some(&ACTIVITY_ROOT),
         crate::wire::ViewType::Gantt => None,
     }

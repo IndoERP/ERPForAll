@@ -49,12 +49,14 @@ fn system(db: &TestDb) -> ModuleSystem {
         .collect();
     ModuleSystem::builder(db.pool().clone(), index)
         .view_types(erp_addon_web::view_type_contributions())
+        .view_types(erp_addon_web_map::view_type_contributions())
         .native_artifact_identities(native_artifact_identities)
         .code([
             &erp_addon_uom::ADDON,
             &erp_addon_base::ADDON,
             &erp_addon_mail::ADDON,
             &erp_addon_web::ADDON,
+            &erp_addon_web_map::ADDON,
         ])
         .require_core_tables(erp_security::auth::core_tables())
         .build()
@@ -78,8 +80,101 @@ fn big_stack(body: impl std::future::Future<Output = ()> + Send + 'static) {
         .unwrap();
 }
 
+async fn seed_internal_reader(orm: &Orm) -> i64 {
+    let mut setup_tx = orm.begin(SUPERUSER_ID).await.unwrap();
+    let admin_group_rows = setup_tx
+            .query(
+                "SELECT res_id FROM ir_model_data WHERE module = 'base' AND name = 'group_system' AND model = 'res.groups'",
+                &[],
+            )
+            .await
+            .unwrap();
+    let admin_group: i64 = admin_group_rows[0].get(0);
+    let user_group_rows = setup_tx
+            .query(
+                "SELECT res_id FROM ir_model_data WHERE module = 'base' AND name = 'group_user' AND model = 'res.groups'",
+                &[],
+            )
+            .await
+            .unwrap();
+    let user_group: i64 = user_group_rows[0].get(0);
+    let company_rows = setup_tx
+            .query(
+                "SELECT res_id FROM ir_model_data WHERE module = 'base' AND name = 'main_company' AND model = 'res.company'",
+                &[],
+            )
+            .await
+            .unwrap();
+    let main_company: i64 = company_rows[0].get(0);
+    let users = setup_tx.env().records("res.users").unwrap();
+    // An active administrator user must exist for the database invariant to hold.
+    users
+        .create(
+            &mut setup_tx,
+            vec![
+                RawVals::new()
+                    .set_cell("name", Cell::Str("Test Admin".into()))
+                    .set_cell("login", Cell::Str("test_admin".into()))
+                    .set_cell("company_id", Cell::Id(main_company))
+                    .set_commands(
+                        "company_ids",
+                        [Command::Set(vec![RecId::from_real(main_company).unwrap()])],
+                    )
+                    .set_commands(
+                        "group_ids",
+                        [Command::Set(vec![RecId::from_real(admin_group).unwrap()])],
+                    ),
+            ],
+        )
+        .await
+        .unwrap();
+    let internal_user = users
+        .create(
+            &mut setup_tx,
+            vec![
+                RawVals::new()
+                    .set_cell("name", Cell::Str("Internal Reader".into()))
+                    .set_cell("login", Cell::Str("internal_reader".into()))
+                    .set_cell("company_id", Cell::Id(main_company))
+                    .set_commands(
+                        "company_ids",
+                        [Command::Set(vec![RecId::from_real(main_company).unwrap()])],
+                    )
+                    .set_commands(
+                        "group_ids",
+                        [Command::Set(vec![RecId::from_real(user_group).unwrap()])],
+                    ),
+            ],
+        )
+        .await
+        .unwrap();
+    let user_id = internal_user.ids()[0];
+    setup_tx.commit().await.unwrap();
+
+    user_id
+}
+
+async fn reader_orm(db: &TestDb, orm: &Orm) -> Orm {
+    let source = PolicySource::build(Arc::clone(orm.registry()), db.pool().clone())
+        .await
+        .unwrap();
+    Orm::builder(Arc::clone(orm.registry()), db.pool().clone())
+        .require_core_tables(erp_security::auth::core_tables())
+        .resolver(Resolver::for_registry(orm.registry()).unwrap())
+        .policy(Arc::new(source) as Arc<dyn erp_orm::PolicyProvider>)
+        .impls(erp_modules::base_models::IMPLS.iter().copied())
+        .constraints(erp_modules::base_models::CONSTRAINTS.iter().copied())
+        .unlink_hook(erp_data::model_data::UNLINK_HOOK)
+        .build()
+        .unwrap()
+}
+
 /// A database with base and web initialised, then `contacts` installed.
 async fn with_contacts(demo: bool) -> (TestDb, Orm) {
+    with_addon(demo, "contacts").await
+}
+
+async fn with_addon(demo: bool, addon: &str) -> (TestDb, Orm) {
     let db = TestDb::create().await.unwrap();
     let system = system(&db);
     let _init = system
@@ -88,7 +183,7 @@ async fn with_contacts(demo: bool) -> (TestDb, Orm) {
         .unwrap();
     let env = system.system_env(erp_orm::Context::new());
     let installed = system
-        .button_immediate_install(&env, &[ModuleName::new("contacts").unwrap()])
+        .button_immediate_install(&env, &[ModuleName::new(addon).unwrap()])
         .await
         .unwrap();
     assert!(
@@ -452,89 +547,8 @@ fn contacts_demo_partners_load_with_demo() {
 fn internal_user_reads_tags_and_industries_and_is_refused_on_partner_create() {
     big_stack(async {
         let (db, orm) = with_contacts(false).await;
-        let mut setup_tx = orm.begin(SUPERUSER_ID).await.unwrap();
-        let admin_group_rows = setup_tx
-            .query(
-                "SELECT res_id FROM ir_model_data WHERE module = 'base' AND name = 'group_system' AND model = 'res.groups'",
-                &[],
-            )
-            .await
-            .unwrap();
-        let admin_group: i64 = admin_group_rows[0].get(0);
-        let user_group_rows = setup_tx
-            .query(
-                "SELECT res_id FROM ir_model_data WHERE module = 'base' AND name = 'group_user' AND model = 'res.groups'",
-                &[],
-            )
-            .await
-            .unwrap();
-        let user_group: i64 = user_group_rows[0].get(0);
-        let company_rows = setup_tx
-            .query(
-                "SELECT res_id FROM ir_model_data WHERE module = 'base' AND name = 'main_company' AND model = 'res.company'",
-                &[],
-            )
-            .await
-            .unwrap();
-        let main_company: i64 = company_rows[0].get(0);
-        let users = setup_tx.env().records("res.users").unwrap();
-        // An active administrator user must exist for the database invariant to hold.
-        users
-            .create(
-                &mut setup_tx,
-                vec![
-                    RawVals::new()
-                        .set_cell("name", Cell::Str("Test Admin".into()))
-                        .set_cell("login", Cell::Str("test_admin".into()))
-                        .set_cell("company_id", Cell::Id(main_company))
-                        .set_commands(
-                            "company_ids",
-                            [Command::Set(vec![RecId::from_real(main_company).unwrap()])],
-                        )
-                        .set_commands(
-                            "group_ids",
-                            [Command::Set(vec![RecId::from_real(admin_group).unwrap()])],
-                        ),
-                ],
-            )
-            .await
-            .unwrap();
-        let internal_user = users
-            .create(
-                &mut setup_tx,
-                vec![
-                    RawVals::new()
-                        .set_cell("name", Cell::Str("Internal Reader".into()))
-                        .set_cell("login", Cell::Str("internal_reader".into()))
-                        .set_cell("company_id", Cell::Id(main_company))
-                        .set_commands(
-                            "company_ids",
-                            [Command::Set(vec![RecId::from_real(main_company).unwrap()])],
-                        )
-                        .set_commands(
-                            "group_ids",
-                            [Command::Set(vec![RecId::from_real(user_group).unwrap()])],
-                        ),
-                ],
-            )
-            .await
-            .unwrap();
-        let user_id = internal_user.ids()[0];
-        setup_tx.commit().await.unwrap();
-
-        let source = PolicySource::build(Arc::clone(orm.registry()), db.pool().clone())
-            .await
-            .unwrap();
-        let runtime_orm = Orm::builder(Arc::clone(orm.registry()), db.pool().clone())
-            .require_core_tables(erp_security::auth::core_tables())
-            .resolver(Resolver::for_registry(orm.registry()).unwrap())
-            .policy(Arc::new(source) as Arc<dyn erp_orm::PolicyProvider>)
-            .impls(erp_modules::base_models::IMPLS.iter().copied())
-            .constraints(erp_modules::base_models::CONSTRAINTS.iter().copied())
-            .unlink_hook(erp_data::model_data::UNLINK_HOOK)
-            .build()
-            .unwrap();
-
+        let user_id = seed_internal_reader(&orm).await;
+        let runtime_orm = reader_orm(&db, &orm).await;
         let mut user_tx = runtime_orm
             .begin(erp_orm::UserId::new(user_id).unwrap())
             .await
@@ -780,5 +794,113 @@ fn mail_install_on_contacts_serves_chatter_on_partner_form() {
             "res.partner must inherit mail.thread after mail install"
         );
         tx.rollback().await.unwrap();
+    });
+}
+
+#[test]
+fn stored_coordinate_map_installs_in_contacts_and_serves_checked_fields() {
+    big_stack(async {
+        let (db, orm) = with_addon(false, "web_map").await;
+        let map = get_views(&orm, "res.partner", &["map", "form"]).await;
+        let root = &map["views"][0]["nodes"][0];
+        assert_eq!(root["kind"], "map");
+        for (attr, field) in [("latitude", "map_latitude"), ("longitude", "map_longitude")] {
+            assert_eq!(root[attr]["name"], field);
+            assert_eq!(map["fields"]["res.partner"][field]["type"], "float");
+            assert!(field_names(&map["views"][1]).contains(&field.to_owned()));
+        }
+        assert_eq!(
+            xml_ids(&orm, "web_map", "ir.actions.act_window").await,
+            ["web_map.contact_map_action"]
+        );
+        let user_id = seed_internal_reader(&orm).await;
+        let mut setup = orm.begin(SUPERUSER_ID).await.unwrap();
+        let partners = setup.env().records("res.partner").unwrap();
+        let visible = partners
+            .create(
+                &mut setup,
+                vec![
+                    RawVals::new()
+                        .set_cell("name", Cell::Str("Visible port".into()))
+                        .set_cell("map_located", Cell::Bool(true))
+                        .set_cell(
+                            "map_latitude",
+                            Cell::Decimal(erp_fields::Decimal::new(-62, 1)),
+                        )
+                        .set_cell(
+                            "map_longitude",
+                            Cell::Decimal(erp_fields::Decimal::new(1068, 1)),
+                        ),
+                ],
+            )
+            .await
+            .unwrap()
+            .ids()[0];
+        let hidden = partners
+            .create(
+                &mut setup,
+                vec![
+                    RawVals::new()
+                        .set_cell("name", Cell::Str("Private port".into()))
+                        .set_cell("map_located", Cell::Bool(true))
+                        .set_cell(
+                            "map_latitude",
+                            Cell::Decimal(erp_fields::Decimal::new(45, 0)),
+                        )
+                        .set_cell(
+                            "map_longitude",
+                            Cell::Decimal(erp_fields::Decimal::new(-20, 0)),
+                        ),
+                ],
+            )
+            .await
+            .unwrap()
+            .ids()[0];
+        setup.execute("INSERT INTO ir_access (name, model_id, group_id, operation, domain, active)
+            SELECT 'Private locations', id, NULL, 'r', $1, true FROM ir_model WHERE model='res.partner'",
+            &[&format!("[('id', '!=', {hidden})]")]).await.unwrap();
+        setup.commit().await.unwrap();
+        let runtime = reader_orm(&db, &orm).await;
+        let mut reader = runtime
+            .begin(erp_orm::UserId::new(user_id).unwrap())
+            .await
+            .unwrap();
+        let empty = || Value::Map(Arc::new(erp_fields::ValueMap::new()));
+        let args = Value::Map(Arc::new(erp_fields::ValueMap::from_iter([
+            (
+                "domain".into(),
+                Value::list([Value::list([
+                    Value::str("map_located"),
+                    Value::str("="),
+                    Value::Bool(true),
+                ])]),
+            ),
+            (
+                "specification".into(),
+                Value::Map(Arc::new(erp_fields::ValueMap::from_iter([
+                    ("display_name".into(), empty()),
+                    ("map_latitude".into(), empty()),
+                    ("map_longitude".into(), empty()),
+                ]))),
+            ),
+            ("limit".into(), Value::Int(80)),
+            ("order".into(), Value::str("id asc")),
+        ])));
+        let model = reader.env().records("res.partner").unwrap();
+        let rows = model
+            .web_call(&mut reader, "web_search_read", &args)
+            .await
+            .unwrap();
+        let rows = erp_fields::convert::value_to_json(&rows).unwrap();
+        assert_eq!(rows["length"], 1);
+        assert_eq!(rows["records"][0]["id"], visible);
+        assert_eq!(
+            rows["records"][0]["map_latitude"]
+                .as_str()
+                .unwrap()
+                .parse::<erp_fields::Decimal>()
+                .unwrap(),
+            erp_fields::Decimal::new(-62, 1)
+        );
     });
 }

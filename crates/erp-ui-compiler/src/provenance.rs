@@ -180,9 +180,7 @@ pub(crate) struct Builder {
     keys: BTreeMap<Key, usize>,
     matches: Vec<Matches>,
     entries: BTreeMap<EntryId, Matches>,
-    /// Only new localization/extraction passes request these conservative mutation ledgers.
-    text_risks: Option<BTreeSet<EntryId>>,
-    attribute_risks: Option<BTreeSet<EntryId>>,
+    literal_sources: Option<BTreeMap<(EntryId, u32), usize>>,
 }
 
 pub(crate) struct Index {
@@ -190,9 +188,7 @@ pub(crate) struct Index {
     keys: BTreeMap<Key, usize>,
     matches: Rc<Vec<Matches>>,
     entries: BTreeMap<EntryId, Matches>,
-    /// Only new localization/extraction passes request these conservative mutation ledgers.
-    text_risks: Option<BTreeSet<EntryId>>,
-    attribute_risks: Option<BTreeSet<EntryId>>,
+    literal_sources: Option<BTreeMap<(EntryId, u32), usize>>,
 }
 
 /// Original node positions in one linear UTF-8 pass. Computing every column separately from
@@ -284,15 +280,13 @@ impl Builder {
             keys: BTreeMap::new(),
             matches: Vec::new(),
             entries: BTreeMap::new(),
-            text_risks: None,
-            attribute_risks: None,
+            literal_sources: None,
         }
     }
 
     /// Enable source-operation mutation tracking without changing normal compiler admission.
     pub(crate) fn track_translation_ownership(mut self) -> Self {
-        self.text_risks = Some(BTreeSet::new());
-        self.attribute_risks = Some(BTreeSet::new());
+        self.literal_sources = Some(BTreeMap::new());
         self
     }
 
@@ -341,33 +335,9 @@ impl Builder {
             .map(|(i, &offset)| (offset, i + 1))
             .collect();
         let mut summary = Matches::default();
-        let track_mutations = self.text_risks.is_some() && !input.specs.is_empty();
-        let mut text_risky = false;
-        let mut attributes_risky = false;
         let mut pending = vec![(input.root, None)];
         let mut ordinal = 0u32;
         while let Some((node, inherited_spec)) = pending.pop() {
-            if track_mutations {
-                // Attribute writes preserve the element origin/ordinal even when a write is
-                // identical or later restored. Final signature equality cannot prove that a
-                // selected attribute still belongs to the original declaration.
-                attributes_risky |= operations.contains_key(&node.offset)
-                    && node.attr("position") == Some("attributes");
-                // The current inheritance identity table tracks elements, not raw text/tails.
-                // All replace/move operations can erase or transfer tails, even with identical
-                // replacement text. $0 can duplicate/reparent text. Do not infer safety from
-                // text value equality or from the target element's unchanged attributes.
-                text_risky |= matches!(node.attr("position"), Some("replace" | "move"));
-                let operation_text = operations.contains_key(&node.offset)
-                    || node.name == "data"
-                    || node.offset == input.root.offset;
-                for child in &node.children {
-                    if let XNode::Text { text, .. } = child {
-                        text_risky |= text.contains("$0")
-                            || operation_text && !text.chars().all(crate::xml::is_xml_space);
-                    }
-                }
-            }
             let spec = operations.get(&node.offset).copied().or(inherited_spec);
             self.budget.element(node)?;
             self.budget.charge(256)?;
@@ -407,6 +377,10 @@ impl Builder {
                         index
                     }
                 };
+                if let Some(sources) = &mut self.literal_sources {
+                    self.budget.charge(INDEX_ROW)?;
+                    sources.insert((input.entry, ordinal), index);
+                }
                 self.matches[index].push(candidate)?;
             }
             ordinal = ordinal
@@ -428,18 +402,6 @@ impl Builder {
                 tag: input.root.name.chars().take(128).collect(),
             })?;
         }
-        if text_risky {
-            self.budget.charge(64)?;
-            if let Some(risks) = &mut self.text_risks {
-                risks.insert(input.entry);
-            }
-        }
-        if attributes_risky {
-            self.budget.charge(64)?;
-            if let Some(risks) = &mut self.attribute_risks {
-                risks.insert(input.entry);
-            }
-        }
         self.entries.insert(input.entry, summary);
         Ok(())
     }
@@ -450,8 +412,7 @@ impl Builder {
             keys: self.keys,
             matches: Rc::new(self.matches),
             entries: self.entries,
-            text_risks: self.text_risks,
-            attribute_risks: self.attribute_risks,
+            literal_sources: self.literal_sources,
         }
     }
 }
@@ -467,8 +428,7 @@ pub(crate) struct Mapping {
     nodes: Vec<Node>,
     sources: Rc<Vec<Matches>>,
     fallback: Matches,
-    text_risky: bool,
-    attributes_risky: bool,
+    literals: BTreeMap<u32, usize>,
 }
 
 impl Index {
@@ -476,21 +436,64 @@ impl Index {
         &self,
         root: &XElement<'_>,
         xml: &str,
-        origins: &[(erp_views::NodeOrigin, Option<u32>)],
+        origins: &[crate::inherit::ElementOrigin],
         applied: &[EntryId],
     ) -> Result<Mapping, ProvenanceError> {
         self.budget.charge(PENDING_ROW)?;
         let mut nodes = Vec::new();
+        let mut literals = BTreeMap::new();
+        let mut tails = BTreeMap::new();
         let mut pending = vec![root];
         while let Some(node) = pending.pop() {
             self.budget.charge(MAPPING_ROW - PENDING_ROW)?;
             self.budget.element(node)?;
-            let (origin, ordinal) = origins
+            let origin = origins
                 .get(nodes.len())
                 .ok_or("combined XML has more elements than its origin table")?;
-            let entry = crate::inherit::entry_index(origin.view_id())
+            let entry = crate::inherit::entry_index(origin.node.view_id())
                 .ok_or("combined node origin has no source entry")?;
-            let ordinal = ordinal.ok_or("combined node has no original source ordinal")?;
+            let ordinal = origin
+                .ordinal
+                .ok_or("combined node has no original source ordinal")?;
+            if let Some(table) = &self.literal_sources {
+                let mut track = |offset,
+                                 source: crate::inherit::LiteralOrigin|
+                 -> Result<(), ProvenanceError> {
+                    self.budget.charge(INDEX_ROW)?;
+                    if let Some((view_id, index)) = source
+                        && let Some(key) = crate::inherit::entry_index(view_id)
+                        && let Some(source) = table.get(&(key, index))
+                    {
+                        literals.insert(offset, *source);
+                    }
+                    Ok(())
+                };
+                for attr in &node.attrs {
+                    let source = origin
+                        .attributes
+                        .get(attr.name)
+                        .copied()
+                        .unwrap_or(Some((origin.node.view_id(), ordinal)));
+                    track(attr.offset, source)?;
+                }
+                if let Some(offset) = tails.remove(&node.offset) {
+                    track(offset, origin.tail)?;
+                }
+                let mut previous = None;
+                for child in &node.children {
+                    match child {
+                        XNode::Element(child) => previous = Some(child.offset),
+                        XNode::Text { offset, .. } => {
+                            if let Some(child) = previous {
+                                self.budget.charge(PENDING_ROW)?;
+                                tails.insert(child, *offset);
+                            } else {
+                                track(*offset, origin.text)?;
+                            }
+                        }
+                    }
+                }
+            }
             let key = (entry, ordinal, node.name.to_owned(), attrs(node));
             nodes.push(Node {
                 start: node.offset as usize,
@@ -529,63 +532,18 @@ impl Index {
             nodes,
             sources: Rc::clone(&self.matches),
             fallback,
-            text_risky: self
-                .text_risks
-                .as_ref()
-                .is_some_and(|risks| applied.iter().any(|entry| risks.contains(entry))),
-            attributes_risky: self
-                .attribute_risks
-                .as_ref()
-                .is_some_and(|risks| applied.iter().any(|entry| risks.contains(entry))),
+            literals,
         })
     }
 }
 
 impl Mapping {
-    /// Element identity proves literal text ownership only when no applied operation can
-    /// change raw text/tails. Refuse the conservative risk set until finer text provenance
-    /// exists; a refusal deliberately claims no exact source location.
-    pub(crate) fn translation_text_location(
-        &self,
-        owner_offset: u32,
-    ) -> Result<Location, Diagnostic> {
-        if self.text_risky {
-            return Err(self.remap(
-                Diagnostic::error(crate::DiagnosticKind::Inheritance,
-                    "translation text ownership after inheritance mutation is not supported until a later release")
-                    .with_directive("translation"),
-            ));
-        }
-        self.translation_location(owner_offset)
-    }
-
-    /// Attribute mutation history is independent of its final value. Preserve the existing
-    /// generic refusal when the element signature already lacks a unique match; an equal or
-    /// restored signature still needs this additional history guard before it proves ownership.
-    pub(crate) fn translation_attribute_location(
-        &self,
-        owner_offset: u32,
-    ) -> Result<Location, Diagnostic> {
-        let location = self.translation_location(owner_offset)?;
-        if self.attributes_risky {
-            return Err(self.remap(
-                Diagnostic::error(crate::DiagnosticKind::Inheritance,
-                    "translation attribute ownership after inheritance mutation is not supported until a later release")
-                    .with_directive("translation"),
-            ));
-        }
-        Ok(location)
-    }
-
-    /// Resolve the original owner element of a selected translation literal. Unlike a
-    /// diagnostic's fallback notes, ambiguous ownership cannot choose a catalogue module.
-    pub(crate) fn translation_location(&self, owner_offset: u32) -> Result<Location, Diagnostic> {
-        if let Ok(index) = self
-            .nodes
-            .binary_search_by_key(&(owner_offset as usize), |node| node.start)
-            && let Some(source) = self.nodes[index]
-                .source
-                .and_then(|index| self.sources.get(index))
+    /// The engine records the writer of each literal separately from the element's origin.
+    pub(crate) fn literal_location(&self, literal_offset: u32) -> Result<Location, Diagnostic> {
+        if let Some(source) = self
+            .literals
+            .get(&literal_offset)
+            .and_then(|index| self.sources.get(*index))
             && source.total == 1
             && let Some(candidate) = source.candidates.first()
         {
@@ -600,7 +558,7 @@ impl Mapping {
                 "translation literal has no unique inherited source owner",
             )
             .with_directive("translation")
-            .with_source_offset(owner_offset),
+            .with_source_offset(literal_offset),
         ))
     }
 

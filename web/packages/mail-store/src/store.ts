@@ -448,6 +448,16 @@ export class MessagingStore {
     };
   }
 
+  /** Discard a revoked thread, its message window and the records held only by that window. */
+  forgetThread(ref: ThreadRef): void {
+    batch(() => {
+      for (const id of this.windows.get(ref)?.ids ?? []) this.#evict(this.config.messageModel, id);
+      this.windows.drop(ref);
+      if (this.#schema && lookupModel(this.#schema, ref.model)) this.#evict(ref.model, ref.id);
+      this.collect();
+    });
+  }
+
   /**
    * Bounds memory (4). Drops the windows of threads no surface holds beyond `maxThreads`, least recently
    * used first; then evicts the messages no kept window or lease holds, and the collectable records nothing retained

@@ -299,6 +299,56 @@ impl<F: Fn(&str, &str) -> Option<FieldInfo>> Analysis<'_, F> {
         }
         Ok(out)
     }
+    fn contact_fields(
+        &mut self,
+        relation: &Ty,
+        options: Option<&Code>,
+        at: &At,
+    ) -> Result<(), ReportError> {
+        let Some(options) = options else {
+            return Ok(());
+        };
+        let Expr::Dict(entries) = &options.expr else {
+            return Ok(());
+        };
+        let entry = |name: &str| {
+            entries.iter().find_map(|(key, value)| {
+                matches!(key, Expr::Literal(Literal::Str(k)) if k == name).then_some(value)
+            })
+        };
+        if !matches!(entry("widget"), Some(Expr::Literal(Literal::Str(s))) if s == "contact") {
+            return Ok(());
+        }
+        for paths in relation.0.values() {
+            for path in paths {
+                self.paths[*path].display_name = true;
+            }
+        }
+        let Some(fields) = entry("fields") else {
+            return Ok(());
+        };
+        let (Expr::List(fields) | Expr::Tuple(fields)) = fields else {
+            return Err(at.compile("contact fields must be a literal list of line names"));
+        };
+        for field in fields {
+            let Expr::Literal(Literal::Str(field)) = field else {
+                return Err(at.compile("contact fields must be literal line names"));
+            };
+            for column in crate::widget::contact_columns(field)
+                .ok_or_else(|| at.compile(format!("unknown contact line {field}")))?
+            {
+                self.attribute(
+                    relation,
+                    column,
+                    &Cx {
+                        at,
+                        source: &options.source,
+                    },
+                )?;
+            }
+        }
+        Ok(())
+    }
     /// The fields the monetary widget reads of a currency.
     fn currency(&mut self, currency: &Ty, cx: &Cx<'_>) -> Result<(), ReportError> {
         for field in CURRENCY_FIELDS {
@@ -307,8 +357,15 @@ impl<F: Fn(&str, &str) -> Option<FieldInfo>> Analysis<'_, F> {
         Ok(())
     }
     /// `t-field`: the field, the display names a relation prints and the currency of an amount.
-    fn printed(&mut self, record: &Ty, field: &str, cx: &Cx<'_>) -> Result<(), ReportError> {
+    fn printed(
+        &mut self,
+        record: &Ty,
+        field: &str,
+        options: Option<&Code>,
+        cx: &Cx<'_>,
+    ) -> Result<(), ReportError> {
         let value = self.attribute(record, field, cx)?;
+        self.contact_fields(&value, options, cx.at)?;
         for paths in value.0.values() {
             for path in paths {
                 self.paths[*path].display_name = true;
@@ -652,7 +709,8 @@ impl<F: Fn(&str, &str) -> Option<FieldInfo>> Analysis<'_, F> {
                             default,
                         } => {
                             if let Some(value) = value {
-                                self.code(value, at, scope)?;
+                                let relation = self.code(value, at, scope)?;
+                                self.contact_fields(&relation, options.as_ref(), at)?;
                             }
                             self.options(options.as_ref(), at, scope)?;
                             self.ops(default, scope)?;
@@ -668,6 +726,7 @@ impl<F: Fn(&str, &str) -> Option<FieldInfo>> Analysis<'_, F> {
                             self.printed(
                                 &value,
                                 field,
+                                options.as_ref(),
                                 &Cx {
                                     at,
                                     source: &source,

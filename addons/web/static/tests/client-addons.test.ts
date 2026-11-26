@@ -250,8 +250,7 @@ test("upgrade refusal in detail disables upgrade button and shows a fixed senten
   const note = host.querySelector<HTMLElement>(".addon-refusal-note")!;
   expect(upgradeBtn.getAttribute("aria-describedby")).toBe(note.id);
   expect(upgradeBtn.title).toBe("");
-  expect(note.textContent).toBe("Upgrade from this page is not available: this addon is not in the server's addon directory.");
-  expect(note.dataset["reason"]).toBe("Installed addon source is unavailable to native upgrade");
+  expect(note.textContent).toBe("Installed addon source is unavailable to native upgrade");
 });
 
 /// (partial: detail page layout, one header row, fixed unavailable sentence, each menu once)
@@ -284,9 +283,7 @@ test("addon detail header, unavailable uninstall sentence and menu list", async 
   const button = detail.querySelector<HTMLButtonElement>(".addon-uninstall")!;
   const note = detail.querySelector<HTMLElement>(`#${button.getAttribute("aria-describedby")}`)!;
   expect(button.disabled).toBe(true);
-  expect(note.textContent).toBe("Uninstalling this addon from this page is not available yet.");
-  expect(detail.textContent).not.toContain("a later release");
-  expect(detail.textContent).not.toContain("lifecycle callbacks");
+  expect(note.textContent).toBe(internal);
 
   const items = [...detail.querySelectorAll(".addon-metadata-item")].map(item => [...item.children].map(c => c.textContent));
   expect(items).toEqual([["Library"], ["Books", "library_books"]]);
@@ -338,17 +335,17 @@ test("a refused uninstall stays disabled after an upgrade is cancelled", async (
   cancel.click();
   await vi.waitFor(() => expect(host.querySelector<HTMLButtonElement>(".addon-detail .addon-upgrade")!.disabled).toBe(false));
   expect(host.querySelector<HTMLButtonElement>(".addon-detail .addon-uninstall")!.disabled).toBe(true);
-  expect(host.querySelector("#addon-uninstall-unavailable")?.textContent).toBe("Uninstalling this addon from this page is not available yet.");
+  expect(host.querySelector("#addon-uninstall-unavailable")?.textContent).toBe("Uninstall impact cannot describe x; unsupported until a later release");
 });
 
 /// (partial: uninstall preview refusal shows the fixed sentence and prevents confirmation dialog)
-test("uninstall preview refusal shows the fixed sentence and prevents confirmation dialog", async () => {
+test("uninstall preview refusal explains the conflict and prevents confirmation dialog", async () => {
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function (this: HTMLDialogElement) { this.open = true; } });
   Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function (this: HTMLDialogElement) { this.open = false; } });
 
   const rpc = new RpcClient(async (path) => {
     if (typeof path === "string" && path.includes("erp_preview_uninstall")) {
-      return new Response(JSON.stringify({ error: { message: "Native uninstall preview requires a trusted-session engine bridge", name: "erp.exceptions.UserError" } }), { status: 400, headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ message: "Uninstall would remove a package addon; remove it with the package lifecycle first", name: "erp.exceptions.ValidationError" }), { status: 422, headers: { "Content-Type": "application/json" } });
     }
     return new Response(JSON.stringify({ wire_major: 1, addons: [row({ name: "acceptance_notes", label: "Notes", version: "1.0", state: "installed", installable: true })] }), { headers: { "Content-Type": "application/json" } });
   }, () => {});
@@ -361,7 +358,7 @@ test("uninstall preview refusal shows the fixed sentence and prevents confirmati
   uninstallBtn.click();
 
   await vi.waitFor(() => expect(notices.length).toBeGreaterThan(0));
-  expect(notices[0]).toBe("Uninstalling this addon from this page is not available yet.");
+  expect(notices[0]).toBe("Uninstall would remove a package addon; remove it with the package lifecycle first");
   expect(document.querySelector(".addon-uninstall-dialog")).toBeNull();
 });
 
@@ -394,7 +391,11 @@ test("uninstall confirmation dialog renders warning, affected modules, dropped m
           { model: "note.note", table: "note_note", row_count: "42" },
           { model: "note.tag", table: "note_tag", row_count: "7" }
         ],
-        metadata: [],
+        metadata: [{ table: "ir_model_data", kind: "delete", row_count: "4" }],
+        effects: [
+          { component: "Addon packages", description: "Installed packages stay in place" },
+          { component: "Web assets", description: "Publish the remaining web bundle" }
+        ],
         target_count: "49",
         fingerprint: "fp_test_123"
       }), { headers: { "Content-Type": "application/json" } });
@@ -423,6 +424,9 @@ test("uninstall confirmation dialog renders warning, affected modules, dropped m
     ["note.tag", "note_tag", "7"]
   ]);
   expect(dialog.querySelector(".addon-impact-summary")?.textContent).toContain("49");
+  expect(dialog.textContent).toContain("Delete records · ir_model_data (4)");
+  expect(dialog.textContent).toContain("Installed packages stay in place");
+  expect(dialog.textContent).toContain("Publish the remaining web bundle");
 });
 
 /// (partial: uninstall confirmation dialog traps focus and restores focus on escape/cancel)
@@ -434,7 +438,7 @@ test("uninstall confirmation dialog traps focus and restores focus on escape/can
     if (typeof path === "string" && path.includes("erp_preview_uninstall")) {
       return new Response(JSON.stringify({
         version: 1, requested: ["acceptance_notes"], resolved: ["acceptance_notes"],
-        dropped_models: [], metadata: [], target_count: "0", fingerprint: "fp_test"
+        dropped_models: [], metadata: [], effects: [], target_count: "0", fingerprint: "fp_test"
       }), { headers: { "Content-Type": "application/json" } });
     }
     return new Response(JSON.stringify({ wire_major: 1, addons: [row({ name: "acceptance_notes", label: "Notes", version: "1.0", state: "installed", installable: true })] }), { headers: { "Content-Type": "application/json" } });
@@ -459,7 +463,7 @@ test("uninstall confirmation dialog traps focus and restores focus on escape/can
 
   dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
   expect(document.querySelector(".addon-uninstall-dialog")).toBeNull();
-  expect(document.activeElement).toBe(uninstallBtn);
+  await vi.waitFor(() => expect(document.activeElement).toBe(uninstallBtn));
 });
 
 /// (partial: confirmed uninstall submits fingerprint to /erp/module/uninstall and handles 409 conflict)
@@ -474,7 +478,7 @@ test("confirmed uninstall submits fingerprint to /erp/module/uninstall and handl
     if (typeof path === "string" && path.includes("erp_preview_uninstall")) {
       return new Response(JSON.stringify({
         version: 1, requested: ["acceptance_notes"], resolved: ["acceptance_notes"],
-        dropped_models: [], metadata: [], target_count: "0", fingerprint: "fp_123"
+        dropped_models: [], metadata: [], effects: [], target_count: "0", fingerprint: "fp_123"
       }), { headers: { "Content-Type": "application/json" } });
     }
     if (String(path) === "/erp/module/uninstall") {
@@ -696,7 +700,7 @@ test("Module info opens a read-only dialog with the manifest details and returns
   expect(facts).toEqual({ "Technical name": "sample_library", Version: "1.0.0", Category: "Sample", Type: "App", Author: "Arkana", License: "LGPL-3", Website: "example.com/library", "Depends on": "baseweb", Installable: "Yes" });
   const link = dialog.querySelector<HTMLAnchorElement>("a.addon-info-link")!;
   expect(link.href).toBe("https://example.com/library"); expect(link.rel).toBe("noopener noreferrer");
-  expect(dialog.querySelector(".addon-info-note")?.textContent).toContain("");
+  expect(dialog.querySelector(".addon-info-note")).toBeNull();
   expect(calls).toBe(1);
   [...dialog.querySelectorAll("button")].find(item => item.textContent === "Close")!.click();
   expect(document.querySelector("dialog.addon-info-dialog")).toBeNull();
@@ -786,7 +790,7 @@ test("a slow detail reply for an earlier click does not replace the later addon'
 });
 test("an uninstall preview without its fingerprint is an error and no dialog opens", async () => {
   const rpc = new RpcClient(async path => String(path).includes("erp_preview_uninstall")
-    ? json({ version: 1, requested: ["aa"], resolved: ["aa"], dropped_models: [], metadata: [], target_count: "0" }) : json(twoAddons), () => {});
+    ? json({ version: 1, requested: ["aa"], resolved: ["aa"], dropped_models: [], metadata: [], effects: [], target_count: "0" }) : json(twoAddons), () => {});
   const host = document.createElement("div"); document.body.append(host);
   const errors: unknown[] = [], jobs: Promise<void>[] = [];
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function (this: HTMLDialogElement) { this.open = true; } });
@@ -799,7 +803,7 @@ test("Escape and the cancel event are ignored while the uninstall request runs",
   Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function (this: HTMLDialogElement) { this.open = false; this.dispatchEvent(new Event("close")); } });
   let release!: () => void, posts = 0; const gate = new Promise<void>(done => { release = done; });
   const rpc = new RpcClient(async path => {
-    if (String(path).includes("erp_preview_uninstall")) return json({ version: 1, requested: ["aa"], resolved: ["aa"], dropped_models: [], metadata: [], target_count: "0", fingerprint: "fp" });
+    if (String(path).includes("erp_preview_uninstall")) return json({ version: 1, requested: ["aa"], resolved: ["aa"], dropped_models: [], metadata: [], effects: [], target_count: "0", fingerprint: "fp" });
     if (String(path) === "/erp/module/uninstall") { posts++; await gate; return new Response("{}", { status: 500 }); }
     return json(twoAddons);
   }, () => {});

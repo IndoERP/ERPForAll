@@ -514,6 +514,9 @@ async fn locale(tx: &mut Transaction, report: &PrintReport) -> Result<Locale> {
         &text(4, "time_format")?,
     )
     .map_err(|e| report_error(report, &e))?;
+    let formats = formats
+        .with_language(code)
+        .map_err(|e| report_error(report, &e))?;
     let tz = context.tz().filter(|tz| !tz.is_empty()).unwrap_or("UTC");
     let zone = jiff::tz::TimeZone::get(tz).map_err(|_| {
         Error::validation(format!(
@@ -521,8 +524,6 @@ async fn locale(tx: &mut Transaction, report: &PrintReport) -> Result<Locale> {
             report.name
         ))
     })?;
-    // shortcut: no translated template terms are stored yet (the terms of views are not imported),
-    // so the language carries none; load them here when a store of template terms exists.
     let language = Language::new(code).map_err(|e| report_error(report, &e))?;
     let options = EvalOptions::default()
         .with_code_grid(crate::report_settings::barcode_grid(tx).await?)
@@ -569,14 +570,64 @@ async fn compile(
         Some((key, arch)) => vec![(key.to_owned(), arch.to_owned())],
         None => report_templates::template_sources(tx, &report.name, root).await?,
     };
-    let language = language.clone();
+    let refs: Vec<_> = sources
+        .iter()
+        .map(|(key, arch)| TemplateSource::new(key, arch))
+        .collect();
+    let conditions = ReportProgram::group_conditions(&refs, ReportLimits::default())
+        .map_err(|err| report_error(report, &err))?;
+    let mut groups = std::collections::BTreeMap::new();
+    let env = tx.env();
+    for condition in conditions {
+        let allowed = tx.has_groups(&env, &condition).await?;
+        groups.insert(condition, allowed);
+    }
+    let mut language = language.clone();
+    if inline.is_none() {
+        let keys: Vec<_> = sources.iter().map(|(key, _)| key.as_str()).collect();
+        let rows = tx
+            .query(
+                "SELECT DISTINCT ON (key) key, template_translations->$2::text FROM ir_ui_view
+                WHERE key=ANY($1) AND type='qweb' AND active IS TRUE
+                ORDER BY key, (mode='primary') DESC, priority, id",
+                &[&keys, &language.code()],
+            )
+            .await?;
+        for row in rows {
+            let key: String = row
+                .try_get(0)
+                .map_err(|_| Error::db("invalid report template identity"))?;
+            let terms: Option<erp_sdk::serde_json::Value> = row
+                .try_get(1)
+                .map_err(|_| Error::db("invalid report template catalogue"))?;
+            if let Some(terms) = terms {
+                for (source, translated) in terms.as_object().ok_or_else(|| {
+                    Error::validation("report catalogue must be a term dictionary")
+                })? {
+                    language = language.with_template_term(
+                        &key,
+                        source,
+                        translated
+                            .as_str()
+                            .ok_or_else(|| Error::validation("report translation must be text"))?,
+                    );
+                }
+            }
+        }
+    }
     let root = root.to_owned();
     blocking(report, move || {
         let templates: Vec<TemplateSource<'_>> = sources
             .iter()
             .map(|(key, arch)| TemplateSource::new(key, arch))
             .collect();
-        ReportProgram::compile(&root, &templates, &language, ReportLimits::default())
+        ReportProgram::compile_for_groups(
+            &root,
+            &templates,
+            &language,
+            ReportLimits::default(),
+            &groups,
+        )
     })
     .await
 }

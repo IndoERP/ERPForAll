@@ -54,6 +54,8 @@ pub const MODULE_INSTALL: &str = "/erp/module/install";
 pub const MODULE_UPGRADE: &str = "/erp/module/upgrade";
 /// Module lifecycle: uninstall.
 pub const MODULE_UNINSTALL: &str = "/erp/module/uninstall";
+/// Session-only engine preview retaining the existing JSON-2 client URL.
+pub const MODULE_UNINSTALL_PREVIEW: &str = "/erp/json/2/ir.module.module/erp_preview_uninstall";
 /// Module lifecycle: force demo data.
 pub const MODULE_FORCE_DEMO: &str = "/erp/module/force-demo";
 /// Favicon probed by browsers.

@@ -1,0 +1,145 @@
+{
+  "months_short": [
+    "janv.",
+    "févr.",
+    "mars",
+    "avr.",
+    "mai",
+    "juin",
+    "juil.",
+    "août",
+    "sept.",
+    "oct.",
+    "nov.",
+    "déc."
+  ],
+  "months_long": [
+    "janvier",
+    "février",
+    "mars",
+    "avril",
+    "mai",
+    "juin",
+    "juillet",
+    "août",
+    "septembre",
+    "octobre",
+    "novembre",
+    "décembre"
+  ],
+  "days_short": [
+    "dim.",
+    "lun.",
+    "mar.",
+    "mer.",
+    "jeu.",
+    "ven.",
+    "sam."
+  ],
+  "days_long": [
+    "dimanche",
+    "lundi",
+    "mardi",
+    "mercredi",
+    "jeudi",
+    "vendredi",
+    "samedi"
+  ],
+  "periods": [
+    "AM",
+    "PM"
+  ],
+  "plural_rule": "one",
+  "duration": {
+    "long": {
+      "year": {
+        "one": "{0} an",
+        "other": "{0} ans"
+      },
+      "month": {
+        "one": "{0} mois",
+        "other": "{0} mois"
+      },
+      "week": {
+        "one": "{0} semaine",
+        "other": "{0} semaines"
+      },
+      "day": {
+        "one": "{0} jour",
+        "other": "{0} jours"
+      },
+      "hour": {
+        "one": "{0} heure",
+        "other": "{0} heures"
+      },
+      "minute": {
+        "one": "{0} minute",
+        "other": "{0} minutes"
+      },
+      "second": {
+        "one": "{0} seconde",
+        "other": "{0} secondes"
+      }
+    },
+    "short": {
+      "year": {
+        "one": "{0} an",
+        "other": "{0} ans"
+      },
+      "month": {
+        "one": "{0} m.",
+        "other": "{0} m."
+      },
+      "week": {
+        "one": "{0} sem.",
+        "other": "{0} sem."
+      },
+      "day": {
+        "one": "{0} j",
+        "other": "{0} j"
+      },
+      "hour": {
+        "one": "{0} h",
+        "other": "{0} h"
+      },
+      "minute": {
+        "one": "{0} min",
+        "other": "{0} min"
+      },
+      "second": {
+        "one": "{0} s",
+        "other": "{0} s"
+      }
+    },
+    "narrow": {
+      "year": {
+        "one": "{0}a",
+        "other": "{0}a"
+      },
+      "month": {
+        "one": "{0}m.",
+        "other": "{0}m."
+      },
+      "week": {
+        "one": "{0}sem.",
+        "other": "{0}sem."
+      },
+      "day": {
+        "one": "{0}j",
+        "other": "{0}j"
+      },
+      "hour": {
+        "one": "{0}h",
+        "other": "{0}h"
+      },
+      "minute": {
+        "one": "{0}min",
+        "other": "{0}min"
+      },
+      "second": {
+        "one": "{0}s",
+        "other": "{0}s"
+      }
+    }
+  }
+}

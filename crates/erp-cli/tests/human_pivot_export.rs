@@ -514,6 +514,34 @@ async fn acceptance() {
             json!({"scope":{"kind":"global"},"expected_revision":revision,"changes":changes}),
         )
     };
+    // Expect/Continue makes this deterministic: hyper asks for the body only after the handler
+    // has acquired its slot. A caller disconnecting mid-upload must release it.
+    ok(
+        &write(json!([{"key":"web.pivot_export_max_concurrent","value":1}])),
+        "set one export slot",
+    );
+    let mut stalled = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stalled
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    write!(stalled, "POST /erp/pivot/export HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {admin}\r\nContent-Type: application/json\r\nSec-Fetch-Site: same-origin\r\nExpect: 100-continue\r\nContent-Length: 100\r\n\r\n").unwrap();
+    let mut interim = [0u8; 25];
+    stalled.read_exact(&mut interim).unwrap();
+    assert_eq!(interim.as_slice(), b"HTTP/1.1 100 Continue\r\n\r\n");
+    let refused = post(port, Some(&reader), &[], &body(&flat));
+    assert_eq!(refused.status, 429);
+    assert!(refused.text().contains("web.pivot_export_max_concurrent"));
+    drop(stalled);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let answer = post(port, Some(&reader), &[], &body(&flat));
+        if answer.status == 200 {
+            break;
+        }
+        assert_eq!(answer.status, 429);
+        assert!(Instant::now() < deadline, "cancelled export held a slot");
+        std::thread::sleep(Duration::from_millis(10));
+    }
     let below = write(json!([{"key":"web.pivot_export_max_cells","value":99}]));
     assert_ne!(
         below.status, 200,

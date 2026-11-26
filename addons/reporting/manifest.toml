@@ -5,7 +5,7 @@ category = "Technical"
 icon = "lucide:chart-column"
 author = "Arkana"
 license = "MIT OR Apache-2.0"
-version = "1.2.2"
+version = "1.2.3"
 depends = ["base", "web"]
 data = [
     "security/ir.access.csv",

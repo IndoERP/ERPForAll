@@ -9,8 +9,9 @@
     "@erpforall/elang": "workspace:*",
     "@erpforall/mail-store": "workspace:*",
     "@erpforall/mail-thread-view": "workspace:*",
+    "ace-builds": "1.45.0",
     "luxon": "3.7.2",
-    "ace-builds": "1.45.0"
+    "pdfjs-dist": "6.5.438"
   },
   "devDependencies": {
     "@types/luxon": "3.7.6",

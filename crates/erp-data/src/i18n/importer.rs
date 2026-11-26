@@ -16,6 +16,7 @@ use crate::error::{ParseError, ParseErrorKind};
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct TranslationEntry {
+    pub(super) structured: bool,
     model: String,
     xmlid: String,
     field: String,
@@ -69,11 +70,11 @@ impl TranslationEntry {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct PoLoadSummary {
-    /// Translation entries added (one per `model:` occurrence of a translated entry).
+    /// Translation entries added for fields and supported structured template terms.
     pub imported: usize,
     /// `code:` occurrences: translations of source code terms, not of records.
     pub skipped_code: usize,
-    /// `model_terms:` occurrences: terms of structured values, which need.
+    /// Structured terms for which no storage handler is registered.
     pub skipped_model_terms: usize,
     pub skipped_deprecated: usize,
     /// Translated entries without any occurrence: they name no record to attach to.
@@ -271,6 +272,23 @@ impl TranslationImporter {
                 match occurrence {
                     PoOccurrence::Model(r) => {
                         added.push(TranslationEntry {
+                            structured: false,
+                            model: r.model.clone(),
+                            xmlid: r.xml_id(),
+                            field: r.field.clone(),
+                            lang: lang.to_owned(),
+                            value: entry.msgstr.clone(),
+                            src: Some(entry.msgid.clone()),
+                            module: r.module,
+                        });
+                        summary.imported += 1;
+                    }
+                    PoOccurrence::ModelTerms(r)
+                        if r.model == "ir.ui.view"
+                            && matches!(r.field.as_str(), "arch" | "arch_db") =>
+                    {
+                        added.push(TranslationEntry {
+                            structured: true,
                             model: r.model.clone(),
                             xmlid: r.xml_id(),
                             field: r.field.clone(),
@@ -356,6 +374,7 @@ impl TranslationImporter {
                 None => None,
             };
             added.push(TranslationEntry {
+                structured: false,
                 model: op.model().to_owned(),
                 xmlid: xmlid.clone(),
                 field: tr.name().to_owned(),
@@ -407,6 +426,7 @@ impl TranslationImporter {
                 .cloned();
 
             added.push(TranslationEntry {
+                structured: false,
                 model: import.model().to_owned(),
                 xmlid,
                 field: tr.field().to_owned(),
@@ -502,6 +522,10 @@ msgstr "Dans le code"
 msgid "A term"
 msgstr "Un terme"
 
+#: model_terms:x.model,description:x.other
+msgid "Another term"
+msgstr "Un autre terme"
+
 #: selection:x.model,state sql_constraint:x.model
 msgid "Old"
 msgstr "Ancien"
@@ -522,7 +546,7 @@ msgstr "Les deux"
 "#;
         let mut importer = TranslationImporter::new();
         let summary = importer.load_po(po, "fr.po", "fr_FR").unwrap();
-        assert_eq!(summary.imported, 1);
+        assert_eq!(summary.imported, 2);
         assert_eq!(summary.skipped_code, 2);
         assert_eq!(summary.skipped_model_terms, 1);
         assert_eq!(summary.skipped_deprecated, 2);
@@ -530,8 +554,18 @@ msgstr "Les deux"
         assert_eq!(summary.skipped_obsolete, 1);
         assert_eq!(summary.header, 1);
         assert_eq!(summary.untranslated, 1);
-        assert_eq!(importer.len(), 1);
-        assert_eq!(importer.entries()[0].src(), Some("Both"));
+        assert_eq!(importer.len(), 2);
+        let records = importer.entries_for_record("x.rec");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].src(), Some("Both"));
+        assert!(!records[0].structured);
+        let views = importer.entries_for_record("x.view_a");
+        assert_eq!(views.len(), 1);
+        assert!(views[0].structured);
+        assert_eq!(
+            (views[0].src(), views[0].value()),
+            (Some("A term"), "Un terme")
+        );
     }
 
     #[test]

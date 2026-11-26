@@ -212,6 +212,10 @@ pub fn inspect_arch(
                     continue;
                 }
                 obligation(&mut out, template, line, target, value, limits)?;
+            } else if name == "groups" {
+                if value.trim().is_empty() {
+                    invalid_value(&mut out, template, line, name, value, limits)?;
+                }
             } else if name.starts_with("t-") {
                 if !profile::listed(profile::DIRECTIVES, name) {
                     diagnostic(&mut out, template, line, name, K::Directive, limits)?;
