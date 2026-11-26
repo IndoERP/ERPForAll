@@ -46,7 +46,7 @@ pub async fn seed(tx: &mut Transaction) {
     tx.execute("INSERT INTO res_company (tz, id,name,currency_id,parent_path,account_price_include,tax_calculation_rounding_method,anglo_saxon_accounting,expects_chart_of_accounts,fpos_revision) VALUES ('UTC', 101,'C1',$1,'101/','tax_excluded','round_globally',false,true,0),('UTC', 102,'C2',$1,'102/','tax_excluded','round_globally',false,true,0)", &[&currency]).await.unwrap();
     tx.batch("INSERT INTO uom_uom(id,name,relative_factor) VALUES (101,'{\"en_US\":\"Unit\"}',1);
         INSERT INTO product_category(id,name) VALUES (101,'{\"en_US\":\"Category\"}');
-        INSERT INTO product_template(id,name,uom_id,type) VALUES (101,'{\"en_US\":\"P1\"}',101,'consu'),(102,'{\"en_US\":\"P2\"}',101,'consu');
+        INSERT INTO product_template(id,name,uom_id,type,tracking) VALUES (101,'{\"en_US\":\"P1\"}',101,'consu','none'),(102,'{\"en_US\":\"P2\"}',101,'consu','none');
         INSERT INTO product_product(id,product_tmpl_id) VALUES (101,101),(102,102);
         INSERT INTO stock_location(id,name,usage) VALUES (101,'Internal','internal'),(102,'Customer','customer');
         INSERT INTO stock_lot(id,name,product_id) VALUES (101,'L1',101),(102,'L2',102);

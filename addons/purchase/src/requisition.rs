@@ -673,7 +673,7 @@ impl PurchaseRequisition {
     description = "Purchase Agreement Line",
     order = "id",
     check_company_auto = true,
-    company_access = parent(edge = "requisition_id")
+    company_access = direct(field = "company_id", branch = "exact", empty = "deny", parent = "requisition_id")
 )]
 pub struct PurchaseRequisitionLine {
     /// Owning agreement.

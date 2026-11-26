@@ -14,8 +14,7 @@ use crate::picking::StockPicking;
     description = "Package",
     order = "name, id",
     parent_store = true,
-    parent_name = "parent_package_id",
-    company_access = unrestricted(reason = "packages are physical containers whose quants carry company scope")
+    parent_name = "parent_package_id"
 )]
 pub struct StockPackage {
     /// Package reference.

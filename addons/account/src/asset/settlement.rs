@@ -327,7 +327,7 @@ impl AccountAssetSettlement {
         tx: &mut Transaction,
         vals: RawVals,
         sup: Super,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         if !this.as_records().is_empty() && !this.env().su() {
             if vals.contains("state")
                 || vals.contains("total_settled")
@@ -354,7 +354,7 @@ impl AccountAssetSettlement {
         this: &RecordSet<AccountAssetSettlement>,
         tx: &mut Transaction,
         sup: Super,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         if !this.as_records().is_empty() && !this.env().su() {
             for state in this.mapped(tx, AccountAssetSettlement::STATE).await? {
                 if state.as_deref() == Some("posted") {

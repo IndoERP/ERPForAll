@@ -298,7 +298,7 @@ async fn install() {
         .await
         .unwrap()[0]
         .get(0);
-    let tmpl:i64=tx.query("INSERT INTO product_template(name,uom_id,type) SELECT '{\"en_US\":\"Valuation fixture\"}',id,'consu' FROM uom_uom ORDER BY id LIMIT 1 RETURNING id",&[]).await.unwrap()[0].get(0);
+    let tmpl:i64=tx.query("INSERT INTO product_template(name,uom_id,type,tracking) SELECT '{\"en_US\":\"Valuation fixture\"}',id,'consu','none' FROM uom_uom ORDER BY id LIMIT 1 RETURNING id",&[]).await.unwrap()[0].get(0);
     let product: i64 = tx
         .query(
             "INSERT INTO product_product(product_tmpl_id) VALUES($1) RETURNING id",
@@ -1238,7 +1238,7 @@ async fn verify_valuation_report(
         .await
         .unwrap();
     setup.execute("UPDATE stk_cost_state SET grid_value=0.06,quantity=3 WHERE company_id=$1 AND product_id=$2", &[&company,&product]).await.unwrap();
-    let second_template: i64 = setup.query("INSERT INTO product_template(name,uom_id,type) SELECT '{\"en_US\":\"Another valued product\"}',id,'consu' FROM uom_uom ORDER BY id LIMIT 1 RETURNING id", &[]).await.unwrap()[0].get(0);
+    let second_template: i64 = setup.query("INSERT INTO product_template(name,uom_id,type,tracking) SELECT '{\"en_US\":\"Another valued product\"}',id,'consu','none' FROM uom_uom ORDER BY id LIMIT 1 RETURNING id", &[]).await.unwrap()[0].get(0);
     let second: i64 = setup
         .query(
             "INSERT INTO product_product(product_tmpl_id) VALUES($1) RETURNING id",
@@ -1303,7 +1303,7 @@ async fn verify_more_rounding(
     let report:i64=setup.query("SELECT res_id::int8 FROM ir_model_data WHERE module='stock' AND name='report_stock_position'",&[]).await.unwrap()[0].get(0);
     let definition:i64=setup.query("SELECT res_id::int8 FROM ir_model_data WHERE module='stock' AND name='report_stock_position_line'",&[]).await.unwrap()[0].get(0);
     let place:i64=setup.query("SELECT id FROM stock_location WHERE company_id=$1 AND usage='internal' ORDER BY id LIMIT 1",&[&company]).await.unwrap()[0].get(0);
-    let template:i64=setup.query("INSERT INTO product_template(name,uom_id,type) SELECT '{\"en_US\":\"Rounding tail product\"}',id,'consu' FROM uom_uom ORDER BY id LIMIT 1 RETURNING id",&[]).await.unwrap()[0].get(0);
+    let template:i64=setup.query("INSERT INTO product_template(name,uom_id,type,tracking) SELECT '{\"en_US\":\"Rounding tail product\"}',id,'consu','none' FROM uom_uom ORDER BY id LIMIT 1 RETURNING id",&[]).await.unwrap()[0].get(0);
     let product: i64 = setup
         .query(
             "INSERT INTO product_product(product_tmpl_id) VALUES($1) RETURNING id",
@@ -1606,7 +1606,7 @@ async fn verify_receipt_preview(
 ) {
     use serde_json::{Value as Json, json};
     let mut setup = system.begin(SUPERUSER_ID).await.unwrap();
-    let template: i64 = setup.query("INSERT INTO product_template(name,uom_id,type) SELECT '{\"en_US\":\"Receipt preview\"}',id,'consu' FROM uom_uom ORDER BY id LIMIT 1 RETURNING id", &[]).await.unwrap()[0].get(0);
+    let template: i64 = setup.query("INSERT INTO product_template(name,uom_id,type,tracking) SELECT '{\"en_US\":\"Receipt preview\"}',id,'consu','none' FROM uom_uom ORDER BY id LIMIT 1 RETURNING id", &[]).await.unwrap()[0].get(0);
     let product: i64 = setup
         .query(
             "INSERT INTO product_product(product_tmpl_id) VALUES($1) RETURNING id",

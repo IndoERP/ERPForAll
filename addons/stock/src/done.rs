@@ -723,7 +723,6 @@ async fn resolve_and_check_lots(
         .await?;
     let lot_model = records.env().records("stock.lot")?;
     let mut seen_serials = BTreeSet::<(i64, i64, i64)>::new();
-    let mut updated_lot_lines = Vec::new();
     for row in rows {
         let line_id: i64 = row.try_get(0).map_err(decode)?;
         let company_id: i64 = row.try_get(1).map_err(decode)?;
@@ -776,7 +775,6 @@ async fn resolve_and_check_lots(
                 &[&resolved, &line_id],
             )
             .await?;
-            updated_lot_lines.push(line_id);
             lot_id = Some(resolved);
         }
 
@@ -836,14 +834,6 @@ async fn resolve_and_check_lots(
                 _ => {}
             }
         }
-    }
-    if !updated_lot_lines.is_empty() {
-        records
-            .env()
-            .records("stock.move.line")?
-            .browse(updated_lot_lines)?
-            .modified_external(tx, &["lot_id"])
-            .await?;
     }
     Ok(())
 }

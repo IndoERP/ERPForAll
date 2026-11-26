@@ -513,7 +513,7 @@ impl QualityCheck {
         tx: &mut Transaction,
         vals: RawVals,
         sup: Super,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         if vals.contains("quality_state")
             || vals.contains("control_date")
             || vals.contains("user_id")
@@ -555,7 +555,7 @@ impl QualityCheck {
         this: &RecordSet<QualityCheck>,
         tx: &mut Transaction,
         sup: Super,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         if !this.env().su()
             && !tx
                 .has_group(this.env(), "stock.group_stock_manager")
@@ -833,7 +833,7 @@ impl QualityAlert {
         tx: &mut Transaction,
         vals: RawVals,
         sup: Super,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         if vals.contains("stage") {
             return Err(Error::validation(
                 "Quality alert stage is managed by workflow actions.",

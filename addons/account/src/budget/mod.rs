@@ -380,7 +380,7 @@ impl AccountBudget {
         tx: &mut Transaction,
         vals: RawVals,
         sup: Super,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         if !this.as_records().is_empty() && !this.env().su() {
             if vals.contains("state") {
                 return Err(Error::user(
@@ -403,7 +403,7 @@ impl AccountBudget {
         this: &RecordSet<AccountBudget>,
         tx: &mut Transaction,
         sup: Super,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         if !this.as_records().is_empty() && !this.env().su() {
             for state in this.mapped(tx, AccountBudget::STATE).await? {
                 if matches!(state.as_deref(), Some("validate" | "done")) {
@@ -1147,7 +1147,7 @@ impl AccountBudgetLine {
         tx: &mut Transaction,
         vals: RawVals,
         sup: Super,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         if !this.as_records().is_empty() && !this.env().su() {
             let ids = this.as_records().ids();
             let locked_count: i64 = tx
@@ -1174,7 +1174,7 @@ impl AccountBudgetLine {
         this: &RecordSet<AccountBudgetLine>,
         tx: &mut Transaction,
         sup: Super,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         if !this.as_records().is_empty() && !this.env().su() {
             let ids = this.as_records().ids();
             let locked_count: i64 = tx

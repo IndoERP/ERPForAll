@@ -610,7 +610,7 @@ impl AccountAsset {
         tx: &mut Transaction,
         vals: RawVals,
         sup: Super,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         if !this.as_records().is_empty() && !this.env().su() {
             if vals.contains("state")
                 || vals.contains("disposal_date")
@@ -642,7 +642,7 @@ impl AccountAsset {
         this: &RecordSet<AccountAsset>,
         tx: &mut Transaction,
         sup: Super,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         if !this.as_records().is_empty() && !this.env().su() {
             for state in this.mapped(tx, AccountAsset::STATE).await? {
                 if state.as_deref() != Some("draft") {
@@ -802,7 +802,7 @@ impl AccountAsset {
         let a_rows = tx
             .query(
                 "SELECT COALESCE(asset_type, 'normal')::text, COALESCE(state, 'draft')::text, \
-                        original_value, salvage_value, acquisition_date, method_number, \
+                        COALESCE(original_value, 0), COALESCE(salvage_value, 0), acquisition_date, method_number, \
                         method_period, method::text, COALESCE(method_progress_factor, 0.30), \
                         COALESCE(prorata_temporis, false), currency_id::int8 \
                  FROM account_asset WHERE id = $1 FOR UPDATE",
@@ -1559,7 +1559,7 @@ impl AccountAssetDepreciationRun {
         tx: &mut Transaction,
         vals: RawVals,
         sup: Super,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         if !this.as_records().is_empty() && !this.env().su() {
             if vals.contains("state")
                 || vals.contains("entries_posted")
@@ -1583,7 +1583,7 @@ impl AccountAssetDepreciationRun {
         this: &RecordSet<AccountAssetDepreciationRun>,
         tx: &mut Transaction,
         sup: Super,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         if !this.as_records().is_empty() && !this.env().su() {
             for state in this.mapped(tx, AccountAssetDepreciationRun::STATE).await? {
                 if state.as_deref() != Some("draft") {

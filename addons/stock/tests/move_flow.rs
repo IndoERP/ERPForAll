@@ -3248,6 +3248,18 @@ async fn scrap_validate_moves_exact_stock_to_scrap_location() {
 
     let mut tx = f.h.begin().await.unwrap();
     let env = f.env(&tx);
+    // Schema-only harness fixture does not load XML seed data; seed the stock.scrap sequence.
+    create(
+        &mut tx,
+        "ir.sequence",
+        RawVals::new()
+            .set_cell("name", text("Scrap"))
+            .set_cell("code", text("stock.scrap"))
+            .set_cell("prefix", text("SP/"))
+            .set_cell("padding", Cell::Int(5))
+            .set_cell("company_id", Cell::Id(f.company)),
+    )
+    .await;
     let scraps = env.records("stock.scrap").unwrap();
     let created = scraps
         .create(
@@ -3292,6 +3304,27 @@ async fn physical_inventory_apply_adjusts_quant_and_schedules_annual_count_date(
 
     let mut tx = f.h.begin().await.unwrap();
     let env = f.env(&tx);
+    // Schema-only harness fixture does not load XML groups referenced by stock/web/reporting setting policies.
+    for (module, xml_name, label) in [
+        ("base", "group_user", "Internal User"),
+        ("base", "group_system", "Administration / Settings"),
+        ("stock", "group_stock_manager", "Inventory / Administrator"),
+    ] {
+        let gid: i64 = tx
+            .query(
+                "INSERT INTO res_groups (name) VALUES (jsonb_build_object('en_US', $1::text)) RETURNING id::int8",
+                &[&label],
+            )
+            .await
+            .unwrap()[0]
+            .get(0);
+        tx.execute(
+            "INSERT INTO ir_model_data (module, name, model, res_id) VALUES ($1, $2, 'res.groups', $3)",
+            &[&module, &xml_name, &gid],
+        )
+        .await
+        .unwrap();
+    }
     let quant_id: i64 = tx
         .query(
             "SELECT id::int8 FROM stock_quant WHERE product_id = $1 AND location_id = $2",
@@ -3381,14 +3414,27 @@ async fn mto_procurement_chains_upstream_move_when_pull_rule_exists() {
         .await
         .unwrap();
 
-    // Ensure receipt operation type has a sequence prefix for generated upstream MTO receipts
+    // Ensure receipt operation type has a sequence and prefix for generated upstream MTO receipts
+    let seq_id = create(
+        &mut tx,
+        "ir.sequence",
+        RawVals::new()
+            .set_cell("name", text("MTO Receipts"))
+            .set_cell("code", text("stock.in.mto"))
+            .set_cell("prefix", text("WH/IN/"))
+            .set_cell("padding", Cell::Int(5))
+            .set_cell("company_id", Cell::Id(f.company)),
+    )
+    .await;
     env.records("stock.picking.type")
         .unwrap()
         .browse([f.receipt_type])
         .unwrap()
         .write(
             &mut tx,
-            RawVals::new().set_cell("sequence_code", text("IN")),
+            RawVals::new()
+                .set_cell("sequence_id", Cell::Id(seq_id))
+                .set_cell("sequence_code", text("IN")),
         )
         .await
         .unwrap();

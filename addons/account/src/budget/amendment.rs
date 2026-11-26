@@ -31,7 +31,7 @@ pub fn validate_virement_lines_with_scale(deltas: &[Decimal], scale: u32) -> Res
     let sum: Decimal = deltas.iter().copied().sum();
     if !sum.round_dp(scale).is_zero() {
         return Err(Error::user(format!(
-            "Budget Transfer lines must balance to 0 (net difference: {sum})."
+            "Budget Transfer lines must balance to 0.00 (net difference: {sum})."
         )));
     }
     Ok(())
@@ -169,7 +169,7 @@ impl AccountBudgetAmendment {
         tx: &mut Transaction,
         vals: RawVals,
         sup: Super,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         if !this.as_records().is_empty() && !this.env().su() {
             if vals.contains("state") {
                 return Err(Error::user(
@@ -190,7 +190,7 @@ impl AccountBudgetAmendment {
         this: &RecordSet<AccountBudgetAmendment>,
         tx: &mut Transaction,
         sup: Super,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         if !this.as_records().is_empty() && !this.env().su() {
             for state in this.mapped(tx, AccountBudgetAmendment::STATE).await? {
                 if state.as_deref() == Some("approved") {
@@ -799,7 +799,7 @@ impl AccountBudgetAmendmentLine {
         tx: &mut Transaction,
         vals: RawVals,
         sup: Super,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         if !this.as_records().is_empty() && !this.env().su() {
             let ids = this.as_records().ids();
             let locked: i64 = tx
@@ -826,7 +826,7 @@ impl AccountBudgetAmendmentLine {
         this: &RecordSet<AccountBudgetAmendmentLine>,
         tx: &mut Transaction,
         sup: Super,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         if !this.as_records().is_empty() && !this.env().su() {
             let ids = this.as_records().ids();
             let locked: i64 = tx

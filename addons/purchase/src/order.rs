@@ -1228,14 +1228,10 @@ pub(crate) async fn sync_order_commitments(
             "SELECT l.id::int8, o.name::text, o.company_id::int8, o.currency_id::int8, \
                     o.date_order, l.analytic_account_id::int8, l.asset_id::int8, \
                     COALESCE(l.price_subtotal, 0), a.account_asset_id::int8, \
-                    a.company_id::int8, \
-                    COALESCE(pt.property_account_expense_id, pc.property_account_expense_categ_id)::int8 \
+                    a.company_id::int8 \
              FROM purchase_order_line l \
              JOIN purchase_order o ON o.id = l.order_id \
              LEFT JOIN account_asset a ON a.id = l.asset_id \
-             LEFT JOIN product_product pp ON pp.id = l.product_id \
-             LEFT JOIN product_template pt ON pt.id = pp.product_tmpl_id \
-             LEFT JOIN product_category pc ON pc.id = pt.categ_id \
              WHERE l.order_id = ANY($1::int8[]) \
              ORDER BY l.id",
             &[&order_ids],
@@ -1267,7 +1263,6 @@ pub(crate) async fn sync_order_commitments(
         let subtotal: Decimal = r.try_get(7).map_err(db)?;
         let asset_acc: Option<i64> = r.try_get(8).map_err(db)?;
         let asset_company: Option<i64> = r.try_get(9).map_err(db)?;
-        let expense_acc: Option<i64> = r.try_get(10).map_err(db)?;
 
         if asset_id.is_some() && asset_company != Some(cid) {
             return Err(Error::validation(
@@ -1281,8 +1276,7 @@ pub(crate) async fn sync_order_commitments(
         if let Some(cc) = cc_id {
             erp_addon_account::controlling::validate_center_for_commitment(tx, cc, odate).await?;
         }
-        let resolved_account = asset_acc.or(expense_acc);
-        if cc_id.is_none() && asset_id.is_none() && resolved_account.is_none() {
+        if cc_id.is_none() && asset_id.is_none() {
             continue;
         }
         if subtotal <= Decimal::ZERO {
@@ -1301,7 +1295,7 @@ pub(crate) async fn sync_order_commitments(
                 source_id: lid,
                 source_ref: oname,
                 company_id: cid,
-                account_id: resolved_account,
+                account_id: asset_acc,
                 analytic_account_id: cc_id,
                 asset_id,
                 date: odate,

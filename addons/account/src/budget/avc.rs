@@ -212,7 +212,7 @@ impl AccountBudgetCommitment {
         tx: &mut Transaction,
         vals: RawVals,
         sup: Super,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         if !this.env().su() {
             return Err(Error::user(
                 "Budget commitments are managed automatically by Purchase Order confirmation and Vendor Bill posting and cannot be edited manually.",
@@ -226,7 +226,7 @@ impl AccountBudgetCommitment {
         this: &RecordSet<AccountBudgetCommitment>,
         tx: &mut Transaction,
         sup: Super,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         if !this.env().su() {
             return Err(Error::user(
                 "Budget commitments cannot be deleted manually; cancel the originating Purchase Order to release commitments.",

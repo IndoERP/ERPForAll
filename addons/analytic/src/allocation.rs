@@ -388,7 +388,7 @@ impl AccountCostAllocationRun {
         tx: &mut Transaction,
         vals: RawVals,
         sup: Super,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         if !this.as_records().is_empty() {
             if vals.contains("state") || vals.contains("total_allocated") {
                 return Err(Error::user(
@@ -411,7 +411,7 @@ impl AccountCostAllocationRun {
         this: &RecordSet<AccountCostAllocationRun>,
         tx: &mut Transaction,
         sup: Super,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         if !this.as_records().is_empty() {
             for state in this.mapped(tx, AccountCostAllocationRun::STATE).await? {
                 if state.as_deref() == Some("posted") {

@@ -31,7 +31,6 @@ pub fn capacity_percent(load: Decimal, capacity: Decimal) -> Decimal {
     name = "fleet.vehicle.category",
     description = "Vehicle Category",
     order = "sequence, name",
-    company_access = unrestricted(reason = "fleet vehicle categories are shared classification templates"),
     constraints = [
         ("_nonneg_weight", "CHECK (max_weight >= 0)", "Max weight cannot be negative."),
         ("_nonneg_volume", "CHECK (max_volume >= 0)", "Max volume cannot be negative."),

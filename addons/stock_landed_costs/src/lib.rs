@@ -763,7 +763,7 @@ impl StockLandedCostLine {
         tx: &mut Transaction,
         vals: RawVals,
         sup: Super,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         let ids = this.ids();
         if !ids.is_empty() {
             let cost_ids: Vec<i64> = tx
@@ -786,7 +786,7 @@ impl StockLandedCostLine {
         this: &RecordSet<StockLandedCostLine>,
         tx: &mut Transaction,
         sup: Super,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         let ids = this.ids();
         if !ids.is_empty() {
             let cost_ids: Vec<i64> = tx
@@ -813,7 +813,7 @@ impl StockValuationAdjustmentLine {
         tx: &mut Transaction,
         vals: RawVals,
         sup: Super,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         let ids = this.ids();
         if !ids.is_empty() {
             let cost_ids: Vec<i64> = tx
@@ -836,7 +836,7 @@ impl StockValuationAdjustmentLine {
         this: &RecordSet<StockValuationAdjustmentLine>,
         tx: &mut Transaction,
         sup: Super,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         let ids = this.ids();
         if !ids.is_empty() {
             let cost_ids: Vec<i64> = tx
@@ -1006,7 +1006,7 @@ impl StockLandedCost {
         tx: &mut Transaction,
         vals: RawVals,
         sup: Super,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         if vals.contains("state") || vals.contains("account_move_id") {
             return Err(Error::validation(
                 "Landed cost status and journal entry are managed by posting actions.",
@@ -1022,7 +1022,7 @@ impl StockLandedCost {
         this: &RecordSet<StockLandedCost>,
         tx: &mut Transaction,
         sup: Super,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         let ids = this.ids();
         ensure_draft_costs(tx, &ids, "delete").await?;
         sup.call(tx, this.as_records(), ()).await

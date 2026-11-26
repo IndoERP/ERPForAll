@@ -44,6 +44,7 @@
           <!-- a posted or cancelled entry keeps only its reference editable, as the server does -->
           <group>
             <group>
+              <field name="reset_blocked" invisible="1"/>
               <field name="move_type" invisible="1" readonly="state != 'draft'"/>
               <field name="date" readonly="state != 'draft'"/>
               <field name="journal_id" readonly="state != 'draft'"/>
