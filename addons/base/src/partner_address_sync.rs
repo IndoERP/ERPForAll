@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use erp_sdk::prelude::*;
 use erp_sdk::{Operation, Operator};
 
-use crate::partner_address::{cells, fields, has_address, is_set, replacement};
+use crate::partner_address::{cells, fields, has_address, is_set, replacement, warm_cells};
 use crate::partner_address_budget::AssignmentBudget;
 
 #[derive(Default)]
@@ -556,7 +556,7 @@ async fn synchronize_inner(
                 let mut all_fields = address_fields.clone();
                 all_fields.extend(["parent_id".to_owned(), "type".to_owned()]);
                 // Prefetch the whole input once; record continuations share its cache.
-                cells(tx, &next.records, &all_fields).await?;
+                warm_cells(tx, &next.records, &all_fields).await?;
                 let remaining = next.records.iter().zip(next.changes).collect();
                 work.push(Work::Batch(BatchWork {
                     records: next.records,

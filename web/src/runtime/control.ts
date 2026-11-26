@@ -228,15 +228,31 @@ export function list(
   const update = (collection: unknown): void => {
     const { items: its, values, hasValue } = prepare(collection);
     const n = its.length;
+    const priorRows = rows;
     const keys = new Array<unknown>(n);
-    const seen = new Set<unknown>();
+    // The committed rows already have unique keys. Validate against their order before allocating a
+    // new index, and finish evaluating keys before writing any row signals.
+    let seen = priorRows.length === n ? null : new Set<unknown>();
     for (let i = 0; i < n; i++) {
       const k = key(its[i], values[i], i, n);
+      keys[i] = k;
+      if (seen === null) {
+        const prior = priorRows[i]!.key;
+        // The keyed map uses SameValueZero: both signed zeroes and all NaNs match.
+        if (k === prior || Object.is(k, prior)) continue;
+        seen = new Set();
+        for (let j = 0; j < i; j++) seen.add(keys[j]);
+      }
       if (seen.has(k)) throw new UIError(`Got duplicate key in t-foreach: ${String(k)}`, "loop");
       seen.add(k);
-      keys[i] = k;
     }
+    // A key callback can run user code. Use the committed state after all callbacks complete.
     const old = rows;
+    if (seen === null && old === priorRows) {
+      $count(n);
+      for (let i = 0; i < n; i++) old[i]!.update(its[i], values[i], i);
+      return;
+    }
     const next = new Array<ListRow>(n);
     const nextByKey = new Map<unknown, ListRow>();
     const scope = beginBuild(owner);

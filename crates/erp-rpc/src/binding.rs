@@ -84,7 +84,7 @@ impl HtmlValidation {
 }
 
 /// The body split into its parts, as sent (for the idempotency digest) and as bound.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct Bound {
     /// `ids` as sent (`[]` when absent).
     pub(crate) ids_json: Json,

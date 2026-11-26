@@ -68,13 +68,34 @@ const IDENTITY_KEYS: [&str; 2] = [keys::SECRET, "database.uuid"];
 /// # Errors
 /// The refusals of the parameter registry (`erp_sdk::params::registry_of`); a factory's error.
 pub fn secret_keys(registry: &erp_sdk::Registry) -> Result<Vec<String>> {
-    // publication checks of the installed declarations still refuse a bad registry
+    Ok(secret_key_names(registry)?.as_ref().to_vec())
+}
+
+thread_local! {
+    // One generation per worker. The declarations are pure, including linked uninstalled
+    // addons. No row values, permissions, model registry or database handles are retained.
+    static LAST_SECRET_KEYS: std::cell::RefCell<Option<(u64, Arc<[String]>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn secret_key_names(registry: &erp_sdk::Registry) -> Result<Arc<[String]>> {
+    let generation = registry.generation();
+    if let Some(names) = LAST_SECRET_KEYS.with_borrow(|slot| {
+        slot.as_ref()
+            .filter(|(known, _)| *known == generation)
+            .map(|(_, names)| Arc::clone(names))
+    }) {
+        return Ok(names);
+    }
+    // A failed publication or linked declaration must still fail. Build outside the borrow.
     erp_sdk::params::registry_of(registry)?;
-    Ok(SECRET_KEYS
+    let names: Arc<[String]> = SECRET_KEYS
         .iter()
         .map(|k| (*k).to_owned())
         .chain(erp_sdk::params::linked_secret_keys()?)
-        .collect())
+        .collect();
+    LAST_SECRET_KEYS.with_borrow_mut(|slot| *slot = Some((generation, Arc::clone(&names))));
+    Ok(names)
 }
 
 /// The refusal of a secret key outside superuser mode.
@@ -159,7 +180,7 @@ fn parse_bool(key: &str, value: &str) -> Result<bool> {
 
 /// Refuse a secret key outside superuser mode.
 fn guard_secret(env: &Env, key: &str) -> Result<()> {
-    if !env.su() && secret_keys(env.registry())?.iter().any(|k| k == key) {
+    if !env.su() && secret_key_names(env.registry())?.iter().any(|k| k == key) {
         return Err(secret_refusal(key));
     }
     Ok(())
@@ -973,7 +994,7 @@ impl IrConfigParameter {
         this.as_records()
             .check_access(tx, Operation::Create)
             .await?;
-        if !secret_keys(this.env().registry())?.contains(&key) {
+        if !secret_key_names(this.env().registry())?.contains(&key) {
             return Err(Error::validation(format!(
                 "Parameter {key} is not a secret; change it in System Parameters."
             )));

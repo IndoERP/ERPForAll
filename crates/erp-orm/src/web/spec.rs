@@ -172,10 +172,17 @@ impl Spec {
 
     /// The same specification without `name`.
     pub fn without(&self, name: &str) -> Self {
+        let items = self.items();
+        let Some(index) = items.iter().position(|(field, _)| field == name) else {
+            return self.clone();
+        };
+        if items.len() == 1 {
+            return Self::new();
+        }
         Self::from_items(
-            self.items()
+            items[..index]
                 .iter()
-                .filter(|(n, _)| n != name)
+                .chain(&items[index + 1..])
                 .cloned()
                 .collect(),
         )
@@ -613,5 +620,26 @@ pub(crate) fn py_str(value: &Value) -> String {
         Value::Date(d) => d.to_string(),
         Value::DateTime(d) => d.to_string(),
         other => other.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod without_tests {
+    use super::{Spec, SpecItem};
+
+    #[test]
+    fn without_preserves_field_order_and_keeps_clones_independent() {
+        let original = Spec::new()
+            .field("id")
+            .with("partner_id", SpecItem::fields(Spec::new().field("name")))
+            .field("amount");
+        let absent = original.without("display_name");
+        assert_eq!(absent, original);
+        assert!(absent.field("extra").contains("extra"));
+        assert!(!original.contains("extra"));
+        let removed = original.without("partner_id");
+        assert_eq!(removed, Spec::new().field("id").field("amount"));
+        assert!(original.contains("partner_id"));
+        assert!(Spec::new().field("name").without("name").is_empty());
     }
 }

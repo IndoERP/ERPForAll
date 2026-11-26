@@ -437,7 +437,8 @@ struct Plan<'a> {
     route: &'a Route,
     entry: String,
     principal: Principal,
-    bound: Bound,
+    // Retries and credential refreshes share the immutable parsed request.
+    bound: &'a Bound,
     key: Option<&'a IdempotencyKey>,
     request_digest: Option<[u8; 32]>,
     /// Only for keyed calls (the binding encoding costs an allocation).
@@ -1004,7 +1005,7 @@ impl RpcService {
                 .as_ref()
                 .map(|_| idempotency::binding_digest(&principal.binding_bytes())),
             principal,
-            bound,
+            bound: &bound,
             key: call.idempotency_key.as_ref(),
             request_digest,
             correlation: call.correlation.as_ref(),
@@ -1269,8 +1270,9 @@ impl RpcService {
             }
             Err(_) => return deadline_exceeded(plan, debug),
         };
-        let mut fresh_plan = plan.clone();
-        if plan.credential.is_some() {
+        let mut fresh_plan;
+        let plan = if plan.credential.is_some() {
+            fresh_plan = plan.clone();
             let env = tx.env();
             if let Err(error) = env.companies() {
                 return classify(error, debug);
@@ -1295,8 +1297,10 @@ impl RpcService {
             ) {
                 return Attempt::Fail(error, debug);
             }
-        }
-        let plan = &fresh_plan;
+            &fresh_plan
+        } else {
+            plan
+        };
         if plan.capture {
             tx.capture_statements(true);
         }

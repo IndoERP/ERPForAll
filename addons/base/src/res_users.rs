@@ -56,9 +56,10 @@ use erp_sdk::prelude::*;
 use erp_sdk::{Command, Domain, Env, RecId, ValueMap};
 
 use crate::group_graph::{
-    DEFAULT_USER_GROUP, GROUP_SYSTEM, GROUP_USER, GROUP_USER_REGULAR, Graph, direct_groups,
-    groups_by_xmlid, internal_group_ids, lock_users_for_type_check, lookup_groups, required_group,
-    required_groups, row_id, user_type_groups,
+    DEFAULT_USER_GROUP, GROUP_SYSTEM, GROUP_USER, GROUP_USER_REGULAR, Graph,
+    first_user_with_conflicting_types, groups_by_xmlid, internal_group_ids,
+    lock_users_for_type_check, lookup_groups, required_group, required_groups, row_id,
+    user_type_groups,
 };
 use crate::res_groups::exclusive_groups_error;
 
@@ -555,7 +556,6 @@ async fn check_user_types(users: &Records, tx: &mut Transaction) -> Result<()> {
     if types.len() < 2 {
         return Ok(());
     }
-    let graph = Graph::load(tx).await?;
     let ids: Vec<i64> = users
         .rec_ids()
         .iter()
@@ -564,23 +564,18 @@ async fn check_user_types(users: &Records, tx: &mut Transaction) -> Result<()> {
     // concurrent membership changes of the same users must conflict before the memberships are
     // read (write skew under REPEATABLE READ, `lock_users_for_type_check`)
     lock_users_for_type_check(tx, &ids).await?;
-    let direct = direct_groups(tx, &ids).await?;
-    for id in ids {
-        // a user without any membership row holds no group
-        let all = graph.up(direct.get(&id).cloned().unwrap_or_default());
-        if types.iter().filter(|t| all.contains(t)).count() > 1 {
-            let name = users.browse([id])?.sudo(true).value(tx, "name").await?;
-            let name = match name {
-                Value::Str(name) => Some(name.to_string()),
-                Value::False => None,
-                other => {
-                    return Err(Error::programming(format!(
-                        "res.users.name holds {other:?}, expected text"
-                    )));
-                }
-            };
-            return Err(exclusive_groups_error(tx, id, name.as_deref()).await?);
-        }
+    if let Some(id) = first_user_with_conflicting_types(tx, &ids, &types).await? {
+        let name = users.browse([id])?.sudo(true).value(tx, "name").await?;
+        let name = match name {
+            Value::Str(name) => Some(name.to_string()),
+            Value::False => None,
+            other => {
+                return Err(Error::programming(format!(
+                    "res.users.name holds {other:?}, expected text"
+                )));
+            }
+        };
+        return Err(exclusive_groups_error(tx, id, name.as_deref()).await?);
     }
     Ok(())
 }
