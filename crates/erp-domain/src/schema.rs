@@ -132,6 +132,10 @@ pub struct FieldInfo<'a> {
     /// Comodel of a relational field.
     pub comodel: Option<&'a str>,
     pub not_null: bool,
+    /// Whether this field is stored encrypted at rest.
+    pub encrypted: bool,
+    /// Whether this encrypted field maintains a searchable equality blind index.
+    pub blind_index: bool,
 }
 
 impl<'a> FieldInfo<'a> {
@@ -142,7 +146,16 @@ impl<'a> FieldInfo<'a> {
             field_type,
             comodel: None,
             not_null: false,
+            encrypted: false,
+            blind_index: false,
         }
+    }
+
+    /// Set encryption and blind-index metadata for the optimizer.
+    pub fn with_encrypted(mut self, encrypted: bool, blind_index: bool) -> Self {
+        self.encrypted = encrypted;
+        self.blind_index = blind_index;
+        self
     }
 
     /// Set the comodel (relational fields).

@@ -182,18 +182,20 @@ impl Transaction {
     /// keys are built: add the companion column and its index of each blind-indexed field and
     /// fill the rows whose hash is missing or stale; drop the companion column of an encrypted
     /// field that is no longer blind-indexed. `clear` lists the encrypted columns that still hold
-    /// clear UTF-8 bytes in this transaction (they are sealed after the schema sync).
-    ///
-    /// # Errors
-    ///
-    /// A database error; the missing-key error; a `Database` error naming the field when a
-    /// stored value does not open.
-    pub(crate) async fn sync_blind_indexes(
+    /// Add and backfill companion columns for blind-indexed encrypted fields before Phase 2 builds
+    /// unique keys over them. Populates existing rows before building the B-tree index and skips
+    /// view-backed models. Returns `true` if any DDL was executed.
+    pub(crate) async fn sync_blind_indexes_add_and_fill(
         &mut self,
         specs: &[&ModelSpec],
+        views: &rustc_hash::FxHashSet<String>,
         clear: &[ClearColumn],
-    ) -> Result<()> {
+    ) -> Result<bool> {
+        let mut ddl_ran = false;
         for spec in specs {
+            if views.contains(&spec.table) {
+                continue;
+            }
             let encrypted: Vec<&FieldSpec> = spec
                 .fields
                 .iter()
@@ -206,64 +208,133 @@ impl Transaction {
                 .iter()
                 .map(|f| format!("{}{BLIND_INDEX_SUFFIX}", f.name))
                 .collect();
-            let rows = self
-                .query(
-                    "SELECT a.attname::text FROM pg_attribute a \
-                     WHERE a.attrelid = to_regclass($1) AND a.attname = ANY($2) \
-                     AND a.attnum > 0 AND NOT a.attisdropped",
-                    &[&erp_sql::quote(&spec.table), &companions],
-                )
+            let existing = self
+                .existing_blind_columns(&spec.table, &companions)
                 .await?;
-            let mut existing: Vec<String> = Vec::with_capacity(rows.len());
-            for row in rows {
-                existing.push(
-                    row.try_get(0)
-                        .map_err(db_error("could not read the catalog of a blind index"))?,
-                );
-            }
             for field in encrypted {
-                let column = format!("{}{BLIND_INDEX_SUFFIX}", field.name);
-                let exists = existing.contains(&column);
-                match Blind::of(spec, field) {
-                    Some(blind) => {
-                        let in_clear = clear.iter().any(|c| c.is(&spec.table, field.name));
-                        self.add_blind_index(spec, &blind, exists).await?;
-                        self.fill_blind_index(spec, field, &blind, in_clear).await?;
-                    }
-                    None if exists => {
-                        self.batch(&format!(
-                            "ALTER TABLE {} DROP COLUMN {}",
-                            erp_sql::quote(&spec.table),
-                            erp_sql::quote(&column)
-                        ))
-                        .await?;
-                    }
-                    None => {}
+                let Some(blind) = Blind::of(spec, field) else {
+                    continue;
+                };
+                let exists = existing.iter().any(|c| c == blind.column());
+                let in_clear = clear.iter().any(|c| c.is(&spec.table, field.name));
+                if !exists {
+                    let table = erp_sql::quote(&spec.table);
+                    let column = erp_sql::quote(blind.column());
+                    self.batch(&format!(
+                        "ALTER TABLE {table} ADD COLUMN {column} text COLLATE \"C\""
+                    ))
+                    .await?;
+                    ddl_ran = true;
+                }
+                // Fill existing rows BEFORE building the B-tree index to avoid page-split bloat.
+                self.fill_blind_index(spec, field, &blind, in_clear).await?;
+                let idx_name = index_name(&spec.table, blind.column());
+                let has_valid_idx = self.has_valid_blind_index(&spec.table, &idx_name).await?;
+                if !has_valid_idx {
+                    let table = erp_sql::quote(&spec.table);
+                    let column = erp_sql::quote(blind.column());
+                    self.batch(&format!(
+                        "CREATE INDEX IF NOT EXISTS {} ON {table} ({column})",
+                        erp_sql::quote(&idx_name)
+                    ))
+                    .await?;
+                    ddl_ran = true;
                 }
             }
         }
-        Ok(())
+        Ok(ddl_ran)
     }
 
-    async fn add_blind_index(
+    /// Drop companion columns of encrypted fields that no longer declare `blind_index = true`.
+    /// Runs AFTER Phase 2 drops superseded unique keys so PostgreSQL does not fail with `2BP01`.
+    pub(crate) async fn sync_blind_indexes_drop(
         &mut self,
-        spec: &ModelSpec,
-        blind: &Blind,
-        exists: bool,
-    ) -> Result<()> {
-        let table = erp_sql::quote(&spec.table);
-        let column = erp_sql::quote(blind.column());
-        if !exists {
-            self.batch(&format!(
-                "ALTER TABLE {table} ADD COLUMN {column} text COLLATE \"C\""
-            ))
-            .await?;
+        specs: &[&ModelSpec],
+        views: &rustc_hash::FxHashSet<String>,
+    ) -> Result<bool> {
+        let mut ddl_ran = false;
+        for spec in specs {
+            if views.contains(&spec.table) {
+                continue;
+            }
+            let encrypted: Vec<&FieldSpec> = spec
+                .fields
+                .iter()
+                .filter(|f| f.encrypted && f.has_column() && f.inherited.is_none())
+                .collect();
+            if encrypted.is_empty() {
+                continue;
+            }
+            let companions: Vec<String> = encrypted
+                .iter()
+                .map(|f| format!("{}{BLIND_INDEX_SUFFIX}", f.name))
+                .collect();
+            let existing = self
+                .existing_blind_columns(&spec.table, &companions)
+                .await?;
+            for field in encrypted {
+                if Blind::of(spec, field).is_some() {
+                    continue;
+                }
+                let column = format!("{}{BLIND_INDEX_SUFFIX}", field.name);
+                if existing.contains(&column) {
+                    self.batch(&format!(
+                        "ALTER TABLE {} DROP COLUMN {}",
+                        erp_sql::quote(&spec.table),
+                        erp_sql::quote(&column)
+                    ))
+                    .await?;
+                    ddl_ran = true;
+                }
+            }
         }
-        self.batch(&format!(
-            "CREATE INDEX IF NOT EXISTS {} ON {table} ({column})",
-            erp_sql::quote(&index_name(&spec.table, blind.column()))
-        ))
-        .await
+        Ok(ddl_ran)
+    }
+
+    async fn existing_blind_columns(
+        &mut self,
+        table: &str,
+        companions: &[String],
+    ) -> Result<Vec<String>> {
+        let rows = self
+            .query(
+                "SELECT a.attname::text \
+                 FROM pg_attribute a \
+                 JOIN pg_class c ON c.oid = a.attrelid \
+                 JOIN pg_namespace n ON n.oid = c.relnamespace \
+                 WHERE n.nspname = current_schema() AND c.relname = $1 \
+                   AND a.attname = ANY($2) AND a.attnum > 0 AND NOT a.attisdropped",
+                &[&table, &companions],
+            )
+            .await?;
+        let mut existing = Vec::with_capacity(rows.len());
+        for row in rows {
+            existing.push(
+                row.try_get(0)
+                    .map_err(db_error("could not read the catalog of a blind index"))?,
+            );
+        }
+        Ok(existing)
+    }
+
+    async fn has_valid_blind_index(&mut self, table: &str, idx_name: &str) -> Result<bool> {
+        let rows = self
+            .query(
+                "SELECT EXISTS ( \
+                     SELECT 1 FROM pg_index i \
+                     JOIN pg_class idx ON idx.oid = i.indexrelid \
+                     JOIN pg_class tbl ON tbl.oid = i.indrelid \
+                     JOIN pg_namespace n ON n.oid = tbl.relnamespace \
+                     WHERE n.nspname = current_schema() AND tbl.relname = $1 \
+                       AND idx.relname = $2 AND i.indisvalid \
+                 )",
+                &[&table, &idx_name],
+            )
+            .await?;
+        Ok(rows
+            .first()
+            .and_then(|r| r.try_get::<_, bool>(0).ok())
+            .unwrap_or(false))
     }
 
     /// Fill the companion column of `field` where it does not hold the hash of the current index

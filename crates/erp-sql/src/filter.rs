@@ -1066,10 +1066,14 @@ impl Renderer<'_> {
                     .registry
                     .model_by_id(self.table_model(scope, col.table));
                 let field = model.field_by_id(col.field);
+                let Some(blind_col) = field.blind_index_column() else {
+                    out.push_str("FALSE");
+                    return;
+                };
                 let c = format!(
                     "{}.{}",
                     quote(self.table_alias(scope, col.table)),
-                    quote(&field.blind_index_column().unwrap_or_default())
+                    quote(&blind_col)
                 );
                 let test = values.then(|| {
                     let p = self.next("text[]");
@@ -2386,46 +2390,97 @@ impl<'a> Planner<'a> {
         col: Col,
         condition: &Condition,
     ) -> Result<Token> {
+        let value_kind = |v: &Value| -> &'static str {
+            match v {
+                Value::Bool(_) => "boolean",
+                Value::Int(_) => "integer",
+                Value::Float(_) => "float",
+                Value::Str(_) => "text",
+                Value::Date(_) => "date",
+                Value::Datetime(_) => "datetime",
+                Value::List(_) => "list",
+                Value::Set(_) => "set",
+                Value::Domain(_) => "domain",
+                Value::Param(_) => "parameter",
+                Value::Opaque(_) => "opaque",
+                Value::NewId => "new_id",
+            }
+        };
         let positive = condition.operator() == Operator::In;
         let items: Vec<&Value> = match condition.value() {
             Value::Set(set) => set.iter().collect(),
             Value::List(list) => list.iter().collect(),
             other => {
                 return Err(Error::programming(format!(
-                    "condition_to_sql() 'in' operator expects a collection, not a {other}"
+                    "condition_to_sql() 'in' operator expects a collection, not a {}",
+                    value_kind(other)
                 )));
             }
         };
-        // as on a clear column, `False` (no value) and `''` match each other
-        let mut hashes: Vec<Value> = Vec::with_capacity(items.len() + 2);
+        const MAX_BLIND_IN_ITEMS: usize = 10_000;
+        if items.len() > MAX_BLIND_IN_ITEMS {
+            return Err(self.input_error(format!(
+                "The field {} of {} is encrypted: an equality list cannot exceed \
+                 {MAX_BLIND_IN_ITEMS} items",
+                field.name, model.name
+            )));
+        }
+        // as on a clear column, `False` (no value) and `''` match each other; build the hashed
+        // parameter array directly so unhashed `""` is never injected into the companion query
+        let mut params: Vec<Scalar> = Vec::with_capacity(items.len() + 1);
         let mut falsy = false;
         for item in items {
             match item {
                 Value::Bool(false) => falsy = true,
                 Value::Str(text) if text.is_empty() => falsy = true,
-                Value::Str(text) => hashes.push(Value::Str(crate::blind::hash(
-                    model.name, field.name, text,
-                )?)),
+                Value::Str(text) => {
+                    let digest =
+                        Scalar::Text(crate::blind::hash(model.name, field.name, text)?.into());
+                    if !params.contains(&digest) {
+                        params.push(digest);
+                    }
+                }
                 _ => {
                     return Err(self.input_error(format!(
-                        "The field {} of {} is encrypted: it is compared with text, not with \
-                         {item}",
-                        field.name, model.name
+                        "The field {} of {} is encrypted: it is compared with text, not with {}",
+                        field.name,
+                        model.name,
+                        value_kind(item)
                     )));
                 }
             }
         }
         if falsy {
-            hashes.push(Value::Str(crate::blind::hash(model.name, field.name, "")?));
-            hashes.push(Value::Bool(false));
+            let empty_digest = Scalar::Text(crate::blind::hash(model.name, field.name, "")?.into());
+            if !params.contains(&empty_digest) {
+                params.push(empty_digest);
+            }
         }
-        let refs: Vec<&Value> = hashes.iter().collect();
-        let (values, null) =
-            self.literal_in_part(model, field, ScalarKind::Text, positive, &refs, condition)?;
+        let has_values = !params.is_empty();
+        // Companion `<field>__bidx` columns are created nullable, so NULL handling always treats
+        // them as nullable.
+        let null = if positive == falsy {
+            if has_values {
+                NullTest::OrIsNull
+            } else {
+                NullTest::IsNull
+            }
+        } else if !positive && falsy && !has_values {
+            NullTest::IsNotNull
+        } else if has_values {
+            NullTest::None
+        } else if positive {
+            NullTest::False
+        } else {
+            NullTest::True
+        };
+        if has_values {
+            self.params.push(Param::Array(ScalarKind::Text, params));
+        }
         Ok(Token::BlindIn {
             col,
             positive,
-            values: values.is_some(),
+            values: has_values,
             null,
         })
     }

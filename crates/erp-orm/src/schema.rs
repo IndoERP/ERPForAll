@@ -2057,7 +2057,7 @@ impl Transaction {
         // the limits the transaction began with no longer hold: errors say so
         self.note_limits_changed(Some(SCHEMA_STATEMENT_TIMEOUT_DURATION));
         let target = Replan { table, recorded };
-        let clear = self.clear_encrypted_columns(&specs).await?;
+        // `plan_schema_step` is read-only: never seal clear columns or mutate table data here.
         let steps = self
             .init_models_locked(
                 &specs,
@@ -2068,10 +2068,9 @@ impl Transaction {
                     replan: Some(&target),
                     sql_objects: crate::schema_sqlobj::SqlObjectScope::Full,
                 },
-                &clear,
+                &[],
             )
             .await?;
-        self.seal_clear_columns(&clear).await?;
         if let Some(step) = steps
             .into_iter()
             .find(|step| step.table == table && step.key == key.as_str())
@@ -3805,8 +3804,10 @@ impl Transaction {
         // S1: independent functions before the tables
         self.install_sql_objects_early(&mut sql_objects).await?;
         self.run_phase(phase1, None).await?;
-        // the companion columns of blind indexes are filled before phase 2 builds the keys on them
-        self.sync_blind_indexes(specs, clear).await?;
+        // the companion columns of blind indexes are added & filled before phase 2 builds keys on them
+        let mut blind_ddl = self
+            .sync_blind_indexes_add_and_fill(specs, &cat.views, clear)
+            .await?;
         self.record_generated_provenance(&pending_provenance)
             .await?;
         for (table, col) in &pending_analyzes {
@@ -3862,6 +3863,13 @@ impl Transaction {
             }
         }
         self.run_phase(phase2, diagnose(conflicts2)).await?;
+        // drop retired blind-index companion columns AFTER phase 2 drops dependent unique keys
+        if self.sync_blind_indexes_drop(specs, &cat.views).await? {
+            blind_ddl = true;
+        }
+        if blind_ddl {
+            self.signal_schema_change().await?;
+        }
         self.run_phase(phase3, diagnose(conflicts3)).await?;
         self.run_phase(phase4, diagnose(conflicts4)).await?;
         self.run_signal_upgrade(signal_upgrade).await?;

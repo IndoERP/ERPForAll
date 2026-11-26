@@ -408,7 +408,12 @@ static INSTALLED: OnceLock<Arc<FieldKeys>> = OnceLock::new();
 pub fn install(keys: FieldKeys) -> Result<()> {
     let fingerprint = keys.fingerprint;
     let installed = INSTALLED.get_or_init(|| Arc::new(keys));
-    if installed.fingerprint != fingerprint {
+    let diff = installed
+        .fingerprint
+        .iter()
+        .zip(&fingerprint)
+        .fold(0u8, |acc, (a, b)| acc | (a ^ b));
+    if diff != 0 {
         return Err(Error::programming(
             "another set of field keys is already installed in this process",
         ));
@@ -500,14 +505,21 @@ pub fn validate(registry: &Registry) -> Result<()> {
             }
         }
         for field in &model.fields {
-            if let Some(column) = field.blind_index_column()
-                && model.field(&column).is_some()
-            {
-                return Err(Error::programming(format!(
-                    "{}.{column}: this field has the name of the blind index column of the \
-                     encrypted field '{}'",
-                    model.name, field.name
-                )));
+            if let Some(column) = field.blind_index_column() {
+                if column.len() > 63 {
+                    return Err(Error::programming(format!(
+                        "{}.{}: blind index companion column '{column}' exceeds PostgreSQL's \
+                         63-byte identifier limit",
+                        model.name, field.name
+                    )));
+                }
+                if model.field(&column).is_some() {
+                    return Err(Error::programming(format!(
+                        "{}.{column}: this field has the name of the blind index column of the \
+                         encrypted field '{}'",
+                        model.name, field.name
+                    )));
+                }
             }
         }
     }

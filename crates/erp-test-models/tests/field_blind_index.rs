@@ -440,3 +440,87 @@ async fn duplicates_in_existing_rows_stop_the_key() {
     drop(tx);
     h.cleanup().await.unwrap();
 }
+
+#[tokio::test]
+async fn optimizer_does_not_fold_disallowed_operators_on_encrypted_fields() {
+    let h = harness(Shape::Blind).await;
+    let mut tx = h.begin().await.unwrap();
+    create(&mut tx, &[("a", Some(NIK_A)), ("none", None)]).await;
+    let people = tx.env().records(MODEL).unwrap();
+    for (op, val) in [
+        (Operator::ILike, Value::from("")),
+        (Operator::EqLike, Value::from("")),
+        (Operator::EqIfSet, Value::Bool(false)),
+    ] {
+        let error = people
+            .search(&mut tx, &condition(op, val))
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .message()
+                .contains("national_id of test_bidx.person is encrypted"),
+            "{op:?}: {}",
+            error.message()
+        );
+    }
+    // `= false` must check only `IS NULL` on `__bidx`, never `OR __bidx = ''`.
+    tx.batch(&format!(
+        "UPDATE {TABLE} SET national_id__bidx = '' WHERE name = 'a'"
+    ))
+    .await
+    .unwrap();
+    assert_eq!(
+        names(&mut tx, &condition(Operator::Eq, Value::Bool(false))).await,
+        ["none"]
+    );
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[tokio::test]
+async fn removing_key_and_blind_index_together_drops_both_cleanly() {
+    let h = harness(Shape::BlindKeyed).await;
+    let mut tx = h.begin().await.unwrap();
+    create(&mut tx, &[("a", Some(NIK_A))]).await;
+    tx.commit().await.unwrap();
+
+    // Upgrading from BlindKeyed -> Encrypted drops the unique constraint in Phase 2 before
+    // dropping `national_id__bidx` (avoids PostgreSQL 2BP01 dependent-object failure).
+    let encrypted = orm(&h, Shape::Encrypted);
+    let mut tx = encrypted.begin(SUPERUSER_ID).await.unwrap();
+    tx.init_models(&[]).await.unwrap();
+    tx.commit().await.unwrap();
+    let mut tx = encrypted.begin(SUPERUSER_ID).await.unwrap();
+    assert_eq!(
+        count(
+            &mut tx,
+            &format!(
+                "SELECT count(*)::text FROM information_schema.columns \
+                 WHERE table_name = '{TABLE}' AND column_name = 'national_id__bidx'"
+            )
+        )
+        .await,
+        "0"
+    );
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+#[test]
+fn blind_index_companion_column_over_63_bytes_is_refused() {
+    let long_name: &'static str = Box::leak("a".repeat(58).into_boxed_str());
+    let fields = vec![
+        FieldDecl::char("name"),
+        FieldDecl::char(long_name).encrypted(true).blind_index(true),
+    ];
+    let decl = ModelDecl::new("test_bidx", "test_bidx.longcol").fields(Vec::leak(fields));
+    let error = RegistryBuilder::new([&ADDON])
+        .with_decls([&*Box::leak(Box::new(decl))])
+        .build()
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("63"),
+        "expected 63-byte identifier error, got: {error}"
+    );
+}

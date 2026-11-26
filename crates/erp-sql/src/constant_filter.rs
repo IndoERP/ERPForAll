@@ -139,6 +139,11 @@ fn node(domain: &Domain, model: &ModelSpec) -> Result<String, String> {
                     "field '{name}' is company-dependent and requires a prepared company context"
                 ));
             }
+            if field.encrypted {
+                return Err(format!(
+                    "field '{name}' is encrypted and cannot be used in a constant filter"
+                ));
+            }
             if !field.has_column() {
                 return Err(format!("field '{name}' is not stored"));
             }

@@ -2265,6 +2265,15 @@ fn build_model(
                 f.name
             )));
         }
+        if let Some(blind_col) = f.blind_index_column()
+            && blind_col.len() > MAX_IDENTIFIER_LEN
+        {
+            return Err(Error::validation(format!(
+                "Blind-indexed field '{}' on model '{name}' produces companion column \
+                 '{blind_col}' exceeding 63 bytes (PostgreSQL identifier limit)",
+                f.name
+            )));
+        }
     }
     // Texts that end up in SQL comments or messages may not contain NUL bytes.
     let mut texts: Vec<&str> = vec![name, &description];

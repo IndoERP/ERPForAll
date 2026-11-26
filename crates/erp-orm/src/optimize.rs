@@ -85,7 +85,9 @@ impl Schema for RegistrySchema<'_> {
     fn field(&self, model: &str, field: &str) -> Option<FieldInfo<'_>> {
         let spec = self.0.model(model)?.field(field)?;
         let (ty, comodel) = domain_type(&spec.ty);
-        let mut info = FieldInfo::new(spec.name, ty).with_not_null(not_null(spec));
+        let mut info = FieldInfo::new(spec.name, ty)
+            .with_not_null(not_null(spec))
+            .with_encrypted(spec.encrypted, spec.blind_index);
         if let Some(comodel) = comodel {
             info = info.with_comodel(comodel);
         }

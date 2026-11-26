@@ -396,7 +396,7 @@ pub struct FieldSpec {
     pub encrypted: bool,
     /// `blind_index`: an encrypted field whose column has a companion column
     /// ([`FieldSpec::blind_index_column`]) holding an HMAC-SHA256 of the value, which equality
-    /// conditions, typed keys and typed indexes use. A related field whose path ends at such a
+    /// conditions and typed keys use. A related field whose path ends at such a
     /// field has one too.
     pub blind_index: bool,
     /// `db_default`: schema sync keeps the static default (a boolean) as the column's
@@ -484,8 +484,8 @@ impl FieldSpec {
         self.column().is_some()
     }
 
-    /// The companion column of a stored blind-indexed field (`<field>__bidx`, `bytea`), which
-    /// holds the HMAC-SHA256 of the value; `None` for any other field.
+    /// The companion column of a stored blind-indexed field (`<field>__bidx`, `text COLLATE "C"`),
+    /// which holds the `<key_id>:<hex>` HMAC-SHA256 of the value; `None` for any other field.
     pub fn blind_index_column(&self) -> Option<String> {
         (self.blind_index && self.encrypted && self.has_column())
             .then(|| format!("{}{BLIND_INDEX_SUFFIX}", self.name))

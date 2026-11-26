@@ -823,6 +823,10 @@ fn related_encrypted(
                 "is tracked"
             } else if field.collation_declared {
                 "declares a collation"
+            } else if field.translate {
+                "is translated"
+            } else if field.company_dependent {
+                "is company-dependent"
             } else {
                 continue;
             };

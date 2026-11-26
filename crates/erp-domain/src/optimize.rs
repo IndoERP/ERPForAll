@@ -197,6 +197,18 @@ fn condition_step(
             Value::Domain(sub),
         ));
     }
+    // Encrypted fields reject disallowed operators in the ORM optimizer; do not fold them into
+    // TRUE/FALSE or rewrite `=like ''` into `= False` during BASIC optimization.
+    if field.encrypted {
+        let allowed_equality = field.blind_index
+            && matches!(
+                condition.operator(),
+                Operator::Eq | Operator::Ne | Operator::In | Operator::NotIn
+            );
+        if !allowed_equality {
+            return Ok(domain.clone());
+        }
+    }
     let rules = operator_rules(condition.operator())
         .iter()
         .chain(type_rules(field.field_type));
