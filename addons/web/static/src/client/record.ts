@@ -139,6 +139,61 @@ function writableValue(field: Field, value: unknown, initial?: unknown, refs = f
   }
   return value;
 }
+/** Serialize parent record draft fields for a one2many line's virtual inverse many2one. */
+export function parentOnchangeValues(fields: readonly Field[], values: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  const out: Record<string, unknown> = { id: false };
+  for (const field of fields) {
+    if (field.name === "id" || field.name === "display_name" || field.kind === "one2many" || !Object.hasOwn(values, field.name)) continue;
+    if (field.kind === "binary" && isBinarySize(values[field.name])) continue;
+    out[field.name] = writableValue(field, values[field.name]);
+  }
+  return out;
+}
+/** Serialize a one2many line's current values (including readonly fields) for `<line_model>/onchange`. */
+export function lineOnchangeValues(fields: readonly Field[], line: Line): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const field of fields) {
+    if (field.name === "id" || field.kind === "one2many" || !Object.hasOwn(line, field.name)) continue;
+    if (line["id"] === undefined && untouchedEmptyRelation(field, line)) continue;
+    if (field.kind === "binary" && isBinarySize(line[field.name])) continue;
+    out[field.name] = writableValue(field, line[field.name]);
+  }
+  return out;
+}
+/** Validate and normalize an optional onchange warning payload. */
+export function parseOnchangeWarning(raw: unknown): OnchangeWarning | undefined {
+  if (raw === undefined) return undefined;
+  const warning = object(raw, "onchange warning");
+  for (const key of Object.keys(warning)) if (!["title", "message", "type", "className", "sticky"].includes(key)) throw new ClientError("server", `Unknown onchange warning option: ${key}.`);
+  const className = Object.hasOwn(warning, "className") ? notificationClasses(warning["className"], "onchange warning") : undefined;
+  if (Object.hasOwn(warning, "sticky") && typeof warning["sticky"] !== "boolean") throw new ClientError("server", "Onchange warning sticky must be boolean.");
+  if (typeof warning["message"] !== "string" || warning["title"] !== undefined && typeof warning["title"] !== "string" || warning["type"] !== undefined && typeof warning["type"] !== "string") throw new ClientError("server", "Invalid onchange warning.");
+  const title = warning["title"] === undefined ? "Warning" : warning["title"];
+  const type = warning["type"] === undefined ? "dialog" : warning["type"];
+  // MessageServices forwards the body unchanged to DialogService, whose body cap is 8192 bytes.
+  if (new TextEncoder().encode(warning["message"]).length > 8192) throw new ClientError("server", "Onchange warning message must be text of at most 8192 bytes.");
+  if (new TextEncoder().encode(title).length > 4096 || type.length > 256) throw new ClientError("server", "Onchange warning exceeds its text limit.");
+  return { title, message: warning["message"], type, ...(className === undefined ? {} : { className }), ...(Object.hasOwn(warning, "sticky") ? { sticky: warning["sticky"] as boolean } : {}) };
+}
+/** Apply an onchange `value` map onto a line or record value dictionary. */
+export function applyOnchangeUpdate(fields: readonly Field[], current: Record<string, unknown>, update: Record<string, unknown>, firstCall: boolean): { values: Record<string, unknown>; keys: string[] } {
+  let values = { ...current };
+  const keys: string[] = [];
+  for (const [key, value] of Object.entries(update)) {
+    const field = fields.find(candidate => candidate.name === key);
+    if (!field) throw new ClientError("server", "Onchange returned an unrequested field.");
+    const previous = firstCall ? undefined : values[key];
+    const resolved = field.kind === "many2many" ? relationDiff(previous, value) : field.kind === "one2many" ? lineDiff(previous, value) : value;
+    values = { ...values, [key]: resolved };
+    keys.push(key);
+  }
+  if (firstCall) {
+    for (const field of fields) {
+      if ((field.kind === "one2many" || field.kind === "many2many") && Object.hasOwn(values, field.name) && !Object.hasOwn(update, field.name)) values = { ...values, [field.name]: [] };
+    }
+  }
+  return { values, keys };
+}
 // Onchange returns x2many command diffs; web_read returns projected records. Never send
 // display labels back as writes, or treat a command tuple as a persisted identifier.
 function relationDiff(previous: unknown, update: unknown, defaults = false): unknown[] {
@@ -315,38 +370,16 @@ export class RecordState {
     // Draft admission precedes mutation so a malformed source cannot destroy an accepted draft.
     this.editorOwner?.admit({ ...this.values, ...update });
     const firstCall = name.length === 0;
-    for (const [key, value] of Object.entries(update)) {
-      if (!this.fields.some(field => field.name === key)) throw new ClientError("server", "Onchange returned an unrequested field.");
-      const field = this.fields.find(candidate => candidate.name === key)!;
-      const previous = firstCall ? undefined : this.values[key];
-      const resolved = field.kind === "many2many" ? relationDiff(previous, value) : field.kind === "one2many" ? lineDiff(previous, value) : value;
-      this.values = { ...this.values, [key]: resolved };
-      if (!firstCall) this.changes.add(key);
-    }
-    // The complete first answer leaves out an x2many whose lines it emptied (no commands): the
-    // default lines sent are gone, not kept.
-    if (firstCall) {
-      for (const field of this.fields) {
-        if ((field.kind === "one2many" || field.kind === "many2many") && Object.hasOwn(this.values, field.name) && !Object.hasOwn(update, field.name)) this.values = { ...this.values, [field.name]: [] };
-      }
-    }
+    const applied = applyOnchangeUpdate(this.fields, this.values, update, firstCall);
+    this.values = applied.values;
+    if (!firstCall) for (const key of applied.keys) this.changes.add(key);
     this.editorOwner?.onchangeAccepted(this.values);
     if (result["warning"] !== undefined) {
       // Ordinary onchange retains its updated values when warning presentation is refused.
       // Clear older feedback and report the boundary instead of publishing stale or truncated text.
       this.warning = ""; this.warningDetails = undefined;
-      const warning = object(result["warning"], "onchange warning");
-      for (const key of Object.keys(warning)) if (!["title", "message", "type", "className", "sticky"].includes(key)) throw new ClientError("server", `Unknown onchange warning option: ${key}.`);
-      const className = Object.hasOwn(warning, "className") ? notificationClasses(warning["className"], "onchange warning") : undefined;
-      if (Object.hasOwn(warning, "sticky") && typeof warning["sticky"] !== "boolean") throw new ClientError("server", "Onchange warning sticky must be boolean.");
-      if (typeof warning["message"] !== "string" || warning["title"] !== undefined && typeof warning["title"] !== "string" || warning["type"] !== undefined && typeof warning["type"] !== "string") throw new ClientError("server", "Invalid onchange warning.");
-      const title = warning["title"] === undefined ? "Warning" : warning["title"];
-      const type = warning["type"] === undefined ? "dialog" : warning["type"];
-      // MessageServices forwards the body unchanged to DialogService, whose body cap is 8192 bytes.
-      if (new TextEncoder().encode(warning["message"]).length > 8192) throw new ClientError("server", "Onchange warning message must be text of at most 8192 bytes.");
-      if (new TextEncoder().encode(title).length > 4096 || type.length > 256) throw new ClientError("server", "Onchange warning exceeds its text limit.");
-      this.warning = warning["message"];
-      this.warningDetails = { title, message: this.warning, type, ...(className === undefined ? {} : { className }), ...(Object.hasOwn(warning, "sticky") ? { sticky: warning["sticky"] as boolean } : {}) };
+      const details = parseOnchangeWarning(result["warning"]);
+      if (details) { this.warning = details.message; this.warningDetails = details; }
     } else { this.warning = ""; this.warningDetails = undefined; }
   }
   async onchange(name: string | readonly string[]): Promise<void> {

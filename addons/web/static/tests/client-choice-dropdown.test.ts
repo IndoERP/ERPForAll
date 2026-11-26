@@ -62,3 +62,12 @@ test("the trigger's accessible name carries the current value", () => {
   control.setValue("archived");
   expect(control.trigger.getAttribute("aria-label")).toBe("Records: Archived");
 });
+
+test("autofill plain keydown and keyup events on nested controls do not throw", () => {
+  const control = createChoiceDropdown({ label: "Records", choices, value: "active", onChange: () => {} });
+  document.body.append(control.element);
+  control.trigger.click();
+  expect(() => control.trigger.dispatchEvent(new Event("keydown", { bubbles: true }))).not.toThrow();
+  expect(() => control.element.querySelector('[role="menu"]')!.dispatchEvent(new Event("keydown", { bubbles: true }))).not.toThrow();
+  control.dispose();
+});

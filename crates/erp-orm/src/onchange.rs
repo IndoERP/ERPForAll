@@ -463,6 +463,114 @@ fn form_commands(model: &ModelSpec, field: &str, value: &Value) -> Result<Vec<Fo
     Ok(out)
 }
 
+/// Returns the parent's draft values when a `Many2one` field carries a virtual parent dictionary
+/// (a dictionary with `'id'` plus at least one parent field beyond `'id'`/`'display_name'`).
+/// A top-level `Many2one` dictionary carrying unsaved virtual parent fields (`id` is `false` or
+/// `0` and at least one field besides `id` / `display_name` is present), as sent by a `one2many`
+/// line form whose parent record is unsaved or has unsaved draft header edits.
+///
+/// A `Many2one` dictionary with a real positive `id` is NOT treated as a virtual parent: it may be
+/// a `web_read` row echoed back by a client, whose extra keys are ignored by `form_cell`.
+fn virtual_parent_dict<'a>(
+    field: &erp_registry::FieldSpec,
+    value: &'a Value,
+) -> Option<&'a ValueMap> {
+    if !matches!(field.ty, FieldType::Many2one { .. }) {
+        return None;
+    }
+    let Value::Map(map) = value else {
+        return None;
+    };
+    if !matches!(
+        map.get("id"),
+        Some(Value::False | Value::Bool(false) | Value::Int(0))
+    ) {
+        return None;
+    }
+    if map.keys().any(|k| k != "id" && k != "display_name") {
+        Some(map.as_ref())
+    } else {
+        None
+    }
+}
+
+/// Build an in-memory parent record from a virtual parent dictionary on a top-level `Many2one`
+/// field (e.g., an unsaved or edited parent record passed by a `one2many` line form).
+async fn resolve_virtual_parent(
+    tx: &mut Transaction,
+    record: &Records,
+    field: &erp_registry::FieldSpec,
+    dict: &ValueMap,
+    applying: &mut Applying,
+    level: usize,
+) -> Result<RecId> {
+    let model = record.spec();
+    if level != 0 {
+        return Err(Error::validation(format!(
+            "Wrong value for {}.{}: nested virtual parent dictionaries are not supported",
+            model.name, field.name
+        )));
+    }
+    let registry = Arc::clone(record.env().registry());
+    let comodel = crate::relational::comodel_of(&registry, field)?;
+    let co = Records::empty(record.env().clone(), comodel.id);
+    match dict.get("id") {
+        Some(Value::False | Value::Bool(false) | Value::Int(0)) => {
+            tx.check_model(record.env(), comodel.id, Operation::Read)?;
+        }
+        other => {
+            return Err(bad_value(model, field.name, other.unwrap_or(&Value::False)));
+        }
+    }
+    crate::database_generated::check_write_names(tx, comodel, dict.keys().map(String::as_str))?;
+    let mut parent_vals = ValueMap::new();
+    for (key, val) in dict {
+        if key == "id" {
+            continue;
+        }
+        let target_field = comodel.field(key).ok_or_else(|| {
+            Error::validation(format!("Invalid field '{key}' on model '{}'", comodel.name))
+        })?;
+        if matches!(target_field.ty, FieldType::One2many { .. }) {
+            return Err(Error::validation(format!(
+                "Wrong value for {}.{}: virtual parent cannot carry one2many field '{key}'",
+                model.name, field.name
+            )));
+        }
+        if tx
+            .shared
+            .graph
+            .model(comodel.id)
+            .is_builtin_display_name(target_field.id)
+            || tx
+                .shared
+                .graph
+                .requires_persisted((comodel.id, target_field.id))
+        {
+            continue;
+        }
+        parent_vals.insert(key.clone(), val.clone());
+    }
+    let parent = tx.new_record(&co, RawVals::new(), None, None).await?;
+    let empty_spec = Spec::new();
+    let mut parent_applying = Applying {
+        first_new_form: true,
+        commands: applying.commands,
+        ..Applying::default()
+    };
+    update_cache(
+        tx,
+        &parent,
+        &parent_vals,
+        &empty_spec,
+        &mut parent_applying,
+        level + 1,
+    )
+    .await?;
+    applying.commands = parent_applying.commands;
+    single_id(&parent)
+}
+
 /// A form's value of a scalar or many2one field as a cell (the input converter; a many2one may
 /// also be sent as `{'id': …, 'display_name': …}`).
 fn form_cell(model: &ModelSpec, name: &str, value: &Value) -> Result<Cell> {
@@ -892,6 +1000,9 @@ struct Applying {
     /// each.
     owners: Owners,
     seen: FxHashSet<(ModelId, FieldId, RecId)>,
+    /// `(model, field, record)` on in-memory x2many lines modified by form commands, once each.
+    line_changes: Owners,
+    seen_line_changes: FxHashSet<(ModelId, FieldId, RecId)>,
     commands: usize,
 }
 
@@ -900,6 +1011,13 @@ impl Applying {
     fn own(&mut self, model: ModelId, field: FieldId, record: RecId) {
         if self.seen.insert((model, field, record)) {
             self.owners.push((model, field, record));
+        }
+    }
+
+    /// Record that `field` of in-memory x2many line `record` was updated by a form command.
+    fn line_change(&mut self, model: ModelId, field: FieldId, record: RecId) {
+        if self.seen_line_changes.insert((model, field, record)) {
+            self.line_changes.push((model, field, record));
         }
     }
 
@@ -941,11 +1059,19 @@ impl Applying {
         std::mem::take(&mut self.owners)
     }
 
-    /// Forget the parent fields recorded so far (initial values are the form's state, not
+    /// The in-memory x2many line fields updated by form commands so far; forgotten here.
+    fn take_line_changes(&mut self) -> Owners {
+        self.seen_line_changes.clear();
+        std::mem::take(&mut self.line_changes)
+    }
+
+    /// Forget the parent and line fields recorded so far (initial values are the form's state, not
     /// changes).
     fn forget_owners(&mut self) {
         self.seen.clear();
         self.owners.clear();
+        self.seen_line_changes.clear();
+        self.line_changes.clear();
     }
 }
 
@@ -972,6 +1098,26 @@ fn update_cache<'a>(
                 .is_some_and(|field| matches!(field.ty, FieldType::Binary { .. }))
         }) {
             tx.load_image_policy().await?;
+        }
+        // Resolve top-level virtual parent many2one dictionaries before monetary normalization so
+        // related currency fields (e.g. `currency_id` related to `order_id.currency_id`) can read
+        // the unsaved/edited parent's draft values during same-call monetary staging.
+        let mut virtual_parents: FxHashMap<FieldId, RecId> = FxHashMap::default();
+        for (name, value) in values {
+            if name == "id" {
+                continue;
+            }
+            let Some(field) = model.field(name) else {
+                continue;
+            };
+            if field.inherited.is_some() {
+                continue;
+            }
+            if let Some(dict) = virtual_parent_dict(field, value) {
+                let parent_id =
+                    resolve_virtual_parent(tx, record, field, dict, applying, level).await?;
+                virtual_parents.insert(field.id, parent_id);
+            }
         }
         // Convert and normalize the whole scalar input before publishing any value. In
         // particular, an inherited currency supplied with an own amount belongs to
@@ -1005,7 +1151,12 @@ fn update_cache<'a>(
                 if !field.ty.is_x2many()
                     && let Ok(slot) = slots.binary_search(&field.id)
                 {
-                    rows[0][slot] = Some(form_cell(model, name, value)?);
+                    let cell = if let Some(&parent_id) = virtual_parents.get(&field.id) {
+                        Cell::Id(parent_id.get())
+                    } else {
+                        form_cell(model, name, value)?
+                    };
+                    rows[0][slot] = Some(cell);
                 }
             }
             crate::monetary::normalize(
@@ -1081,16 +1232,25 @@ fn update_cache<'a>(
                 let scalar = tx.admit_html_cell(model, field, form_cell(model, name, value)?)?;
                 let map = tx.draft_property_map(record, field, &scalar).await?;
                 cells.push((field.id, map));
+            } else if let Some(&parent_id) = virtual_parents.get(&field.id) {
+                cells.push((field.id, Cell::Id(parent_id.get())));
             } else {
                 let cell = tx.admit_html_cell(model, field, form_cell(model, name, value)?)?;
                 cells.push((field.id, cell));
             }
         }
-        // the record's own values first: they may hold the delegate links, whose old in-memory
-        // parents stop listing the record (the new ones list it once `ensure_parents` ran)
+        // the record's own values first: they may hold the delegate links (or virtual parent
+        // links), whose old in-memory parents stop listing the record (the new ones list it once
+        // `ensure_parents` / `relink` ran)
         let mut relinked: Vec<(FieldId, Option<Cell>, Cell)> = Vec::new();
         let mut own = Vec::with_capacity(cells.len());
         for (f, cell) in cells {
+            if virtual_parents.contains_key(&f) {
+                let old = tx.cache.get(model.id, f, single_id(record)?);
+                relinked.push((f, old, cell.clone()));
+                own.push((f, cell));
+                continue;
+            }
             if !model.inherits.iter().any(|(_, d)| *d == f) {
                 own.push((f, cell));
                 continue;
@@ -1126,7 +1286,8 @@ fn update_cache<'a>(
                 .get(name)
                 .and_then(|i| i.fields.as_ref())
                 .unwrap_or(&empty);
-            let applied = apply_commands(tx, record, field.id, commands, sub, below == 1).await?;
+            let applied =
+                apply_commands(tx, record, field.id, commands, sub, below == 1, applying).await?;
             tx.set_new_cells(
                 record,
                 vec![(field.id, Cell::Ids(applied.lines.clone().into()))],
@@ -1297,7 +1458,9 @@ fn update_lines<'a>(
             let mut mirrors = MirrorPatches::default();
             for (line, commands) in parsed {
                 let record = co.browse_ids([line]);
-                let applied = apply_commands(tx, &record, field.id, commands, sub, false).await?;
+                let applied =
+                    apply_commands(tx, &record, field.id, commands, sub, false, applying).await?;
+                applying.line_change(comodel.id, field.id, line);
                 tx.set_new_cells_into(
                     &record,
                     vec![(field.id, Cell::Ids(applied.lines.clone().into()))],
@@ -1711,6 +1874,7 @@ async fn apply_commands(
     commands: Vec<FormCommand>,
     sub: &Spec,
     first_level: bool,
+    applying: &mut Applying,
 ) -> Result<AppliedLines> {
     let registry = Arc::clone(record.env().registry());
     let model = registry.model_by_id(record.model_id());
@@ -1794,13 +1958,24 @@ async fn apply_commands(
         match command {
             FormCommand::Create(reference, vals) => {
                 let (raw, x2many, delegated) = line_vals(&vals)?;
+                let changed_fields: Vec<FieldId> = raw
+                    .names()
+                    .filter_map(|name| comodel.field_id(name))
+                    .collect();
                 let line = tx.new_record(&co, raw, None, reference.as_deref()).await?;
                 let id = single_id(&line)?;
+                for fid in changed_fields {
+                    applying.line_change(comodel.id, fid, id);
+                }
                 lines.add(id);
                 wait(id, x2many, delegated);
             }
             FormCommand::Update(target, vals) => {
                 let (raw, x2many, delegated) = line_vals(&vals)?;
+                let changed_fields: Vec<FieldId> = raw
+                    .names()
+                    .filter_map(|name| comodel.field_id(name))
+                    .collect();
                 let line = match &target {
                     LineRef::Real(id) => {
                         tx.new_record(&co, raw, Some(new_id_of(*id)?), None).await?
@@ -1808,6 +1983,9 @@ async fn apply_commands(
                     LineRef::Virtual(r) => tx.new_record(&co, raw, None, Some(r)).await?,
                 };
                 let id = single_id(&line)?;
+                for fid in changed_fields {
+                    applying.line_change(comodel.id, fid, id);
+                }
                 lines.add(id);
                 wait(id, x2many, delegated);
             }
@@ -2653,6 +2831,7 @@ async fn apply_changes(
     };
     update_cache(tx, record, &plan.changed, spec, applying, 0).await?;
     let owners = applying.take_owners();
+    let line_changes = applying.take_line_changes();
     for name in &plan.field_names {
         if spec.contains(name) {
             let value = snap_field(tx, record, spec, name, 1, work).await?;
@@ -2700,12 +2879,12 @@ async fn apply_changes(
             }
         }
     }
-    for &(m, f, id) in &owners {
+    for &(m, f, id) in owners.iter().chain(&line_changes) {
         parent_changes.add(m, f, id);
     }
     let guard = tx.guard();
     let depth = tx.protect(model.id, &protected, record.rec_ids());
-    for &(m, f, id) in &owners {
+    for &(m, f, id) in owners.iter().chain(&line_changes) {
         let group: Vec<FieldId> = shared
             .graph
             .model(m)

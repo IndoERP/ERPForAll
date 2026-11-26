@@ -45,7 +45,9 @@ function rpcWith(answer: (path: string, body: Record<string, unknown>) => unknow
   return new RpcClient(async (path, init) => {
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     calls.push({ path: String(path), body });
-    return new Response(JSON.stringify(answer(String(path), body)), { headers: { "Content-Type": "application/json" } });
+    const raw = answer(String(path), body);
+    const payload = String(path).endsWith("/onchange") && (raw === undefined || typeof raw !== "object" || raw === null || !Object.hasOwn(raw, "value")) ? { value: {} } : raw;
+    return new Response(JSON.stringify(payload), { headers: { "Content-Type": "application/json" } });
   }, () => {});
 }
 function render(value: unknown, change = vi.fn(), rpc = rpcWith(() => ({})), target = books(), signal?: AbortSignal): { node: HTMLElement; change: typeof change } {
@@ -113,13 +115,13 @@ test("the embedded list shows the list columns, removes a line and adds one thro
   expect(dialog.querySelector('[name="author_id"]')).toBeNull();
   const save = [...dialog.querySelectorAll("button")].find(b => b.textContent === "Save & Close")!;
   save.click();
-  // A required field still empty keeps the dialog open and reports which one.
-  expect(reports).toEqual([expect.objectContaining({ kind: "validation", message: "Title is required." })]);
+  await vi.waitFor(() => expect(reports).toEqual([expect.objectContaining({ kind: "validation", message: "Title is required." })]));
   expect(change).toHaveBeenCalledTimes(1);
   expect(dialog.isConnected).toBe(true);
   const input = dialog.querySelector<HTMLInputElement>('input[name="title"]')!;
   input.value = "Children of Dune"; input.dispatchEvent(new Event("change"));
   [...document.querySelectorAll<HTMLButtonElement>("dialog.x2many-dialog button")].find(b => b.textContent === "Save & Close")!.click();
+  await vi.waitFor(() => expect(change).toHaveBeenCalledTimes(2));
   expect(change).toHaveBeenLastCalledWith([
     { id: 1, title: "Dune", publication_year: 1965 },
     expect.objectContaining({ title: "Children of Dune", publication_year: 2026, __key: expect.any(String) })
@@ -135,6 +137,7 @@ test("editing a stored line records which fields changed; a read-only one2many o
   const yearInput = dialog.querySelector<HTMLInputElement>('input[name="publication_year"]')!;
   yearInput.value = "1952"; yearInput.dispatchEvent(new Event("change"));
   [...document.querySelectorAll<HTMLButtonElement>("dialog.x2many-dialog button")].find(b => b.textContent === "Save & Close")!.click();
+  await vi.waitFor(() => expect(change).toHaveBeenCalled());
   expect(change).toHaveBeenCalledWith([{ id: 4, title: "Foundation", publication_year: 1952, __changed: ["publication_year"] }]);
 
   const readonly = render([{ id: 4, title: "Foundation" }], vi.fn(), undefined, { ...books(), readonly: true });
@@ -351,9 +354,9 @@ test("line dialog reevaluates readonly invisible and required modifiers before c
   expect(dialog.querySelector('[name="title"]')).toBeNull(); expect(dialog.querySelector('[name="secret"]')).toBeNull();
   expect(dialog.querySelector<HTMLInputElement>('[name="code"]')!.required).toBe(true);
   const save = (): void => [...dialog.querySelectorAll("button")].find(button => button.textContent === "Save & Close")!.click();
-  save(); expect(dialog.isConnected).toBe(true); expect(reports[0]).toMatchObject({ kind: "validation", message: "code is required." });
+  save(); await vi.waitFor(() => expect(reports[0]).toMatchObject({ kind: "validation", message: "code is required." })); expect(dialog.isConnected).toBe(true);
   const input = dialog.querySelector<HTMLInputElement>('[name="code"]')!; input.value = "Set"; input.dispatchEvent(new Event("change")); save();
-  expect(change).toHaveBeenCalledOnce(); expect(lineCommands(target, change.mock.calls[0]![0], before)).toEqual([[1, 1, { locked: true, code: "Set" }]]);
+  await vi.waitFor(() => expect(change).toHaveBeenCalledOnce()); expect(lineCommands(target, change.mock.calls[0]![0], before)).toEqual([[1, 1, { locked: true, code: "Set" }]]);
 });
 
 /// (partial: asynchronous monetary line drafts survive unrelated line rerenders)
@@ -370,8 +373,9 @@ test("line dialog retains invalid monetary draft through cached currency remount
   const input = dialog.querySelector<HTMLInputElement>('[name="amount"]')!; input.value = "invalid"; input.dispatchEvent(new Event("input"));
   const other = dialog.querySelector<HTMLInputElement>('[name="name"]')!; other.value = "After"; other.dispatchEvent(new Event("change")); await new Promise(done => setTimeout(done, 0));
   const restored = dialog.querySelector<HTMLInputElement>('[name="amount"]')!; expect(restored.value).toBe("invalid"); expect(restored.validity.valid).toBe(false);
-  [...dialog.querySelectorAll("button")].find(button => button.textContent === "Save & Close")!.click(); expect(change).not.toHaveBeenCalled();
-  expect(reports[0]).toMatchObject({ kind: "validation", message: "Correct the invalid line fields before saving." });
+  [...dialog.querySelectorAll("button")].find(button => button.textContent === "Save & Close")!.click();
+  await vi.waitFor(() => expect(reports[0]).toMatchObject({ kind: "validation", message: "Correct the invalid line fields before saving." }));
+  expect(change).not.toHaveBeenCalled();
   [...dialog.querySelectorAll("button")].find(button => button.textContent === "Discard")!.click(); handle.dispose(); messages.dispose();
 });
 
@@ -704,9 +708,91 @@ test("inline entry loads line defaults, offers relation search in the table and 
   const match = () => [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(option => option.textContent === "Ayu");
   await vi.waitFor(() => expect(match()).toBeDefined());
   match()!.click();
+  await vi.waitFor(() => expect(change).toHaveBeenCalled());
   expect(change.mock.calls[0]?.[0]).toMatchObject([{ author_id: { id: 5 }, title: "New book", publication_year: 2026 }]);
   node.querySelector<HTMLButtonElement>(".x2many-detail-add")!.click();
   await Promise.all(jobs);
   expect(document.querySelector("dialog[open]")).not.toBeNull();
+  dispose(); messages.dispose();
+});
+
+test("line dialog runs live onchange with virtual parent values before Save & Close", async () => {
+  const calls: { path: string; body: Record<string, unknown> }[] = [];
+  const product = field("product_id", "many2one", { label: "Product", relation: "product.product" });
+  const qty = field("product_uom_qty", "float", { label: "Quantity" });
+  const subtotal = field("price_subtotal", "float", { label: "Subtotal", readonly: true });
+  const orderRef = field("order_id", "many2one", { label: "Order", relation: "sale.order" });
+  const lineForm: View = {
+    type: "form", mode: "record", fields: [product, title, qty, subtotal, orderRef],
+    nodes: [{ kind: "root", children: [{ kind: "sheet", children: [
+      { kind: "field", field: product, label: "Product", widget: "many2one" },
+      { kind: "field", field: title, label: "Title", widget: "char" },
+      { kind: "field", field: qty, label: "Quantity", widget: "float" },
+      { kind: "field", field: subtotal, label: "Subtotal", widget: "float" }
+    ] }] }]
+  };
+  const orderLine = field("order_line", "one2many", {
+    label: "Order Lines", relation: "sale.order.line", relationField: "order_id",
+    subview: { model: "sale.order.line", list: [product, title, qty, subtotal], form: lineForm, fields: new Map([[product.name, product], [title.name, title], [qty.name, qty], [subtotal.name, subtotal], [orderRef.name, orderRef]]) }
+  });
+  const partnerField = field("partner_id", "many2one", { label: "Customer", relation: "res.partner" });
+  const rpc = rpcWith((path, body) => {
+    if (path.endsWith("/default_get")) return { product_uom_qty: 1 };
+    if (path.endsWith("/web_name_search")) return [{ id: 7, display_name: "Desk" }];
+    if (path.endsWith("/onchange")) {
+      const names = body["field_names"] as string[];
+      if (names.length === 0) return { value: { product_uom_qty: 1, price_subtotal: 0 } };
+      if (names.includes("product_id")) return { value: { title: "Desk", price_subtotal: 250 } };
+      if (names.includes("product_uom_qty")) return { value: { price_subtotal: Number((body["values"] as Record<string, unknown>)["product_uom_qty"]) * 250 } };
+    }
+    return {};
+  }, calls);
+  const change = vi.fn(), messages = new MessageServices(document.body, error => { reports.push(error); });
+  const handle = fieldWidgets.get("one2many").render({
+    field: orderLine, model: "sale.order", fields: [partnerField, orderLine],
+    values: { partner_id: { id: 12, display_name: "Acme" }, order_line: [] },
+    value: [], change, rpc, context: {}, messages, run, report: error => { reports.push(error); }
+  });
+  document.body.append(handle.node);
+  handle.node.querySelector<HTMLButtonElement>(".x2many-add")!.click();
+  await Promise.all(jobs);
+  const initialCall = calls.find(c => c.path.endsWith("sale.order.line/onchange") && (c.body["field_names"] as string[]).length === 0);
+  expect(initialCall?.body["values"]).toMatchObject({ product_uom_qty: 1, order_id: { id: false, partner_id: 12 } });
+  const dialog = document.querySelector<HTMLDialogElement>("dialog.x2many-dialog")!;
+  const qtyInput = dialog.querySelector<HTMLInputElement>('input[name="product_uom_qty"]')!;
+  qtyInput.value = "3"; qtyInput.dispatchEvent(new Event("change"));
+  await vi.waitFor(() => expect(dialog.textContent).toContain("750"));
+  const titleInput = dialog.querySelector<HTMLInputElement>('input[name="title"]')!;
+  titleInput.value = "Desk"; titleInput.dispatchEvent(new Event("change"));
+  [...dialog.querySelectorAll("button")].find(b => b.textContent === "Save & Close")!.click();
+  await vi.waitFor(() => expect(change).toHaveBeenCalledOnce());
+  expect(change.mock.calls[0]?.[0]).toEqual([expect.objectContaining({ title: "Desk", product_uom_qty: 3, price_subtotal: 750 })]);
+  handle.dispose(); messages.dispose();
+});
+
+test("inline product pick runs line onchange to auto-fill required fields before opening modal", async () => {
+  const str = (value: string) => ({ kind: "literal" as const, value: { kind: "str" as const, value } });
+  const owner = books();
+  owner.options = { context: { schema: 1, nodes: [str("inline_search_field"), str("author_id"), { kind: "dict", items: [[0, 1]] }] } };
+  owner.relationField = null;
+  owner.subview = { ...subview, list: [author, title, year] };
+  const rpc = rpcWith((path, body) => {
+    if (path.endsWith("/default_get")) return { publication_year: 2026 };
+    if (path.endsWith("/onchange") && (body["field_names"] as string[]).includes("author_id")) return { value: { title: "Auto-filled Title" } };
+    return [{ id: 5, display_name: "Ayu" }];
+  });
+  const change = vi.fn(), messages = new MessageServices(document.body, error => { throw error; });
+  const { node, dispose } = fieldWidgets.get("one2many").render({ field: owner, value: [], rpc, change, run, context: {}, messages, report: error => { throw error; } });
+  document.body.append(node);
+  node.querySelector<HTMLButtonElement>(".x2many-add")!.click();
+  await Promise.all(jobs);
+  const input = node.querySelector<HTMLInputElement>("tfoot [role=combobox]")!;
+  input.click();
+  const match = () => [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(option => option.textContent === "Ayu");
+  await vi.waitFor(() => expect(match()).toBeDefined());
+  match()!.click();
+  await vi.waitFor(() => expect(change).toHaveBeenCalledOnce());
+  expect(document.querySelector("dialog")).toBeNull();
+  expect(change.mock.calls[0]?.[0]).toMatchObject([{ author_id: { id: 5 }, title: "Auto-filled Title", publication_year: 2026 }]);
   dispose(); messages.dispose();
 });

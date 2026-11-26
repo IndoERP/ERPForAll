@@ -4,7 +4,7 @@ import { actionButton, button, el } from "./dom.js";
 import { renderFormLayout } from "./form-layout.js";
 import { icon } from "./icons.js";
 import { array, integer, object, type Description, type Field, type Node, type Subview, type View } from "./metadata.js";
-import { lineFields, linePolicy, newLineKey, touchNewLine, type Line } from "./record.js";
+import { applyOnchangeUpdate, lineFields, lineOnchangeValues, linePolicy, newLineKey, parentOnchangeValues, parseOnchangeWarning, specification, touchNewLine, type Line, type OnchangeWarning } from "./record.js";
 import { effectiveNodes } from "./field-modifiers.js";
 import { CurrencyDisplayCache } from "./field-currency.js";
 import { constantRelationContext, relationQuery } from "./field-relations.js";
@@ -158,8 +158,18 @@ export function one2manyField(environment: WidgetEnvironment): WidgetHandle {
             rpc: environment.rpc, context: environment.context, run, report: environment.report,
             change: next => {
               if (!writable) throw new ClientError("validation", `${column.label} is read-only.`);
-              touchNewLine(String(line["__key"]), [column.name]);
-              change(items.map((item, i) => i === index ? { ...item, [column.name]: next } : item));
+              run(async () => {
+                const lineContext = relationQuery(field, environment.values ?? {}, environment.context, environment.fields ?? [], "context").context;
+                const formFields = lineFields(subview).filter(candidate => candidate.name !== field.relationField);
+                const draft: Line = { ...line, [column.name]: next };
+                const touched = [column.name];
+                touchNewLine(String(line["__key"]), touched);
+                const outcome = await runLineOnchange(environment, subview, formFields, draft, [column.name], lineContext);
+                if (environment.signal?.aborted) return;
+                if (outcome.warning) environment.messages?.warning(outcome.warning);
+                if (outcome.changedKeys.length) touchNewLine(String(line["__key"]), outcome.changedKeys);
+                change(items.map((item, i) => i === index ? outcome.values : item));
+              });
             }
           });
           cell.classList.add("x2many-inline-number");
@@ -230,13 +240,21 @@ export function one2manyField(environment: WidgetEnvironment): WidgetHandle {
             messages: environment.messages,
             change: selected => {
               if (!selected || !cell.isConnected) return;
-              const proposed = { ...values, [permitted.name]: selected };
-              if (missingLineField(subview, proposed)) {
-                reset(); run(() => openLine(environment, items, null, proposed)); return;
-              }
-              const key = newLineKey();
-              touchNewLine(key, [permitted.name]);
-              reset(); change([...items, { ...proposed, __key: key }]);
+              run(async () => {
+                const formFields = lineFields(subview).filter(candidate => candidate.name !== field.relationField);
+                const key = newLineKey();
+                touchNewLine(key, [permitted.name]);
+                const proposed: Line = { ...values, [permitted.name]: selected, __key: key };
+                const outcome = await runLineOnchange(environment, subview, formFields, proposed, [permitted.name], lineContext);
+                if (!cell.isConnected || environment.signal?.aborted) return;
+                if (outcome.warning) environment.messages?.warning(outcome.warning);
+                const updated = outcome.values;
+                if (missingLineField(subview, updated)) {
+                  reset(); await openLine(environment, items, null, updated); return;
+                }
+                if (outcome.changedKeys.length) touchNewLine(key, outcome.changedKeys);
+                reset(); change([...items, updated]);
+              });
             }
           });
           const entry = el("div", undefined, "x2many-inline-search");
@@ -295,6 +313,41 @@ async function readLineDefaults(environment: WidgetEnvironment, subview: Subview
   return Object.fromEntries(fields.filter(field => Object.hasOwn(defaults, field.name)).map(field => [field.name, lineDefault(field, defaults[field.name])]));
 }
 
+/** Run `<line_model>/onchange` with virtual parent header values so line computes and `#[onchange]`
+ *  methods update the line live before Save. */
+async function runLineOnchange(
+  environment: WidgetEnvironment,
+  subview: Subview,
+  formFields: readonly Field[],
+  line: Line,
+  fieldNames: readonly string[],
+  lineContext: Record<string, unknown>,
+): Promise<{ values: Line; changedKeys: string[]; warning: OnchangeWarning | undefined }> {
+  const payload = lineOnchangeValues(formFields, line);
+  const inverse = environment.field.relationField;
+  if (inverse) {
+    if (environment.fields?.length && environment.values) {
+      payload[inverse] = parentOnchangeValues(environment.fields, environment.values);
+    } else if (environment.values && typeof environment.values["id"] === "number" && Number.isSafeInteger(environment.values["id"]) && environment.values["id"] > 0) {
+      payload[inverse] = environment.values["id"];
+    }
+  }
+  const id = line["id"];
+  const ids = typeof id === "number" && Number.isSafeInteger(id) && id > 0 ? [id] : [];
+  const response = await environment.rpc.call(subview.model, "onchange", {
+    ids,
+    values: payload,
+    field_names: [...fieldNames],
+    fields_spec: specification(formFields),
+    context: lineContext,
+  }, { signal: environment.signal });
+  const result = object(response, "onchange response");
+  const update = object(result["value"], "onchange values");
+  const applied = applyOnchangeUpdate(formFields, line, update, fieldNames.length === 0);
+  const warning = parseOnchangeWarning(result["warning"]);
+  return { values: applied.values, changedKeys: applied.keys, warning };
+}
+
 function missingLineField(subview: Subview, values: Line): Field | undefined {
   return linePolicy(subview, values).find(field => {
     if (!field.required || field.readonly || field.invisible || field.kind === "boolean") return false;
@@ -322,13 +375,22 @@ async function openLine(environment: WidgetEnvironment, items: readonly Line[], 
 
   // Every line's widgets get the field's context (default_*, lang, company keys); the domain is never evaluated here.
   let lineContext = context;
+  let lineEpoch = 0;
+  let pendingChange: Promise<void> | undefined;
 
   const load = async (): Promise<void> => {
+    lineEpoch += 1;
+    pendingChange = undefined;
     changed = new Set();
     lineContext = relationQuery(field, environment.values ?? {}, context, environment.fields ?? [], "context").context;
     if (current !== null) { values = { ...working[current]! }; return; }
-    values = initial ?? await readLineDefaults(environment, subview, lineContext);
-    initial = undefined;
+    if (initial !== undefined) { values = { ...initial }; initial = undefined; return; }
+    const defaults = await readLineDefaults(environment, subview, lineContext);
+    if (signal?.aborted) return;
+    const outcome = await runLineOnchange(environment, subview, formFields, defaults, [], lineContext);
+    if (signal?.aborted) return;
+    values = outcome.values;
+    if (outcome.warning) environment.messages?.warning(outcome.warning);
   };
   await load();
   if (signal?.aborted) return;
@@ -356,10 +418,36 @@ async function openLine(environment: WidgetEnvironment, items: readonly Line[], 
   const abort = (): void => close(true);
   const close = (discard = false): void => {
     if (closed) return;
+    lineEpoch += 1;
+    pendingChange = undefined;
     signal?.removeEventListener("abort", abort);
     closed = true; disposeWidgets(); dialog.close(); dialog.remove();
     if (committed && !discard) change(working);
     else if (prior instanceof HTMLElement && prior.isConnected) prior.focus();
+  };
+
+  const applyLineChange = (names: readonly string[], patch: Readonly<Record<string, unknown>>): void => {
+    values = { ...values, ...patch };
+    for (const name of names) changed.add(name);
+    render();
+    const epoch = lineEpoch;
+    const priorWork = pendingChange;
+    const work = (async () => {
+      if (priorWork) { try { await priorWork; } catch {} }
+      if (closed || signal?.aborted || epoch !== lineEpoch) return;
+      const outcome = await runLineOnchange(environment, subview, formFields, values, names, lineContext);
+      if (closed || signal?.aborted || epoch !== lineEpoch) return;
+      values = outcome.values;
+      for (const key of outcome.changedKeys) changed.add(key);
+      if (outcome.warning) environment.messages?.warning(outcome.warning);
+      render();
+    })();
+    pendingChange = work.finally(() => { if (pendingChange === work) pendingChange = undefined; });
+    run(() => work);
+  };
+
+  const flushLineChange = async (): Promise<void> => {
+    if (pendingChange) await pendingChange;
   };
 
   const commit = (): void => {
@@ -401,17 +489,18 @@ async function openLine(environment: WidgetEnvironment, items: readonly Line[], 
         value: values[node.field.name], values, ...(field.relation === null ? {} : { model: field.relation }), fields: policy.map(candidate => ({ ...candidate, readonly: readonly || candidate.readonly })), numericLocale: environment.numericLocale, currencies,
         changeValues: changes => {
           for (const name of Object.keys(changes)) if (!policy.some(field => field.name === name && !field.readonly) || readonly) throw new ClientError("validation", "Readonly line fields cannot be changed.");
-          values = { ...values, ...changes }; for (const name of Object.keys(changes)) changed.add(name); render();
+          applyLineChange(Object.keys(changes), changes);
         },
         rpc, context: lineContext, run, report, signal, messages: environment.messages, editorLocale: environment.editorLocale,
         ...(environment.views ? { views: environment.views } : {}),
         ...(environment.openRecord ? { openRecord: async (model: string, id: number) => {
           // The line's own edits reach the parent form first, then the dialog closes: leaving the form asks about them.
+          await flushLineChange();
           if (changed.size && !readonly) commit();
           close();
           await environment.openRecord!(model, id);
         } } : {}),
-        change: next => { values = { ...values, [node.field.name]: next }; changed.add(node.field.name); render(); }
+        change: next => { applyLineChange([node.field.name], { [node.field.name]: next }); }
       });
       widgetHandles.push({ name: node.field.name, represented: values[node.field.name], handle });
       if (managed.has(node.field.name)) handle.restoreDraft?.(drafts.get(node.field.name)!);
@@ -442,13 +531,13 @@ async function openLine(environment: WidgetEnvironment, items: readonly Line[], 
       actions.append(actionButton("Delete", () => { const at = current!; working = working.filter((_, i) => i !== at); committed = true; close(); }, "danger"));
     }
     actions.append(actionButton("Discard", () => close()));
-    if (current === null) actions.append(button("Save & New", () => act(async () => { commit(); current = null; await load(); render(); body.querySelector<HTMLElement>("input,select,textarea")?.focus(); })));
-    actions.append(button("Save & Close", () => act(() => { commit(); close(); }), "primary"));
+    if (current === null) actions.append(button("Save & New", () => act(async () => { await flushLineChange(); if (closed || signal?.aborted) return; commit(); current = null; await load(); if (closed || signal?.aborted) return; render(); body.querySelector<HTMLElement>("input,select,textarea")?.focus(); })));
+    actions.append(button("Save & Close", () => act(async () => { await flushLineChange(); if (closed || signal?.aborted) return; commit(); close(); }), "primary"));
   };
   render();
   buttons();
   dialog.addEventListener("cancel", event => { event.preventDefault(); close(); });
-  body.addEventListener("submit", event => { event.preventDefault(); if (!readonly) act(() => { commit(); close(); }); });
+  body.addEventListener("submit", event => { event.preventDefault(); if (!readonly) act(async () => { await flushLineChange(); if (closed || signal?.aborted) return; commit(); close(); }); });
   signal?.addEventListener("abort", abort, { once: true });
   document.body.append(dialog);
   dialog.showModal();

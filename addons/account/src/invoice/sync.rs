@@ -166,13 +166,13 @@ struct Line {
 }
 
 /// One tax repartition line of kind `tax`.
-struct Repartition {
-    id: i64,
-    tax: i64,
-    refund: bool,
-    factor: Decimal,
-    account: Option<i64>,
-    sequence: i32,
+pub(super) struct Repartition {
+    pub(super) id: i64,
+    pub(super) tax: i64,
+    pub(super) refund: bool,
+    pub(super) factor: Decimal,
+    pub(super) account: Option<i64>,
+    pub(super) sequence: i32,
 }
 
 /// The draft invoices among `move_ids`, with their headers.
@@ -374,7 +374,7 @@ async fn load_lines(tx: &mut Transaction, env: &Env, invoices: &[Invoice]) -> Re
 /// The taxes of `tax_ids` as the computation needs them, with their labels, and their `tax`
 /// repartition lines. A group of taxes and a tax with a negative
 /// factor (reverse charge); both are refused.
-async fn load_taxes(
+pub(super) async fn load_taxes(
     tx: &mut Transaction,
     env: &Env,
     tax_ids: &BTreeSet<i64>,
@@ -477,7 +477,7 @@ async fn load_taxes(
 
 /// Splits a tax amount over the tax's repartition lines of the document kind by their factor; the
 /// rounding difference goes to the first line so the parts add up to the rounded whole.
-fn distribute<'a>(
+pub(super) fn distribute<'a>(
     amount: Decimal,
     repartitions: impl Iterator<Item = &'a Repartition>,
     increment: &Increment,

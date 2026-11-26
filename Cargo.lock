@@ -1633,11 +1633,15 @@ name = "erp-addon-purchase"
 version = "0.1.0"
 dependencies = [
  "erp-addon-account",
+ "erp-addon-analytic",
  "erp-addon-base",
  "erp-addon-product",
  "erp-addon-reporting",
  "erp-addon-uom",
+ "erp-addon-web",
  "erp-sdk",
+ "erp-testkit",
+ "tokio",
  "toml 0.8.23",
 ]
 

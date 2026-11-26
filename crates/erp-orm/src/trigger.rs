@@ -461,6 +461,9 @@ impl Transaction {
                         }
                         out.extend(ids_in(cell));
                     }
+                    if ids.iter().all(|id| id.is_new()) {
+                        out.retain(|id| id.is_new());
+                    }
                 }
                 FieldType::Many2one { .. } => {
                     let inverse = shared
