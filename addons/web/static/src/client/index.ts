@@ -26,7 +26,7 @@ class LoginPage extends Component<{ page: Login; productName: string }> {
     guardSubmit(event);
   }
   onReveal(event: Event): void { togglePasswordReveal(event); }
-  onPasswordKey(event: KeyboardEvent): void { updateCapsLockHint(event); }
+  onPasswordKey(event: Event): void { updateCapsLockHint(event); }
 }
 class Shell extends Component<{ host: HTMLElement; bootstrap: unknown }> {
   static override template = "web.HumanClient";

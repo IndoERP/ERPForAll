@@ -13,8 +13,8 @@ beforeEach(() => {
 });
 const form = (): HTMLFormElement => document.querySelector("form")!;
 const submit = (): HTMLButtonElement => document.querySelector("[data-login-submit]")!;
-const fire = (target: Element, event: Event, handler: (event: never) => void): Event => {
-  target.addEventListener(event.type, handler as EventListener, { once: true });
+const fire = (target: Element, event: Event, handler: EventListener): Event => {
+  target.addEventListener(event.type, handler, { once: true });
   target.dispatchEvent(event);
   return event;
 };
@@ -48,6 +48,16 @@ test("the Caps Lock hint follows the key state", () => {
   expect(hint.hidden).toBe(false);
   fire(input, new KeyboardEvent("keyup", { modifierCapsLock: false }), updateCapsLockHint);
   expect(hint.hidden).toBe(true);
+});
+
+test("autofill key events leave the Caps Lock hint unchanged", () => {
+  const input = document.querySelector<HTMLInputElement>("#login-password")!;
+  const hint = document.querySelector<HTMLElement>("[data-login-capslock]")!;
+  fire(input, new Event("keydown", { bubbles: true }), updateCapsLockHint);
+  expect(hint.hidden).toBe(true);
+  fire(input, new KeyboardEvent("keydown", { modifierCapsLock: true }), updateCapsLockHint);
+  fire(input, new Event("keyup", { bubbles: true }), updateCapsLockHint);
+  expect(hint.hidden).toBe(false);
 });
 
 test("markup without the expected parts fails loudly", () => {
