@@ -502,6 +502,68 @@ async fn prepare_core_accounting_reports_pre(
     for container in &CONTAINERS_1_13 {
         container.convert(tx).await?;
     }
+    // Databases installed before 1.12 still have the first layout: top-level totals at sequences
+    // 30 to 100. The data files below add sub-lines with lower sequences under these lines and
+    // refuse a sub-line placed before its parent, so the shipped totals move first; the 1.13 post
+    // step then finds the values it expects.
+    set_all(
+        tx,
+        LINE,
+        &[
+            ("profit_loss_income", "sequence", Some("40"), Some("10")),
+            (
+                "profit_loss_income",
+                "name",
+                Some("Total income"),
+                Some("Income"),
+            ),
+            ("profit_loss_expense", "sequence", Some("50"), Some("20")),
+            (
+                "profit_loss_expense",
+                "name",
+                Some("Total expenses"),
+                Some("Expenses"),
+            ),
+            ("profit_loss_result", "sequence", Some("60"), Some("30")),
+            (
+                "profit_loss_result",
+                "name",
+                Some("Net profit (loss)"),
+                Some("Net profit"),
+            ),
+            ("position_asset", "sequence", Some("30"), Some("10")),
+            (
+                "position_asset",
+                "name",
+                Some("Total assets"),
+                Some("Assets"),
+            ),
+            ("position_liability", "sequence", Some("60"), Some("20")),
+            (
+                "position_liability",
+                "name",
+                Some("Total liabilities"),
+                Some("Liabilities"),
+            ),
+            ("position_capital", "sequence", Some("70"), Some("30")),
+            ("position_earnings", "sequence", Some("80"), Some("40")),
+            (
+                "position_earnings",
+                "name",
+                Some("Cumulative unallocated earnings"),
+                Some("Unallocated earnings"),
+            ),
+            ("position_equity", "sequence", Some("90"), Some("50")),
+            (
+                "position_financing",
+                "name",
+                Some("Total liabilities and equity"),
+                Some("Liabilities and equity"),
+            ),
+            ("position_financing", "sequence", Some("100"), Some("60")),
+        ],
+    )
+    .await?;
 
     // The native ledger providers never read definition lines: their shipped lines go (with
     // their expressions) while the report still uses the provider; lines an administrator added
