@@ -11,8 +11,13 @@
 # Python bytecode
 __pycache__/
 
-# Web workspace (web/, addons/*/static/): pnpm installs
+# Web workspace (web/, addons/*/static/): pnpm installs and built bundles
 node_modules/
+/web/dist/
+
+# Test and browser run logs / fixture outputs
+/logs/
+/crates/erp-cli/logs/
 
 # built components of the CLI (erp addon build --target wasm)
 /crates/erp-test-models/addons/*/wasm/
