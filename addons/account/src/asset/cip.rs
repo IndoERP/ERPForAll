@@ -17,7 +17,8 @@ use super::db;
     keys = [key(
         name = "_unique_move_line",
         fields = ["move_line_id"],
-        message = "A journal item can only generate one CIP accumulation line."
+        message = "A journal item can only generate one CIP accumulation line.",
+        nulls_distinct = true
     )]
 )]
 pub struct AccountAssetCipLine {
