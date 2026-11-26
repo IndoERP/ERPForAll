@@ -31,7 +31,9 @@ export function togglePasswordReveal(event: Event): void {
 }
 
 /** Shows the Caps Lock hint of the password field while Caps Lock is on. */
-export function updateCapsLockHint(event: KeyboardEvent): void {
+export function updateCapsLockHint(event: Event): void {
+  // Chromium autofill dispatches plain Event objects for keydown and keyup.
+  if (!(event instanceof KeyboardEvent)) return;
   const field = event.currentTarget instanceof Element ? event.currentTarget.closest(".login-field") : null;
   const hint = field?.querySelector("[data-login-capslock]");
   if (!(hint instanceof HTMLElement)) throw new Error("Expected the Caps Lock hint.");
