@@ -3152,7 +3152,15 @@ mod h18_request_composition_tests {
                 .map(|(_, declaration)| declaration.key())
                 .collect::<Vec<_>>(),
             [
-                "calendar", "form", "graph", "kanban", "list", "pivot", "search"
+                "activity",
+                "calendar",
+                "form",
+                "graph",
+                "hierarchy",
+                "kanban",
+                "list",
+                "pivot",
+                "search"
             ]
         );
     }

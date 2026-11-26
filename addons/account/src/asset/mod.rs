@@ -1389,7 +1389,11 @@ async fn post_asset_depreciation(
     description = "Asset Depreciation Line",
     order = "sequence, id",
     check_company_auto = true,
-    company_access = direct(field = "company_id", branch = "exact", empty = "deny")
+    company_access = direct(field = "company_id", branch = "exact", empty = "deny"),
+    indexes = [
+        ("_asset_state", "(asset_id, state)"),
+        ("_draft_date", "(depreciation_date) WHERE state = 'draft'"),
+    ],
 )]
 pub struct AccountAssetDepreciationLine {
     /// Parent asset.

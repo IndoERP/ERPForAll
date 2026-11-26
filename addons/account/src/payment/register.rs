@@ -36,6 +36,7 @@ const INVOICE_TYPES: [&str; 4] = ["out_invoice", "out_refund", "in_invoice", "in
     description = "Register Payment",
     kind = "transient",
     transient_max_age_seconds = 3600,
+    check_company_auto = true,
     company_access = direct(field = "company_id", branch = "exact", empty = "deny")
 )]
 pub struct AccountPaymentRegister {
@@ -947,14 +948,16 @@ impl AccountPaymentRegister {
         // include its receivable/payable counterpart line in reconciliation.
         let mut writeoff_counterpart_line: Option<i64> = None;
         if apply_writeoff && let (Some(wo_account), Some(p)) = (writeoff_account, planned.first()) {
+            let wo_env = env.with_company(company)?;
             let (counterpart_cur, writeoff_cur) = compute_writeoff_balance(payment_diff, p.inbound);
-            let gen_journal = find_misc_journal(tx, company, journal.get()).await?;
+            let gen_journal = find_misc_journal(tx, company).await?;
             let comp_currency = company_currency_id(tx, company).await?;
             let (counterpart_bal, writeoff_bal) = if doc_currency == comp_currency {
                 (counterpart_cur, writeoff_cur)
             } else {
                 let converted = convert_to_company_currency(
                     tx,
+                    &wo_env,
                     doc_currency,
                     comp_currency,
                     company,
@@ -974,7 +977,7 @@ impl AccountPaymentRegister {
             if let Some(partner) = p.partner {
                 mvals.insert("partner_id".into(), Cell::Id(partner));
             }
-            let unchecked_moves = crate::moves::unchecked(&env.records("account.move")?);
+            let unchecked_moves = crate::moves::unchecked(&wo_env.records("account.move")?);
             let wo_move = unchecked_moves.create(tx, vec![mvals]).await?;
             let wo_move_id = wo_move.ids()[0];
             let mut l1 = RawVals::new();
@@ -997,10 +1000,10 @@ impl AccountPaymentRegister {
             if let Some(partner) = p.partner {
                 l2.insert("partner_id".into(), Cell::Id(partner));
             }
-            let unchecked_lines = crate::moves::unchecked(&env.records("account.move.line")?);
+            let unchecked_lines = crate::moves::unchecked(&wo_env.records("account.move.line")?);
             let created_lines = unchecked_lines.create(tx, vec![l1, l2]).await?;
             writeoff_counterpart_line = created_lines.ids().first().copied();
-            crate::moves::post_moves(tx, &env.records("account.move")?.browse([wo_move_id])?)
+            crate::moves::post_moves(tx, &wo_env.records("account.move")?.browse([wo_move_id])?)
                 .await?;
         }
         let lines = env.records("account.move.line")?;
@@ -1179,11 +1182,7 @@ pub(crate) fn compute_writeoff_balance(difference: Decimal, inbound: bool) -> (D
     (counterpart, -counterpart)
 }
 
-async fn find_misc_journal(
-    tx: &mut Transaction,
-    company: i64,
-    fallback_journal: i64,
-) -> Result<i64> {
+async fn find_misc_journal(tx: &mut Transaction, company: i64) -> Result<i64> {
     let rows = tx
         .query(
             "SELECT id::int8 FROM account_journal \
@@ -1192,10 +1191,14 @@ async fn find_misc_journal(
             &[&company],
         )
         .await?;
-    if let Some(row) = rows.first() {
-        return row.try_get(0).map_err(db);
-    }
-    Ok(fallback_journal)
+    rows.first()
+        .ok_or_else(|| {
+            Error::user(
+                "No active Miscellaneous (general) journal is configured for this company to post the payment write-off entry.",
+            )
+        })?
+        .try_get(0)
+        .map_err(db)
 }
 
 async fn company_currency_id(tx: &mut Transaction, company: i64) -> Result<i64> {
@@ -1213,40 +1216,35 @@ async fn company_currency_id(tx: &mut Transaction, company: i64) -> Result<i64> 
 
 async fn convert_to_company_currency(
     tx: &mut Transaction,
+    env: &Env,
     from_currency: i64,
     to_currency: i64,
     company: i64,
     date: Date,
     amount: Decimal,
 ) -> Result<Decimal> {
-    let rate_rows = tx
-        .query(
-            "SELECT rate FROM res_currency_rate \
-             WHERE currency_id = $1 AND company_id = $2 AND name <= $3 \
-             ORDER BY name DESC LIMIT 1",
-            &[&from_currency, &company, &date],
-        )
-        .await?;
-    let from_rate: Decimal = rate_rows
-        .first()
-        .and_then(|r| r.try_get(0).ok())
-        .unwrap_or(Decimal::ONE);
-    let to_rows = tx
-        .query(
-            "SELECT rate FROM res_currency_rate \
-             WHERE currency_id = $1 AND company_id = $2 AND name <= $3 \
-             ORDER BY name DESC LIMIT 1",
-            &[&to_currency, &company, &date],
-        )
-        .await?;
-    let to_rate: Decimal = to_rows
-        .first()
-        .and_then(|r| r.try_get(0).ok())
-        .unwrap_or(Decimal::ONE);
-    if from_rate.is_zero() {
-        return Ok(amount.round_dp(2));
-    }
-    Ok((amount * to_rate / from_rate).round_dp(2))
+    let from_rec = RecId::from_real(from_currency)
+        .ok_or_else(|| Error::invariant("Invalid source currency id."))?;
+    let to_rec = RecId::from_real(to_currency)
+        .ok_or_else(|| Error::invariant("Invalid target currency id."))?;
+    let co_rec =
+        RecId::from_real(company).ok_or_else(|| Error::invariant("Invalid company id."))?;
+    let currencies = [from_rec, to_rec];
+    let rounding = erp_addon_base::money::RoundingTable::load(env, tx, &currencies).await?;
+    let book = erp_addon_base::money::RateBook::load(
+        env,
+        tx,
+        co_rec,
+        date,
+        erp_sdk::money::RateDateRule::OnOrBefore,
+        &currencies,
+    )
+    .await?;
+    let exact = book.snapshot(from_rec, to_rec)?.convert_exact(amount)?;
+    Ok(exact.quantize(
+        rounding.get(to_rec)?.increment(),
+        erp_addon_base::money::CURRENCY_ROUNDING_MODE,
+    )?)
 }
 
 #[cfg(test)]

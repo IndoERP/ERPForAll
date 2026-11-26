@@ -427,15 +427,18 @@ async fn validation_body() {
     )
     .await
     .unwrap();
-    exact_error(
-        write(
-            &c,
-            &mut tx,
-            RawVals::new().set_cell("chart_template", text("custom")),
-        )
-        .await,
-        ErrorKind::UserError,
-        "Chart activation is not available yet.",
+    let unknown_chart = write(
+        &c,
+        &mut tx,
+        RawVals::new().set_cell("chart_template", text("custom")),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(unknown_chart.kind(), ErrorKind::Validation);
+    assert!(
+        unknown_chart.message().contains("custom"),
+        "{}",
+        unknown_chart.message()
     );
     assert_eq!(c.cell(&mut tx, "chart_template").await.unwrap(), Cell::Null);
     tx.rollback().await.unwrap();

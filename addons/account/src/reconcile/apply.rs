@@ -467,6 +467,16 @@ async fn admit<'a>(
             names.into_values().collect::<Vec<_>>().join(", ")
         )));
     }
+    let foreign_currencies: BTreeSet<i64> = chosen
+        .iter()
+        .filter(|i| i.currency != i.company_currency)
+        .map(|i| i.currency)
+        .collect();
+    if foreign_currencies.len() > 1 {
+        return Err(Error::user(
+            "Items in two different foreign currencies cannot be matched directly together.",
+        ));
+    }
     Ok(chosen)
 }
 
@@ -542,25 +552,51 @@ async fn insert_matches(
         .iter()
         .map(|(&id, item)| (id, item.residual_currency().abs()))
         .collect();
+    let mut cur_ids: Vec<RecId> = items
+        .values()
+        .flat_map(|i| [i.currency, i.company_currency])
+        .filter_map(RecId::from_real)
+        .collect();
+    cur_ids.sort_unstable();
+    cur_ids.dedup();
+    let rounding = if cur_ids.is_empty() {
+        None
+    } else {
+        Some(erp_addon_base::money::RoundingTable::load(&tx.env(), tx, &cur_ids).await?)
+    };
+    let scale_of = |cur_id: i64| -> Result<u32> {
+        let Some(ref table) = rounding else {
+            return Ok(2);
+        };
+        let rec = RecId::from_real(cur_id)
+            .ok_or_else(|| Error::invariant(format!("Invalid currency id {cur_id}.")))?;
+        Ok(table.get(rec)?.decimal_places())
+    };
     let mut debit_curs = Vec::with_capacity(pairs.len());
     let mut credit_curs = Vec::with_capacity(pairs.len());
     for p in pairs {
-        let d_same = items
-            .get(&p.debit)
-            .is_none_or(|i| i.currency == i.company_currency);
-        let c_same = items
-            .get(&p.credit)
-            .is_none_or(|i| i.currency == i.company_currency);
+        let d_item = items.get(&p.debit);
+        let c_item = items.get(&p.credit);
+        let d_same = d_item.is_none_or(|i| i.currency == i.company_currency);
+        let c_same = c_item.is_none_or(|i| i.currency == i.company_currency);
+        let d_scale = match d_item {
+            Some(i) => scale_of(i.currency)?,
+            None => 2,
+        };
+        let c_scale = match c_item {
+            Some(i) => scale_of(i.currency)?,
+            None => 2,
+        };
         let d_rco = rem_co.get(&p.debit).copied().unwrap_or(p.amount);
         let d_rcur = rem_cur.get(&p.debit).copied().unwrap_or(p.amount);
-        let d_amt_cur = settled_currency_amount(p.amount, d_rco, d_rcur, d_same, 2);
+        let d_amt_cur = settled_currency_amount(p.amount, d_rco, d_rcur, d_same, d_scale);
         rem_co.insert(p.debit, (d_rco - p.amount).max(Decimal::ZERO));
         rem_cur.insert(p.debit, (d_rcur - d_amt_cur).max(Decimal::ZERO));
         debit_curs.push(d_amt_cur);
 
         let c_rco = rem_co.get(&p.credit).copied().unwrap_or(p.amount);
         let c_rcur = rem_cur.get(&p.credit).copied().unwrap_or(p.amount);
-        let c_amt_cur = settled_currency_amount(p.amount, c_rco, c_rcur, c_same, 2);
+        let c_amt_cur = settled_currency_amount(p.amount, c_rco, c_rcur, c_same, c_scale);
         rem_co.insert(p.credit, (c_rco - p.amount).max(Decimal::ZERO));
         rem_cur.insert(p.credit, (c_rcur - c_amt_cur).max(Decimal::ZERO));
         credit_curs.push(c_amt_cur);
@@ -783,7 +819,7 @@ pub async fn unreconcile_partials(tx: &mut Transaction, partials: &Records) -> R
              INSERT INTO account_reconcile_removal (original_partial_id, company_id, account_id, \
                  line_id, partner_id, currency_id, matched_delta, matched_on, removed_on, \
                  create_uid, create_date, write_uid, write_date) \
-             SELECT p.id, l.company_id, l.account_id, l.id, l.partner_id, side.currency_id, \
+             SELECT p.id, l.company_id, l.account_id, l.id, l.partner_id, co.currency_id, \
                     side.delta, p.max_date, c.removed_on, $4, transaction_timestamp() AT TIME ZONE 'UTC', \
                     $4, transaction_timestamp() AT TIME ZONE 'UTC' \
              FROM gone p CROSS JOIN LATERAL (VALUES \
@@ -792,7 +828,7 @@ pub async fn unreconcile_partials(tx: &mut Transaction, partials: &Records) -> R
              JOIN account_move_line l ON l.id = side.line_id \
              JOIN unnest($2::int8[], $3::date[]) c(company_id, removed_on) ON c.company_id = l.company_id \
              JOIN res_company co ON co.id = l.company_id \
-             WHERE side.currency_id = co.currency_id AND l.currency_id = side.currency_id \
+             WHERE l.currency_id = side.currency_id \
                AND p.max_date IS NOT NULL",
             &[&ids, &company_ids, &removal_dates, &env.uid()],
         ).await?;

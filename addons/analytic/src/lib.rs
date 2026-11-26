@@ -536,7 +536,11 @@ impl AccountAnalyticAccount {
     description = "Analytic Line",
     order = "date desc, id desc",
     check_company_auto = true,
-    company_access = direct(field = "company_id", branch = "exact", empty = "deny")
+    company_access = direct(field = "company_id", branch = "exact", empty = "deny"),
+    indexes = [
+        ("_account_date_kind", "(account_id, date, cost_kind)"),
+        ("_company_date_kind", "(company_id, date, cost_kind)"),
+    ],
 )]
 pub struct AccountAnalyticLine {
     /// Line description.
@@ -820,7 +824,10 @@ impl AccountAnalyticSkf {
     description = "Statistical Key Figure Entry",
     order = "date desc, id desc",
     check_company_auto = true,
-    company_access = direct(field = "company_id", branch = "exact", empty = "deny")
+    company_access = direct(field = "company_id", branch = "exact", empty = "deny"),
+    indexes = [
+        ("_skf_account_latest", "(skf_id, analytic_account_id, date DESC, id DESC)"),
+    ],
 )]
 pub struct AccountAnalyticSkfLine {
     /// Parent SKF definition.

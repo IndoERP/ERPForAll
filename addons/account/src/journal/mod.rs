@@ -335,10 +335,7 @@ impl AccountJournal {
             if reset_empty {
                 vals.insert("sequence_reset".into(), Cell::Str(reset.into()));
             }
-            let padding_empty = matches!(
-                vals.get("sequence_padding"),
-                None | Some(Cell::Null | Cell::Int(0))
-            );
+            let padding_empty = matches!(vals.get("sequence_padding"), None | Some(Cell::Null));
             if padding_empty {
                 vals.insert("sequence_padding".into(), Cell::Int(padding));
             }
@@ -952,27 +949,35 @@ async fn auto_create_liquidity_account(
             "asset_cash",
         ),
         "credit" => ("211", "liability_credit_card"),
-        _ => (
+        "bank" => (
             bank_prefix
                 .as_deref()
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or("102"),
             "asset_cash",
         ),
+        other => {
+            return Err(Error::validation(format!(
+                "Cannot auto-create a liquidity account for journal type '{other}'."
+            )));
+        }
     };
+    let like_pattern = format!("{prefix}%");
+    let existing_rows = tx
+        .query(
+            "SELECT code::text FROM account_account_code \
+             WHERE company_id = $1 AND code LIKE $2",
+            &[&company_id, &like_pattern],
+        )
+        .await?;
+    let existing_codes: BTreeSet<String> = existing_rows
+        .into_iter()
+        .map(|r| r.try_get::<_, String>(0).map_err(db_err))
+        .collect::<Result<_>>()?;
     let mut chosen_code = None;
     for seq in 1..=999u32 {
         let candidate = format!("{prefix}{seq:03}");
-        let exists: i64 = tx
-            .query(
-                "SELECT count(*)::int8 FROM account_account_code \
-                 WHERE company_id = $1 AND code = $2",
-                &[&company_id, &candidate],
-            )
-            .await?[0]
-            .try_get(0)
-            .map_err(db_err)?;
-        if exists == 0 {
+        if !existing_codes.contains(&candidate) {
             chosen_code = Some(candidate);
             break;
         }

@@ -916,7 +916,10 @@ async fn set_budget_state(
     description = "Budget Line",
     order = "date_from, id",
     check_company_auto = true,
-    company_access = direct(field = "company_id", branch = "exact", empty = "deny")
+    company_access = direct(field = "company_id", branch = "exact", empty = "deny"),
+    indexes = [
+        ("_company_period", "(company_id, date_from, date_to)"),
+    ],
 )]
 pub struct AccountBudgetLine {
     /// Owning budget.

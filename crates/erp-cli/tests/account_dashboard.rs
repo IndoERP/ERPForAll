@@ -328,8 +328,9 @@ async fn cards_per_journal_type_with_drafts_body() {
         let card: Json = serde_json::from_str(json).unwrap();
         assert_eq!(card["v"], 1);
         if id == b.bank {
-            // a bank journal starts no document from its card
-            assert_eq!(card["buttons"], serde_json::json!([]), "{card}");
+            // a bank journal starts a new bank statement from its card
+            assert_eq!(card["buttons"][0]["label"], "New Statement", "{card}");
+            assert_eq!(card["buttons"][0]["context"]["default_journal_id"], id);
         } else {
             assert_eq!(card["buttons"][0]["context"]["default_journal_id"], id);
         }

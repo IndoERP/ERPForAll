@@ -612,31 +612,41 @@ impl AccountPayment {
             .collect();
         cur_ids.sort_unstable();
         cur_ids.dedup();
-        let mut names = std::collections::HashMap::new();
+        let mut info = std::collections::HashMap::<i64, (String, u32)>::new();
         if !cur_ids.is_empty() {
             let rows = tx
                 .query(
-                    "SELECT id::int8, name::text FROM res_currency WHERE id = ANY($1::int8[])",
+                    "SELECT id::int8, name::text, COALESCE(decimal_places, 2)::int4 \
+                     FROM res_currency WHERE id = ANY($1::int8[])",
                     &[&cur_ids],
                 )
                 .await?;
             for row in rows {
-                if let (Ok(id), Ok(name)) = (row.try_get::<_, i64>(0), row.try_get::<_, String>(1))
-                {
-                    names.insert(id, name);
-                }
+                let id: i64 = row
+                    .try_get(0)
+                    .map_err(|e| Error::db(format!("Currency id unreadable: {e}")))?;
+                let name: String = row
+                    .try_get(1)
+                    .map_err(|e| Error::db(format!("Currency code unreadable: {e}")))?;
+                let dp: i32 = row
+                    .try_get(2)
+                    .map_err(|e| Error::db(format!("Currency precision unreadable: {e}")))?;
+                let scale = u32::try_from(dp).unwrap_or(2);
+                info.insert(id, (name, scale));
             }
         }
         for (i, (amount, cur)) in amounts.into_iter().zip(currencies).enumerate() {
-            let code = cur
+            let (code, scale) = cur
                 .and_then(|c| c.as_real())
-                .and_then(|c| names.get(&c.get()))
-                .map(String::as_str)
-                .unwrap_or("USD");
+                .and_then(|c| info.get(&c.get()))
+                .map(|(n, s)| (n.as_str(), *s))
+                .unwrap_or(("", 2));
             out.set(
                 i,
                 AccountPayment::CHECK_AMOUNT_IN_WORDS,
-                Some(Arc::<str>::from(batch::amount_to_words(amount, code))),
+                Some(Arc::<str>::from(batch::amount_to_words_scaled(
+                    amount, code, scale,
+                ))),
             )?;
         }
         Ok(())

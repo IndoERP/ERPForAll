@@ -93,11 +93,17 @@ async fn prepare(tx: &mut Transaction, company: i64, patch: &LockPatch) -> Resul
                 }
                 let draft_count: i64 = tx
                     .query(
-                        "SELECT count(*)::int8 FROM account_move \
-                         WHERE company_id = $1 AND state = 'draft' AND date <= $2",
+                        "SELECT count(*)::int8 \
+                         FROM account_move m \
+                         JOIN res_company target ON target.id = $1 \
+                         JOIN res_company mc ON mc.id = m.company_id \
+                         WHERE (mc.id = target.id OR mc.parent_path LIKE target.parent_path || '%') \
+                           AND m.state = 'draft' AND m.date <= $2",
                         &[&company, &date],
                     )
-                    .await?[0]
+                    .await?
+                    .first()
+                    .ok_or_else(|| Error::invariant("Missing draft count row for hard lock check."))?
                     .try_get(0)
                     .map_err(db)?;
                 if draft_count > 0 {
