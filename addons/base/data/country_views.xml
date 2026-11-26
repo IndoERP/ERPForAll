@@ -20,7 +20,6 @@
       <form>
         <sheet>
           <div class="oe_title">
-            <label for="name"/>
             <h1><field name="name"/></h1>
           </div>
           <group name="main_group">
@@ -42,12 +41,7 @@
           </group>
           <notebook>
             <page name="states" string="States">
-              <field name="state_ids">
-                <list editable="bottom">
-                  <field name="name"/>
-                  <field name="code"/>
-                </list>
-              </field>
+              <field name="state_ids"/>
             </page>
           </notebook>
         </sheet>
@@ -93,7 +87,7 @@
     <field name="name">res.country.state.list</field>
     <field name="model">res.country.state</field>
     <field name="arch" type="xml">
-      <list string="State" editable="bottom">
+      <list string="State">
         <field name="name"/>
         <field name="code"/>
         <field name="country_id"/>
@@ -172,7 +166,6 @@
       <form string="Country Group">
         <sheet>
           <div class="oe_title">
-            <label for="name" string="Group Name"/>
             <h1><field name="name" placeholder="e.g. Europe"/></h1>
           </div>
           <group name="country_group">
