@@ -10,8 +10,16 @@ pub mod allocation;
 use erp_sdk::migrations::SemverVersion;
 use erp_sdk::prelude::*;
 
-pub(crate) fn default_today(_ctx: &erp_sdk::DefaultContext) -> Value {
-    Value::Date(Date::today())
+pub(crate) fn strip_default_context(env: &Env) -> Env {
+    let mut ctx = env.context().clone();
+    let keys: Vec<String> = ctx
+        .default_field_names()
+        .map(|k| format!("default_{k}"))
+        .collect();
+    for k in keys {
+        ctx.remove(&k);
+    }
+    env.with_context_replaced(ctx)
 }
 
 pub(crate) fn db(err: impl std::fmt::Display) -> Error {
@@ -365,7 +373,10 @@ impl AccountAnalyticAccount {
         Ok(())
     }
 
-    #[compute(depends = ["line_ids", "line_ids.amount"])]
+    #[compute(
+        depends = ["line_ids", "line_ids.amount"],
+        depends_context = ["uid", "allowed_company_ids"]
+    )]
     async fn _compute_debit_credit_balance(
         this: &RecordSet<AccountAnalyticAccount>,
         tx: &mut Transaction,
@@ -379,8 +390,9 @@ impl AccountAnalyticAccount {
             .collect();
         let mut totals = std::collections::HashMap::<i64, (Decimal, Decimal, Decimal)>::new();
         if !real_ids.is_empty() {
-            let rows = tx
-                .query(
+            tx.flush().await?;
+            let rows = if this.env().su() {
+                tx.query(
                     "SELECT account_id::int8, \
                             COALESCE(SUM(-amount) FILTER (WHERE amount < 0), 0), \
                             COALESCE(SUM(amount) FILTER (WHERE amount > 0), 0), \
@@ -390,7 +402,31 @@ impl AccountAnalyticAccount {
                      GROUP BY account_id",
                     &[&real_ids],
                 )
-                .await?;
+                .await?
+            } else {
+                let allowed: Vec<i64> = tx
+                    .companies(this.env())
+                    .await?
+                    .into_iter()
+                    .map(|c| c.get())
+                    .collect();
+                if allowed.is_empty() {
+                    Vec::new()
+                } else {
+                    tx.query(
+                        "SELECT account_id::int8, \
+                                COALESCE(SUM(-amount) FILTER (WHERE amount < 0), 0), \
+                                COALESCE(SUM(amount) FILTER (WHERE amount > 0), 0), \
+                                COALESCE(SUM(amount), 0) \
+                         FROM account_analytic_line \
+                         WHERE account_id = ANY($1::int8[]) \
+                           AND company_id = ANY($2::int8[]) \
+                         GROUP BY account_id",
+                        &[&real_ids, &allowed],
+                    )
+                    .await?
+                }
+            };
             for row in rows {
                 let aid: i64 = row.try_get(0).map_err(db)?;
                 let debit: Decimal = row.try_get(1).map_err(db)?;
@@ -411,7 +447,10 @@ impl AccountAnalyticAccount {
         Ok(())
     }
 
-    #[compute(depends = ["parent_path", "line_ids", "line_ids.amount", "child_ids"])]
+    #[compute(
+        depends = ["parent_path", "line_ids", "line_ids.amount", "child_ids"],
+        depends_context = ["uid", "allowed_company_ids"]
+    )]
     async fn _compute_subtree_totals(
         this: &RecordSet<AccountAnalyticAccount>,
         tx: &mut Transaction,
@@ -425,8 +464,9 @@ impl AccountAnalyticAccount {
             .collect();
         let mut totals = std::collections::HashMap::<i64, (Decimal, Decimal, Decimal)>::new();
         if !real_ids.is_empty() {
-            let rows = tx
-                .query(
+            tx.flush().await?;
+            let rows = if this.env().su() {
+                tx.query(
                     "SELECT p.id::int8, \
                             COALESCE(SUM(-l.amount) FILTER (WHERE l.amount < 0), 0), \
                             COALESCE(SUM(l.amount) FILTER (WHERE l.amount > 0), 0), \
@@ -440,7 +480,35 @@ impl AccountAnalyticAccount {
                      GROUP BY p.id",
                     &[&real_ids],
                 )
-                .await?;
+                .await?
+            } else {
+                let allowed: Vec<i64> = tx
+                    .companies(this.env())
+                    .await?
+                    .into_iter()
+                    .map(|c| c.get())
+                    .collect();
+                if allowed.is_empty() {
+                    Vec::new()
+                } else {
+                    tx.query(
+                        "SELECT p.id::int8, \
+                                COALESCE(SUM(-l.amount) FILTER (WHERE l.amount < 0), 0), \
+                                COALESCE(SUM(l.amount) FILTER (WHERE l.amount > 0), 0), \
+                                COALESCE(SUM(l.amount), 0) \
+                         FROM account_analytic_account p \
+                         JOIN account_analytic_account d \
+                           ON (d.id = p.id OR (p.parent_path IS NOT NULL AND d.parent_path IS NOT NULL \
+                               AND starts_with(d.parent_path, p.parent_path))) \
+                         LEFT JOIN account_analytic_line l \
+                           ON l.account_id = d.id AND l.company_id = ANY($2::int8[]) \
+                         WHERE p.id = ANY($1::int8[]) \
+                         GROUP BY p.id",
+                        &[&real_ids, &allowed],
+                    )
+                    .await?
+                }
+            };
             for row in rows {
                 let aid: i64 = row.try_get(0).map_err(db)?;
                 let debit: Decimal = row.try_get(1).map_err(db)?;
@@ -475,7 +543,7 @@ pub struct AccountAnalyticLine {
     #[field(char, required = true, string = "Description")]
     pub name: Option<Arc<str>>,
     /// Posting date.
-    #[field(date, required = true, default_fn = default_today, index = true, string = "Date")]
+    #[field(date, required = true, index = true, string = "Date")]
     pub date: Option<Date>,
     /// Target analytic account / cost center.
     #[field(
@@ -568,7 +636,23 @@ pub struct AccountAnalyticLine {
 }
 
 #[methods(AccountAnalyticLine, addon = "analytic")]
-impl AccountAnalyticLine {}
+impl AccountAnalyticLine {
+    #[method(override)]
+    async fn default_get(
+        this: &RecordSet<AccountAnalyticLine>,
+        tx: &mut Transaction,
+        names: Vec<String>,
+        sup: Super,
+    ) -> Result<erp_sdk::ValueMap> {
+        let mut values: erp_sdk::ValueMap =
+            sup.call(tx, this.as_records(), (names.clone(),)).await?;
+        if names.iter().any(|n| n == "date") && !values.contains_key("date") {
+            let today = this.env().context_today()?;
+            values.insert("date".to_owned(), Value::Date(today));
+        }
+        Ok(values)
+    }
+}
 
 /// `account.analytic.distribution.model`: rule automatically suggesting an analytic account
 /// based on partner or account code prefix.
@@ -636,6 +720,24 @@ impl AccountAnalyticDistributionModel {
             values.insert("company_id".to_owned(), Value::Int(cid));
         }
         Ok(values)
+    }
+
+    #[constrains("percentage")]
+    async fn _check_percentage(
+        this: &RecordSet<AccountAnalyticDistributionModel>,
+        tx: &mut Transaction,
+    ) -> Result<()> {
+        for pct in this
+            .mapped(tx, AccountAnalyticDistributionModel::PERCENTAGE)
+            .await?
+        {
+            if pct <= Decimal::ZERO || pct > Decimal::from(100) {
+                return Err(Error::validation(
+                    "Analytic distribution percentage must be greater than 0 and at most 100.",
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -752,7 +854,7 @@ pub struct AccountAnalyticSkfLine {
     )]
     pub analytic_account_id: Option<RecId>,
     /// Effective date of the measurement.
-    #[field(date, required = true, default_fn = default_today, index = true, string = "Date")]
+    #[field(date, required = true, index = true, string = "Date")]
     pub date: Option<Date>,
     /// Positive quantitative measure (e.g. 25 employees, 450.5 m2).
     #[field(float, digits = (16, 4), required = true, default = 0, string = "Quantity")]
@@ -764,6 +866,22 @@ pub struct AccountAnalyticSkfLine {
 
 #[methods(AccountAnalyticSkfLine, addon = "analytic")]
 impl AccountAnalyticSkfLine {
+    #[method(override)]
+    async fn default_get(
+        this: &RecordSet<AccountAnalyticSkfLine>,
+        tx: &mut Transaction,
+        names: Vec<String>,
+        sup: Super,
+    ) -> Result<erp_sdk::ValueMap> {
+        let mut values: erp_sdk::ValueMap =
+            sup.call(tx, this.as_records(), (names.clone(),)).await?;
+        if names.iter().any(|n| n == "date") && !values.contains_key("date") {
+            let today = this.env().context_today()?;
+            values.insert("date".to_owned(), Value::Date(today));
+        }
+        Ok(values)
+    }
+
     #[constrains("quantity")]
     async fn _check_quantity(
         this: &RecordSet<AccountAnalyticSkfLine>,
@@ -795,7 +913,12 @@ async fn backfill_analytic_controlling_fields(
              lock_secondary_costs = COALESCE(lock_secondary_costs, false), \
              lock_commitment = COALESCE(lock_commitment, false), \
              parent_path = COALESCE(parent_path, id::text || '/') \
-         WHERE center_type IS NULL OR parent_path IS NULL",
+         WHERE center_type IS NULL \
+            OR lock_primary_costs IS NULL \
+            OR lock_revenues IS NULL \
+            OR lock_secondary_costs IS NULL \
+            OR lock_commitment IS NULL \
+            OR parent_path IS NULL",
         &[],
     )
     .await?;

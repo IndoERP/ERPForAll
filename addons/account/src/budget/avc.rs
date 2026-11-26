@@ -505,6 +505,136 @@ async fn liquidate_po_commitments_for_move_line(
     Ok(liquidated_by_line)
 }
 
+/// Restores any open commitments liquidated by `move_ids` when those moves are reset to draft,
+/// and refreshes all budget lines matching the reset moves so actuals stay accurate.
+pub async fn restore_commitments_and_refresh_for_reset_moves(
+    tx: &mut Transaction,
+    move_ids: &[i64],
+) -> Result<()> {
+    if move_ids.is_empty() {
+        return Ok(());
+    }
+    let mut touched_budget_lines: Vec<i64> = Vec::new();
+    let active_budgets: i64 = tx
+        .query(
+            "SELECT count(*)::int8 FROM account_budget \
+             WHERE state = 'validate' AND COALESCE(budget_type, 'opex') IN ('opex', 'capex')",
+            &[],
+        )
+        .await?[0]
+        .try_get(0)
+        .map_err(db)?;
+    if active_budgets == 0 {
+        return Ok(());
+    }
+
+    let lines = tx
+        .query(
+            "SELECT l.id::int8, l.company_id::int8, l.date, l.account_id::int8, \
+                    l.analytic_account_id::int8, l.asset_id::int8, COALESCE(l.balance, 0) \
+             FROM account_move_line l \
+             WHERE l.move_id = ANY($1::int8[]) AND l.account_id IS NOT NULL \
+             ORDER BY l.id",
+            &[&move_ids],
+        )
+        .await?;
+
+    let has_direct_bill = tx.registry().model("purchase.direct.bill.line").is_some();
+    for row in lines {
+        let ml_id: i64 = row.try_get(0).map_err(db)?;
+        let company_id: i64 = row.try_get(1).map_err(db)?;
+        let date: Date = row.try_get(2).map_err(db)?;
+        let account_id: i64 = row.try_get(3).map_err(db)?;
+        let analytic_id: Option<i64> = row.try_get(4).map_err(db)?;
+        let asset_id: Option<i64> = row.try_get(5).map_err(db)?;
+        let spend: Decimal = row.try_get(6).map_err(db)?;
+
+        if has_direct_bill && spend > Decimal::ZERO {
+            let po_lines = tx
+                .query(
+                    "SELECT purchase_line_id::int8 FROM purchase_direct_bill_line WHERE bill_line_id = $1",
+                    &[&ml_id],
+                )
+                .await?;
+            let po_line_ids: Vec<i32> = po_lines
+                .iter()
+                .map(|r| {
+                    let id: i64 = r.try_get(0).map_err(db)?;
+                    i32::try_from(id).map_err(|_| {
+                        Error::validation(format!("purchase line id {id} out of range"))
+                    })
+                })
+                .collect::<Result<_>>()?;
+            if !po_line_ids.is_empty() {
+                let commits = tx
+                    .query(
+                        "SELECT id::int8, budget_line_id::int8, ordered_amount, liquidated_amount \
+                         FROM account_budget_commitment \
+                         WHERE source_model = 'purchase.order.line' \
+                           AND source_id = ANY($1::int4[]) \
+                           AND state IN ('partially_billed', 'closed') \
+                         ORDER BY id FOR UPDATE",
+                        &[&po_line_ids],
+                    )
+                    .await?;
+                let mut remaining = spend;
+                for crow in commits {
+                    if remaining <= Decimal::ZERO {
+                        break;
+                    }
+                    let cid: i64 = crow.try_get(0).map_err(db)?;
+                    let bl_id: i64 = crow.try_get(1).map_err(db)?;
+                    let ordered: Decimal = crow.try_get(2).map_err(db)?;
+                    let cur_liq: Decimal = crow.try_get(3).map_err(db)?;
+                    let restore = cur_liq.min(remaining);
+                    if restore <= Decimal::ZERO {
+                        continue;
+                    }
+                    let next_liq = cur_liq - restore;
+                    let next_open = (ordered - next_liq).max(Decimal::ZERO);
+                    let next_state = if next_liq <= Decimal::ZERO {
+                        "open"
+                    } else {
+                        "partially_billed"
+                    };
+                    tx.execute(
+                        "UPDATE account_budget_commitment \
+                         SET liquidated_amount = $2, open_amount = $3, state = $4, \
+                             write_date = now() AT TIME ZONE 'UTC' \
+                         WHERE id = $1",
+                        &[&cid, &next_liq, &next_open, &next_state],
+                    )
+                    .await?;
+                    remaining -= restore;
+                    if !touched_budget_lines.contains(&bl_id) {
+                        touched_budget_lines.push(bl_id);
+                    }
+                }
+            }
+        }
+
+        let matched = find_and_lock_matching_budget_lines(
+            tx,
+            company_id,
+            date,
+            Some(account_id),
+            analytic_id,
+            asset_id,
+        )
+        .await?;
+        for bl in matched {
+            if !touched_budget_lines.contains(&bl.id) {
+                touched_budget_lines.push(bl.id);
+            }
+        }
+    }
+
+    if !touched_budget_lines.is_empty() {
+        refresh_budget_lines(tx, &touched_budget_lines).await?;
+    }
+    Ok(())
+}
+
 /// Evaluates real-time AVC on journal entries / vendor bills being posted (`post_moves`),
 /// liquidating any linked PO commitments atomically (zero double-counting), and returns
 /// the matched budget line IDs so the caller refreshes their utilization metrics right after
@@ -512,9 +642,9 @@ async fn liquidate_po_commitments_for_move_line(
 pub async fn check_and_apply_move_avc(
     tx: &mut Transaction,
     env: &Env,
-    move_ids: &[i64],
+    move_dates: &[(i64, Date)],
 ) -> Result<Vec<i64>> {
-    if move_ids.is_empty() {
+    if move_dates.is_empty() {
         return Ok(Vec::new());
     }
     // Fast skip when no validated OPEX/CAPEX budget exists.
@@ -531,19 +661,21 @@ pub async fn check_and_apply_move_avc(
         return Ok(Vec::new());
     }
 
+    let (move_ids, dates): (Vec<i64>, Vec<Date>) = move_dates.iter().copied().unzip();
     let lines = tx
         .query(
-            "SELECT l.id::int8, l.company_id::int8, l.date, l.account_id::int8, \
+            "WITH md AS (SELECT * FROM unnest($1::int8[], $2::date[]) AS t(move_id, eff_date)) \
+             SELECT l.id::int8, l.company_id::int8, md.eff_date, l.account_id::int8, \
                     l.analytic_account_id::int8, l.asset_id::int8, COALESCE(l.balance, 0), \
                     COALESCE(a.internal_group, '')::text \
-             FROM account_move_line l \
+             FROM md \
+             JOIN account_move_line l ON l.move_id = md.move_id \
              JOIN account_account a ON a.id = l.account_id \
-             WHERE l.move_id = ANY($1::int8[]) \
-               AND l.account_id IS NOT NULL \
+             WHERE l.account_id IS NOT NULL \
                AND COALESCE(l.balance, 0) > 0 \
                AND (a.internal_group = 'expense' OR l.asset_id IS NOT NULL) \
              ORDER BY l.id",
-            &[&move_ids],
+            &[&move_ids, &dates],
         )
         .await?;
     if lines.is_empty() {

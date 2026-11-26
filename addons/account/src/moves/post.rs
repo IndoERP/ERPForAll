@@ -31,6 +31,20 @@ use crate::locking::{
 };
 use crate::numbering::{LockWait, NumberRequest, assign_numbers};
 
+/// Strips only `default_*` keys from `env`, preserving caller `allowed_company_ids`, `tz`, `lang`,
+/// and `active_test`.
+pub(crate) fn strip_default_context(env: &Env) -> Env {
+    let mut ctx = env.context().clone();
+    let keys: Vec<String> = ctx
+        .default_field_names()
+        .map(|k| format!("default_{k}"))
+        .collect();
+    for k in keys {
+        ctx.remove(&k);
+    }
+    env.with_context_replaced(ctx)
+}
+
 /// The group whose members may post, reset and cancel entries (the reference asks for its
 /// invoicing group, which this addon does not declare yet; the accounting users hold the rights
 /// on entries, `security/ir.access.csv`).
@@ -93,32 +107,79 @@ impl AccountMove {
         Ok(Value::Map(action.into()))
     }
 
-    /// Whether Reset to Draft is refused ([`reset_moves`]): every entry but a cancelled one, and
-    /// a cancelled one with a matched item or a payment ([`refuse_consequences`]). The matches are
-    /// written by SQL; the reconciliation service drops this value with them. An unsaved copy
-    /// answers for the entry it was made from.
-    #[compute(depends = ["state", "origin_payment_id", "line_ids.full_reconcile_id"])]
+    /// Whether Reset to Draft is refused ([`reset_moves`]): every entry that is neither cancelled
+    /// nor a posted entry in a company with `allow_posted_reset = true`, plus any entry with
+    /// blocking consequences (matched items, payment, posted allocation/depreciation/settlement/
+    /// disposal/bank statement). The matches are written by SQL; the reconciliation service drops
+    /// this value with them. An unsaved copy answers for the entry it was made from.
+    #[compute(depends = [
+        "state",
+        "company_id",
+        "company_id.allow_posted_reset",
+        "origin_payment_id",
+        "line_ids.full_reconcile_id"
+    ])]
     async fn _compute_reset_blocked(
         this: &RecordSet<AccountMove>,
         tx: &mut Transaction,
         out: &mut Assign<'_, AccountMove>,
     ) -> Result<()> {
         let states = this.mapped(tx, AccountMove::STATE).await?;
-        let cancelled: Vec<i64> = this
+        let companies = this.mapped(tx, AccountMove::COMPANY_ID).await?;
+        let comp_ids: BTreeSet<i64> = companies
+            .iter()
+            .filter_map(|c| c.map(|id| id.get()))
+            .collect();
+        let mut allow_reset_by_company = BTreeMap::<i64, bool>::new();
+        if !comp_ids.is_empty() {
+            let ids_vec: Vec<i64> = comp_ids.into_iter().collect();
+            let rows = tx
+                .query(
+                    "SELECT id::int8, COALESCE(allow_posted_reset, false) \
+                     FROM res_company WHERE id = ANY($1::int8[])",
+                    &[&ids_vec],
+                )
+                .await?;
+            for row in rows {
+                let cid: i64 = row.try_get(0).map_err(db)?;
+                let allow: bool = row.try_get(1).map_err(db)?;
+                allow_reset_by_company.insert(cid, allow);
+            }
+        }
+        let candidates: Vec<i64> = this
             .as_records()
             .rec_ids()
             .iter()
             .zip(&states)
-            .filter(|(_, state)| state.as_deref() == Some("cancel"))
-            .filter_map(|(id, _)| id.as_real().or(id.origin()).map(|row| row.get()))
+            .zip(&companies)
+            .filter(|((_, state), cid)| {
+                state.as_deref() == Some("cancel")
+                    || (state.as_deref() == Some("posted")
+                        && cid
+                            .and_then(|c| allow_reset_by_company.get(&c.get()).copied())
+                            .unwrap_or(false))
+            })
+            .filter_map(|((id, _), _)| id.as_real().or(id.origin()).map(|row| row.get()))
             .collect();
-        let blocked = if cancelled.is_empty() {
+        let blocked = if candidates.is_empty() {
             BTreeMap::new()
         } else {
-            consequences(tx, &cancelled).await?
+            consequences(tx, &candidates).await?
         };
-        for (index, (id, state)) in this.as_records().rec_ids().iter().zip(&states).enumerate() {
-            let free = state.as_deref() == Some("cancel")
+        for (index, ((id, state), cid)) in this
+            .as_records()
+            .rec_ids()
+            .iter()
+            .zip(&states)
+            .zip(&companies)
+            .enumerate()
+        {
+            let eligible = state.as_deref() == Some("cancel")
+                || (state.as_deref() == Some("posted")
+                    && cid
+                        .and_then(|c| allow_reset_by_company.get(&c.get()).copied())
+                        .unwrap_or(false));
+            let free = eligible
                 && id
                     .as_real()
                     .or(id.origin())
@@ -157,6 +218,7 @@ struct Header {
     reference: Option<String>,
     move_type: String,
     payment: bool,
+    allow_posted_reset: bool,
 }
 
 impl Header {
@@ -287,13 +349,14 @@ pub async fn post_moves(tx: &mut Transaction, moves: &Records) -> Result<()> {
             .map(|h| h.id)
             .zip(dates.iter().copied())
             .collect();
-        // Controlling: auto-assign default cost centers, enforce mandatory/locks/validity,
-        // stamp intercompany trading partners, and check real-time Budget AVC before posting.
+        // Controlling: auto-assign default cost centers, enforce mandatory/locks/validity against
+        // the resolved accounting dates, stamp intercompany trading partners, and check real-time
+        // Budget AVC before posting.
         crate::controlling::apply_default_cost_centers(tx, &ids).await?;
-        crate::controlling::validate_move_cost_centers(tx, &ids).await?;
+        crate::controlling::validate_move_cost_centers(tx, &pairs).await?;
         stamp_trading_partners_for_moves(tx, &ids).await?;
         let avc_touched =
-            crate::budget::avc::check_and_apply_move_avc(tx, moves.env(), &ids).await?;
+            crate::budget::avc::check_and_apply_move_avc(tx, moves.env(), &pairs).await?;
 
         set_state(tx, &pairs, "posted").await?;
         // the history of the entries (a no-op without a tracking addon such as the mail bridge)
@@ -327,19 +390,26 @@ async fn stamp_trading_partners_for_moves(tx: &mut Transaction, move_ids: &[i64]
     if move_ids.is_empty() {
         return Ok(());
     }
-    tx.execute(
-        "UPDATE account_move_line l \
-         SET trading_partner_company_id = COALESCE(p.trading_partner_company_id, c.id) \
-         FROM res_partner p \
-         LEFT JOIN res_company c ON c.partner_id = p.id \
-         WHERE l.move_id = ANY($1::int8[]) \
-           AND l.partner_id = p.id \
-           AND l.trading_partner_company_id IS NULL \
-           AND COALESCE(p.trading_partner_company_id, c.id) IS NOT NULL \
-           AND COALESCE(p.trading_partner_company_id, c.id) <> l.company_id",
-        &[&move_ids],
-    )
-    .await?;
+    let updated = tx
+        .execute(
+            "UPDATE account_move_line l \
+             SET trading_partner_company_id = COALESCE(p.trading_partner_company_id, c.id) \
+             FROM res_partner p \
+             LEFT JOIN LATERAL ( \
+                 SELECT rc.id FROM res_company rc WHERE rc.partner_id = p.id ORDER BY rc.id LIMIT 1 \
+             ) c ON TRUE \
+             WHERE l.move_id = ANY($1::int8[]) \
+               AND l.partner_id = p.id \
+               AND l.trading_partner_company_id IS NULL \
+               AND COALESCE(p.trading_partner_company_id, c.id) IS NOT NULL \
+               AND COALESCE(p.trading_partner_company_id, c.id) <> l.company_id",
+            &[&move_ids],
+        )
+        .await?;
+    if updated > 0 {
+        tx.invalidate_model("account.move.line", Some(&["trading_partner_company_id"]))
+            .await?;
+    }
     Ok(())
 }
 
@@ -398,7 +468,7 @@ async fn create_analytic_lines_for_moves(
         }
         vals_list.push(v);
     }
-    let clean_env = env.with_context_replaced(erp_sdk::Context::default());
+    let clean_env = strip_default_context(env);
     clean_env
         .records("account.analytic.line")?
         .create(tx, vals_list)
@@ -445,18 +515,29 @@ pub async fn reset_moves(tx: &mut Transaction, moves: &Records) -> Result<()> {
             refuse_locked(tx, &closed, "reset to draft", LockScope::Tax, None).await?;
             refuse_consequences(tx, &posted, "reset to draft").await?;
             crate::asset::cip::remove_cip_lines_for_moves(tx, &posted).await?;
-            tx.execute(
-                "DELETE FROM account_analytic_line a \
-                 USING account_move_line l \
-                 WHERE a.move_line_id = l.id AND l.move_id = ANY($1::int8[])",
-                &[&posted],
-            )
-            .await?;
-            tx.execute(
-                "UPDATE account_move SET name = NULL WHERE id = ANY($1::int8[])",
-                &[&posted],
-            )
-            .await?;
+            let deleted_analytic = tx
+                .execute(
+                    "DELETE FROM account_analytic_line a \
+                     USING account_move_line l \
+                     WHERE a.move_line_id = l.id AND l.move_id = ANY($1::int8[])",
+                    &[&posted],
+                )
+                .await?;
+            if deleted_analytic > 0 {
+                tx.invalidate_model("account.analytic.line", None).await?;
+                tx.invalidate_model(
+                    "account.analytic.account",
+                    Some(&[
+                        "debit",
+                        "credit",
+                        "balance",
+                        "subtree_debit",
+                        "subtree_credit",
+                        "subtree_balance",
+                    ]),
+                )
+                .await?;
+            }
         }
         if states
             .iter()
@@ -469,6 +550,10 @@ pub async fn reset_moves(tx: &mut Transaction, moves: &Records) -> Result<()> {
         refuse_consequences(tx, &ids, "reset to draft").await?;
         let pairs: Vec<(i64, Date)> = states.iter().map(|(id, _, date)| (*id, *date)).collect();
         set_state(tx, &pairs, "draft").await?;
+        if !posted.is_empty() {
+            crate::budget::avc::restore_commitments_and_refresh_for_reset_moves(tx, &posted)
+                .await?;
+        }
         tx.track_external(
             moves,
             "state",
@@ -717,9 +802,23 @@ async fn consequences(
     let rows = tx
         .query(
             &format!(
-                "SELECT m.id::int8, {MATCHED_ITEMS}, COALESCE(p.name, p.id::text) \
+                "SELECT m.id::int8, {MATCHED_ITEMS}, COALESCE(p.name, p.id::text), \
+                        EXISTS (SELECT 1 FROM account_asset_depreciation_line dl WHERE dl.move_id = m.id AND dl.state = 'posted'), \
+                        EXISTS (SELECT 1 FROM account_asset_settlement s WHERE s.move_id = m.id AND s.state = 'posted'), \
+                        EXISTS (SELECT 1 FROM account_asset a WHERE a.disposal_move_id = m.id), \
+                        EXISTS (SELECT 1 FROM account_bank_statement_line bsl WHERE bsl.move_id = m.id), \
+                        EXISTS (SELECT 1 FROM account_asset_cip_line c \
+                                JOIN account_move_line ml ON ml.id = c.move_line_id \
+                                WHERE ml.move_id = m.id AND COALESCE(c.settled_amount, 0) <> 0), \
+                        EXISTS (SELECT 1 FROM account_analytic_line al \
+                                JOIN account_move_line ml ON ml.id = al.move_line_id \
+                                JOIN account_cost_allocation_rule r ON r.sender_center_id = al.account_id \
+                                JOIN account_cost_allocation_run run \
+                                  ON run.cycle_id = r.cycle_id AND run.state = 'posted' \
+                                 AND al.date >= run.date_from AND al.date <= run.date_to \
+                                WHERE ml.move_id = m.id) \
                  FROM account_move m LEFT JOIN account_payment p ON p.id = m.origin_payment_id \
-                 WHERE m.id = ANY($1::int8[]) AND ({MATCHED_ITEMS} OR p.id IS NOT NULL) \
+                 WHERE m.id = ANY($1::int8[]) \
                  ORDER BY m.id"
             ),
             &[&move_ids],
@@ -730,6 +829,12 @@ async fn consequences(
         let id: i64 = row.try_get(0).map_err(db)?;
         let matched: bool = row.try_get(1).map_err(db)?;
         let payment: Option<String> = row.try_get(2).map_err(db)?;
+        let has_depreciation: bool = row.try_get(3).map_err(db)?;
+        let has_settlement: bool = row.try_get(4).map_err(db)?;
+        let has_disposal: bool = row.try_get(5).map_err(db)?;
+        let has_bank_stmt: bool = row.try_get(6).map_err(db)?;
+        let has_settled_cip: bool = row.try_get(7).map_err(db)?;
+        let has_allocation: bool = row.try_get(8).map_err(db)?;
         let mut reasons = Vec::new();
         if matched {
             reasons.push(
@@ -740,7 +845,34 @@ async fn consequences(
         if let Some(payment) = payment {
             reasons.push(format!("it is the journal entry of payment {payment}"));
         }
-        found.insert(id, reasons);
+        if has_depreciation {
+            reasons.push("it is linked to a posted asset depreciation line".to_owned());
+        }
+        if has_settlement {
+            reasons.push(
+                "it is linked to a posted CIP settlement (reverse the settlement first)".to_owned(),
+            );
+        }
+        if has_disposal {
+            reasons.push("it is the disposal entry of a fixed asset".to_owned());
+        }
+        if has_bank_stmt {
+            reasons.push("it is linked to a bank statement line".to_owned());
+        }
+        if has_settled_cip {
+            reasons.push(
+                "its CIP cost lines have already been settled (reverse the settlement first)"
+                    .to_owned(),
+            );
+        }
+        if has_allocation {
+            reasons.push(
+                "its controlling cost center items have been allocated by a posted cost allocation run (reverse the allocation run first)".to_owned(),
+            );
+        }
+        if !reasons.is_empty() {
+            found.insert(id, reasons);
+        }
     }
     Ok(found)
 }
@@ -999,7 +1131,7 @@ fn sorted_ids(moves: &Records) -> Vec<i64> {
 }
 
 /// The posting-policy part of the refusal of Reset to Draft and Cancel on a posted entry.
-const REVERSAL_ONLY: &str = "this company's posting policy requires a reversal (use Reverse Entry, \
+const REVERSAL_ONLY: &str = "this company's posting policy only allows a reversal (use Reverse Entry, \
      or enable 'Allow Resetting Posted Entries' in Company Accounting settings)";
 
 /// Create a reversed draft journal entry (or credit note) for a posted `account.move`.
@@ -1052,7 +1184,7 @@ pub async fn reverse_move_with_options(
         let company_id: i64 = hrow.try_get(4).map_err(db)?;
         let currency_id: i64 = hrow.try_get(5).map_err(db)?;
         let partner_id: Option<i64> = hrow.try_get(6).map_err(db)?;
-        let orig_date: Date = hrow.try_get(7).map_err(db)?;
+        let _orig_date: Date = hrow.try_get(7).map_err(db)?;
         let storno: bool = hrow.try_get(8).map_err(db)?;
 
         let journal_id = override_journal.unwrap_or(orig_journal_id);
@@ -1070,9 +1202,7 @@ pub async fn reverse_move_with_options(
         };
         let rev_date = match override_date {
             Some(d) => d,
-            None => erp_addon_base::company_calendar::business_date(tx, company_id)
-                .await
-                .unwrap_or(orig_date),
+            None => erp_addon_base::company_calendar::business_date(tx, company_id).await?,
         };
 
         let mut mvals = RawVals::new();
@@ -1107,8 +1237,11 @@ pub async fn reverse_move_with_options(
                         l.product_id::int8, l.product_uom_id::int8, COALESCE(l.quantity, 0), \
                         COALESCE(l.price_unit, 0), COALESCE(l.discount, 0), \
                         COALESCE(ARRAY(SELECT r.account_tax_id::int8 FROM account_move_line_account_tax_rel r \
-                                       WHERE r.account_move_line_id = l.id ORDER BY r.account_tax_id), '{}') \
+                                       WHERE r.account_move_line_id = l.id ORDER BY r.account_tax_id), '{}'), \
+                        l.analytic_account_id::int8, l.trading_partner_company_id::int8, \
+                        CASE WHEN a.asset_type = 'cip' AND a.state IN ('draft', 'cip') THEN l.asset_id::int8 ELSE NULL END \
                  FROM account_move_line l \
+                 LEFT JOIN account_asset a ON a.id = l.asset_id \
                  WHERE l.move_id = $1 ORDER BY l.sequence, l.id",
                 &[&source_id],
             )
@@ -1133,6 +1266,9 @@ pub async fn reverse_move_with_options(
             let price_unit: Decimal = lrow.try_get(11).map_err(db)?;
             let discount: Decimal = lrow.try_get(12).map_err(db)?;
             let tax_ids: Vec<i64> = lrow.try_get(13).map_err(db)?;
+            let analytic_id: Option<i64> = lrow.try_get(14).map_err(db)?;
+            let trading_partner_id: Option<i64> = lrow.try_get(15).map_err(db)?;
+            let active_cip_asset_id: Option<i64> = lrow.try_get(16).map_err(db)?;
 
             let mut lvals = RawVals::new();
             lvals.insert("move_id".into(), Cell::Id(rev_id));
@@ -1141,6 +1277,15 @@ pub async fn reverse_move_with_options(
             }
             if let Some(pid) = l_partner {
                 lvals.insert("partner_id".into(), Cell::Id(pid));
+            }
+            if let Some(cc_id) = analytic_id {
+                lvals.insert("analytic_account_id".into(), Cell::Id(cc_id));
+            }
+            if let Some(tp_id) = trading_partner_id {
+                lvals.insert("trading_partner_company_id".into(), Cell::Id(tp_id));
+            }
+            if let Some(cip_id) = active_cip_asset_id {
+                lvals.insert("asset_id".into(), Cell::Id(cip_id));
             }
             if let Some(lbl) = name {
                 lvals.insert("name".into(), Cell::Str(lbl.into()));
@@ -1216,7 +1361,7 @@ async fn read_headers(tx: &mut Transaction, ids: &[i64]) -> Result<Vec<Header>> 
              EXISTS (SELECT 1 FROM account_move p WHERE p.journal_id = m.journal_id \
                      AND p.state = 'posted'), \
              cur.active, cur.name::text, m.ref::text, m.move_type::text, \
-             m.origin_payment_id IS NOT NULL \
+             m.origin_payment_id IS NOT NULL, COALESCE(co.allow_posted_reset, false) \
              FROM account_move m \
              JOIN res_company co ON co.id = m.company_id \
              JOIN account_journal j ON j.id = m.journal_id \
@@ -1255,6 +1400,7 @@ async fn read_headers(tx: &mut Transaction, ids: &[i64]) -> Result<Vec<Header>> 
             reference: row.try_get(15).map_err(db)?,
             move_type: row.try_get(16).map_err(db)?,
             payment: row.try_get(17).map_err(db)?,
+            allow_posted_reset: row.try_get(18).map_err(db)?,
         });
     }
     Ok(headers)
@@ -1354,11 +1500,12 @@ fn validate(
         ));
     }
     if header.state == "draft"
+        && !header.allow_posted_reset
         && let Some(name) = &header.name
     {
-        // A posted entry never returns to draft (reversal-only), so a draft with a name was named
-        // by hand. Such a name is not posted: it could repeat a posted number or take one the
-        // journal's chain gives out later.
+        // Under reversal-only policy, a posted entry never returns to draft, so a draft with a
+        // name was named by hand. Such a name is not posted: it could repeat a posted number or
+        // take one the journal's chain gives out later.
         messages.push(format!(
             "The draft carries the number {name:?}, written by hand: clear it, an entry takes \
              its number from its journal when it is posted."
@@ -1635,13 +1782,11 @@ async fn number(
     dates: &[Date],
 ) -> Result<()> {
     let env = moves.env();
-    if let Some(named) = headers.iter().find(|h| h.name.is_some()) {
-        return Err(Error::invariant(format!(
-            "entry {} reached numbering with a name",
-            named.id
-        )));
-    }
-    let unnamed: Vec<(&Header, Date)> = headers.iter().zip(dates.iter().copied()).collect();
+    let unnamed: Vec<(&Header, Date)> = headers
+        .iter()
+        .zip(dates.iter().copied())
+        .filter(|(h, _)| h.name.is_none())
+        .collect();
     if unnamed.is_empty() {
         return Ok(());
     }

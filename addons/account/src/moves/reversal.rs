@@ -80,25 +80,22 @@ impl AccountMoveReversal {
         let mut company_id = this.env().company_id()?;
         if let Some(mid) = move_id {
             let m = this.env().records("account.move")?.browse([mid])?;
-            if let Ok(Cell::Id(cid)) = m.cell(tx, "company_id").await {
+            if let Cell::Id(cid) = m.cell(tx, "company_id").await? {
                 company_id = Some(cid);
             }
             if names.iter().any(|n| n == "journal_id")
                 && !values.contains_key("journal_id")
-                && let Ok(Cell::Id(jid)) = m.cell(tx, "journal_id").await
+                && let Cell::Id(jid) = m.cell(tx, "journal_id").await?
             {
                 values.insert("journal_id".to_owned(), Value::Int(jid));
             }
         }
         if names.iter().any(|n| n == "date") && !values.contains_key("date") {
-            let today = if let Some(cid) = company_id {
-                erp_addon_base::company_calendar::business_date(tx, cid)
-                    .await
-                    .ok()
+            let date = if let Some(cid) = company_id {
+                erp_addon_base::company_calendar::business_date(tx, cid).await?
             } else {
-                None
+                this.env().context_today()?
             };
-            let date = today.unwrap_or_else(Date::today);
             values.insert("date".to_owned(), Value::Date(date));
         }
         Ok(values)
@@ -133,11 +130,9 @@ impl AccountMoveReversal {
             .await?
             .unwrap_or_else(|| Arc::from("refund"));
 
-        // Strip wizard `default_*` context keys (such as `default_move_id`) before creating
-        // the reversal move and its lines.
-        let env = wizard
-            .env()
-            .with_context_replaced(erp_sdk::Context::default());
+        // Strip wizard `default_*` context keys (such as `default_move_id`) while preserving
+        // caller `allowed_company_ids`, `tz`, and `lang`.
+        let env = post::strip_default_context(wizard.env());
         let source = env.records("account.move")?.browse([move_id])?;
         let rev_id =
             post::reverse_move_with_options(tx, &source, date, journal_id, reason.as_deref())

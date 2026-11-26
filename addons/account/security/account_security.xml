@@ -23,7 +23,7 @@ Accounting groups, from the least to the most access. The full matrix and the ot
 
   <record id="group_budget_override" model="res.groups">
     <field name="name">Budget Availability Control Override</field>
-    <field name="implied_ids" eval="[Command.link(ref('group_account_manager'))]"/>
+    <field name="implied_ids" eval="[Command.link(ref('group_account_user'))]"/>
   </record>
 
   <!-- Optional controlling feature toggles (light groups controlled from Accounting Settings).
