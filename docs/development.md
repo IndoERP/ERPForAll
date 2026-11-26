@@ -58,6 +58,15 @@ be allowed to create databases.
 4. Run `scripts/check.sh --affected --tests`, and for web changes the web checks below.
 5. Open a pull request: one topic, tests included, commits signed off.
 
+For a space-constrained checkout, put a positive GiB budget in
+`.cargo/debug-cache-limit-gib` (for example, `20`). Rust runs of
+`scripts/check.sh` trim old workspace test executables before and after verification when the
+debug directory exceeds that budget. Run `python3 -I scripts/trim-debug-tests.py` for the
+same cleanup after a direct Cargo run. Dependency libraries and installed CLI binaries stay
+cached. Active builds and retained libraries can exceed the budget. To limit compiler
+intermediates as well, set `incremental = false` under `[profile.dev]` and `[profile.test]`
+in this checkout's `.cargo/config.toml`.
+
 ## Writing an addon
 
 An addon is a directory with a `manifest.toml`. Scaffold one:

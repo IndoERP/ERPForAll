@@ -69,6 +69,11 @@ elif [ "$affected" = 1 ]; then
 fi
 
 if [ "$run_rust" = 1 ]; then
+  if [ -f .cargo/debug-cache-limit-gib ]; then
+    # This checkout opted in. Also retire completed harnesses after a failing verification.
+    step python3 -I scripts/trim-debug-tests.py
+    trap 'python3 -I scripts/trim-debug-tests.py' EXIT
+  fi
   step python3 -I scripts/check-layers.py
   step cargo fmt --all --check
   step cargo clippy --locked "${cargo_scope[@]}" --all-targets -- -D warnings

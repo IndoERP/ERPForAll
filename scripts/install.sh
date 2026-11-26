@@ -466,12 +466,17 @@ SQL
 # ---- clean-cache --------------------------------------------------------------------------------
 do_clean_cache() {
   step "Cleaning stale build caches"
+  if [ -f "$ROOT/.cargo/debug-cache-limit-gib" ]; then
+    dry "trim workspace test executables to the checkout's debug cache budget" || python3 -I "$ROOT/scripts/trim-debug-tests.py"
+  else
+    dry "remove $ROOT/target/debug" || rm -rf "$ROOT/target/debug"
+  fi
   if [ "$DRY" = 1 ]; then
-    say "  [dry-run] remove $ROOT/target/debug and $ROOT/target/tmp (keeping target/$CARGO_PROFILE_DIR)"
+    say "  [dry-run] remove $ROOT/target/tmp"
     say "  [dry-run] prune unreferenced client.*.js|css in $ROOT/web/dist/human-ui"
     return 0
   fi
-  rm -rf "$ROOT/target/debug" "$ROOT/target/tmp"
+  rm -rf "$ROOT/target/tmp"
   if [ -f "$ROOT/web/dist/human-ui/manifest.json" ] && command -v python3 >/dev/null 2>&1; then
     python3 -c '
 import json, pathlib, sys

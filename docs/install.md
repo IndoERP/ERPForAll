@@ -22,7 +22,8 @@ Three flags help while you work on the checkout:
   refuses an addon whose files changed until its identity is enrolled or the previous release is named.
 - `--clean-cache` removes `target/debug`, `target/tmp` and the web bundles in `web/dist/human-ui` that its
   `manifest.json` no longer names; it keeps the active profile's build. Alone it only cleans; with `--rebuild` or
-  `--reset` it cleans first.
+  `--reset` it cleans first. When `.cargo/debug-cache-limit-gib` is set, the debug cleanup follows
+  the checkout's test executable budget and preserves compiled dependencies.
 
 Everything it owns is under `~/.erpforall/local` (`private/` holds the mode 600 URL files, the generated
 `admin-password` and `server.toml`). It installs these modules with demo data, in one command, after the base:
