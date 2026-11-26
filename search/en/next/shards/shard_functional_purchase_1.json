@@ -5,6 +5,7 @@
   "audience": "functional",
   "modules": [
     "purchase",
+    "purchase",
     "purchase"
   ],
   "docs": [
@@ -47,7 +48,7 @@
         },
         {
           "anchor": "handle-failure",
-          "text": "* **Cannot Confirm Draft Vendor Bill (\"enter the bill date before confirming\")**: Draft bills created from Purchase Orders require an explicit **Bill Date** matching the vendor's invoice before clicking **Confirm**. * **Warehouse Configuration Error on PO Confirmation**: Ensure the company has an active warehouse with a valid incoming operation type configured under **Inventory → Configuration → Operation Types**. * **Short-Receipt Billing**: When **Received Quantities** control is enabled, ERPForAll bills only the quantities actually validated on warehouse receipts. Validate pending backorders before billing the remainder."
+          "text": "* **Cannot Confirm Draft Vendor Bill (\"enter the bill date before confirming\")**: Draft bills created from Purchase Orders require an explicit **Bill Date** matching the vendor's invoice before clicking **Confirm**. * **Warehouse Configuration Error on PO Confirmation**: Ensure the company has an active warehouse with a valid incoming operation type configured under **Inventory → Configuration → Operation Types**. * **Short-Receipt Billing**: When **Received Quantities** control is enabled, ERPForAll bills only the quantities actually validated on warehouse receipts. Validate pending backorders before billing the remainder. For a complete worked walkthrough from Blanket Agreement and Alternative RFQs through backorders, 3-way billing, payment, and returns, see [Purchasing Full-Cycle Example: Procure-to-Pay End-to-End](/en/next/user/purchasing-full-cycle-example.md)."
         }
       ]
     },
@@ -87,6 +88,53 @@
         {
           "anchor": "troubleshooting",
           "text": "* **Cross-Company Error When Creating Alternative RFQ**: Ensure the selected **Alternative Vendor** belongs to the same active company (or has no restrictive company set on its contact record). * **Alternatives Smart Button Not Immediately Visible**: After closing the Alternative RFQ wizard, refresh or reopen the original RFQ if the **Alternatives** stat button has not updated in the header yet."
+        }
+      ]
+    },
+    {
+      "page_id": "user/purchasing-full-cycle-example",
+      "title": "Purchasing Full-Cycle Example: Procure-to-Pay End-to-End",
+      "module": "purchase",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "This worked walkthrough traces one procurement cycle across **Purchase**, **Inventory**, and **Accounting**—covering a Blanket Purchase Agreement, competing Alternative RFQs, partial warehouse receiving with a backorder, a 3-way matched Vendor Bill, bank settlement, and a defective-unit return."
+        },
+        {
+          "anchor": "scenario-overview",
+          "text": "| Parameter | Worked Example Value | | --- | --- | | **Blanket Agreement** | PA00001 (PT Global Komponen Indonesia, [ELK-MON24] Monitor 24 inci, Qty 20 @ $120.00) | | **Winning RFQ / PO** | PO00023 (Baja Sentosa Abadi, [ELK-MON24] Monitor 24 inci, Qty 10 @ $50.00 = $500.00) | | **Alternative RFQ** | PO00024 (PT Global Komponen Indonesia) compared side by side before awarding PO00023 | | **Warehouse Receipts** | Partial delivery Main/IN/00026 (6 units) + Backorder Main/IN/00027 (4 units) = 10 received | | **Vendor Bill & Payment** | BILL/2026/11/0022 ($500.00, Purchase Match: Matched) settled via PBNK1/2026/00032 | | **Return Case** | 1 defective monitor returned to vendor via Main/OUT/00024 |"
+        },
+        {
+          "anchor": "step-1-agreement-and-alternatives",
+          "text": "1. **Create a Blanket Agreement (PA00001)**: * Open **Purchase → Orders → Purchase Agreements** and click **New**. * Select **Vendor** PT Global Komponen Indonesia, add [ELK-MON24] Monitor 24 inci for 20 units @ $120.00, click **Save**, and **Confirm**. 2. **Raise an RFQ (PO00023) and Competing Alternative (PO00024)**: * Open **Purchase → Orders → Requests for Quotation → New**. * Choose **Vendor** Baja Sentosa Abadi, add [ELK-MON24] Monitor 24 inci, **Quantity** 10, **Unit Price** $50.00 (Total $500.00), and **Save** (PO00023). * Click **Alternative**, select a same-company vendor (PT Global Komponen Indonesia), and create **PO00024**. * Open **Compare Product Lines** to review competing unit prices side by side before awarding PO00023. ![Confirmed Blanket Purchase Agreement PA00001 recording contracted quantities and unit pricing.](/en/next/assets/docs/assets/user-manual/purchasing/purchase-agreement.webp) ![Alternative RFQ comparison view displaying PO00023 against PO00024 side by side so buyers can award the winning quote.](/en/next/assets/docs/assets/user-manual/purchasing/compare-alternatives.webp)"
+        },
+        {
+          "anchor": "step-2-confirm-po",
+          "text": "1. Open the winning RFQ **PO00023** ($500.00, below the $5,000 second-approval threshold) and click **Confirm Order**. 2. Verify the immediate outcomes: * Status moves from **RFQ** to **Purchase Order**. * ERPForAll locks vendor and currency and generates incoming Receipt **Main/IN/00026** (Vendors → Main/Stock, Demand 10), accessible from the **1 Receipt** smart button. ![Confirmed Purchase Order PO00023 with Purchase Order status and 1 Receipt smart button linked to Main/IN/00026.](/en/next/assets/docs/assets/user-manual/purchasing/confirmed-po.webp)"
+        },
+        {
+          "anchor": "step-3-partial-receipt-backorder",
+          "text": "Suppose only 6 of the 10 monitors arrive on the first truck: 1. Click **1 Receipt** on PO00023 to open **Main/IN/00026**. 2. Switch to **Detailed Operations**, update **Quantity / Done** to **6**, and click **Validate**. 3. On the **Remaining demand** dialog, click **Create Backorder**. * Main/IN/00026 moves to **Done** (+6 units in Main/Stock). * ERPForAll creates linked backorder **Main/IN/00027** (Ready, Demand 4, Back Order of Main/IN/00026). * Returning to PO00023 shows **Received Qty = 6** and **2 Receipt**. 4. When the remaining 4 units arrive, open **Main/IN/00027**, verify 4 units, and click **Validate**. * PO00023 updates to **Received Qty = 10** and billing status **Waiting Bills**. ![Remaining demand dialog when validating 6 out of 10 units on Main/IN/00026, creating backorder Main/IN/00027.](/en/next/assets/docs/assets/user-manual/purchasing/backorder-dialog.webp)"
+        },
+        {
+          "anchor": "step-4-vendor-bill-3way",
+          "text": "1. On PO00023 (now Received Qty = 10), click **Create Bill**. 2. ERPForAll drafts a Vendor Bill linked via **1 Purchase Orders** with: * 10 units × $50.00 = **$500.00** * **Purchase Match: Matched** (Ordered 10 = Received 10 = Billed 10 under Three-Way Matching). 3. Enter the supplier's **Bill Date** (for example, 11/26/2026), verify the invoice reference, and click **Confirm** to post **BILL/2026/11/0022**. * Accounting posts **Debit Inventory / Purchases $500.00** / **Credit Accounts Payable $500.00**. * Back on PO00023, **Billed Qty = 10** and billing status becomes **Fully Billed**. ![Draft Vendor Bill generated from PO00023 displaying Purchase Match: Matched across ordered, received, and billed quantities.](/en/next/assets/docs/assets/user-manual/purchasing/vendor-bill-3way-match.webp)"
+        },
+        {
+          "anchor": "step-5-pay-vendor",
+          "text": "1. On posted bill **BILL/2026/11/0022**, click **Register Payment**. 2. Choose **Journal**: Main Bank, verify **Amount**: $500.00, and click **Create Payment**. 3. Verify the settled bill: * Status badge shows **PAID** with **Amount Due = $0.00**, linked to **PBNK1/2026/00032**. * Accounting posts **Debit Accounts Payable $500.00** / **Credit Main Bank $500.00**. ![Settled Vendor Bill BILL/2026/11/0022 showing PAID badge, $0.00 Amount Due, and linked payment PBNK1/2026/00032.](/en/next/assets/docs/assets/user-manual/purchasing/vendor-bill-paid.webp)"
+        },
+        {
+          "anchor": "step-6-return-and-reporting",
+          "text": "If 1 monitor from the second shipment (Main/IN/00027) fails inspection: 1. Open validated receipt **Main/IN/00027** (Done) and click **Return**. 2. ERPForAll creates Draft outgoing transfer **Main/OUT/00024** (Return of Main/IN/00027, Main/Stock → Vendors). 3. Set the stock move **Demand** to **1**, click **Confirm**, and click **Validate** to ship the defective unit back to the vendor (-1 unit from Main/Stock). 4. Issue a corresponding **Vendor Refund** (Accounting → Vendors → Refunds) if the supplier credits your account."
+        },
+        {
+          "anchor": "full-cycle-audit-table",
+          "text": "| Stage | Document Ref | Module | Stock Delta (Main/Stock) | Accounting Impact | | --- | --- | --- | --- | --- | | 1. Blanket & Alt RFQ | PA00001, PO00023 / PO00024 | Purchase | 0 | None | | 2. Confirm PO | PO00023 (Purchase Order) | Purchase | 0 (10 incoming) | Optional Budget AVC commitment | | 3a. Partial Receipt | Main/IN/00026 (Done) | Inventory | **+6 units** | Inventory receipt | | 3b. Backorder Receipt | Main/IN/00027 (Done) | Inventory | **+4 units** | Inventory receipt | | 4. Vendor Bill | BILL/2026/11/0022 (Posted) | Accounting | 0 | Dr Purchases/Stock $500.00 / Cr Payable $500.00 | | 5. Vendor Payment | PBNK1/2026/00032 (Paid) | Accounting | 0 | Dr Payable $500.00 / Cr Bank $500.00 | | 6. Return Delivery | Main/OUT/00024 (Done) | Inventory | **-1 unit** | Inventory return outflow | | **Net Final Position** | — | **All** | **+9 net units kept** | **$500.00 settled (pending $50.00 vendor refund)** | Audit spend across suppliers in **Purchase → Reporting → Purchase Report**, **Purchases by Product**, and **Purchase Pivot & Graph**. ![Purchase Report confirming Baja Sentosa Abadi spend rolled up cleanly with drill-down to PO00023.](/en/next/assets/docs/assets/user-manual/purchasing/purchase-report.webp)"
         }
       ]
     }

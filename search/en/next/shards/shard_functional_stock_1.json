@@ -6,9 +6,53 @@
   "modules": [
     "stock",
     "stock",
+    "stock",
     "stock"
   ],
   "docs": [
+    {
+      "page_id": "user/inventory-full-cycle-example",
+      "title": "Inventory Full-Cycle Example: Receive-to-Ship with Lots, QC, Landed Cost, and Count",
+      "module": "stock",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "This worked walkthrough follows a single lot-tracked product through every key warehouse operation in ERPForAll: enabling traceability settings, receiving stock with a Lot number and Expiration Date, capitalizing inbound freight via Landed Costs, logging and closing a Quality Alert, reconciling physical inventory via a cycle count, scrapping a damaged unit, and auditing the entire history in **Moves History**."
+        },
+        {
+          "anchor": "scenario-overview",
+          "text": "| Parameter | Worked Example Value | | --- | --- | | **Product** | Lot-tracked Storable Item (Tracking: By Lots, Expiration Date: ON, 365 days shelf life, Unit Cost $50.00) | | **Inbound Receipt** | Main/IN/00028 — 10 units assigned to Lot **LOT-UM-QA-01** (Expiry 11/26/2027) | | **Landed Cost** | LC/00001 — Inbound Freight & Customs, $100.00 split By Quantity ($500.00 → $600.00, $60.00/unit) | | **Quality Control** | Quality Alert **QA/00001** (Main Quality Team) progressed from Confirmed → Solved | | **Cycle Count** | Record Stock Count updates LOT-UM-QA-01 from 10 → 12 units (+2 surplus found) | | **Scrap** | 1 damaged unit scrapped from LOT-UM-QA-01 → net **11 units On Hand** |"
+        },
+        {
+          "anchor": "step-1-enable-tracking",
+          "text": "1. Open **Inventory → More → Configuration → Settings** and confirm **Company-wide lot tracking**, **Packages**, **Multiple locations**, and **Advanced routes** are enabled, then click **Save** and reload. 2. Open **Inventory → Products → Products → New**: * Set **Product Type** to Storable Goods and **Cost** to $50.00. * On the **Inventory** tab, set **Traceability** to **By Lots**, enable **Expiration Date**, and enter **Expiration Time**: 365 days. * Click **Save**. ![Inventory Settings with Lot & Serial Traceability, Packages, Multiple Locations, and Advanced Routes enabled.](/en/next/assets/docs/assets/user-manual/inventory/inventory-settings.webp)"
+        },
+        {
+          "anchor": "step-2-receive-lot-expiry",
+          "text": "1. Open **Inventory → Operations → Receipts** and click **New**. 2. Select **Operation Type**: Receiving (Vendors → Main/Stock), add the lot-tracked product for 10 units, and save. 3. Switch to **Detailed Operations**, assign **Lot/Serial Number**: **LOT-UM-QA-01**, verify the auto-calculated **Expiration Date** (11/26/2027), enter **Quantity / Done**: 10, and click **Validate**. 4. Confirm **Main/IN/00028** moves to **Done**, and verify **LOT-UM-QA-01** appears under **Inventory → Products → Lots/Serial Numbers** with 10 units on hand. ![Receipt Main/IN/00028 Detailed Operations recording Lot LOT-UM-QA-01 and its Expiration Date.](/en/next/assets/docs/assets/user-manual/inventory/receipt-lot-expiry.webp) ![Validated Receipt Main/IN/00028 in Done status confirming 10 lot-tracked units entered Main/Stock.](/en/next/assets/docs/assets/user-manual/inventory/receipt-done-lot.webp)"
+        },
+        {
+          "anchor": "step-3-landed-cost",
+          "text": "Now allocate $100.00 of inbound freight onto receipt **Main/IN/00028** so inventory valuation reflects true landed cost: 1. Open **Inventory → Operations → Landed Costs** and click **New**. 2. Select **Transfers**: Main/IN/00028. 3. Under **Additional Costs**, add a line for service product **Inbound Freight & Customs**, **Split Method**: By Quantity, **Cost**: $100.00. 4. Click **Compute** and inspect **Valuation Adjustments**: * **Former Cost**: $500.00 (10 × $50.00) * **Additional Landed Cost**: $100.00 * **New Cost**: **$600.00** ($60.00/unit) 5. Click **Validate**. **LC/00001** moves to **Posted**. ![Posted Landed Cost LC/00001 showing Former Cost $500.00 + Additional Landed Cost $100.00 = New Cost $600.00.](/en/next/assets/docs/assets/user-manual/inventory/landed-cost-valuation.webp)"
+        },
+        {
+          "anchor": "step-4-quality-alert",
+          "text": "When receiving inspection spots minor carton moisture on the lot: 1. Open **Inventory → Operations → Quality Alerts** and click **New**. 2. Link the affected product, **Lot/Serial**: LOT-UM-QA-01, and **Quality Team**: Main Quality Team, then click **Confirm** (QA/00001). 3. After repacking and verifying the intact units, click **Mark Solved** so the alert closes in **Solved** status with a full quality audit trail. ![Quality Alert QA/00001 tracking carton inspection linked to Main Quality Team through resolution.](/en/next/assets/docs/assets/user-manual/inventory/quality-alert.webp)"
+        },
+        {
+          "anchor": "step-5-cycle-count-and-scrap",
+          "text": "1. **Physical Cycle Count (Record Stock Count)**: * Open **Inventory → Operations → Record Stock Count**. * Select **Location**: Main/Stock, the product, **Lot/Serial**: LOT-UM-QA-01, enter **Counted Quantity**: 12 (suppose 2 bonus/over-shipped units were found during binning), add an **Adjustment Note**, and apply. * Open **Inventory → Operations → Physical Inventory** to verify **On Hand = 12** for LOT-UM-QA-01. 2. **Scrap Damaged Unit**: * Open **Inventory → Operations → Scrap** and click **New**. * Select the product, confirm **Unit**: Units, choose **Lot/Serial**: LOT-UM-QA-01, enter **Quantity**: 1, and click **Validate**. * The Scrap order moves to **Done** (Main/Stock → Virtual Locations/Scrap), leaving **11 sellable units On Hand**. ![Physical Inventory confirming On Hand updated to 12 units for LOT-UM-QA-01 after Record Stock Count.](/en/next/assets/docs/assets/user-manual/inventory/physical-inventory.webp) ![Validated Scrap order in Done status removing 1 damaged unit of LOT-UM-QA-01 from sellable stock.](/en/next/assets/docs/assets/user-manual/inventory/scrap-done.webp)"
+        },
+        {
+          "anchor": "step-6-audit-moves-history",
+          "text": "Open **Inventory → More → Reporting → Moves History** and filter by product or lot LOT-UM-QA-01. Every warehouse event appears chronologically and reconciles exactly to current on-hand stock: | Stage | Operation / Document | From → To Location | Qty Delta | Running On Hand | Unit Valuation | | --- | --- | --- | --- | ---: | ---: | | 1. Inbound Receipt | Main/IN/00028 (LOT-UM-QA-01) | Vendors → Main/Stock | +10 | 10 | $50.00 ($500.00) | | 2. Landed Cost | LC/00001 (Posted) | Valuation Adjustment | 0 | 10 | **$60.00 ($600.00)** | | 3. Quality Alert | QA/00001 (Solved) | Inspection record | 0 | 10 | $60.00 | | 4. Cycle Count | Record Stock Count | Inventory Adj. → Main/Stock | +2 | 12 | $60.00 | | 5. Scrap | Scrap (Done) | Main/Stock → Scrap | -1 | **11** | $60.00 | | 6. Sales Delivery / Replenishment | Outgoing Main/OUT/... (FIFO) | Main/Stock → Customers | -qty | 11 − qty | Triggers Buy RFQ below Min Qty | ![Moves History displaying every validated receipt, stock count adjustment, scrap, and delivery line with lot traceability.](/en/next/assets/docs/assets/user-manual/inventory/moves-history.webp)"
+        }
+      ]
+    },
     {
       "page_id": "user/inventory-traceability-and-routes",
       "title": "Lots, Serials, Expiry Dates, Multi-Step Routes, and Landed Costs",
@@ -87,7 +131,7 @@
         },
         {
           "anchor": "failure-and-recovery",
-          "text": "* **Negative Stock Refused on Validation**: If a storage location forbids negative stock and insufficient free stock exists, ERPForAll halts **Validate** without moving stock. Adjust done quantities to available free stock or validate pending incoming receipts first. * **Physical Inventory Inline Apply Error**: If applying a count directly from an individual quant form fails, use **Inventory → Operations → Record Stock Count** to apply the cycle count cleanly and verify the updated On Hand count in **Physical Inventory**. * **Missing Unit on Scrap**: Always confirm the **Unit** field is populated on a new Scrap order before clicking **Validate**."
+          "text": "* **Negative Stock Refused on Validation**: If a storage location forbids negative stock and insufficient free stock exists, ERPForAll halts **Validate** without moving stock. Adjust done quantities to available free stock or validate pending incoming receipts first. * **Physical Inventory Inline Apply Error**: If applying a count directly from an individual quant form fails, use **Inventory → Operations → Record Stock Count** to apply the cycle count cleanly and verify the updated On Hand count in **Physical Inventory**. * **Missing Unit on Scrap**: Always confirm the **Unit** field is populated on a new Scrap order before clicking **Validate**. For a complete worked walkthrough covering lot receipt, expiration date, Landed Cost valuation, Quality Alert, cycle count, scrap, and Moves History reconciliation, see [Inventory Full-Cycle Example: Receive-to-Ship with Lots, QC, Landed Cost, and Count](/en/next/user/inventory-full-cycle-example.md)."
         }
       ]
     },

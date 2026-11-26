@@ -28,7 +28,7 @@
         "base"
       ],
       "doc_count": 2,
-      "byte_size": 13987
+      "byte_size": 14650
     },
     {
       "shard_id": "shard_functional_hr_1",
@@ -54,8 +54,8 @@
       "modules": [
         "purchase"
       ],
-      "doc_count": 2,
-      "byte_size": 11669
+      "doc_count": 3,
+      "byte_size": 19527
     },
     {
       "shard_id": "shard_functional_quality_control_1",
@@ -72,8 +72,8 @@
       "modules": [
         "sale"
       ],
-      "doc_count": 2,
-      "byte_size": 9977
+      "doc_count": 3,
+      "byte_size": 17518
     },
     {
       "shard_id": "shard_functional_stock_1",
@@ -81,8 +81,8 @@
       "modules": [
         "stock"
       ],
-      "doc_count": 3,
-      "byte_size": 13295
+      "doc_count": 4,
+      "byte_size": 20722
     },
     {
       "shard_id": "shard_functional_web_1",
@@ -108,9 +108,12 @@
     "user/master-data-contacts-products": "shard_functional_product_1",
     "user/buy-and-receive": "shard_functional_purchase_1",
     "user/purchasing-agreements-and-controls": "shard_functional_purchase_1",
+    "user/purchasing-full-cycle-example": "shard_functional_purchase_1",
     "user/inventory-quality-and-delivery": "shard_functional_quality_control_1",
+    "user/sales-full-cycle-example": "shard_functional_sale_1",
     "user/sales-pricing-and-analytics": "shard_functional_sale_1",
     "user/work-with-customers": "shard_functional_sale_1",
+    "user/inventory-full-cycle-example": "shard_functional_stock_1",
     "user/inventory-traceability-and-routes": "shard_functional_stock_1",
     "user/manage-warehouse": "shard_functional_stock_1",
     "user/stock-receipt-admission": "shard_functional_stock_1",

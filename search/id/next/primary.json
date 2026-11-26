@@ -1,7 +1,7 @@
 {
   "lang": "id",
   "version": "next",
-  "doc_count": 20,
+  "doc_count": 23,
   "docs": [
     {
       "id": "user/accounting-bank-reconciliation",
@@ -328,6 +328,54 @@
       "shard_id": "shard_functional_hr_1"
     },
     {
+      "id": "user/inventory-full-cycle-example",
+      "title": "Contoh Full Cycle Inventaris: Penerimaan hingga Pengiriman dengan Lot, QC, Landed Cost, dan Opname",
+      "description": "Ikuti satu produk terlacak lot dari pengaturan gudang dan penerimaan dengan tanggal kedaluwarsa, kapitalisasi Landed Cost, penanganan Quality Alert, stok opname, scrap, hingga audit lengkap di Moves History.",
+      "audience": "functional",
+      "module": "stock",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "scenario-overview",
+          "depth": 2,
+          "text": "Skenario Bisnis dan Data Awal"
+        },
+        {
+          "id": "step-1-enable-tracking",
+          "depth": 2,
+          "text": "Langkah 1: Mengaktifkan Pengaturan Pelacakan dan Mengatur Produk"
+        },
+        {
+          "id": "step-2-receive-lot-expiry",
+          "depth": 2,
+          "text": "Langkah 2: Menerima Stok dengan Nomor Lot dan Tanggal Kedaluwarsa (`Main/IN/00028`)"
+        },
+        {
+          "id": "step-3-landed-cost",
+          "depth": 2,
+          "text": "Langkah 3: Mengapitalisasi Ongkos Angkut dengan Landed Cost (`LC/00001`)"
+        },
+        {
+          "id": "step-4-quality-alert",
+          "depth": 2,
+          "text": "Langkah 4: Mencatat dan Menyelesaikan Quality Alert (`QA/00001`)"
+        },
+        {
+          "id": "step-5-cycle-count-and-scrap",
+          "depth": 2,
+          "text": "Langkah 5: Melakukan Stok Opname (`10 → 12`) dan Scrap Barang Rusak (`12 → 11`)"
+        },
+        {
+          "id": "step-6-audit-moves-history",
+          "depth": 2,
+          "text": "Langkah 6: Mengaudit Seluruh Pergerakan di Moves History dan Rekonsiliasi Stok"
+        }
+      ],
+      "shard_id": "shard_functional_stock_1"
+    },
+    {
       "id": "user/inventory-quality-and-delivery",
       "title": "Kontrol Kualitas, Armada Kendaraan, Kurir Pengiriman, dan Barcode",
       "description": "Mengatur Quality Control Points dan Tim Kualitas, mengelola Quality Checks dan Quality Alerts, memelihara Armada Kendaraan dan opsi pengiriman, serta memakai barcode di gudang.",
@@ -576,6 +624,59 @@
       "shard_id": "shard_functional_purchase_1"
     },
     {
+      "id": "user/purchasing-full-cycle-example",
+      "title": "Contoh Full Cycle Pembelian: Procure-to-Pay End-to-End",
+      "description": "Ikuti satu transaksi Pembelian lengkap dari Blanket Agreement dan perbandingan RFQ Alternatif, konfirmasi PO, penerimaan parsial dengan backorder, tagihan pemasok 3-way match, pelunasan, hingga retur pemasok.",
+      "audience": "functional",
+      "module": "purchase",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "scenario-overview",
+          "depth": 2,
+          "text": "Skenario Bisnis dan Data Awal"
+        },
+        {
+          "id": "step-1-agreement-and-alternatives",
+          "depth": 2,
+          "text": "Langkah 1: Membuat Perjanjian Pembelian dan Membandingkan RFQ Alternatif"
+        },
+        {
+          "id": "step-2-confirm-po",
+          "depth": 2,
+          "text": "Langkah 2: Mengonfirmasi Pesanan Pembelian (`PO00023`)"
+        },
+        {
+          "id": "step-3-partial-receipt-backorder",
+          "depth": 2,
+          "text": "Langkah 3: Menerima Kiriman Parsial dan Memvalidasi Backorder"
+        },
+        {
+          "id": "step-4-vendor-bill-3way",
+          "depth": 2,
+          "text": "Langkah 4: Membuat dan Mengonfirmasi Tagihan Pemasok 3-Way Match (`BILL/2026/11/0022`)"
+        },
+        {
+          "id": "step-5-pay-vendor",
+          "depth": 2,
+          "text": "Langkah 5: Melunasi Tagihan Pemasok (`PBNK1/2026/00032`)"
+        },
+        {
+          "id": "step-6-return-and-reporting",
+          "depth": 2,
+          "text": "Langkah 6: Memproses Retur ke Pemasok (`Main/OUT/00024`) dan Audit Laporan"
+        },
+        {
+          "id": "full-cycle-audit-table",
+          "depth": 2,
+          "text": "Ringkasan Rantai Dokumen dan Dampak Stok/Keuangan"
+        }
+      ],
+      "shard_id": "shard_functional_purchase_1"
+    },
+    {
       "id": "user/read-financial-reports",
       "title": "Laporan Keuangan: Pernyataan, Drill-Down, dan Ekspor",
       "description": "Mengatur periode pelaporan dan perbandingan, membaca Neraca, Laba Rugi, Buku Besar, Arus Kas, dan Umur Piutang/Utang, melakukan drill-down ke jurnal, serta ekspor PDF/XLSX.",
@@ -703,6 +804,59 @@
         }
       ],
       "shard_id": "shard_functional_web_1"
+    },
+    {
+      "id": "user/sales-full-cycle-example",
+      "title": "Contoh Full Cycle Penjualan: Order-to-Cash End-to-End",
+      "description": "Ikuti satu transaksi Penjualan lengkap dari Penawaran harga grosir, konfirmasi Pesanan Penjualan, pengiriman gudang, faktur, pelunasan pembayaran, hingga retur pelanggan dan nota kredit parsial.",
+      "audience": "functional",
+      "module": "sale",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "scenario-overview",
+          "depth": 2,
+          "text": "Skenario Bisnis dan Data Awal"
+        },
+        {
+          "id": "step-1-quotation",
+          "depth": 2,
+          "text": "Langkah 1: Menyusun Draf Penawaran (`S00021`)"
+        },
+        {
+          "id": "step-2-confirm-order",
+          "depth": 2,
+          "text": "Langkah 2: Mengonfirmasi Penawaran Menjadi Pesanan Penjualan"
+        },
+        {
+          "id": "step-3-deliver-goods",
+          "depth": 2,
+          "text": "Langkah 3: Memvalidasi Pengiriman Gudang (`Main/OUT/00023`)"
+        },
+        {
+          "id": "step-4-create-invoice",
+          "depth": 2,
+          "text": "Langkah 4: Menerbitkan Faktur Penjualan (`INV/2026/00026`)"
+        },
+        {
+          "id": "step-5-register-payment",
+          "depth": 2,
+          "text": "Langkah 5: Mencatat Pembayaran Pelanggan (`PBNK1/2026/00031`)"
+        },
+        {
+          "id": "step-6-return-and-credit-note",
+          "depth": 2,
+          "text": "Langkah 6: Menangani Retur Pelanggan dan Nota Kredit Parsial"
+        },
+        {
+          "id": "full-cycle-audit-table",
+          "depth": 2,
+          "text": "Ringkasan Rantai Dokumen dan Dampak Stok/Keuangan"
+        }
+      ],
+      "shard_id": "shard_functional_sale_1"
     },
     {
       "id": "user/sales-pricing-and-analytics",

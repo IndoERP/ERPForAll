@@ -5,9 +5,57 @@
   "audience": "functional",
   "modules": [
     "sale",
+    "sale",
     "sale"
   ],
   "docs": [
+    {
+      "page_id": "user/sales-full-cycle-example",
+      "title": "Sales Full-Cycle Example: Order-to-Cash End-to-End",
+      "module": "sale",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "This worked walkthrough follows a single real-world customer order across **Sales**, **Inventory**, and **Accounting** so your team can verify every status transition, stock deduction, invoice posting, payment settlement, and return credit note end to end."
+        },
+        {
+          "anchor": "scenario-overview",
+          "text": "| Parameter | Worked Example Value | | --- | --- | | **Customer** | PT Sumber Makmur Sejahtera | | **Pricelist** | Harga Grosir (Wholesale tier) | | **Main Product** | Meja Kerja (Kayu Jati) — Storable Goods, Cost $300.00, List/Pricelist Price $450.00 | | **Quantity & Discount** | 3 Units with 5% approved volume discount ($427.50/unit, Subtotal $1,282.50, Margin $382.50 / 29.82%) | | **Optional Cross-Sell** | Kursi Kantor Ergonomis added on the **Optional Products** tab | | **Return & Refund Case** | Customer later returns 1 unit ($427.50) after full payment, settled with a partial Credit Note |"
+        },
+        {
+          "anchor": "step-1-quotation",
+          "text": "1. Open **Sales → Orders → Quotations** and click **New**. 2. Select **Customer**: PT Sumber Makmur Sejahtera. Billing/shipping addresses, salesperson, and sales team populate automatically. 3. Choose **Pricelist**: Harga Grosir. 4. On the **Order Lines** tab, click **Add a line**, choose Meja Kerja (Kayu Jati), enter **Quantity** 3, verify **Unit Price** $450.00, and enter **Discount (%)** 5. * Check the live totals at the bottom right: **Untaxed / Total = $1,282.50** and **Margin = $382.50 (29.82%)**. 5. Switch to the **Optional Products** tab and add Kursi Kantor Ergonomis so the customer can optionally include chairs. 6. Click **Save**. ERPForAll assigns reference **S00021** in **Quotation** status. ![Draft Quotation S00021 showing Harga Grosir pricelist, 3 units at 5% discount ($1,282.50), live margin ($382.50 / 29.82%), and Optional Products tab.](/en/next/assets/docs/assets/user-manual/sales/quotation-draft.webp)"
+        },
+        {
+          "anchor": "step-2-confirm-order",
+          "text": "1. Once the customer approves the quote, click **Confirm** on S00021. 2. Verify the immediate outcomes: * Document status changes from **Quotation** to **Sales Order** (keeping number S00021). * Customer, company, and pricelist lock against accidental changes. * ERPForAll automatically creates outgoing Delivery Order **Main/OUT/00023** (Main/Stock → Customers, Demand 3) and reveals the **1 Delivery** smart button and **Create Invoice** action. ![Confirmed Sales Order S00021 with the 1 Delivery smart button and Create Invoice action ready.](/en/next/assets/docs/assets/user-manual/sales/sales-order-confirmed.webp)"
+        },
+        {
+          "anchor": "step-3-deliver-goods",
+          "text": "1. Click **1 Delivery** on S00021 (or open **Inventory → Operations → Deliveries → Main/OUT/00023**). 2. Confirm that 3 units of Meja Kerja (Kayu Jati) are reserved in **Ready** status (Main/Stock → Customers). 3. Click **Validate**. * Delivery Main/OUT/00023 transitions to **Done**. * Warehouse **On Hand** stock decreases by **3 units**. 4. Return to S00021 via the breadcrumb: the order line now shows **Delivered Qty = 3**. ![Validated Delivery Order Main/OUT/00023 in Done status confirming 3 units shipped to the customer.](/en/next/assets/docs/assets/user-manual/sales/delivery-done.webp)"
+        },
+        {
+          "anchor": "step-4-create-invoice",
+          "text": "1. On S00021, click **Create Invoice**. 2. In the **Create Invoice** wizard, review the billing modes: * **Regular Invoice** (selected for this example — bills all 3 delivered units for $1,282.50). * **Down Payment (percentage)** or **Down Payment (fixed amount)** (useful when collecting an upfront deposit before shipping). 3. Click **Create Draft Invoice**, review the generated lines and totals ($1,282.50), and click **Confirm** to post **INV/2026/00026**. * Accounting posts **Debit Accounts Receivable $1,282.50** / **Credit Sales Revenue $1,282.50**. ![Create Invoice wizard on S00021 offering Regular Invoice and percentage or fixed-amount Down Payment options.](/en/next/assets/docs/assets/user-manual/sales/create-invoice-wizard.webp)"
+        },
+        {
+          "anchor": "step-5-register-payment",
+          "text": "1. On posted invoice **INV/2026/00026**, click **Register Payment**. 2. Select **Journal**: Main Bank, verify **Amount**: $1,282.50, and click **Create Payment**. 3. Verify the settled invoice: * Status badge updates to **PAID** with **Amount Due = $0.00**. * Smart buttons link directly to **1 Sales Orders** (S00021) and **1 Payments** (PBNK1/2026/00031). * Accounting posts **Debit Main Bank / Outstanding Receipts $1,282.50** / **Credit Accounts Receivable $1,282.50**. ![Settled Customer Invoice INV/2026/00026 displaying PAID status, $0.00 Amount Due, and smart buttons to S00021 and payment PBNK1/2026/00031.](/en/next/assets/docs/assets/user-manual/sales/invoice-paid-linked-so.webp)"
+        },
+        {
+          "anchor": "step-6-return-and-credit-note",
+          "text": "Suppose the customer returns 1 table ($427.50) after delivery and payment: 1. **Physical Return (Main/IN/00025)**: * Open completed Delivery Main/OUT/00023 and click **Return**. * ERPForAll opens Draft return receipt **Main/IN/00025** (Customers → Main/Stock). * Set the return move line **Demand** to **1**, click **Confirm**, and click **Validate** to return 1 unit into Main/Stock. 2. **Financial Refund (RINV/2026/00004)**: * Open posted invoice INV/2026/00026 and click **Credit Note**. * Choose partial refund, enter the return reason, adjust the Credit Note quantity to **1** unit ($427.50), and click **Confirm** to post **RINV/2026/00004**. * Register the outgoing refund payment (or keep the credit open to offset the customer's next invoice)."
+        },
+        {
+          "anchor": "full-cycle-audit-table",
+          "text": "| Stage | Document Ref | Module | Stock Delta (Main/Stock) | Accounting Impact | | --- | --- | --- | --- | --- | | 1. Quotation | S00021 (Draft) | Sales | 0 | None | | 2. Confirm Order | S00021 (Sales Order) | Sales | 0 (3 reserved) | None | | 3. Delivery | Main/OUT/00023 (Done) | Inventory | **-3 units** | Inventory / COGS outflow | | 4. Invoice | INV/2026/00026 (Posted) | Accounting | 0 | Dr Receivable $1,282.50 / Cr Revenue $1,282.50 | | 5. Payment | PBNK1/2026/00031 (Paid) | Accounting | 0 | Dr Bank $1,282.50 / Cr Receivable $1,282.50 | | 6a. Return Receipt | Main/IN/00025 (Done) | Inventory | **+1 unit** | Inventory / COGS reversal | | 6b. Partial Credit Note | RINV/2026/00004 (Posted) | Accounting | 0 | Dr Revenue $427.50 / Cr Receivable $427.50 | | **Net Final Position** | — | **All** | **-2 units sold** | **Net Revenue $855.00, $427.50 credit/refund** | Verify the final commercial results under **Sales → Reporting → Sales Report** and **Sales Pivot & Graph**, and confirm the posted ledger entries in **Accounting → More → Reporting → Profit and Loss** and **Partner Ledger**. ![Sales Report confirms S00021 revenue rolled up under PT Sumber Makmur Sejahtera with drill-down and export.](/en/next/assets/docs/assets/user-manual/sales/sales-report.webp)"
+        }
+      ]
+    },
     {
       "page_id": "user/sales-pricing-and-analytics",
       "title": "Pricelists, Discounts, Sales Teams, Margins, and Sales Analytics",
@@ -78,7 +126,7 @@
         },
         {
           "anchor": "handle-failure",
-          "text": "* **Inline Product Search Error (Missing required field 'Name')**: When adding a line, always select a product from the dropdown suggestions rather than pressing **Enter** on blank text. * **Down Payment Field Not Expanding**: In the **Create Invoice** wizard, click directly on the circular radio button next to *Down Payment (percentage)* or *Down Payment (fixed amount)* to reveal the percentage/amount input. * **Cancelling a Confirmed Sales Order**: Cancel any open outgoing **Delivery** transfer first before cancelling the Sales Order."
+          "text": "* **Inline Product Search Error (Missing required field 'Name')**: When adding a line, always select a product from the dropdown suggestions rather than pressing **Enter** on blank text. * **Down Payment Field Not Expanding**: In the **Create Invoice** wizard, click directly on the circular radio button next to *Down Payment (percentage)* or *Down Payment (fixed amount)* to reveal the percentage/amount input. * **Cancelling a Confirmed Sales Order**: Cancel any open outgoing **Delivery** transfer first before cancelling the Sales Order. For a complete worked walkthrough with real document numbers, stock movements, and accounting entries, see [Sales Full-Cycle Example: Order-to-Cash End-to-End](/en/next/user/sales-full-cycle-example.md)."
         }
       ]
     }

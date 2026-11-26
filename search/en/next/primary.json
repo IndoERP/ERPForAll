@@ -1,7 +1,7 @@
 {
   "lang": "en",
   "version": "next",
-  "doc_count": 126,
+  "doc_count": 129,
   "docs": [
     {
       "id": "index",
@@ -6649,6 +6649,54 @@
       "shard_id": "shard_functional_hr_1"
     },
     {
+      "id": "user/inventory-full-cycle-example",
+      "title": "Inventory Full-Cycle Example: Receive-to-Ship with Lots, QC, Landed Cost, and Count",
+      "description": "Follow one lot-tracked product from warehouse configuration and inbound receipt with expiration date through Landed Cost valuation adjustment, Quality Alert handling, physical cycle count, scrap, and full Moves History audit.",
+      "audience": "functional",
+      "module": "stock",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "scenario-overview",
+          "depth": 2,
+          "text": "Business Scenario and Starting Data"
+        },
+        {
+          "id": "step-1-enable-tracking",
+          "depth": 2,
+          "text": "Step 1: Enable Traceability Settings and Configure the Product"
+        },
+        {
+          "id": "step-2-receive-lot-expiry",
+          "depth": 2,
+          "text": "Step 2: Receive Stock with Lot Number and Expiration Date (`Main/IN/00028`)"
+        },
+        {
+          "id": "step-3-landed-cost",
+          "depth": 2,
+          "text": "Step 3: Capitalize Inbound Freight with Landed Costs (`LC/00001`)"
+        },
+        {
+          "id": "step-4-quality-alert",
+          "depth": 2,
+          "text": "Step 4: Log and Resolve a Quality Alert (`QA/00001`)"
+        },
+        {
+          "id": "step-5-cycle-count-and-scrap",
+          "depth": 2,
+          "text": "Step 5: Perform a Cycle Count (`10 → 12`) and Scrap a Damaged Unit (`12 → 11`)"
+        },
+        {
+          "id": "step-6-audit-moves-history",
+          "depth": 2,
+          "text": "Step 6: Audit Every Movement in Moves History and Reconcile Stock"
+        }
+      ],
+      "shard_id": "shard_functional_stock_1"
+    },
+    {
       "id": "user/inventory-quality-and-delivery",
       "title": "Quality Control, Fleet Vehicles, Delivery Carriers, and Barcodes",
       "description": "Configure Quality Control Points and Teams, manage Quality Checks and Quality Alerts, maintain Fleet Vehicles and delivery shipping options, and use barcodes in warehouse workflows.",
@@ -6897,6 +6945,59 @@
       "shard_id": "shard_functional_purchase_1"
     },
     {
+      "id": "user/purchasing-full-cycle-example",
+      "title": "Purchasing Full-Cycle Example: Procure-to-Pay End-to-End",
+      "description": "Follow one complete Purchasing transaction from Blanket Agreement and Alternative RFQ comparison through Purchase Order confirmation, partial receipt with backorder, 3-way matched vendor billing, payment, and purchase return.",
+      "audience": "functional",
+      "module": "purchase",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "scenario-overview",
+          "depth": 2,
+          "text": "Business Scenario and Starting Data"
+        },
+        {
+          "id": "step-1-agreement-and-alternatives",
+          "depth": 2,
+          "text": "Step 1: Set Up a Purchase Agreement and Compare Alternative RFQs"
+        },
+        {
+          "id": "step-2-confirm-po",
+          "depth": 2,
+          "text": "Step 2: Confirm the Purchase Order (`PO00023`)"
+        },
+        {
+          "id": "step-3-partial-receipt-backorder",
+          "depth": 2,
+          "text": "Step 3: Receive a Partial Shipment and Validate the Backorder"
+        },
+        {
+          "id": "step-4-vendor-bill-3way",
+          "depth": 2,
+          "text": "Step 4: Generate and Confirm the 3-Way Matched Vendor Bill (`BILL/2026/11/0022`)"
+        },
+        {
+          "id": "step-5-pay-vendor",
+          "depth": 2,
+          "text": "Step 5: Pay the Vendor Bill (`PBNK1/2026/00032`)"
+        },
+        {
+          "id": "step-6-return-and-reporting",
+          "depth": 2,
+          "text": "Step 6: Process a Vendor Return (`Main/OUT/00024`) and Audit Reports"
+        },
+        {
+          "id": "full-cycle-audit-table",
+          "depth": 2,
+          "text": "End-to-End Document Chain and Financial/Stock Impact"
+        }
+      ],
+      "shard_id": "shard_functional_purchase_1"
+    },
+    {
       "id": "user/read-financial-reports",
       "title": "Financial Reports: Statements, Drill-Down, and Export",
       "description": "Configure reporting periods and comparisons, read Balance Sheet, Profit and Loss, General Ledger, Cash Flow, and Aged reports, drill down to journal items, and export PDF or XLSX.",
@@ -7024,6 +7125,59 @@
         }
       ],
       "shard_id": "shard_functional_web_1"
+    },
+    {
+      "id": "user/sales-full-cycle-example",
+      "title": "Sales Full-Cycle Example: Order-to-Cash End-to-End",
+      "description": "Follow one complete Sales transaction from wholesale Quotation through Sales Order confirmation, warehouse delivery, invoicing, payment settlement, customer return, and partial credit note.",
+      "audience": "functional",
+      "module": "sale",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "scenario-overview",
+          "depth": 2,
+          "text": "Business Scenario and Starting Data"
+        },
+        {
+          "id": "step-1-quotation",
+          "depth": 2,
+          "text": "Step 1: Prepare the Draft Quotation (`S00021`)"
+        },
+        {
+          "id": "step-2-confirm-order",
+          "depth": 2,
+          "text": "Step 2: Confirm the Quotation into a Sales Order"
+        },
+        {
+          "id": "step-3-deliver-goods",
+          "depth": 2,
+          "text": "Step 3: Validate the Warehouse Delivery (`Main/OUT/00023`)"
+        },
+        {
+          "id": "step-4-create-invoice",
+          "depth": 2,
+          "text": "Step 4: Invoice the Sales Order (`INV/2026/00026`)"
+        },
+        {
+          "id": "step-5-register-payment",
+          "depth": 2,
+          "text": "Step 5: Register Customer Payment (`PBNK1/2026/00031`)"
+        },
+        {
+          "id": "step-6-return-and-credit-note",
+          "depth": 2,
+          "text": "Step 6: Handle a Customer Return and Partial Credit Note"
+        },
+        {
+          "id": "full-cycle-audit-table",
+          "depth": 2,
+          "text": "End-to-End Document Chain and Financial/Stock Impact"
+        }
+      ],
+      "shard_id": "shard_functional_sale_1"
     },
     {
       "id": "user/sales-pricing-and-analytics",

@@ -5,6 +5,7 @@
   "audience": "functional",
   "modules": [
     "purchase",
+    "purchase",
     "purchase"
   ],
   "docs": [
@@ -47,7 +48,7 @@
         },
         {
           "anchor": "handle-failure",
-          "text": "* **Gagal Mengonfirmasi Draf Tagihan (\"enter the bill date before confirming\")**: Tagihan pemasok dari PO mewajibkan pengisian **Bill Date** sesuai tanggal faktur pemasok sebelum klik **Confirm**. * **Kesalahan Konfigurasi Gudang Saat Konfirmasi PO**: Pastikan perusahaan memiliki gudang aktif dengan tipe operasi penerimaan yang valid di **Inventory → Configuration → Operation Types**. * **Penagihan Penerimaan Parsial**: Saat kebijakan penagihan berbasis **Received Quantities** aktif, ERPForAll hanya menagih jumlah yang sudah divalidasi di gudang. Validasi backorder terlebih dahulu sebelum menagih sisanya."
+          "text": "* **Gagal Mengonfirmasi Draf Tagihan (\"enter the bill date before confirming\")**: Tagihan pemasok dari PO mewajibkan pengisian **Bill Date** sesuai tanggal faktur pemasok sebelum klik **Confirm**. * **Kesalahan Konfigurasi Gudang Saat Konfirmasi PO**: Pastikan perusahaan memiliki gudang aktif dengan tipe operasi penerimaan yang valid di **Inventory → Configuration → Operation Types**. * **Penagihan Penerimaan Parsial**: Saat kebijakan penagihan berbasis **Received Quantities** aktif, ERPForAll hanya menagih jumlah yang sudah divalidasi di gudang. Validasi backorder terlebih dahulu sebelum menagih sisanya. Untuk studi kasus menyeluruh dari Blanket Agreement dan RFQ Alternatif hingga backorder, tagihan 3-way match, pembayaran, dan retur, lihat [Contoh Full Cycle Pembelian: Procure-to-Pay End-to-End](/id/next/user/purchasing-full-cycle-example.md)."
         }
       ]
     },
@@ -87,6 +88,53 @@
         {
           "anchor": "troubleshooting",
           "text": "* **Galat Lintas Perusahaan Saat Membuat RFQ Alternatif**: Pastikan **Alternative Vendor** yang dipilih terdaftar pada perusahaan aktif yang sama (atau tidak dikunci ke perusahaan lain pada kartu kontaknya). * **Tombol Pintar Alternatives Belum Langsung Terlihat**: Setelah menutup wizard RFQ Alternatif, segarkan atau buka ulang RFQ awal jika tombol statistik **Alternatives** di header belum langsung tampil."
+        }
+      ]
+    },
+    {
+      "page_id": "user/purchasing-full-cycle-example",
+      "title": "Contoh Full Cycle Pembelian: Procure-to-Pay End-to-End",
+      "module": "purchase",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "Studi kasus ini menelusuri satu siklus pengadaan menyeluruh lintas modul **Purchase**, **Inventory**, dan **Accounting**—mulai dari Perjanjian Pembelian (Blanket Order), perbandingan RFQ Alternatif, penerimaan parsial dengan backorder di gudang, Tagihan Pemasok dengan 3-Way Match, pembayaran bank, hingga retur barang cacat ke pemasok."
+        },
+        {
+          "anchor": "scenario-overview",
+          "text": "| Parameter | Nilai Studi Kasus | | --- | --- | | **Blanket Agreement** | PA00001 (PT Global Komponen Indonesia, [ELK-MON24] Monitor 24 inci, Qty 20 @ $120.00) | | **RFQ / PO Pemenang** | PO00023 (Baja Sentosa Abadi, [ELK-MON24] Monitor 24 inci, Qty 10 @ $50.00 = $500.00) | | **RFQ Alternatif** | PO00024 (PT Global Komponen Indonesia) dibandingkan berdampingan sebelum menetapkan PO00023 | | **Penerimaan Gudang** | Penerimaan parsial Main/IN/00026 (6 unit) + Backorder Main/IN/00027 (4 unit) = 10 diterima | | **Tagihan & Pembayaran** | BILL/2026/11/0022 ($500.00, Purchase Match: Matched) dilunasi lewat PBNK1/2026/00032 | | **Kasus Retur** | 1 monitor cacat dikembalikan ke pemasok lewat Main/OUT/00024 |"
+        },
+        {
+          "anchor": "step-1-agreement-and-alternatives",
+          "text": "1. **Buat Blanket Agreement (PA00001)**: * Buka **Purchase → Orders → Purchase Agreements** lalu klik **New**. * Pilih **Vendor** PT Global Komponen Indonesia, tambahkan [ELK-MON24] Monitor 24 inci sebanyak 20 unit @ $120.00, klik **Save**, lalu **Confirm**. 2. **Buat RFQ (PO00023) dan Penawaran Pembanding (PO00024)**: * Buka **Purchase → Orders → Requests for Quotation → New**. * Pilih **Vendor** Baja Sentosa Abadi, tambahkan [ELK-MON24] Monitor 24 inci, **Quantity** 10, **Unit Price** $50.00 (Total $500.00), lalu klik **Save** (PO00023). * Klik **Alternative**, pilih pemasok dalam perusahaan yang sama (PT Global Komponen Indonesia), dan bentuk **PO00024**. * Buka **Compare Product Lines** untuk membandingkan harga satuan kedua pemasok berdampingan sebelum memilih PO00023. ![Perjanjian Pembelian Blanket Agreement PA00001 terkonfirmasi mencatat kuantitas target dan harga kontrak.](/id/next/assets/docs/assets/user-manual/purchasing/purchase-agreement.webp) ![Tampilan perbandingan RFQ Alternatif membandingkan PO00023 dengan PO00024 secara berdampingan untuk menentukan pemenang.](/id/next/assets/docs/assets/user-manual/purchasing/compare-alternatives.webp)"
+        },
+        {
+          "anchor": "step-2-confirm-po",
+          "text": "1. Buka RFQ pemenang **PO00023** ($500.00, di bawah batas persetujuan ganda $5,000) lalu klik **Confirm Order**. 2. Periksa hasil langsungnya: * Status berubah dari **RFQ** menjadi **Purchase Order**. * ERPForAll mengunci pemasok dan mata uang serta membentuk dokumen penerimaan **Main/IN/00026** (Vendors → Main/Stock, Demand 10) pada tombol pintar **1 Receipt**. ![Pesanan Pembelian PO00023 terkonfirmasi dengan status Purchase Order dan tombol pintar 1 Receipt menuju Main/IN/00026.](/id/next/assets/docs/assets/user-manual/purchasing/confirmed-po.webp)"
+        },
+        {
+          "anchor": "step-3-partial-receipt-backorder",
+          "text": "Misalkan pada pengiriman pertama hanya tiba 6 dari 10 monitor: 1. Klik **1 Receipt** pada PO00023 untuk membuka **Main/IN/00026**. 2. Buka tab **Detailed Operations**, ubah **Quantity / Done** menjadi **6**, lalu klik **Validate**. 3. Pada dialog **Remaining demand**, pilih **Create Backorder**. * Main/IN/00026 menjadi **Done** (+6 unit masuk ke Main/Stock). * ERPForAll membentuk backorder **Main/IN/00027** (Ready, Demand 4, Back Order of Main/IN/00026). * Kembali ke PO00023, terlihat **Received Qty = 6** dan **2 Receipt**. 4. Saat sisa 4 unit tiba, buka **Main/IN/00027**, verifikasi 4 unit, lalu klik **Validate**. * PO00023 diperbarui menjadi **Received Qty = 10** dengan status tagihan **Waiting Bills**. ![Dialog Remaining demand saat memvalidasi 6 dari 10 unit pada Main/IN/00026 sehingga membentuk backorder Main/IN/00027.](/id/next/assets/docs/assets/user-manual/purchasing/backorder-dialog.webp)"
+        },
+        {
+          "anchor": "step-4-vendor-bill-3way",
+          "text": "1. Pada PO00023 (kini Received Qty = 10), klik **Create Bill**. 2. ERPForAll membuat draf Tagihan Pemasok yang tertaut via **1 Purchase Orders** berisi: * 10 unit × $50.00 = **$500.00** * **Purchase Match: Matched** (Dipesan 10 = Diterima 10 = Ditagih 10 pada Three-Way Matching). 3. Isi **Bill Date** sesuai faktur pemasok (misalnya 11/26/2026), periksa referensi tagihan, lalu klik **Confirm** untuk memposting **BILL/2026/11/0022**. * Akuntansi mencatat **Debit Persediaan / Pembelian $500.00** / **Kredit Utang Usaha $500.00**. * Pada PO00023, **Billed Qty = 10** dan status menjadi **Fully Billed**. ![Draf Tagihan Pemasok dari PO00023 menampilkan Purchase Match: Matched atas kuantitas dipesan, diterima, dan ditagih.](/id/next/assets/docs/assets/user-manual/purchasing/vendor-bill-3way-match.webp)"
+        },
+        {
+          "anchor": "step-5-pay-vendor",
+          "text": "1. Pada tagihan terposting **BILL/2026/11/0022**, klik **Register Payment**. 2. Pilih **Journal**: Main Bank, pastikan **Amount**: $500.00, lalu klik **Create Payment**. 3. Verifikasi tagihan lunas: * Lencana status menunjukkan **PAID** dengan **Amount Due = $0.00**, tertaut ke **PBNK1/2026/00032**. * Akuntansi mencatat **Debit Utang Usaha $500.00** / **Kredit Main Bank $500.00**. ![Tagihan Pemasok BILL/2026/11/0022 berstatus PAID dengan Amount Due $0.00 dan tautan pembayaran PBNK1/2026/00032.](/id/next/assets/docs/assets/user-manual/purchasing/vendor-bill-paid.webp)"
+        },
+        {
+          "anchor": "step-6-return-and-reporting",
+          "text": "Jika 1 monitor dari kiriman kedua (Main/IN/00027) tidak lolos inspeksi: 1. Buka dokumen penerimaan selesai **Main/IN/00027** (Done) lalu klik **Return**. 2. ERPForAll membuat draf pengiriman balik **Main/OUT/00024** (Return of Main/IN/00027, Main/Stock → Vendors). 3. Atur **Demand** pada baris perpindahan stok menjadi **1**, klik **Confirm**, lalu klik **Validate** untuk mengirim barang rusak kembali ke pemasok (-1 unit dari Main/Stock). 4. Buat **Vendor Refund** di **Accounting → Vendors → Refunds** apabila pemasok menerbitkan nota kredit pengembalian."
+        },
+        {
+          "anchor": "full-cycle-audit-table",
+          "text": "| Tahap | Referensi Dokumen | Modul | Perubahan Stok (Main/Stock) | Dampak Akuntansi | | --- | --- | --- | --- | --- | | 1. Blanket & Alt RFQ | PA00001, PO00023 / PO00024 | Purchase | 0 | Belum ada | | 2. Konfirmasi PO | PO00023 (Purchase Order) | Purchase | 0 (10 masuk) | Komitmen Anggaran AVC (bila aktif) | | 3a. Penerimaan Parsial | Main/IN/00026 (Done) | Inventory | **+6 unit** | Penerimaan persediaan | | 3b. Penerimaan Backorder | Main/IN/00027 (Done) | Inventory | **+4 unit** | Penerimaan persediaan | | 4. Tagihan Pemasok | BILL/2026/11/0022 (Posted) | Accounting | 0 | Dr Pembelian/Stok $500.00 / Cr Utang $500.00 | | 5. Pembayaran Pemasok | PBNK1/2026/00032 (Paid) | Accounting | 0 | Dr Utang $500.00 / Cr Bank $500.00 | | 6. Pengiriman Retur | Main/OUT/00024 (Done) | Inventory | **-1 unit** | Pengeluaran retur persediaan | | **Posisi Akhir Bersih** | — | **Semua** | **+9 unit bersih disimpan** | **$500.00 lunas (menunggu refund pemasok $50.00)** | Audit total belanja pemasok di **Purchase → Reporting → Purchase Report**, **Purchases by Product**, dan **Purchase Pivot & Graph**. ![Purchase Report memastikan belanja ke Baja Sentosa Abadi terangkum rapi dengan drill-down ke PO00023.](/id/next/assets/docs/assets/user-manual/purchasing/purchase-report.webp)"
         }
       ]
     }

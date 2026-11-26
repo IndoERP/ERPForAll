@@ -6,9 +6,53 @@
   "modules": [
     "stock",
     "stock",
+    "stock",
     "stock"
   ],
   "docs": [
+    {
+      "page_id": "user/inventory-full-cycle-example",
+      "title": "Contoh Full Cycle Inventaris: Penerimaan hingga Pengiriman dengan Lot, QC, Landed Cost, dan Opname",
+      "module": "stock",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "Studi kasus ini menelusuri satu produk terlacak lot melalui seluruh operasi gudang utama di ERPForAll: mengaktifkan pelacakan di Pengaturan Inventaris, menerima barang dengan nomor Lot dan Tanggal Kedaluwarsa, mengapitalisasi ongkos angkut lewat Landed Cost, mencatat dan menutup Quality Alert, melakukan stok opname fisik, memusnahkan barang rusak (scrap), serta mengaudit seluruh riwayat di **Moves History**."
+        },
+        {
+          "anchor": "scenario-overview",
+          "text": "| Parameter | Nilai Studi Kasus | | --- | --- | | **Produk** | Produk Storable terlacak Lot (Tracking: By Lots, Expiration Date: ON, masa simpan 365 hari, Harga Pokok $50.00) | | **Penerimaan Masuk** | Main/IN/00028 — 10 unit pada Lot **LOT-UM-QA-01** (Kedaluwarsa 11/26/2027) | | **Landed Cost** | LC/00001 — Inbound Freight & Customs, $100.00 dibagi By Quantity ($500.00 → $600.00, $60.00/unit) | | **Kontrol Kualitas** | Quality Alert **QA/00001** (Main Quality Team) diproses dari Confirmed → Solved | | **Stok Opname** | Record Stock Count memperbarui LOT-UM-QA-01 dari 10 → 12 unit (ditemukan surplus +2) | | **Scrap** | 1 unit rusak di-scrap dari LOT-UM-QA-01 → sisa **11 unit On Hand** |"
+        },
+        {
+          "anchor": "step-1-enable-tracking",
+          "text": "1. Buka **Inventory → More → Configuration → Settings** dan pastikan **Company-wide lot tracking**, **Packages**, **Multiple locations**, serta **Advanced routes** aktif, lalu klik **Save** dan muat ulang halaman. 2. Buka **Inventory → Products → Products → New**: * Atur **Product Type** ke Barang Storable dan **Cost** sebesar $50.00. * Pada tab **Inventory**, pilih **Traceability** = **By Lots**, aktifkan **Expiration Date**, dan isi **Expiration Time**: 365 hari. * Klik **Save**. ![Pengaturan Inventaris dengan Pelacakan Lot & Seri, Paket, Multi-Lokasi, dan Rute Lanjutan dalam keadaan aktif.](/id/next/assets/docs/assets/user-manual/inventory/inventory-settings.webp)"
+        },
+        {
+          "anchor": "step-2-receive-lot-expiry",
+          "text": "1. Buka **Inventory → Operations → Receipts** lalu klik **New**. 2. Pilih **Operation Type**: Receiving (Vendors → Main/Stock), tambahkan produk terlacak lot sebanyak 10 unit, lalu simpan. 3. Buka tab **Detailed Operations**, isi **Lot/Serial Number**: **LOT-UM-QA-01**, periksa **Expiration Date** yang otomatis terisi (11/26/2027), masukkan **Quantity / Done**: 10, lalu klik **Validate**. 4. Pastikan **Main/IN/00028** berpindah ke **Done**, dan verifikasi **LOT-UM-QA-01** muncul di **Inventory → Products → Lots/Serial Numbers** dengan 10 unit on hand. ![Tab Detailed Operations pada Main/IN/00028 mencatat Lot LOT-UM-QA-01 beserta Tanggal Kedaluwarsanya.](/id/next/assets/docs/assets/user-manual/inventory/receipt-lot-expiry.webp) ![Penerimaan Main/IN/00028 berstatus Done memastikan 10 unit terlacak lot telah masuk ke Main/Stock.](/id/next/assets/docs/assets/user-manual/inventory/receipt-done-lot.webp)"
+        },
+        {
+          "anchor": "step-3-landed-cost",
+          "text": "Alokasikan $100.00 biaya angkut masuk ke penerimaan **Main/IN/00028** agar valuasi persediaan mencerminkan harga perolehan sebenarnya: 1. Buka **Inventory → Operations → Landed Costs** lalu klik **New**. 2. Pilih **Transfers**: Main/IN/00028. 3. Pada tab **Additional Costs**, tambahkan produk jasa **Inbound Freight & Customs**, **Split Method**: By Quantity, **Cost**: $100.00. 4. Klik **Compute** lalu tinjau tab **Valuation Adjustments**: * **Former Cost**: $500.00 (10 × $50.00) * **Additional Landed Cost**: $100.00 * **New Cost**: **$600.00** ($60.00/unit) 5. Klik **Validate**. Status **LC/00001** berubah menjadi **Posted**. ![Landed Cost LC/00001 berstatus Posted menampilkan Former Cost $500.00 + Additional Landed Cost $100.00 = New Cost $600.00.](/id/next/assets/docs/assets/user-manual/inventory/landed-cost-valuation.webp)"
+        },
+        {
+          "anchor": "step-4-quality-alert",
+          "text": "Bila pemeriksaan penerimaan menemukan kardus lembap pada sebagian lot: 1. Buka **Inventory → Operations → Quality Alerts** lalu klik **New**. 2. Tautkan produk terdampak, **Lot/Serial**: LOT-UM-QA-01, dan **Quality Team**: Main Quality Team, lalu klik **Confirm** (QA/00001). 3. Setelah pengemasan ulang dan verifikasi unit baik selesai, klik **Mark Solved** agar peringatan ditutup pada status **Solved** dengan jejak audit kualitas lengkap. ![Quality Alert QA/00001 melacak inspeksi kemasan bersama Main Quality Team hingga penyelesaian.](/id/next/assets/docs/assets/user-manual/inventory/quality-alert.webp)"
+        },
+        {
+          "anchor": "step-5-cycle-count-and-scrap",
+          "text": "1. **Stok Opname Fisik (Record Stock Count)**: * Buka **Inventory → Operations → Record Stock Count**. * Pilih **Location**: Main/Stock, produk terkait, **Lot/Serial**: LOT-UM-QA-01, masukkan **Counted Quantity**: 12 (misalnya ditemukan 2 unit berlebih saat penataan rak), isi **Adjustment Note**, lalu terapkan. * Buka **Inventory → Operations → Physical Inventory** untuk memverifikasi **On Hand = 12** pada LOT-UM-QA-01. 2. **Scrap Unit Rusak**: * Buka **Inventory → Operations → Scrap** lalu klik **New**. * Pilih produk, pastikan **Unit**: Units, pilih **Lot/Serial**: LOT-UM-QA-01, masukkan **Quantity**: 1, lalu klik **Validate**. * Pesanan Scrap menjadi **Done** (Main/Stock → Virtual Locations/Scrap), menyisakan **11 unit siap jual On Hand**. ![Physical Inventory memastikan stok On Hand terbarui menjadi 12 unit untuk LOT-UM-QA-01 setelah Record Stock Count.](/id/next/assets/docs/assets/user-manual/inventory/physical-inventory.webp) ![Pesanan Scrap berstatus Done mengeluarkan 1 unit rusak dari LOT-UM-QA-01 keluar dari stok siap jual.](/id/next/assets/docs/assets/user-manual/inventory/scrap-done.webp)"
+        },
+        {
+          "anchor": "step-6-audit-moves-history",
+          "text": "Buka **Inventory → More → Reporting → Moves History** lalu saring berdasarkan produk atau lot LOT-UM-QA-01. Setiap kejadian gudang tercatat kronologis dan cocok persis dengan saldo akhir: | Tahap | Operasi / Dokumen | Lokasi Asal → Tujuan | Perubahan Qty | Saldo On Hand | Valuasi per Unit | | --- | --- | --- | --- | ---: | ---: | | 1. Penerimaan Masuk | Main/IN/00028 (LOT-UM-QA-01) | Vendors → Main/Stock | +10 | 10 | $50.00 ($500.00) | | 2. Landed Cost | LC/00001 (Posted) | Penyesuaian Valuasi | 0 | 10 | **$60.00 ($600.00)** | | 3. Quality Alert | QA/00001 (Solved) | Catatan Inspeksi | 0 | 10 | $60.00 | | 4. Stok Opname | Record Stock Count | Inventory Adj. → Main/Stock | +2 | 12 | $60.00 | | 5. Scrap | Scrap (Done) | Main/Stock → Scrap | -1 | **11** | $60.00 | | 6. Pengiriman / Replenishment | Keluar Main/OUT/... (FIFO) | Main/Stock → Customers | -qty | 11 − qty | Memicu RFQ Buy di bawah Min Qty | ![Moves History menampilkan setiap penerimaan, penyesuaian stok opname, scrap, dan pengiriman yang tervalidasi lengkap dengan jejak lot.](/id/next/assets/docs/assets/user-manual/inventory/moves-history.webp)"
+        }
+      ]
+    },
     {
       "page_id": "user/inventory-traceability-and-routes",
       "title": "Lot, Nomor Seri, Tanggal Kedaluwarsa, Rute Multi-Tahap, dan Landed Cost",
@@ -87,7 +131,7 @@
         },
         {
           "anchor": "failure-and-recovery",
-          "text": "* **Penolakan Stok Negatif Saat Validasi**: Jika lokasi penyimpanan melarang stok negatif dan stok bebas tidak mencukupi, ERPForAll menghentikan **Validate** tanpa memindahkan barang. Sesuaikan kuantitas dengan stok tersedia atau validasi penerimaan masuk terlebih dahulu. * **Kendala Apply Count pada Form Quant**: Bila penerapan hitung langsung dari form quant mengalami galat, gunakan **Inventory → Operations → Record Stock Count** lalu verifikasi perubahan On Hand di daftar **Physical Inventory**. * **Unit Kosong pada Pesanan Scrap**: Pastikan field **Unit** sudah terisi pada form Scrap baru sebelum mengklik **Validate**."
+          "text": "* **Penolakan Stok Negatif Saat Validasi**: Jika lokasi penyimpanan melarang stok negatif dan stok bebas tidak mencukupi, ERPForAll menghentikan **Validate** tanpa memindahkan barang. Sesuaikan kuantitas dengan stok tersedia atau validasi penerimaan masuk terlebih dahulu. * **Kendala Apply Count pada Form Quant**: Bila penerapan hitung langsung dari form quant mengalami galat, gunakan **Inventory → Operations → Record Stock Count** lalu verifikasi perubahan On Hand di daftar **Physical Inventory**. * **Unit Kosong pada Pesanan Scrap**: Pastikan field **Unit** sudah terisi pada form Scrap baru sebelum mengklik **Validate**. Untuk studi kasus menyeluruh mencakup penerimaan lot, kedaluwarsa, valuasi Landed Cost, Quality Alert, stok opname, scrap, dan rekonsiliasi Moves History, lihat [Contoh Full Cycle Inventaris: Penerimaan hingga Pengiriman dengan Lot, QC, Landed Cost, dan Opname](/id/next/user/inventory-full-cycle-example.md)."
         }
       ]
     },

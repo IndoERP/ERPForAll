@@ -5,9 +5,57 @@
   "audience": "functional",
   "modules": [
     "sale",
+    "sale",
     "sale"
   ],
   "docs": [
+    {
+      "page_id": "user/sales-full-cycle-example",
+      "title": "Contoh Full Cycle Penjualan: Order-to-Cash End-to-End",
+      "module": "sale",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "Studi kasus ini menelusuri satu pesanan pelanggan nyata lintas modul **Sales**, **Inventory**, dan **Accounting** agar tim Anda dapat memverifikasi setiap perubahan status, pengurangan stok, posting faktur, pelunasan pembayaran, hingga retur barang dan nota kredit parsial secara menyeluruh."
+        },
+        {
+          "anchor": "scenario-overview",
+          "text": "| Parameter | Nilai Studi Kasus | | --- | --- | | **Pelanggan (Customer)** | PT Sumber Makmur Sejahtera | | **Daftar Harga (Pricelist)** | Harga Grosir | | **Produk Utama** | Meja Kerja (Kayu Jati) — Barang Storable, Harga Pokok $300.00, Harga Daftar $450.00 | | **Kuantitas & Diskon** | 3 Unit dengan diskon volume 5% ($427.50/unit, Subtotal $1,282.50, Margin $382.50 / 29.82%) | | **Produk Opsional** | Kursi Kantor Ergonomis ditambahkan pada tab **Optional Products** | | **Kasus Retur & Kredit** | Pelanggan kemudian mengembalikan 1 unit ($427.50) setelah lunas, diselesaikan dengan Nota Kredit parsial |"
+        },
+        {
+          "anchor": "step-1-quotation",
+          "text": "1. Buka **Sales → Orders → Quotations** lalu klik **New**. 2. Pilih **Customer**: PT Sumber Makmur Sejahtera. Alamat penagihan, alamat kirim, tenaga penjual, dan tim penjualan otomatis terisi. 3. Pilih **Pricelist**: Harga Grosir. 4. Pada tab **Order Lines**, klik **Add a line**, pilih Meja Kerja (Kayu Jati), isi **Quantity** 3, periksa **Unit Price** $450.00, dan masukkan **Discount (%)** 5. * Periksa total langsung di kanan bawah: **Untaxed / Total = $1,282.50** serta **Margin = $382.50 (29.82%)**. 5. Buka tab **Optional Products** lalu tambahkan Kursi Kantor Ergonomis sebagai penawaran tambahan. 6. Klik **Save**. ERPForAll menerbitkan nomor **S00021** berstatus **Quotation**. ![Draf Penawaran S00021 menampilkan daftar harga Harga Grosir, 3 unit diskon 5% ($1,282.50), margin langsung ($382.50 / 29.82%), dan tab Optional Products.](/id/next/assets/docs/assets/user-manual/sales/quotation-draft.webp)"
+        },
+        {
+          "anchor": "step-2-confirm-order",
+          "text": "1. Setelah pelanggan menyetujui penawaran, klik **Confirm** pada S00021. 2. Periksa hasil langsungnya: * Status dokumen berubah dari **Quotation** menjadi **Sales Order** (tetap bernomor S00021). * Pelanggan, perusahaan, dan daftar harga terkunci agar tidak berubah tidak sengaja. * ERPForAll otomatis membentuk dokumen pengiriman **Main/OUT/00023** (Main/Stock → Customers, Demand 3) serta menampilkan tombol pintar **1 Delivery** dan tombol **Create Invoice**. ![Pesanan Penjualan S00021 terkonfirmasi dengan tombol pintar 1 Delivery dan tombol Create Invoice siap digunakan.](/id/next/assets/docs/assets/user-manual/sales/sales-order-confirmed.webp)"
+        },
+        {
+          "anchor": "step-3-deliver-goods",
+          "text": "1. Klik **1 Delivery** pada S00021 (atau buka **Inventory → Operations → Deliveries → Main/OUT/00023**). 2. Pastikan 3 unit Meja Kerja (Kayu Jati) sudah dicadangkan pada status **Ready** (Main/Stock → Customers). 3. Klik **Validate**. * Pengiriman Main/OUT/00023 berpindah ke status **Done**. * Stok **On Hand** gudang berkurang **3 unit**. 4. Kembali ke S00021 melalui breadcrumb: baris pesanan kini menampilkan **Delivered Qty = 3**. ![Delivery Order Main/OUT/00023 berstatus Done memastikan 3 unit telah dikirim ke pelanggan.](/id/next/assets/docs/assets/user-manual/sales/delivery-done.webp)"
+        },
+        {
+          "anchor": "step-4-create-invoice",
+          "text": "1. Pada S00021, klik **Create Invoice**. 2. Pada wizard **Create Invoice**, tinjau opsi penagihan: * **Regular Invoice** (dipilih pada contoh ini — menagih seluruh 3 unit terkirim sebesar $1,282.50). * **Down Payment (percentage)** atau **Down Payment (fixed amount)** (berguna bila menagih uang muka sebelum pengiriman). 3. Klik **Create Draft Invoice**, tinjau baris dan total ($1,282.50), lalu klik **Confirm** untuk memposting **INV/2026/00026**. * Akuntansi mencatat **Debit Piutang Usaha $1,282.50** / **Kredit Pendapatan Penjualan $1,282.50**. ![Wizard Create Invoice pada S00021 menyediakan opsi Regular Invoice serta Down Payment persentase atau nominal tetap.](/id/next/assets/docs/assets/user-manual/sales/create-invoice-wizard.webp)"
+        },
+        {
+          "anchor": "step-5-register-payment",
+          "text": "1. Pada faktur terposting **INV/2026/00026**, klik **Register Payment**. 2. Pilih **Journal**: Main Bank, pastikan **Amount**: $1,282.50, lalu klik **Create Payment**. 3. Verifikasi faktur yang telah lunas: * Lencana status berubah menjadi **PAID** dengan **Amount Due = $0.00**. * Tombol pintar menautkan langsung ke **1 Sales Orders** (S00021) dan **1 Payments** (PBNK1/2026/00031). * Akuntansi mencatat **Debit Main Bank / Penerimaan Tertunda $1,282.50** / **Kredit Piutang Usaha $1,282.50**. ![Faktur Pelanggan INV/2026/00026 lunas menampilkan status PAID, Amount Due $0.00, serta tombol pintar ke S00021 dan pembayaran PBNK1/2026/00031.](/id/next/assets/docs/assets/user-manual/sales/invoice-paid-linked-so.webp)"
+        },
+        {
+          "anchor": "step-6-return-and-credit-note",
+          "text": "Misalkan pelanggan mengembalikan 1 meja ($427.50) setelah pengiriman dan pelunasan: 1. **Penerimaan Retur Fisik (Main/IN/00025)**: * Buka Delivery selesai Main/OUT/00023 lalu klik **Return**. * ERPForAll membentuk draf penerimaan retur **Main/IN/00025** (Customers → Main/Stock). * Isi **Demand** pada baris perpindahan stok menjadi **1**, klik **Confirm**, lalu klik **Validate** untuk memasukkan kembali 1 unit ke Main/Stock. 2. **Nota Kredit Finansial (RINV/2026/00004)**: * Buka faktur terposting INV/2026/00026 lalu klik **Credit Note**. * Pilih pengembalian sebagian, masukkan alasan retur, sesuaikan kuantitas Nota Kredit menjadi **1** unit ($427.50), lalu klik **Confirm** untuk memposting **RINV/2026/00004**. * Catat pembayaran pengembalian dana (atau simpan sebagai kredit untuk memotong faktur pelanggan berikutnya)."
+        },
+        {
+          "anchor": "full-cycle-audit-table",
+          "text": "| Tahap | Referensi Dokumen | Modul | Perubahan Stok (Main/Stock) | Dampak Akuntansi | | --- | --- | --- | --- | --- | | 1. Penawaran | S00021 (Draft) | Sales | 0 | Belum ada | | 2. Konfirmasi SO | S00021 (Sales Order) | Sales | 0 (3 dicadangkan) | Belum ada | | 3. Pengiriman | Main/OUT/00023 (Done) | Inventory | **-3 unit** | Persediaan / HPP keluar | | 4. Faktur | INV/2026/00026 (Posted) | Accounting | 0 | Dr Piutang $1,282.50 / Cr Pendapatan $1,282.50 | | 5. Pembayaran | PBNK1/2026/00031 (Paid) | Accounting | 0 | Dr Bank $1,282.50 / Cr Piutang $1,282.50 | | 6a. Penerimaan Retur | Main/IN/00025 (Done) | Inventory | **+1 unit** | Pembalikan Persediaan / HPP | | 6b. Nota Kredit Parsial | RINV/2026/00004 (Posted) | Accounting | 0 | Dr Pendapatan $427.50 / Cr Piutang $427.50 | | **Posisi Akhir Bersih** | — | **Semua** | **-2 unit terjual** | **Pendapatan Bersih $855.00, kredit/retur $427.50** | Periksa hasil komersial akhirnya di **Sales → Reporting → Sales Report** dan **Sales Pivot & Graph**, serta pastikan jurnalnya di **Accounting → More → Reporting → Profit and Loss** dan **Partner Ledger**. ![Sales Report memastikan omzet S00021 tercatat pada PT Sumber Makmur Sejahtera lengkap dengan drill-down dan ekspor.](/id/next/assets/docs/assets/user-manual/sales/sales-report.webp)"
+        }
+      ]
+    },
     {
       "page_id": "user/sales-pricing-and-analytics",
       "title": "Daftar Harga, Diskon, Tim Penjualan, Margin, dan Analitik Penjualan",
@@ -78,7 +126,7 @@
         },
         {
           "anchor": "handle-failure",
-          "text": "* **Galat Pencarian Produk Inline (Missing required field 'Name')**: Saat menambah baris produk, selalu pilih produk dari daftar saran dropdown daripada menekan **Enter** pada kolom kosong. * **Kolom Uang Muka Tidak Muncul**: Pada wizard **Create Invoice**, klik langsung pada lingkaran radio di sebelah *Down Payment (percentage)* atau *Down Payment (fixed amount)* untuk memunculkan kolom persentase/nominal. * **Membatalkan Pesanan Penjualan Terkonfirmasi**: Batalkan terlebih dahulu dokumen **Delivery** yang masih terbuka sebelum membatalkan Pesanan Penjualan."
+          "text": "* **Galat Pencarian Produk Inline (Missing required field 'Name')**: Saat menambah baris produk, selalu pilih produk dari daftar saran dropdown daripada menekan **Enter** pada kolom kosong. * **Kolom Uang Muka Tidak Muncul**: Pada wizard **Create Invoice**, klik langsung pada lingkaran radio di sebelah *Down Payment (percentage)* atau *Down Payment (fixed amount)* untuk memunculkan kolom persentase/nominal. * **Membatalkan Pesanan Penjualan Terkonfirmasi**: Batalkan terlebih dahulu dokumen **Delivery** yang masih terbuka sebelum membatalkan Pesanan Penjualan. Untuk studi kasus menyeluruh lengkap dengan nomor dokumen nyata, pergerakan stok, dan jurnal akuntansi, lihat [Contoh Full Cycle Penjualan: Order-to-Cash End-to-End](/id/next/user/sales-full-cycle-example.md)."
         }
       ]
     }
