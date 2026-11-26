@@ -340,28 +340,64 @@ impl ProductTemplateStockButtons {
         let mut incoming: BTreeMap<i64, Decimal> = BTreeMap::new();
         let mut outgoing: BTreeMap<i64, Decimal> = BTreeMap::new();
         if !tmpl_ids.is_empty() {
-            let flow_rows = tx
+            tx.flush().await?;
+            let env = records.env();
+            let is_su = env.su();
+            let allowed_companies: Vec<i64> = if is_su {
+                Vec::new()
+            } else {
+                tx.companies(env)
+                    .await?
+                    .into_iter()
+                    .map(|c| c.get())
+                    .collect()
+            };
+            let cand_rows = tx
                 .query(
-                    "SELECT pp.product_tmpl_id::int8, \
-                            COALESCE(sum(CASE WHEN ld.usage = 'internal' AND ls.usage <> 'internal' THEN m.product_qty ELSE 0 END), 0), \
-                            COALESCE(sum(CASE WHEN ls.usage = 'internal' AND ld.usage <> 'internal' THEN m.product_qty ELSE 0 END), 0) \
+                    "SELECT m.id::int8 \
                      FROM stock_move m \
                      JOIN product_product pp ON pp.id = m.product_id \
-                     JOIN stock_location ls ON ls.id = m.location_id \
-                     JOIN stock_location ld ON ld.id = m.location_dest_id \
                      WHERE pp.product_tmpl_id = ANY($1) \
                        AND m.state NOT IN ('draft', 'done', 'cancel') \
-                     GROUP BY pp.product_tmpl_id",
-                    &[&tmpl_ids],
+                       AND ($2::bool OR m.company_id = ANY($3))",
+                    &[&tmpl_ids, &is_su, &allowed_companies],
                 )
                 .await?;
-            for row in flow_rows {
+            if !cand_rows.is_empty() {
                 let decode = |e| Error::internal(format!("forecasted move read: {e}"));
-                let tid: i64 = row.try_get(0).map_err(decode)?;
-                let inc: Decimal = row.try_get(1).map_err(decode)?;
-                let out_q: Decimal = row.try_get(2).map_err(decode)?;
-                incoming.insert(tid, inc);
-                outgoing.insert(tid, out_q);
+                let cand_ids: Vec<i64> = cand_rows
+                    .iter()
+                    .map(|r| r.try_get::<_, i64>(0).map_err(decode))
+                    .collect::<Result<_>>()?;
+                let visible_ids = env
+                    .records("stock.move")?
+                    .browse(cand_ids)?
+                    .filtered_access(tx, Operation::Read)
+                    .await?
+                    .ids();
+                if !visible_ids.is_empty() {
+                    let flow_rows = tx
+                        .query(
+                            "SELECT pp.product_tmpl_id::int8, \
+                                    COALESCE(sum(CASE WHEN ld.usage = 'internal' AND ls.usage <> 'internal' THEN m.product_qty ELSE 0 END), 0), \
+                                    COALESCE(sum(CASE WHEN ls.usage = 'internal' AND ld.usage <> 'internal' THEN m.product_qty ELSE 0 END), 0) \
+                             FROM stock_move m \
+                             JOIN product_product pp ON pp.id = m.product_id \
+                             JOIN stock_location ls ON ls.id = m.location_id \
+                             JOIN stock_location ld ON ld.id = m.location_dest_id \
+                             WHERE m.id = ANY($1) \
+                             GROUP BY pp.product_tmpl_id",
+                            &[&visible_ids],
+                        )
+                        .await?;
+                    for row in flow_rows {
+                        let tid: i64 = row.try_get(0).map_err(decode)?;
+                        let inc: Decimal = row.try_get(1).map_err(decode)?;
+                        let out_q: Decimal = row.try_get(2).map_err(decode)?;
+                        incoming.insert(tid, inc);
+                        outgoing.insert(tid, out_q);
+                    }
+                }
             }
         }
         let move_counts = counts(tx, records, "stock.move", TEMPLATE, &[]).await?;

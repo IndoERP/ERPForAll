@@ -15,8 +15,10 @@ fn db_err(e: impl std::error::Error + Send + Sync + 'static) -> Error {
     Error::db("A stock procurement or route record could not be read.").with_source(e)
 }
 
-/// Toggle the built-in `Replenish on Order (MTO)` route active state and ensure every active
-/// warehouse in `company_id` has an MTO pull rule into its stock location when enabled.
+const MAX_MTO_DEPTH: usize = 16;
+
+/// Toggle the built-in `Replenish on Order (MTO)` pull rules for `company_id` without disabling
+/// the shared global route for other companies.
 pub(crate) async fn toggle_mto_route(
     env: &Env,
     tx: &mut Transaction,
@@ -35,14 +37,44 @@ pub(crate) async fn toggle_mto_route(
         return Ok(());
     };
     let route_id: i64 = row.try_get(0).map_err(db_err)?;
-    sudo.records("stock.route")?
-        .browse([route_id])?
-        .write(tx, RawVals::new().set_cell("active", Cell::Bool(enabled)))
-        .await?;
 
     if !enabled {
+        // Deactivate only this company's MTO rules; keep the shared route active if other
+        // companies still have active MTO rules.
+        tx.execute(
+            "UPDATE stock_rule SET active = false WHERE route_id = $1 AND company_id = $2",
+            &[&route_id, &company_id],
+        )
+        .await?;
+        let remaining: i64 = tx
+            .query(
+                "SELECT count(*)::int8 FROM stock_rule WHERE route_id = $1 AND active IS TRUE",
+                &[&route_id],
+            )
+            .await?
+            .first()
+            .ok_or_else(|| Error::internal("MTO rule count returned no row."))?
+            .try_get(0)
+            .map_err(db_err)?;
+        if remaining == 0 {
+            sudo.records("stock.route")?
+                .browse([route_id])?
+                .write(tx, RawVals::new().set_cell("active", Cell::Bool(false)))
+                .await?;
+        }
+        tx.flush().await?;
         return Ok(());
     }
+
+    sudo.records("stock.route")?
+        .browse([route_id])?
+        .write(tx, RawVals::new().set_cell("active", Cell::Bool(true)))
+        .await?;
+    tx.execute(
+        "UPDATE stock_rule SET active = true WHERE route_id = $1 AND company_id = $2",
+        &[&route_id, &company_id],
+    )
+    .await?;
     // Ensure each active warehouse of this company has an MTO pull rule from Vendors -> Stock
     // so confirming an MTO outgoing move can procure stock without manual rule authoring.
     let vendor_rows = tx
@@ -111,14 +143,22 @@ pub(crate) async fn procure_mto_moves(
     records: &Records,
     tx: &mut Transaction,
     moves: &[i64],
+    visited: &mut BTreeSet<(i64, i64, i64)>,
+    depth: usize,
 ) -> Result<Vec<i64>> {
     if moves.is_empty() {
         return Ok(Vec::new());
     }
+    if depth >= MAX_MTO_DEPTH {
+        return Err(Error::validation(
+            "Make-to-order procurement exceeded maximum chain depth (possible cyclic stock rules).",
+        ));
+    }
     let candidates = tx
         .query(
             "SELECT m.id::int8, m.company_id::int8, m.product_id::int8, m.product_uom_qty, \
-                    m.uom_id::int8, m.location_id::int8, m.origin, m.partner_id::int8 \
+                    m.uom_id::int8, m.location_id::int8, m.origin, m.partner_id::int8, \
+                    m.procure_method, COALESCE(r.procure_method, '') \
              FROM stock_move m \
              LEFT JOIN stock_rule r ON r.id = m.rule_id \
              WHERE m.id = ANY($1) AND m.state = 'draft' \
@@ -140,13 +180,44 @@ pub(crate) async fn procure_mto_moves(
         let dest_move_id: i64 = row.try_get(0).map_err(db_err)?;
         let company_id: i64 = row.try_get(1).map_err(db_err)?;
         let product_id: i64 = row.try_get(2).map_err(db_err)?;
-        let demand: Decimal = row.try_get(3).map_err(db_err)?;
+        let mut demand: Decimal = row.try_get(3).map_err(db_err)?;
         let uom_id: i64 = row.try_get(4).map_err(db_err)?;
         let needed_loc: i64 = row.try_get(5).map_err(db_err)?;
         let origin: Option<String> = row.try_get(6).map_err(db_err)?;
         let partner_id: Option<i64> = row.try_get(7).map_err(db_err)?;
+        let move_procure: String = row.try_get(8).map_err(db_err)?;
+        let rule_procure_hint: String = row.try_get(9).map_err(db_err)?;
 
-        // Find the highest-priority active pull/pull_push rule that supplies `needed_loc`.
+        // For mts_else_mto, check free stock first and only procure the shortfall.
+        if move_procure != "make_to_order" && rule_procure_hint == "mts_else_mto" {
+            let free: Decimal = tx
+                .query(
+                    "SELECT COALESCE(SUM(quantity - reserved_quantity), 0) FROM stock_quant \
+                     WHERE company_id = $1 AND product_id = $2 AND location_id = $3 \
+                       AND quantity > reserved_quantity",
+                    &[&company_id, &product_id, &needed_loc],
+                )
+                .await?
+                .first()
+                .ok_or_else(|| Error::internal("Free stock check returned no row."))?
+                .try_get(0)
+                .map_err(db_err)?;
+            if free >= demand {
+                continue;
+            }
+            if free > Decimal::ZERO {
+                demand -= free;
+            }
+        }
+
+        if !visited.insert((company_id, product_id, needed_loc)) {
+            return Err(Error::validation(
+                "Cycle detected in make-to-order stock pull rules.",
+            ));
+        }
+
+        // Find the highest-priority active pull/pull_push rule supplying `needed_loc`,
+        // preferring routes explicitly assigned to the move or product template.
         let rule_rows = tx
             .query(
                 "SELECT sr.id::int8, sr.location_src_id::int8, sr.picking_type_id::int8, sr.procure_method \
@@ -156,8 +227,19 @@ pub(crate) async fn procure_mto_moves(
                    AND sr.action IN ('pull', 'pull_push') \
                    AND sr.location_dest_id = $1 \
                    AND (sr.company_id = $2 OR sr.company_id IS NULL) \
-                 ORDER BY rt.sequence, sr.sequence, sr.id LIMIT 1",
-                &[&needed_loc, &company_id],
+                 ORDER BY \
+                   CASE WHEN EXISTS ( \
+                     SELECT 1 FROM stock_route_move rm \
+                     WHERE rm.move_id = $3 AND rm.route_id = rt.id \
+                   ) THEN 0 \
+                   WHEN EXISTS ( \
+                     SELECT 1 FROM stock_route_product rp \
+                     JOIN product_product pp ON pp.product_tmpl_id = rp.product_id \
+                     WHERE pp.id = $4 AND rp.route_id = rt.id \
+                   ) THEN 1 \
+                   ELSE 2 END, \
+                   rt.sequence, sr.sequence, sr.id LIMIT 1",
+                &[&needed_loc, &company_id, &dest_move_id, &product_id],
             )
             .await?;
         let Some(rule) = rule_rows.first() else {
@@ -281,10 +363,28 @@ pub(crate) async fn sync_warehouse_step_rules(
         let store_type: Option<i64> = row.try_get(15).map_err(db_err)?;
         let qc_type: Option<i64> = row.try_get(16).map_err(db_err)?;
 
+        // Deactivate stale multi-step reception rules before activating the chosen step count.
+        tx.execute(
+            "UPDATE stock_rule SET active = false \
+             WHERE warehouse_id = $1 AND company_id = $2 AND action = 'push' \
+               AND route_id IN (SELECT id FROM stock_route WHERE name IN ($3, $4) AND company_id = $2)",
+            &[
+                &wh_id,
+                &company_id,
+                &format!("{wh_name}: Receive in 2 steps"),
+                &format!("{wh_name}: Receive in 3 steps"),
+            ],
+        )
+        .await?;
         // Multi-step reception push rules
         if reception == "two_steps"
             && let (Some(inp), Some(st_type)) = (input_loc, store_type.or(int_type))
         {
+            tx.execute(
+                "UPDATE stock_location SET active = true WHERE id = $1",
+                &[&inp],
+            )
+            .await?;
             let route_id = ensure_route(
                 &route_model,
                 tx,
@@ -315,6 +415,11 @@ pub(crate) async fn sync_warehouse_step_rules(
                 store_type.or(int_type),
             )
         {
+            tx.execute(
+                "UPDATE stock_location SET active = true WHERE id = ANY($1)",
+                &[&vec![inp, qc]],
+            )
+            .await?;
             let route_id = ensure_route(
                 &route_model,
                 tx,
@@ -354,12 +459,30 @@ pub(crate) async fn sync_warehouse_step_rules(
             .await?;
         }
 
+        // Deactivate stale multi-step delivery rules before activating the chosen step count.
+        tx.execute(
+            "UPDATE stock_rule SET active = false \
+             WHERE warehouse_id = $1 AND company_id = $2 AND action = 'pull' \
+               AND route_id IN (SELECT id FROM stock_route WHERE name IN ($3, $4) AND company_id = $2)",
+            &[
+                &wh_id,
+                &company_id,
+                &format!("{wh_name}: Deliver in 2 steps"),
+                &format!("{wh_name}: Deliver in 3 steps"),
+            ],
+        )
+        .await?;
         // Multi-step delivery pull rules
         if let Some(cust) = customer_loc {
             if delivery == "pick_ship"
                 && let (Some(out_loc), Some(p_type), Some(o_type)) =
                     (output_loc, pick_type.or(int_type), out_type)
             {
+                tx.execute(
+                    "UPDATE stock_location SET active = true WHERE id = $1",
+                    &[&out_loc],
+                )
+                .await?;
                 let route_id = ensure_route(
                     &route_model,
                     tx,
@@ -576,13 +699,21 @@ pub(crate) async fn propagate_push_and_downstream(
         .map_err(db_err)?;
 
     if !downstream.is_empty() {
+        // Lock move roots BEFORE mutating stock_move.state to respect lock hierarchy.
+        // Do not invoke assign_moves inside the same validation transaction so we never violate
+        // quant_engine::HeldKeys ordering; unlocked downstream moves become ready for assignment.
+        let roots = crate::move_counters::lock_move_roots(tx, &downstream, &[]).await?;
         tx.execute(
             "UPDATE stock_move SET state = 'confirmed' WHERE id = ANY($1) AND state = 'waiting'",
             &[&downstream],
         )
         .await?;
-        let roots = crate::move_counters::lock_move_roots(tx, &downstream, &[]).await?;
-        crate::reservation::assign_moves(records, tx, &downstream).await?;
+        records
+            .env()
+            .records("stock.move")?
+            .browse(downstream)?
+            .modified_external(tx, &["state"])
+            .await?;
         crate::move_counters::notify_pickings(records, tx, &roots).await?;
     }
 
@@ -673,7 +804,9 @@ pub(crate) async fn propagate_push_and_downstream(
         }
     }
     if !pushed_moves.is_empty() {
-        crate::confirm::confirm_moves(records, tx, &pushed_moves, true).await?;
+        // Confirm pushed moves without calling assign_moves inside this validation transaction
+        // so we never violate quant_engine::HeldKeys lock ordering.
+        crate::confirm::confirm_moves(records, tx, &pushed_moves, false).await?;
     }
     Ok(())
 }

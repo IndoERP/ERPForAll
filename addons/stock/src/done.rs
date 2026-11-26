@@ -574,26 +574,43 @@ async fn validate(records: &Records, tx: &mut Transaction) -> Result<Vec<i64>> {
         }
     }
 
-    // Propagate transfer consignment owner to lines that have no explicit owner set.
-    if !done_lines.is_empty() {
-        tx.execute(
-            "UPDATE stock_move_line l SET owner_id = p.owner_id \
-             FROM stock_picking p \
-             WHERE l.id = ANY($1) AND l.picking_id = p.id \
-               AND l.owner_id IS NULL AND p.owner_id IS NOT NULL",
-            &[&done_lines],
-        )
-        .await?;
-    }
-    resolve_and_check_lots(records, tx, &done_lines).await?;
-    crate::returns::guard_completion(records, tx, &origins, &done_lines).await?;
-
-    // one engine call: the released reservations and the on-hand changes, netted per key
+    // Capture reservation releases BEFORE updating owner_id or lot_id so released keys match
+    // the exact QuantKeys originally reserved (preventing ReservationUnderflow).
     let mut released = HashMap::new();
     // the demand lines of a draft were never reserved
     let mut touched = deleted.clone();
     touched.extend(done_lines.iter().filter(|id| !fresh.contains(id)));
     reservation_changes(tx, &touched, Decimal::NEGATIVE_ONE, &mut released).await?;
+
+    // Propagate transfer consignment owner to lines that have no explicit owner set.
+    if !done_lines.is_empty() {
+        let updated_owners = tx
+            .query(
+                "UPDATE stock_move_line l SET owner_id = p.owner_id \
+                 FROM stock_picking p \
+                 WHERE l.id = ANY($1) AND l.picking_id = p.id \
+                   AND l.owner_id IS NULL AND p.owner_id IS NOT NULL \
+                 RETURNING l.id::int8",
+                &[&done_lines],
+            )
+            .await?;
+        if !updated_owners.is_empty() {
+            let owner_line_ids: Vec<i64> = updated_owners
+                .iter()
+                .map(|r| r.try_get::<_, i64>(0).map_err(decode))
+                .collect::<Result<_>>()?;
+            records
+                .env()
+                .records("stock.move.line")?
+                .browse(owner_line_ids)?
+                .modified_external(tx, &["owner_id"])
+                .await?;
+        }
+    }
+    resolve_and_check_lots(records, tx, &done_lines).await?;
+    crate::returns::guard_completion(records, tx, &origins, &done_lines).await?;
+
+    // one engine call: the released reservations and the on-hand changes, netted per key
     let mut nets: HashMap<QuantKey, (Decimal, Decimal)> = released
         .into_iter()
         .map(|(key, reserved)| (key, (Decimal::ZERO, reserved)))
@@ -691,10 +708,12 @@ async fn resolve_and_check_lots(
         .query(
             "SELECT l.id::int8, l.company_id::int8, l.product_id::int8, l.lot_id::int8, \
                     l.lot_name, l.quantity_product_uom, pt.is_storable, pt.tracking, \
-                    COALESCE(t.use_create_lots, true) \
+                    COALESCE(t.use_create_lots, true), ls.usage, ld.usage \
              FROM stock_move_line l \
              JOIN product_product pp ON pp.id = l.product_id \
              JOIN product_template pt ON pt.id = pp.product_tmpl_id \
+             JOIN stock_location ls ON ls.id = l.location_id \
+             JOIN stock_location ld ON ld.id = l.location_dest_id \
              LEFT JOIN stock_picking p ON p.id = l.picking_id \
              LEFT JOIN stock_picking_type t ON t.id = p.picking_type_id \
              WHERE l.id = ANY($1) \
@@ -703,6 +722,8 @@ async fn resolve_and_check_lots(
         )
         .await?;
     let lot_model = records.env().records("stock.lot")?;
+    let mut seen_serials = BTreeSet::<(i64, i64, i64)>::new();
+    let mut updated_lot_lines = Vec::new();
     for row in rows {
         let line_id: i64 = row.try_get(0).map_err(decode)?;
         let company_id: i64 = row.try_get(1).map_err(decode)?;
@@ -713,6 +734,8 @@ async fn resolve_and_check_lots(
         let _is_storable: bool = row.try_get(6).map_err(decode)?;
         let tracking: Option<String> = row.try_get(7).map_err(decode)?;
         let use_create_lots: bool = row.try_get(8).map_err(decode)?;
+        let src_usage: String = row.try_get(9).map_err(decode)?;
+        let dst_usage: String = row.try_get(10).map_err(decode)?;
 
         if lot_id.is_none()
             && let Some(raw_name) = lot_name.as_deref().map(str::trim).filter(|s| !s.is_empty())
@@ -753,6 +776,7 @@ async fn resolve_and_check_lots(
                 &[&resolved, &line_id],
             )
             .await?;
+            updated_lot_lines.push(line_id);
             lot_id = Some(resolved);
         }
 
@@ -767,22 +791,59 @@ async fn resolve_and_check_lots(
                     }
                 }
                 Some("serial") => {
-                    if lot_id.is_none() {
+                    let Some(sid) = lot_id else {
                         let name = product_name(tx, product_id).await?;
                         return Err(Error::user(format!(
                             "You need to supply a Serial Number for product '{name}'."
                         )));
-                    }
+                    };
                     if qty_product_uom != Decimal::ONE {
                         let name = product_name(tx, product_id).await?;
                         return Err(Error::user(format!(
                             "Serial-tracked product '{name}' must be moved with quantity 1 per line (got {qty_product_uom})."
                         )));
                     }
+                    if !seen_serials.insert((company_id, product_id, sid)) {
+                        let name = product_name(tx, product_id).await?;
+                        return Err(Error::user(format!(
+                            "Serial number cannot appear on multiple lines in the same validation for product '{name}'."
+                        )));
+                    }
+                    if dst_usage == "internal" && src_usage != "internal" {
+                        let existing_qty: Decimal = tx
+                            .query(
+                                "SELECT COALESCE(SUM(q.quantity), 0) FROM stock_quant q \
+                                 JOIN stock_location l ON l.id = q.location_id \
+                                 WHERE q.company_id = $1 AND q.product_id = $2 AND q.lot_id = $3 \
+                                   AND l.usage = 'internal' AND q.quantity > 0",
+                                &[&company_id, &product_id, &sid],
+                            )
+                            .await?
+                            .first()
+                            .ok_or_else(|| {
+                                Error::internal("Serial uniqueness check returned no row.")
+                            })?
+                            .try_get(0)
+                            .map_err(decode)?;
+                        if existing_qty > Decimal::ZERO {
+                            let name = product_name(tx, product_id).await?;
+                            return Err(Error::user(format!(
+                                "Serial number is already in stock for product '{name}' and cannot be received twice."
+                            )));
+                        }
+                    }
                 }
                 _ => {}
             }
         }
+    }
+    if !updated_lot_lines.is_empty() {
+        records
+            .env()
+            .records("stock.move.line")?
+            .browse(updated_lot_lines)?
+            .modified_external(tx, &["lot_id"])
+            .await?;
     }
     Ok(())
 }

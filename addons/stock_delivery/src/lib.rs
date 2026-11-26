@@ -19,10 +19,55 @@ fn db_err(e: impl std::error::Error + Send + Sync + 'static) -> Error {
     Error::db("Shipping delivery data could not be read.").with_source(e)
 }
 
+async fn currency_scale(
+    tx: &mut Transaction,
+    currency_id: Option<i64>,
+    company_id: i64,
+) -> Result<u32> {
+    let resolved_cid = match currency_id {
+        Some(cid) => cid,
+        None => {
+            let rows = tx
+                .query(
+                    "SELECT currency_id::int8 FROM res_company WHERE id = $1",
+                    &[&company_id],
+                )
+                .await?;
+            rows.first()
+                .ok_or_else(|| Error::missing("Company not found."))?
+                .try_get::<_, Option<i64>>(0)
+                .map_err(db_err)?
+                .ok_or_else(|| Error::user("Company has no currency configured."))?
+        }
+    };
+    let rows = tx
+        .query(
+            "SELECT decimal_places::int4 FROM res_currency WHERE id = $1",
+            &[&resolved_cid],
+        )
+        .await?;
+    let dp: i32 = rows
+        .first()
+        .ok_or_else(|| Error::missing("Currency not found."))?
+        .try_get(0)
+        .map_err(db_err)?;
+    if !(0..=6).contains(&dp) {
+        return Err(Error::validation(format!(
+            "Unsupported currency decimal places '{dp}'."
+        )));
+    }
+    u32::try_from(dp).map_err(|_| Error::internal("currency decimal_places conversion failed"))
+}
+
 #[extend(StockPicking, addon = "stock_delivery")]
 pub struct StockPickingDelivery {
     /// Shipping carrier selected for this transfer.
-    #[field(many2one, comodel = "delivery.carrier", string = "Carrier")]
+    #[field(
+        many2one,
+        comodel = "delivery.carrier",
+        check_company = true,
+        string = "Carrier"
+    )]
     pub carrier_id: Option<RecId>,
     /// Carrier tracking number returned or entered at dispatch.
     #[field(char, copy = false, string = "Tracking Reference")]
@@ -60,7 +105,7 @@ impl StockPickingDelivery {
             let rows = tx
                 .query(
                     "SELECT m.picking_id::int8, \
-                            COALESCE(sum((CASE WHEN m.quantity > 0 THEN m.quantity ELSE m.product_uom_qty END) * COALESCE(pt.weight, 0)), 0) \
+                            COALESCE(sum((CASE WHEN m.quantity_product_uom > 0 THEN m.quantity_product_uom ELSE m.product_qty END) * COALESCE(pt.weight, 0)), 0) \
                      FROM stock_move m \
                      JOIN product_product pp ON pp.id = m.product_id \
                      JOIN product_template pt ON pt.id = pp.product_tmpl_id \
@@ -95,24 +140,33 @@ impl StockPickingDelivery {
         let records = this.as_records().clone();
         records.check_access(tx, Operation::Write).await?;
         let picking_id = records.ensure_one()?.int()?;
+        let uid = records.env().uid();
         tx.flush().await?;
         let p_rows = tx
             .query(
-                "SELECT carrier_id::int8 FROM stock_picking WHERE id = $1",
+                "SELECT carrier_id::int8, state, company_id::int8 \
+                 FROM stock_picking WHERE id = $1 FOR UPDATE",
                 &[&picking_id],
             )
             .await?;
-        let carrier_id: Option<i64> = p_rows
+        let prow = p_rows
             .first()
-            .ok_or_else(|| Error::missing("Transfer not found."))?
-            .try_get(0)
-            .map_err(db_err)?;
+            .ok_or_else(|| Error::missing("Transfer not found."))?;
+        let carrier_id: Option<i64> = prow.try_get(0).map_err(db_err)?;
+        let state: String = prow.try_get(1).map_err(db_err)?;
+        let company_id: i64 = prow.try_get(2).map_err(db_err)?;
+        if state == "cancel" {
+            return Err(Error::user(
+                "Cannot compute shipping cost on a cancelled transfer.",
+            ));
+        }
         let Some(carrier_id) = carrier_id else {
             return Err(Error::user(
                 "Select a carrier before computing shipping cost.",
             ));
         };
         let carrier = load_carrier_pricing(tx, carrier_id).await?;
+        let scale = currency_scale(tx, None, company_id).await?;
         let m_rows = tx
             .query(
                 "SELECT COALESCE(sum(qty * COALESCE(pt.weight, 0)), 0), \
@@ -121,7 +175,7 @@ impl StockPickingDelivery {
                         COALESCE(sum(qty), 0) \
                  FROM ( \
                    SELECT product_id, \
-                          CASE WHEN quantity > 0 THEN quantity ELSE product_uom_qty END AS qty \
+                          CASE WHEN quantity_product_uom > 0 THEN quantity_product_uom ELSE product_qty END AS qty \
                    FROM stock_move \
                    WHERE picking_id = $1 AND state <> 'cancel' \
                  ) m \
@@ -130,17 +184,22 @@ impl StockPickingDelivery {
                 &[&picking_id],
             )
             .await?;
-        let row = &m_rows[0];
+        let row = m_rows
+            .first()
+            .ok_or_else(|| Error::internal("Transfer shipment metrics returned no row."))?;
         let metrics = ShipmentMetrics {
             weight: row.try_get(0).map_err(db_err)?,
             volume: row.try_get(1).map_err(db_err)?,
             order_price: row.try_get(2).map_err(db_err)?,
             quantity: row.try_get(3).map_err(db_err)?,
         };
-        let price = rate_shipment(&carrier, &metrics, 2)?;
+        let price = rate_shipment(&carrier, &metrics, scale)?;
         tx.execute(
-            "UPDATE stock_picking SET carrier_price = $2, shipping_weight = $3 WHERE id = $1",
-            &[&picking_id, &price, &metrics.weight],
+            "UPDATE stock_picking \
+             SET carrier_price = $2, shipping_weight = $3, \
+                 write_uid = $4, write_date = (now() AT TIME ZONE 'UTC') \
+             WHERE id = $1",
+            &[&picking_id, &price, &metrics.weight, &uid],
         )
         .await?;
         records
@@ -160,18 +219,28 @@ impl StockPickingDelivery {
         Self::action_compute_shipping_cost(this, tx).await?;
         let records = this.as_records().clone();
         let picking_id = records.ensure_one()?.int()?;
-        let row = tx
+        let uid = records.env().uid();
+        let rows = tx
             .query(
-                "SELECT name, carrier_tracking_ref FROM stock_picking WHERE id = $1",
+                "SELECT state, carrier_tracking_ref FROM stock_picking WHERE id = $1 FOR UPDATE",
                 &[&picking_id],
             )
             .await?;
-        let existing: Option<String> = row[0].try_get(1).map_err(db_err)?;
+        let row = rows
+            .first()
+            .ok_or_else(|| Error::missing("Transfer not found."))?;
+        let state: String = row.try_get(0).map_err(db_err)?;
+        if state == "cancel" {
+            return Err(Error::user("Cannot dispatch a cancelled transfer."));
+        }
+        let existing: Option<String> = row.try_get(1).map_err(db_err)?;
         if existing.as_deref().is_none_or(|s| s.trim().is_empty()) {
             let tracking = format!("TRK-{picking_id:06}");
             tx.execute(
-                "UPDATE stock_picking SET carrier_tracking_ref = $2 WHERE id = $1",
-                &[&picking_id, &tracking],
+                "UPDATE stock_picking \
+                 SET carrier_tracking_ref = $2, write_uid = $3, write_date = (now() AT TIME ZONE 'UTC') \
+                 WHERE id = $1",
+                &[&picking_id, &tracking, &uid],
             )
             .await?;
             records
@@ -185,7 +254,12 @@ impl StockPickingDelivery {
 #[extend(SaleOrder, addon = "stock_delivery")]
 pub struct SaleOrderDelivery {
     /// Selected shipping carrier for this quotation / sales order.
-    #[field(many2one, comodel = "delivery.carrier", string = "Delivery Method")]
+    #[field(
+        many2one,
+        comodel = "delivery.carrier",
+        check_company = true,
+        string = "Delivery Method"
+    )]
     pub carrier_id: Option<RecId>,
     /// Last computed shipping cost for the selected carrier.
     #[field(float, digits = "Product Price", default = 0, string = "Shipping Cost")]
@@ -206,11 +280,13 @@ impl SaleOrderDelivery {
         records.check_access(tx, Operation::Write).await?;
         let order_id = records.ensure_one()?.int()?;
         let env = records.env().clone();
+        let uid = env.uid();
         tx.savepoint(async move |tx| {
             tx.flush().await?;
             let order_rows = tx
                 .query(
-                    "SELECT state, carrier_id::int8 FROM sale_order WHERE id = $1",
+                    "SELECT state, locked, carrier_id::int8, currency_id::int8, company_id::int8 \
+                     FROM sale_order WHERE id = $1 FOR UPDATE",
                     &[&order_id],
                 )
                 .await?;
@@ -218,46 +294,66 @@ impl SaleOrderDelivery {
                 return Err(Error::missing("Sales order not found."));
             };
             let state: String = orow.try_get(0).map_err(db_err)?;
-            if !matches!(state.as_str(), "draft" | "sent") {
+            let locked: bool = orow.try_get(1).map_err(db_err)?;
+            if !matches!(state.as_str(), "draft" | "sent") || locked {
                 return Err(Error::user(
-                    "Shipping lines can only be added to draft or sent quotations.",
+                    "Shipping lines can only be added to unlocked draft or sent quotations.",
                 ));
             }
-            let carrier_id: Option<i64> = orow.try_get(1).map_err(db_err)?;
+            let carrier_id: Option<i64> = orow.try_get(2).map_err(db_err)?;
+            let currency_id: Option<i64> = orow.try_get(3).map_err(db_err)?;
+            let company_id: i64 = orow.try_get(4).map_err(db_err)?;
             let Some(carrier_id) = carrier_id else {
                 return Err(Error::user("Select a delivery method first."));
             };
             let carrier = load_carrier_pricing(tx, carrier_id).await?;
+            let scale = currency_scale(tx, currency_id, company_id).await?;
             let carrier_prod_rows = tx
                 .query(
                     "SELECT product_id::int8, name FROM delivery_carrier WHERE id = $1",
                     &[&carrier_id],
                 )
                 .await?;
-            let delivery_product_id: i64 = carrier_prod_rows[0].try_get(0).map_err(db_err)?;
-            let carrier_name: String = carrier_prod_rows[0].try_get(1).map_err(db_err)?;
+            let cprow = carrier_prod_rows
+                .first()
+                .ok_or_else(|| Error::missing("Delivery carrier not found."))?;
+            let delivery_product_id: i64 = cprow.try_get(0).map_err(db_err)?;
+            let carrier_name: String = cprow.try_get(1).map_err(db_err)?;
 
             let m_rows = tx
                 .query(
-                    "SELECT COALESCE(sum(l.product_uom_qty * COALESCE(pt.weight, 0)), 0), \
-                            COALESCE(sum(l.product_uom_qty * COALESCE(pt.volume, 0)), 0), \
-                            COALESCE(sum(l.price_subtotal), 0), \
-                            COALESCE(sum(l.product_uom_qty), 0) \
-                     FROM sale_order_line l \
-                     JOIN product_product pp ON pp.id = l.product_id \
-                     JOIN product_template pt ON pt.id = pp.product_tmpl_id \
-                     WHERE l.order_id = $1 AND l.product_id <> $2 AND l.display_type IS NULL",
+                    "SELECT COALESCE(sum(base_qty * COALESCE(pt.weight, 0)), 0), \
+                            COALESCE(sum(base_qty * COALESCE(pt.volume, 0)), 0), \
+                            COALESCE(sum(price_subtotal), 0), \
+                            COALESCE(sum(base_qty), 0) \
+                     FROM ( \
+                       SELECT l.product_id, \
+                              l.price_subtotal, \
+                              CASE WHEN lu.factor IS NOT NULL AND pu.factor IS NOT NULL AND pu.factor <> 0 \
+                                   THEN l.product_uom_qty * lu.factor / pu.factor \
+                                   ELSE l.product_uom_qty END AS base_qty \
+                       FROM sale_order_line l \
+                       JOIN product_product pp ON pp.id = l.product_id \
+                       JOIN product_template pt ON pt.id = pp.product_tmpl_id \
+                       LEFT JOIN uom_uom lu ON lu.id = l.product_uom_id \
+                       LEFT JOIN uom_uom pu ON pu.id = pt.uom_id \
+                       WHERE l.order_id = $1 AND l.product_id <> $2 AND l.display_type IS NULL \
+                     ) lines \
+                     JOIN product_product pp ON pp.id = lines.product_id \
+                     JOIN product_template pt ON pt.id = pp.product_tmpl_id",
                     &[&order_id, &delivery_product_id],
                 )
                 .await?;
-            let mrow = &m_rows[0];
+            let mrow = m_rows
+                .first()
+                .ok_or_else(|| Error::internal("Sales order shipment metrics returned no row."))?;
             let metrics = ShipmentMetrics {
                 weight: mrow.try_get(0).map_err(db_err)?,
                 volume: mrow.try_get(1).map_err(db_err)?,
                 order_price: mrow.try_get(2).map_err(db_err)?,
                 quantity: mrow.try_get(3).map_err(db_err)?,
             };
-            let price = rate_shipment(&carrier, &metrics, 2)?;
+            let price = rate_shipment(&carrier, &metrics, scale)?;
 
             // Update existing delivery line if present, otherwise create one.
             let existing = tx
@@ -291,8 +387,10 @@ impl SaleOrderDelivery {
             }
 
             tx.execute(
-                "UPDATE sale_order SET delivery_price = $2 WHERE id = $1",
-                &[&order_id, &price],
+                "UPDATE sale_order \
+                 SET delivery_price = $2, write_uid = $3, write_date = (now() AT TIME ZONE 'UTC') \
+                 WHERE id = $1",
+                &[&order_id, &price, &uid],
             )
             .await?;
             records.modified_external(tx, &["delivery_price"]).await?;

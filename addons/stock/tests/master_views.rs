@@ -93,8 +93,11 @@ fn forms_exist_and_quant_list_is_read_only() {
         assert!(xml.contains("<form"), "{model} form");
     }
     let quant = read("views/stock_quant_views.xml");
-    assert!(quant.contains(r#"<list create="false" edit="false" delete="false">"#));
-    assert!(quant.contains(r#"<form string="Stock" create="false" edit="false" delete="false">"#));
+    assert!(quant.contains(r#"<list create="false" delete="false">"#));
+    assert!(quant.contains(r#"<form string="Stock" create="false" delete="false">"#));
+    assert!(quant.contains(r#"<field name="product_id" readonly="1"/>"#));
+    assert!(quant.contains(r#"<field name="location_id" readonly="1"/>"#));
+    assert!(quant.contains(r#"<field name="quantity" string="Quantity On Hand" readonly="1"/>"#));
     assert!(quant.contains(r#"<field name="view_mode">list,form</field>"#));
     assert!(quant.contains(r#"context="{'group_by': 'product_id'}""#));
     assert!(quant.contains(r#"context="{'group_by': 'location_id'}""#));

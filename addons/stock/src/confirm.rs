@@ -152,14 +152,35 @@ pub(crate) async fn confirm_moves(
     moves: &[i64],
     assign: bool,
 ) -> Result<()> {
+    let mut visited = std::collections::BTreeSet::new();
+    confirm_moves_inner(records, tx, moves, assign, &mut visited, 0).await
+}
+
+async fn confirm_moves_inner(
+    records: &Records,
+    tx: &mut Transaction,
+    moves: &[i64],
+    assign: bool,
+    visited: &mut std::collections::BTreeSet<(i64, i64, i64)>,
+    depth: usize,
+) -> Result<()> {
     if moves.is_empty() {
         return Ok(());
     }
     tx.flush().await?;
     let roots = lock_move_roots(tx, moves, &[]).await?;
-    let upstream = crate::procurement::procure_mto_moves(records, tx, moves).await?;
+    let upstream =
+        crate::procurement::procure_mto_moves(records, tx, moves, visited, depth).await?;
     if !upstream.is_empty() {
-        Box::pin(confirm_moves(records, tx, &upstream, assign)).await?;
+        Box::pin(confirm_moves_inner(
+            records,
+            tx,
+            &upstream,
+            assign,
+            visited,
+            depth + 1,
+        ))
+        .await?;
     }
     // The whole request is locked above, before partitioning by company. Resolve every calendar
     // before changing any move so a bad zone cannot leave an earlier company confirmed.

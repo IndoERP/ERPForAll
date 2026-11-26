@@ -290,17 +290,25 @@ fn stock_adds_default_rule_types_without_transaction_schema() {
             .await
             .unwrap();
         let mut tx = outcome.orm.begin(SUPERUSER_ID).await.unwrap();
+        let id: i64 = tx
+            .query(
+                "SELECT res_id::int8 FROM ir_model_data \
+                 WHERE module = 'barcodes' AND name = 'default_barcode_nomenclature'",
+                &[],
+            )
+            .await
+            .unwrap()[0]
+            .get(0);
         let rows = tx
-            .query("SELECT type FROM barcode_rule ORDER BY sequence,id", &[])
+            .query(
+                "SELECT type FROM barcode_rule \
+                 WHERE barcode_nomenclature_id = $1 ORDER BY sequence,id",
+                &[&id],
+            )
             .await
             .unwrap();
         let types: Vec<String> = rows.iter().map(|r| r.get(0)).collect();
         assert_eq!(types, ["weight", "location", "package", "lot", "product"]);
-        let id: i64 = tx
-            .query("SELECT id FROM barcode_nomenclature", &[])
-            .await
-            .unwrap()[0]
-            .get(0);
         let n = tx
             .env()
             .records("barcode.nomenclature")

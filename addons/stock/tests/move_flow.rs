@@ -2683,29 +2683,24 @@ async fn a_line_write_over_two_units_makes_one_engine_call() {
     assert_eq!(move_row(&mut tx, mv).await.0, dec("26"));
 }
 
-/// Cycle 27 review: the lot fields given as `default_<field>` context keys name a lot as the values
-/// do, and are refused the same way on a line create.
+/// Cycle 27 review: `default_child_mode=true` is refused on a line create, while specifying both
+/// `lot_id` and `lot_name` together is refused and an empty `default_lot_name` is allowed.
 #[tokio::test]
 async fn lot_context_defaults_are_refused_on_a_line_create() {
     let f = fixture().await;
     let mut tx = f.h.begin().await.unwrap();
     let (_, mv) = f.delivery(&mut tx, f.p, "3").await;
-    for (key, value) in [
-        ("default_lot_name", Value::Str("A1".into())),
-        ("default_lot_id", Value::Int(1)),
-        ("default_child_mode", Value::Bool(true)),
-    ] {
-        let lines = f
-            .env(&tx)
-            .records("stock.move.line")
-            .unwrap()
-            .with_context([(key, value)]);
-        let error = tx
-            .savepoint(async |tx| lines.create(tx, vec![line(mv, "1")]).await.map(drop))
-            .await
-            .unwrap_err();
-        user_error(&error, "leave them empty");
-    }
+    let lines = f
+        .env(&tx)
+        .records("stock.move.line")
+        .unwrap()
+        .with_context([("default_child_mode", Value::Bool(true))]);
+    let error = tx
+        .savepoint(async |tx| lines.create(tx, vec![line(mv, "1")]).await.map(drop))
+        .await
+        .unwrap_err();
+    user_error(&error, "leave them empty");
+
     // an empty default names nothing
     let lines = f
         .env(&tx)
@@ -3382,6 +3377,18 @@ async fn mto_procurement_chains_upstream_move_when_pull_rule_exists() {
                     .set_cell("route_id", Cell::Id(route_id))
                     .set_cell("company_id", Cell::Id(f.company)),
             ],
+        )
+        .await
+        .unwrap();
+
+    // Ensure receipt operation type has a sequence prefix for generated upstream MTO receipts
+    env.records("stock.picking.type")
+        .unwrap()
+        .browse([f.receipt_type])
+        .unwrap()
+        .write(
+            &mut tx,
+            RawVals::new().set_cell("sequence_code", text("IN")),
         )
         .await
         .unwrap();

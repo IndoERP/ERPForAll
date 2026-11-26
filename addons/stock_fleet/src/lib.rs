@@ -31,6 +31,7 @@ pub fn capacity_percent(load: Decimal, capacity: Decimal) -> Decimal {
     name = "fleet.vehicle.category",
     description = "Vehicle Category",
     order = "sequence, name",
+    company_access = unrestricted(reason = "fleet vehicle categories are shared classification templates"),
     constraints = [
         ("_nonneg_weight", "CHECK (max_weight >= 0)", "Max weight cannot be negative."),
         ("_nonneg_volume", "CHECK (max_volume >= 0)", "Max volume cannot be negative."),
@@ -102,7 +103,12 @@ pub struct FleetVehicle {
 #[extend(StockPickingBatch, addon = "stock_fleet")]
 pub struct StockPickingBatchFleet {
     /// Vehicle assigned to dispatch this batch.
-    #[field(many2one, comodel = "fleet.vehicle", string = "Vehicle")]
+    #[field(
+        many2one,
+        comodel = "fleet.vehicle",
+        check_company = true,
+        string = "Vehicle"
+    )]
     pub vehicle_id: Option<RecId>,
     /// Vehicle category (auto-used for capacity limits when set).
     #[field(
@@ -115,7 +121,12 @@ pub struct StockPickingBatchFleet {
     #[field(many2one, comodel = "res.partner", string = "Driver")]
     pub driver_id: Option<RecId>,
     /// Staging / loading dock location.
-    #[field(many2one, comodel = "stock.location", string = "Dock Location")]
+    #[field(
+        many2one,
+        comodel = "stock.location",
+        check_company = true,
+        string = "Dock Location"
+    )]
     pub dock_id: Option<RecId>,
     /// Total weight of all transfers in this batch (kg).
     #[field(
@@ -176,9 +187,10 @@ async fn compute_batch_totals(
              LEFT JOIN fleet_vehicle_category bc ON bc.id = b.vehicle_category_id \
              LEFT JOIN ( \
                SELECT p.batch_id, \
-                      sum((CASE WHEN m.quantity > 0 THEN m.quantity ELSE m.product_uom_qty END) * COALESCE(pt.weight, 0)) AS w, \
-                      sum((CASE WHEN m.quantity > 0 THEN m.quantity ELSE m.product_uom_qty END) * COALESCE(pt.volume, 0)) AS v \
+                      sum((CASE WHEN m.quantity_product_uom > 0 THEN m.quantity_product_uom ELSE m.product_qty END) * COALESCE(pt.weight, 0)) AS w, \
+                      sum((CASE WHEN m.quantity_product_uom > 0 THEN m.quantity_product_uom ELSE m.product_qty END) * COALESCE(pt.volume, 0)) AS v \
                FROM stock_picking p \
+               JOIN stock_picking_batch b2 ON b2.id = p.batch_id AND p.company_id = b2.company_id \
                JOIN stock_move m ON m.picking_id = p.id AND m.state <> 'cancel' \
                JOIN product_product pp ON pp.id = m.product_id \
                JOIN product_template pt ON pt.id = pp.product_tmpl_id \
@@ -240,39 +252,60 @@ impl StockPickingBatchFleet {
         let records = this.as_records().clone();
         records.check_access(tx, Operation::Write).await?;
         let bid = records.ensure_one()?.int()?;
-        tx.flush().await?;
-        let totals = compute_batch_totals(tx, &[bid]).await?;
-        let (w, v, wp, vp) = totals.get(&bid).copied().unwrap_or((
-            Decimal::ZERO,
-            Decimal::ZERO,
-            Decimal::ZERO,
-            Decimal::ZERO,
-        ));
-        tx.execute(
-            "UPDATE stock_picking_batch \
-             SET dispatch_weight = $2, dispatch_volume = $3, \
-                 weight_utilization = $4, volume_utilization = $5 \
-             WHERE id = $1",
-            &[&bid, &w, &v, &wp, &vp],
-        )
-        .await?;
-        records
-            .modified_external(
-                tx,
-                &[
-                    "dispatch_weight",
-                    "dispatch_volume",
-                    "weight_utilization",
-                    "volume_utilization",
-                ],
+        let uid = records.env().uid();
+        tx.savepoint(async move |tx| {
+            tx.flush().await?;
+            let state_rows = tx
+                .query(
+                    "SELECT state FROM stock_picking_batch WHERE id = $1 FOR UPDATE",
+                    &[&bid],
+                )
+                .await?;
+            let state: String = state_rows
+                .first()
+                .ok_or_else(|| Error::missing("Batch transfer not found."))?
+                .try_get(0)
+                .map_err(db_err)?;
+            if matches!(state.as_str(), "done" | "cancel") {
+                return Err(Error::user(
+                    "Cannot recompute dispatch on a completed or cancelled batch.",
+                ));
+            }
+            let totals = compute_batch_totals(tx, &[bid]).await?;
+            let (w, v, wp, vp) = totals.get(&bid).copied().unwrap_or((
+                Decimal::ZERO,
+                Decimal::ZERO,
+                Decimal::ZERO,
+                Decimal::ZERO,
+            ));
+            if wp > Decimal::from(100) || vp > Decimal::from(100) {
+                return Err(Error::user(format!(
+                    "Batch load exceeds vehicle capacity (Weight: {wp}%, Volume: {vp}%)."
+                )));
+            }
+            tx.execute(
+                "UPDATE stock_picking_batch \
+                 SET dispatch_weight = $2, dispatch_volume = $3, \
+                     weight_utilization = $4, volume_utilization = $5, \
+                     write_uid = $6, write_date = (now() AT TIME ZONE 'UTC') \
+                 WHERE id = $1",
+                &[&bid, &w, &v, &wp, &vp, &uid],
             )
             .await?;
-        if wp > Decimal::from(100) || vp > Decimal::from(100) {
-            return Err(Error::user(format!(
-                "Batch load exceeds vehicle capacity (Weight: {wp}%, Volume: {vp}%)."
-            )));
-        }
-        Ok(())
+            records
+                .modified_external(
+                    tx,
+                    &[
+                        "dispatch_weight",
+                        "dispatch_volume",
+                        "weight_utilization",
+                        "volume_utilization",
+                    ],
+                )
+                .await?;
+            Ok(())
+        })
+        .await
     }
 }
 

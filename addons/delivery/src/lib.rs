@@ -2,7 +2,7 @@
 //! Addon `delivery` for ERPForAll: shipping carriers, delivery pricing rules,
 //! exact-decimal rate calculation with margins and free-over thresholds.
 
-use erp_sdk::prelude::*;
+use erp_sdk::{Operation, prelude::*};
 
 erp_sdk::addon!(
     name = "delivery",
@@ -126,12 +126,13 @@ pub fn rate_shipment(
     let hundred = Decimal::from(100);
     let with_margin =
         base * (Decimal::ONE + (carrier.margin_percent / hundred)) + carrier.fixed_margin;
-    let clamped = if with_margin < Decimal::ZERO {
-        Decimal::ZERO
-    } else {
-        with_margin
-    };
-    Ok(clamped.round_dp(scale))
+    if with_margin < Decimal::ZERO {
+        return Err(Error::validation(format!(
+            "Computed shipping rate for carrier '{}' cannot be negative.",
+            carrier.name
+        )));
+    }
+    Ok(with_margin.round_dp(scale))
 }
 
 /// Read a carrier's pricing configuration and ordered rules from the database.
@@ -139,6 +140,11 @@ pub async fn load_carrier_pricing(tx: &mut Transaction, carrier_id: i64) -> Resu
     fn db_err(e: impl std::error::Error + Send + Sync + 'static) -> Error {
         Error::db("Delivery carrier pricing could not be read.").with_source(e)
     }
+    tx.env()
+        .records("delivery.carrier")?
+        .browse(vec![carrier_id])?
+        .check_access(tx, Operation::Read)
+        .await?;
     let rows = tx
         .query(
             "SELECT name, delivery_type, COALESCE(fixed_price, 0), COALESCE(free_over, false), \
@@ -227,6 +233,7 @@ pub struct DeliveryCarrier {
         many2one,
         comodel = "product.product",
         required = true,
+        check_company = true,
         string = "Delivery Product"
     )]
     pub product_id: Option<RecId>,
@@ -275,7 +282,7 @@ pub struct DeliveryCarrier {
     name = "delivery.price.rule",
     description = "Delivery Price Rule",
     order = "sequence, id",
-    company_access = unrestricted(reason = "delivery pricing rules inherit visibility from their carrier")
+    company_access = parent(edge = "carrier_id")
 )]
 pub struct DeliveryPriceRule {
     /// Owning delivery carrier.
