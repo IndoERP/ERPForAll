@@ -207,6 +207,13 @@ function admitAddonActionRequest(request: ActionRequest): ActionRequest {
   return { xmlId: request.xmlId, viewMode: request.viewMode, domain: [...request.domain], context };
 }
 
+/** The records a form was opened from, which its pager steps through. */
+type ListContext = {
+  ids: number[]; total: number; offset: number; limit: number;
+  /** Loads the ids of another page of the same search and order, so the form pager can cross a page edge. */
+  page?: (offset: number) => Promise<{ ids: number[]; total: number }>;
+};
+
 export class HumanApp {
   private readonly errors: ErrorDialog;
   readonly messages: MessageServices;
@@ -309,11 +316,7 @@ export class HumanApp {
 
   /** The kanban page a card was opened from (its address, page, scroll and card), so the way back shows it as it was left. */
   private kanbanResume?: { url: string; offset: number; scroll: number; id: number };
-  private listContext?: {
-    ids: number[]; total: number; offset: number; limit: number;
-    /** Loads the ids of another page of the same search and order, so the form pager can cross a page edge. */
-    page?: (offset: number) => Promise<{ ids: number[]; total: number }>;
-  };
+  private listContext?: ListContext;
   private disposeWidgets: (() => void)[] = [];
   private disposeListeners: (() => void)[] = [];
   private disposeHeader: (() => void)[] = [];
@@ -4618,6 +4621,32 @@ export class HumanApp {
       if (target === undefined) throw new ClientError("server", "The adjacent page returned no records.");
       next = { ...context, ids: loaded.ids, total: loaded.total, offset: from };
     }
+    await this.moveInList(route, target, context, next);
+  }
+
+  /** Leaves a new record for the last record of the list it was created from. A new record goes after that record, so
+   *  once `saved` it joins the list there and the pager leads back to it. */
+  private async stepFromNew(route: Route, saved: number | undefined): Promise<void> {
+    const context = this.listContext;
+    if (!context) throw new ClientError("validation", "The record is no longer in the list.");
+    let { ids, offset, total } = context, reloaded = false;
+    if (offset + ids.length < total) {
+      if (!context.page) throw new ClientError("validation", "There is no record in that direction.");
+      offset = Math.max(0, total - context.limit);
+      ({ ids, total } = await context.page(offset));
+      reloaded = true;
+    }
+    // A reloaded page may already hold the saved record wherever the list's order puts it: it goes last all the same.
+    ids = ids.filter(id => id !== saved);
+    const target = ids[ids.length - 1];
+    if (target === undefined) throw new ClientError("validation", "There is no record in that direction.");
+    const next = saved === undefined ? { ...context, ids, offset, total }
+      : { ...context, ids: [...ids, saved], offset, total: reloaded ? total : total + 1 };
+    await this.moveInList(route, target, context, next);
+  }
+
+  /** Opens record `target` of the list `next`; the list stays `context` when the form does not arrive there. */
+  private async moveInList(route: Route, target: number, context: ListContext, next: ListContext): Promise<void> {
     this.listContext = next;
     try {
       await this.navigate({ ...route, id: String(target), view_type: "form" }, false, false, undefined, { autosave: true });
@@ -5087,6 +5116,15 @@ export class HumanApp {
           pagerCount.textContent = "1 / 1";
           prevBtn.disabled = true;
           nextBtn.disabled = true;
+        } else if (this.listContext) {
+          // A new record goes after the last record of its list: Previous saves a changed one and leads to that record.
+          pagerCount.textContent = "New";
+          prevBtn.disabled = this.listContext.total === 0;
+          nextBtn.disabled = true;
+          prevBtn.onclick = () => this.run(async () => {
+            if (state.dirty && !await trySave()) return;
+            await this.stepFromNew(route, state.id);
+          });
         } else {
           pagerCount.textContent = "New";
           prevBtn.disabled = true;

@@ -1403,6 +1403,76 @@ test("form pager stays on the record when the save fails", async () => {
   expect(root.querySelector<HTMLInputElement>('input[name="name"]')?.value).toBe("Changed");
 });
 
+function newNoteFetch(log: { saved: unknown[]; reads: number[] }, fail: boolean): (path: string, init: RequestInit) => Promise<Response> {
+  const saved = pagerSaveFetch(log, fail);
+  return vi.fn(async (path: string, init: RequestInit) => {
+    if (path.endsWith("default_get")) return new Response(JSON.stringify({}), { headers: { "Content-Type": "application/json" } });
+    if (path.endsWith("web_save") && !fail) {
+      log.saved.push(JSON.parse(String(init.body)).vals);
+      return new Response(JSON.stringify([{ id: 7, name: "Fresh" }]), { headers: { "Content-Type": "application/json" } });
+    }
+    return saved(path, init);
+  });
+}
+
+/** Opens a new note from the list of notes 5 and 6; `name` is typed into it when given. */
+async function openNewNote(root: HTMLElement, name?: string): Promise<void> {
+  await vi.waitFor(() => expect(root.querySelector("tbody tr[data-id='6']")).not.toBeNull());
+  [...root.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "New")!.click();
+  await vi.waitFor(() => expect(root.querySelector(".form-pager .pager-count")?.textContent).toBe("New"));
+  if (name === undefined) return;
+  const input = root.querySelector<HTMLInputElement>('input[name="name"]')!;
+  input.value = name;
+  input.dispatchEvent(new Event("change"));
+  await vi.waitFor(() => expect(root.querySelector<HTMLInputElement>('input[name="name"]')?.disabled).toBe(false));
+}
+
+// A new record sits after the last record of the list: Previous leads to that record, Next has nothing to reach.
+test("form pager on a new record saves it, adds it to the end of the list and moves to the record before it", async () => {
+  history.replaceState(null, "", "/erp/action-20");
+  const log = { saved: [] as unknown[], reads: [] as number[] };
+  vi.stubGlobal("fetch", newNoteFetch(log, false));
+  const root = host(); app = new HumanApp(root, bootstrap); await app.start();
+  await openNewNote(root, "Fresh");
+  expect(root.querySelector<HTMLButtonElement>(".form-pager .pager-prev")!.disabled).toBe(false);
+  expect(root.querySelector<HTMLButtonElement>(".form-pager .pager-next")!.disabled).toBe(true);
+  root.querySelector<HTMLButtonElement>(".form-pager .pager-prev")!.click();
+  await vi.waitFor(() => expect(window.location.search).toContain("id=6"));
+  await vi.waitFor(() => expect(root.querySelector(".form-pager .pager-count")?.textContent).toBe("2 / 3"));
+  expect(log.saved).toEqual([{ name: "Fresh" }]);
+  expect(document.querySelector("dialog")).toBeNull();
+  // The saved record is in the list now: Next leads back to it.
+  root.querySelector<HTMLButtonElement>(".form-pager .pager-next")!.click();
+  await vi.waitFor(() => expect(window.location.search).toContain("id=7"));
+  await vi.waitFor(() => expect(root.querySelector(".form-pager .pager-count")?.textContent).toBe("3 / 3"));
+});
+
+test("form pager on an untouched new record moves without creating a record", async () => {
+  history.replaceState(null, "", "/erp/action-20");
+  const log = { saved: [] as unknown[], reads: [] as number[] };
+  vi.stubGlobal("fetch", newNoteFetch(log, false));
+  const root = host(); app = new HumanApp(root, bootstrap); await app.start();
+  await openNewNote(root);
+  root.querySelector<HTMLButtonElement>(".form-pager .pager-prev")!.click();
+  await vi.waitFor(() => expect(window.location.search).toContain("id=6"));
+  await vi.waitFor(() => expect(root.querySelector(".form-pager .pager-count")?.textContent).toBe("2 / 2"));
+  expect(log.saved).toEqual([]);
+});
+
+test("form pager stays on a new record whose save fails", async () => {
+  history.replaceState(null, "", "/erp/action-20");
+  const log = { saved: [] as unknown[], reads: [] as number[] };
+  vi.stubGlobal("fetch", newNoteFetch(log, true));
+  const root = host(); app = new HumanApp(root, bootstrap); await app.start();
+  await openNewNote(root, "Fresh");
+  root.querySelector<HTMLButtonElement>(".form-pager .pager-prev")!.click();
+  await vi.waitFor(() => expect(log.saved).toHaveLength(1));
+  await new Promise(resolve => setTimeout(resolve, 50));
+  expect(log.reads).not.toContain(6);
+  expect(root.querySelector(".form-pager .pager-count")?.textContent).toBe("New");
+  expect(root.querySelector<HTMLInputElement>('input[name="name"]')?.value).toBe("Fresh");
+});
+
 function pagedFetch(total: number, log: { unlink: number[][]; offsets: number[] }): (path: string, init: RequestInit) => Promise<Response> {
   return vi.fn(async (path: string, init: RequestInit) => {
     const body = init.body ? JSON.parse(String(init.body)) : {};
