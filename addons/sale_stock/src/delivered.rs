@@ -181,8 +181,8 @@ impl DeliveredLine {
             .await?;
         for row in rows {
             let id: i64 = row.try_get(0).map_err(decode)?;
-            let rec_id =
-                RecId::from_real(id).ok_or_else(|| Error::invariant("Invalid linked sales line."))?;
+            let rec_id = RecId::from_real(id)
+                .ok_or_else(|| Error::invariant("Invalid linked sales line."))?;
             finished.insert(rec_id);
         }
         Ok(finished)

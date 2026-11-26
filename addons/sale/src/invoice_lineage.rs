@@ -281,12 +281,8 @@ impl SalesInvoiceHeader {
         line_pairs: Value,
         sup: Super,
     ) -> Result<()> {
-        sup.call(
-            tx,
-            this.as_records(),
-            (source_move_id, line_pairs.clone()),
-        )
-        .await?;
+        sup.call(tx, this.as_records(), (source_move_id, line_pairs.clone()))
+            .await?;
         let mut pairs: Vec<(i64, i64)> = Vec::new();
         if let Value::List(entries) = &line_pairs {
             for entry in entries.iter() {
@@ -339,8 +335,12 @@ impl SalesInvoiceHeader {
             links.create(tx, new_links).await?;
             tx.flush().await?;
             check_links(tx, rev_line_ids.clone(), "l.id").await?;
-            let items = this.env().records("account.move.line")?.browse(rev_line_ids)?;
-            tx.invalidate_records(&items, Some(&["sale_line_id"])).await?;
+            let items = this
+                .env()
+                .records("account.move.line")?
+                .browse(rev_line_ids)?;
+            tx.invalidate_records(&items, Some(&["sale_line_id"]))
+                .await?;
             let sol = this
                 .env()
                 .records("sale.order.line")?

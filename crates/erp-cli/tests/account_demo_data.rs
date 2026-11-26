@@ -332,7 +332,10 @@ fn force_demo_reloads_cleanly_on_demo_database_and_ships_complete_demo_defaults(
             .await
             .unwrap()[0]
             .get(0);
-        assert_eq!(missing_tax_acc, 0, "demo tax repartition lines must set account_id");
+        assert_eq!(
+            missing_tax_acc, 0,
+            "demo tax repartition lines must set account_id"
+        );
 
         // Verify main_company has transfer_account_id, anglo_saxon_accounting, cost_method='average',
         // and stock valuation default account configured.
@@ -347,8 +350,14 @@ fn force_demo_reloads_cleanly_on_demo_database_and_ships_complete_demo_defaults(
             .await
             .unwrap();
         let main_id: i64 = row[0].get(0);
-        assert!(row[0].get::<_, bool>(1), "main_company transfer_account_id must be set in demo");
-        assert!(row[0].get::<_, bool>(2), "main_company anglo_saxon_accounting must be true in demo");
+        assert!(
+            row[0].get::<_, bool>(1),
+            "main_company transfer_account_id must be set in demo"
+        );
+        assert!(
+            row[0].get::<_, bool>(2),
+            "main_company anglo_saxon_accounting must be true in demo"
+        );
 
         let main_rec = tx
             .env()

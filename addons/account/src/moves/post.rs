@@ -125,7 +125,11 @@ impl AccountMove {
         action.insert("type".into(), Value::str("ir.actions.act_window"));
         action.insert(
             "name".into(),
-            Value::str(if is_invoice { "Credit Note" } else { "Reversal" }),
+            Value::str(if is_invoice {
+                "Credit Note"
+            } else {
+                "Reversal"
+            }),
         );
         action.insert("res_model".into(), Value::str("account.move"));
         action.insert("res_id".into(), Value::Int(rev_id));
@@ -517,6 +521,7 @@ async fn create_analytic_lines_for_moves(
         .records("account.analytic.line")?
         .create(tx, vals_list)
         .await?;
+    tx.flush().await?;
     Ok(())
 }
 

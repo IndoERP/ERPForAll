@@ -199,7 +199,10 @@ async fn draft_or_open(
                 .first()
         {
             let bill = row.try_get(0).map_err(decode)?;
-            bills.browse([bill])?.check_access(tx, Operation::Read).await?;
+            bills
+                .browse([bill])?
+                .check_access(tx, Operation::Read)
+                .await?;
             return document_action(tx, bill).await;
         }
         if let Some(bill) = history.latest_active {

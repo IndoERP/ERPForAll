@@ -1009,7 +1009,10 @@ async fn lot_tracked_product_reserves_from_child_location_and_validates() {
         .unwrap()
         .ids()[0];
     let prod: i64 = tx
-        .query("SELECT id FROM product_product WHERE product_tmpl_id = $1", &[&tmpl])
+        .query(
+            "SELECT id FROM product_product WHERE product_tmpl_id = $1",
+            &[&tmpl],
+        )
         .await
         .unwrap()[0]
         .get(0);
@@ -1092,7 +1095,10 @@ async fn serial_tracked_product_reserves_one_line_per_serial() {
         .unwrap()
         .ids()[0];
     let prod: i64 = tx
-        .query("SELECT id FROM product_product WHERE product_tmpl_id = $1", &[&tmpl])
+        .query(
+            "SELECT id FROM product_product WHERE product_tmpl_id = $1",
+            &[&tmpl],
+        )
         .await
         .unwrap()[0]
         .get(0);

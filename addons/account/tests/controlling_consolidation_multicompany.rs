@@ -1834,3 +1834,299 @@ async fn multicompany_multicurrency_consolidation_cta_ic_elimination_and_nci() {
     drop(tx);
     h.cleanup().await.unwrap();
 }
+
+#[tokio::test]
+async fn budget_actuals_filter_by_category_live_refresh_and_bank_statement_autopost() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    seed_security_groups(&mut tx).await;
+
+    let usd = ensure_currency(&mut tx, "USD", "$").await;
+    let co = make_company(&mut tx, "Ops Cycle Co.", usd).await;
+    let env = co_env(&tx, co);
+
+    let bank_acct = make_account(&mut tx, co, "Main Bank", "101100", "asset_cash").await;
+    let ar_acct = make_account(&mut tx, co, "Receivable", "121000", "asset_receivable").await;
+    let ap_acct = make_account(&mut tx, co, "Payable", "211000", "liability_payable").await;
+    let income_acct = make_account(&mut tx, co, "Product Sales", "401000", "income").await;
+    let exp_acct = make_account(&mut tx, co, "Operating Expense", "611000", "expense").await;
+    let suspense_acct = make_account(&mut tx, co, "Bank Suspense", "101900", "asset_current").await;
+    let gen_jrn = make_journal(&mut tx, co, "General", "GEN1").await;
+    let bank_jrn: i64 = tx
+        .query(
+            "INSERT INTO account_journal (name, code, active, type, company_id, sequence, \
+             default_account_id, suspense_account_id, refund_sequence, payment_sequence, \
+             sequence_reset, sequence_padding, color, show_on_dashboard) \
+             VALUES (jsonb_build_object('en_US', 'Bank'), 'BNK1', true, 'bank', $1, 10, \
+             $2, $3, false, false, 'month', 4, 0, true) RETURNING id::int8",
+            &[&co, &bank_acct, &suspense_acct],
+        )
+        .await
+        .unwrap()[0]
+        .get(0);
+    let sale_jrn: i64 = tx
+        .query(
+            "INSERT INTO account_journal (name, code, active, type, company_id, sequence, \
+             default_account_id, refund_sequence, payment_sequence, \
+             sequence_reset, sequence_padding, color, show_on_dashboard) \
+             VALUES (jsonb_build_object('en_US', 'Sales'), 'INV1', true, 'sale', $1, 10, \
+             $2, false, false, 'month', 4, 0, true) RETURNING id::int8",
+            &[&co, &income_acct],
+        )
+        .await
+        .unwrap()[0]
+        .get(0);
+    let purch_jrn: i64 = tx
+        .query(
+            "INSERT INTO account_journal (name, code, active, type, company_id, sequence, \
+             default_account_id, refund_sequence, payment_sequence, \
+             sequence_reset, sequence_padding, color, show_on_dashboard) \
+             VALUES (jsonb_build_object('en_US', 'Bills'), 'BILL1', true, 'purchase', $1, 10, \
+             $2, false, false, 'month', 4, 0, true) RETURNING id::int8",
+            &[&co, &exp_acct],
+        )
+        .await
+        .unwrap()[0]
+        .get(0);
+
+    let partner = env
+        .records("res.partner")
+        .unwrap()
+        .create(
+            &mut tx,
+            vec![RawVals::new().set_cell("name", Cell::Str("Cycle Partner".into()))],
+        )
+        .await
+        .unwrap()
+        .ids()[0];
+
+    // 1. Zero-amount vendor bill with a product line must be refused on posting.
+    let zero_bill = env
+        .records("account.move")
+        .unwrap()
+        .create(
+            &mut tx,
+            vec![{
+                let mut v = RawVals::new()
+                    .set_cell("move_type", Cell::Str("in_invoice".into()))
+                    .set_cell("partner_id", Cell::Id(partner))
+                    .set_cell("journal_id", Cell::Id(purch_jrn))
+                    .set_cell("invoice_date", Cell::Date(d(2026, 5, 1)));
+                v.insert_commands(
+                    "invoice_line_ids".into(),
+                    vec![Command::Create(
+                        RawVals::new()
+                            .set_cell("name", Cell::Str("Unpriced Service".into()))
+                            .set_cell("account_id", Cell::Id(exp_acct))
+                            .set_cell("quantity", Cell::Decimal(Decimal::ONE))
+                            .set_cell("price_unit", Cell::Decimal(Decimal::ZERO)),
+                    )],
+                );
+                v
+            }],
+        )
+        .await
+        .unwrap();
+    let zero_err = tx
+        .savepoint(async |tx| zero_bill.call::<(), ()>(tx, "action_post", ()).await)
+        .await
+        .unwrap_err();
+    assert!(
+        zero_err.message().contains("total is zero"),
+        "Expected zero-amount vendor bill refusal, got: {}",
+        zero_err.message()
+    );
+
+    // 2. OPEX budget line scoped only to cost center (no specific account_id) must ignore
+    //    customer revenue postings and live-refresh automatically when expense moves post/reset.
+    let plan = make_plan(&mut tx, "Cost Centers").await;
+    let cc = env
+        .records("account.analytic.account")
+        .unwrap()
+        .create(
+            &mut tx,
+            vec![
+                RawVals::new()
+                    .set_cell("name", Cell::Str("HQ Ops CC".into()))
+                    .set_cell("code", Cell::Str("CC-OPS".into()))
+                    .set_cell("plan_id", Cell::Id(plan))
+                    .set_cell("company_id", Cell::Id(co)),
+            ],
+        )
+        .await
+        .unwrap()
+        .ids()[0];
+    let budget = env
+        .records("account.budget")
+        .unwrap()
+        .create(
+            &mut tx,
+            vec![
+                RawVals::new()
+                    .set_cell("name", Cell::Str("FY2026 OPEX".into()))
+                    .set_cell("budget_type", Cell::Str("opex".into()))
+                    .set_cell("company_id", Cell::Id(co))
+                    .set_cell("date_from", Cell::Date(d(2026, 1, 1)))
+                    .set_cell("date_to", Cell::Date(d(2026, 12, 31)))
+                    .set_commands(
+                        "line_ids",
+                        vec![Command::create(
+                            RawVals::new()
+                                .set_cell("name", Cell::Str("HQ Ops OPEX".into()))
+                                .set_cell("analytic_account_id", Cell::Id(cc))
+                                .set_cell("date_from", Cell::Date(d(2026, 1, 1)))
+                                .set_cell("date_to", Cell::Date(d(2026, 12, 31)))
+                                .set_cell("original_amount", Cell::Decimal(dec("1000")))
+                                .set_cell("planned_amount", Cell::Decimal(dec("1000")))
+                                .set_cell("release_pct", Cell::Decimal(dec("100")))
+                                .set_cell("released_amount", Cell::Decimal(dec("1000"))),
+                        )],
+                    ),
+            ],
+        )
+        .await
+        .unwrap();
+    let bline = budget.related(&mut tx, "line_ids").await.unwrap();
+    budget
+        .call::<(), ()>(&mut tx, "action_budget_confirm", ())
+        .await
+        .unwrap();
+    budget
+        .call::<(), ()>(&mut tx, "action_budget_validate", ())
+        .await
+        .unwrap();
+
+    // Post a customer invoice tagged to the same cost center -> OPEX practical_amount stays 0.
+    let inv = env
+        .records("account.move")
+        .unwrap()
+        .create(
+            &mut tx,
+            vec![{
+                let mut v = RawVals::new()
+                    .set_cell("move_type", Cell::Str("out_invoice".into()))
+                    .set_cell("partner_id", Cell::Id(partner))
+                    .set_cell("journal_id", Cell::Id(sale_jrn))
+                    .set_cell("invoice_date", Cell::Date(d(2026, 5, 10)));
+                v.insert_commands(
+                    "invoice_line_ids".into(),
+                    vec![Command::Create(
+                        RawVals::new()
+                            .set_cell("name", Cell::Str("Customer Sale".into()))
+                            .set_cell("account_id", Cell::Id(income_acct))
+                            .set_cell("analytic_account_id", Cell::Id(cc))
+                            .set_cell("quantity", Cell::Decimal(Decimal::ONE))
+                            .set_cell("price_unit", Cell::Decimal(dec("500"))),
+                    )],
+                );
+                v
+            }],
+        )
+        .await
+        .unwrap();
+    inv.call::<(), ()>(&mut tx, "action_post", ())
+        .await
+        .unwrap();
+    assert_eq!(
+        bline.cell(&mut tx, "practical_amount").await.unwrap(),
+        Cell::Decimal(Decimal::ZERO),
+        "OPEX budget must NOT include customer income postings"
+    );
+
+    // Post a general expense journal entry tagged to the cost center -> live-refreshes to 250.
+    let exp_move = env
+        .records("account.move")
+        .unwrap()
+        .create(
+            &mut tx,
+            vec![{
+                let mut v = RawVals::new()
+                    .set_cell("move_type", Cell::Str("entry".into()))
+                    .set_cell("journal_id", Cell::Id(gen_jrn))
+                    .set_cell("date", Cell::Date(d(2026, 5, 11)));
+                v.insert_commands(
+                    "line_ids".into(),
+                    vec![
+                        Command::Create(
+                            RawVals::new()
+                                .set_cell("name", Cell::Str("Cloud Hosting".into()))
+                                .set_cell("account_id", Cell::Id(exp_acct))
+                                .set_cell("analytic_account_id", Cell::Id(cc))
+                                .set_cell("debit", Cell::Decimal(dec("250"))),
+                        ),
+                        Command::Create(
+                            RawVals::new()
+                                .set_cell("name", Cell::Str("Payable".into()))
+                                .set_cell("account_id", Cell::Id(ap_acct))
+                                .set_cell("credit", Cell::Decimal(dec("250"))),
+                        ),
+                    ],
+                );
+                v
+            }],
+        )
+        .await
+        .unwrap();
+    exp_move
+        .call::<(), ()>(&mut tx, "action_post", ())
+        .await
+        .unwrap();
+    assert_eq!(
+        bline.cell(&mut tx, "practical_amount").await.unwrap(),
+        Cell::Decimal(dec("250")),
+        "OPEX budget must live-refresh on expense posting"
+    );
+
+    // 3. Bank statement auto-posts once complete and every statement line is reconciled.
+    let stmt = env
+        .records("account.bank.statement")
+        .unwrap()
+        .create(
+            &mut tx,
+            vec![
+                RawVals::new()
+                    .set_cell("name", Cell::Str("BNK/2026/05".into()))
+                    .set_cell("journal_id", Cell::Id(bank_jrn))
+                    .set_cell("date", Cell::Date(d(2026, 5, 15)))
+                    .set_cell("balance_start", Cell::Decimal(Decimal::ZERO))
+                    .set_cell("balance_end_real", Cell::Decimal(dec("500"))),
+            ],
+        )
+        .await
+        .unwrap();
+    let stmt_line = env
+        .records("account.bank.statement.line")
+        .unwrap()
+        .create(
+            &mut tx,
+            vec![
+                RawVals::new()
+                    .set_cell("statement_id", Cell::Id(stmt.ids()[0]))
+                    .set_cell("date", Cell::Date(d(2026, 5, 15)))
+                    .set_cell("payment_ref", Cell::Str("Customer Wire".into()))
+                    .set_cell("partner_id", Cell::Id(partner))
+                    .set_cell("amount", Cell::Decimal(dec("500")))
+                    .set_cell("counterpart_account_id", Cell::Id(income_acct)),
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        stmt.cell(&mut tx, "state").await.unwrap(),
+        Cell::Str("open".into())
+    );
+    let _ = ar_acct;
+    stmt_line
+        .call::<(), ()>(&mut tx, "action_reconcile_line", ())
+        .await
+        .unwrap();
+    assert_eq!(
+        stmt.cell(&mut tx, "state").await.unwrap(),
+        Cell::Str("posted".into()),
+        "Complete bank statement with all lines reconciled must auto-post"
+    );
+
+    tx.rollback().await.unwrap();
+    drop(tx);
+    h.cleanup().await.unwrap();
+}

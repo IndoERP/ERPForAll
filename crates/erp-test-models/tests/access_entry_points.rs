@@ -1085,6 +1085,11 @@ const SUDO_SITES: &[(&str, usize, &str)] = &[
         "deletes association records only for the authorized accounting items or headers being deleted; accounting enforces its draft and deletion policies in the same savepoint, rolling back the private deletion on refusal",
     ),
     (
+        "sale/invoice_lineage.rs::_after_reverse_move",
+        1,
+        "propagates private `sale.invoice.item` lineage rows from a posted invoice's items to its newly reversed credit note's items inside the authorized reversal transaction, then validates document compatibility via `check_links` and invalidates affected sales line/order caches; no foreign record is returned",
+    ),
+    (
         "account/moves/post.rs::cancel_document_drafts",
         1,
         "cancels, through the ordinary cancel of draft entries (which refuses any entry no longer a draft), only the draft invoices or bills linked to a sales or purchase order whose cancel step already checked the caller's write right on that order, each as a whole document (also its items of another order or of no order, whose invoiced quantities recompute; an accountant can reset it to draft); elevated only for a caller without accounting rights, so a sales or purchase user can cancel an order whose invoices are drafts; returns nothing",
@@ -1858,6 +1863,11 @@ const SUDO_SITES: &[(&str, usize, &str)] = &[
         "purchase/direct_bill.rs::link_items",
         1,
         "creates only the private source links of a vendor bill that this action just created as the caller (create access on the bill and its items checked, the order locked and its source fields authorized), one per bill item, so the billed quantities of the purchase lines follow through the ORM; no bill, order or line is read or written elevated and nothing is returned",
+    ),
+    (
+        "purchase/direct_bill_integrity.rs::_after_reverse_move",
+        1,
+        "propagates private `purchase.direct.bill.line` links from a posted vendor bill's items to its newly reversed vendor credit note inside the authorized reversal transaction and invalidates affected purchase order caches; no foreign record is returned",
     ),
     (
         "purchase/settings.rs::default_bill_control",

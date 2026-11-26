@@ -757,6 +757,7 @@ pub async fn refresh_budget_lines(tx: &mut Transaction, line_ids: &[i64]) -> Res
     if line_ids.is_empty() {
         return Ok(());
     }
+    tx.flush().await?;
     let rows = tx
         .query(
             "SELECT l.id::int8, l.company_id::int8, COALESCE(b.budget_type, 'opex')::text, \
@@ -855,7 +856,9 @@ pub async fn refresh_budget_lines(tx: &mut Transaction, line_ids: &[i64]) -> Res
                 let sign_expr = if is_revenue { "l.amount" } else { "-l.amount" };
                 let group_filter = match budget_type.as_str() {
                     "revenue" => "a.internal_group = 'income'",
-                    "capex" => "(a.internal_group IN ('asset', 'expense') OR ml.asset_id IS NOT NULL)",
+                    "capex" => {
+                        "(a.internal_group IN ('asset', 'expense') OR ml.asset_id IS NOT NULL)"
+                    }
                     _ => {
                         "(a.internal_group = 'expense' \
                           OR (l.move_line_id IS NULL AND COALESCE(l.cost_kind, 'primary') = 'secondary'))"
@@ -933,6 +936,17 @@ pub async fn refresh_budget_lines(tx: &mut Transaction, line_ids: &[i64]) -> Res
         )
         .await?;
     }
+    tx.invalidate_model(
+        "account.budget.line",
+        Some(&[
+            "committed_amount",
+            "practical_amount",
+            "theoretical_amount",
+            "percentage",
+            "avc_status",
+        ]),
+    )
+    .await?;
     Ok(())
 }
 

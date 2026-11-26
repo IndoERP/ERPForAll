@@ -980,3 +980,197 @@ fn cancelled_purchases_take_their_draft_bills_along_and_keep_the_billed_floor() 
         db.cleanup().await.unwrap();
     })
 }
+
+#[test]
+fn service_po_bills_ordered_qty_second_receipt_creates_second_bill_and_reversal_links_po() {
+    run(async {
+        let db = TestDb::builder().pool_size(8).create().await.unwrap();
+        let orm = install(&db).await;
+        let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+        let company = xmlid(&mut tx, "base", "main_company").await;
+        let system = xmlid(&mut tx, "base", "group_system").await;
+        let _admin = user(&mut tx, "cycle-billing-admin", &[system], &[company]).await;
+        let purchase = xmlid(&mut tx, "purchase", "group_purchase_user").await;
+        let accounting = xmlid(&mut tx, "account", "group_account_user").await;
+        let clerk = user(
+            &mut tx,
+            "cycle-billing-clerk",
+            &[purchase, accounting],
+            &[company],
+        )
+        .await;
+        bill_books::books(&mut tx, company).await;
+        let k = catalog(&mut tx, company).await;
+
+        // 1. Service product with purchase_method='receive' still bills on ordered quantities.
+        let service_prod = tx
+            .env()
+            .with_company(company)
+            .unwrap()
+            .records("product.product")
+            .unwrap()
+            .create(
+                &mut tx,
+                vec![
+                    RawVals::new()
+                        .set_cell("name", text("Installation Service"))
+                        .set_cell("type", text("service"))
+                        .set_cell("purchase_method", text("receive"))
+                        .set_cell("uom_id", Cell::Id(k.unit))
+                        .set_cell("standard_price", Cell::Decimal(dec("120"))),
+                ],
+            )
+            .await
+            .unwrap()
+            .ids()[0];
+        let ordered_prod = tx
+            .env()
+            .with_company(company)
+            .unwrap()
+            .records("product.product")
+            .unwrap()
+            .create(
+                &mut tx,
+                vec![
+                    RawVals::new()
+                        .set_cell("name", text("Ordered Widget"))
+                        .set_cell("purchase_method", text("purchase"))
+                        .set_cell("uom_id", Cell::Id(k.unit))
+                        .set_cell("standard_price", Cell::Decimal(dec("15"))),
+                ],
+            )
+            .await
+            .unwrap()
+            .ids()[0];
+        tx.commit().await.unwrap();
+        drop(tx);
+
+        let mut tx = orm.begin(clerk).await.unwrap();
+        let svc_po = order(
+            &mut tx,
+            &[company],
+            RawVals::new()
+                .set_cell("partner_id", Cell::Id(k.vendor))
+                .set_commands(
+                    "order_line",
+                    [Command::Create(
+                        line_vals(service_prod)
+                            .set_cell("product_qty", Cell::Decimal(dec("2")))
+                            .set_cell("price_unit", Cell::Decimal(dec("120"))),
+                    )],
+                ),
+        )
+        .await;
+        act(&mut tx, &svc_po, "button_confirm").await.unwrap();
+        assert_eq!(
+            cell(&mut tx, &svc_po, "invoice_status").await,
+            text("to invoice")
+        );
+        let svc_bill = bill(&mut tx, &svc_po, "action_create_vendor_bill").await;
+        let svc_move = bill_books::moves(&tx, company).browse([svc_bill]).unwrap();
+        assert_eq!(
+            cell(&mut tx, &svc_move, "amount_untaxed").await,
+            Cell::Decimal(dec("240"))
+        );
+
+        // 2. Partial bill 1 (qty 4 of 10) -> Bill 2 creates a distinct bill for remaining qty 6.
+        let po = order(
+            &mut tx,
+            &[company],
+            RawVals::new()
+                .set_cell("partner_id", Cell::Id(k.vendor))
+                .set_commands(
+                    "order_line",
+                    [Command::Create(
+                        line_vals(ordered_prod)
+                            .set_cell("product_qty", Cell::Decimal(dec("10")))
+                            .set_cell("price_unit", Cell::Decimal(dec("15"))),
+                    )],
+                ),
+        )
+        .await;
+        act(&mut tx, &po, "button_confirm").await.unwrap();
+        let line = lines_of(&mut tx, &[company], &po).await.remove(0);
+        let bill1 = bill(&mut tx, &po, "action_create_vendor_bill").await;
+        let item1 = item_of(&mut tx, company, bill1, &line).await;
+        set_quantity(&mut tx, &item1, "4").await;
+        let m1 = bill_books::moves(&tx, company).browse([bill1]).unwrap();
+        m1.write(
+            &mut tx,
+            RawVals::new().set_cell(
+                "invoice_date",
+                Cell::Date(Date::from_ymd(2026, 6, 1).unwrap()),
+            ),
+        )
+        .await
+        .unwrap();
+        act(&mut tx, &m1, "action_post").await.unwrap();
+        assert_eq!(
+            cell(&mut tx, &line, "qty_invoiced").await,
+            Cell::Decimal(dec("4"))
+        );
+
+        // Remaining 6 units -> action_create_vendor_bill must create a distinct 2nd bill.
+        let bill2 = bill(&mut tx, &po, "action_create_vendor_bill").await;
+        assert_ne!(
+            bill2, bill1,
+            "Remaining received qty must create a new second vendor bill"
+        );
+        let m2 = bill_books::moves(&tx, company).browse([bill2]).unwrap();
+        assert_eq!(
+            cell(&mut tx, &m2, "amount_untaxed").await,
+            Cell::Decimal(dec("90"))
+        );
+        m2.write(
+            &mut tx,
+            RawVals::new().set_cell(
+                "invoice_date",
+                Cell::Date(Date::from_ymd(2026, 6, 2).unwrap()),
+            ),
+        )
+        .await
+        .unwrap();
+        act(&mut tx, &m2, "action_post").await.unwrap();
+        assert_eq!(
+            cell(&mut tx, &line, "qty_invoiced").await,
+            Cell::Decimal(dec("10"))
+        );
+
+        // 3. Reversing Bill 1 propagates purchase.direct.bill.line lineage to the credit note
+        //    and reduces qty_invoiced on the PO line from 10 to 6 once posted.
+        let rev_wiz = tx
+            .env()
+            .with_company(company)
+            .unwrap()
+            .records("account.move.reversal")
+            .unwrap()
+            .create(
+                &mut tx,
+                vec![
+                    RawVals::new()
+                        .set_cell("move_id", Cell::Id(bill1))
+                        .set_cell("refund_method", text("refund"))
+                        .set_cell("date", Cell::Date(Date::from_ymd(2026, 6, 3).unwrap()))
+                        .set_cell("reason", text("Damaged partial lot")),
+                ],
+            )
+            .await
+            .unwrap();
+        let rev_action: Value = rev_wiz.call(&mut tx, "reverse_moves", ()).await.unwrap();
+        let cn_id = match &rev_action {
+            Value::Json(v) => v.get("res_id").and_then(|r| r.as_i64()).unwrap(),
+            other => panic!("expected Json action with res_id, got {other:?}"),
+        };
+        let cn = bill_books::moves(&tx, company).browse([cn_id]).unwrap();
+        assert_eq!(cell(&mut tx, &cn, "move_type").await, text("in_refund"));
+        act(&mut tx, &cn, "action_post").await.unwrap();
+        assert_eq!(
+            cell(&mut tx, &line, "qty_invoiced").await,
+            Cell::Decimal(dec("6")),
+            "Posted vendor credit note reversal must reduce PO line qty_invoiced"
+        );
+
+        tx.rollback().await.unwrap();
+        db.cleanup().await.unwrap();
+    })
+}

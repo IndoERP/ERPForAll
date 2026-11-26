@@ -894,8 +894,7 @@ impl SaleOrderLine {
         } else {
             std::collections::BTreeSet::new()
         };
-        for (index, ((line, policy), rec_id)) in
-            lines.iter().zip(policies).zip(rec_ids).enumerate()
+        for (index, ((line, policy), rec_id)) in lines.iter().zip(policies).zip(rec_ids).enumerate()
         {
             let status = if line.state != "sale" {
                 "no"

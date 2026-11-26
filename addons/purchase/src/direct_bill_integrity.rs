@@ -36,12 +36,8 @@ impl DirectBill {
         line_pairs: Value,
         sup: Super,
     ) -> Result<()> {
-        sup.call(
-            tx,
-            this.as_records(),
-            (source_move_id, line_pairs.clone()),
-        )
-        .await?;
+        sup.call(tx, this.as_records(), (source_move_id, line_pairs.clone()))
+            .await?;
         let Some(rev_id) = this.as_records().ids().into_iter().next() else {
             return Ok(());
         };
@@ -108,10 +104,7 @@ impl DirectBill {
             tx.flush().await?;
             tx.invalidate_records(this.as_records(), Some(&["purchase_order_count"]))
                 .await?;
-            let orders = tx
-                .env()
-                .records("purchase.order")?
-                .browse(order_ids)?;
+            let orders = tx.env().records("purchase.order")?.browse(order_ids)?;
             tx.invalidate_records(&orders, Some(&["invoice_status", "invoice_count"]))
                 .await?;
             crate::line::invalidate_bill_comparisons(tx).await?;

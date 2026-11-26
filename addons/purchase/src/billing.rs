@@ -188,8 +188,7 @@ async fn product_policies(
         .zip(kinds.into_iter().zip(values))
         .map(|(id, (kind, policy))| {
             let is_service = matches!(kind, Value::Str(k) if k.as_ref() == "service");
-            let ordered =
-                is_service || matches!(policy, Value::Str(p) if p.as_ref() == ORDERED);
+            let ordered = is_service || matches!(policy, Value::Str(p) if p.as_ref() == ORDERED);
             (id, ordered)
         })
         .collect())
