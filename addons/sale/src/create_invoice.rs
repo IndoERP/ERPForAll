@@ -157,6 +157,7 @@ async fn invoice_items(
             "invoice_policy",
             "is_downpayment",
             "display_type",
+            "analytic_account_id",
         ],
     )
     .await?;
@@ -211,7 +212,7 @@ async fn invoice_items(
     let ids = eligible.iter().map(|(id, _)| *id).collect::<Vec<_>>();
     let taxes = source_taxes(tx, env, &ids, limit).await?;
     let source = lines.browse(ids)?;
-    for field in ["product_id", "product_uom_id"] {
+    for field in ["product_id", "product_uom_id", "analytic_account_id"] {
         source
             .related(tx, field)
             .await?

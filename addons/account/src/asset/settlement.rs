@@ -6,19 +6,24 @@ use erp_addon_analytic::split_proportional_exact;
 use erp_sdk::Operation;
 use erp_sdk::prelude::*;
 
-use super::{AccountAsset, db};
+use super::{AccountAsset, currency_scale, db};
 use crate::moves::post_moves;
 
-fn default_today(_ctx: &erp_sdk::DefaultContext) -> Value {
-    Value::Date(Date::today())
-}
-
-/// Pure exact-decimal settlement distribution calculator.
+/// Pure exact-decimal settlement distribution calculator (default 2 decimal places).
 /// Supports percentage-based rules (must sum to 100% or proportional weights) or explicit fixed
 /// amounts whose sum equals `settlement_total`.
 pub fn allocate_settlement_amounts(
     settlement_total: Decimal,
     rules: &[(i64, Decimal, Decimal)], // (rule_id, percentage, fixed_amount)
+) -> Result<Vec<(i64, Decimal)>> {
+    allocate_settlement_amounts_scaled(settlement_total, rules, 2)
+}
+
+/// Currency-scale-aware CIP settlement distribution calculator.
+pub fn allocate_settlement_amounts_scaled(
+    settlement_total: Decimal,
+    rules: &[(i64, Decimal, Decimal)], // (rule_id, percentage, fixed_amount)
+    scale: u32,
 ) -> Result<Vec<(i64, Decimal)>> {
     if settlement_total <= Decimal::ZERO {
         return Err(Error::user("Settlement amount must be greater than zero."));
@@ -28,18 +33,25 @@ pub fn allocate_settlement_amounts(
             "Configure at least one CIP settlement distribution rule before settling.",
         ));
     }
+    for (_, pct, fixed) in rules {
+        if *pct < Decimal::ZERO || *fixed < Decimal::ZERO {
+            return Err(Error::validation(
+                "Settlement rule percentages and fixed amounts cannot be negative.",
+            ));
+        }
+    }
     let total_fixed: Decimal = rules.iter().map(|(_, _, fixed)| *fixed).sum();
     let total_pct: Decimal = rules.iter().map(|(_, pct, _)| *pct).sum();
 
     if total_fixed > Decimal::ZERO && total_pct.is_zero() {
-        if total_fixed.round_dp(2) != settlement_total.round_dp(2) {
+        if total_fixed.round_dp(scale) != settlement_total.round_dp(scale) {
             return Err(Error::user(format!(
                 "Fixed settlement rule amounts ({total_fixed}) must equal the total settlement amount ({settlement_total})."
             )));
         }
         return Ok(rules
             .iter()
-            .map(|(id, _, fixed)| (*id, fixed.round_dp(2)))
+            .map(|(id, _, fixed)| (*id, fixed.round_dp(scale)))
             .collect());
     }
     if total_pct <= Decimal::ZERO {
@@ -53,7 +65,7 @@ pub fn allocate_settlement_amounts(
         )));
     }
     let weights: Vec<(i64, Decimal)> = rules.iter().map(|(id, pct, _)| (*id, *pct)).collect();
-    split_proportional_exact(settlement_total, &weights, 2)
+    split_proportional_exact(settlement_total, &weights, scale)
 }
 
 /// `account.asset.settlement.rule`: distribution rule defining how a CIP asset's accumulated cost
@@ -211,7 +223,7 @@ pub struct AccountAssetSettlement {
     )]
     pub currency_id: Option<RecId>,
     /// Capitalization / settlement posting date.
-    #[field(date, required = true, default_fn = default_today, string = "Settlement Date")]
+    #[field(date, required = true, string = "Settlement Date")]
     pub settlement_date: Option<Date>,
     /// Full settlement zeroes remaining CIP balance; Partial settles an explicit amount.
     #[field(
@@ -289,6 +301,72 @@ pub struct AccountAssetSettlement {
 
 #[methods(AccountAssetSettlement, addon = "account")]
 impl AccountAssetSettlement {
+    #[method(override)]
+    async fn default_get(
+        this: &RecordSet<AccountAssetSettlement>,
+        tx: &mut Transaction,
+        names: Vec<String>,
+        sup: Super,
+    ) -> Result<erp_sdk::ValueMap> {
+        let mut values: erp_sdk::ValueMap =
+            sup.call(tx, this.as_records(), (names.clone(),)).await?;
+        if names.iter().any(|n| n == "settlement_date") && !values.contains_key("settlement_date") {
+            let today = if let Some(cid) = this.env().company_id()? {
+                erp_addon_base::company_calendar::business_date(tx, cid).await?
+            } else {
+                this.env().context_today()?
+            };
+            values.insert("settlement_date".to_owned(), Value::Date(today));
+        }
+        Ok(values)
+    }
+
+    #[method(override)]
+    async fn write(
+        this: &RecordSet<AccountAssetSettlement>,
+        tx: &mut Transaction,
+        vals: RawVals,
+        sup: Super,
+    ) -> Result<bool> {
+        if !this.as_records().is_empty() && !this.env().su() {
+            if vals.contains("state")
+                || vals.contains("total_settled")
+                || vals.contains("move_id")
+                || vals.contains("reversal_move_id")
+            {
+                return Err(Error::user(
+                    "CIP settlement status, total, and journal links cannot be edited directly.",
+                ));
+            }
+            for state in this.mapped(tx, AccountAssetSettlement::STATE).await? {
+                if state.as_deref() != Some("draft") {
+                    return Err(Error::user(
+                        "Posted or reversed CIP settlements cannot be modified.",
+                    ));
+                }
+            }
+        }
+        sup.call(tx, this.as_records(), (vals,)).await
+    }
+
+    #[method(override)]
+    async fn unlink(
+        this: &RecordSet<AccountAssetSettlement>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<bool> {
+        if !this.as_records().is_empty() && !this.env().su() {
+            for state in this.mapped(tx, AccountAssetSettlement::STATE).await? {
+                if state.as_deref() == Some("posted") {
+                    return Err(Error::user(
+                        "Posted CIP settlements cannot be deleted; reverse the settlement first.",
+                    ));
+                }
+            }
+        }
+        sup.call(tx, this.as_records(), ()).await
+    }
+
     /// Executes CIP capitalization according to the CIP asset's distribution rules:
     /// creates/updates receiver assets, posts a balanced GL entry (Dr Target Asset/Expense,
     /// Cr CIP Account), and updates CIP unsettled balances atomically.
@@ -300,29 +378,42 @@ impl AccountAssetSettlement {
     ) -> Result<()> {
         let doc = this.ensure_one()?;
         doc.as_records().check_access(tx, Operation::Write).await?;
+        tx.flush().await?;
         let doc_id = doc.as_records().ids()[0];
-        let state = doc.get(tx, AccountAssetSettlement::STATE).await?;
-        if state.as_deref() != Some("draft") {
+        let doc_rows = tx
+            .query(
+                "SELECT state::text, cip_asset_id::int8, settlement_date, \
+                        settlement_mode::text, COALESCE(partial_amount, 0), name::text \
+                 FROM account_asset_settlement WHERE id = $1 FOR UPDATE",
+                &[&doc_id],
+            )
+            .await?;
+        let Some(drow) = doc_rows.first() else {
+            return Err(Error::missing("CIP settlement document no longer exists."));
+        };
+        let state: String = drow.try_get(0).map_err(db)?;
+        if state != "draft" {
             return Err(Error::user("Only a draft CIP settlement can be posted."));
         }
-        let cip_id = doc
-            .get(tx, AccountAssetSettlement::CIP_ASSET_ID)
-            .await?
-            .ok_or_else(|| Error::validation("Select a CIP Asset to settle."))?
-            .get();
-        let settlement_date = doc
-            .get(tx, AccountAssetSettlement::SETTLEMENT_DATE)
-            .await?
-            .unwrap_or_else(Date::today);
-        let mode = doc
-            .get(tx, AccountAssetSettlement::SETTLEMENT_MODE)
-            .await?
-            .unwrap_or_else(|| Arc::from("full"));
-        let partial_amount = doc.get(tx, AccountAssetSettlement::PARTIAL_AMOUNT).await?;
-        let doc_name = doc
-            .get(tx, AccountAssetSettlement::NAME)
-            .await?
-            .unwrap_or_else(|| Arc::from("CIP Settlement"));
+        let cip_id: i64 = drow
+            .try_get::<_, Option<i64>>(1)
+            .map_err(db)?
+            .ok_or_else(|| Error::validation("Select a CIP Asset to settle."))?;
+        let settlement_date: Date = drow
+            .try_get::<_, Option<Date>>(2)
+            .map_err(db)?
+            .ok_or_else(|| Error::validation("Settlement Date is required."))?;
+        let mode: String = drow
+            .try_get::<_, Option<String>>(3)
+            .map_err(db)?
+            .ok_or_else(|| Error::validation("Settlement Mode is required."))?;
+        let partial_amount: Decimal = drow.try_get(4).map_err(db)?;
+        let doc_name: Arc<str> = drow
+            .try_get::<_, Option<String>>(5)
+            .map_err(db)?
+            .filter(|s| !s.trim().is_empty())
+            .map(Arc::from)
+            .ok_or_else(|| Error::validation("Settlement Reference is required."))?;
 
         let cip_rows = tx
             .query(
@@ -343,6 +434,7 @@ impl AccountAssetSettlement {
         let asset_type: String = cip_row.try_get(4).map_err(db)?;
         let cip_state: String = cip_row.try_get(5).map_err(db)?;
         let cip_name: String = cip_row.try_get(6).map_err(db)?;
+        let scale = currency_scale(tx, currency_id).await?;
 
         if asset_type != "cip" {
             return Err(Error::user(format!(
@@ -361,24 +453,29 @@ impl AccountAssetSettlement {
                  FROM account_asset_cip_line WHERE asset_id = $1",
                 &[&cip_id],
             )
-            .await?
-            .first()
-            .and_then(|r| r.try_get(0).ok())
-            .unwrap_or(Decimal::ZERO);
+            .await?[0]
+            .try_get(0)
+            .map_err(db)?;
         if unsettled <= Decimal::ZERO {
             return Err(Error::user(format!(
                 "CIP asset '{cip_name}' has no unsettled accumulated costs to capitalize."
             )));
         }
-        let target_total = if mode.as_ref() == "partial" {
-            if partial_amount <= Decimal::ZERO || partial_amount > unsettled {
-                return Err(Error::user(format!(
-                    "Partial settlement amount ({partial_amount}) must be > 0 and <= unsettled CIP balance ({unsettled})."
+        let target_total = match mode.as_str() {
+            "partial" => {
+                if partial_amount <= Decimal::ZERO || partial_amount > unsettled {
+                    return Err(Error::user(format!(
+                        "Partial settlement amount ({partial_amount}) must be > 0 and <= unsettled CIP balance ({unsettled})."
+                    )));
+                }
+                partial_amount.round_dp(scale)
+            }
+            "full" => unsettled.round_dp(scale),
+            other => {
+                return Err(Error::validation(format!(
+                    "Unknown settlement mode '{other}'."
                 )));
             }
-            partial_amount.round_dp(2)
-        } else {
-            unsettled.round_dp(2)
         };
 
         let rule_rows = tx
@@ -424,8 +521,8 @@ impl AccountAssetSettlement {
             specs.push(s);
         }
 
-        let shares = allocate_settlement_amounts(target_total, &alloc_inputs)?;
-        let env = doc.env().with_context_replaced(erp_sdk::Context::default());
+        let shares = allocate_settlement_amounts_scaled(target_total, &alloc_inputs, scale)?;
+        let env = crate::moves::post::strip_default_context(doc.env());
 
         // Create settlement journal entry header.
         let mut mvals = RawVals::new();
@@ -651,18 +748,37 @@ impl AccountAssetSettlement {
                 .await?;
         }
 
-        // Allocate settled_amount FIFO across open CIP cost lines.
+        // Allocate settled_amount FIFO across open CIP cost lines, netting any negative refund
+        // lines first so total settled_amount equals target_total and unsettled balance stays exact.
         let cip_lines = tx
             .query(
                 "SELECT id::int8, amount, settled_amount \
                  FROM account_asset_cip_line \
                  WHERE asset_id = $1 AND (amount - settled_amount) <> 0 \
-                 ORDER BY date, id",
+                 ORDER BY date, id FOR UPDATE",
                 &[&cip_id],
             )
             .await?;
+        let uid = doc.env().uid();
         let mut to_mark = target_total;
-        for cl in cip_lines {
+        // First settle any open negative CIP refund lines (credit notes) which reduce total
+        // accumulated CIP, adding their magnitude to the positive lines we must settle.
+        for cl in &cip_lines {
+            let cl_id: i64 = cl.try_get(0).map_err(db)?;
+            let amt: Decimal = cl.try_get(1).map_err(db)?;
+            let cur_settled: Decimal = cl.try_get(2).map_err(db)?;
+            let avail = amt - cur_settled;
+            if avail < Decimal::ZERO {
+                tx.execute(
+                    "UPDATE account_asset_cip_line SET settled_amount = $2, \
+                            write_uid = $3, write_date = now() AT TIME ZONE 'UTC' WHERE id = $1",
+                    &[&cl_id, &amt, &uid],
+                )
+                .await?;
+                to_mark -= avail; // subtracting a negative increases positive lines to settle
+            }
+        }
+        for cl in &cip_lines {
             if to_mark <= Decimal::ZERO {
                 break;
             }
@@ -677,8 +793,8 @@ impl AccountAssetSettlement {
             let new_settled = cur_settled + take;
             tx.execute(
                 "UPDATE account_asset_cip_line SET settled_amount = $2, \
-                        write_date = now() AT TIME ZONE 'UTC' WHERE id = $1",
-                &[&cl_id, &new_settled],
+                        write_uid = $3, write_date = now() AT TIME ZONE 'UTC' WHERE id = $1",
+                &[&cl_id, &new_settled, &uid],
             )
             .await?;
             to_mark -= take;
@@ -688,9 +804,9 @@ impl AccountAssetSettlement {
         tx.execute(
             "UPDATE account_asset_settlement \
              SET state = 'posted', total_settled = $2, move_id = $3, \
-                 write_date = now() AT TIME ZONE 'UTC' \
-             WHERE id = $1",
-            &[&doc_id, &target_total, &move_id],
+                 write_uid = $4, write_date = now() AT TIME ZONE 'UTC' \
+             WHERE id = $1 AND state = 'draft'",
+            &[&doc_id, &target_total, &move_id, &uid],
         )
         .await?;
 
@@ -700,15 +816,15 @@ impl AccountAssetSettlement {
                  FROM account_asset_cip_line WHERE asset_id = $1",
                 &[&cip_id],
             )
-            .await?
-            .first()
-            .and_then(|r| r.try_get(0).ok())
-            .unwrap_or(Decimal::ZERO);
+            .await?[0]
+            .try_get(0)
+            .map_err(db)?;
         if rem_unsettled <= Decimal::ZERO {
             tx.execute(
-                "UPDATE account_asset SET state = 'settled', write_date = now() AT TIME ZONE 'UTC' \
+                "UPDATE account_asset SET state = 'settled', write_uid = $2, \
+                        write_date = now() AT TIME ZONE 'UTC' \
                  WHERE id = $1",
-                &[&cip_id],
+                &[&cip_id, &uid],
             )
             .await?;
         }
@@ -731,8 +847,9 @@ impl AccountAssetSettlement {
         .await
     }
 
-    /// Reverses a posted CIP settlement if none of the newly capitalized assets have posted
-    /// depreciation entries yet, restoring the CIP unsettled balance cleanly.
+    /// Reverses a posted CIP settlement if none of the capitalized assets have posted incompatible
+    /// depreciation or been disposed, restoring the CIP unsettled balance and recomputing any
+    /// post-capitalized existing assets cleanly.
     #[method]
     #[rpc(effect = write)]
     pub async fn action_reverse_settlement(
@@ -741,22 +858,31 @@ impl AccountAssetSettlement {
     ) -> Result<()> {
         let doc = this.ensure_one()?;
         doc.as_records().check_access(tx, Operation::Write).await?;
+        tx.flush().await?;
         let doc_id = doc.as_records().ids()[0];
-        let state = doc.get(tx, AccountAssetSettlement::STATE).await?;
-        if state.as_deref() != Some("posted") {
+        let doc_rows = tx
+            .query(
+                "SELECT state::text, cip_asset_id::int8, move_id::int8, total_settled \
+                 FROM account_asset_settlement WHERE id = $1 FOR UPDATE",
+                &[&doc_id],
+            )
+            .await?;
+        let Some(drow) = doc_rows.first() else {
+            return Err(Error::missing("CIP settlement document no longer exists."));
+        };
+        let state: String = drow.try_get(0).map_err(db)?;
+        if state != "posted" {
             return Err(Error::user("Only a posted CIP settlement can be reversed."));
         }
-        let cip_id = doc
-            .get(tx, AccountAssetSettlement::CIP_ASSET_ID)
-            .await?
-            .ok_or_else(|| Error::validation("Missing CIP Asset."))?
-            .get();
-        let move_id = doc
-            .get(tx, AccountAssetSettlement::MOVE_ID)
-            .await?
-            .ok_or_else(|| Error::validation("Missing settlement journal entry."))?
-            .get();
-        let total_settled = doc.get(tx, AccountAssetSettlement::TOTAL_SETTLED).await?;
+        let cip_id: i64 = drow
+            .try_get::<_, Option<i64>>(1)
+            .map_err(db)?
+            .ok_or_else(|| Error::validation("Missing CIP Asset."))?;
+        let move_id: i64 = drow
+            .try_get::<_, Option<i64>>(2)
+            .map_err(db)?
+            .ok_or_else(|| Error::validation("Missing settlement journal entry."))?;
+        let total_settled: Decimal = drow.try_get(3).map_err(db)?;
 
         let slines = tx
             .query(
@@ -765,9 +891,48 @@ impl AccountAssetSettlement {
                 &[&doc_id],
             )
             .await?;
+
+        // Lock CIP asset and all affected target assets in sorted ID order to prevent deadlocks.
+        let mut lock_assets = vec![cip_id];
         for sl in &slines {
+            if let Some(aid) = sl.try_get::<_, Option<i64>>(1).map_err(db)? {
+                lock_assets.push(aid);
+            }
+            if let Some(tid) = sl.try_get::<_, Option<i64>>(2).map_err(db)? {
+                lock_assets.push(tid);
+            }
+        }
+        lock_assets.sort_unstable();
+        lock_assets.dedup();
+        tx.query(
+            "SELECT id::int8 FROM account_asset WHERE id = ANY($1::int8[]) ORDER BY id FOR UPDATE",
+            &[&lock_assets],
+        )
+        .await?;
+
+        for sl in &slines {
+            let rtype: String = sl.try_get(0).map_err(db)?;
             let created_id: Option<i64> = sl.try_get(1).map_err(db)?;
-            if let Some(aid) = created_id {
+            let target_id: Option<i64> = sl.try_get(2).map_err(db)?;
+            let amount: Decimal = sl.try_get(3).map_err(db)?;
+
+            if rtype == "new_asset"
+                && let Some(aid) = created_id
+            {
+                let arow = tx
+                    .query(
+                        "SELECT COALESCE(state, 'draft')::text FROM account_asset WHERE id = $1",
+                        &[&aid],
+                    )
+                    .await?;
+                if let Some(r) = arow.first() {
+                    let st: String = r.try_get(0).map_err(db)?;
+                    if st == "disposed" {
+                        return Err(Error::user(
+                            "Cannot reverse this CIP settlement because a newly capitalized Fixed Asset has already been disposed.",
+                        ));
+                    }
+                }
                 let dep_posted: i64 = tx
                     .query(
                         "SELECT count(*)::int8 FROM account_asset_depreciation_line \
@@ -782,10 +947,46 @@ impl AccountAssetSettlement {
                         "Cannot reverse this CIP settlement because a capitalized Fixed Asset has already posted depreciation.",
                     ));
                 }
+            } else if rtype == "existing_asset"
+                && let Some(tid) = target_id
+            {
+                let arows = tx
+                    .query(
+                        "SELECT COALESCE(state, 'draft')::text, original_value, salvage_value \
+                         FROM account_asset WHERE id = $1",
+                        &[&tid],
+                    )
+                    .await?;
+                let Some(arow) = arows.first() else {
+                    return Err(Error::missing("Target existing asset no longer exists."));
+                };
+                let st: String = arow.try_get(0).map_err(db)?;
+                let cur_orig: Decimal = arow.try_get(1).map_err(db)?;
+                let salvage: Decimal = arow.try_get(2).map_err(db)?;
+                if matches!(st.as_str(), "disposed" | "close") {
+                    return Err(Error::user(
+                        "Cannot reverse this CIP settlement because the target existing Fixed Asset is already disposed or closed.",
+                    ));
+                }
+                let posted_dep: Decimal = tx
+                    .query(
+                        "SELECT COALESCE(SUM(amount), 0) FROM account_asset_depreciation_line \
+                         WHERE asset_id = $1 AND state = 'posted'",
+                        &[&tid],
+                    )
+                    .await?[0]
+                    .try_get(0)
+                    .map_err(db)?;
+                let reduced_depreciable = cur_orig - amount - salvage;
+                if reduced_depreciable < posted_dep {
+                    return Err(Error::user(format!(
+                        "Cannot reverse this CIP settlement: target asset has already posted {posted_dep} depreciation, exceeding its reduced depreciable value ({reduced_depreciable})."
+                    )));
+                }
             }
         }
 
-        let env = doc.env().with_context_replaced(erp_sdk::Context::default());
+        let env = crate::moves::post::strip_default_context(doc.env());
         let src_move = env.records("account.move")?.browse([move_id])?;
         let rev_id = crate::moves::post::reverse_move_with_options(
             tx,
@@ -797,6 +998,7 @@ impl AccountAssetSettlement {
         .await?;
         post_moves(tx, &env.records("account.move")?.browse([rev_id])?).await?;
 
+        let uid = doc.env().uid();
         for sl in &slines {
             let rtype: String = sl.try_get(0).map_err(db)?;
             let created_id: Option<i64> = sl.try_get(1).map_err(db)?;
@@ -812,8 +1014,8 @@ impl AccountAssetSettlement {
                 .await?;
                 tx.execute(
                     "UPDATE account_asset SET state = 'close', original_value = 0, \
-                            write_date = now() AT TIME ZONE 'UTC' WHERE id = $1",
-                    &[&aid],
+                            write_uid = $2, write_date = now() AT TIME ZONE 'UTC' WHERE id = $1",
+                    &[&aid, &uid],
                 )
                 .await?;
             } else if rtype == "existing_asset"
@@ -821,51 +1023,100 @@ impl AccountAssetSettlement {
             {
                 tx.execute(
                     "UPDATE account_asset SET original_value = GREATEST(original_value - $2, 0), \
-                            write_date = now() AT TIME ZONE 'UTC' WHERE id = $1",
-                    &[&tid, &amount],
+                            write_uid = $3, write_date = now() AT TIME ZONE 'UTC' WHERE id = $1",
+                    &[&tid, &amount, &uid],
                 )
                 .await?;
+                let tgt_rec: RecordSet<AccountAsset> =
+                    env.records("account.asset")?.browse([tid])?.try_into()?;
+                tx.invalidate_records(tgt_rec.as_records(), Some(&["original_value"]))
+                    .await?;
+                // Recompute draft schedule lines if remaining depreciable > 0; otherwise clear drafts.
+                let check_rows = tx
+                    .query(
+                        "SELECT original_value, salvage_value FROM account_asset WHERE id = $1",
+                        &[&tid],
+                    )
+                    .await?;
+                let new_orig: Decimal = check_rows[0].try_get(0).map_err(db)?;
+                let salvage: Decimal = check_rows[0].try_get(1).map_err(db)?;
+                let posted_dep: Decimal = tx
+                    .query(
+                        "SELECT COALESCE(SUM(amount), 0) FROM account_asset_depreciation_line \
+                         WHERE asset_id = $1 AND state = 'posted'",
+                        &[&tid],
+                    )
+                    .await?[0]
+                    .try_get(0)
+                    .map_err(db)?;
+                if new_orig - salvage - posted_dep > Decimal::ZERO {
+                    AccountAsset::action_compute_depreciation_board(&tgt_rec, tx).await?;
+                } else {
+                    tx.execute(
+                        "DELETE FROM account_asset_depreciation_line WHERE asset_id = $1 AND state = 'draft'",
+                        &[&tid],
+                    )
+                    .await?;
+                }
             }
         }
 
-        // Roll back settled_amount LIFO across CIP lines.
+        // Roll back settled_amount LIFO across CIP lines (including any negative refund lines).
         let cip_lines = tx
             .query(
                 "SELECT id::int8, settled_amount FROM account_asset_cip_line \
-                 WHERE asset_id = $1 AND settled_amount > 0 \
-                 ORDER BY date DESC, id DESC",
+                 WHERE asset_id = $1 AND settled_amount <> 0 \
+                 ORDER BY date DESC, id DESC FOR UPDATE",
                 &[&cip_id],
             )
             .await?;
         let mut to_restore = total_settled;
-        for cl in cip_lines {
+        for cl in &cip_lines {
+            let cl_id: i64 = cl.try_get(0).map_err(db)?;
+            let cur_settled: Decimal = cl.try_get(1).map_err(db)?;
+            if cur_settled < Decimal::ZERO {
+                tx.execute(
+                    "UPDATE account_asset_cip_line SET settled_amount = 0, \
+                            write_uid = $2, write_date = now() AT TIME ZONE 'UTC' WHERE id = $1",
+                    &[&cl_id, &uid],
+                )
+                .await?;
+                to_restore -= cur_settled; // restoring negative settled means we restore more positive settled
+            }
+        }
+        for cl in &cip_lines {
             if to_restore <= Decimal::ZERO {
                 break;
             }
             let cl_id: i64 = cl.try_get(0).map_err(db)?;
             let cur_settled: Decimal = cl.try_get(1).map_err(db)?;
+            if cur_settled <= Decimal::ZERO {
+                continue;
+            }
             let undo = cur_settled.min(to_restore);
             let next_settled = cur_settled - undo;
             tx.execute(
                 "UPDATE account_asset_cip_line SET settled_amount = $2, \
-                        write_date = now() AT TIME ZONE 'UTC' WHERE id = $1",
-                &[&cl_id, &next_settled],
+                        write_uid = $3, write_date = now() AT TIME ZONE 'UTC' WHERE id = $1",
+                &[&cl_id, &next_settled, &uid],
             )
             .await?;
             to_restore -= undo;
         }
 
         tx.execute(
-            "UPDATE account_asset SET state = 'cip', write_date = now() AT TIME ZONE 'UTC' \
+            "UPDATE account_asset SET state = 'cip', write_uid = $2, \
+                    write_date = now() AT TIME ZONE 'UTC' \
              WHERE id = $1",
-            &[&cip_id],
+            &[&cip_id, &uid],
         )
         .await?;
         tx.execute(
             "UPDATE account_asset_settlement \
-             SET state = 'reversed', reversal_move_id = $2, write_date = now() AT TIME ZONE 'UTC' \
-             WHERE id = $1",
-            &[&doc_id, &rev_id],
+             SET state = 'reversed', reversal_move_id = $2, write_uid = $3, \
+                 write_date = now() AT TIME ZONE 'UTC' \
+             WHERE id = $1 AND state = 'posted'",
+            &[&doc_id, &rev_id, &uid],
         )
         .await?;
         tx.invalidate_records(doc.as_records(), Some(&["state", "reversal_move_id"]))

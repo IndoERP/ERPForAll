@@ -333,7 +333,52 @@ impl PurchaseOrderLine {
         let lines = sup.call(tx, this.as_records(), (vals_list,)).await?;
         sync_lines(tx, &env, &lines).await?;
         refuse_unapproved_raise(tx, &env, &heads, &before).await?;
+        let confirmed_orders: Vec<i64> = heads
+            .iter()
+            .filter(|(_, h)| h.state == "purchase")
+            .map(|(id, _)| *id)
+            .collect();
+        if !confirmed_orders.is_empty() {
+            crate::order::sync_order_commitments(tx, &env, &confirmed_orders).await?;
+        }
         Ok(lines)
+    }
+
+    #[constrains("asset_id")]
+    async fn _check_asset_is_active_cip(
+        this: &RecordSet<PurchaseOrderLine>,
+        tx: &mut Transaction,
+    ) -> Result<()> {
+        let asset_ids: Vec<i64> = this
+            .mapped(tx, PurchaseOrderLine::ASSET_ID)
+            .await?
+            .into_iter()
+            .flatten()
+            .map(|id| id.get())
+            .collect();
+        if asset_ids.is_empty() {
+            return Ok(());
+        }
+        let bad = tx
+            .query(
+                "SELECT name::text, COALESCE(asset_type, 'normal')::text, COALESCE(state, 'draft')::text \
+                 FROM account_asset \
+                 WHERE id = ANY($1::int8[]) \
+                   AND (COALESCE(asset_type, 'normal') <> 'cip' \
+                        OR COALESCE(state, 'draft') NOT IN ('draft', 'cip')) \
+                 LIMIT 1",
+                &[&asset_ids],
+            )
+            .await?;
+        if let Some(row) = bad.first() {
+            let name: String = row.try_get(0).map_err(db_error)?;
+            let atype: String = row.try_get(1).map_err(db_error)?;
+            let state: String = row.try_get(2).map_err(db_error)?;
+            return Err(Error::validation(format!(
+                "Asset '{name}' (type '{atype}', status '{state}') cannot be linked on a purchase order line: select an active Construction in Progress (CIP) asset."
+            )));
+        }
+        Ok(())
     }
 
     /// Refuses the computed and received fields and a move to another order, and edits of lines of
@@ -384,6 +429,16 @@ impl PurchaseOrderLine {
         refuse_closed(&heads, &order_ids, "delete lines of", true)?;
         sup.call(tx, &lines, ()).await?;
         sync_orders(tx, &env, &order_ids).await
+    }
+
+    /// Notify installed purchase review extensions when their relational source changes.
+    #[method]
+    async fn _invalidate_purchase_bill_review(
+        _this: &RecordSet<PurchaseOrderLine>,
+        tx: &mut Transaction,
+    ) -> Result<()> {
+        tx.invalidate_model("account.move.line", Some(crate::bill_source_review::FIELDS))
+            .await
     }
 }
 
@@ -579,6 +634,27 @@ async fn write_lines(
     }
     sync_lines(tx, &env, lines).await?;
     refuse_unapproved_raise(tx, &env, &heads, &before).await?;
+    if [
+        "product_id",
+        "uom_id",
+        "product_qty",
+        "price_unit",
+        "discount",
+        "analytic_account_id",
+        "asset_id",
+    ]
+    .iter()
+    .any(|field| written.contains(*field))
+    {
+        let confirmed_orders: Vec<i64> = heads
+            .iter()
+            .filter(|(_, h)| h.state == "purchase")
+            .map(|(id, _)| *id)
+            .collect();
+        if !confirmed_orders.is_empty() {
+            crate::order::sync_order_commitments(tx, &env, &confirmed_orders).await?;
+        }
+    }
     if reprice
         || [
             "product_id",
@@ -605,19 +681,6 @@ pub async fn invalidate_bill_comparisons(tx: &mut Transaction) -> Result<()> {
     lines
         .call::<(), ()>(tx, "_invalidate_purchase_bill_review", ())
         .await
-}
-
-#[methods(PurchaseOrderLine, addon = "purchase")]
-impl PurchaseOrderLine {
-    /// Notify installed purchase review extensions when their relational source changes.
-    #[method]
-    async fn _invalidate_purchase_bill_review(
-        _this: &RecordSet<PurchaseOrderLine>,
-        tx: &mut Transaction,
-    ) -> Result<()> {
-        tx.invalidate_model("account.move.line", Some(crate::bill_source_review::FIELDS))
-            .await
-    }
 }
 
 /// After a new product on an existing line: unit, vendor taxes and description of the new product,
@@ -1522,9 +1585,11 @@ pub(crate) async fn in_company_currency(
     if company_currency == currency {
         return Ok(total);
     }
-    // the UTC day of the deadline (what the reference's conversion gets from the datetime), never
-    // the reader's day: the stored total and the approval question must not change with the reader
-    let date = deadline.map_or_else(Date::today, |at| at.date());
+    // the UTC day of the deadline (or the company's business date without one), never the host clock
+    let date = match deadline {
+        Some(at) => at.date(),
+        None => erp_addon_base::company_calendar::business_date(tx, company.get()).await?,
+    };
     convert(env, tx, total, currency, company_currency, company, date).await
 }
 

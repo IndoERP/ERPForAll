@@ -21,7 +21,7 @@ pub enum AvcVerdict {
     Blocked(String),
 }
 
-/// Pure exact-decimal Availability Control evaluation.
+/// Pure exact-decimal Availability Control evaluation (default 2 decimal places).
 #[allow(clippy::too_many_arguments)]
 pub fn evaluate_avc(
     budget_label: &str,
@@ -34,16 +34,44 @@ pub fn evaluate_avc(
     blocking_pct: Decimal,
     tolerance: Decimal,
 ) -> AvcVerdict {
+    evaluate_avc_with_scale(
+        budget_label,
+        released,
+        committed,
+        actual,
+        delta,
+        avc_mode,
+        warning_pct,
+        blocking_pct,
+        tolerance,
+        2,
+    )
+}
+
+/// Pure exact-decimal Availability Control evaluation using the company currency's decimal scale.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_avc_with_scale(
+    budget_label: &str,
+    released: Decimal,
+    committed: Decimal,
+    actual: Decimal,
+    delta: Decimal,
+    avc_mode: &str,
+    warning_pct: Decimal,
+    blocking_pct: Decimal,
+    tolerance: Decimal,
+    scale: u32,
+) -> AvcVerdict {
     if delta <= Decimal::ZERO || avc_mode == "none" {
         return AvcVerdict::Ok;
     }
     let base = released.abs();
     let projected = committed + actual + delta;
-    let warn_limit = (base * warning_pct / Decimal::from(100)).round_dp(2);
-    let block_limit = (base * blocking_pct / Decimal::from(100)).round_dp(2) + tolerance;
+    let warn_limit = (base * warning_pct / Decimal::from(100)).round_dp(scale);
+    let block_limit = (base * blocking_pct / Decimal::from(100)).round_dp(scale) + tolerance;
 
     if avc_mode == "hard_stop" && projected > block_limit {
-        let shortfall = (projected - block_limit).round_dp(2);
+        let shortfall = (projected - block_limit).round_dp(scale);
         return AvcVerdict::Blocked(format!(
             "Budget Availability Control exceeded on '{budget_label}': Released {base}, Committed {committed}, Actual {actual}, Requested {delta}, Hard Limit {block_limit} (shortfall {shortfall}). Submit a Budget Supplement or Transfer to proceed."
         ));
@@ -113,8 +141,8 @@ pub struct AccountBudgetCommitment {
     #[field(char, required = true, string = "Source Model")]
     pub source_model: Option<Arc<str>>,
     /// Source record id.
-    #[field(integer, required = true, string = "Source Record ID")]
-    pub source_id: i32,
+    #[field(bigint, required = true, string = "Source Record ID")]
+    pub source_id: erp_sdk::BigInt,
     /// Human-readable source document number.
     #[field(char, string = "Source Document")]
     pub source_ref: Option<Arc<str>>,
@@ -177,7 +205,36 @@ pub struct AccountBudgetCommitment {
 }
 
 #[methods(AccountBudgetCommitment, addon = "account")]
-impl AccountBudgetCommitment {}
+impl AccountBudgetCommitment {
+    #[method(override)]
+    async fn write(
+        this: &RecordSet<AccountBudgetCommitment>,
+        tx: &mut Transaction,
+        vals: RawVals,
+        sup: Super,
+    ) -> Result<bool> {
+        if !this.env().su() {
+            return Err(Error::user(
+                "Budget commitments are managed automatically by Purchase Order confirmation and Vendor Bill posting and cannot be edited manually.",
+            ));
+        }
+        sup.call(tx, this.as_records(), (vals,)).await
+    }
+
+    #[method(override)]
+    async fn unlink(
+        this: &RecordSet<AccountBudgetCommitment>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<bool> {
+        if !this.env().su() {
+            return Err(Error::user(
+                "Budget commitments cannot be deleted manually; cancel the originating Purchase Order to release commitments.",
+            ));
+        }
+        sup.call(tx, this.as_records(), ()).await
+    }
+}
 
 struct MatchedBudgetLine {
     id: i64,
@@ -190,6 +247,7 @@ struct MatchedBudgetLine {
     blocking_pct: Decimal,
     tolerance: Decimal,
     check_commitments: bool,
+    scale: u32,
 }
 
 async fn find_and_lock_matching_budget_lines(
@@ -205,16 +263,18 @@ async fn find_and_lock_matching_budget_lines(
     let rows = tx
         .query(
             "SELECT l.id::int8, (b.name || ' / ' || l.name)::text, \
-                    COALESCE(l.released_amount, l.planned_amount, 0), \
+                    COALESCE(l.released_amount, 0), \
                     COALESCE(l.committed_amount, 0), \
                     COALESCE(l.practical_amount, 0), \
                     COALESCE(p.avc_mode, 'none')::text, \
                     COALESCE(p.warning_threshold_pct, 80), \
                     COALESCE(p.blocking_threshold_pct, 100), \
                     COALESCE(p.tolerance_amount, 0), \
-                    COALESCE(p.check_commitments, true) \
+                    COALESCE(p.check_commitments, true), \
+                    COALESCE(cur.decimal_places, 2)::int4 \
              FROM account_budget_line l \
              JOIN account_budget b ON b.id = l.budget_id \
+             JOIN res_currency cur ON cur.id = l.currency_id \
              LEFT JOIN account_budget_profile p ON p.id = b.profile_id \
              LEFT JOIN account_analytic_account req_cc ON req_cc.id = $4 \
              LEFT JOIN account_analytic_account bl_cc ON bl_cc.id = l.analytic_account_id \
@@ -237,6 +297,9 @@ async fn find_and_lock_matching_budget_lines(
 
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
+        let scale_i32: i32 = row.try_get(10).map_err(db)?;
+        let scale = u32::try_from(scale_i32)
+            .map_err(|_| Error::validation(format!("Invalid currency scale {scale_i32}.")))?;
         out.push(MatchedBudgetLine {
             id: row.try_get(0).map_err(db)?,
             label: row.try_get(1).map_err(db)?,
@@ -248,6 +311,7 @@ async fn find_and_lock_matching_budget_lines(
             blocking_pct: row.try_get(7).map_err(db)?,
             tolerance: row.try_get(8).map_err(db)?,
             check_commitments: row.try_get(9).map_err(db)?,
+            scale,
         });
     }
     Ok(out)
@@ -277,18 +341,19 @@ pub async fn check_and_record_commitments(
     let mut new_commitments = Vec::new();
     let mut blocks = Vec::new();
 
+    // Release prior open commitments for the exact same source lines first so budget line locks
+    // and refreshed totals reflect the clean baseline before evaluating the whole batch.
     for req in requests {
         if req.amount <= Decimal::ZERO {
             continue;
         }
-        // Remove any prior open commitments for the exact same source line to stay idempotent.
         let old_lines = tx
             .query(
                 "UPDATE account_budget_commitment \
                  SET state = 'cancelled', open_amount = 0, write_date = now() AT TIME ZONE 'UTC' \
-                 WHERE source_model = $1 AND source_id = $2 AND state IN ('open', 'partially_billed') \
+                 WHERE source_model = $1 AND source_id = $2::int8 AND state IN ('open', 'partially_billed') \
                  RETURNING budget_line_id::int8",
-                &[&req.source_model, &(req.source_id as i32)],
+                &[&req.source_model, &req.source_id],
             )
             .await?;
         for ol in old_lines {
@@ -297,10 +362,32 @@ pub async fn check_and_record_commitments(
                 touched_budget_lines.push(bl_id);
             }
         }
-        if !touched_budget_lines.is_empty() {
-            refresh_budget_lines(tx, &touched_budget_lines).await?;
-        }
+    }
+    if !touched_budget_lines.is_empty() {
+        touched_budget_lines.sort_unstable();
+        touched_budget_lines.dedup();
+        refresh_budget_lines(tx, &touched_budget_lines).await?;
+    }
 
+    // Pre-lock all candidate budget lines for the companies/dates in sorted canonical ID order to
+    // prevent cross-request deadlocks on multi-line POs.
+    let mut candidate_company_ids: Vec<i64> = requests.iter().map(|r| r.company_id).collect();
+    candidate_company_ids.sort_unstable();
+    candidate_company_ids.dedup();
+    tx.query(
+        "SELECT l.id::int8 FROM account_budget_line l \
+         JOIN account_budget b ON b.id = l.budget_id \
+         WHERE b.company_id = ANY($1::int8[]) AND b.state = 'validate' \
+           AND COALESCE(b.budget_type, 'opex') IN ('opex', 'capex') \
+         ORDER BY l.id FOR UPDATE OF l",
+        &[&candidate_company_ids],
+    )
+    .await?;
+
+    for req in requests {
+        if req.amount <= Decimal::ZERO {
+            continue;
+        }
         let matched = find_and_lock_matching_budget_lines(
             tx,
             req.company_id,
@@ -319,7 +406,7 @@ pub async fn check_and_record_commitments(
                 .get(&bl.id)
                 .copied()
                 .unwrap_or(Decimal::ZERO);
-            let verdict = evaluate_avc(
+            let verdict = evaluate_avc_with_scale(
                 &bl.label,
                 bl.released,
                 bl.committed + prior_delta,
@@ -329,26 +416,44 @@ pub async fn check_and_record_commitments(
                 bl.warning_pct,
                 bl.blocking_pct,
                 bl.tolerance,
+                bl.scale,
             );
-            if let AvcVerdict::Blocked(msg) = verdict
-                && !can_override
-            {
-                blocks.push(msg);
-                continue;
+            let mut audit_suffix = "";
+            match verdict {
+                AvcVerdict::Blocked(msg) => {
+                    if can_override {
+                        audit_suffix = " [AVC Override]";
+                    } else {
+                        blocks.push(msg);
+                        continue;
+                    }
+                }
+                AvcVerdict::Warning(_) => {
+                    audit_suffix = " [AVC Warning]";
+                }
+                AvcVerdict::Ok => {}
             }
             *running_delta_by_line.entry(bl.id).or_insert(Decimal::ZERO) += req.amount;
             if !touched_budget_lines.contains(&bl.id) {
                 touched_budget_lines.push(bl.id);
             }
             let mut v = RawVals::new();
-            v.insert("name".into(), Cell::Str(req.source_ref.as_str().into()));
+            let commit_name = if audit_suffix.is_empty() {
+                req.source_ref.clone()
+            } else {
+                format!("{}{audit_suffix}", req.source_ref)
+            };
+            v.insert("name".into(), Cell::Str(commit_name.as_str().into()));
             v.insert("company_id".into(), Cell::Id(req.company_id));
             v.insert("budget_line_id".into(), Cell::Id(bl.id));
             v.insert(
                 "source_model".into(),
                 Cell::Str(req.source_model.as_str().into()),
             );
-            v.insert("source_id".into(), Cell::Int(req.source_id as i32));
+            v.insert(
+                "source_id".into(),
+                Cell::BigInt(erp_sdk::BigInt::from_i64(req.source_id)),
+            );
             v.insert(
                 "source_ref".into(),
                 Cell::Str(req.source_ref.as_str().into()),
@@ -376,15 +481,15 @@ pub async fn check_and_record_commitments(
     }
 
     if !new_commitments.is_empty() {
-        let clean_env = env
-            .sudo(true)
-            .with_context_replaced(erp_sdk::Context::default());
+        let clean_env = crate::moves::post::strip_default_context(env).sudo(true);
         clean_env
             .records("account.budget.commitment")?
             .create(tx, new_commitments)
             .await?;
     }
     if !touched_budget_lines.is_empty() {
+        touched_budget_lines.sort_unstable();
+        touched_budget_lines.dedup();
         refresh_budget_lines(tx, &touched_budget_lines).await?;
     }
     Ok(())
@@ -399,15 +504,14 @@ pub async fn release_commitments_for_source(
     if source_ids.is_empty() {
         return Ok(());
     }
-    let ids_i32: Vec<i32> = source_ids.iter().map(|id| *id as i32).collect();
     let rows = tx
         .query(
             "UPDATE account_budget_commitment \
              SET state = 'cancelled', open_amount = 0, write_date = now() AT TIME ZONE 'UTC' \
-             WHERE source_model = $1 AND source_id = ANY($2::int4[]) \
+             WHERE source_model = $1 AND source_id = ANY($2::int8[]) \
                AND state IN ('open', 'partially_billed') \
              RETURNING budget_line_id::int8",
-            &[&source_model, &ids_i32],
+            &[&source_model, &source_ids],
         )
         .await?;
     let mut touched = Vec::new();
@@ -418,6 +522,8 @@ pub async fn release_commitments_for_source(
         }
     }
     if !touched.is_empty() {
+        touched.sort_unstable();
+        touched.dedup();
         refresh_budget_lines(tx, &touched).await?;
     }
     Ok(())
@@ -435,28 +541,19 @@ async fn liquidate_po_commitments_for_move_line(
     if billed_amount <= Decimal::ZERO {
         return Ok(liquidated_by_line);
     }
-    // Check if `purchase_direct_bill_line` exists (purchase addon installed) and links this bill line.
-    let table_exists: bool = tx
-        .query(
-            "SELECT to_regclass('public.purchase_direct_bill_line') IS NOT NULL",
-            &[],
-        )
-        .await?[0]
-        .try_get(0)
-        .map_err(db)?;
-    if !table_exists {
+    if tx.registry().model("purchase.direct.bill.line").is_none() {
         return Ok(liquidated_by_line);
     }
     let po_lines = tx
         .query(
-            "SELECT purchase_line_id::int4 FROM purchase_direct_bill_line WHERE bill_line_id = $1",
+            "SELECT purchase_line_id::int8 FROM purchase_direct_bill_line WHERE bill_line_id = $1",
             &[&move_line_id],
         )
         .await?;
     if po_lines.is_empty() {
         return Ok(liquidated_by_line);
     }
-    let po_line_ids: Vec<i32> = po_lines
+    let po_line_ids: Vec<i64> = po_lines
         .iter()
         .map(|r| r.try_get(0).map_err(db))
         .collect::<Result<_>>()?;
@@ -466,19 +563,23 @@ async fn liquidate_po_commitments_for_move_line(
             "SELECT id::int8, budget_line_id::int8, liquidated_amount, open_amount \
              FROM account_budget_commitment \
              WHERE source_model = 'purchase.order.line' \
-               AND source_id = ANY($1::int4[]) \
+               AND source_id = ANY($1::int8[]) \
                AND state IN ('open', 'partially_billed') \
              ORDER BY id FOR UPDATE",
             &[&po_line_ids],
         )
         .await?;
 
+    let mut remaining = billed_amount;
     for crow in commits {
+        if remaining <= Decimal::ZERO {
+            break;
+        }
         let cid: i64 = crow.try_get(0).map_err(db)?;
         let bl_id: i64 = crow.try_get(1).map_err(db)?;
         let cur_liq: Decimal = crow.try_get(2).map_err(db)?;
         let cur_open: Decimal = crow.try_get(3).map_err(db)?;
-        let take = cur_open.min(billed_amount);
+        let take = cur_open.min(remaining);
         if take <= Decimal::ZERO {
             continue;
         }
@@ -497,6 +598,7 @@ async fn liquidate_po_commitments_for_move_line(
             &[&cid, &next_liq, &next_open, &next_state],
         )
         .await?;
+        remaining -= take;
         *liquidated_by_line.entry(bl_id).or_insert(Decimal::ZERO) += take;
         if !touched_budget_lines.contains(&bl_id) {
             touched_budget_lines.push(bl_id);
@@ -556,14 +658,9 @@ pub async fn restore_commitments_and_refresh_for_reset_moves(
                     &[&ml_id],
                 )
                 .await?;
-            let po_line_ids: Vec<i32> = po_lines
+            let po_line_ids: Vec<i64> = po_lines
                 .iter()
-                .map(|r| {
-                    let id: i64 = r.try_get(0).map_err(db)?;
-                    i32::try_from(id).map_err(|_| {
-                        Error::validation(format!("purchase line id {id} out of range"))
-                    })
-                })
+                .map(|r| r.try_get(0).map_err(db))
                 .collect::<Result<_>>()?;
             if !po_line_ids.is_empty() {
                 let commits = tx
@@ -571,7 +668,7 @@ pub async fn restore_commitments_and_refresh_for_reset_moves(
                         "SELECT id::int8, budget_line_id::int8, ordered_amount, liquidated_amount \
                          FROM account_budget_commitment \
                          WHERE source_model = 'purchase.order.line' \
-                           AND source_id = ANY($1::int4[]) \
+                           AND source_id = ANY($1::int8[]) \
                            AND state IN ('partially_billed', 'closed') \
                          ORDER BY id FOR UPDATE",
                         &[&po_line_ids],
@@ -672,8 +769,8 @@ pub async fn check_and_apply_move_avc(
              JOIN account_move_line l ON l.move_id = md.move_id \
              JOIN account_account a ON a.id = l.account_id \
              WHERE l.account_id IS NOT NULL \
-               AND COALESCE(l.balance, 0) > 0 \
-               AND (a.internal_group = 'expense' OR l.asset_id IS NOT NULL) \
+               AND COALESCE(l.balance, 0) <> 0 \
+               AND (a.internal_group IN ('expense', 'asset') OR l.asset_id IS NOT NULL) \
              ORDER BY l.id",
             &[&move_ids, &dates],
         )
@@ -682,8 +779,28 @@ pub async fn check_and_apply_move_avc(
         return Ok(Vec::new());
     }
 
+    // Pre-lock all active OPEX/CAPEX budget lines for the companies in this batch in canonical ID
+    // order so concurrent multi-line postings cannot deadlock.
+    let mut batch_companies: Vec<i64> = lines
+        .iter()
+        .map(|r| r.try_get(1).map_err(db))
+        .collect::<Result<_>>()?;
+    batch_companies.sort_unstable();
+    batch_companies.dedup();
+    tx.query(
+        "SELECT l.id::int8 FROM account_budget_line l \
+         JOIN account_budget b ON b.id = l.budget_id \
+         WHERE b.company_id = ANY($1::int8[]) AND b.state = 'validate' \
+           AND COALESCE(b.budget_type, 'opex') IN ('opex', 'capex') \
+         ORDER BY l.id FOR UPDATE OF l",
+        &[&batch_companies],
+    )
+    .await?;
+
     let can_override = has_override_right(tx, env).await?;
     let mut touched_budget_lines = Vec::new();
+    let mut running_actual_by_line = std::collections::BTreeMap::<i64, Decimal>::new();
+    let mut running_liq_by_line = std::collections::BTreeMap::<i64, Decimal>::new();
     let mut blocks = Vec::new();
 
     for row in lines {
@@ -713,39 +830,53 @@ pub async fn check_and_apply_move_avc(
             if !touched_budget_lines.contains(&bl.id) {
                 touched_budget_lines.push(bl.id);
             }
-            // Subtract the commitment liquidated by this very bill so PO -> Bill has ZERO double-counting.
             let liq = liquidated_map.get(&bl.id).copied().unwrap_or(Decimal::ZERO);
-            let net_incremental = (spend - liq).max(Decimal::ZERO);
-            if net_incremental.is_zero() {
-                continue;
+            let prior_liq = running_liq_by_line
+                .get(&bl.id)
+                .copied()
+                .unwrap_or(Decimal::ZERO);
+            let prior_actual = running_actual_by_line
+                .get(&bl.id)
+                .copied()
+                .unwrap_or(Decimal::ZERO);
+
+            if spend > Decimal::ZERO {
+                // Subtract liquidated commitment from `committed` ONCE and pass full `spend`
+                // (never subtract `liq` from both `committed` and `spend`!).
+                let effective_committed = if bl.check_commitments {
+                    (bl.committed - prior_liq - liq).max(Decimal::ZERO)
+                } else {
+                    Decimal::ZERO
+                };
+                let verdict = evaluate_avc_with_scale(
+                    &bl.label,
+                    bl.released,
+                    effective_committed,
+                    bl.practical + prior_actual,
+                    spend,
+                    &bl.avc_mode,
+                    bl.warning_pct,
+                    bl.blocking_pct,
+                    bl.tolerance,
+                    bl.scale,
+                );
+                match verdict {
+                    AvcVerdict::Blocked(msg) if !can_override => {
+                        blocks.push(msg);
+                    }
+                    AvcVerdict::Blocked(_) | AvcVerdict::Warning(_) | AvcVerdict::Ok => {}
+                }
             }
-            let effective_committed = if bl.check_commitments {
-                (bl.committed - liq).max(Decimal::ZERO)
-            } else {
-                Decimal::ZERO
-            };
-            let verdict = evaluate_avc(
-                &bl.label,
-                bl.released,
-                effective_committed,
-                bl.practical,
-                net_incremental,
-                &bl.avc_mode,
-                bl.warning_pct,
-                bl.blocking_pct,
-                bl.tolerance,
-            );
-            if let AvcVerdict::Blocked(msg) = verdict
-                && !can_override
-            {
-                blocks.push(msg);
-            }
+            *running_liq_by_line.entry(bl.id).or_insert(Decimal::ZERO) += liq;
+            *running_actual_by_line.entry(bl.id).or_insert(Decimal::ZERO) += spend;
         }
     }
 
     if !blocks.is_empty() {
         return Err(Error::user(blocks.join("\n")));
     }
+    touched_budget_lines.sort_unstable();
+    touched_budget_lines.dedup();
     Ok(touched_budget_lines)
 }
 
