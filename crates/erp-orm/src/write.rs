@@ -993,19 +993,27 @@ async fn create_records_inner(
         && let Some((fields, _)) = groups.first()
     {
         // the INSERT's own parameters: one array per column, or the row count
-        let offset = fields.len().max(1);
+        let offset = (fields.len() + blinds_of(spec, fields)).max(1);
         fused = tx.fused_create_check(&env, spec, &late, offset).await?;
     }
     let mut denied: Vec<RealId> = Vec::new();
 
     let mut ids: Vec<Option<RecId>> = vec![None; rows.len()];
     for (fields, members) in &groups {
+        // blind-indexed fields also fill their companion column (after the field columns)
+        let blinds: Vec<(FieldId, crate::field_encryption::Blind)> = fields
+            .iter()
+            .filter_map(|f| {
+                crate::field_encryption::Blind::of(spec, spec.field_by_id(*f)).map(|b| (*f, b))
+            })
+            .collect();
         let columns: Vec<(&str, ColumnType)> = fields
             .iter()
             .filter_map(|f| {
                 let fs = spec.field_by_id(*f);
                 fs.column().map(|c| (fs.name, c))
             })
+            .chain(blinds.iter().map(|(_, b)| (b.column(), ColumnType::Text)))
             .collect();
         // the table's own identity, or the shared sequence it names
         let id_source = spec.id_sequence.map_or(IdSource::Identity, IdSource::Named);
@@ -1021,11 +1029,15 @@ async fn create_records_inner(
         };
         for chunk in members.chunks(batch) {
             let mut arrays: Vec<Box<dyn ToSql + Sync + Send>> = Vec::with_capacity(fields.len());
+            let mut blind_arrays: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
             for f in fields {
                 let cells: Vec<Cell> = chunk
                     .iter()
                     .map(|&r| rows[r][f.index()].clone().unwrap_or(Cell::Null))
                     .collect();
+                if let Some((_, blind)) = blinds.iter().find(|(id, _)| id == f) {
+                    blind_arrays.push(blind.param(&cells)?);
+                }
                 arrays.push(
                     column_param(spec, spec.field_by_id(*f), cells).map_err(|error| {
                         Error::new(
@@ -1040,6 +1052,7 @@ async fn create_records_inner(
                     })?,
                 );
             }
+            arrays.extend(blind_arrays);
             if fields.is_empty() {
                 arrays.push(Box::new(chunk.len() as i64));
             }
@@ -2277,6 +2290,14 @@ async fn write_protected(
     Ok(())
 }
 
+/// How many of `fields` are blind-indexed (each adds its companion column to an INSERT).
+fn blinds_of(spec: &ModelSpec, fields: &[FieldId]) -> usize {
+    fields
+        .iter()
+        .filter(|f| spec.field_by_id(**f).blind_index_column().is_some())
+        .count()
+}
+
 /// The array parameter of `field`'s column: [`array_param`] of the field's storage or, for an
 /// encrypted field, of the envelopes its values are sealed into (a `bytea` column).
 pub(crate) fn column_param(
@@ -2706,6 +2727,14 @@ impl Transaction {
         self.lock_company_references(&targets).await?;
         for (group_fields, ids) in groups {
             let rec_ids: Vec<RecId> = ids.iter().map(|id| RecId::real(*id)).collect();
+            // blind-indexed fields also write their companion column (after the field columns)
+            let blinds: Vec<(FieldId, crate::field_encryption::Blind)> = group_fields
+                .iter()
+                .filter_map(|f| {
+                    crate::field_encryption::Blind::of(spec, spec.field_by_id(*f)).map(|b| (*f, b))
+                })
+                .collect();
+            let mut blind_arrays: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
             let mut columns: Vec<(&str, ColumnType)> = Vec::with_capacity(group_fields.len());
             let mut arrays: Vec<Box<dyn ToSql + Sync + Send>> =
                 Vec::with_capacity(group_fields.len());
@@ -2748,9 +2777,14 @@ impl Transaction {
                         .iter()
                         .map(|id| self.cache.get(spec.id, *fid, *id).unwrap_or(Cell::Null))
                         .collect();
+                    if let Some((_, blind)) = blinds.iter().find(|(id, _)| id == fid) {
+                        blind_arrays.push(blind.param(&cells)?);
+                    }
                     arrays.push(column_param(spec, field, cells)?);
                 }
             }
+            columns.extend(blinds.iter().map(|(_, b)| (b.column(), ColumnType::Text)));
+            arrays.extend(blind_arrays);
             let extra: Vec<(&str, &str)> = if spec.log_access && spec.field("write_date").is_some()
             {
                 vec![("write_date", NOW_UTC)]

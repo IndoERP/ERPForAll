@@ -423,13 +423,18 @@ impl<'a> Rewriter<'a> {
 
         // ----- FULL -----
         if field.encrypted {
-            // also a related or inherited field ending at an encrypted one: refused here, before
-            // the condition is moved to the field that holds the column
-            return Err(self.invalid(erp_sql::filter::encrypted_message(
-                self.spec.name,
-                field.name,
-                "a condition",
-            )));
+            // equality on a blind-indexed field is compiled on its companion column (a related or
+            // inherited one moves to its target below)
+            let equality = matches!(operator, Operator::In | Operator::NotIn);
+            if !(field.blind_index && equality) {
+                // also a related or inherited field ending at an encrypted one: refused here,
+                // before the condition is moved to the field that holds the column
+                return Err(self.invalid(erp_sql::filter::encrypted_message(
+                    self.spec.name,
+                    field.name,
+                    "a condition",
+                )));
+            }
         }
         if operator.is_any()
             && let Some(query) = ReferenceQuery::of(value)

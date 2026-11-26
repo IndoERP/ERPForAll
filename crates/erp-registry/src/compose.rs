@@ -1308,6 +1308,7 @@ impl Merged {
             let secret = self.params.secret;
             // and `encrypted`: a type change cannot silently leave sealed values unread
             let encrypted = self.params.encrypted;
+            let blind_index = self.params.blind_index;
             let collation = self.params.collation;
             let native = if decl.runtime {
                 self.native
@@ -1328,6 +1329,7 @@ impl Merged {
             };
             self.params.secret = secret;
             self.params.encrypted = encrypted;
+            self.params.blind_index = blind_index;
             self.params.collation = collation;
         }
         if addon == MANUAL_ADDON {
@@ -1546,6 +1548,9 @@ impl Merged {
         }
         if fd.encrypted.is_some() {
             p.encrypted = fd.encrypted;
+        }
+        if fd.blind_index.is_some() {
+            p.blind_index = fd.blind_index;
         }
         macro_rules! take {
             ($($attr:ident),*) => {$( if fd.$attr.is_some() { p.$attr = fd.$attr; } )*};
@@ -3051,6 +3056,13 @@ fn resolve_field(model: &str, id: FieldId, merged: Merged) -> Result<FieldSpec> 
     if encrypted {
         check_encrypted(model, name, &ty, store, &p, tracking.is_some())?;
     }
+    let blind_index = p.blind_index.unwrap_or(false);
+    if blind_index && !encrypted {
+        return Err(Error::programming(format!(
+            "field '{model}.{name}': blind_index is for an encrypted field (declare \
+             `encrypted = true`, or search the clear column directly)"
+        )));
+    }
     let quoted_name = crate::ident::quote_arc(name);
     Ok(FieldSpec {
         id,
@@ -3108,6 +3120,7 @@ fn resolve_field(model: &str, id: FieldId, merged: Merged) -> Result<FieldSpec> 
         user_writeable: p.user_writeable.unwrap_or(false),
         secret: p.secret.unwrap_or(false),
         encrypted,
+        blind_index,
         db_default,
         tracking,
         inherited: None,

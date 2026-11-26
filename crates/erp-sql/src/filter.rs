@@ -276,6 +276,18 @@ pub enum Token {
         /// NULL handling.
         null: NullTest,
     },
+    /// `in` / `not in` on the blind index of an encrypted field: the blind indexes of the values
+    /// are compared with the field's companion column.
+    BlindIn {
+        /// The encrypted field (its companion column is compared).
+        col: Col,
+        /// `in` (true) or `not in`.
+        positive: bool,
+        /// Whether a text array parameter holds blind indexes.
+        values: bool,
+        /// NULL handling.
+        null: NullTest,
+    },
     /// Boolean `in` / `not in`.
     Bool {
         /// The column.
@@ -506,6 +518,7 @@ fn token_selects(token: &Token, model: ModelId) -> bool {
         | Token::NotOpen
         | Token::NotClose
         | Token::In { .. }
+        | Token::BlindIn { .. }
         | Token::Bool { .. }
         | Token::JsonNull { .. }
         | Token::Like { .. }
@@ -1026,6 +1039,40 @@ impl Renderer<'_> {
                 let c = self.col(scope, *col);
                 let test = values.map(|kind| {
                     let p = self.next(&format!("{}[]", kind.sql()));
+                    if *positive {
+                        format!("{c} = ANY({p})")
+                    } else {
+                        format!("{c} <> ALL({p})")
+                    }
+                });
+                out.push_str(&match (null, test) {
+                    (NullTest::OrIsNull, Some(t)) => format!("({t} OR {c} IS NULL)"),
+                    (NullTest::None, Some(t)) => t,
+                    (NullTest::IsNull, _) => format!("{c} IS NULL"),
+                    (NullTest::IsNotNull, _) => format!("{c} IS NOT NULL"),
+                    (NullTest::True, _) => "TRUE".to_owned(),
+                    (NullTest::False | NullTest::None | NullTest::OrIsNull, _) => {
+                        "FALSE".to_owned()
+                    }
+                });
+            }
+            Token::BlindIn {
+                col,
+                positive,
+                values,
+                null,
+            } => {
+                let model = self
+                    .registry
+                    .model_by_id(self.table_model(scope, col.table));
+                let field = model.field_by_id(col.field);
+                let c = format!(
+                    "{}.{}",
+                    quote(self.table_alias(scope, col.table)),
+                    quote(&field.blind_index_column().unwrap_or_default())
+                );
+                let test = values.then(|| {
+                    let p = self.next("text[]");
                     if *positive {
                         format!("{c} = ANY({p})")
                     } else {
@@ -1877,6 +1924,19 @@ impl<'a> Planner<'a> {
             ));
         }
         if field.encrypted {
+            if field.blind_index_column().is_some()
+                && matches!(operator, Operator::In | Operator::NotIn)
+                && !condition.value().has_param()
+            {
+                self.read(model_id, field);
+                let col = Col {
+                    table,
+                    field: field.id,
+                };
+                let token = self.blind_in_condition(model, field, col, condition)?;
+                scope.tokens.push(token);
+                return Ok(());
+            }
             return Err(self.input_error(encrypted_message(model.name, field.name, "a condition")));
         }
         if !matches!(field.ty, FieldType::Id) && !field.has_column() {
@@ -2313,6 +2373,59 @@ impl<'a> Planner<'a> {
             col,
             positive,
             values,
+            null,
+        })
+    }
+
+    /// `in` / `not in` on a blind-indexed encrypted field: every text member is replaced by its
+    /// blind index ([`crate::blind::hash`]), compared with the field's companion column.
+    fn blind_in_condition(
+        &mut self,
+        model: &ModelSpec,
+        field: &FieldSpec,
+        col: Col,
+        condition: &Condition,
+    ) -> Result<Token> {
+        let positive = condition.operator() == Operator::In;
+        let items: Vec<&Value> = match condition.value() {
+            Value::Set(set) => set.iter().collect(),
+            Value::List(list) => list.iter().collect(),
+            other => {
+                return Err(Error::programming(format!(
+                    "condition_to_sql() 'in' operator expects a collection, not a {other}"
+                )));
+            }
+        };
+        // as on a clear column, `False` (no value) and `''` match each other
+        let mut hashes: Vec<Value> = Vec::with_capacity(items.len() + 2);
+        let mut falsy = false;
+        for item in items {
+            match item {
+                Value::Bool(false) => falsy = true,
+                Value::Str(text) if text.is_empty() => falsy = true,
+                Value::Str(text) => hashes.push(Value::Str(crate::blind::hash(
+                    model.name, field.name, text,
+                )?)),
+                _ => {
+                    return Err(self.input_error(format!(
+                        "The field {} of {} is encrypted: it is compared with text, not with \
+                         {item}",
+                        field.name, model.name
+                    )));
+                }
+            }
+        }
+        if falsy {
+            hashes.push(Value::Str(crate::blind::hash(model.name, field.name, "")?));
+            hashes.push(Value::Bool(false));
+        }
+        let refs: Vec<&Value> = hashes.iter().collect();
+        let (values, null) =
+            self.literal_in_part(model, field, ScalarKind::Text, positive, &refs, condition)?;
+        Ok(Token::BlindIn {
+            col,
+            positive,
+            values: values.is_some(),
             null,
         })
     }

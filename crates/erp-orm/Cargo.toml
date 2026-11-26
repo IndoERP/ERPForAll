@@ -64,6 +64,8 @@ tokio = { workspace = true, features = ["time", "sync", "macros", "rt", "rt-mult
 # Node digests: SHA-256 of configuration, build and addons, HMAC of shared secrets.
 sha2 = { workspace = true }
 hmac = { workspace = true }
+# Blind indexes of encrypted fields: one key per field, derived from the field key.
+hkdf = { workspace = true }
 # Encrypted fields (`field_encryption`): the AEAD and the wiping of key bytes read from the key file.
 chacha20poly1305 = { workspace = true }
 zeroize = { workspace = true }

@@ -86,15 +86,58 @@ of a database needs the same file: the node settings check refuses a node whose 
   a dump without its key file is unreadable for these fields, which is the point.
 - **Rotation:** put a new key on the first line and keep the old ones below it. New and changed values are sealed
   with the new key; values sealed with an old key still open. Remove an old key only when no value uses it: a
-  re-encryption job that rewrites old values is not built yet, so for now keep old keys.
+  re-encryption job that rewrites old values is not built yet, so for now keep old keys. Blind indexes (below) are
+  derived from the last key of the file, so adding a sealing key on top leaves them as they are.
 - **Existing data:** when a field becomes encrypted, the schema synchronization of the module upgrade converts its
   column and encrypts every existing value in the same transaction (in batches of 1,000 rows; on a large table this
   lengthens the upgrade). Declaring an encrypted field plain again is refused: decrypting a column is not built yet.
 - **Searching:** conditions, sorting, grouping and aggregates on an encrypted field are refused with an error naming
-  the field (the database cannot compare encrypted values). Keys, indexes and exclusion constraints on such a field
-  are refused when the registry is built; an addon's SQL must not read the column directly.
+  the field (the database cannot compare encrypted values), except equality on a blind-indexed field (below).
+  Keys, indexes and exclusion constraints on such a field are refused when the registry is built (a typed key on a
+  blind-indexed field excepted); an addon's SQL must not read the column directly.
 - **Audit:** the call digest of the audit trail replaces an encrypted field's value with `{"$redacted":"encrypted"}`;
   tracking an encrypted field is refused.
+
+### Blind indexes
+
+A field declared `blind_index = true` as well (`#[field(char, encrypted = true, blind_index = true)]`) can be
+searched for equal values and made unique, while the database still holds no clear value:
+
+```rust
+#[field(char, encrypted = true, blind_index = true)]
+pub national_id: Option<Arc<str>>,
+
+static OBJECTS: &[TableObjectDecl] = &[TableObjectDecl {
+    name: "_national_id_key",
+    kind: TableObjectKind::Key(
+        KeyDecl::new(&["company_id", "national_id"], "This national id is already used.").nulls_distinct(true),
+    ),
+}];
+```
+
+- **Storage:** a companion column `<field>__bidx` (`text`, not a field of the model) holds
+  `<key id>:<HMAC-SHA256 of the value, in hex>`. The HMAC key is derived with HKDF-SHA256 from the last key of
+  `field_key_file`, the model and the field: the same value in two fields has two unrelated hashes, and no key is
+  ever in the database. The ORM indexes the column.
+- **Searching:** `=`, `!=`, `in` and `not in` work (the ORM hashes the values it compares; `!=` keeps the records
+  without a value, as on a clear column), and so does `= False`. `like`, `ilike`, comparisons, ordering and
+  grouping stay refused. The value is hashed exactly as stored: normalise it (spaces, case) before writing it if
+  two spellings must match.
+- **Keys:** a typed key (`KeyDecl`) may name the field; it is built on the companion column. A key written as SQL
+  text (`UNIQUE (national_id)`) is not parsed and must not name an encrypted or companion column. Typed indexes and
+  exclusion constraints on the field stay refused. An upsert on a model with a blind-indexed field is refused for
+  now (create and write maintain the hash; the upsert statement does not yet).
+- **Existing data:** when a field becomes blind-indexed (or encrypted and blind-indexed in the same upgrade), the
+  schema synchronization adds the companion column and fills it for every row with a value, in batches of 1,000,
+  in the transaction of the module upgrade and before the table's keys are built; duplicate values stop the upgrade
+  with the key's message. Declaring the field without `blind_index` again drops the companion column.
+- **Changing the index key:** removing the last line of the key file changes the key the indexes derive from. Until
+  the next `erp module upgrade` recomputes them (it rewrites every hash whose key id is not the current one),
+  searches on the field find nothing and keys on it do not see the older rows: run the upgrade in the same
+  maintenance window as the key change. Removing a key also requires that no envelope uses it (see Rotation).
+- **What it reveals:** which rows hold equal values, which is what a unique key or an equality search needs. A
+  short or guessable value (a small number range) can be found by whoever holds the key file and the database;
+  without the key file the hashes give nothing back.
 ### Request throttling (`[auth]`)
 
 Three per-process token buckets screen requests before the database is asked; a value outside its bounds stops

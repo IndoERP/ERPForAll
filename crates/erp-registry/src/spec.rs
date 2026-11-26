@@ -394,6 +394,11 @@ pub struct FieldSpec {
     /// (`erp_orm::field_encryption`); conditions, ordering and grouping on it are refused. A
     /// related field whose path ends at an encrypted field is encrypted too.
     pub encrypted: bool,
+    /// `blind_index`: an encrypted field whose column has a companion column
+    /// ([`FieldSpec::blind_index_column`]) holding an HMAC-SHA256 of the value, which equality
+    /// conditions, typed keys and typed indexes use. A related field whose path ends at such a
+    /// field has one too.
+    pub blind_index: bool,
     /// `db_default`: schema sync keeps the static default (a boolean) as the column's
     /// database default instead of dropping it. Only on stored, required boolean fields with a
     /// static boolean default; never on an `_inherits` copy.
@@ -479,6 +484,13 @@ impl FieldSpec {
         self.column().is_some()
     }
 
+    /// The companion column of a stored blind-indexed field (`<field>__bidx`, `bytea`), which
+    /// holds the HMAC-SHA256 of the value; `None` for any other field.
+    pub fn blind_index_column(&self) -> Option<String> {
+        (self.blind_index && self.encrypted && self.has_column())
+            .then(|| format!("{}{BLIND_INDEX_SUFFIX}", self.name))
+    }
+
     /// Computed or related (its value comes from a compute method or a path).
     pub fn is_computed(&self) -> bool {
         self.compute.is_some() || self.related.is_some()
@@ -542,6 +554,10 @@ pub struct TableObject {
     /// behalf.
     pub runtime: bool,
 }
+
+/// Suffix of the companion column of a blind-indexed encrypted field
+/// ([`FieldSpec::blind_index_column`]).
+pub const BLIND_INDEX_SUFFIX: &str = "__bidx";
 
 /// The Postgres schema name of the closed event namespace (A2-D5).
 pub const EVENT_SCHEMA: &str = "erp_event";
