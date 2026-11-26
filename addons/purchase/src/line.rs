@@ -1158,7 +1158,12 @@ async fn fill_line(
             vals.insert("discount".into(), Cell::Decimal(discount));
         }
         if !vals.contains("date_planned") {
-            vals.insert("date_planned".into(), Cell::DateTime(planned(head, delay)?));
+            let lead_days = crate::settings::days_to_purchase(tx, head.company).await?;
+            let total_delay = delay.saturating_add(i64::from(lead_days));
+            vals.insert(
+                "date_planned".into(),
+                Cell::DateTime(planned(head, total_delay)?),
+            );
         }
         vals.insert(
             "selected_seller_id".into(),

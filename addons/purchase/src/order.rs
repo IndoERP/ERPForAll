@@ -43,10 +43,30 @@ const DRAFT_BILLS: &str = "SELECT DISTINCT k.bill_id::int8 FROM purchase_direct_
     WHERE k.order_id = ANY($1) AND m.state = 'draft' ORDER BY 1";
 
 /// Fields only the operations write (5).
-const OPERATION_FIELDS: [&str; 3] = ["state", "locked", "date_approve"];
+const OPERATION_FIELDS: [&str; 4] = ["state", "locked", "date_approve", "mail_reminder_confirmed"];
 
 /// Fields a client write never sets: the operation fields and the number, given only at create.
-const WRITE_REFUSED: [&str; 4] = ["state", "locked", "date_approve", "name"];
+const WRITE_REFUSED: [&str; 5] = [
+    "state",
+    "locked",
+    "date_approve",
+    "mail_reminder_confirmed",
+    "name",
+];
+
+/// Returns a copy of `env` with `default_*` keys removed while preserving `tz`, `lang`,
+/// `company_id`, `allowed_company_ids`, and all other caller context entries.
+pub(crate) fn strip_default_context(env: &Env) -> Env {
+    let mut ctx = env.context().clone();
+    let keys: Vec<String> = ctx
+        .default_field_names()
+        .map(|k| format!("default_{k}"))
+        .collect();
+    for k in keys {
+        ctx.remove(&k);
+    }
+    env.with_context_replaced(ctx)
+}
 
 /// Fields computed from the lines; never written by a client.
 const AMOUNT_FIELDS: [&str; 6] = [
