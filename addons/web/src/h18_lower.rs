@@ -2977,6 +2977,7 @@ mod tests {
     include!("tests/h18_dashboard.rs");
     include!("tests/h18_kanban.rs");
     include!("tests/h18_calendar.rs");
+    include!("tests/h18_base_views.rs");
 
     // ---- graph ----
     fn graph_refused(xml: &str) -> String {

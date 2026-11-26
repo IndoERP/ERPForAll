@@ -3,13 +3,13 @@
 //! caller-scoped ORM reads grouped by Asset Class -> Fixed Assets & CIP projects with
 //! Gross / CIP Cost, CIP Settled, Accumulated Depreciation, and Net Book Value.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use erp_addon_reporting::{
     definition::ReportDef,
     line::{
-        Cell as ReportCell, DrillTarget, ExpandPage, Expansion, Line, LineId, LineKind, Segment,
-        SegmentKind,
+        Cell as ReportCell, CellKind, DrillTarget, ExpandPage, Expansion, Line, LineId, LineKind,
+        Segment, SegmentKind,
     },
     options::Options,
     provider::{ProviderSpec, ReportCx, ReportProvider},
@@ -25,8 +25,42 @@ fn invalid(msg: impl Into<String>) -> Error {
     Error::validation(msg.into())
 }
 
+fn day(date: Date) -> String {
+    let (y, m, d) = date.ymd();
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
 fn cond(value: Json) -> Result<Domain> {
     Ok(Domain::from_json(&value)?)
+}
+
+fn gnum(value: Option<&GroupValue>) -> Result<Decimal> {
+    match value {
+        None | Some(GroupValue::Null | GroupValue::False) => Ok(Decimal::ZERO),
+        Some(GroupValue::Decimal(d)) => Ok(*d),
+        Some(GroupValue::Int(n)) => Ok(Decimal::from(*n)),
+        Some(other) => Err(Error::internal(format!(
+            "Asset Register aggregate is not exact decimal: {other:?}"
+        ))),
+    }
+}
+
+fn gid(value: Option<&GroupValue>) -> Option<i64> {
+    match value {
+        Some(GroupValue::Int(id)) if *id > 0 => Some(*id),
+        Some(other) => other.record_id().map(|id| id.get()),
+        None => None,
+    }
+}
+
+fn gtext(value: Option<&GroupValue>) -> Result<String> {
+    match value {
+        Some(GroupValue::Str(s)) => Ok(s.to_string()),
+        Some(GroupValue::False | GroupValue::Null) | None => Ok(String::new()),
+        Some(other) => Err(Error::internal(format!(
+            "Asset Register group key is not text: {other:?}"
+        ))),
+    }
 }
 
 fn get(row: &Value, field: &str) -> Result<Value> {
@@ -156,7 +190,7 @@ fn locate(report: &ReportDef, id: &LineId) -> Result<AssetLineTarget> {
         return Err(invalid("Line id does not belong to Asset & CIP Register."));
     }
     match id.segments() {
-        [seg]
+        [_, seg]
             if seg.kind() == &SegmentKind::Group("category_id".to_owned())
                 && seg.model() == "account.asset.category" =>
         {
@@ -164,11 +198,13 @@ fn locate(report: &ReportDef, id: &LineId) -> Result<AssetLineTarget> {
                 "" => Ok(AssetLineTarget::Category(None)),
                 v => Ok(AssetLineTarget::Category(Some(
                     v.parse::<i64>()
-                        .map_err(|_| invalid("Invalid asset class id."))?,
+                        .ok()
+                        .filter(|id| *id > 0)
+                        .ok_or_else(|| invalid("Invalid asset class id."))?,
                 ))),
             }
         }
-        [_, seg]
+        [_, _, seg]
             if seg.kind() == &SegmentKind::Group("asset_id".to_owned())
                 && seg.model() == "account.asset" =>
         {
@@ -197,6 +233,11 @@ impl ReportProvider for AssetRegisterReport {
         _strict: bool,
     ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
+            if options.order.is_some() {
+                return Err(invalid(
+                    "Asset & CIP Register rows are ordered by asset class and code.",
+                ));
+            }
             if let Some(key) = options.provider.keys().next() {
                 return Err(invalid(format!(
                     "Asset & CIP Register does not accept option '{key}'."
@@ -211,10 +252,12 @@ impl ReportProvider for AssetRegisterReport {
                 ));
             }
             for col in &report.columns {
-                if !matches!(
-                    col.label.as_str(),
-                    "asset_type" | "state" | "gross" | "settled" | "depreciation" | "nbv"
-                ) {
+                let ok = match col.label.as_str() {
+                    "asset_type" | "state" => col.kind == CellKind::Text,
+                    "gross" | "settled" | "depreciation" | "nbv" => col.kind == CellKind::Monetary,
+                    _ => false,
+                };
+                if !ok {
                     return Err(invalid(format!(
                         "Unknown Asset & CIP Register column '{}'.",
                         col.label
@@ -234,70 +277,131 @@ impl ReportProvider for AssetRegisterReport {
         Box::pin(async move {
             let company = options.companies[0];
             let (currency, scale) = company_currency(cx, company).await?;
+            let to = options.period.to;
             let limit = cx.bounds().max_screen_lines;
 
+            // Aggregate non-draft assets acquired on or before `to` by (category, type, state)
+            // so registers with >max_screen_lines assets remain fast and never fail unnecessarily.
             let asset_rec = cx.env().records("account.asset")?;
-            let found = asset_rec
-                .search_with(
+            let asset_domain = cond(json!([
+                ["company_id", "=", company],
+                ["state", "!=", "draft"],
+                ["acquisition_date", "<=", day(to)]
+            ]))?;
+            let grouped = asset_rec
+                ._read_group(
                     cx.tx(),
-                    &cond(json!([["company_id", "=", company]]))?,
-                    &SearchOptions::new().order("id").limit(limit as u64 + 1),
+                    ReadGroup::new(asset_domain)
+                        .groupby(["category_id", "asset_type", "state"])
+                        .aggregates([
+                            "original_value:sum",
+                            "cip_accumulated_amount:sum",
+                            "cip_settled_amount:sum",
+                            "cip_unsettled_amount:sum",
+                        ]),
                 )
                 .await?;
-            if found.len() > limit {
+
+            // Derive Accumulated Depreciation strictly from posted depreciation lines <= `to`
+            // (never `original_value - value_residual`, which misclassifies disposal write-offs as depreciation).
+            let dep_groups = cx
+                .env()
+                .records("account.asset.depreciation.line")?
+                ._read_group(
+                    cx.tx(),
+                    ReadGroup::new(cond(json!([
+                        ["asset_id.company_id", "=", company],
+                        ["asset_id.state", "!=", "draft"],
+                        ["asset_id.acquisition_date", "<=", day(to)],
+                        ["state", "=", "posted"],
+                        ["depreciation_date", "<=", day(to)]
+                    ]))?)
+                    .groupby(["asset_id"])
+                    .aggregates(["amount:sum"]),
+                )
+                .await?;
+            let mut dep_by_asset = BTreeMap::<i64, Decimal>::new();
+            for row in dep_groups.rows() {
+                if let Some(aid) = gid(row.first()) {
+                    let amt = gnum(row.get(1))?;
+                    if !amt.is_zero() {
+                        *dep_by_asset.entry(aid).or_insert(Decimal::ZERO) += amt;
+                    }
+                }
+            }
+            let mut dep_by_cat = BTreeMap::<Option<i64>, Decimal>::new();
+            let mut active_dep_by_cat = BTreeMap::<Option<i64>, Decimal>::new();
+            if !dep_by_asset.is_empty() {
+                let dep_asset_ids: Vec<i64> = dep_by_asset.keys().copied().collect();
+                let arows = asset_rec
+                    .browse(dep_asset_ids)?
+                    .read_rows(cx.tx(), &["id", "category_id", "state"], Load::Raw)
+                    .await?;
+                for ar in arows.iter().map(Value::Row) {
+                    let aid = int_field(&ar, "id")?;
+                    let cat_id = opt_int_field(&ar, "category_id")?;
+                    let st = text_field(&ar, "state")?;
+                    if let Some(&amt) = dep_by_asset.get(&aid) {
+                        *dep_by_cat.entry(cat_id).or_insert(Decimal::ZERO) += amt;
+                        if st != "disposed" {
+                            *active_dep_by_cat.entry(cat_id).or_insert(Decimal::ZERO) += amt;
+                        }
+                    }
+                }
+            }
+
+            let mut by_cat = BTreeMap::<Option<i64>, AssetTotals>::new();
+            let mut active_orig_by_cat = BTreeMap::<Option<i64>, Decimal>::new();
+            let mut cat_ids = BTreeSet::new();
+
+            for row in grouped.rows() {
+                let cat_id = gid(row.first());
+                if let Some(cid) = cat_id {
+                    cat_ids.insert(cid);
+                }
+                let atype = gtext(row.get(1))?;
+                let state = gtext(row.get(2))?;
+                let orig = gnum(row.get(3))?;
+                let cip_acc = gnum(row.get(4))?;
+                let cip_set = gnum(row.get(5))?;
+                let cip_uns = gnum(row.get(6))?;
+
+                let entry = by_cat.entry(cat_id).or_default();
+                if atype == "cip" {
+                    entry.gross += cip_acc;
+                    entry.settled += cip_set;
+                    entry.nbv += cip_uns;
+                } else {
+                    entry.gross += orig;
+                    if state != "disposed" {
+                        *active_orig_by_cat.entry(cat_id).or_insert(Decimal::ZERO) += orig;
+                    }
+                }
+            }
+            if by_cat.len() > limit {
                 return Err(invalid(format!(
                     "Asset & CIP Register exceeds reporting.max_screen_lines ({limit})."
                 )));
             }
-            let rows = found
-                .read_rows(
-                    cx.tx(),
-                    &[
-                        "id",
-                        "category_id",
-                        "asset_type",
-                        "original_value",
-                        "value_residual",
-                        "cip_accumulated_amount",
-                        "cip_settled_amount",
-                        "cip_unsettled_amount",
-                    ],
-                    Load::Raw,
-                )
-                .await?;
 
-            let mut by_cat = BTreeMap::<Option<i64>, AssetTotals>::new();
-            let mut cat_ids = Vec::new();
             let mut grand = AssetTotals::default();
+            for (cat_id, totals) in &mut by_cat {
+                let dep = dep_by_cat.get(cat_id).copied().unwrap_or(Decimal::ZERO);
+                let active_orig = active_orig_by_cat
+                    .get(cat_id)
+                    .copied()
+                    .unwrap_or(Decimal::ZERO);
+                let active_dep = active_dep_by_cat
+                    .get(cat_id)
+                    .copied()
+                    .unwrap_or(Decimal::ZERO);
+                totals.depreciation = dep;
+                totals.nbv += (active_orig - active_dep).max(Decimal::ZERO);
 
-            for row in rows.iter().map(Value::Row) {
-                let cat_id = opt_int_field(&row, "category_id")?;
-                if let Some(cid) = cat_id
-                    && !cat_ids.contains(&cid)
-                {
-                    cat_ids.push(cid);
-                }
-                let atype = text_field(&row, "asset_type")?;
-                let (gross, settled, dep, nbv) = if atype == "cip" {
-                    let acc = dec_field(&row, "cip_accumulated_amount")?;
-                    let set = dec_field(&row, "cip_settled_amount")?;
-                    let uns = dec_field(&row, "cip_unsettled_amount")?;
-                    (acc, set, Decimal::ZERO, uns)
-                } else {
-                    let orig = dec_field(&row, "original_value")?;
-                    let res = dec_field(&row, "value_residual")?;
-                    (orig, Decimal::ZERO, (orig - res).max(Decimal::ZERO), res)
-                };
-                let entry = by_cat.entry(cat_id).or_default();
-                entry.gross += gross;
-                entry.settled += settled;
-                entry.depreciation += dep;
-                entry.nbv += nbv;
-
-                grand.gross += gross;
-                grand.settled += settled;
-                grand.depreciation += dep;
-                grand.nbv += nbv;
+                grand.gross += totals.gross;
+                grand.settled += totals.settled;
+                grand.depreciation += totals.depreciation;
+                grand.nbv += totals.nbv;
             }
 
             let mut cat_names = BTreeMap::<i64, String>::new();
@@ -324,6 +428,14 @@ impl ReportProvider for AssetRegisterReport {
             let root = LineId::root(report.id);
             let mut out = Vec::new();
             for (cat_id, totals) in by_cat {
+                if options.hide_zero
+                    && totals.gross.is_zero()
+                    && totals.settled.is_zero()
+                    && totals.depreciation.is_zero()
+                    && totals.nbv.is_zero()
+                {
+                    continue;
+                }
                 let (label, seg_val) = match cat_id {
                     Some(cid) => (
                         cat_names
@@ -340,13 +452,12 @@ impl ReportProvider for AssetRegisterReport {
                     &seg_val,
                 ));
                 let mut line = Line::new(
-                    lid.clone(),
+                    lid,
                     label,
                     LineKind::Group,
                     build_cells(report, currency, scale, &totals),
                 );
                 line.unfoldable = true;
-                line.unfolded = options.unfold_all || options.unfolded.contains(&lid);
                 out.push(line);
             }
 
@@ -372,16 +483,27 @@ impl ReportProvider for AssetRegisterReport {
             let AssetLineTarget::Category(cat_id) = locate(report, line)? else {
                 return Err(invalid("Only Asset Class rows can be unfolded."));
             };
+            let max_page = cx.bounds().max_screen_lines as u64;
+            if page.limit == 0 || page.limit > max_page {
+                return Err(invalid(format!(
+                    "Page limit must be between 1 and {max_page}."
+                )));
+            }
             let company = options.companies[0];
+            let to = options.period.to;
             let (currency, scale) = company_currency(cx, company).await?;
 
             let domain = match cat_id {
                 Some(cid) => cond(json!([
                     ["company_id", "=", company],
+                    ["state", "!=", "draft"],
+                    ["acquisition_date", "<=", day(to)],
                     ["category_id", "=", cid]
                 ]))?,
                 None => cond(json!([
                     ["company_id", "=", company],
+                    ["state", "!=", "draft"],
+                    ["acquisition_date", "<=", day(to)],
                     ["category_id", "=", false]
                 ]))?,
             };
@@ -407,7 +529,6 @@ impl ReportProvider for AssetRegisterReport {
                         "asset_type",
                         "state",
                         "original_value",
-                        "value_residual",
                         "cip_accumulated_amount",
                         "cip_settled_amount",
                         "cip_unsettled_amount",
@@ -415,6 +536,34 @@ impl ReportProvider for AssetRegisterReport {
                     Load::Raw,
                 )
                 .await?;
+
+            let page_ids: Vec<i64> = rows
+                .iter()
+                .map(Value::Row)
+                .map(|r| int_field(&r, "id"))
+                .collect::<Result<_>>()?;
+            let mut dep_by_asset = BTreeMap::<i64, Decimal>::new();
+            if !page_ids.is_empty() {
+                let dep_groups = cx
+                    .env()
+                    .records("account.asset.depreciation.line")?
+                    ._read_group(
+                        cx.tx(),
+                        ReadGroup::new(cond(json!([
+                            ["asset_id", "in", page_ids],
+                            ["state", "=", "posted"],
+                            ["depreciation_date", "<=", day(to)]
+                        ]))?)
+                        .groupby(["asset_id"])
+                        .aggregates(["amount:sum"]),
+                    )
+                    .await?;
+                for dr in dep_groups.rows() {
+                    if let Some(aid) = gid(dr.first()) {
+                        *dep_by_asset.entry(aid).or_insert(Decimal::ZERO) += gnum(dr.get(1))?;
+                    }
+                }
+            }
 
             let mut out = Vec::new();
             for row in rows.iter().map(Value::Row) {
@@ -439,14 +588,19 @@ impl ReportProvider for AssetRegisterReport {
                     }
                 } else {
                     let orig = dec_field(&row, "original_value")?;
-                    let res = dec_field(&row, "value_residual")?;
+                    let dep = dep_by_asset.get(&aid).copied().unwrap_or(Decimal::ZERO);
+                    let nbv = if state == "disposed" {
+                        Decimal::ZERO
+                    } else {
+                        (orig - dep).max(Decimal::ZERO)
+                    };
                     AssetTotals {
                         kind_text: "Fixed Asset".to_owned(),
                         state_text: state,
                         gross: orig,
                         settled: Decimal::ZERO,
-                        depreciation: (orig - res).max(Decimal::ZERO),
-                        nbv: res,
+                        depreciation: dep,
+                        nbv,
                     }
                 };
                 let cid = line.child(Segment::group(
@@ -481,15 +635,28 @@ impl ReportProvider for AssetRegisterReport {
 
     fn drill<'a>(
         &'a self,
-        _cx: &'a mut ReportCx<'_>,
+        cx: &'a mut ReportCx<'_>,
         report: &'a ReportDef,
-        _options: &'a Options,
+        options: &'a Options,
         line: &'a LineId,
         target: &'a DrillTarget,
     ) -> BoxFuture<'a, Result<Json>> {
         Box::pin(async move {
             match (locate(report, line)?, target) {
                 (AssetLineTarget::Asset(aid), DrillTarget::Item(item)) if item == "open" => {
+                    let company = options.companies[0];
+                    let visible = cx
+                        .env()
+                        .records("account.asset")?
+                        .search_count(
+                            cx.tx(),
+                            &cond(json!([["id", "=", aid], ["company_id", "=", company]]))?,
+                            None,
+                        )
+                        .await?;
+                    if visible == 0 {
+                        return Err(invalid("Asset is not accessible in this company."));
+                    }
                     Ok(json!({
                         "type": "ir.actions.act_window",
                         "name": "Asset / CIP",

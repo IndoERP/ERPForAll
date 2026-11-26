@@ -7,7 +7,7 @@ use erp_sdk::prelude::*;
 use erp_sdk::serde_json::json;
 use erp_sdk::{Operation, ValueMap};
 
-use crate::order::SaleOrder;
+use crate::order::{SaleOrder, strip_default_context};
 
 /// `sale.quotation.send`: transient email composer for sending quotations and pro-forma invoices.
 #[model(
@@ -69,17 +69,33 @@ impl SaleQuotationSend {
         };
         if let Some(order_id) = oid {
             let order = this.env().records("sale.order")?.browse([order_id])?;
-            let oname = match order.cell(tx, "name").await {
-                Ok(Cell::Str(s)) => s.to_string(),
-                _ => format!("Order {order_id}"),
+            order.check_access(tx, Operation::Read).await?;
+            let oname = match order.cell(tx, "name").await? {
+                Cell::Str(s) => s.to_string(),
+                Cell::Null => format!("Order {order_id}"),
+                other => {
+                    return Err(Error::programming(format!(
+                        "sale.order.name returned {other:?}"
+                    )));
+                }
             };
-            let total = match order.cell(tx, "amount_total").await {
-                Ok(Cell::Decimal(d)) => d.to_string(),
-                _ => "0.00".to_owned(),
+            let total = match order.cell(tx, "amount_total").await? {
+                Cell::Decimal(d) => d.to_string(),
+                Cell::Null => "0.00".to_owned(),
+                other => {
+                    return Err(Error::programming(format!(
+                        "sale.order.amount_total returned {other:?}"
+                    )));
+                }
             };
-            let partner_id = match order.cell(tx, "partner_id").await {
-                Ok(Cell::Id(pid)) => Some(pid),
-                _ => None,
+            let partner_id = match order.cell(tx, "partner_id").await? {
+                Cell::Id(pid) => Some(pid),
+                Cell::Null => None,
+                other => {
+                    return Err(Error::programming(format!(
+                        "sale.order.partner_id returned {other:?}"
+                    )));
+                }
             };
             if names.iter().any(|n| n == "partner_id")
                 && !values.contains_key("partner_id")
@@ -90,14 +106,24 @@ impl SaleQuotationSend {
             if names.iter().any(|n| n == "email_to")
                 && !values.contains_key("email_to")
                 && let Some(pid) = partner_id
-                && let Ok(Cell::Str(email)) = this
+            {
+                match this
                     .env()
                     .records("res.partner")?
                     .browse([pid])?
                     .cell(tx, "email")
-                    .await
-            {
-                values.insert("email_to".to_owned(), Value::Str(email));
+                    .await?
+                {
+                    Cell::Str(email) => {
+                        values.insert("email_to".to_owned(), Value::Str(email));
+                    }
+                    Cell::Null => {}
+                    other => {
+                        return Err(Error::programming(format!(
+                            "res.partner.email returned {other:?}"
+                        )));
+                    }
+                }
             }
             if names.iter().any(|n| n == "subject") && !values.contains_key("subject") {
                 values.insert(
@@ -141,40 +167,52 @@ impl SaleQuotationSend {
         let subject = wizard
             .get(tx, SaleQuotationSend::SUBJECT)
             .await?
-            .unwrap_or_else(|| Arc::from("Quotation"));
+            .unwrap_or_default();
+        if subject.trim().is_empty() {
+            return Err(Error::user("Enter a subject before sending."));
+        }
         let is_proforma = wizard.get(tx, SaleQuotationSend::IS_PROFORMA).await?;
         let body = wizard
             .get(tx, SaleQuotationSend::BODY)
             .await?
             .unwrap_or_default();
 
-        let env = wizard
-            .env()
-            .with_context_replaced(erp_sdk::Context::default());
+        let env = strip_default_context(wizard.env());
         let order = env.records("sale.order")?.browse([order_id])?;
         order.check_access(tx, Operation::Write).await?;
-        let state = order.cell(tx, "state").await?;
-        if state == Cell::Str("draft".into()) {
-            let _: () = order.call(tx, "action_quotation_sent", ()).await?;
-        }
         let doc_kind = if is_proforma {
             "Pro-Forma Invoice"
         } else {
             "Quotation"
         };
-        let note_body = format!("{doc_kind} emailed to {email_to}\n\n{body}");
-        let mut req = PostRequest::new(Body::Text(note_body));
-        req.subject = Some(subject.to_string());
-        req.message_type = PostType::Comment;
-        req.subtype = PostSubtype::Comment;
-        let _: Posted = order.call(tx, "message_post", (req,)).await?;
 
-        wizard.as_records().unlink(tx).await?;
+        tx.savepoint(async |tx| {
+            tx.flush().await?;
+            order.lock_for_update(tx, true).await?;
+            let state = order.cell(tx, "state").await?;
+            if state == Cell::Str("cancel".into()) {
+                return Err(Error::user(
+                    "Cancelled quotations cannot be sent. Set the quotation back to draft first.",
+                ));
+            }
+            if state == Cell::Str("draft".into()) {
+                let _: () = order.call(tx, "action_quotation_sent", ()).await?;
+            }
+            let note_body = format!("{doc_kind} logged for {email_to}\n\n{body}");
+            let mut req = PostRequest::new(Body::Text(note_body));
+            req.subject = Some(subject.to_string());
+            req.message_type = PostType::Comment;
+            req.subtype = PostSubtype::Comment;
+            let _: Posted = order.call(tx, "message_post", (req,)).await?;
+            wizard.as_records().unlink(tx).await
+        })
+        .await?;
+
         Ok(Value::Json(Arc::new(json!({
             "type": "ir.actions.client",
             "tag": "display_notification",
             "params": {
-                "message": format!("{doc_kind} sent to {email_to}."),
+                "message": format!("{doc_kind} logged and marked sent for {email_to}."),
                 "type": "success",
                 "next": {"type": "ir.actions.act_window_close"},
             },
@@ -273,32 +311,40 @@ impl SaleOrderSignWizard {
             .get(tx, SaleOrderSignWizard::PAYMENT_REFERENCE)
             .await?;
 
-        let env = wizard
-            .env()
-            .with_context_replaced(erp_sdk::Context::default());
+        let env = strip_default_context(wizard.env());
         let order = env.records("sale.order")?.browse([order_id])?;
         order.check_access(tx, Operation::Write).await?;
 
-        let now = DateTime::now();
-        let mut vals = RawVals::new();
-        vals.insert("signed_by".into(), Cell::Str(signer.into()));
-        vals.insert("signed_on".into(), Cell::DateTime(now));
-        order.write(tx, vals).await?;
+        tx.savepoint(async |tx| {
+            tx.flush().await?;
+            order.lock_for_update(tx, true).await?;
+            let state = order.cell(tx, "state").await?;
+            if !matches!(state, Cell::Str(ref s) if matches!(s.as_ref(), "draft" | "sent")) {
+                return Err(Error::user(
+                    "Only draft or sent quotations can be signed and confirmed.",
+                ));
+            }
+            if order.cell(tx, "locked").await? == Cell::Bool(true) {
+                return Err(Error::user("Locked sales orders cannot be re-signed."));
+            }
+            let now = DateTime::now();
+            let mut vals = RawVals::new();
+            vals.insert("signed_by".into(), Cell::Str(signer.into()));
+            vals.insert("signed_on".into(), Cell::DateTime(now));
+            order.write_base(tx, vals).await?;
 
-        let state = order.cell(tx, "state").await?;
-        if matches!(state, Cell::Str(ref s) if matches!(s.as_ref(), "draft" | "sent")) {
             let _: () = order.call(tx, "action_confirm", ()).await?;
-        }
-        let pay_note = pay_ref
-            .as_deref()
-            .filter(|s| !s.trim().is_empty())
-            .map(|r| format!(" (Payment ref: {r})"))
-            .unwrap_or_default();
-        let msg = format!("Quotation digitally signed and accepted by {signer}{pay_note}.");
-        let req = PostRequest::new(Body::Text(msg));
-        let _: Posted = order.call(tx, "message_post", (req,)).await?;
-
-        wizard.as_records().unlink(tx).await?;
+            let pay_note = pay_ref
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .map(|r| format!(" (Payment ref: {r})"))
+                .unwrap_or_default();
+            let msg = format!("Quotation digitally signed and accepted by {signer}{pay_note}.");
+            let req = PostRequest::new(Body::Text(msg));
+            let _: Posted = order.call(tx, "message_post", (req,)).await?;
+            wizard.as_records().unlink(tx).await
+        })
+        .await?;
         Ok(Value::Json(Arc::new(json!({
             "type": "ir.actions.client",
             "tag": "display_notification",

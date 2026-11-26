@@ -438,28 +438,47 @@ async fn figures(
                 Domain::field("parent_state")?.eq("posted"),
             ]))
         };
-        // shortcut: "open" is every posted line until reconciliation exists; then the residual
-        // replaces the balance here.
-        let groups = grouped(
+        let posted_open = || -> Result<Domain> {
+            Ok(Domain::and([
+                posted()?,
+                Domain::field("full_reconcile_id")?.eq(false),
+            ]))
+        };
+        let draft_groups = grouped(
             tx,
             env,
             "account.move.line",
-            Domain::and([
-                open_lines()?,
-                Domain::field("parent_state")?.in_(vec!["draft", "posted"]),
-            ]),
-            &["journal_id", "parent_state"],
+            Domain::and([open_lines()?, Domain::field("parent_state")?.eq("draft")]),
+            &["journal_id"],
             &["balance:sum", "move_id:count_distinct"],
         )
         .await?;
-        for r in 0..groups.len() {
-            let journal = group_id(&groups.column(0)[r], "journal")?;
-            let state = group_str(&groups.column(1)[r])?.to_owned();
+        for r in 0..draft_groups.len() {
+            let journal = group_id(&draft_groups.column(0)[r], "journal")?;
             f.open.insert(
-                (journal, state),
+                (journal, "draft".to_owned()),
                 Sum {
-                    amount: group_decimal(&groups.column(2)[r])?,
-                    count: group_int(&groups.column(3)[r])?,
+                    amount: group_decimal(&draft_groups.column(1)[r])?,
+                    count: group_int(&draft_groups.column(2)[r])?,
+                },
+            );
+        }
+        let posted_groups = grouped(
+            tx,
+            env,
+            "account.move.line",
+            posted_open()?,
+            &["journal_id"],
+            &["balance:sum", "move_id:count_distinct"],
+        )
+        .await?;
+        for r in 0..posted_groups.len() {
+            let journal = group_id(&posted_groups.column(0)[r], "journal")?;
+            f.open.insert(
+                (journal, "posted".to_owned()),
+                Sum {
+                    amount: group_decimal(&posted_groups.column(1)[r])?,
+                    count: group_int(&posted_groups.column(2)[r])?,
                 },
             );
         }
@@ -468,7 +487,7 @@ async fn figures(
             env,
             "account.move.line",
             Domain::and([
-                posted()?,
+                posted_open()?,
                 Domain::field("date_maturity")?.lt(today.to_string()),
             ]),
             &["journal_id"],

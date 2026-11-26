@@ -21,3 +21,7 @@ workspace = true
 
 [dev-dependencies]
 toml = { workspace = true }
+erp-testkit = { workspace = true }
+erp-addon-web = { workspace = true }
+erp-addon-analytic = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }

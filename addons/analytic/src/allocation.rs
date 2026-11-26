@@ -7,12 +7,7 @@
 use erp_sdk::Operation;
 use erp_sdk::prelude::*;
 
-use crate::{db, default_today, is_center_valid_on, split_proportional_exact};
-
-fn default_month_start(_ctx: &erp_sdk::DefaultContext) -> Value {
-    let (y, m, _) = Date::today().ymd();
-    Value::Date(Date::from_ymd(y, m, 1).unwrap_or_else(Date::today))
-}
+use crate::{db, is_center_valid_on, split_proportional_exact, strip_default_context};
 
 /// `account.cost.allocation.cycle`: reusable period-end cost center allocation definition
 /// supporting Distribution (primary costs) and Assessment (primary + secondary overhead).
@@ -213,7 +208,12 @@ impl AccountCostAllocationRule {
     description = "Cost Allocation Receiver",
     order = "id",
     check_company_auto = true,
-    company_access = direct(field = "company_id", branch = "exact", empty = "deny")
+    company_access = direct(field = "company_id", branch = "exact", empty = "deny"),
+    keys = [key(
+        name = "_unique_rule_receiver",
+        fields = ["rule_id", "receiver_center_id"],
+        message = "A receiver cost center can appear only once per allocation rule."
+    )]
 )]
 pub struct AccountCostAllocationReceiver {
     /// Parent rule.
@@ -251,7 +251,25 @@ pub struct AccountCostAllocationReceiver {
 }
 
 #[methods(AccountCostAllocationReceiver, addon = "analytic")]
-impl AccountCostAllocationReceiver {}
+impl AccountCostAllocationReceiver {
+    #[constrains("fixed_pct")]
+    async fn _check_fixed_pct(
+        this: &RecordSet<AccountCostAllocationReceiver>,
+        tx: &mut Transaction,
+    ) -> Result<()> {
+        for pct in this
+            .mapped(tx, AccountCostAllocationReceiver::FIXED_PCT)
+            .await?
+        {
+            if pct < Decimal::ZERO {
+                return Err(Error::validation(
+                    "Allocation receiver Fixed % cannot be negative.",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
 
 /// `account.cost.allocation.run`: auditable period-end execution of a cost allocation cycle.
 #[model(
@@ -294,13 +312,13 @@ pub struct AccountCostAllocationRun {
     )]
     pub currency_id: Option<RecId>,
     /// Start date of sender cost accumulation period (inclusive).
-    #[field(date, required = true, default_fn = default_month_start, string = "Period Start")]
+    #[field(date, required = true, string = "Period Start")]
     pub date_from: Option<Date>,
     /// End date of sender cost accumulation period (inclusive).
-    #[field(date, required = true, default_fn = default_today, string = "Period End")]
+    #[field(date, required = true, string = "Period End")]
     pub date_to: Option<Date>,
     /// Posting date stamped onto generated secondary analytic lines.
-    #[field(date, required = true, default_fn = default_today, string = "Posting Date")]
+    #[field(date, required = true, string = "Posting Date")]
     pub posting_date: Option<Date>,
     /// Execution status.
     #[field(
@@ -338,8 +356,76 @@ pub struct AccountCostAllocationRun {
 
 #[methods(AccountCostAllocationRun, addon = "analytic")]
 impl AccountCostAllocationRun {
+    #[method(override)]
+    async fn default_get(
+        this: &RecordSet<AccountCostAllocationRun>,
+        tx: &mut Transaction,
+        names: Vec<String>,
+        sup: Super,
+    ) -> Result<erp_sdk::ValueMap> {
+        let mut values: erp_sdk::ValueMap =
+            sup.call(tx, this.as_records(), (names.clone(),)).await?;
+        let today = this.env().context_today()?;
+        if names.iter().any(|n| n == "date_from") && !values.contains_key("date_from") {
+            let (y, m, _) = today.ymd();
+            let first = Date::from_ymd(y, m, 1).ok_or_else(|| {
+                Error::invariant(format!("Could not build first day of {y}-{m:02}"))
+            })?;
+            values.insert("date_from".to_owned(), Value::Date(first));
+        }
+        if names.iter().any(|n| n == "date_to") && !values.contains_key("date_to") {
+            values.insert("date_to".to_owned(), Value::Date(today));
+        }
+        if names.iter().any(|n| n == "posting_date") && !values.contains_key("posting_date") {
+            values.insert("posting_date".to_owned(), Value::Date(today));
+        }
+        Ok(values)
+    }
+
+    #[method(override)]
+    async fn write(
+        this: &RecordSet<AccountCostAllocationRun>,
+        tx: &mut Transaction,
+        vals: RawVals,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.as_records().is_empty() {
+            if vals.contains("state") || vals.contains("total_allocated") {
+                return Err(Error::user(
+                    "Allocation run status and total cannot be modified directly; use Execute or Reverse.",
+                ));
+            }
+            for state in this.mapped(tx, AccountCostAllocationRun::STATE).await? {
+                if state.as_deref() != Some("draft") {
+                    return Err(Error::user(
+                        "Posted or reversed allocation runs cannot be modified.",
+                    ));
+                }
+            }
+        }
+        sup.call(tx, this.as_records(), (vals,)).await
+    }
+
+    #[method(override)]
+    async fn unlink(
+        this: &RecordSet<AccountCostAllocationRun>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.as_records().is_empty() {
+            for state in this.mapped(tx, AccountCostAllocationRun::STATE).await? {
+                if state.as_deref() == Some("posted") {
+                    return Err(Error::user(
+                        "Posted allocation runs cannot be deleted; reverse the run first.",
+                    ));
+                }
+            }
+        }
+        sup.call(tx, this.as_records(), ()).await
+    }
+
     /// Executes the cycle's allocation rules in sequence order, posting balanced secondary
-    /// sender-credit and receiver-debit analytic lines with exact cent conservation.
+    /// sender-credit and receiver-debit analytic lines with exact currency-unit conservation.
     #[method]
     #[rpc(effect = write)]
     pub async fn action_execute_allocation(
@@ -349,36 +435,73 @@ impl AccountCostAllocationRun {
         let run = this.ensure_one()?;
         run.as_records().check_access(tx, Operation::Write).await?;
         let run_id = run.as_records().ids()[0];
-        let state = run.get(tx, AccountCostAllocationRun::STATE).await?;
-        if state.as_deref() != Some("draft") {
-            return Err(Error::user("Only a draft allocation run can be executed."));
-        }
+        tx.flush().await?;
+
         let cycle_id = run
             .get(tx, AccountCostAllocationRun::CYCLE_ID)
             .await?
             .ok_or_else(|| Error::validation("Select an allocation cycle."))?
             .get();
-        let date_from = run
-            .get(tx, AccountCostAllocationRun::DATE_FROM)
-            .await?
+
+        // Lock cycle first, then run, to serialize concurrent executions on the same cycle.
+        let cyc_rows = tx
+            .query(
+                "SELECT allocation_method::text, tracing_basis::text, skf_id::int8, company_id::int8 \
+                 FROM account_cost_allocation_cycle WHERE id = $1 FOR UPDATE",
+                &[&cycle_id],
+            )
+            .await?;
+        let Some(cyc) = cyc_rows.first() else {
+            return Err(Error::missing("Allocation cycle no longer exists."));
+        };
+        let method: String = cyc.try_get(0).map_err(db)?;
+        let basis: String = cyc.try_get(1).map_err(db)?;
+        let skf_id: Option<i64> = cyc.try_get(2).map_err(db)?;
+        let run_company_id: i64 = cyc.try_get(3).map_err(db)?;
+
+        let run_rows = tx
+            .query(
+                "SELECT state::text, cycle_id::int8, date_from, date_to, posting_date, name::text \
+                 FROM account_cost_allocation_run WHERE id = $1 FOR UPDATE",
+                &[&run_id],
+            )
+            .await?;
+        let Some(rrow) = run_rows.first() else {
+            return Err(Error::missing("Allocation run no longer exists."));
+        };
+        let state: String = rrow.try_get(0).map_err(db)?;
+        if state != "draft" {
+            return Err(Error::user("Only a draft allocation run can be executed."));
+        }
+        let locked_cycle_id: i64 = rrow.try_get(1).map_err(db)?;
+        if locked_cycle_id != cycle_id {
+            return Err(Error::conflict(
+                "The allocation run's cycle changed while executing; retry.",
+            ));
+        }
+        let date_from: Date = rrow
+            .try_get::<_, Option<Date>>(2)
+            .map_err(db)?
             .ok_or_else(|| Error::validation("Period Start is required."))?;
-        let date_to = run
-            .get(tx, AccountCostAllocationRun::DATE_TO)
-            .await?
+        let date_to: Date = rrow
+            .try_get::<_, Option<Date>>(3)
+            .map_err(db)?
             .ok_or_else(|| Error::validation("Period End is required."))?;
         if date_to.days() < date_from.days() {
             return Err(Error::validation(
                 "Period End cannot be earlier than Period Start.",
             ));
         }
-        let posting_date = run
-            .get(tx, AccountCostAllocationRun::POSTING_DATE)
-            .await?
-            .unwrap_or(date_to);
-        let run_name = run
-            .get(tx, AccountCostAllocationRun::NAME)
-            .await?
-            .unwrap_or_else(|| Arc::from("Allocation Run"));
+        let posting_date: Date = rrow
+            .try_get::<_, Option<Date>>(4)
+            .map_err(db)?
+            .ok_or_else(|| Error::validation("Posting Date is required."))?;
+        let run_name: Arc<str> = rrow
+            .try_get::<_, Option<String>>(5)
+            .map_err(db)?
+            .filter(|s| !s.trim().is_empty())
+            .map(Arc::from)
+            .ok_or_else(|| Error::validation("Allocation Run Name is required."))?;
 
         // Idempotency guard: prevent double allocation for the same cycle & overlapping dates.
         let dup_rows = tx
@@ -397,23 +520,71 @@ impl AccountCostAllocationRun {
             )));
         }
 
-        let cyc_rows = tx
+        let cost_kind = match method.as_str() {
+            "distribution" => "secondary_distribution",
+            "assessment" => "secondary_assessment",
+            other => {
+                return Err(Error::validation(format!(
+                    "Unknown allocation method '{other}'."
+                )));
+            }
+        };
+
+        let scale_rows = tx
             .query(
-                "SELECT allocation_method::text, tracing_basis::text, skf_id::int8 \
-                 FROM account_cost_allocation_cycle WHERE id = $1",
-                &[&cycle_id],
+                "SELECT cur.decimal_places::int4 \
+                 FROM res_company c \
+                 JOIN res_currency cur ON cur.id = c.currency_id \
+                 WHERE c.id = $1",
+                &[&run_company_id],
             )
             .await?;
-        let Some(cyc) = cyc_rows.first() else {
-            return Err(Error::missing("Allocation cycle no longer exists."));
-        };
-        let method: String = cyc.try_get(0).map_err(db)?;
-        let basis: String = cyc.try_get(1).map_err(db)?;
-        let skf_id: Option<i64> = cyc.try_get(2).map_err(db)?;
-        let cost_kind = if method == "distribution" {
-            "secondary_distribution"
+        let scale_i32: i32 = scale_rows
+            .first()
+            .ok_or_else(|| Error::missing("Company currency not found for allocation run."))?
+            .try_get(0)
+            .map_err(db)?;
+        let scale = u32::try_from(scale_i32).map_err(|_| {
+            Error::validation(format!(
+                "Invalid currency decimal_places ({scale_i32}) for allocation run."
+            ))
+        })?;
+
+        let hoisted_skf = if basis == "skf" {
+            let sid = skf_id.ok_or_else(|| {
+                Error::validation("Select a Statistical Key Figure on the allocation cycle.")
+            })?;
+            let skf_rows = tx
+                .query(
+                    "SELECT skf_type::text, company_id::int8 FROM account_analytic_skf WHERE id = $1",
+                    &[&sid],
+                )
+                .await?;
+            let Some(skf_row) = skf_rows.first() else {
+                return Err(Error::missing(format!(
+                    "Statistical Key Figure {sid} does not exist."
+                )));
+            };
+            let skf_type: String = skf_row
+                .try_get::<_, Option<String>>(0)
+                .map_err(db)?
+                .ok_or_else(|| {
+                    Error::validation(format!("Statistical Key Figure {sid} has no category."))
+                })?;
+            let skf_company_id: i64 = skf_row.try_get(1).map_err(db)?;
+            if skf_company_id != run_company_id {
+                return Err(Error::validation(
+                    "Statistical Key Figure must belong to the same company as the allocation cycle.",
+                ));
+            }
+            if !matches!(skf_type.as_str(), "fixed" | "total") {
+                return Err(Error::validation(format!(
+                    "Unknown Statistical Key Figure category '{skf_type}'."
+                )));
+            }
+            Some((sid, skf_type))
         } else {
-            "secondary_assessment"
+            None
         };
 
         let rules = tx
@@ -430,7 +601,7 @@ impl AccountCostAllocationRun {
             ));
         }
 
-        let clean_env = run.env().with_context_replaced(erp_sdk::Context::default());
+        let clean_env = strip_default_context(run.env());
         let mut grand_total = Decimal::ZERO;
 
         for rule_row in rules {
@@ -441,22 +612,33 @@ impl AccountCostAllocationRun {
 
             check_secondary_allowed(tx, sender_id, posting_date).await?;
 
-            let sender_cost_sql = if method == "distribution" {
-                "SELECT COALESCE(SUM(-amount), 0) FROM account_analytic_line \
-                 WHERE account_id = $1 AND date >= $2 AND date <= $3 \
-                   AND COALESCE(cost_kind, 'primary') = 'primary'"
-            } else {
-                "SELECT COALESCE(SUM(-amount), 0) FROM account_analytic_line \
-                 WHERE account_id = $1 AND date >= $2 AND date <= $3"
-            };
-            let sender_pool: Decimal = tx
-                .query(sender_cost_sql, &[&sender_id, &date_from, &date_to])
+            // In assessment mode, include secondary lines posted earlier in this same step-down run
+            // even when `posting_date` lies outside `[date_from, date_to]`.
+            let sender_rows = if method == "distribution" {
+                tx.query(
+                    "SELECT COALESCE(SUM(-amount), 0) FROM account_analytic_line \
+                     WHERE account_id = $1 AND company_id = $4 \
+                       AND date >= $2 AND date <= $3 \
+                       AND COALESCE(cost_kind, 'primary') = 'primary'",
+                    &[&sender_id, &date_from, &date_to, &run_company_id],
+                )
                 .await?
+            } else {
+                tx.query(
+                    "SELECT COALESCE(SUM(-amount), 0) FROM account_analytic_line \
+                     WHERE account_id = $1 AND company_id = $4 \
+                       AND ((date >= $2 AND date <= $3) OR allocation_run_id = $5)",
+                    &[&sender_id, &date_from, &date_to, &run_company_id, &run_id],
+                )
+                .await?
+            };
+            let sender_pool: Decimal = sender_rows
                 .first()
-                .and_then(|r| r.try_get(0).ok())
-                .unwrap_or(Decimal::ZERO);
+                .ok_or_else(|| Error::invariant("Sender cost pool aggregate returned no row."))?
+                .try_get(0)
+                .map_err(db)?;
 
-            let allocable = (sender_pool * sender_share_pct / Decimal::from(100)).round_dp(2);
+            let allocable = (sender_pool * sender_share_pct / Decimal::from(100)).round_dp(scale);
             if allocable <= Decimal::ZERO {
                 continue;
             }
@@ -488,27 +670,38 @@ impl AccountCostAllocationRun {
                 let w = match basis.as_str() {
                     "fixed_pct" => fixed_pct,
                     "skf" => {
-                        let sid = skf_id.ok_or_else(|| {
-                            Error::validation(
-                                "Select a Statistical Key Figure on the allocation cycle.",
-                            )
-                        })?;
-                        read_skf_weight(tx, sid, recv_id, date_from, date_to).await?
+                        let (sid, skf_type) = hoisted_skf
+                            .as_ref()
+                            .ok_or_else(|| Error::invariant("SKF metadata was not loaded."))?;
+                        read_skf_weight(
+                            tx,
+                            *sid,
+                            skf_type,
+                            recv_id,
+                            run_company_id,
+                            date_from,
+                            date_to,
+                        )
+                        .await?
                     }
                     "variable_actual" => {
                         let arows = tx
                             .query(
                                 "SELECT COALESCE(SUM(-amount), 0) FROM account_analytic_line \
-                                 WHERE account_id = $1 AND date >= $2 AND date <= $3 \
+                                 WHERE account_id = $1 AND company_id = $4 \
+                                   AND date >= $2 AND date <= $3 \
                                    AND COALESCE(cost_kind, 'primary') = 'primary'",
-                                &[&recv_id, &date_from, &date_to],
+                                &[&recv_id, &date_from, &date_to, &run_company_id],
                             )
                             .await?;
-                        arows
+                        let val: Decimal = arows
                             .first()
-                            .and_then(|r| r.try_get::<_, Decimal>(0).ok())
-                            .unwrap_or(Decimal::ZERO)
-                            .max(Decimal::ZERO)
+                            .ok_or_else(|| {
+                                Error::invariant("Variable actual aggregate returned no row.")
+                            })?
+                            .try_get(0)
+                            .map_err(db)?;
+                        val.max(Decimal::ZERO)
                     }
                     other => {
                         return Err(Error::validation(format!(
@@ -519,7 +712,7 @@ impl AccountCostAllocationRun {
                 weights.push((recv_id, w));
             }
 
-            let shares = split_proportional_exact(allocable, &weights, 2)?;
+            let shares = split_proportional_exact(allocable, &weights, scale)?;
             let mut vals_list = Vec::with_capacity(shares.len() * 2);
             for (recv_id, share) in shares {
                 if share.is_zero() {
@@ -569,13 +762,21 @@ impl AccountCostAllocationRun {
             ));
         }
 
-        tx.execute(
-            "UPDATE account_cost_allocation_run \
-             SET state = 'posted', total_allocated = $2, write_date = now() AT TIME ZONE 'UTC' \
-             WHERE id = $1",
-            &[&run_id, &grand_total],
-        )
-        .await?;
+        let uid = run.env().uid();
+        let updated = tx
+            .execute(
+                "UPDATE account_cost_allocation_run \
+                 SET state = 'posted', total_allocated = $2, write_uid = $3, \
+                     write_date = now() AT TIME ZONE 'UTC' \
+                 WHERE id = $1 AND state = 'draft'",
+                &[&run_id, &grand_total, &uid],
+            )
+            .await?;
+        if updated != 1 {
+            return Err(Error::conflict(
+                "Allocation run state changed concurrently; retry.",
+            ));
+        }
         tx.invalidate_records(
             run.as_records(),
             Some(&["state", "total_allocated", "line_ids"]),
@@ -605,8 +806,19 @@ impl AccountCostAllocationRun {
         let run = this.ensure_one()?;
         run.as_records().check_access(tx, Operation::Write).await?;
         let run_id = run.as_records().ids()[0];
-        let state = run.get(tx, AccountCostAllocationRun::STATE).await?;
-        if state.as_deref() != Some("posted") {
+        tx.flush().await?;
+
+        let rows = tx
+            .query(
+                "SELECT state::text FROM account_cost_allocation_run WHERE id = $1 FOR UPDATE",
+                &[&run_id],
+            )
+            .await?;
+        let Some(row) = rows.first() else {
+            return Err(Error::missing("Allocation run no longer exists."));
+        };
+        let state: String = row.try_get(0).map_err(db)?;
+        if state != "posted" {
             return Err(Error::user("Only a posted allocation run can be reversed."));
         }
         tx.execute(
@@ -614,15 +826,23 @@ impl AccountCostAllocationRun {
             &[&run_id],
         )
         .await?;
-        tx.execute(
-            "UPDATE account_cost_allocation_run \
-             SET state = 'reversed', write_date = now() AT TIME ZONE 'UTC' \
-             WHERE id = $1",
-            &[&run_id],
-        )
-        .await?;
+        let uid = run.env().uid();
+        let updated = tx
+            .execute(
+                "UPDATE account_cost_allocation_run \
+                 SET state = 'reversed', write_uid = $2, write_date = now() AT TIME ZONE 'UTC' \
+                 WHERE id = $1 AND state = 'posted'",
+                &[&run_id, &uid],
+            )
+            .await?;
+        if updated != 1 {
+            return Err(Error::conflict(
+                "Allocation run state changed concurrently; retry.",
+            ));
+        }
         tx.invalidate_records(run.as_records(), Some(&["state", "line_ids"]))
             .await?;
+        tx.invalidate_model("account.analytic.line", None).await?;
         tx.invalidate_model(
             "account.analytic.account",
             Some(&[
@@ -687,45 +907,43 @@ async fn check_secondary_allowed(
 async fn read_skf_weight(
     tx: &mut Transaction,
     skf_id: i64,
+    skf_type: &str,
     center_id: i64,
+    company_id: i64,
     date_from: Date,
     date_to: Date,
 ) -> Result<Decimal> {
-    let type_rows = tx
-        .query(
-            "SELECT COALESCE(skf_type, 'fixed')::text FROM account_analytic_skf WHERE id = $1",
-            &[&skf_id],
-        )
-        .await?;
-    let skf_type: String = type_rows
-        .first()
-        .and_then(|r| r.try_get(0).ok())
-        .unwrap_or_else(|| "fixed".to_owned());
     if skf_type == "total" {
         let rows = tx
             .query(
                 "SELECT COALESCE(SUM(quantity), 0) FROM account_analytic_skf_line \
-                 WHERE skf_id = $1 AND analytic_account_id = $2 \
+                 WHERE skf_id = $1 AND analytic_account_id = $2 AND company_id = $5 \
                    AND date >= $3 AND date <= $4",
-                &[&skf_id, &center_id, &date_from, &date_to],
+                &[&skf_id, &center_id, &date_from, &date_to, &company_id],
             )
             .await?;
-        Ok(rows
+        let val: Decimal = rows
             .first()
-            .and_then(|r| r.try_get(0).ok())
-            .unwrap_or(Decimal::ZERO))
+            .ok_or_else(|| Error::invariant("SKF total aggregate returned no row."))?
+            .try_get(0)
+            .map_err(db)?;
+        Ok(val)
     } else {
         let rows = tx
             .query(
-                "SELECT COALESCE(quantity, 0) FROM account_analytic_skf_line \
-                 WHERE skf_id = $1 AND analytic_account_id = $2 AND date <= $3 \
+                "SELECT quantity FROM account_analytic_skf_line \
+                 WHERE skf_id = $1 AND analytic_account_id = $2 AND company_id = $4 \
+                   AND date <= $3 \
                  ORDER BY date DESC, id DESC LIMIT 1",
-                &[&skf_id, &center_id, &date_to],
+                &[&skf_id, &center_id, &date_to, &company_id],
             )
             .await?;
-        Ok(rows
-            .first()
-            .and_then(|r| r.try_get(0).ok())
-            .unwrap_or(Decimal::ZERO))
+        match rows.first() {
+            Some(row) => {
+                let qty: Option<Decimal> = row.try_get(0).map_err(db)?;
+                Ok(qty.unwrap_or(Decimal::ZERO))
+            }
+            None => Ok(Decimal::ZERO),
+        }
     }
 }

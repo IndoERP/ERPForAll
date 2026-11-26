@@ -425,30 +425,15 @@ fn currency_follows_the_pricelist_and_a_confirmed_pricelist_is_kept() {
             dec("1")
         );
 
-        // no rule of the foreign pricelist: the sales price would need a conversion, refused
+        // no rule of the foreign pricelist: converts list_price (100) from company currency at 0.9
         let lamp = product(&mut tx, "Lamp", "100", &[]).await;
-        refused(
-            try_line(
-                &mut tx,
-                &abroad,
-                RawVals::new().set_cell("product_id", Cell::Id(lamp)),
-            )
-            .await
-            .map(|_| ()),
-            ErrorKind::Validation,
-            "The pricelist Abroad is in ",
-        );
-        refused(
-            try_line(
-                &mut tx,
-                &abroad,
-                RawVals::new().set_cell("product_id", Cell::Id(lamp)),
-            )
-            .await
-            .map(|_| ()),
-            ErrorKind::Validation,
-            "would need a currency conversion",
-        );
+        let converted = add_line(
+            &mut tx,
+            &abroad,
+            RawVals::new().set_cell("product_id", Cell::Id(lamp)),
+        )
+        .await;
+        assert_eq!(amount(&mut tx, &converted, "price_unit").await, dec("90"));
         // a typed price is the caller's and is kept
         let typed = add_line(
             &mut tx,
@@ -980,22 +965,26 @@ fn a_pricelist_in_another_currency_is_refused_on_a_quotation_with_lines() {
         )
         .await
         .unwrap();
-        add_line(
+        let line = add_line(
             &mut tx,
             &quotation,
             RawVals::new().set_cell("product_id", Cell::Id(chair)),
         )
         .await;
-        refused(
-            write(
-                &mut tx,
-                &quotation,
-                RawVals::new().set_cell("pricelist_id", Cell::Id(lists[1])),
-            )
-            .await,
-            ErrorKind::Validation,
-            "Prices cannot be updated to a new currency yet",
+        assert_eq!(amount(&mut tx, &line, "price_unit").await, dec("100"));
+        // switching a draft quotation with lines to a foreign pricelist converts its lines
+        write(
+            &mut tx,
+            &quotation,
+            RawVals::new().set_cell("pricelist_id", Cell::Id(lists[1])),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            many2one(&mut tx, &quotation, "currency_id").await,
+            Some(foreign)
         );
+        assert_eq!(amount(&mut tx, &line, "price_unit").await, dec("90"));
         write(
             &mut tx,
             &quotation,
@@ -1003,6 +992,7 @@ fn a_pricelist_in_another_currency_is_refused_on_a_quotation_with_lines() {
         )
         .await
         .unwrap();
+        assert_eq!(amount(&mut tx, &line, "price_unit").await, dec("100"));
         tx.rollback().await.unwrap();
     });
 }
@@ -1353,6 +1343,256 @@ fn a_quantity_or_pricelist_change_prices_the_lines_again_except_hand_set_ones() 
         .unwrap();
         assert_eq!(amount(&mut tx, &automatic, "price_unit").await, dec("80"));
         assert_eq!(amount(&mut tx, &manual, "price_unit").await, dec("50"));
+        tx.rollback().await.unwrap();
+    });
+}
+
+#[test]
+fn live_onchange_computes_line_and_order_totals_before_save() {
+    run(async {
+        let (_db, orm) = cloned_sale().await;
+        let mut tx = orm.begin(SUPERUSER_ID).await.unwrap();
+        let world = world(&mut tx).await;
+        let us = xmlid(&mut tx, "base", "us").await;
+        let company_partner = xmlid(&mut tx, "base", "main_partner").await;
+        tx.env()
+            .with_company(world.company)
+            .unwrap()
+            .records("res.partner")
+            .unwrap()
+            .browse([company_partner])
+            .unwrap()
+            .write(&mut tx, RawVals::new().set_cell("country_id", Cell::Id(us)))
+            .await
+            .unwrap();
+        let vat10 = tax(&mut tx, world.company, "VAT 10%", "10").await;
+        let chair = product(&mut tx, "Chair", "100", &[vat10]).await;
+        let unit = xmlid(&mut tx, "uom", "product_uom_unit").await;
+        let currency = match tx
+            .env()
+            .records("res.company")
+            .unwrap()
+            .browse([world.company])
+            .unwrap()
+            .cell(&mut tx, "currency_id")
+            .await
+            .unwrap()
+        {
+            Cell::Id(id) => id,
+            other => panic!("company currency is {other:?}"),
+        };
+
+        let obj = |entries: Vec<(&str, Value)>| -> Value {
+            let mut map = erp_sdk::ValueMap::new();
+            for (k, v) in entries {
+                map.insert(k.to_owned(), v);
+            }
+            Value::Map(std::sync::Arc::new(map))
+        };
+
+        // 1. Line onchange on an unsaved line with a virtual unsaved `sale.order` parent.
+        let line_spec = obj(vec![
+            ("name", obj(vec![])),
+            ("product_uom_id", obj(vec![])),
+            ("price_unit", obj(vec![])),
+            ("technical_price_unit", obj(vec![])),
+            ("tax_ids", obj(vec![])),
+            ("price_subtotal", obj(vec![])),
+            ("price_tax", obj(vec![])),
+            ("price_total", obj(vec![])),
+        ]);
+        let parent_dict = obj(vec![
+            ("id", Value::False),
+            ("company_id", Value::Int(world.company)),
+            ("currency_id", Value::Int(currency)),
+            ("partner_id", Value::Int(world.customer)),
+        ]);
+        let res = tx
+            .env()
+            .with_company(world.company)
+            .unwrap()
+            .records("sale.order.line")
+            .unwrap()
+            .web_call(
+                &mut tx,
+                "onchange",
+                &obj(vec![
+                    (
+                        "values",
+                        obj(vec![
+                            ("order_id", parent_dict.clone()),
+                            ("product_id", Value::Int(chair)),
+                            ("product_uom_qty", Value::Decimal(dec("2"))),
+                        ]),
+                    ),
+                    ("field_names", Value::list([Value::str("product_id")])),
+                    ("fields_spec", line_spec.clone()),
+                ]),
+            )
+            .await
+            .unwrap();
+        let val = res.dict().unwrap().get("value").unwrap();
+        let vals = val.dict().unwrap();
+        assert_eq!(vals.get("name").unwrap(), Value::str("Chair"));
+        assert_eq!(vals.get("product_uom_id").unwrap(), Value::Int(unit));
+        assert_eq!(vals.get("price_unit").unwrap(), Value::Decimal(dec("100")));
+        assert_eq!(
+            vals.get("price_subtotal").unwrap(),
+            Value::Decimal(dec("200"))
+        );
+        assert_eq!(vals.get("price_tax").unwrap(), Value::Decimal(dec("20")));
+        assert_eq!(vals.get("price_total").unwrap(), Value::Decimal(dec("220")));
+
+        // Editing price_unit + discount updates line amounts immediately.
+        let res = tx
+            .env()
+            .with_company(world.company)
+            .unwrap()
+            .records("sale.order.line")
+            .unwrap()
+            .web_call(
+                &mut tx,
+                "onchange",
+                &obj(vec![
+                    (
+                        "values",
+                        obj(vec![
+                            ("order_id", parent_dict),
+                            ("product_id", Value::Int(chair)),
+                            ("product_uom_id", Value::Int(unit)),
+                            ("product_uom_qty", Value::Decimal(dec("2"))),
+                            ("price_unit", Value::Decimal(dec("150"))),
+                            ("technical_price_unit", Value::Decimal(dec("100"))),
+                            ("discount", Value::Decimal(dec("10"))),
+                            (
+                                "tax_ids",
+                                Value::list([Value::list([
+                                    Value::Int(6),
+                                    Value::Int(0),
+                                    Value::list([Value::Int(vat10)]),
+                                ])]),
+                            ),
+                            ("price_subtotal", Value::Decimal(dec("200"))),
+                            ("price_tax", Value::Decimal(dec("20"))),
+                            ("price_total", Value::Decimal(dec("220"))),
+                        ]),
+                    ),
+                    (
+                        "field_names",
+                        Value::list([Value::str("price_unit"), Value::str("discount")]),
+                    ),
+                    ("fields_spec", line_spec),
+                ]),
+            )
+            .await
+            .unwrap();
+        let val = res.dict().unwrap().get("value").unwrap();
+        let vals = val.dict().unwrap();
+        // 2 * 150 * 0.9 = 270 subtotal, 27 tax, 297 total
+        assert_eq!(
+            vals.get("price_subtotal").unwrap(),
+            Value::Decimal(dec("270"))
+        );
+        assert_eq!(vals.get("price_tax").unwrap(), Value::Decimal(dec("27")));
+        assert_eq!(vals.get("price_total").unwrap(), Value::Decimal(dec("297")));
+
+        // 2. Order onchange computes header totals (`amount_untaxed`, `amount_tax`, `amount_total`)
+        //    and line subtotals before Save on an unsaved order.
+        let order_spec = obj(vec![
+            ("amount_untaxed", obj(vec![])),
+            ("amount_tax", obj(vec![])),
+            ("amount_total", obj(vec![])),
+            (
+                "order_line",
+                obj(vec![(
+                    "fields",
+                    obj(vec![
+                        ("price_subtotal", obj(vec![])),
+                        ("price_tax", obj(vec![])),
+                        ("price_total", obj(vec![])),
+                    ]),
+                )]),
+            ),
+        ]);
+
+        let order_res = tx
+            .env()
+            .with_company(world.company)
+            .unwrap()
+            .records("sale.order")
+            .unwrap()
+            .web_call(
+                &mut tx,
+                "onchange",
+                &obj(vec![
+                    (
+                        "values",
+                        obj(vec![
+                            ("partner_id", Value::Int(world.customer)),
+                            ("company_id", Value::Int(world.company)),
+                            ("currency_id", Value::Int(currency)),
+                            ("amount_untaxed", Value::Decimal(Decimal::ZERO)),
+                            ("amount_tax", Value::Decimal(Decimal::ZERO)),
+                            ("amount_total", Value::Decimal(Decimal::ZERO)),
+                            (
+                                "order_line",
+                                Value::list([Value::list([
+                                    Value::Int(0),
+                                    Value::str("line_1"),
+                                    obj(vec![
+                                        ("product_id", Value::Int(chair)),
+                                        ("name", Value::str("Chair")),
+                                        ("product_uom_id", Value::Int(unit)),
+                                        ("product_uom_qty", Value::Decimal(dec("3"))),
+                                        ("price_unit", Value::Decimal(dec("100"))),
+                                        ("discount", Value::Decimal(Decimal::ZERO)),
+                                        (
+                                            "tax_ids",
+                                            Value::list([Value::list([
+                                                Value::Int(6),
+                                                Value::Int(0),
+                                                Value::list([Value::Int(vat10)]),
+                                            ])]),
+                                        ),
+                                    ]),
+                                ])]),
+                            ),
+                        ]),
+                    ),
+                    ("field_names", Value::list([Value::str("order_line")])),
+                    ("fields_spec", order_spec),
+                ]),
+            )
+            .await
+            .unwrap();
+        let order_val = order_res.dict().unwrap().get("value").unwrap();
+        let order_vals = order_val.dict().unwrap();
+        assert_eq!(
+            order_vals.get("amount_untaxed").unwrap(),
+            Value::Decimal(dec("300"))
+        );
+        assert_eq!(
+            order_vals.get("amount_tax").unwrap(),
+            Value::Decimal(dec("30"))
+        );
+        assert_eq!(
+            order_vals.get("amount_total").unwrap(),
+            Value::Decimal(dec("330"))
+        );
+
+        // Derived fields are still refused on real persistence writes.
+        let saved = new_order(&mut tx, &world).await;
+        let err = try_line(
+            &mut tx,
+            &saved,
+            RawVals::new()
+                .set_cell("product_id", Cell::Id(chair))
+                .set_cell("price_subtotal", Cell::Decimal(dec("999"))),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Validation);
+
         tx.rollback().await.unwrap();
     });
 }

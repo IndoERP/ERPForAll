@@ -239,6 +239,16 @@ fn payment_fixed() -> &'static [&'static str] {
     })
 }
 
+/// Fields of a payment refused once reconciled, cancelled, or rejected (batch membership frozen too).
+fn payment_final_fixed() -> &'static [&'static str] {
+    static FIXED: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+    FIXED.get_or_init(|| {
+        let mut fixed = payment_fixed().to_vec();
+        fixed.push("batch_payment_id");
+        fixed
+    })
+}
+
 fn guarded() -> Vec<Guarded> {
     let no = || ExprValue::Bool(false);
     let picking_names = vec![
@@ -325,10 +335,12 @@ fn guarded() -> Vec<Guarded> {
             view: None,
             status: "state",
             names: vec![("move_id", no())],
-            states: ["paid", "reconciled", "canceled", "rejected"]
-                .into_iter()
-                .map(|state| (state, Rule::Deny(payment_fixed())))
-                .collect(),
+            states: vec![
+                ("paid", Rule::Deny(payment_fixed())),
+                ("reconciled", Rule::Deny(payment_final_fixed())),
+                ("canceled", Rule::Deny(payment_final_fixed())),
+                ("rejected", Rule::Deny(payment_final_fixed())),
+            ],
         },
     ];
     // A cancelled order refuses every write until it is set back to draft.

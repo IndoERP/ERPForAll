@@ -263,13 +263,16 @@ impl AccountFollowupReport {
                 _ => false,
             };
             if needs_name {
-                let rows = tx
+                let next: i64 = tx
                     .query(
-                        "SELECT count(*)::int8 + 1 FROM account_followup_report",
+                        "SELECT nextval(pg_get_serial_sequence('account_followup_report', 'id'))::int8",
                         &[],
                     )
-                    .await?;
-                let next: i64 = rows.first().and_then(|r| r.try_get(0).ok()).unwrap_or(1);
+                    .await?
+                    .first()
+                    .ok_or_else(|| Error::invariant("Missing nextval row for follow-up report."))?
+                    .try_get(0)
+                    .map_err(db)?;
                 vals.insert("name".into(), Cell::Str(format!("FUP/{next:05}").into()));
             }
         }
@@ -289,6 +292,8 @@ impl AccountFollowupReport {
         tx: &mut Transaction,
     ) -> Result<()> {
         this.as_records().check_access(tx, Operation::Write).await?;
+        tx.flush().await?;
+        let uid = this.env().uid();
         for rec in this.iter() {
             let fid = rec.as_records().ids()[0];
             let partner_id = rec
@@ -301,31 +306,46 @@ impl AccountFollowupReport {
                 .await?
                 .ok_or_else(|| Error::validation("Choose a company for this follow-up."))?
                 .get();
-            let today = erp_addon_base::company_calendar::business_date(tx, company_id)
-                .await
-                .unwrap_or_else(|_| Date::today());
+            let today = erp_addon_base::company_calendar::business_date(tx, company_id).await?;
 
+            // Compute open customer receivables (both out_invoice and out_refund credit notes)
+            // directly in company currency from payment_term items + account_open_item so foreign
+            // invoices are summed accurately in company currency without currency mixing.
             let inv_rows = tx
                 .query(
-                    "SELECT COALESCE(name, 'Invoice')::text, \
-                            COALESCE(invoice_date_due, invoice_date, date), \
-                            COALESCE(amount_residual, 0) \
-                     FROM account_move \
-                     WHERE partner_id = $1 AND company_id = $2 \
-                       AND state = 'posted' AND move_type = 'out_invoice' \
-                       AND payment_state IN ('not_paid', 'partial') \
-                       AND COALESCE(amount_residual, 0) > 0 \
-                     ORDER BY COALESCE(invoice_date_due, date), id",
+                    "SELECT COALESCE(m.name, 'Invoice')::text, \
+                            COALESCE(m.invoice_date_due, m.invoice_date, m.date), \
+                            m.move_type::text, \
+                            COALESCE(SUM(COALESCE(o.amount_residual, l.balance)), 0) \
+                     FROM account_move m \
+                     JOIN account_move_line l ON l.move_id = m.id \
+                     LEFT JOIN account_open_item o ON o.line_id = l.id \
+                     WHERE m.partner_id = $1 AND m.company_id = $2 \
+                       AND m.state = 'posted' AND m.move_type IN ('out_invoice', 'out_refund') \
+                       AND m.payment_state IN ('not_paid', 'partial') \
+                       AND l.display_type = 'payment_term' AND l.full_reconcile_id IS NULL \
+                     GROUP BY m.id, m.name, m.invoice_date_due, m.invoice_date, m.date, m.move_type \
+                     HAVING COALESCE(SUM(COALESCE(o.amount_residual, l.balance)), 0) <> 0 \
+                     ORDER BY COALESCE(m.invoice_date_due, m.date), m.id",
                     &[&partner_id, &company_id],
                 )
                 .await?;
             let mut pairs = Vec::with_capacity(inv_rows.len());
+            let mut credit_offset = Decimal::ZERO;
             let mut lines = Vec::new();
             for row in &inv_rows {
                 let num: String = row.try_get(0).map_err(db)?;
                 let due: Date = row.try_get(1).map_err(db)?;
-                let residual: Decimal = row.try_get(2).map_err(db)?;
-                pairs.push((due, residual));
+                let mtype: String = row.try_get(2).map_err(db)?;
+                let residual_co: Decimal = row.try_get(3).map_err(db)?;
+                if mtype == "out_refund" || residual_co < Decimal::ZERO {
+                    credit_offset += residual_co; // negative credit reducing due balance
+                    lines.push(format!(
+                        "- {num} (Credit Note) | Date {due} | Open Credit {residual_co}"
+                    ));
+                    continue;
+                }
+                pairs.push((due, residual_co));
                 let days = today.days() - due.days();
                 let flag = if days > 0 {
                     format!("{days} day(s) overdue")
@@ -333,14 +353,19 @@ impl AccountFollowupReport {
                     "not yet due".to_owned()
                 };
                 lines.push(format!(
-                    "- {num} | Due {due} | Remaining {residual} ({flag})"
+                    "- {num} | Due {due} | Remaining {residual_co} ({flag})"
                 ));
             }
 
+            // Honor follow-up levels declared on the company OR any ancestor company.
             let level_rows = tx
                 .query(
-                    "SELECT id::int8, delay FROM account_followup_level \
-                     WHERE company_id = $1 ORDER BY delay, id",
+                    "SELECT fl.id::int8, fl.delay \
+                     FROM account_followup_level fl \
+                     JOIN res_company target ON target.id = $1 \
+                     JOIN res_company lc ON lc.id = fl.company_id \
+                     WHERE lc.id = target.id OR target.parent_path LIKE lc.parent_path || '%' \
+                     ORDER BY fl.delay, fl.id",
                     &[&company_id],
                 )
                 .await?;
@@ -349,7 +374,17 @@ impl AccountFollowupReport {
                 .map(|r| Ok((r.try_get(0).map_err(db)?, r.try_get(1).map_err(db)?)))
                 .collect::<Result<_>>()?;
 
-            let summary_calc = classify_overdue(&pairs, today, &levels);
+            let mut summary_calc = classify_overdue(&pairs, today, &levels);
+            if !credit_offset.is_zero() {
+                summary_calc.total_due =
+                    (summary_calc.total_due + credit_offset).max(Decimal::ZERO);
+                summary_calc.total_overdue =
+                    (summary_calc.total_overdue + credit_offset).max(Decimal::ZERO);
+                if summary_calc.total_due.is_zero() {
+                    summary_calc.status = "no_action_needed";
+                    summary_calc.matched_level_id = None;
+                }
+            }
             let summary_text = if lines.is_empty() {
                 "No open customer invoices.".to_owned()
             } else {
@@ -360,7 +395,7 @@ impl AccountFollowupReport {
                 "UPDATE account_followup_report \
                  SET total_due = $2, total_overdue = $3, overdue_invoice_count = $4, \
                      max_days_overdue = $5, followup_level_id = $6, status = $7, \
-                     summary = $8, write_date = now() AT TIME ZONE 'UTC' \
+                     summary = $8, write_uid = $9, write_date = now() AT TIME ZONE 'UTC' \
                  WHERE id = $1",
                 &[
                     &fid,
@@ -371,6 +406,7 @@ impl AccountFollowupReport {
                     &summary_calc.matched_level_id,
                     &summary_calc.status,
                     &summary_text,
+                    &uid,
                 ],
             )
             .await?;
@@ -411,25 +447,24 @@ impl AccountFollowupReport {
         let company_id = rec
             .get(tx, AccountFollowupReport::COMPANY_ID)
             .await?
-            .map(|id| id.get())
-            .unwrap_or(1);
-        let today = erp_addon_base::company_calendar::business_date(tx, company_id)
-            .await
-            .unwrap_or_else(|_| Date::today());
+            .ok_or_else(|| Error::validation("Choose a company for this follow-up."))?
+            .get();
+        let today = erp_addon_base::company_calendar::business_date(tx, company_id).await?;
         let next_date = Date::from_days(today.days() + 7);
         let prev = rec
             .get(tx, AccountFollowupReport::SUMMARY)
             .await?
             .unwrap_or_default();
         let updated_summary =
-            format!("{prev}\n[Reminder sent on {today} — Total Due: {total_due}]");
+            format!("{prev}\n[Reminder logged on {today} — Total Due: {total_due}]");
+        let uid = rec.env().uid();
         tx.execute(
             "UPDATE account_followup_report \
              SET last_reminder_date = $2, next_reminder_date = $3, \
                  status = 'no_action_needed', summary = $4, \
-                 write_date = now() AT TIME ZONE 'UTC' \
+                 write_uid = $5, write_date = now() AT TIME ZONE 'UTC' \
              WHERE id = $1",
-            &[&fid, &today, &next_date, &updated_summary],
+            &[&fid, &today, &next_date, &updated_summary, &uid],
         )
         .await?;
         tx.invalidate_records(
@@ -452,7 +487,7 @@ impl AccountFollowupReport {
         }))))
     }
 
-    /// Opens the customer's open posted invoices in a list/form view.
+    /// Opens the customer's overdue posted invoices in a list/form view.
     #[method]
     #[rpc(effect = read)]
     pub async fn action_view_overdue_invoices(
@@ -465,17 +500,25 @@ impl AccountFollowupReport {
             .await?
             .ok_or_else(|| Error::validation("No customer set on this follow-up."))?
             .get();
+        let company_id = rec
+            .get(tx, AccountFollowupReport::COMPANY_ID)
+            .await?
+            .ok_or_else(|| Error::validation("No company set on this follow-up."))?
+            .get();
+        let today = erp_addon_base::company_calendar::business_date(tx, company_id).await?;
         Ok(Value::Json(Arc::new(json!({
             "type": "ir.actions.act_window",
-            "name": "Open Customer Invoices",
+            "name": "Overdue Customer Invoices",
             "res_model": "account.move",
             "target": "current",
             "views": [[false, "list"], [false, "form"]],
             "domain": [
+                ["company_id", "=", company_id],
                 ["partner_id", "=", partner_id],
                 ["state", "=", "posted"],
                 ["move_type", "=", "out_invoice"],
                 ["payment_state", "in", ["not_paid", "partial"]],
+                ["invoice_date_due", "<", today.to_string()],
             ],
         }))))
     }

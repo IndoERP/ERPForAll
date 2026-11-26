@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use erp_addon_base::ir_config_setting::read_values;
 use erp_addon_stock::picking::StockPicking;
 use erp_sdk::views::wire::{SettingsScope, WireId};
-use erp_sdk::{Operation, prelude::*};
+use erp_sdk::{ErrorKind, GroupValue, Operation, ReadGroup, prelude::*};
 
 erp_sdk::addon!(
     name = "stock_sms",
@@ -87,7 +87,7 @@ pub struct StockDeliveryNotification {
 }
 
 async fn confirmation_flags(tx: &mut Transaction, company_id: i64) -> Result<(bool, bool)> {
-    let env = tx.env().sudo(true);
+    let env = tx.env().sudo(true).with_company(company_id)?;
     let wire_company = u64::try_from(company_id)
         .ok()
         .and_then(|id| WireId::try_from(id).ok())
@@ -103,14 +103,19 @@ async fn confirmation_flags(tx: &mut Transaction, company_id: i64) -> Result<(bo
     .await?;
     let json = erp_sdk::serde_json::to_value(&read)
         .map_err(|e| Error::internal(format!("delivery confirmation setting read: {e}")))?;
-    let flag = |key: &str| {
-        json["values"]
-            .as_array()
-            .and_then(|arr| arr.iter().find(|v| v["key"] == key))
-            .and_then(|entry| entry["value"].as_bool())
-            .unwrap_or(false)
+    let values = json["values"].as_array().ok_or_else(|| {
+        Error::internal("delivery confirmation settings response missing 'values'")
+    })?;
+    let flag = |key: &str| -> Result<bool> {
+        let entry = values
+            .iter()
+            .find(|v| v["key"] == key)
+            .ok_or_else(|| Error::internal(format!("setting '{key}' missing from response")))?;
+        entry["value"]
+            .as_bool()
+            .ok_or_else(|| Error::internal(format!("setting '{key}' value is not a boolean")))
     };
-    Ok((flag(EMAIL_KEY), flag(SMS_KEY)))
+    Ok((flag(EMAIL_KEY)?, flag(SMS_KEY)?))
 }
 
 #[extend(StockPicking, addon = "stock_sms")]
@@ -139,18 +144,34 @@ impl StockPickingSms {
             .collect();
         let mut counts: BTreeMap<i64, i32> = BTreeMap::new();
         if !real_ids.is_empty() {
-            let rows = tx
-                .query(
-                    "SELECT picking_id::int8, count(*)::int4 \
-                     FROM stock_delivery_notification \
-                     WHERE picking_id = ANY($1) GROUP BY picking_id",
-                    &[&real_ids],
+            tx.flush().await?;
+            let domain = Domain::field("picking_id")?.in_(real_ids);
+            let read = this
+                .env()
+                .records("stock.delivery.notification")?
+                ._read_group(
+                    tx,
+                    ReadGroup::new(domain)
+                        .groupby(["picking_id"])
+                        .aggregates(["__count"]),
                 )
-                .await?;
-            for row in rows {
-                let pid: i64 = row.try_get(0).map_err(db_err)?;
-                let cnt: i32 = row.try_get(1).map_err(db_err)?;
-                counts.insert(pid, cnt);
+                .await;
+            match read {
+                Ok(groups) => {
+                    for row in groups.rows() {
+                        if let (Some(pid), Some(GroupValue::Int(cnt))) = (
+                            row.first().and_then(|k| k.record_id().map(|id| id.get())),
+                            row.last(),
+                        ) {
+                            let cnt_i32 = i32::try_from(*cnt).map_err(|_| {
+                                Error::internal("Delivery notification count exceeds i32 range.")
+                            })?;
+                            counts.insert(pid, cnt_i32);
+                        }
+                    }
+                }
+                Err(error) if error.kind() == ErrorKind::Access => {}
+                Err(error) => return Err(error),
             }
         }
         for (idx, rec_id) in rec_ids.iter().enumerate() {
@@ -199,17 +220,18 @@ impl StockPickingSms {
         Ok(Value::Map(action.into()))
     }
 
-    /// Dispatch delivery email / SMS confirmations when an outgoing transfer finishes validation.
+    /// Dispatch delivery email / SMS confirmations when an outgoing transfer finishes validation
+    /// across all validation paths (direct, draft, batch, backorder, RPC).
     #[method(override)]
-    async fn action_validate_transfer(
+    async fn button_validate(
         this: &RecordSet<StockPicking>,
         tx: &mut Transaction,
         sup: Super,
-    ) -> Result<Value> {
-        let result: Value = sup.call(tx, this.as_records(), ()).await?;
+    ) -> Result<()> {
+        sup.call(tx, this.as_records(), ()).await?;
         let ids = this.ids();
         if ids.is_empty() {
-            return Ok(result);
+            return Ok(());
         }
         tx.flush().await?;
         let rows = tx
@@ -224,7 +246,7 @@ impl StockPickingSms {
             )
             .await?;
         if rows.is_empty() {
-            return Ok(result);
+            return Ok(());
         }
         let sudo_env = this.env().sudo(true);
         let notif_model = sudo_env.records("stock.delivery.notification")?;
@@ -255,6 +277,17 @@ impl StockPickingSms {
                 if !enabled {
                     continue;
                 }
+                let already_logged = !tx
+                    .query(
+                        "SELECT 1 FROM stock_delivery_notification \
+                         WHERE picking_id = $1 AND channel = $2 LIMIT 1",
+                        &[&picking_id, &channel],
+                    )
+                    .await?
+                    .is_empty();
+                if already_logged {
+                    continue;
+                }
                 let cleaned = recipient.map(str::trim).filter(|s| !s.is_empty());
                 let state = if cleaned.is_some() { "sent" } else { "skipped" };
                 let mut vals = RawVals::new();
@@ -276,7 +309,7 @@ impl StockPickingSms {
         if !to_create.is_empty() {
             notif_model.create(tx, to_create).await?;
         }
-        Ok(result)
+        Ok(())
     }
 }
 

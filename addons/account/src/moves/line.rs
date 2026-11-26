@@ -47,6 +47,10 @@ use super::{
             "_posted_account_date",
             "(account_id, date) WHERE parent_state = 'posted'"
         ),
+        (
+            "_posted_company_date",
+            "(company_id, date) WHERE parent_state = 'posted'"
+        ),
     ],
 )]
 pub struct AccountMoveLine {
@@ -566,8 +570,8 @@ async fn check_storno_enabled(tx: &mut Transaction, move_ids: &[i64]) -> Result<
         .try_get(0)
         .map_err(|e| Error::db(format!("storno setting read: {e}")))?;
     if blocked > 0 {
-        return Err(Error::user(
-            "Storno journal items require enabling 'Storno Accounting' in Company Accounting settings.",
+        return Err(Error::validation(
+            "Storno journal items require enabling the storno setting ('Storno Accounting') in Company Accounting settings.",
         ));
     }
     Ok(())

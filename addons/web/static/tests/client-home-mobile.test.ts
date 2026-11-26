@@ -185,6 +185,7 @@ describe("M4 Shell Base: Home and Mobile", () => {
     expect(document.activeElement).toBe(otherInput);
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "a" }));
     expect(document.activeElement).toBe(otherInput);
+    expect(() => otherInput.dispatchEvent(new Event("keydown", { bubbles: true }))).not.toThrow();
 
     // Escape closes home menu
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));

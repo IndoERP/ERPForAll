@@ -9,8 +9,9 @@ use std::str::FromStr;
 use erp_addon_barcodes_gs1_nomenclature::{parse_gs1_elements, split_combined_barcode};
 use erp_addon_base::ir_config_setting::read_values;
 use erp_addon_stock::StockPicking;
+use erp_sdk::sequence::draw_by_code;
 use erp_sdk::views::wire::SettingsScope;
-use erp_sdk::{Operation, ValueMap, prelude::*};
+use erp_sdk::{CompanyId, Operation, ValueMap, prelude::*};
 
 erp_sdk::addon!(
     name = "stock_barcode",
@@ -105,32 +106,36 @@ async fn global_barcode_separator(tx: &mut Transaction) -> Result<String> {
     let read = read_values(&env, tx, SettingsScope::Global {}, vec![SEP_KEY.to_owned()]).await?;
     let json = erp_sdk::serde_json::to_value(&read)
         .map_err(|e| Error::internal(format!("barcode separator read: {e}")))?;
-    let sep = json["values"]
+    let entry = json["values"]
         .as_array()
         .and_then(|arr| arr.iter().find(|v| v["key"] == SEP_KEY))
-        .and_then(|entry| entry["value"].as_str())
+        .ok_or_else(|| {
+            Error::internal(format!(
+                "Global setting '{SEP_KEY}' is missing from response."
+            ))
+        })?;
+    let sep = entry["value"]
+        .as_str()
         .filter(|s| !s.is_empty())
-        .unwrap_or(",");
+        .ok_or_else(|| {
+            Error::validation(format!(
+                "Global setting '{SEP_KEY}' must be a non-empty string."
+            ))
+        })?;
     Ok(sep.to_owned())
 }
 
-async fn next_session_name(env: &Env, tx: &mut Transaction) -> Result<String> {
-    let seqs = env.sudo(true).records("ir.sequence")?;
-    if let Ok(Value::Str(code)) = seqs
-        .call::<_, Value>(tx, "next_by_code", ("stock.barcode.session".to_owned(),))
-        .await
-        && !code.is_empty()
-    {
-        return Ok(code.to_string());
-    }
-    let rows = tx
-        .query(
-            "SELECT COALESCE(max(id), 0)::int8 + 1 FROM stock_barcode_session",
-            &[],
-        )
-        .await?;
-    let next: i64 = rows[0].try_get(0).map_err(db_err)?;
-    Ok(format!("SCAN/{next:05}"))
+async fn next_session_name(env: &Env, tx: &mut Transaction, company_id: i64) -> Result<String> {
+    let company = CompanyId::new(company_id)?;
+    let today = env.context_today()?;
+    draw_by_code(
+        tx,
+        &env.sudo(true),
+        "stock.barcode.session",
+        company,
+        Some(today),
+    )
+    .await
 }
 
 /// `stock.barcode.session`: interactive barcode scanning session for a transfer or physical count.
@@ -253,13 +258,23 @@ pub struct StockBarcodeScanLine {
     #[field(char, required = true, string = "Barcode")]
     pub barcode: Option<Arc<str>>,
     /// Matched product variant.
-    #[field(many2one, comodel = "product.product", string = "Product")]
+    #[field(
+        many2one,
+        comodel = "product.product",
+        check_company = true,
+        string = "Product"
+    )]
     pub product_id: Option<RecId>,
     /// Matched or decoded lot/serial name.
     #[field(char, string = "Lot/Serial")]
     pub lot_name: Option<Arc<str>>,
     /// Location associated with this scan.
-    #[field(many2one, comodel = "stock.location", string = "Location")]
+    #[field(
+        many2one,
+        comodel = "stock.location",
+        check_company = true,
+        string = "Location"
+    )]
     pub location_id: Option<RecId>,
     /// Quantity scanned.
     #[field(float, digits = "Product Unit", default = 1, string = "Quantity")]
@@ -359,22 +374,119 @@ impl StockBarcodeSession {
         let env = this.env();
         let active_company = env.company_id()?;
         for vals in &mut vals_list {
+            if vals.contains("state") {
+                return Err(Error::validation(
+                    "Barcode session status changes only through its session actions.",
+                ));
+            }
+            if let Some(Cell::Str(m)) = vals.get("mode")
+                && !matches!(m.as_ref(), "transfer" | "inventory")
+            {
+                return Err(Error::validation(format!(
+                    "Unsupported barcode session mode '{m}'."
+                )));
+            }
+            let company_id = match vals.get("company_id") {
+                Some(Cell::Id(cid)) => *cid,
+                Some(Cell::Int(cid)) => i64::from(*cid),
+                None | Some(Cell::Null) => {
+                    let cid = active_company.ok_or_else(|| {
+                        Error::validation("A company is required to create a barcode session.")
+                    })?;
+                    vals.insert("company_id".into(), Cell::Id(cid));
+                    cid
+                }
+                other => {
+                    return Err(Error::validation(format!(
+                        "Invalid company_id for barcode session: {other:?}"
+                    )));
+                }
+            };
             let needs_name = match vals.get("name") {
                 None | Some(Cell::Null) => true,
                 Some(Cell::Str(s)) => s.trim().is_empty() || s.as_ref() == "New",
                 _ => false,
             };
             if needs_name {
-                let name = next_session_name(env, tx).await?;
+                let name = next_session_name(env, tx, company_id).await?;
                 vals.insert("name".into(), Cell::Str(name.into()));
-            }
-            if matches!(vals.get("company_id"), None | Some(Cell::Null))
-                && let Some(cid) = active_company
-            {
-                vals.insert("company_id".into(), Cell::Id(cid));
             }
         }
         sup.call(tx, this.as_records(), (vals_list,)).await
+    }
+
+    #[method(override)]
+    async fn write(
+        this: &RecordSet<StockBarcodeSession>,
+        tx: &mut Transaction,
+        vals: RawVals,
+        sup: Super,
+    ) -> Result<()> {
+        if vals.contains("state") {
+            return Err(Error::validation(
+                "Barcode session status changes only through its session actions.",
+            ));
+        }
+        if let Some(Cell::Str(m)) = vals.get("mode")
+            && !matches!(m.as_ref(), "transfer" | "inventory")
+        {
+            return Err(Error::validation(format!(
+                "Unsupported barcode session mode '{m}'."
+            )));
+        }
+        let ids = this.ids();
+        if !ids.is_empty() {
+            tx.flush().await?;
+            let rows = tx
+                .query(
+                    "SELECT count(*)::int8 FROM stock_barcode_session \
+                     WHERE id = ANY($1) AND state <> 'open'",
+                    &[&ids],
+                )
+                .await?;
+            let closed: i64 = rows
+                .first()
+                .ok_or_else(|| Error::internal("Barcode session state check returned no row."))?
+                .try_get(0)
+                .map_err(db_err)?;
+            if closed > 0 {
+                return Err(Error::validation(
+                    "Completed or cancelled barcode sessions cannot be modified.",
+                ));
+            }
+        }
+        sup.call(tx, this.as_records(), (vals,)).await
+    }
+
+    #[method(override)]
+    async fn unlink(
+        this: &RecordSet<StockBarcodeSession>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<()> {
+        this.as_records()
+            .check_access(tx, Operation::Unlink)
+            .await?;
+        let ids = this.ids();
+        if !ids.is_empty() {
+            tx.flush().await?;
+            let rows = tx
+                .query(
+                    "SELECT count(*)::int8 FROM stock_barcode_session \
+                     WHERE id = ANY($1) AND state = 'done'",
+                    &[&ids],
+                )
+                .await?;
+            let done: i64 = rows
+                .first()
+                .ok_or_else(|| Error::internal("Barcode session unlink check returned no row."))?
+                .try_get(0)
+                .map_err(db_err)?;
+            if done > 0 {
+                return Err(Error::user("Completed barcode sessions cannot be deleted."));
+            }
+        }
+        sup.call(tx, this.as_records(), ()).await
     }
 
     /// Process the current `barcode_input` string (GS1-128, combined separator, product SKU/barcode,
@@ -414,6 +526,7 @@ impl StockBarcodeSession {
             let sep = global_barcode_separator(tx).await?;
             let decoded = decode_scan_input(&raw, &sep)?;
 
+            let uid = env.uid();
             // First check if a location barcode was scanned (in inventory mode).
             if mode == "inventory" && decoded.lot_name.is_none() {
                 let loc_rows = tx
@@ -429,30 +542,35 @@ impl StockBarcodeSession {
                     let loc_name: String = lrow.try_get(1).map_err(db_err)?;
                     let msg = format!("Active location switched to {loc_name}.");
                     tx.execute(
-                        "UPDATE stock_barcode_session SET location_id = $2, barcode_input = NULL, last_message = $3 WHERE id = $1",
-                        &[&session_id, &loc_id, &msg],
+                        "UPDATE stock_barcode_session \
+                         SET location_id = $2, barcode_input = NULL, last_message = $3, \
+                             write_uid = $4, write_date = (now() AT TIME ZONE 'UTC') \
+                         WHERE id = $1",
+                        &[&session_id, &loc_id, &msg, &uid],
                     )
                     .await?;
                     records
-                        .modified_external(tx, &["barcode_input", "last_message"])
+                        .modified_external(tx, &["location_id", "barcode_input", "last_message"])
                         .await?;
                     return Ok(());
                 }
             }
 
-            // Look up product by barcode or default_code (case-insensitive exact match).
+            // Look up product by barcode or default_code scoped to the session's company.
             let prod_rows = tx
                 .query(
-                    "SELECT pp.id::int8, pt.uom_id::int8, COALESCE(pt.name->>'en_US', pp.default_code, '') \
+                    "SELECT pp.id::int8, pt.uom_id::int8 \
                      FROM product_product pp \
                      JOIN product_template pt ON pt.id = pp.product_tmpl_id \
-                     WHERE pp.active IS TRUE AND ( \
-                       lower(COALESCE(pp.barcode, '')) = lower($1) \
-                       OR lower(COALESCE(pp.default_code, '')) = lower($1) \
-                       OR lower(COALESCE(pt.barcode, '')) = lower($1) \
-                       OR lower(COALESCE(pt.default_code, '')) = lower($1) \
-                     ) ORDER BY pp.id LIMIT 1",
-                    &[&decoded.product_key],
+                     WHERE pp.active IS TRUE \
+                       AND (pt.company_id IS NULL OR pt.company_id = $2) \
+                       AND ( \
+                         lower(COALESCE(pp.barcode, '')) = lower($1) \
+                         OR lower(COALESCE(pp.default_code, '')) = lower($1) \
+                         OR lower(COALESCE(pt.barcode, '')) = lower($1) \
+                         OR lower(COALESCE(pt.default_code, '')) = lower($1) \
+                       ) ORDER BY pt.company_id NULLS LAST, pp.id LIMIT 1",
+                    &[&decoded.product_key, &company_id],
                 )
                 .await?;
             let Some(prow) = prod_rows.first() else {
@@ -463,121 +581,140 @@ impl StockBarcodeSession {
             };
             let product_id: i64 = prow.try_get(0).map_err(db_err)?;
             let uom_id: i64 = prow.try_get(1).map_err(db_err)?;
-            let product_label: String = prow.try_get(2).map_err(db_err)?;
+            let prod_rec = env.records("product.product")?.browse(vec![product_id])?;
+            prod_rec.check_access(tx, Operation::Read).await?;
+            let product_label = match prod_rec.cell(tx, "display_name").await? {
+                Cell::Str(s) if !s.trim().is_empty() => s.to_string(),
+                _ => decoded.product_key.clone(),
+            };
 
             let mut line_location_id = location_id;
-            let note = if mode == "transfer" {
-                let Some(pid) = picking_id else {
-                    return Err(Error::user(
-                        "Select a transfer before scanning items in Transfer mode.",
-                    ));
-                };
-                let p_rows = tx
-                    .query(
-                        "SELECT state, location_id::int8, location_dest_id::int8 \
-                         FROM stock_picking WHERE id = $1",
-                        &[&pid],
-                    )
-                    .await?;
-                let Some(pk) = p_rows.first() else {
-                    return Err(Error::missing("Transfer not found."));
-                };
-                let pstate: String = pk.try_get(0).map_err(db_err)?;
-                let p_src: i64 = pk.try_get(1).map_err(db_err)?;
-                let p_dst: i64 = pk.try_get(2).map_err(db_err)?;
-                line_location_id = Some(p_dst);
-                if matches!(pstate.as_str(), "done" | "cancel") {
-                    return Err(Error::user(
-                        "Cannot scan items onto a completed or cancelled transfer.",
-                    ));
-                }
-                if pstate == "draft" {
-                    env.records("stock.picking")?
-                        .browse(vec![pid])?
-                        .call::<(), ()>(tx, "action_confirm", ())
-                        .await?;
-                    tx.flush().await?;
-                }
-                // Find an open move line for this product (matching lot_name if provided) or its move.
-                let ml_rows = tx
-                    .query(
-                        "SELECT id::int8, quantity FROM stock_move_line \
-                         WHERE picking_id = $1 AND product_id = $2 \
-                           AND membership = 'open' AND active IS TRUE \
-                           AND ($3::text IS NULL OR COALESCE(lot_name, '') = $3) \
-                         ORDER BY id LIMIT 1",
-                        &[&pid, &product_id, &decoded.lot_name],
-                    )
-                    .await?;
-                if let Some(ml) = ml_rows.first() {
-                    let ml_id: i64 = ml.try_get(0).map_err(db_err)?;
-                    let cur_qty: Decimal = ml.try_get(1).map_err(db_err)?;
-                    let next_qty = cur_qty + decoded.quantity;
-                    let mut wvals = RawVals::new().set_cell("quantity", Cell::Decimal(next_qty));
-                    if let Some(lot) = &decoded.lot_name {
-                        wvals.insert("lot_name".into(), Cell::Str(lot.as_str().into()));
-                    }
-                    env.records("stock.move.line")?
-                        .browse(vec![ml_id])?
-                        .write(tx, wvals)
-                        .await?;
-                } else {
-                    // Find or create a move on this picking, then create an open move line.
-                    let mv_rows = tx
-                        .query(
-                            "SELECT id::int8, uom_id::int8 FROM stock_move \
-                             WHERE picking_id = $1 AND product_id = $2 \
-                               AND state NOT IN ('done', 'cancel') ORDER BY id LIMIT 1",
-                            &[&pid, &product_id],
-                        )
-                        .await?;
-                    let (move_id, mv_uom_id) = if let Some(mv) = mv_rows.first() {
-                        (
-                            mv.try_get::<_, i64>(0).map_err(db_err)?,
-                            mv.try_get::<_, i64>(1).map_err(db_err)?,
-                        )
-                    } else {
-                        let mut mvals = RawVals::new();
-                        mvals.insert("picking_id".into(), Cell::Id(pid));
-                        mvals.insert("product_id".into(), Cell::Id(product_id));
-                        mvals.insert("product_uom_qty".into(), Cell::Decimal(decoded.quantity));
-                        mvals.insert("uom_id".into(), Cell::Id(uom_id));
-                        mvals.insert("location_id".into(), Cell::Id(p_src));
-                        mvals.insert("location_dest_id".into(), Cell::Id(p_dst));
-                        let created_mv = env
-                            .records("stock.move")?
-                            .create(tx, vec![mvals])
-                            .await?;
-                        let mid = created_mv
-                            .ids()
-                            .into_iter()
-                            .next()
-                            .ok_or_else(|| Error::invariant("Created stock.move returned no id."))?;
-                        (mid, uom_id)
+            let note = match mode.as_str() {
+                "transfer" => {
+                    let Some(pid) = picking_id else {
+                        return Err(Error::user(
+                            "Select a transfer before scanning items in Transfer mode.",
+                        ));
                     };
-                    let mut lvals = RawVals::new();
-                    lvals.insert("picking_id".into(), Cell::Id(pid));
-                    lvals.insert("move_id".into(), Cell::Id(move_id));
-                    lvals.insert("product_id".into(), Cell::Id(product_id));
-                    lvals.insert("uom_id".into(), Cell::Id(mv_uom_id));
-                    lvals.insert("location_id".into(), Cell::Id(p_src));
-                    lvals.insert("location_dest_id".into(), Cell::Id(p_dst));
-                    lvals.insert("quantity".into(), Cell::Decimal(decoded.quantity));
-                    if let Some(lot) = &decoded.lot_name {
-                        lvals.insert("lot_name".into(), Cell::Str(lot.as_str().into()));
-                    }
-                    env.records("stock.move.line")?
-                        .create(tx, vec![lvals])
+                    let p_rows = tx
+                        .query(
+                            "SELECT state, location_id::int8, location_dest_id::int8 \
+                             FROM stock_picking WHERE id = $1 FOR UPDATE",
+                            &[&pid],
+                        )
                         .await?;
+                    let Some(pk) = p_rows.first() else {
+                        return Err(Error::missing("Transfer not found."));
+                    };
+                    let pstate: String = pk.try_get(0).map_err(db_err)?;
+                    let p_src: i64 = pk.try_get(1).map_err(db_err)?;
+                    let p_dst: i64 = pk.try_get(2).map_err(db_err)?;
+                    line_location_id = Some(p_dst);
+                    if matches!(pstate.as_str(), "done" | "cancel") {
+                        return Err(Error::user(
+                            "Cannot scan items onto a completed or cancelled transfer.",
+                        ));
+                    }
+                    if pstate == "draft" {
+                        env.records("stock.picking")?
+                            .browse(vec![pid])?
+                            .call::<(), ()>(tx, "action_confirm", ())
+                            .await?;
+                        tx.flush().await?;
+                    }
+                    // Find an open move line for this product (matching lot_name if provided) or its move.
+                    let ml_rows = tx
+                        .query(
+                            "SELECT id::int8, quantity FROM stock_move_line \
+                             WHERE picking_id = $1 AND product_id = $2 \
+                               AND membership = 'open' AND active IS TRUE \
+                               AND ($3::text IS NULL OR COALESCE(lot_name, '') = $3) \
+                             ORDER BY id LIMIT 1",
+                            &[&pid, &product_id, &decoded.lot_name],
+                        )
+                        .await?;
+                    if let Some(ml) = ml_rows.first() {
+                        let ml_id: i64 = ml.try_get(0).map_err(db_err)?;
+                        let cur_qty: Decimal = ml.try_get(1).map_err(db_err)?;
+                        let next_qty = cur_qty + decoded.quantity;
+                        let mut wvals =
+                            RawVals::new().set_cell("quantity", Cell::Decimal(next_qty));
+                        if let Some(lot) = &decoded.lot_name {
+                            wvals.insert("lot_name".into(), Cell::Str(lot.as_str().into()));
+                        }
+                        env.records("stock.move.line")?
+                            .browse(vec![ml_id])?
+                            .write(tx, wvals)
+                            .await?;
+                    } else {
+                        // Find or create a move on this picking, then create an open move line.
+                        let mv_rows = tx
+                            .query(
+                                "SELECT id::int8, uom_id::int8 FROM stock_move \
+                                 WHERE picking_id = $1 AND product_id = $2 \
+                                   AND state NOT IN ('done', 'cancel') ORDER BY id LIMIT 1",
+                                &[&pid, &product_id],
+                            )
+                            .await?;
+                        let (move_id, mv_uom_id) = if let Some(mv) = mv_rows.first() {
+                            (
+                                mv.try_get::<_, i64>(0).map_err(db_err)?,
+                                mv.try_get::<_, i64>(1).map_err(db_err)?,
+                            )
+                        } else {
+                            let mut mvals = RawVals::new();
+                            mvals.insert("picking_id".into(), Cell::Id(pid));
+                            mvals.insert("product_id".into(), Cell::Id(product_id));
+                            mvals.insert("product_uom_qty".into(), Cell::Decimal(decoded.quantity));
+                            mvals.insert("uom_id".into(), Cell::Id(uom_id));
+                            mvals.insert("location_id".into(), Cell::Id(p_src));
+                            mvals.insert("location_dest_id".into(), Cell::Id(p_dst));
+                            let created_mv = env
+                                .records("stock.move")?
+                                .create(tx, vec![mvals])
+                                .await?;
+                            let mid = created_mv
+                                .ids()
+                                .into_iter()
+                                .next()
+                                .ok_or_else(|| {
+                                    Error::invariant("Created stock.move returned no id.")
+                                })?;
+                            (mid, uom_id)
+                        };
+                        let mut lvals = RawVals::new();
+                        lvals.insert("picking_id".into(), Cell::Id(pid));
+                        lvals.insert("move_id".into(), Cell::Id(move_id));
+                        lvals.insert("product_id".into(), Cell::Id(product_id));
+                        lvals.insert("uom_id".into(), Cell::Id(mv_uom_id));
+                        lvals.insert("location_id".into(), Cell::Id(p_src));
+                        lvals.insert("location_dest_id".into(), Cell::Id(p_dst));
+                        lvals.insert("quantity".into(), Cell::Decimal(decoded.quantity));
+                        if let Some(lot) = &decoded.lot_name {
+                            lvals.insert("lot_name".into(), Cell::Str(lot.as_str().into()));
+                        }
+                        env.records("stock.move.line")?
+                            .create(tx, vec![lvals])
+                            .await?;
+                    }
+                    format!(
+                        "Added +{} of {} to transfer.",
+                        decoded.quantity, product_label
+                    )
                 }
-                format!("Added +{} of {} to transfer.", decoded.quantity, product_label)
-            } else {
-                if location_id.is_none() {
-                    return Err(Error::user(
-                        "Select or scan a Location before counting items in Inventory mode.",
-                    ));
+                "inventory" => {
+                    if location_id.is_none() {
+                        return Err(Error::user(
+                            "Select or scan a Location before counting items in Inventory mode.",
+                        ));
+                    }
+                    format!("Counted +{} of {}.", decoded.quantity, product_label)
                 }
-                format!("Counted +{} of {}.", decoded.quantity, product_label)
+                other => {
+                    return Err(Error::validation(format!(
+                        "Unsupported barcode session mode '{other}'."
+                    )));
+                }
             };
 
             let mut scan_vals = RawVals::new();
@@ -641,81 +778,111 @@ impl StockBarcodeSession {
             let default_loc: Option<i64> = row.try_get(3).map_err(db_err)?;
             let company_id: i64 = row.try_get(4).map_err(db_err)?;
 
-            let msg = if mode == "transfer" {
-                let Some(pid) = picking_id else {
-                    return Err(Error::user("Select a transfer before validating."));
-                };
-                env.records("stock.picking")?
-                    .browse(vec![pid])?
-                    .call::<(), Value>(tx, "action_validate_transfer", ())
-                    .await?;
-                "Transfer validated via barcode session.".to_owned()
-            } else {
-                let agg_rows = tx
-                    .query(
-                        "SELECT product_id::int8, COALESCE(location_id, $2)::int8, sum(quantity) \
-                         FROM stock_barcode_scan_line \
-                         WHERE session_id = $1 AND product_id IS NOT NULL \
-                         GROUP BY product_id, COALESCE(location_id, $2) ORDER BY product_id",
-                        &[&session_id, &default_loc],
-                    )
-                    .await?;
-                if agg_rows.is_empty() {
-                    return Err(Error::user(
-                        "Scan at least one product before applying the inventory count.",
-                    ));
-                }
-                let quants = env.records("stock.quant")?;
-                let mut applied = 0usize;
-                for arow in agg_rows {
-                    let product_id: i64 = arow.try_get(0).map_err(db_err)?;
-                    let loc_id: Option<i64> = arow.try_get(1).map_err(db_err)?;
-                    let Some(loc_id) = loc_id else {
-                        return Err(Error::user("A location is required to apply scanned counts."));
+            let uid = env.uid();
+            let msg = match mode.as_str() {
+                "transfer" => {
+                    let Some(pid) = picking_id else {
+                        return Err(Error::user("Select a transfer before validating."));
                     };
-                    let counted: Decimal = arow.try_get(2).map_err(db_err)?;
-                    let q_rows = tx
+                    env.records("stock.picking")?
+                        .browse(vec![pid])?
+                        .call::<(), Value>(tx, "action_validate_transfer", ())
+                        .await?;
+                    "Transfer validated via barcode session.".to_owned()
+                }
+                "inventory" => {
+                    if !env.su() && !tx.has_group(&env, "stock.group_stock_manager").await? {
+                        return Err(Error::access(
+                            "Only an Inventory Administrator can apply barcode inventory counts.",
+                        ));
+                    }
+                    let agg_rows = tx
                         .query(
-                            "SELECT id::int8 FROM stock_quant \
-                             WHERE company_id = $1 AND product_id = $2 AND location_id = $3 \
-                               AND lot_id IS NULL AND package_id IS NULL AND owner_id IS NULL LIMIT 1",
-                            &[&company_id, &product_id, &loc_id],
+                            "SELECT product_id::int8, COALESCE(location_id, $2)::int8, \
+                                    NULLIF(trim(COALESCE(lot_name, '')), ''), sum(quantity) \
+                             FROM stock_barcode_scan_line \
+                             WHERE session_id = $1 AND product_id IS NOT NULL \
+                             GROUP BY product_id, COALESCE(location_id, $2), \
+                                      NULLIF(trim(COALESCE(lot_name, '')), '') \
+                             ORDER BY product_id, 2, 3 NULLS LAST",
+                            &[&session_id, &default_loc],
                         )
                         .await?;
-                    let qid = if let Some(qr) = q_rows.first() {
-                        qr.try_get::<_, i64>(0).map_err(db_err)?
-                    } else {
-                        let mut qvals = RawVals::new();
-                        qvals.insert("company_id".into(), Cell::Id(company_id));
-                        qvals.insert("product_id".into(), Cell::Id(product_id));
-                        qvals.insert("location_id".into(), Cell::Id(loc_id));
-                        qvals.insert("inventory_quantity".into(), Cell::Decimal(counted));
-                        qvals.insert("inventory_quantity_set".into(), Cell::Bool(true));
-                        let created = quants.create(tx, vec![qvals]).await?;
-                        created
-                            .ids()
-                            .into_iter()
-                            .next()
-                            .ok_or_else(|| Error::invariant("Created stock.quant returned no id."))?
-                    };
-                    let qrec = quants.browse(vec![qid])?;
-                    qrec.write(
-                        tx,
-                        RawVals::new()
-                            .set_cell("inventory_quantity", Cell::Decimal(counted))
-                            .set_cell("inventory_quantity_set", Cell::Bool(true)),
-                    )
-                    .await?;
-                    qrec.call::<(), ()>(tx, "action_apply_inventory", ())
-                        .await?;
-                    applied += 1;
+                    if agg_rows.is_empty() {
+                        return Err(Error::user(
+                            "Scan at least one product before applying the inventory count.",
+                        ));
+                    }
+                    let lot_model = env.records("stock.lot")?;
+                    let adj_model = env.records("stock.inventory.adjustment.new")?;
+                    let mut applied = 0usize;
+                    for arow in agg_rows {
+                        let product_id: i64 = arow.try_get(0).map_err(db_err)?;
+                        let loc_id: Option<i64> = arow.try_get(1).map_err(db_err)?;
+                        let Some(loc_id) = loc_id else {
+                            return Err(Error::user(
+                                "A location is required to apply scanned counts.",
+                            ));
+                        };
+                        let lot_name: Option<String> = arow.try_get(2).map_err(db_err)?;
+                        let counted: Decimal = arow.try_get(3).map_err(db_err)?;
+                        let lot_id = if let Some(ref lname) = lot_name {
+                            let existing = tx
+                                .query(
+                                    "SELECT id::int8 FROM stock_lot \
+                                     WHERE product_id = $1 AND name = $2 \
+                                       AND (company_id = $3 OR company_id IS NULL) \
+                                     ORDER BY company_id NULLS LAST, id LIMIT 1",
+                                    &[&product_id, &lname, &company_id],
+                                )
+                                .await?;
+                            if let Some(found) = existing.first() {
+                                Some(found.try_get::<_, i64>(0).map_err(db_err)?)
+                            } else {
+                                let mut lv = RawVals::new();
+                                lv.insert("name".into(), Cell::Str(lname.as_str().into()));
+                                lv.insert("product_id".into(), Cell::Id(product_id));
+                                lv.insert("company_id".into(), Cell::Id(company_id));
+                                let created = lot_model.create(tx, vec![lv]).await?;
+                                tx.flush().await?;
+                                Some(created.ids().into_iter().next().ok_or_else(|| {
+                                    Error::invariant("Created stock.lot returned no id.")
+                                })?)
+                            }
+                        } else {
+                            None
+                        };
+
+                        // Apply count through the inventory adjustment wizard so all balances
+                        // flow through the quant engine (never calling StockQuant::create).
+                        let mut av = RawVals::new();
+                        av.insert("company_id".into(), Cell::Id(company_id));
+                        av.insert("product_id".into(), Cell::Id(product_id));
+                        av.insert("location_id".into(), Cell::Id(loc_id));
+                        if let Some(lid) = lot_id {
+                            av.insert("lot_id".into(), Cell::Id(lid));
+                        }
+                        av.insert("counted_quantity".into(), Cell::Decimal(counted));
+                        av.insert("note".into(), Cell::Str("Barcode Inventory Count".into()));
+                        let wiz = adj_model.create(tx, vec![av]).await?;
+                        let _: Value = wiz.call(tx, "action_apply", ()).await?;
+                        applied += 1;
+                    }
+                    format!("Applied barcode inventory count to {applied} stock line(s).")
                 }
-                format!("Applied barcode inventory count to {applied} stock line(s).")
+                other => {
+                    return Err(Error::validation(format!(
+                        "Unsupported barcode session mode '{other}'."
+                    )));
+                }
             };
 
             tx.execute(
-                "UPDATE stock_barcode_session SET state = 'done', last_message = $2 WHERE id = $1",
-                &[&session_id, &msg],
+                "UPDATE stock_barcode_session \
+                 SET state = 'done', last_message = $2, write_uid = $3, \
+                     write_date = (now() AT TIME ZONE 'UTC') \
+                 WHERE id = $1",
+                &[&session_id, &msg, &uid],
             )
             .await?;
             records
@@ -736,9 +903,27 @@ impl StockBarcodeSession {
         let records = this.as_records().clone();
         records.check_access(tx, Operation::Write).await?;
         let id = records.ensure_one()?.int()?;
+        let uid = records.env().uid();
+        tx.flush().await?;
+        let rows = tx
+            .query(
+                "SELECT state FROM stock_barcode_session WHERE id = $1 FOR UPDATE",
+                &[&id],
+            )
+            .await?;
+        let state: String = rows
+            .first()
+            .ok_or_else(|| Error::missing("Barcode session not found."))?
+            .try_get(0)
+            .map_err(db_err)?;
+        if state != "open" {
+            return Err(Error::user("Only open barcode sessions can be cancelled."));
+        }
         tx.execute(
-            "UPDATE stock_barcode_session SET state = 'cancel' WHERE id = $1 AND state = 'open'",
-            &[&id],
+            "UPDATE stock_barcode_session \
+             SET state = 'cancel', write_uid = $2, write_date = (now() AT TIME ZONE 'UTC') \
+             WHERE id = $1",
+            &[&id, &uid],
         )
         .await?;
         records.modified_external(tx, &["state"]).await?;
@@ -772,12 +957,15 @@ impl StockPickingBarcode {
         let session_id = if let Some(row) = rows.first() {
             row.try_get::<_, i64>(0).map_err(db_err)?
         } else {
-            let cid: i64 = tx
+            let p_rows = tx
                 .query(
                     "SELECT company_id::int8 FROM stock_picking WHERE id = $1",
                     &[&picking_id],
                 )
-                .await?[0]
+                .await?;
+            let cid: i64 = p_rows
+                .first()
+                .ok_or_else(|| Error::missing("Transfer not found."))?
                 .try_get(0)
                 .map_err(db_err)?;
             let mut vals = RawVals::new();

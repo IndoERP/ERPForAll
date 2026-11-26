@@ -6,17 +6,14 @@
 use std::collections::BTreeMap;
 
 use erp_addon_product::ProductTemplate;
-use erp_sdk::{Operation, ValueMap, prelude::*};
+use erp_sdk::sequence::draw_by_code;
+use erp_sdk::{CompanyId, Operation, ValueMap, prelude::*};
 
 erp_sdk::addon!(
     name = "stock_landed_costs",
     exact_only = true,
     depends = ["base", "stock", "stock_account", "purchase_stock"]
 );
-
-fn default_today(_ctx: &erp_sdk::DefaultContext) -> Value {
-    Value::Date(Date::today())
-}
 
 fn db_err(e: impl std::error::Error + Send + Sync + 'static) -> Error {
     Error::db("A landed cost record could not be read.").with_source(e)
@@ -83,6 +80,9 @@ pub fn allocate_landed_cost(
             "Select at least one completed transfer with stock moves before computing landed costs.",
         ));
     }
+    if total_cost < Decimal::ZERO {
+        return Err(Error::validation("Landed cost amount cannot be negative."));
+    }
     let rounded_total = total_cost.round_dp(scale);
     let weights: Vec<Decimal> = match method {
         SplitMethod::Equal => vec![Decimal::ONE; targets.len()],
@@ -91,6 +91,11 @@ pub fn allocate_landed_cost(
         SplitMethod::ByWeight => targets.iter().map(|t| t.weight).collect(),
         SplitMethod::ByVolume => targets.iter().map(|t| t.volume).collect(),
     };
+    if weights.iter().any(|w| *w < Decimal::ZERO) {
+        return Err(Error::validation(
+            "Cannot split landed cost when a target move has a negative basis.",
+        ));
+    }
     let weight_sum: Decimal = weights.iter().copied().sum();
     if weight_sum <= Decimal::ZERO {
         return Err(Error::user(
@@ -98,11 +103,20 @@ pub fn allocate_landed_cost(
              (quantity, current cost, weight or volume) across the selected transfers is zero.",
         ));
     }
+    let last_positive_idx = weights
+        .iter()
+        .rposition(|w| *w > Decimal::ZERO)
+        .ok_or_else(|| {
+            Error::user(
+                "Cannot split landed cost using the selected method because no target move has a positive basis.",
+            )
+        })?;
     let mut allocated = Vec::with_capacity(targets.len());
     let mut running = Decimal::ZERO;
-    let last_idx = targets.len() - 1;
     for (idx, w) in weights.into_iter().enumerate() {
-        if idx == last_idx {
+        if w.is_zero() {
+            allocated.push(Decimal::ZERO);
+        } else if idx == last_positive_idx {
             let remainder = (rounded_total - running).round_dp(scale);
             allocated.push(remainder);
         } else {
@@ -154,7 +168,7 @@ pub struct StockLandedCost {
     )]
     pub name: Option<Arc<str>>,
     /// Accounting/valuation date.
-    #[field(date, required = true, default_fn = default_today, string = "Date")]
+    #[field(date, required = true, string = "Date")]
     pub date: Option<Date>,
     /// Owning company.
     #[field(
@@ -270,7 +284,7 @@ pub struct StockLandedCost {
     name = "stock.landed.cost.lines",
     description = "Stock Landed Cost Line",
     order = "id",
-    company_access = direct(field = "company_id", branch = "exact", empty = "deny"),
+    company_access = direct(field = "company_id", branch = "exact", empty = "deny", parent = "cost_id"),
     constraints = [(
         "_nonneg_price",
         "CHECK (price_unit >= 0)",
@@ -358,7 +372,7 @@ pub struct StockLandedCostLine {
     name = "stock.valuation.adjustment.lines",
     description = "Valuation Adjustment Line",
     order = "id",
-    company_access = direct(field = "company_id", branch = "exact", empty = "deny")
+    company_access = direct(field = "company_id", branch = "exact", empty = "deny", parent = "cost_id")
 )]
 pub struct StockValuationAdjustmentLine {
     /// Parent landed cost document.
@@ -392,6 +406,7 @@ pub struct StockValuationAdjustmentLine {
         many2one,
         comodel = "product.product",
         required = true,
+        check_company = true,
         string = "Product"
     )]
     pub product_id: Option<RecId>,
@@ -449,42 +464,63 @@ pub struct StockValuationAdjustmentLine {
     pub final_cost: Decimal,
 }
 
-async fn next_landed_cost_name(env: &Env, tx: &mut Transaction) -> Result<String> {
-    let seqs = env.sudo(true).records("ir.sequence")?;
-    if let Ok(Value::Str(code)) = seqs
-        .call::<_, Value>(tx, "next_by_code", ("stock.landed.cost".to_owned(),))
-        .await
-        && !code.is_empty()
-    {
-        return Ok(code.to_string());
-    }
-    let rows = tx
-        .query(
-            "SELECT COALESCE(max(id), 0)::int8 + 1 FROM stock_landed_cost",
-            &[],
-        )
-        .await?;
-    let next: i64 = rows[0].try_get(0).map_err(db_err)?;
-    Ok(format!("LC/{next:05}"))
+async fn next_landed_cost_name(
+    env: &Env,
+    tx: &mut Transaction,
+    company_id: i64,
+    date: Date,
+) -> Result<String> {
+    let company = CompanyId::new(company_id)?;
+    draw_by_code(
+        tx,
+        &env.sudo(true),
+        "stock.landed.cost",
+        company,
+        Some(date),
+    )
+    .await
 }
 
 async fn currency_decimal_places(tx: &mut Transaction, currency_id: Option<i64>) -> Result<u32> {
-    let Some(cid) = currency_id else {
-        return Ok(2);
-    };
+    let cid = currency_id
+        .ok_or_else(|| Error::user("Landed cost company has no currency configured."))?;
     let rows = tx
         .query(
-            "SELECT COALESCE(decimal_places, 2)::int4 FROM res_currency WHERE id = $1",
+            "SELECT decimal_places::int4 FROM res_currency WHERE id = $1",
             &[&cid],
         )
         .await?;
-    let dp: i32 = rows
+    let row = rows
         .first()
-        .map(|r| r.try_get(0))
-        .transpose()
-        .map_err(db_err)?
-        .unwrap_or(2);
-    Ok(u32::try_from(dp.clamp(0, 6)).unwrap_or(2))
+        .ok_or_else(|| Error::missing("Landed cost currency was not found."))?;
+    let dp: i32 = row.try_get(0).map_err(db_err)?;
+    if !(0..=6).contains(&dp) {
+        return Err(Error::validation(format!(
+            "Unsupported currency decimal places '{dp}'."
+        )));
+    }
+    u32::try_from(dp).map_err(|_| Error::internal("currency decimal_places conversion failed"))
+}
+
+async fn ensure_draft_costs(tx: &mut Transaction, cost_ids: &[i64], action: &str) -> Result<()> {
+    if cost_ids.is_empty() {
+        return Ok(());
+    }
+    let rows = tx
+        .query(
+            "SELECT id::int8, state FROM stock_landed_cost WHERE id = ANY($1) FOR UPDATE",
+            &[&cost_ids],
+        )
+        .await?;
+    for row in rows {
+        let state: String = row.try_get(1).map_err(db_err)?;
+        if state != "draft" {
+            return Err(Error::user(format!(
+                "Cannot {action} a posted or cancelled landed cost document."
+            )));
+        }
+    }
+    Ok(())
 }
 
 async fn recompute_adjustments(
@@ -495,7 +531,8 @@ async fn recompute_adjustments(
     tx.flush().await?;
     let header_rows = tx
         .query(
-            "SELECT state, company_id::int8, currency_id::int8 FROM stock_landed_cost WHERE id = $1",
+            "SELECT state, company_id::int8, currency_id::int8 \
+             FROM stock_landed_cost WHERE id = $1 FOR UPDATE",
             &[&cost_id],
         )
         .await?;
@@ -545,14 +582,15 @@ async fn recompute_adjustments(
 
     let move_rows = tx
         .query(
-            "SELECT m.id::int8, m.product_id::int8, m.quantity, COALESCE(m.price_unit, 0), \
+            "SELECT m.id::int8, m.product_id::int8, m.quantity_product_uom, COALESCE(m.price_unit, 0), \
                     COALESCE(pt.weight, 0), COALESCE(pt.volume, 0) \
              FROM stock_move m \
              JOIN product_product pp ON pp.id = m.product_id \
              JOIN product_template pt ON pt.id = pp.product_tmpl_id \
-             WHERE m.picking_id = ANY($1) AND m.state = 'done' AND m.quantity > 0 \
+             WHERE m.picking_id = ANY($1) AND m.company_id = $2 \
+               AND m.state = 'done' AND m.quantity_product_uom > 0 \
              ORDER BY m.id",
-            &[&picking_ids],
+            &[&picking_ids, &company_id],
         )
         .await?;
     if move_rows.is_empty() {
@@ -575,15 +613,20 @@ async fn recompute_adjustments(
         .read(tx, &["id", "standard_price"])
         .await?;
     for row in prod_rows {
-        if let (Some(Value::Int(pid)), Some(price_val)) = (row.get("id"), row.get("standard_price"))
-        {
-            let price = match price_val {
-                Value::Decimal(d) => *d,
-                Value::Int(i) => Decimal::from(*i),
-                _ => Decimal::ZERO,
-            };
-            std_prices.insert(*pid, price);
-        }
+        let Some(Value::Int(pid)) = row.get("id") else {
+            return Err(Error::internal("product.product read missing integer id"));
+        };
+        let price = match row.get("standard_price") {
+            Some(Value::Decimal(d)) => *d,
+            Some(Value::Int(i)) => Decimal::from(*i),
+            None | Some(Value::False) => Decimal::ZERO,
+            other => {
+                return Err(Error::internal(format!(
+                    "Unexpected standard_price value for product {pid}: {other:?}"
+                )));
+            }
+        };
+        std_prices.insert(*pid, price);
     }
 
     let mut targets = Vec::with_capacity(move_rows.len());
@@ -674,6 +717,15 @@ impl StockLandedCostLine {
         sup: Super,
     ) -> Result<Records> {
         let env = this.env();
+        let cost_ids: Vec<i64> = vals_list
+            .iter()
+            .filter_map(|v| match v.get("cost_id") {
+                Some(Cell::Id(id)) => Some(*id),
+                Some(Cell::Int(id)) => Some(i64::from(*id)),
+                _ => None,
+            })
+            .collect();
+        ensure_draft_costs(tx, &cost_ids, "add cost lines to").await?;
         for vals in &mut vals_list {
             let empty_name = match vals.get("name") {
                 None | Some(Cell::Null) => true,
@@ -704,6 +756,103 @@ impl StockLandedCostLine {
         }
         sup.call(tx, this.as_records(), (vals_list,)).await
     }
+
+    #[method(override)]
+    async fn write(
+        this: &RecordSet<StockLandedCostLine>,
+        tx: &mut Transaction,
+        vals: RawVals,
+        sup: Super,
+    ) -> Result<()> {
+        let ids = this.ids();
+        if !ids.is_empty() {
+            let cost_ids: Vec<i64> = tx
+                .query(
+                    "SELECT DISTINCT cost_id::int8 FROM stock_landed_cost_lines WHERE id = ANY($1)",
+                    &[&ids],
+                )
+                .await?
+                .into_iter()
+                .map(|r| r.try_get(0))
+                .collect::<std::result::Result<Vec<i64>, _>>()
+                .map_err(db_err)?;
+            ensure_draft_costs(tx, &cost_ids, "modify cost lines on").await?;
+        }
+        sup.call(tx, this.as_records(), (vals,)).await
+    }
+
+    #[method(override)]
+    async fn unlink(
+        this: &RecordSet<StockLandedCostLine>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<()> {
+        let ids = this.ids();
+        if !ids.is_empty() {
+            let cost_ids: Vec<i64> = tx
+                .query(
+                    "SELECT DISTINCT cost_id::int8 FROM stock_landed_cost_lines WHERE id = ANY($1)",
+                    &[&ids],
+                )
+                .await?
+                .into_iter()
+                .map(|r| r.try_get(0))
+                .collect::<std::result::Result<Vec<i64>, _>>()
+                .map_err(db_err)?;
+            ensure_draft_costs(tx, &cost_ids, "delete cost lines from").await?;
+        }
+        sup.call(tx, this.as_records(), ()).await
+    }
+}
+
+#[methods(StockValuationAdjustmentLine, addon = "stock_landed_costs")]
+impl StockValuationAdjustmentLine {
+    #[method(override)]
+    async fn write(
+        this: &RecordSet<StockValuationAdjustmentLine>,
+        tx: &mut Transaction,
+        vals: RawVals,
+        sup: Super,
+    ) -> Result<()> {
+        let ids = this.ids();
+        if !ids.is_empty() {
+            let cost_ids: Vec<i64> = tx
+                .query(
+                    "SELECT DISTINCT cost_id::int8 FROM stock_valuation_adjustment_lines WHERE id = ANY($1)",
+                    &[&ids],
+                )
+                .await?
+                .into_iter()
+                .map(|r| r.try_get(0))
+                .collect::<std::result::Result<Vec<i64>, _>>()
+                .map_err(db_err)?;
+            ensure_draft_costs(tx, &cost_ids, "modify valuation adjustments on").await?;
+        }
+        sup.call(tx, this.as_records(), (vals,)).await
+    }
+
+    #[method(override)]
+    async fn unlink(
+        this: &RecordSet<StockValuationAdjustmentLine>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<()> {
+        let ids = this.ids();
+        if !ids.is_empty() {
+            let cost_ids: Vec<i64> = tx
+                .query(
+                    "SELECT DISTINCT cost_id::int8 FROM stock_valuation_adjustment_lines WHERE id = ANY($1)",
+                    &[&ids],
+                )
+                .await?
+                .into_iter()
+                .map(|r| r.try_get(0))
+                .collect::<std::result::Result<Vec<i64>, _>>()
+                .map_err(db_err)?;
+            ensure_draft_costs(tx, &cost_ids, "delete valuation adjustments from").await?;
+        }
+        sup.call(tx, this.as_records(), ()).await
+    }
 }
 
 #[methods(StockLandedCost, addon = "stock_landed_costs")]
@@ -717,6 +866,9 @@ impl StockLandedCost {
     ) -> Result<ValueMap> {
         let mut out: ValueMap = sup.call(tx, this.as_records(), (fields.clone(),)).await?;
         let active_company = this.env().company_id()?;
+        if fields.iter().any(|f| f == "date") && !out.contains_key("date") {
+            out.insert("date".into(), Value::Date(this.env().context_today()?));
+        }
         if fields.iter().any(|f| f == "company_id")
             && !out.contains_key("company_id")
             && let Some(cid) = active_company
@@ -793,30 +945,50 @@ impl StockLandedCost {
             .await?;
         let env = this.env();
         let active_company = env.company_id()?;
+        let today = env.context_today()?;
         for vals in &mut vals_list {
-            let needs_name = match vals.get("name") {
-                None | Some(Cell::Null) => true,
-                Some(Cell::Str(s)) => s.trim().is_empty() || s.as_ref() == "New",
-                _ => false,
-            };
-            if needs_name {
-                let name = next_landed_cost_name(env, tx).await?;
-                vals.insert("name".into(), Cell::Str(name.into()));
+            if vals.contains("state") || vals.contains("account_move_id") {
+                return Err(Error::validation(
+                    "Landed cost status and journal entry are managed by posting actions.",
+                ));
+            }
+            if matches!(vals.get("date"), None | Some(Cell::Null)) {
+                vals.insert("date".into(), Cell::Date(today));
             }
             if matches!(vals.get("company_id"), None | Some(Cell::Null))
                 && let Some(cid) = active_company
             {
                 vals.insert("company_id".into(), Cell::Id(cid));
             }
-            if matches!(vals.get("account_journal_id"), None | Some(Cell::Null))
-                && let Some(Cell::Id(cid)) = vals.get("company_id")
-            {
+            let company_id = match vals.get("company_id") {
+                Some(Cell::Id(cid)) => *cid,
+                Some(Cell::Int(cid)) => i64::from(*cid),
+                _ => {
+                    return Err(Error::validation(
+                        "A landed cost document requires a company.",
+                    ));
+                }
+            };
+            let date = match vals.get("date") {
+                Some(Cell::Date(d)) => *d,
+                _ => today,
+            };
+            let needs_name = match vals.get("name") {
+                None | Some(Cell::Null) => true,
+                Some(Cell::Str(s)) => s.trim().is_empty() || s.as_ref() == "New",
+                _ => false,
+            };
+            if needs_name {
+                let name = next_landed_cost_name(env, tx, company_id, date).await?;
+                vals.insert("name".into(), Cell::Str(name.into()));
+            }
+            if matches!(vals.get("account_journal_id"), None | Some(Cell::Null)) {
                 let jrows = tx
                     .query(
                         "SELECT id::int8 FROM account_journal \
                          WHERE company_id = $1 AND type = 'general' AND active IS TRUE \
                          ORDER BY sequence, id LIMIT 1",
-                        &[cid],
+                        &[&company_id],
                     )
                     .await?;
                 if let Some(jrow) = jrows.first() {
@@ -826,6 +998,34 @@ impl StockLandedCost {
             }
         }
         sup.call(tx, this.as_records(), (vals_list,)).await
+    }
+
+    #[method(override)]
+    async fn write(
+        this: &RecordSet<StockLandedCost>,
+        tx: &mut Transaction,
+        vals: RawVals,
+        sup: Super,
+    ) -> Result<()> {
+        if vals.contains("state") || vals.contains("account_move_id") {
+            return Err(Error::validation(
+                "Landed cost status and journal entry are managed by posting actions.",
+            ));
+        }
+        let ids = this.ids();
+        ensure_draft_costs(tx, &ids, "modify").await?;
+        sup.call(tx, this.as_records(), (vals,)).await
+    }
+
+    #[method(override)]
+    async fn unlink(
+        this: &RecordSet<StockLandedCost>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<()> {
+        let ids = this.ids();
+        ensure_draft_costs(tx, &ids, "delete").await?;
+        sup.call(tx, this.as_records(), ()).await
     }
 
     /// Compute or recompute valuation adjustment lines across the selected transfers.
@@ -877,25 +1077,34 @@ impl StockLandedCost {
             }
             let scale = currency_decimal_places(tx, currency_id).await?;
 
-            // Automatically compute adjustment lines if not yet computed.
-            let adj_count: i64 = tx
-                .query(
-                    "SELECT count(*)::int8 FROM stock_valuation_adjustment_lines WHERE cost_id = $1",
-                    &[&id],
-                )
-                .await?[0]
-                .try_get(0)
-                .map_err(db_err)?;
-            if adj_count == 0 {
-                let _ = recompute_adjustments(&env, tx, id).await?;
-            }
+            // Always recompute adjustments against the current cost lines and transfers before posting.
+            let _ = recompute_adjustments(&env, tx, id).await?;
             tx.flush().await?;
 
+            // Deduplicate move quantities per (move_id, product_id) so multiple cost lines
+            // do not multiply the denominator when computing unit cost uplift.
             let adj_rows = tx
                 .query(
-                    "SELECT product_id::int8, sum(quantity), sum(additional_landed_cost) \
-                     FROM stock_valuation_adjustment_lines \
-                     WHERE cost_id = $1 GROUP BY product_id ORDER BY product_id",
+                    "WITH move_qty AS ( \
+                         SELECT DISTINCT move_id, product_id, quantity \
+                         FROM stock_valuation_adjustment_lines \
+                         WHERE cost_id = $1 \
+                     ), \
+                     prod_qty AS ( \
+                         SELECT product_id, COALESCE(sum(quantity), 0) AS moved_qty \
+                         FROM move_qty \
+                         GROUP BY product_id \
+                     ), \
+                     prod_cost AS ( \
+                         SELECT product_id, COALESCE(sum(additional_landed_cost), 0) AS add_cost \
+                         FROM stock_valuation_adjustment_lines \
+                         WHERE cost_id = $1 \
+                         GROUP BY product_id \
+                     ) \
+                     SELECT pc.product_id::int8, pq.moved_qty, pc.add_cost \
+                     FROM prod_cost pc \
+                     JOIN prod_qty pq ON pq.product_id = pc.product_id \
+                     ORDER BY pc.product_id",
                     &[&id],
                 )
                 .await?;
@@ -913,6 +1122,12 @@ impl StockLandedCost {
                 if add_cost == Decimal::ZERO {
                     continue;
                 }
+                let _ = tx
+                    .query(
+                        "SELECT id FROM product_product WHERE id = $1 FOR UPDATE",
+                        &[&product_id],
+                    )
+                    .await?;
                 let on_hand: Decimal = tx
                     .query(
                         "SELECT COALESCE(sum(q.quantity), 0) \
@@ -921,7 +1136,9 @@ impl StockLandedCost {
                          WHERE q.company_id = $1 AND q.product_id = $2 AND l.usage = 'internal'",
                         &[&company_id, &product_id],
                     )
-                    .await?[0]
+                    .await?
+                    .first()
+                    .ok_or_else(|| Error::internal("On-hand sum returned no row."))?
                     .try_get(0)
                     .map_err(db_err)?;
                 let denom = if on_hand > moved_qty {
@@ -938,7 +1155,12 @@ impl StockLandedCost {
                 let cur_price = match prod_rec.cell(tx, "standard_price").await? {
                     Cell::Decimal(d) => d,
                     Cell::Int(i) => Decimal::from(i),
-                    _ => Decimal::ZERO,
+                    Cell::Null => Decimal::ZERO,
+                    other => {
+                        return Err(Error::internal(format!(
+                            "Unexpected standard_price cell for product {product_id}: {other:?}"
+                        )));
+                    }
                 };
                 let unit_uplift = (add_cost / denom).round_dp(scale);
                 let new_price = (cur_price + unit_uplift).round_dp(scale);
@@ -950,9 +1172,12 @@ impl StockLandedCost {
                     .await?;
             }
 
+            let uid = env.uid();
             tx.execute(
-                "UPDATE stock_landed_cost SET state = 'done' WHERE id = $1",
-                &[&id],
+                "UPDATE stock_landed_cost \
+                 SET state = 'done', write_uid = $2, write_date = (now() AT TIME ZONE 'UTC') \
+                 WHERE id = $1",
+                &[&id, &uid],
             )
             .await?;
             records.modified_external(tx, &["state"]).await?;
@@ -971,20 +1196,28 @@ impl StockLandedCost {
         let records = this.as_records().clone();
         records.check_access(tx, Operation::Write).await?;
         let id = records.ensure_one()?.int()?;
+        let uid = records.env().uid();
         let rows = tx
-            .query("SELECT state FROM stock_landed_cost WHERE id = $1", &[&id])
+            .query(
+                "SELECT state FROM stock_landed_cost WHERE id = $1 FOR UPDATE",
+                &[&id],
+            )
             .await?;
         let state: String = rows
             .first()
             .ok_or_else(|| Error::missing("Landed cost document not found."))?
             .try_get(0)
             .map_err(db_err)?;
-        if state == "done" {
-            return Err(Error::user("Cannot cancel a posted landed cost document."));
+        if state != "draft" {
+            return Err(Error::user(
+                "Only draft landed cost documents can be cancelled.",
+            ));
         }
         tx.execute(
-            "UPDATE stock_landed_cost SET state = 'cancel' WHERE id = $1",
-            &[&id],
+            "UPDATE stock_landed_cost \
+             SET state = 'cancel', write_uid = $2, write_date = (now() AT TIME ZONE 'UTC') \
+             WHERE id = $1",
+            &[&id, &uid],
         )
         .await?;
         records.modified_external(tx, &["state"]).await?;

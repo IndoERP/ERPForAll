@@ -219,8 +219,8 @@ export function attachMenuDropdown(options: MenuDropdownOptions): MenuDropdownCo
   };
 
   // Trigger keyboard listener
-  const onTriggerKeydown = (event: KeyboardEvent): void => {
-    if (disposed) return;
+  const onTriggerKeydown = (event: Event): void => {
+    if (disposed || !(event instanceof KeyboardEvent)) return;
     if (event.key === "ArrowDown") {
       event.preventDefault();
       openMenu("first");
@@ -241,9 +241,9 @@ export function attachMenuDropdown(options: MenuDropdownOptions): MenuDropdownCo
   };
 
   // Menu keyboard listener
-  const onMenuKeydown = (event: KeyboardEvent): void => {
+  const onMenuKeydown = (event: Event): void => {
     sync();
-    if (disposed || !open) return;
+    if (disposed || !open || !(event instanceof KeyboardEvent)) return;
 
     if (event.key === "Escape") {
       event.preventDefault();

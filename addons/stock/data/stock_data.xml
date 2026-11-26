@@ -4,7 +4,7 @@
 Default stock topology records that need no behaviour. The default warehouse
      and everything it generates come with the warehouse model slice. 
 -->
-<odoo>
+<erp>
   <data>
     <!-- The four removal strategies of the reservation code. -->
     <record id="removal_fifo" model="product.removal">
@@ -67,4 +67,4 @@ Default stock topology records that need no behaviour. The default warehouse
       <field name="generation">0</field>
     </record>
   </data>
-</odoo>
+</erp>

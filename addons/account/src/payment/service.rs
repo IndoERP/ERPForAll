@@ -147,6 +147,67 @@ pub(super) async fn refuse_ended(tx: &mut Transaction, ids: &[i64], what: &str) 
     Ok(())
 }
 
+/// Refuses changing `batch_payment_id` on reconciled, cancelled or rejected payments, and refuses
+/// attaching to or detaching from a batch payment that has already been sent or reconciled.
+pub(super) async fn refuse_batch_change(
+    tx: &mut Transaction,
+    ids: &[i64],
+    new_batch: Option<&Cell>,
+) -> Result<()> {
+    tx.flush().await?;
+    let rows = tx
+        .query(
+            "SELECT COALESCE(p.name, 'Draft Payment'), p.state::text, \
+                    b.name::text, b.state::text \
+             FROM account_payment p \
+             LEFT JOIN account_batch_payment b ON b.id = p.batch_payment_id \
+             WHERE p.id = ANY($1::int8[]) \
+             ORDER BY p.id",
+            &[&ids],
+        )
+        .await?;
+    for row in &rows {
+        let name: String = row.try_get(0).map_err(db)?;
+        let state: String = row.try_get(1).map_err(db)?;
+        if matches!(state.as_str(), "reconciled" | "canceled" | "rejected") {
+            let label = if state == "canceled" {
+                "cancelled"
+            } else {
+                state.as_str()
+            };
+            return Err(Error::user(format!(
+                "Payment {name} is {label}: batch_payment_id cannot be changed."
+            )));
+        }
+        let existing_batch_name: Option<String> = row.try_get(2).map_err(db)?;
+        let existing_batch_state: Option<String> = row.try_get(3).map_err(db)?;
+        if matches!(existing_batch_state.as_deref(), Some("sent" | "reconciled")) {
+            let bname = existing_batch_name.as_deref().unwrap_or("Batch");
+            return Err(Error::user(format!(
+                "Payment {name} belongs to finalized batch payment {bname} and cannot be reassigned."
+            )));
+        }
+    }
+    if let Some(Cell::Id(target_id)) = new_batch {
+        let target = tx
+            .query(
+                "SELECT name::text, state::text FROM account_batch_payment WHERE id = $1",
+                &[target_id],
+            )
+            .await?;
+        if let Some(row) = target.first() {
+            let bname: String = row.try_get(0).map_err(db)?;
+            let bstate: String = row.try_get(1).map_err(db)?;
+            if matches!(bstate.as_str(), "sent" | "reconciled") {
+                return Err(Error::user(format!(
+                    "Batch payment {bname} is {bstate}: payments can only be added to a draft batch."
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The memo of the posted payments of `ids` becomes their entries' reference (the entry write
 /// keeps its own rights and rules).
 pub(super) async fn memo_to_entries(tx: &mut Transaction, env: &Env, ids: &[i64]) -> Result<()> {

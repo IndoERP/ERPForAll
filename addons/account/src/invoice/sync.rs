@@ -166,13 +166,13 @@ struct Line {
 }
 
 /// One tax repartition line of kind `tax`.
-struct Repartition {
-    id: i64,
-    tax: i64,
-    refund: bool,
-    factor: Decimal,
-    account: Option<i64>,
-    sequence: i32,
+pub(super) struct Repartition {
+    pub(super) id: i64,
+    pub(super) tax: i64,
+    pub(super) refund: bool,
+    pub(super) factor: Decimal,
+    pub(super) account: Option<i64>,
+    pub(super) sequence: i32,
 }
 
 /// The draft invoices among `move_ids`, with their headers.
@@ -372,9 +372,8 @@ async fn load_lines(tx: &mut Transaction, env: &Env, invoices: &[Invoice]) -> Re
 }
 
 /// The taxes of `tax_ids` as the computation needs them, with their labels, and their `tax`
-/// repartition lines. A group of taxes and a tax with a negative
-/// factor (reverse charge); both are refused.
-async fn load_taxes(
+/// repartition lines. Groups of taxes are refused until child-tax expansion is implemented.
+pub(super) async fn load_taxes(
     tx: &mut Transaction,
     env: &Env,
     tax_ids: &BTreeSet<i64>,
@@ -393,7 +392,6 @@ async fn load_taxes(
         "price_include",
         "include_base_amount",
         "is_base_affected",
-        "has_negative_factor",
         "tax_label",
     ] {
         columns.insert(field, taxes.cells(tx, field).await?);
@@ -477,7 +475,7 @@ async fn load_taxes(
 
 /// Splits a tax amount over the tax's repartition lines of the document kind by their factor; the
 /// rounding difference goes to the first line so the parts add up to the rounded whole.
-fn distribute<'a>(
+pub(super) fn distribute<'a>(
     amount: Decimal,
     repartitions: impl Iterator<Item = &'a Repartition>,
     increment: &Increment,
@@ -619,32 +617,10 @@ async fn sync(tx: &mut Transaction, env: &Env, move_ids: &[i64], redated: bool) 
                 increment,
             })?;
             untaxed = total(untaxed, result.total_excluded)?;
-            let mut update = RawVals::new();
-            let amount_currency = sign * result.total_excluded;
-            amounts_in(&mut update, line, invoice, amount_currency, reconvert);
-            if line.subtotal != result.total_excluded {
-                update.insert(
-                    "price_subtotal".into(),
-                    Cell::Decimal(result.total_excluded),
-                );
-            }
-            if line.price_total != result.total_included {
-                update.insert("price_total".into(), Cell::Decimal(result.total_included));
-            }
-            if line.partner != invoice.partner {
-                update.insert(
-                    "partner_id".into(),
-                    invoice.partner.map_or(Cell::Null, Cell::Id),
-                );
-            }
-            if !update.is_empty() {
-                // shortcut: one write per changed line; a batched multi-row update needs an ORM
-                // bulk-write API, add it when invoices with hundreds of lines show up in a profile
-                items.browse([line.id])?.write(tx, update).await?;
-            }
             let base_account = line.account.ok_or_else(|| {
                 Error::invariant(format!("invoice line {} has no account", line.id))
             })?;
+            let mut effective_line_tax = Decimal::ZERO;
             for tax in &result.taxes {
                 let label = taxes
                     .get(&tax.tax_id)
@@ -656,10 +632,35 @@ async fn sync(tx: &mut Transaction, env: &Env, move_ids: &[i64], redated: bool) 
                     .iter()
                     .filter(|r| r.tax == tax.tax_id && r.refund == refund);
                 for (rep, part) in distribute(tax.amount, own_reps, increment)? {
+                    effective_line_tax = total(effective_line_tax, part)?;
                     let key = (rep.id, rep.account.unwrap_or(base_account));
                     let slot = by_key.entry(key).or_insert((Decimal::ZERO, label.clone()));
                     slot.0 = total(slot.0, part)?;
                 }
+            }
+            let effective_price_total = total(result.total_excluded, effective_line_tax)?;
+            let mut update = RawVals::new();
+            let amount_currency = sign * result.total_excluded;
+            amounts_in(&mut update, line, invoice, amount_currency, reconvert);
+            if line.subtotal != result.total_excluded {
+                update.insert(
+                    "price_subtotal".into(),
+                    Cell::Decimal(result.total_excluded),
+                );
+            }
+            if line.price_total != effective_price_total {
+                update.insert("price_total".into(), Cell::Decimal(effective_price_total));
+            }
+            if line.partner != invoice.partner {
+                update.insert(
+                    "partner_id".into(),
+                    invoice.partner.map_or(Cell::Null, Cell::Id),
+                );
+            }
+            if !update.is_empty() {
+                // shortcut: one write per changed line; a batched multi-row update needs an ORM
+                // bulk-write API, add it when invoices with hundreds of lines show up in a profile
+                items.browse([line.id])?.write(tx, update).await?;
             }
         }
         // tax lines: one per (repartition line, account); zero amounts make no line

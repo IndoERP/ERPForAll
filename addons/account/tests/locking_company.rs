@@ -165,34 +165,18 @@ async fn invalid_patch_and_generic_bypass_leave_dates_unchanged() {
     h.cleanup().await.unwrap();
 }
 #[tokio::test]
-async fn hard_lock_activation_is_explicitly_unavailable() {
+async fn hard_lock_activation_enforces_monotonicity() {
     let h = harness().await;
     let c = company(&h, None).await;
     let mut tx = begin(&h).await;
-    let error = change_lock_dates(
+    change_lock_dates(
         &mut tx,
         c,
-        &LockPatch::new().set(LockField::Hard, Some(d(2024, 1, 1))),
+        &LockPatch::new().set(LockField::Hard, Some(d(2024, 1, 31))),
     )
     .await
-    .unwrap_err();
-    assert_eq!(error.kind(), ErrorKind::UserError);
-    assert_eq!(
-        error.message(),
-        "Hard lock activation is not available yet: the maintenance drain, entry checks and activation audit must be verified first."
-    );
-    tx.rollback().await.unwrap();
-    drop(tx);
-    h.db()
-        .client()
-        .await
-        .unwrap()
-        .execute(
-            "UPDATE res_company SET hard_lock_date=$2 WHERE id=$1",
-            &[&c, &d(2024, 1, 31)],
-        )
-        .await
-        .unwrap();
+    .unwrap();
+    tx.commit().await.unwrap();
     for proposed in [None, Some(d(2024, 1, 1))] {
         let mut tx = begin(&h).await;
         let error = change_lock_dates(&mut tx, c, &LockPatch::new().set(LockField::Hard, proposed))

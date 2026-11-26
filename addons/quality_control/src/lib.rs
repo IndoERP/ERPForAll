@@ -6,7 +6,8 @@
 use std::collections::BTreeMap;
 
 use erp_addon_stock::StockPicking;
-use erp_sdk::{Operation, ValueMap, prelude::*};
+use erp_sdk::sequence::draw_by_code;
+use erp_sdk::{CompanyId, ErrorKind, GroupValue, Operation, ReadGroup, ValueMap, prelude::*};
 
 erp_sdk::addon!(
     name = "quality_control",
@@ -33,25 +34,10 @@ pub fn is_measure_within_tolerance(
     Ok(measure >= tolerance_min && measure <= tolerance_max)
 }
 
-async fn next_seq(
-    env: &Env,
-    tx: &mut Transaction,
-    code: &str,
-    table: &str,
-    prefix: &str,
-) -> Result<String> {
-    let seqs = env.sudo(true).records("ir.sequence")?;
-    if let Ok(Value::Str(val)) = seqs
-        .call::<_, Value>(tx, "next_by_code", (code.to_owned(),))
-        .await
-        && !val.is_empty()
-    {
-        return Ok(val.to_string());
-    }
-    let sql = format!("SELECT COALESCE(max(id), 0)::int8 + 1 FROM {table}");
-    let rows = tx.query(&sql, &[]).await?;
-    let next: i64 = rows[0].try_get(0).map_err(db_err)?;
-    Ok(format!("{prefix}{next:05}"))
+async fn next_seq(env: &Env, tx: &mut Transaction, code: &str, company_id: i64) -> Result<String> {
+    let today = env.context_today()?;
+    let company = CompanyId::new(company_id)?;
+    draw_by_code(tx, &env.sudo(true), code, company, Some(today)).await
 }
 
 /// `quality.team`: team responsible for quality inspections and alerts.
@@ -106,13 +92,28 @@ pub struct QualityPoint {
     )]
     pub company_id: Option<RecId>,
     /// Responsible quality team.
-    #[field(many2one, comodel = "quality.team", string = "Team")]
+    #[field(
+        many2one,
+        comodel = "quality.team",
+        check_company = true,
+        string = "Team"
+    )]
     pub team_id: Option<RecId>,
     /// Operation type where this control point triggers (empty = all operation types).
-    #[field(many2one, comodel = "stock.picking.type", string = "Operation Type")]
+    #[field(
+        many2one,
+        comodel = "stock.picking.type",
+        check_company = true,
+        string = "Operation Type"
+    )]
     pub picking_type_id: Option<RecId>,
     /// Specific product covered (empty = all products on matching transfers).
-    #[field(many2one, comodel = "product.product", string = "Product")]
+    #[field(
+        many2one,
+        comodel = "product.product",
+        check_company = true,
+        string = "Product"
+    )]
     pub product_id: Option<RecId>,
     /// Inspection kind.
     #[field(
@@ -169,11 +170,17 @@ pub struct QualityCheck {
         many2one,
         comodel = "quality.point",
         ondelete = "set null",
+        check_company = true,
         string = "Control Point"
     )]
     pub point_id: Option<RecId>,
     /// Quality team.
-    #[field(many2one, comodel = "quality.team", string = "Team")]
+    #[field(
+        many2one,
+        comodel = "quality.team",
+        check_company = true,
+        string = "Team"
+    )]
     pub team_id: Option<RecId>,
     /// Owning company.
     #[field(
@@ -190,14 +197,25 @@ pub struct QualityCheck {
         comodel = "stock.picking",
         ondelete = "cascade",
         index = true,
+        check_company = true,
         string = "Transfer"
     )]
     pub picking_id: Option<RecId>,
     /// Inspected product.
-    #[field(many2one, comodel = "product.product", string = "Product")]
+    #[field(
+        many2one,
+        comodel = "product.product",
+        check_company = true,
+        string = "Product"
+    )]
     pub product_id: Option<RecId>,
     /// Inspected lot/serial.
-    #[field(many2one, comodel = "stock.lot", string = "Lot/Serial")]
+    #[field(
+        many2one,
+        comodel = "stock.lot",
+        check_company = true,
+        string = "Lot/Serial"
+    )]
     pub lot_id: Option<RecId>,
     /// Inspection type.
     #[field(
@@ -276,7 +294,12 @@ pub struct QualityAlert {
     #[field(char, required = true, string = "Title")]
     pub title: Option<Arc<str>>,
     /// Responsible team.
-    #[field(many2one, comodel = "quality.team", string = "Team")]
+    #[field(
+        many2one,
+        comodel = "quality.team",
+        check_company = true,
+        string = "Team"
+    )]
     pub team_id: Option<RecId>,
     /// Owning company.
     #[field(
@@ -292,6 +315,7 @@ pub struct QualityAlert {
         many2one,
         comodel = "stock.picking",
         ondelete = "set null",
+        check_company = true,
         string = "Transfer"
     )]
     pub picking_id: Option<RecId>,
@@ -300,14 +324,25 @@ pub struct QualityAlert {
         many2one,
         comodel = "quality.check",
         ondelete = "set null",
+        check_company = true,
         string = "Quality Check"
     )]
     pub check_id: Option<RecId>,
     /// Affected product.
-    #[field(many2one, comodel = "product.product", string = "Product")]
+    #[field(
+        many2one,
+        comodel = "product.product",
+        check_company = true,
+        string = "Product"
+    )]
     pub product_id: Option<RecId>,
     /// Affected lot/serial.
-    #[field(many2one, comodel = "stock.lot", string = "Lot/Serial")]
+    #[field(
+        many2one,
+        comodel = "stock.lot",
+        check_company = true,
+        string = "Lot/Serial"
+    )]
     pub lot_id: Option<RecId>,
     /// Priority (`0` normal, `1` urgent).
     #[field(
@@ -373,22 +408,34 @@ impl QualityPoint {
         mut vals_list: Vec<RawVals>,
         sup: Super,
     ) -> Result<Records> {
+        this.as_records()
+            .check_access(tx, Operation::Create)
+            .await?;
         let env = this.env();
         let active_company = env.company_id()?;
         for vals in &mut vals_list {
+            if matches!(vals.get("company_id"), None | Some(Cell::Null))
+                && let Some(cid) = active_company
+            {
+                vals.insert("company_id".into(), Cell::Id(cid));
+            }
+            let company_id = match vals.get("company_id") {
+                Some(Cell::Id(cid)) => *cid,
+                Some(Cell::Int(cid)) => i64::from(*cid),
+                _ => {
+                    return Err(Error::validation(
+                        "A quality control point requires a company.",
+                    ));
+                }
+            };
             let needs_name = match vals.get("name") {
                 None | Some(Cell::Null) => true,
                 Some(Cell::Str(s)) => s.trim().is_empty() || s.as_ref() == "New",
                 _ => false,
             };
             if needs_name {
-                let name = next_seq(env, tx, "quality.point", "quality_point", "QCP/").await?;
+                let name = next_seq(env, tx, "quality.point", company_id).await?;
                 vals.insert("name".into(), Cell::Str(name.into()));
-            }
-            if matches!(vals.get("company_id"), None | Some(Cell::Null))
-                && let Some(cid) = active_company
-            {
-                vals.insert("company_id".into(), Cell::Id(cid));
             }
         }
         sup.call(tx, this.as_records(), (vals_list,)).await
@@ -421,25 +468,104 @@ impl QualityCheck {
         mut vals_list: Vec<RawVals>,
         sup: Super,
     ) -> Result<Records> {
+        this.as_records()
+            .check_access(tx, Operation::Create)
+            .await?;
         let env = this.env();
         let active_company = env.company_id()?;
         for vals in &mut vals_list {
-            let needs_name = match vals.get("name") {
-                None | Some(Cell::Null) => true,
-                Some(Cell::Str(s)) => s.trim().is_empty() || s.as_ref() == "New",
-                _ => false,
-            };
-            if needs_name {
-                let name = next_seq(env, tx, "quality.check", "quality_check", "QC/").await?;
-                vals.insert("name".into(), Cell::Str(name.into()));
+            if vals.contains("quality_state")
+                || vals.contains("control_date")
+                || vals.contains("user_id")
+            {
+                return Err(Error::validation(
+                    "Quality check outcome fields are managed by inspection actions.",
+                ));
             }
             if matches!(vals.get("company_id"), None | Some(Cell::Null))
                 && let Some(cid) = active_company
             {
                 vals.insert("company_id".into(), Cell::Id(cid));
             }
+            let company_id = match vals.get("company_id") {
+                Some(Cell::Id(cid)) => *cid,
+                Some(Cell::Int(cid)) => i64::from(*cid),
+                _ => {
+                    return Err(Error::validation("A quality check requires a company."));
+                }
+            };
+            let needs_name = match vals.get("name") {
+                None | Some(Cell::Null) => true,
+                Some(Cell::Str(s)) => s.trim().is_empty() || s.as_ref() == "New",
+                _ => false,
+            };
+            if needs_name {
+                let name = next_seq(env, tx, "quality.check", company_id).await?;
+                vals.insert("name".into(), Cell::Str(name.into()));
+            }
         }
         sup.call(tx, this.as_records(), (vals_list,)).await
+    }
+
+    #[method(override)]
+    async fn write(
+        this: &RecordSet<QualityCheck>,
+        tx: &mut Transaction,
+        vals: RawVals,
+        sup: Super,
+    ) -> Result<()> {
+        if vals.contains("quality_state")
+            || vals.contains("control_date")
+            || vals.contains("user_id")
+        {
+            return Err(Error::validation(
+                "Quality check outcome fields are managed by inspection actions.",
+            ));
+        }
+        let ids = this.ids();
+        if !ids.is_empty()
+            && !this.env().su()
+            && !tx
+                .has_group(this.env(), "stock.group_stock_manager")
+                .await?
+        {
+            let rows = tx
+                .query(
+                    "SELECT count(*)::int8 FROM quality_check \
+                     WHERE id = ANY($1) AND quality_state <> 'none'",
+                    &[&ids],
+                )
+                .await?;
+            let done_cnt: i64 = rows
+                .first()
+                .ok_or_else(|| Error::internal("Quality check count returned no row."))?
+                .try_get(0)
+                .map_err(db_err)?;
+            if done_cnt > 0 {
+                return Err(Error::user(
+                    "Completed quality checks can only be modified by an inventory manager.",
+                ));
+            }
+        }
+        sup.call(tx, this.as_records(), (vals,)).await
+    }
+
+    #[method(override)]
+    async fn unlink(
+        this: &RecordSet<QualityCheck>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.env().su()
+            && !tx
+                .has_group(this.env(), "stock.group_stock_manager")
+                .await?
+        {
+            return Err(Error::access(
+                "Only inventory managers can delete quality checks.",
+            ));
+        }
+        sup.call(tx, this.as_records(), ()).await
     }
 
     /// Mark a pending quality check as Passed.
@@ -450,15 +576,31 @@ impl QualityCheck {
         records.check_access(tx, Operation::Write).await?;
         let id = records.ensure_one()?.int()?;
         let uid = records.env().uid();
+        let rows = tx
+            .query(
+                "SELECT quality_state FROM quality_check WHERE id = $1 FOR UPDATE",
+                &[&id],
+            )
+            .await?;
+        let Some(row) = rows.first() else {
+            return Err(Error::missing("Quality check not found."));
+        };
+        let cur: String = row.try_get(0).map_err(db_err)?;
+        if cur != "none" {
+            return Err(Error::user(
+                "This quality check has already been completed.",
+            ));
+        }
         tx.execute(
             "UPDATE quality_check \
-             SET quality_state = 'pass', control_date = (now() AT TIME ZONE 'UTC'), user_id = $2 \
+             SET quality_state = 'pass', control_date = (now() AT TIME ZONE 'UTC'), \
+                 user_id = $2, write_uid = $2, write_date = (now() AT TIME ZONE 'UTC') \
              WHERE id = $1",
             &[&id, &uid],
         )
         .await?;
         records
-            .modified_external(tx, &["quality_state", "control_date"])
+            .modified_external(tx, &["quality_state", "control_date", "user_id"])
             .await?;
         Ok(())
     }
@@ -471,15 +613,31 @@ impl QualityCheck {
         records.check_access(tx, Operation::Write).await?;
         let id = records.ensure_one()?.int()?;
         let uid = records.env().uid();
+        let rows = tx
+            .query(
+                "SELECT quality_state FROM quality_check WHERE id = $1 FOR UPDATE",
+                &[&id],
+            )
+            .await?;
+        let Some(row) = rows.first() else {
+            return Err(Error::missing("Quality check not found."));
+        };
+        let cur: String = row.try_get(0).map_err(db_err)?;
+        if cur != "none" {
+            return Err(Error::user(
+                "This quality check has already been completed.",
+            ));
+        }
         tx.execute(
             "UPDATE quality_check \
-             SET quality_state = 'fail', control_date = (now() AT TIME ZONE 'UTC'), user_id = $2 \
+             SET quality_state = 'fail', control_date = (now() AT TIME ZONE 'UTC'), \
+                 user_id = $2, write_uid = $2, write_date = (now() AT TIME ZONE 'UTC') \
              WHERE id = $1",
             &[&id, &uid],
         )
         .await?;
         records
-            .modified_external(tx, &["quality_state", "control_date"])
+            .modified_external(tx, &["quality_state", "control_date", "user_id"])
             .await?;
         Ok(())
     }
@@ -494,28 +652,42 @@ impl QualityCheck {
         tx.flush().await?;
         let rows = tx
             .query(
-                "SELECT measure, tolerance_min, tolerance_max FROM quality_check WHERE id = $1",
+                "SELECT quality_state, test_type, measure, tolerance_min, tolerance_max \
+                 FROM quality_check WHERE id = $1 FOR UPDATE",
                 &[&id],
             )
             .await?;
         let Some(row) = rows.first() else {
             return Err(Error::missing("Quality check not found."));
         };
-        let measure: Decimal = row.try_get(0).map_err(db_err)?;
-        let min_v: Decimal = row.try_get(1).map_err(db_err)?;
-        let max_v: Decimal = row.try_get(2).map_err(db_err)?;
+        let cur: String = row.try_get(0).map_err(db_err)?;
+        if cur != "none" {
+            return Err(Error::user(
+                "This quality check has already been completed.",
+            ));
+        }
+        let test_type: String = row.try_get(1).map_err(db_err)?;
+        if test_type != "measure" {
+            return Err(Error::user(
+                "Only measurement quality checks can be evaluated with do_measure.",
+            ));
+        }
+        let measure: Decimal = row.try_get(2).map_err(db_err)?;
+        let min_v: Decimal = row.try_get(3).map_err(db_err)?;
+        let max_v: Decimal = row.try_get(4).map_err(db_err)?;
         let passed = is_measure_within_tolerance(measure, min_v, max_v)?;
         let state = if passed { "pass" } else { "fail" };
         let uid = records.env().uid();
         tx.execute(
             "UPDATE quality_check \
-             SET quality_state = $2, control_date = (now() AT TIME ZONE 'UTC'), user_id = $3 \
+             SET quality_state = $2, control_date = (now() AT TIME ZONE 'UTC'), \
+                 user_id = $3, write_uid = $3, write_date = (now() AT TIME ZONE 'UTC') \
              WHERE id = $1",
             &[&id, &state, &uid],
         )
         .await?;
         records
-            .modified_external(tx, &["quality_state", "control_date"])
+            .modified_external(tx, &["quality_state", "control_date", "user_id"])
             .await?;
         Ok(())
     }
@@ -619,25 +791,55 @@ impl QualityAlert {
         mut vals_list: Vec<RawVals>,
         sup: Super,
     ) -> Result<Records> {
+        this.as_records()
+            .check_access(tx, Operation::Create)
+            .await?;
         let env = this.env();
         let active_company = env.company_id()?;
         for vals in &mut vals_list {
-            let needs_name = match vals.get("name") {
-                None | Some(Cell::Null) => true,
-                Some(Cell::Str(s)) => s.trim().is_empty() || s.as_ref() == "New",
-                _ => false,
-            };
-            if needs_name {
-                let name = next_seq(env, tx, "quality.alert", "quality_alert", "QA/").await?;
-                vals.insert("name".into(), Cell::Str(name.into()));
+            if vals.contains("stage") {
+                return Err(Error::validation(
+                    "Quality alert stage is managed by workflow actions.",
+                ));
             }
             if matches!(vals.get("company_id"), None | Some(Cell::Null))
                 && let Some(cid) = active_company
             {
                 vals.insert("company_id".into(), Cell::Id(cid));
             }
+            let company_id = match vals.get("company_id") {
+                Some(Cell::Id(cid)) => *cid,
+                Some(Cell::Int(cid)) => i64::from(*cid),
+                _ => {
+                    return Err(Error::validation("A quality alert requires a company."));
+                }
+            };
+            let needs_name = match vals.get("name") {
+                None | Some(Cell::Null) => true,
+                Some(Cell::Str(s)) => s.trim().is_empty() || s.as_ref() == "New",
+                _ => false,
+            };
+            if needs_name {
+                let name = next_seq(env, tx, "quality.alert", company_id).await?;
+                vals.insert("name".into(), Cell::Str(name.into()));
+            }
         }
         sup.call(tx, this.as_records(), (vals_list,)).await
+    }
+
+    #[method(override)]
+    async fn write(
+        this: &RecordSet<QualityAlert>,
+        tx: &mut Transaction,
+        vals: RawVals,
+        sup: Super,
+    ) -> Result<()> {
+        if vals.contains("stage") {
+            return Err(Error::validation(
+                "Quality alert stage is managed by workflow actions.",
+            ));
+        }
+        sup.call(tx, this.as_records(), (vals,)).await
     }
 
     #[method]
@@ -649,9 +851,25 @@ impl QualityAlert {
         let records = this.as_records().clone();
         records.check_access(tx, Operation::Write).await?;
         let id = records.ensure_one()?.int()?;
+        let uid = records.env().uid();
+        let rows = tx
+            .query(
+                "SELECT stage FROM quality_alert WHERE id = $1 FOR UPDATE",
+                &[&id],
+            )
+            .await?;
+        let Some(row) = rows.first() else {
+            return Err(Error::missing("Quality alert not found."));
+        };
+        let stage: String = row.try_get(0).map_err(db_err)?;
+        if stage != "new" {
+            return Err(Error::user("Only new quality alerts can be confirmed."));
+        }
         tx.execute(
-            "UPDATE quality_alert SET stage = 'confirmed' WHERE id = $1 AND stage = 'new'",
-            &[&id],
+            "UPDATE quality_alert \
+             SET stage = 'confirmed', write_uid = $2, write_date = (now() AT TIME ZONE 'UTC') \
+             WHERE id = $1",
+            &[&id, &uid],
         )
         .await?;
         records.modified_external(tx, &["stage"]).await?;
@@ -664,9 +882,25 @@ impl QualityAlert {
         let records = this.as_records().clone();
         records.check_access(tx, Operation::Write).await?;
         let id = records.ensure_one()?.int()?;
+        let uid = records.env().uid();
+        let rows = tx
+            .query(
+                "SELECT stage FROM quality_alert WHERE id = $1 FOR UPDATE",
+                &[&id],
+            )
+            .await?;
+        let Some(row) = rows.first() else {
+            return Err(Error::missing("Quality alert not found."));
+        };
+        let stage: String = row.try_get(0).map_err(db_err)?;
+        if stage == "solved" {
+            return Err(Error::user("This quality alert is already solved."));
+        }
         tx.execute(
-            "UPDATE quality_alert SET stage = 'solved' WHERE id = $1",
-            &[&id],
+            "UPDATE quality_alert \
+             SET stage = 'solved', write_uid = $2, write_date = (now() AT TIME ZONE 'UTC') \
+             WHERE id = $1",
+            &[&id, &uid],
         )
         .await?;
         records.modified_external(tx, &["stage"]).await?;
@@ -685,6 +919,148 @@ pub struct StockPickingQuality {
     pub quality_check_count: i32,
 }
 
+async fn generate_quality_checks_for_pickings(
+    env: &Env,
+    tx: &mut Transaction,
+    ids: &[i64],
+) -> Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    tx.flush().await?;
+    let pickings = tx
+        .query(
+            "SELECT id::int8, company_id::int8, picking_type_id::int8 \
+             FROM stock_picking WHERE id = ANY($1) AND state NOT IN ('done', 'cancel')",
+            &[&ids],
+        )
+        .await?;
+    let checks = env.sudo(true).records("quality.check")?;
+    for prow in pickings {
+        let picking_id: i64 = prow.try_get(0).map_err(db_err)?;
+        let company_id: i64 = prow.try_get(1).map_err(db_err)?;
+        let ptype_id: Option<i64> = prow.try_get(2).map_err(db_err)?;
+        let Some(ptype_id) = ptype_id else {
+            continue;
+        };
+        let move_products: Vec<i64> = tx
+            .query(
+                "SELECT DISTINCT product_id::int8 FROM stock_move \
+                 WHERE picking_id = $1 AND state NOT IN ('done', 'cancel') ORDER BY product_id",
+                &[&picking_id],
+            )
+            .await?
+            .into_iter()
+            .map(|r| r.try_get(0))
+            .collect::<std::result::Result<Vec<i64>, _>>()
+            .map_err(db_err)?;
+        let points = tx
+            .query(
+                "SELECT qp.id::int8, qp.title, qp.team_id::int8, qp.test_type, \
+                        qp.norm, qp.tolerance_min, qp.tolerance_max, qp.note, qp.product_id::int8 \
+                 FROM quality_point qp \
+                 WHERE qp.active IS TRUE AND qp.company_id = $1 \
+                   AND (qp.picking_type_id IS NULL OR qp.picking_type_id = $2) \
+                 ORDER BY qp.id",
+                &[&company_id, &ptype_id],
+            )
+            .await?;
+        for qrow in points {
+            let point_id: i64 = qrow.try_get(0).map_err(db_err)?;
+            let title: String = qrow.try_get(1).map_err(db_err)?;
+            let team_id: Option<i64> = qrow.try_get(2).map_err(db_err)?;
+            let test_type: String = qrow.try_get(3).map_err(db_err)?;
+            let norm: Decimal = qrow.try_get(4).map_err(db_err)?;
+            let tol_min: Decimal = qrow.try_get(5).map_err(db_err)?;
+            let tol_max: Decimal = qrow.try_get(6).map_err(db_err)?;
+            let note: Option<String> = qrow.try_get(7).map_err(db_err)?;
+            let point_product: Option<i64> = qrow.try_get(8).map_err(db_err)?;
+
+            let matched_products: Vec<Option<i64>> = match point_product {
+                None => {
+                    if move_products.is_empty() {
+                        vec![None]
+                    } else {
+                        move_products.iter().copied().map(Some).collect()
+                    }
+                }
+                Some(req_pid) => move_products
+                    .iter()
+                    .copied()
+                    .filter(|pid| *pid == req_pid)
+                    .map(Some)
+                    .collect(),
+            };
+
+            for prod_opt in matched_products {
+                let exists_rows = tx
+                    .query(
+                        "SELECT count(*)::int8 FROM quality_check \
+                         WHERE picking_id = $1 AND point_id = $2 \
+                           AND product_id IS NOT DISTINCT FROM $3",
+                        &[&picking_id, &point_id, &prod_opt],
+                    )
+                    .await?;
+                let exists: i64 = exists_rows
+                    .first()
+                    .ok_or_else(|| {
+                        Error::internal("Quality check existence query returned no row.")
+                    })?
+                    .try_get(0)
+                    .map_err(db_err)?;
+                if exists > 0 {
+                    continue;
+                }
+                let mut cvals = RawVals::new();
+                cvals.insert("title".into(), Cell::Str(title.as_str().into()));
+                cvals.insert("point_id".into(), Cell::Id(point_id));
+                if let Some(tid) = team_id {
+                    cvals.insert("team_id".into(), Cell::Id(tid));
+                }
+                cvals.insert("company_id".into(), Cell::Id(company_id));
+                cvals.insert("picking_id".into(), Cell::Id(picking_id));
+                if let Some(pid) = prod_opt {
+                    cvals.insert("product_id".into(), Cell::Id(pid));
+                }
+                cvals.insert("test_type".into(), Cell::Str(test_type.as_str().into()));
+                cvals.insert("norm".into(), Cell::Decimal(norm));
+                cvals.insert("tolerance_min".into(), Cell::Decimal(tol_min));
+                cvals.insert("tolerance_max".into(), Cell::Decimal(tol_max));
+                if let Some(n) = &note {
+                    cvals.insert("worksheet_notes".into(), Cell::Str(n.as_str().into()));
+                }
+                checks.create(tx, vec![cvals]).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn ensure_no_pending_quality_checks(tx: &mut Transaction, ids: &[i64]) -> Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    tx.flush().await?;
+    let rows = tx
+        .query(
+            "SELECT count(*)::int8 FROM quality_check \
+             WHERE picking_id = ANY($1) AND quality_state = 'none'",
+            &[&ids],
+        )
+        .await?;
+    let todo_count: i64 = rows
+        .first()
+        .ok_or_else(|| Error::internal("Pending quality check count returned no row."))?
+        .try_get(0)
+        .map_err(db_err)?;
+    if todo_count > 0 {
+        return Err(Error::user(format!(
+            "Complete all {todo_count} pending Quality Check(s) on this transfer before validating."
+        )));
+    }
+    Ok(())
+}
+
 #[methods(StockPicking, addon = "quality_control")]
 impl StockPickingQuality {
     #[compute(depends = [], depends_context = ["uid", "allowed_company_ids"])]
@@ -700,18 +1076,34 @@ impl StockPickingQuality {
             .collect();
         let mut counts: BTreeMap<i64, i32> = BTreeMap::new();
         if !real_ids.is_empty() {
-            let rows = tx
-                .query(
-                    "SELECT picking_id::int8, count(*)::int4 \
-                     FROM quality_check WHERE picking_id = ANY($1) GROUP BY picking_id",
-                    &[&real_ids],
+            tx.flush().await?;
+            let domain = Domain::field("picking_id")?.in_(real_ids);
+            let read = this
+                .env()
+                .records("quality.check")?
+                ._read_group(
+                    tx,
+                    ReadGroup::new(domain)
+                        .groupby(["picking_id"])
+                        .aggregates(["__count"]),
                 )
-                .await?;
-            for row in rows {
-                counts.insert(
-                    row.try_get(0).map_err(db_err)?,
-                    row.try_get(1).map_err(db_err)?,
-                );
+                .await;
+            match read {
+                Ok(groups) => {
+                    for row in groups.rows() {
+                        if let (Some(pid), Some(GroupValue::Int(cnt))) = (
+                            row.first().and_then(|k| k.record_id().map(|id| id.get())),
+                            row.last(),
+                        ) {
+                            let cnt_i32 = i32::try_from(*cnt).map_err(|_| {
+                                Error::internal("Quality check count exceeds i32 range.")
+                            })?;
+                            counts.insert(pid, cnt_i32);
+                        }
+                    }
+                }
+                Err(error) if error.kind() == ErrorKind::Access => {}
+                Err(error) => return Err(error),
             }
         }
         for (idx, rec_id) in rec_ids.iter().enumerate() {
@@ -766,108 +1158,24 @@ impl StockPickingQuality {
     ) -> Result<()> {
         sup.call(tx, this.as_records(), ()).await?;
         let ids = this.ids();
-        if ids.is_empty() {
-            return Ok(());
-        }
-        tx.flush().await?;
-        let pickings = tx
-            .query(
-                "SELECT id::int8, company_id::int8, picking_type_id::int8 \
-                 FROM stock_picking WHERE id = ANY($1) AND state NOT IN ('done', 'cancel')",
-                &[&ids],
-            )
-            .await?;
-        let checks = this.env().sudo(true).records("quality.check")?;
-        for prow in pickings {
-            let picking_id: i64 = prow.try_get(0).map_err(db_err)?;
-            let company_id: i64 = prow.try_get(1).map_err(db_err)?;
-            let ptype_id: Option<i64> = prow.try_get(2).map_err(db_err)?;
-            let Some(ptype_id) = ptype_id else {
-                continue;
-            };
-            let move_products: Vec<i64> = tx
-                .query(
-                    "SELECT DISTINCT product_id::int8 FROM stock_move \
-                     WHERE picking_id = $1 AND state NOT IN ('done', 'cancel') ORDER BY product_id",
-                    &[&picking_id],
-                )
-                .await?
-                .into_iter()
-                .map(|r| r.try_get(0))
-                .collect::<std::result::Result<Vec<i64>, _>>()
-                .map_err(db_err)?;
-            let points = tx
-                .query(
-                    "SELECT qp.id::int8, qp.title, qp.team_id::int8, qp.test_type, \
-                            qp.norm, qp.tolerance_min, qp.tolerance_max, qp.note, qp.product_id::int8 \
-                     FROM quality_point qp \
-                     WHERE qp.active IS TRUE AND qp.company_id = $1 \
-                       AND (qp.picking_type_id IS NULL OR qp.picking_type_id = $2) \
-                     ORDER BY qp.id",
-                    &[&company_id, &ptype_id],
-                )
-                .await?;
-            for qrow in points {
-                let point_id: i64 = qrow.try_get(0).map_err(db_err)?;
-                let title: String = qrow.try_get(1).map_err(db_err)?;
-                let team_id: Option<i64> = qrow.try_get(2).map_err(db_err)?;
-                let test_type: String = qrow.try_get(3).map_err(db_err)?;
-                let norm: Decimal = qrow.try_get(4).map_err(db_err)?;
-                let tol_min: Decimal = qrow.try_get(5).map_err(db_err)?;
-                let tol_max: Decimal = qrow.try_get(6).map_err(db_err)?;
-                let note: Option<String> = qrow.try_get(7).map_err(db_err)?;
-                let point_product: Option<i64> = qrow.try_get(8).map_err(db_err)?;
-
-                let matched_products: Vec<Option<i64>> = match point_product {
-                    None => vec![move_products.first().copied()],
-                    Some(req_pid) => move_products
-                        .iter()
-                        .copied()
-                        .filter(|pid| *pid == req_pid)
-                        .map(Some)
-                        .collect(),
-                };
-
-                for prod_opt in matched_products {
-                    let exists: i64 = tx
-                        .query(
-                            "SELECT count(*)::int8 FROM quality_check \
-                             WHERE picking_id = $1 AND point_id = $2 \
-                               AND product_id IS NOT DISTINCT FROM $3",
-                            &[&picking_id, &point_id, &prod_opt],
-                        )
-                        .await?[0]
-                        .try_get(0)
-                        .map_err(db_err)?;
-                    if exists > 0 {
-                        continue;
-                    }
-                    let mut cvals = RawVals::new();
-                    cvals.insert("title".into(), Cell::Str(title.as_str().into()));
-                    cvals.insert("point_id".into(), Cell::Id(point_id));
-                    if let Some(tid) = team_id {
-                        cvals.insert("team_id".into(), Cell::Id(tid));
-                    }
-                    cvals.insert("company_id".into(), Cell::Id(company_id));
-                    cvals.insert("picking_id".into(), Cell::Id(picking_id));
-                    if let Some(pid) = prod_opt {
-                        cvals.insert("product_id".into(), Cell::Id(pid));
-                    }
-                    cvals.insert("test_type".into(), Cell::Str(test_type.as_str().into()));
-                    cvals.insert("norm".into(), Cell::Decimal(norm));
-                    cvals.insert("tolerance_min".into(), Cell::Decimal(tol_min));
-                    cvals.insert("tolerance_max".into(), Cell::Decimal(tol_max));
-                    if let Some(n) = &note {
-                        cvals.insert("worksheet_notes".into(), Cell::Str(n.as_str().into()));
-                    }
-                    checks.create(tx, vec![cvals]).await?;
-                }
-            }
-        }
-        Ok(())
+        generate_quality_checks_for_pickings(this.env(), tx, &ids).await
     }
 
-    /// Block transfer validation while any linked `quality.check` is still pending (`none`).
+    /// Block transfer validation on all validation paths (direct, draft, batch, backorder, RPC)
+    /// while any matching or linked `quality.check` is still pending (`none`).
+    #[method(override)]
+    async fn button_validate(
+        this: &RecordSet<StockPicking>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<()> {
+        let ids = this.ids();
+        generate_quality_checks_for_pickings(this.env(), tx, &ids).await?;
+        ensure_no_pending_quality_checks(tx, &ids).await?;
+        sup.call(tx, this.as_records(), ()).await
+    }
+
+    /// Block UI transfer validation before backorder wizard when checks are still pending.
     #[method(override)]
     async fn action_validate_transfer(
         this: &RecordSet<StockPicking>,
@@ -875,22 +1183,8 @@ impl StockPickingQuality {
         sup: Super,
     ) -> Result<Value> {
         let ids = this.ids();
-        if !ids.is_empty() {
-            let todo_count: i64 = tx
-                .query(
-                    "SELECT count(*)::int8 FROM quality_check \
-                     WHERE picking_id = ANY($1) AND quality_state = 'none'",
-                    &[&ids],
-                )
-                .await?[0]
-                .try_get(0)
-                .map_err(db_err)?;
-            if todo_count > 0 {
-                return Err(Error::user(format!(
-                    "Complete all {todo_count} pending Quality Check(s) on this transfer before validating."
-                )));
-            }
-        }
+        generate_quality_checks_for_pickings(this.env(), tx, &ids).await?;
+        ensure_no_pending_quality_checks(tx, &ids).await?;
         sup.call(tx, this.as_records(), ()).await
     }
 }

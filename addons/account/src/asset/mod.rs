@@ -43,7 +43,7 @@ pub fn build_depreciation_schedule(
     )
 }
 
-/// Schedule generator with optional day-based pro-rata temporis for the first period.
+/// Schedule generator with optional day-based pro-rata temporis for the first period (default 2 decimals).
 pub fn build_depreciation_schedule_with_prorata(
     depreciable: Decimal,
     start_date: Date,
@@ -52,6 +52,30 @@ pub fn build_depreciation_schedule_with_prorata(
     degressive: bool,
     factor: Decimal,
     prorata_temporis: bool,
+) -> Result<Vec<DepreciationRow>> {
+    build_depreciation_schedule_scaled(
+        depreciable,
+        start_date,
+        periods,
+        months_per_period,
+        degressive,
+        factor,
+        prorata_temporis,
+        2,
+    )
+}
+
+/// Currency-scale-aware depreciation schedule generator.
+#[allow(clippy::too_many_arguments)]
+pub fn build_depreciation_schedule_scaled(
+    depreciable: Decimal,
+    start_date: Date,
+    periods: i32,
+    months_per_period: i32,
+    degressive: bool,
+    factor: Decimal,
+    prorata_temporis: bool,
+    scale: u32,
 ) -> Result<Vec<DepreciationRow>> {
     if depreciable <= Decimal::ZERO {
         return Err(Error::user(
@@ -67,9 +91,9 @@ pub fn build_depreciation_schedule_with_prorata(
         return Err(Error::user("Months per period must be between 1 and 120."));
     }
     let mut rows = Vec::with_capacity((periods + 1) as usize);
-    let mut remaining = depreciable.round_dp(2);
+    let mut remaining = depreciable.round_dp(scale);
     let mut cumulative = Decimal::ZERO;
-    let linear_base = (remaining / Decimal::from(periods)).round_dp(2);
+    let linear_base = (remaining / Decimal::from(periods)).round_dp(scale);
 
     // Optional first-period pro-rata temporis when starting mid-month (day > 1).
     let (_, _, start_day) = start_date.ymd();
@@ -84,15 +108,15 @@ pub fn build_depreciation_schedule_with_prorata(
             let days_used = (31 - start_day as i32).clamp(1, 30);
             let ratio = Decimal::from(days_used) / Decimal::from(30);
             let base = if degressive {
-                (remaining * factor).round_dp(2)
+                (remaining * factor).round_dp(scale)
             } else {
                 linear_base
             };
-            (base * ratio).round_dp(2).min(remaining)
+            (base * ratio).round_dp(scale).min(remaining)
         } else if degressive {
             let periods_left = total_rows - i + 1;
-            let linear_floor = (remaining / Decimal::from(periods_left)).round_dp(2);
-            let deg = (remaining * factor).round_dp(2);
+            let linear_floor = (remaining / Decimal::from(periods_left)).round_dp(scale);
+            let deg = (remaining * factor).round_dp(scale);
             deg.max(linear_floor).min(remaining)
         } else {
             linear_base.min(remaining)
@@ -110,12 +134,24 @@ pub fn build_depreciation_schedule_with_prorata(
     Ok(rows)
 }
 
-fn default_today(_ctx: &erp_sdk::DefaultContext) -> Value {
-    Value::Date(Date::today())
-}
-
 pub(crate) fn db(err: impl std::fmt::Display) -> Error {
     Error::db(format!("Asset query failed: {err}"))
+}
+
+async fn currency_scale(tx: &mut Transaction, currency_id: i64) -> Result<u32> {
+    let rows = tx
+        .query(
+            "SELECT decimal_places::int4 FROM res_currency WHERE id = $1",
+            &[&currency_id],
+        )
+        .await?;
+    let scale_i32: i32 = rows
+        .first()
+        .ok_or_else(|| Error::missing(format!("Currency {currency_id} not found.")))?
+        .try_get(0)
+        .map_err(db)?;
+    u32::try_from(scale_i32)
+        .map_err(|_| Error::validation(format!("Invalid currency decimal_places {scale_i32}.")))
 }
 
 /// `account.asset.category`: reusable Asset Class defining accounts, CIP vs depreciable behavior,
@@ -356,7 +392,7 @@ pub struct AccountAsset {
     )]
     pub state: Option<Arc<str>>,
     /// Acquisition / capitalization / depreciation start date.
-    #[field(date, required = true, default_fn = default_today, string = "Acquisition Date")]
+    #[field(date, required = true, string = "Acquisition Date")]
     pub acquisition_date: Option<Date>,
     /// Purchase / original cost of the asset.
     #[field(monetary, currency_field = "currency_id", string = "Original Value")]
@@ -536,7 +572,8 @@ impl AccountAsset {
     ) -> Result<erp_sdk::ValueMap> {
         let mut values: erp_sdk::ValueMap =
             sup.call(tx, this.as_records(), (names.clone(),)).await?;
-        if let Some(cid) = this.env().company_id()? {
+        let cid = this.env().company_id()?;
+        if let Some(cid) = cid {
             if names.iter().any(|n| n == "company_id") && !values.contains_key("company_id") {
                 values.insert("company_id".to_owned(), Value::Int(cid));
             }
@@ -549,12 +586,73 @@ impl AccountAsset {
                         &[&cid],
                     )
                     .await?;
-                if let Some(jid) = rows.first().and_then(|r| r.try_get::<_, i64>(0).ok()) {
+                if let Some(row) = rows.first() {
+                    let jid: i64 = row.try_get(0).map_err(db)?;
                     values.insert("journal_id".to_owned(), Value::Int(jid));
                 }
             }
         }
+        if names.iter().any(|n| n == "acquisition_date") && !values.contains_key("acquisition_date")
+        {
+            let today = if let Some(cid) = cid {
+                erp_addon_base::company_calendar::business_date(tx, cid).await?
+            } else {
+                this.env().context_today()?
+            };
+            values.insert("acquisition_date".to_owned(), Value::Date(today));
+        }
         Ok(values)
+    }
+
+    #[method(override)]
+    async fn write(
+        this: &RecordSet<AccountAsset>,
+        tx: &mut Transaction,
+        vals: RawVals,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.as_records().is_empty() && !this.env().su() {
+            if vals.contains("state")
+                || vals.contains("disposal_date")
+                || vals.contains("disposal_move_id")
+            {
+                return Err(Error::user(
+                    "Asset status and disposal fields cannot be modified directly; use asset workflow actions.",
+                ));
+            }
+            let states = this.mapped(tx, AccountAsset::STATE).await?;
+            for state in &states {
+                if matches!(state.as_deref(), Some("settled" | "disposed" | "close")) {
+                    return Err(Error::user(
+                        "Settled, disposed, or closed assets cannot be modified.",
+                    ));
+                }
+                if vals.contains("asset_type") && state.as_deref() != Some("draft") {
+                    return Err(Error::user(
+                        "Asset Type cannot be changed after the asset has left Draft state.",
+                    ));
+                }
+            }
+        }
+        sup.call(tx, this.as_records(), (vals,)).await
+    }
+
+    #[method(override)]
+    async fn unlink(
+        this: &RecordSet<AccountAsset>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.as_records().is_empty() && !this.env().su() {
+            for state in this.mapped(tx, AccountAsset::STATE).await? {
+                if state.as_deref() != Some("draft") {
+                    return Err(Error::user(
+                        "Only draft assets can be deleted; dispose or close active assets instead.",
+                    ));
+                }
+            }
+        }
+        sup.call(tx, this.as_records(), ()).await
     }
 
     #[compute(depends = [
@@ -576,9 +674,40 @@ impl AccountAsset {
         let originals = this.mapped(tx, AccountAsset::ORIGINAL_VALUE).await?;
         let types = this.mapped(tx, AccountAsset::ASSET_TYPE).await?;
         let states = this.mapped(tx, AccountAsset::STATE).await?;
-        for (i, ((rid, orig), (atype, state))) in this
-            .as_records()
-            .rec_ids()
+        let rec_ids = this.as_records().rec_ids();
+        let real_ids: Vec<i64> = rec_ids
+            .iter()
+            .filter_map(|r| r.as_real())
+            .map(|r| r.get())
+            .collect();
+        let mut cip_unsettled = std::collections::HashMap::<i64, Decimal>::new();
+        let mut posted_dep = std::collections::HashMap::<i64, Decimal>::new();
+        if !real_ids.is_empty() {
+            tx.flush().await?;
+            for row in tx
+                .query(
+                    "SELECT asset_id::int8, COALESCE(SUM(amount - settled_amount), 0) \
+                     FROM account_asset_cip_line \
+                     WHERE asset_id = ANY($1::int8[]) GROUP BY asset_id",
+                    &[&real_ids],
+                )
+                .await?
+            {
+                cip_unsettled.insert(row.try_get(0).map_err(db)?, row.try_get(1).map_err(db)?);
+            }
+            for row in tx
+                .query(
+                    "SELECT asset_id::int8, COALESCE(SUM(amount), 0) \
+                     FROM account_asset_depreciation_line \
+                     WHERE asset_id = ANY($1::int8[]) AND state = 'posted' GROUP BY asset_id",
+                    &[&real_ids],
+                )
+                .await?
+            {
+                posted_dep.insert(row.try_get(0).map_err(db)?, row.try_get(1).map_err(db)?);
+            }
+        }
+        for (i, ((rid, orig), (atype, state))) in rec_ids
             .iter()
             .zip(originals)
             .zip(types.into_iter().zip(states))
@@ -589,20 +718,10 @@ impl AccountAsset {
                 continue;
             }
             if atype.as_deref() == Some("cip") {
-                let unsettled = if let Some(real) = rid.as_real() {
-                    let rows = tx
-                        .query(
-                            "SELECT COALESCE(SUM(amount - settled_amount), 0) \
-                             FROM account_asset_cip_line WHERE asset_id = $1",
-                            &[&real.get()],
-                        )
-                        .await?;
-                    rows.first()
-                        .and_then(|r| r.try_get::<_, Decimal>(0).ok())
-                        .unwrap_or(Decimal::ZERO)
-                } else {
-                    Decimal::ZERO
-                };
+                let unsettled = rid
+                    .as_real()
+                    .and_then(|r| cip_unsettled.get(&r.get()).copied())
+                    .unwrap_or(Decimal::ZERO);
                 out.set(
                     i,
                     AccountAsset::VALUE_RESIDUAL,
@@ -610,20 +729,10 @@ impl AccountAsset {
                 )?;
                 continue;
             }
-            let posted = if let Some(real) = rid.as_real() {
-                let rows = tx
-                    .query(
-                        "SELECT COALESCE(SUM(amount), 0) FROM account_asset_depreciation_line \
-                         WHERE asset_id = $1 AND state = 'posted'",
-                        &[&real.get()],
-                    )
-                    .await?;
-                rows.first()
-                    .and_then(|r| r.try_get::<_, Decimal>(0).ok())
-                    .unwrap_or(Decimal::ZERO)
-            } else {
-                Decimal::ZERO
-            };
+            let posted = rid
+                .as_real()
+                .and_then(|r| posted_dep.get(&r.get()).copied())
+                .unwrap_or(Decimal::ZERO);
             out.set(
                 i,
                 AccountAsset::VALUE_RESIDUAL,
@@ -639,26 +748,35 @@ impl AccountAsset {
         tx: &mut Transaction,
         out: &mut Assign<'_, AccountAsset>,
     ) -> Result<()> {
-        for (i, rid) in this.as_records().rec_ids().iter().enumerate() {
-            let (acc, settled) = if let Some(real) = rid.as_real() {
-                let rows = tx
-                    .query(
-                        "SELECT COALESCE(SUM(amount), 0), COALESCE(SUM(settled_amount), 0) \
-                         FROM account_asset_cip_line WHERE asset_id = $1",
-                        &[&real.get()],
-                    )
-                    .await?;
-                if let Some(row) = rows.first() {
-                    (
-                        row.try_get::<_, Decimal>(0).map_err(db)?,
-                        row.try_get::<_, Decimal>(1).map_err(db)?,
-                    )
-                } else {
-                    (Decimal::ZERO, Decimal::ZERO)
-                }
-            } else {
-                (Decimal::ZERO, Decimal::ZERO)
-            };
+        let rec_ids = this.as_records().rec_ids();
+        let real_ids: Vec<i64> = rec_ids
+            .iter()
+            .filter_map(|r| r.as_real())
+            .map(|r| r.get())
+            .collect();
+        let mut by_asset = std::collections::HashMap::<i64, (Decimal, Decimal)>::new();
+        if !real_ids.is_empty() {
+            tx.flush().await?;
+            for row in tx
+                .query(
+                    "SELECT asset_id::int8, COALESCE(SUM(amount), 0), COALESCE(SUM(settled_amount), 0) \
+                     FROM account_asset_cip_line \
+                     WHERE asset_id = ANY($1::int8[]) GROUP BY asset_id",
+                    &[&real_ids],
+                )
+                .await?
+            {
+                by_asset.insert(
+                    row.try_get(0).map_err(db)?,
+                    (row.try_get(1).map_err(db)?, row.try_get(2).map_err(db)?),
+                );
+            }
+        }
+        for (i, rid) in rec_ids.iter().enumerate() {
+            let (acc, settled) = rid
+                .as_real()
+                .and_then(|r| by_asset.get(&r.get()).copied())
+                .unwrap_or((Decimal::ZERO, Decimal::ZERO));
             out.set(i, AccountAsset::CIP_ACCUMULATED_AMOUNT, acc)?;
             out.set(i, AccountAsset::CIP_SETTLED_AMOUNT, settled)?;
             out.set(i, AccountAsset::CIP_UNSETTLED_AMOUNT, acc - settled)?;
@@ -679,33 +797,49 @@ impl AccountAsset {
             .as_records()
             .check_access(tx, Operation::Write)
             .await?;
+        tx.flush().await?;
         let aid = asset.as_records().ids()[0];
-        let asset_type = asset.get(tx, AccountAsset::ASSET_TYPE).await?;
-        if asset_type.as_deref() == Some("cip") {
+        let a_rows = tx
+            .query(
+                "SELECT COALESCE(asset_type, 'normal')::text, COALESCE(state, 'draft')::text, \
+                        COALESCE(original_value, 0), COALESCE(salvage_value, 0), acquisition_date, method_number, \
+                        method_period, method::text, COALESCE(method_progress_factor, 0.30), \
+                        COALESCE(prorata_temporis, false), currency_id::int8 \
+                 FROM account_asset WHERE id = $1 FOR UPDATE",
+                &[&aid],
+            )
+            .await?;
+        let Some(arow) = a_rows.first() else {
+            return Err(Error::missing("Fixed asset no longer exists."));
+        };
+        let asset_type: String = arow.try_get(0).map_err(db)?;
+        if asset_type == "cip" {
             return Err(Error::user(
                 "Construction in Progress (CIP) assets cannot be depreciated until settled to a Fixed Asset.",
             ));
         }
-        let state = asset.get(tx, AccountAsset::STATE).await?;
-        if matches!(state.as_deref(), Some("close" | "disposed" | "settled")) {
+        let state: String = arow.try_get(1).map_err(db)?;
+        if matches!(state.as_str(), "close" | "disposed" | "settled") {
             return Err(Error::user(
                 "Cannot recompute a closed, settled, or disposed asset.",
             ));
         }
-        let orig = asset.get(tx, AccountAsset::ORIGINAL_VALUE).await?;
-        let salvage = asset.get(tx, AccountAsset::SALVAGE_VALUE).await?;
-        let start = asset
-            .get(tx, AccountAsset::ACQUISITION_DATE)
-            .await?
-            .unwrap_or_else(Date::today);
-        let periods = asset.get(tx, AccountAsset::METHOD_NUMBER).await?;
-        let months = asset.get(tx, AccountAsset::METHOD_PERIOD).await?;
-        let method = asset
-            .get(tx, AccountAsset::METHOD)
-            .await?
-            .unwrap_or_else(|| Arc::from("linear"));
-        let factor = asset.get(tx, AccountAsset::METHOD_PROGRESS_FACTOR).await?;
-        let prorata = asset.get(tx, AccountAsset::PRORATA_TEMPORIS).await?;
+        let orig: Decimal = arow.try_get(2).map_err(db)?;
+        let salvage: Decimal = arow.try_get(3).map_err(db)?;
+        let start: Date = arow
+            .try_get::<_, Option<Date>>(4)
+            .map_err(db)?
+            .ok_or_else(|| Error::validation("Asset Acquisition Date is required."))?;
+        let periods: i32 = arow.try_get(5).map_err(db)?;
+        let months: i32 = arow.try_get(6).map_err(db)?;
+        let method: String = arow
+            .try_get::<_, Option<String>>(7)
+            .map_err(db)?
+            .ok_or_else(|| Error::validation("Asset depreciation method is required."))?;
+        let factor: Decimal = arow.try_get(8).map_err(db)?;
+        let prorata: bool = arow.try_get(9).map_err(db)?;
+        let currency_id: i64 = arow.try_get(10).map_err(db)?;
+        let scale = currency_scale(tx, currency_id).await?;
 
         // Account for already posted depreciation lines when recomputing (e.g. after post-capitalization).
         let posted_rows = tx
@@ -715,21 +849,13 @@ impl AccountAsset {
                 &[&aid],
             )
             .await?;
-        let (posted_count, posted_sum, max_seq, last_posted_date): (
-            i32,
-            Decimal,
-            Option<i32>,
-            Option<Date>,
-        ) = if let Some(r) = posted_rows.first() {
-            (
-                r.try_get(0).map_err(db)?,
-                r.try_get(1).map_err(db)?,
-                r.try_get(2).map_err(db)?,
-                r.try_get(3).map_err(db)?,
-            )
-        } else {
-            (0, Decimal::ZERO, None, None)
-        };
+        let prow = posted_rows
+            .first()
+            .ok_or_else(|| Error::invariant("Posted depreciation aggregate returned no row."))?;
+        let posted_count: i32 = prow.try_get(0).map_err(db)?;
+        let posted_sum: Decimal = prow.try_get(1).map_err(db)?;
+        let max_seq: Option<i32> = prow.try_get(2).map_err(db)?;
+        let last_posted_date: Option<Date> = prow.try_get(3).map_err(db)?;
 
         let remaining_depreciable = orig - salvage - posted_sum;
         let remaining_periods = (periods - posted_count).max(1);
@@ -737,14 +863,24 @@ impl AccountAsset {
             Some(d) => add_months(d, months)?,
             None => start,
         };
-        let schedule = build_depreciation_schedule_with_prorata(
+        let degressive = match method.as_str() {
+            "linear" => false,
+            "degressive" => true,
+            other => {
+                return Err(Error::validation(format!(
+                    "Unknown depreciation method '{other}'."
+                )));
+            }
+        };
+        let schedule = build_depreciation_schedule_scaled(
             remaining_depreciable,
             schedule_start,
             remaining_periods,
             months,
-            method.as_ref() == "degressive",
+            degressive,
             factor,
             prorata && posted_count == 0,
+            scale,
         )?;
 
         tx.execute(
@@ -767,8 +903,7 @@ impl AccountAsset {
             v.insert("remaining_value".into(), Cell::Decimal(row.remaining));
             vals_list.push(v);
         }
-        asset
-            .env()
+        crate::moves::post::strip_default_context(asset.env())
             .records("account.asset.depreciation.line")?
             .create(tx, vals_list)
             .await?;
@@ -792,49 +927,62 @@ impl AccountAsset {
             .as_records()
             .check_access(tx, Operation::Write)
             .await?;
+        tx.flush().await?;
         let aid = asset.as_records().ids()[0];
-        let asset_type = asset.get(tx, AccountAsset::ASSET_TYPE).await?;
-        if asset_type.as_deref() == Some("cip") {
-            tx.execute(
-                "UPDATE account_asset SET state = 'cip', write_date = now() AT TIME ZONE 'UTC' \
-                 WHERE id = $1",
+        let a_rows = tx
+            .query(
+                "SELECT COALESCE(asset_type, 'normal')::text, COALESCE(state, 'draft')::text, \
+                        account_depreciation_id::int8, account_depreciation_expense_id::int8 \
+                 FROM account_asset WHERE id = $1 FOR UPDATE",
                 &[&aid],
+            )
+            .await?;
+        let Some(arow) = a_rows.first() else {
+            return Err(Error::missing("Asset no longer exists."));
+        };
+        let asset_type: String = arow.try_get(0).map_err(db)?;
+        let state: String = arow.try_get(1).map_err(db)?;
+        let dep_acc: Option<i64> = arow.try_get(2).map_err(db)?;
+        let exp_acc: Option<i64> = arow.try_get(3).map_err(db)?;
+        if state != "draft" {
+            return Err(Error::user(format!(
+                "Only a draft asset can be confirmed (current status: '{state}')."
+            )));
+        }
+        let uid = asset.env().uid();
+        if asset_type == "cip" {
+            tx.execute(
+                "UPDATE account_asset SET state = 'cip', write_uid = $2, \
+                        write_date = now() AT TIME ZONE 'UTC' \
+                 WHERE id = $1 AND state = 'draft'",
+                &[&aid, &uid],
             )
             .await?;
             return tx
                 .invalidate_records(asset.as_records(), Some(&["state"]))
                 .await;
         }
-        if asset
-            .get(tx, AccountAsset::ACCOUNT_DEPRECIATION_ID)
-            .await?
-            .is_none()
-            || asset
-                .get(tx, AccountAsset::ACCOUNT_DEPRECIATION_EXPENSE_ID)
-                .await?
-                .is_none()
-        {
+        if dep_acc.is_none() || exp_acc.is_none() {
             return Err(Error::validation(
                 "Depreciable fixed assets require both an Accumulated Depreciation Account and a Depreciation Expense Account.",
             ));
         }
-        let count_rows = tx
+        let count: i64 = tx
             .query(
                 "SELECT count(*)::int8 FROM account_asset_depreciation_line WHERE asset_id = $1",
                 &[&aid],
             )
-            .await?;
-        let count: i64 = count_rows
-            .first()
-            .and_then(|r| r.try_get(0).ok())
-            .unwrap_or(0);
+            .await?[0]
+            .try_get(0)
+            .map_err(db)?;
         if count == 0 {
             Self::action_compute_depreciation_board(asset, tx).await?;
         }
         tx.execute(
-            "UPDATE account_asset SET state = 'open', write_date = now() AT TIME ZONE 'UTC' \
-             WHERE id = $1",
-            &[&aid],
+            "UPDATE account_asset SET state = 'open', write_uid = $2, \
+                    write_date = now() AT TIME ZONE 'UTC' \
+             WHERE id = $1 AND state = 'draft'",
+            &[&aid, &uid],
         )
         .await?;
         tx.invalidate_records(asset.as_records(), Some(&["state"]))
@@ -854,153 +1002,13 @@ impl AccountAsset {
             .as_records()
             .check_access(tx, Operation::Write)
             .await?;
+        tx.flush().await?;
         let aid = asset.as_records().ids()[0];
-        let asset_type = asset.get(tx, AccountAsset::ASSET_TYPE).await?;
-        if asset_type.as_deref() == Some("cip") {
-            return Err(Error::user(
-                "Construction in Progress (CIP) assets cannot post depreciation.",
-            ));
-        }
-        let state = asset.get(tx, AccountAsset::STATE).await?;
-        if state.as_deref() != Some("open") {
-            return Err(Error::user(
-                "Confirm the asset before posting depreciation entries.",
-            ));
-        }
-        let next_rows = tx
-            .query(
-                "SELECT id::int8, sequence, depreciation_date, COALESCE(amount, 0) \
-                 FROM account_asset_depreciation_line \
-                 WHERE asset_id = $1 AND state = 'draft' \
-                 ORDER BY sequence, id LIMIT 1",
-                &[&aid],
-            )
-            .await?;
-        let Some(nrow) = next_rows.first() else {
-            return Err(Error::user(
-                "All depreciation entries for this asset have already been posted.",
-            ));
-        };
-        let line_id: i64 = nrow.try_get(0).map_err(db)?;
-        let seq: i32 = nrow.try_get(1).map_err(db)?;
-        let dep_date: Date = nrow.try_get(2).map_err(db)?;
-        let amount: Decimal = nrow.try_get(3).map_err(db)?;
-
-        let name = asset
-            .get(tx, AccountAsset::NAME)
-            .await?
-            .unwrap_or_else(|| Arc::from("Asset"));
-        let company_id = asset
-            .get(tx, AccountAsset::COMPANY_ID)
-            .await?
-            .ok_or_else(|| Error::validation("Asset has no company."))?
-            .get();
-        let currency_id = asset
-            .get(tx, AccountAsset::CURRENCY_ID)
-            .await?
-            .ok_or_else(|| Error::validation("Asset has no currency."))?
-            .get();
-        let journal_id = asset
-            .get(tx, AccountAsset::JOURNAL_ID)
-            .await?
-            .ok_or_else(|| Error::validation("Asset has no journal."))?
-            .get();
-        let dep_acc = asset
-            .get(tx, AccountAsset::ACCOUNT_DEPRECIATION_ID)
-            .await?
-            .ok_or_else(|| Error::validation("Asset has no depreciation account."))?
-            .get();
-        let exp_acc = asset
-            .get(tx, AccountAsset::ACCOUNT_DEPRECIATION_EXPENSE_ID)
-            .await?
-            .ok_or_else(|| Error::validation("Asset has no depreciation expense account."))?
-            .get();
-        let cost_center_id = asset
-            .get(tx, AccountAsset::ANALYTIC_ACCOUNT_ID)
-            .await?
-            .map(|r| r.get());
-
-        let env = asset
-            .env()
-            .with_context_replaced(erp_sdk::Context::default());
-        let label = format!("Depreciation {seq}: {name}");
-        let mut mvals = RawVals::new();
-        mvals.insert("move_type".into(), Cell::Str("entry".into()));
-        mvals.insert("journal_id".into(), Cell::Id(journal_id));
-        mvals.insert("company_id".into(), Cell::Id(company_id));
-        mvals.insert("currency_id".into(), Cell::Id(currency_id));
-        mvals.insert("date".into(), Cell::Date(dep_date));
-        mvals.insert("ref".into(), Cell::Str(label.as_str().into()));
-
-        let unchecked_moves = crate::moves::unchecked(&env.records("account.move")?);
-        let created_move = unchecked_moves.create(tx, vec![mvals]).await?;
-        let move_id = created_move.ids()[0];
-
-        let mut debit_line = RawVals::new();
-        debit_line.insert("move_id".into(), Cell::Id(move_id));
-        debit_line.insert("account_id".into(), Cell::Id(exp_acc));
-        debit_line.insert("name".into(), Cell::Str(label.as_str().into()));
-        debit_line.insert("currency_id".into(), Cell::Id(currency_id));
-        debit_line.insert("balance".into(), Cell::Decimal(amount));
-        debit_line.insert("amount_currency".into(), Cell::Decimal(amount));
-        if let Some(cc) = cost_center_id {
-            debit_line.insert("analytic_account_id".into(), Cell::Id(cc));
-        }
-
-        let mut credit_line = RawVals::new();
-        credit_line.insert("move_id".into(), Cell::Id(move_id));
-        credit_line.insert("account_id".into(), Cell::Id(dep_acc));
-        credit_line.insert("name".into(), Cell::Str(label.as_str().into()));
-        credit_line.insert("currency_id".into(), Cell::Id(currency_id));
-        credit_line.insert("balance".into(), Cell::Decimal(-amount));
-        credit_line.insert("amount_currency".into(), Cell::Decimal(-amount));
-
-        let unchecked_lines = crate::moves::unchecked(&env.records("account.move.line")?);
-        unchecked_lines
-            .create(tx, vec![debit_line, credit_line])
-            .await?;
-        post_moves(tx, &env.records("account.move")?.browse([move_id])?).await?;
-
-        tx.execute(
-            "UPDATE account_asset_depreciation_line \
-             SET state = 'posted', move_id = $2, write_date = now() AT TIME ZONE 'UTC' \
-             WHERE id = $1",
-            &[&line_id, &move_id],
-        )
-        .await?;
-        let rem_rows = tx
-            .query(
-                "SELECT count(*)::int8 FROM account_asset_depreciation_line \
-                 WHERE asset_id = $1 AND state = 'draft'",
-                &[&aid],
-            )
-            .await?;
-        let remaining: i64 = rem_rows
-            .first()
-            .and_then(|r| r.try_get(0).ok())
-            .unwrap_or(0);
-        if remaining == 0 {
-            tx.execute(
-                "UPDATE account_asset SET state = 'close', write_date = now() AT TIME ZONE 'UTC' \
-                 WHERE id = $1",
-                &[&aid],
-            )
-            .await?;
-        }
-        tx.invalidate_records(
-            asset.as_records(),
-            Some(&["state", "value_residual", "depreciation_line_ids"]),
-        )
-        .await?;
-        tx.invalidate_model(
-            "account.asset.depreciation.line",
-            Some(&["state", "move_id"]),
-        )
-        .await
+        post_asset_depreciation(tx, asset, aid, None).await
     }
 
     /// Scraps / disposes a running fixed asset by derecognizing original cost & accumulated
-    /// depreciation and posting the remaining net book value to Disposal Gain/Loss (or Expense).
+    /// depreciation and posting the remaining net book value to Disposal Gain/Loss.
     #[method]
     #[rpc(effect = write)]
     pub async fn action_dispose_asset(
@@ -1012,84 +1020,80 @@ impl AccountAsset {
             .as_records()
             .check_access(tx, Operation::Write)
             .await?;
+        tx.flush().await?;
         let aid = asset.as_records().ids()[0];
-        let asset_type = asset.get(tx, AccountAsset::ASSET_TYPE).await?;
-        if asset_type.as_deref() == Some("cip") {
+        let a_rows = tx
+            .query(
+                "SELECT name::text, company_id::int8, currency_id::int8, journal_id::int8, \
+                        account_asset_id::int8, account_depreciation_id::int8, \
+                        account_disposal_gain_loss_id::int8, analytic_account_id::int8, \
+                        original_value, COALESCE(asset_type, 'normal')::text, \
+                        COALESCE(state, 'draft')::text \
+                 FROM account_asset WHERE id = $1 FOR UPDATE",
+                &[&aid],
+            )
+            .await?;
+        let Some(arow) = a_rows.first() else {
+            return Err(Error::missing("Asset no longer exists."));
+        };
+        let name: String = arow.try_get(0).map_err(db)?;
+        let company_id: i64 = arow.try_get(1).map_err(db)?;
+        let currency_id: i64 = arow.try_get(2).map_err(db)?;
+        let journal_id: i64 = arow.try_get(3).map_err(db)?;
+        let asset_acc: i64 = arow.try_get(4).map_err(db)?;
+        let dep_acc: Option<i64> = arow.try_get(5).map_err(db)?;
+        let gain_loss_acc: Option<i64> = arow.try_get(6).map_err(db)?;
+        let cost_center_id: Option<i64> = arow.try_get(7).map_err(db)?;
+        let original: Decimal = arow.try_get(8).map_err(db)?;
+        let asset_type: String = arow.try_get(9).map_err(db)?;
+        let state: String = arow.try_get(10).map_err(db)?;
+
+        if asset_type == "cip" {
             return Err(Error::user(
                 "Use CIP Settlement (to a Cost Center or Fixed Asset) instead of Asset Disposal for a CIP asset.",
             ));
         }
-        let state = asset.get(tx, AccountAsset::STATE).await?;
-        if state.as_deref() != Some("open") {
+        if state != "open" {
             return Err(Error::user("Only a running fixed asset can be disposed."));
         }
-        let name = asset
-            .get(tx, AccountAsset::NAME)
-            .await?
-            .unwrap_or_else(|| Arc::from("Asset"));
-        let company_id = asset
-            .get(tx, AccountAsset::COMPANY_ID)
-            .await?
-            .ok_or_else(|| Error::validation("Asset has no company."))?
-            .get();
-        let currency_id = asset
-            .get(tx, AccountAsset::CURRENCY_ID)
-            .await?
-            .ok_or_else(|| Error::validation("Asset has no currency."))?
-            .get();
-        let journal_id = asset
-            .get(tx, AccountAsset::JOURNAL_ID)
-            .await?
-            .ok_or_else(|| Error::validation("Asset has no journal."))?
-            .get();
-        let asset_acc = asset
-            .get(tx, AccountAsset::ACCOUNT_ASSET_ID)
-            .await?
-            .ok_or_else(|| Error::validation("Asset has no Fixed Asset account."))?
-            .get();
-        let dep_acc = asset
-            .get(tx, AccountAsset::ACCOUNT_DEPRECIATION_ID)
-            .await?
-            .ok_or_else(|| Error::validation("Asset has no Accumulated Depreciation account."))?
-            .get();
-        let gain_loss_acc = match asset
-            .get(tx, AccountAsset::ACCOUNT_DISPOSAL_GAIN_LOSS_ID)
-            .await?
-        {
-            Some(id) => id.get(),
-            None => asset
-                .get(tx, AccountAsset::ACCOUNT_DEPRECIATION_EXPENSE_ID)
-                .await?
-                .ok_or_else(|| {
-                    Error::validation(
-                        "Set a Disposal Gain/Loss Account (or Expense Account) before disposing this asset.",
-                    )
-                })?
-                .get(),
-        };
-        let cost_center_id = asset
-            .get(tx, AccountAsset::ANALYTIC_ACCOUNT_ID)
-            .await?
-            .map(|r| r.get());
-        let original = asset.get(tx, AccountAsset::ORIGINAL_VALUE).await?;
-        let accum_dep: Decimal = tx
+        if original <= Decimal::ZERO {
+            return Err(Error::validation(
+                "Asset Original Value must be greater than zero to dispose.",
+            ));
+        }
+        let dep_acc = dep_acc
+            .ok_or_else(|| Error::validation("Asset has no Accumulated Depreciation account."))?;
+        let dep_agg = tx
             .query(
-                "SELECT COALESCE(SUM(amount), 0) FROM account_asset_depreciation_line \
+                "SELECT COALESCE(SUM(amount), 0), MAX(depreciation_date) \
+                 FROM account_asset_depreciation_line \
                  WHERE asset_id = $1 AND state = 'posted'",
                 &[&aid],
             )
-            .await?
-            .first()
-            .and_then(|r| r.try_get(0).ok())
-            .unwrap_or(Decimal::ZERO);
-        let nbv = (original - accum_dep).max(Decimal::ZERO);
-        let disposal_date = erp_addon_base::company_calendar::business_date(tx, company_id)
-            .await
-            .unwrap_or_else(|_| Date::today());
+            .await?;
+        let accum_dep: Decimal = dep_agg[0].try_get(0).map_err(db)?;
+        let last_posted_date: Option<Date> = dep_agg[0].try_get(1).map_err(db)?;
+        if accum_dep > original {
+            return Err(Error::invariant(format!(
+                "Asset '{name}' has accumulated depreciation ({accum_dep}) exceeding original cost ({original})."
+            )));
+        }
+        let nbv = original - accum_dep;
+        if !nbv.is_zero() && gain_loss_acc.is_none() {
+            return Err(Error::validation(
+                "Set an explicit Disposal Gain/Loss Account on the asset before disposing a non-zero Net Book Value.",
+            ));
+        }
+        let disposal_date = erp_addon_base::company_calendar::business_date(tx, company_id).await?;
+        if let Some(last_dt) = last_posted_date
+            && disposal_date.days() < last_dt.days()
+        {
+            return Err(Error::user(format!(
+                "Disposal date ({disposal_date}) cannot be earlier than the last posted depreciation date ({last_dt})."
+            )));
+        }
 
-        let env = asset
-            .env()
-            .with_context_replaced(erp_sdk::Context::default());
+        let env = crate::moves::post::strip_default_context(asset.env());
         let label = format!("Asset Disposal: {name}");
         let mut mvals = RawVals::new();
         mvals.insert("move_type".into(), Cell::Str("entry".into()));
@@ -1126,10 +1130,12 @@ impl AccountAsset {
         }
 
         // Dr Loss on Disposal for remaining NBV (if any)
-        if !nbv.is_zero() {
+        if !nbv.is_zero()
+            && let Some(gl_acc) = gain_loss_acc
+        {
             let mut dr_loss = RawVals::new();
             dr_loss.insert("move_id".into(), Cell::Id(move_id));
-            dr_loss.insert("account_id".into(), Cell::Id(gain_loss_acc));
+            dr_loss.insert("account_id".into(), Cell::Id(gl_acc));
             dr_loss.insert("name".into(), Cell::Str(label.as_str().into()));
             dr_loss.insert("currency_id".into(), Cell::Id(currency_id));
             dr_loss.insert("balance".into(), Cell::Decimal(nbv));
@@ -1150,12 +1156,13 @@ impl AccountAsset {
             &[&aid],
         )
         .await?;
+        let uid = asset.env().uid();
         tx.execute(
             "UPDATE account_asset \
              SET state = 'disposed', disposal_date = $2, disposal_move_id = $3, \
-                 write_date = now() AT TIME ZONE 'UTC' \
-             WHERE id = $1",
-            &[&aid, &disposal_date, &move_id],
+                 write_uid = $4, write_date = now() AT TIME ZONE 'UTC' \
+             WHERE id = $1 AND state = 'open'",
+            &[&aid, &disposal_date, &move_id, &uid],
         )
         .await?;
         tx.invalidate_records(
@@ -1171,7 +1178,7 @@ impl AccountAsset {
         .await
     }
 
-    /// Manually closes a running asset.
+    /// Manually closes a running asset (refuses draft/settled/disposed or CIP with unsettled balance).
     #[method]
     #[rpc(effect = write)]
     pub async fn action_close(this: &RecordSet<AccountAsset>, tx: &mut Transaction) -> Result<()> {
@@ -1180,16 +1187,200 @@ impl AccountAsset {
             .as_records()
             .check_access(tx, Operation::Write)
             .await?;
+        tx.flush().await?;
         let aid = asset.as_records().ids()[0];
+        let rows = tx
+            .query(
+                "SELECT COALESCE(state, 'draft')::text, COALESCE(asset_type, 'normal')::text \
+                 FROM account_asset WHERE id = $1 FOR UPDATE",
+                &[&aid],
+            )
+            .await?;
+        let Some(row) = rows.first() else {
+            return Err(Error::missing("Asset no longer exists."));
+        };
+        let state: String = row.try_get(0).map_err(db)?;
+        let atype: String = row.try_get(1).map_err(db)?;
+        if state != "open" {
+            return Err(Error::user(format!(
+                "Only a running asset can be closed (current status: '{state}')."
+            )));
+        }
+        if atype == "cip" {
+            let unsettled: Decimal = tx
+                .query(
+                    "SELECT COALESCE(SUM(amount - settled_amount), 0) \
+                     FROM account_asset_cip_line WHERE asset_id = $1",
+                    &[&aid],
+                )
+                .await?[0]
+                .try_get(0)
+                .map_err(db)?;
+            if !unsettled.is_zero() {
+                return Err(Error::user(format!(
+                    "Cannot close a CIP asset with unsettled balance ({unsettled}). Settle it first."
+                )));
+            }
+        }
+        let uid = asset.env().uid();
         tx.execute(
-            "UPDATE account_asset SET state = 'close', write_date = now() AT TIME ZONE 'UTC' \
-             WHERE id = $1",
-            &[&aid],
+            "UPDATE account_asset SET state = 'close', write_uid = $2, \
+                    write_date = now() AT TIME ZONE 'UTC' \
+             WHERE id = $1 AND state = 'open'",
+            &[&aid, &uid],
         )
         .await?;
         tx.invalidate_records(asset.as_records(), Some(&["state"]))
             .await
     }
+}
+
+async fn post_asset_depreciation(
+    tx: &mut Transaction,
+    asset: &RecordSet<AccountAsset>,
+    aid: i64,
+    specific_line_id: Option<i64>,
+) -> Result<()> {
+    let a_rows = tx
+        .query(
+            "SELECT name::text, company_id::int8, currency_id::int8, journal_id::int8, \
+                    account_depreciation_id::int8, account_depreciation_expense_id::int8, \
+                    analytic_account_id::int8, COALESCE(asset_type, 'normal')::text, \
+                    COALESCE(state, 'draft')::text \
+             FROM account_asset WHERE id = $1 FOR UPDATE",
+            &[&aid],
+        )
+        .await?;
+    let Some(arow) = a_rows.first() else {
+        return Err(Error::missing("Asset no longer exists."));
+    };
+    let name: String = arow.try_get(0).map_err(db)?;
+    let company_id: i64 = arow.try_get(1).map_err(db)?;
+    let currency_id: i64 = arow.try_get(2).map_err(db)?;
+    let journal_id: i64 = arow.try_get(3).map_err(db)?;
+    let dep_acc: Option<i64> = arow.try_get(4).map_err(db)?;
+    let exp_acc: Option<i64> = arow.try_get(5).map_err(db)?;
+    let cost_center_id: Option<i64> = arow.try_get(6).map_err(db)?;
+    let asset_type: String = arow.try_get(7).map_err(db)?;
+    let state: String = arow.try_get(8).map_err(db)?;
+
+    if asset_type == "cip" {
+        return Err(Error::user(
+            "Construction in Progress (CIP) assets cannot post depreciation.",
+        ));
+    }
+    if state != "open" {
+        return Err(Error::user(
+            "Confirm the asset before posting depreciation entries.",
+        ));
+    }
+    let dep_acc = dep_acc.ok_or_else(|| Error::validation("Asset has no depreciation account."))?;
+    let exp_acc =
+        exp_acc.ok_or_else(|| Error::validation("Asset has no depreciation expense account."))?;
+
+    let next_rows = if let Some(target_lid) = specific_line_id {
+        tx.query(
+            "SELECT id::int8, sequence, depreciation_date, COALESCE(amount, 0) \
+             FROM account_asset_depreciation_line \
+             WHERE id = $1 AND asset_id = $2 AND state = 'draft' FOR UPDATE",
+            &[&target_lid, &aid],
+        )
+        .await?
+    } else {
+        tx.query(
+            "SELECT id::int8, sequence, depreciation_date, COALESCE(amount, 0) \
+             FROM account_asset_depreciation_line \
+             WHERE asset_id = $1 AND state = 'draft' \
+             ORDER BY sequence, id LIMIT 1 FOR UPDATE",
+            &[&aid],
+        )
+        .await?
+    };
+    let Some(nrow) = next_rows.first() else {
+        return Err(Error::user(
+            "All depreciation entries for this asset have already been posted.",
+        ));
+    };
+    let line_id: i64 = nrow.try_get(0).map_err(db)?;
+    let seq: i32 = nrow.try_get(1).map_err(db)?;
+    let dep_date: Date = nrow.try_get(2).map_err(db)?;
+    let amount: Decimal = nrow.try_get(3).map_err(db)?;
+
+    let env = crate::moves::post::strip_default_context(asset.env());
+    let label = format!("Depreciation {seq}: {name}");
+    let mut mvals = RawVals::new();
+    mvals.insert("move_type".into(), Cell::Str("entry".into()));
+    mvals.insert("journal_id".into(), Cell::Id(journal_id));
+    mvals.insert("company_id".into(), Cell::Id(company_id));
+    mvals.insert("currency_id".into(), Cell::Id(currency_id));
+    mvals.insert("date".into(), Cell::Date(dep_date));
+    mvals.insert("ref".into(), Cell::Str(label.as_str().into()));
+
+    let unchecked_moves = crate::moves::unchecked(&env.records("account.move")?);
+    let created_move = unchecked_moves.create(tx, vec![mvals]).await?;
+    let move_id = created_move.ids()[0];
+
+    let mut debit_line = RawVals::new();
+    debit_line.insert("move_id".into(), Cell::Id(move_id));
+    debit_line.insert("account_id".into(), Cell::Id(exp_acc));
+    debit_line.insert("name".into(), Cell::Str(label.as_str().into()));
+    debit_line.insert("currency_id".into(), Cell::Id(currency_id));
+    debit_line.insert("balance".into(), Cell::Decimal(amount));
+    debit_line.insert("amount_currency".into(), Cell::Decimal(amount));
+    if let Some(cc) = cost_center_id {
+        debit_line.insert("analytic_account_id".into(), Cell::Id(cc));
+    }
+
+    let mut credit_line = RawVals::new();
+    credit_line.insert("move_id".into(), Cell::Id(move_id));
+    credit_line.insert("account_id".into(), Cell::Id(dep_acc));
+    credit_line.insert("name".into(), Cell::Str(label.as_str().into()));
+    credit_line.insert("currency_id".into(), Cell::Id(currency_id));
+    credit_line.insert("balance".into(), Cell::Decimal(-amount));
+    credit_line.insert("amount_currency".into(), Cell::Decimal(-amount));
+
+    let unchecked_lines = crate::moves::unchecked(&env.records("account.move.line")?);
+    unchecked_lines
+        .create(tx, vec![debit_line, credit_line])
+        .await?;
+    post_moves(tx, &env.records("account.move")?.browse([move_id])?).await?;
+
+    let uid = asset.env().uid();
+    tx.execute(
+        "UPDATE account_asset_depreciation_line \
+         SET state = 'posted', move_id = $2, write_uid = $3, write_date = now() AT TIME ZONE 'UTC' \
+         WHERE id = $1 AND state = 'draft'",
+        &[&line_id, &move_id, &uid],
+    )
+    .await?;
+    let remaining: i64 = tx
+        .query(
+            "SELECT count(*)::int8 FROM account_asset_depreciation_line \
+             WHERE asset_id = $1 AND state = 'draft'",
+            &[&aid],
+        )
+        .await?[0]
+        .try_get(0)
+        .map_err(db)?;
+    if remaining == 0 {
+        tx.execute(
+            "UPDATE account_asset SET state = 'close', write_uid = $2, \
+                    write_date = now() AT TIME ZONE 'UTC' \
+             WHERE id = $1 AND state = 'open'",
+            &[&aid, &uid],
+        )
+        .await?;
+    }
+    tx.invalidate_records(
+        asset.as_records(),
+        Some(&["state", "value_residual", "depreciation_line_ids"]),
+    )
+    .await?;
+    tx.invalidate_model(
+        "account.asset.depreciation.line",
+        Some(&["state", "move_id"]),
+    )
+    .await
 }
 
 /// `account.asset.depreciation.line`: one scheduled depreciation installment of an asset.
@@ -1198,7 +1389,11 @@ impl AccountAsset {
     description = "Asset Depreciation Line",
     order = "sequence, id",
     check_company_auto = true,
-    company_access = direct(field = "company_id", branch = "exact", empty = "deny")
+    company_access = direct(field = "company_id", branch = "exact", empty = "deny"),
+    indexes = [
+        ("_asset_state", "(asset_id, state)"),
+        ("_draft_date", "(depreciation_date) WHERE state = 'draft'"),
+    ],
 )]
 pub struct AccountAssetDepreciationLine {
     /// Parent asset.
@@ -1303,7 +1498,7 @@ pub struct AccountAssetDepreciationRun {
     )]
     pub currency_id: Option<RecId>,
     /// Post all scheduled depreciation lines with date <= cutoff_date.
-    #[field(date, required = true, default_fn = default_today, string = "Cutoff Date")]
+    #[field(date, required = true, string = "Cutoff Date")]
     pub cutoff_date: Option<Date>,
     /// Run status.
     #[field(
@@ -1340,52 +1535,111 @@ impl AccountAssetDepreciationRun {
     ) -> Result<erp_sdk::ValueMap> {
         let mut values: erp_sdk::ValueMap =
             sup.call(tx, this.as_records(), (names.clone(),)).await?;
+        let cid = this.env().company_id()?;
         if names.iter().any(|n| n == "company_id")
             && !values.contains_key("company_id")
-            && let Some(cid) = this.env().company_id()?
+            && let Some(cid) = cid
         {
             values.insert("company_id".to_owned(), Value::Int(cid));
+        }
+        if names.iter().any(|n| n == "cutoff_date") && !values.contains_key("cutoff_date") {
+            let today = if let Some(cid) = cid {
+                erp_addon_base::company_calendar::business_date(tx, cid).await?
+            } else {
+                this.env().context_today()?
+            };
+            values.insert("cutoff_date".to_owned(), Value::Date(today));
         }
         Ok(values)
     }
 
+    #[method(override)]
+    async fn write(
+        this: &RecordSet<AccountAssetDepreciationRun>,
+        tx: &mut Transaction,
+        vals: RawVals,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.as_records().is_empty() && !this.env().su() {
+            if vals.contains("state")
+                || vals.contains("entries_posted")
+                || vals.contains("total_depreciation")
+            {
+                return Err(Error::user(
+                    "Depreciation run status and totals cannot be edited directly.",
+                ));
+            }
+            for state in this.mapped(tx, AccountAssetDepreciationRun::STATE).await? {
+                if state.as_deref() != Some("draft") {
+                    return Err(Error::user("Posted depreciation runs cannot be modified."));
+                }
+            }
+        }
+        sup.call(tx, this.as_records(), (vals,)).await
+    }
+
+    #[method(override)]
+    async fn unlink(
+        this: &RecordSet<AccountAssetDepreciationRun>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.as_records().is_empty() && !this.env().su() {
+            for state in this.mapped(tx, AccountAssetDepreciationRun::STATE).await? {
+                if state.as_deref() != Some("draft") {
+                    return Err(Error::user("Posted depreciation runs cannot be deleted."));
+                }
+            }
+        }
+        sup.call(tx, this.as_records(), ()).await
+    }
+
     /// Posts every scheduled depreciation line dated on or before `cutoff_date` for open
-    /// depreciable fixed assets in the company.
+    /// depreciable fixed assets in the company (capped per run for bounded transaction work).
     #[method]
     #[rpc(effect = write)]
     pub async fn action_post_due_depreciations(
         this: &RecordSet<AccountAssetDepreciationRun>,
         tx: &mut Transaction,
     ) -> Result<()> {
+        const MAX_LINES_PER_RUN: i64 = 500;
         let run = this.ensure_one()?;
         run.as_records().check_access(tx, Operation::Write).await?;
+        tx.flush().await?;
         let run_id = run.as_records().ids()[0];
-        let state = run.get(tx, AccountAssetDepreciationRun::STATE).await?;
-        if state.as_deref() != Some("draft") {
+        let run_rows = tx
+            .query(
+                "SELECT state::text, company_id::int8, cutoff_date \
+                 FROM account_asset_depreciation_run WHERE id = $1 FOR UPDATE",
+                &[&run_id],
+            )
+            .await?;
+        let Some(rrow) = run_rows.first() else {
+            return Err(Error::missing("Depreciation run no longer exists."));
+        };
+        let state: String = rrow.try_get(0).map_err(db)?;
+        if state != "draft" {
             return Err(Error::user(
                 "This depreciation run has already been posted.",
             ));
         }
-        let company_id = run
-            .get(tx, AccountAssetDepreciationRun::COMPANY_ID)
-            .await?
-            .ok_or_else(|| Error::validation("Company is required."))?
-            .get();
-        let cutoff = run
-            .get(tx, AccountAssetDepreciationRun::CUTOFF_DATE)
-            .await?
+        let company_id: i64 = rrow.try_get(1).map_err(db)?;
+        let cutoff: Date = rrow
+            .try_get::<_, Option<Date>>(2)
+            .map_err(db)?
             .ok_or_else(|| Error::validation("Cutoff Date is required."))?;
 
         let due_rows = tx
             .query(
-                "SELECT l.asset_id::int8, COALESCE(l.amount, 0) \
+                "SELECT l.id::int8, l.asset_id::int8, COALESCE(l.amount, 0) \
                  FROM account_asset_depreciation_line l \
                  JOIN account_asset a ON a.id = l.asset_id \
                  WHERE a.company_id = $1 AND a.state = 'open' \
                    AND COALESCE(a.asset_type, 'normal') = 'normal' \
                    AND l.state = 'draft' AND l.depreciation_date <= $2 \
-                 ORDER BY l.depreciation_date, l.asset_id, l.sequence, l.id",
-                &[&company_id, &cutoff],
+                 ORDER BY l.asset_id, l.depreciation_date, l.sequence, l.id \
+                 LIMIT $3",
+                &[&company_id, &cutoff, &(MAX_LINES_PER_RUN + 1)],
             )
             .await?;
         if due_rows.is_empty() {
@@ -1393,28 +1647,41 @@ impl AccountAssetDepreciationRun {
                 "No scheduled depreciation entries are due on or before {cutoff}."
             )));
         }
+        if due_rows.len() as i64 > MAX_LINES_PER_RUN {
+            return Err(Error::user(format!(
+                "More than {MAX_LINES_PER_RUN} depreciation entries are due on or before {cutoff}; run depreciation for an earlier cutoff date in smaller batches."
+            )));
+        }
 
         let mut posted_count: i32 = 0;
         let mut total = Decimal::ZERO;
         let env = run.env().clone();
         for row in due_rows {
-            let aid: i64 = row.try_get(0).map_err(db)?;
-            let amt: Decimal = row.try_get(1).map_err(db)?;
+            let line_id: i64 = row.try_get(0).map_err(db)?;
+            let aid: i64 = row.try_get(1).map_err(db)?;
+            let amt: Decimal = row.try_get(2).map_err(db)?;
             let rec: RecordSet<AccountAsset> =
                 env.records("account.asset")?.browse([aid])?.try_into()?;
-            AccountAsset::action_post_next_depreciation(&rec, tx).await?;
+            post_asset_depreciation(tx, &rec, aid, Some(line_id)).await?;
             posted_count += 1;
             total += amt;
         }
 
-        tx.execute(
-            "UPDATE account_asset_depreciation_run \
-             SET state = 'posted', entries_posted = $2, total_depreciation = $3, \
-                 write_date = now() AT TIME ZONE 'UTC' \
-             WHERE id = $1",
-            &[&run_id, &posted_count, &total],
-        )
-        .await?;
+        let uid = run.env().uid();
+        let updated = tx
+            .execute(
+                "UPDATE account_asset_depreciation_run \
+                 SET state = 'posted', entries_posted = $2, total_depreciation = $3, \
+                     write_uid = $4, write_date = now() AT TIME ZONE 'UTC' \
+                 WHERE id = $1 AND state = 'draft'",
+                &[&run_id, &posted_count, &total, &uid],
+            )
+            .await?;
+        if updated != 1 {
+            return Err(Error::conflict(
+                "Depreciation run state changed concurrently; retry.",
+            ));
+        }
         tx.invalidate_records(
             run.as_records(),
             Some(&["state", "entries_posted", "total_depreciation"]),

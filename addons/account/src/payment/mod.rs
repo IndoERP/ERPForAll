@@ -35,7 +35,7 @@ pub const SERVICE_OWNED: [&str; 7] = [
 
 /// What feeds the journal entry of a payment: refused on a payment that is no longer a draft
 /// (paid, reconciled, cancelled or rejected); reset a cancelled or rejected one to draft first.
-pub const ENTRY_FIELDS: [&str; 11] = [
+pub const ENTRY_FIELDS: [&str; 12] = [
     "date",
     "amount",
     "payment_type",
@@ -47,6 +47,7 @@ pub const ENTRY_FIELDS: [&str; 11] = [
     "company_id",
     "payment_method_line_id",
     "payment_reference",
+    "check_number",
 ];
 
 /// `account.payment.method`: a way to pay or to be paid, in one direction.
@@ -513,9 +514,7 @@ impl AccountPayment {
                 values.insert("company_id".to_owned(), Value::Int(cid));
             }
             if names.iter().any(|n| n == "date") && !values.contains_key("date") {
-                let today = erp_addon_base::company_calendar::business_date(tx, cid)
-                    .await
-                    .unwrap_or_else(|_| Date::today());
+                let today = erp_addon_base::company_calendar::business_date(tx, cid).await?;
                 values.insert("date".to_owned(), Value::Date(today));
             }
             let mut journal_id = match values.get("journal_id") {
@@ -613,31 +612,41 @@ impl AccountPayment {
             .collect();
         cur_ids.sort_unstable();
         cur_ids.dedup();
-        let mut names = std::collections::HashMap::new();
+        let mut info = std::collections::HashMap::<i64, (String, u32)>::new();
         if !cur_ids.is_empty() {
             let rows = tx
                 .query(
-                    "SELECT id::int8, name::text FROM res_currency WHERE id = ANY($1::int8[])",
+                    "SELECT id::int8, name::text, COALESCE(decimal_places, 2)::int4 \
+                     FROM res_currency WHERE id = ANY($1::int8[])",
                     &[&cur_ids],
                 )
                 .await?;
             for row in rows {
-                if let (Ok(id), Ok(name)) = (row.try_get::<_, i64>(0), row.try_get::<_, String>(1))
-                {
-                    names.insert(id, name);
-                }
+                let id: i64 = row
+                    .try_get(0)
+                    .map_err(|e| Error::db(format!("Currency id unreadable: {e}")))?;
+                let name: String = row
+                    .try_get(1)
+                    .map_err(|e| Error::db(format!("Currency code unreadable: {e}")))?;
+                let dp: i32 = row
+                    .try_get(2)
+                    .map_err(|e| Error::db(format!("Currency precision unreadable: {e}")))?;
+                let scale = u32::try_from(dp).unwrap_or(2);
+                info.insert(id, (name, scale));
             }
         }
         for (i, (amount, cur)) in amounts.into_iter().zip(currencies).enumerate() {
-            let code = cur
+            let (code, scale) = cur
                 .and_then(|c| c.as_real())
-                .and_then(|c| names.get(&c.get()))
-                .map(String::as_str)
-                .unwrap_or("USD");
+                .and_then(|c| info.get(&c.get()))
+                .map(|(n, s)| (n.as_str(), *s))
+                .unwrap_or(("", 2));
             out.set(
                 i,
                 AccountPayment::CHECK_AMOUNT_IN_WORDS,
-                Some(Arc::<str>::from(batch::amount_to_words(amount, code))),
+                Some(Arc::<str>::from(batch::amount_to_words_scaled(
+                    amount, code, scale,
+                ))),
             )?;
         }
         Ok(())
@@ -696,7 +705,8 @@ impl AccountPayment {
             .filter(|f| vals.contains(f))
             .collect();
         let memo = vals.contains("memo");
-        if !entry.is_empty() || memo {
+        let batch = vals.contains("batch_payment_id");
+        if !entry.is_empty() || memo || batch {
             this.as_records()
                 .check_access(tx, erp_sdk::Operation::Write)
                 .await?;
@@ -704,6 +714,9 @@ impl AccountPayment {
         if !entry.is_empty() {
             service::refuse_posted(tx, &this.ids(), &entry.join(", ")).await?;
             service::refuse_ended(tx, &this.ids(), &entry.join(", ")).await?;
+        }
+        if batch {
+            service::refuse_batch_change(tx, &this.ids(), vals.get("batch_payment_id")).await?;
         }
         sup.call(tx, this.as_records(), (vals,)).await?;
         if memo {

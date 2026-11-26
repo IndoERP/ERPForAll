@@ -27,7 +27,7 @@ pub struct AccountBatchPayment {
     )]
     pub name: Option<Arc<str>>,
     /// Batch date.
-    #[field(date, required = true, default_fn = default_today, string = "Date")]
+    #[field(date, required = true, string = "Date")]
     pub date: Option<Date>,
     /// Inbound customer deposit or outbound vendor batch.
     #[field(
@@ -112,18 +112,43 @@ pub struct AccountBatchPayment {
     pub memo: Option<Arc<str>>,
 }
 
-fn default_today(_ctx: &erp_sdk::DefaultContext) -> Value {
-    Value::Date(Date::today())
+fn db(err: impl std::fmt::Display) -> Error {
+    Error::db(format!("Batch payment query failed: {err}"))
+}
+
+async fn resolve_default_today(tx: &mut Transaction, env: &Env) -> Result<Date> {
+    if let Some(cid) = env.company_id()? {
+        erp_addon_base::company_calendar::business_date(tx, cid).await
+    } else {
+        env.context_today()
+    }
 }
 
 #[methods(AccountBatchPayment, addon = "account")]
 impl AccountBatchPayment {
-    #[compute(depends = ["journal_id", "payment_ids", "payment_ids.amount"])]
+    #[method(override)]
+    async fn default_get(
+        this: &RecordSet<AccountBatchPayment>,
+        tx: &mut Transaction,
+        names: Vec<String>,
+        sup: Super,
+    ) -> Result<erp_sdk::ValueMap> {
+        let mut values: erp_sdk::ValueMap =
+            sup.call(tx, this.as_records(), (names.clone(),)).await?;
+        if names.iter().any(|n| n == "date") && !values.contains_key("date") {
+            let today = resolve_default_today(tx, this.env()).await?;
+            values.insert("date".to_owned(), Value::Date(today));
+        }
+        Ok(values)
+    }
+
+    #[compute(depends = ["journal_id", "payment_ids", "payment_ids.amount", "payment_ids.currency_id"])]
     async fn _compute_amount(
         this: &RecordSet<AccountBatchPayment>,
         tx: &mut Transaction,
         out: &mut Assign<'_, AccountBatchPayment>,
     ) -> Result<()> {
+        tx.flush().await?;
         let journals = this.mapped(tx, AccountBatchPayment::JOURNAL_ID).await?;
         let rec_ids = this.as_records().rec_ids();
         for (i, (rec_id, journal)) in rec_ids.iter().zip(journals).enumerate() {
@@ -138,28 +163,35 @@ impl AccountBatchPayment {
                     )
                     .await?;
                 if let Some(row) = rows.first() {
-                    let cid: Option<i64> = row
-                        .try_get(0)
-                        .map_err(|e| Error::db(format!("Batch currency unreadable: {e}")))?;
+                    let cid: Option<i64> = row.try_get(0).map_err(db)?;
                     currency_id = cid.and_then(RecId::from_real);
                 }
             }
             let (total, count) = if let Some(real) = rec_id.as_real() {
                 let rows = tx
                     .query(
-                        "SELECT COALESCE(SUM(amount), 0), count(*)::int4 \
+                        "SELECT COALESCE(SUM(amount), 0), count(*)::int4, \
+                                count(DISTINCT currency_id)::int4, MIN(currency_id)::int8 \
                          FROM account_payment \
                          WHERE batch_payment_id = $1 AND state <> 'canceled'",
                         &[&real.get()],
                     )
                     .await?;
                 if let Some(row) = rows.first() {
-                    let sum: Decimal = row
-                        .try_get(0)
-                        .map_err(|e| Error::db(format!("Batch total unreadable: {e}")))?;
-                    let cnt: i32 = row
-                        .try_get(1)
-                        .map_err(|e| Error::db(format!("Batch count unreadable: {e}")))?;
+                    let sum: Decimal = row.try_get(0).map_err(db)?;
+                    let cnt: i32 = row.try_get(1).map_err(db)?;
+                    let distinct_cur: i32 = row.try_get(2).map_err(db)?;
+                    let first_cur: Option<i64> = row.try_get(3).map_err(db)?;
+                    if distinct_cur > 1
+                        || (cnt > 0
+                            && currency_id.is_some()
+                            && first_cur.is_some()
+                            && first_cur != currency_id.map(|c| c.get()))
+                    {
+                        return Err(Error::validation(
+                            "All payments in a batch payment must share the batch's currency.",
+                        ));
+                    }
                     (sum, cnt)
                 } else {
                     (Decimal::ZERO, 0)
@@ -181,7 +213,27 @@ impl AccountBatchPayment {
         mut vals_list: Vec<RawVals>,
         sup: Super,
     ) -> Result<Records> {
+        let mut today_cache: Option<Date> = None;
         for vals in &mut vals_list {
+            if !this.env().su()
+                && let Some(Cell::Str(st)) = vals.get("state")
+                && st.as_ref() != "draft"
+            {
+                return Err(Error::validation(
+                    "Batch payments must start in Draft status.",
+                ));
+            }
+            if !vals.contains("date") {
+                let d = match today_cache {
+                    Some(d) => d,
+                    None => {
+                        let d = resolve_default_today(tx, this.env()).await?;
+                        today_cache = Some(d);
+                        d
+                    }
+                };
+                vals.insert("date".into(), Cell::Date(d));
+            }
             let needs_name = match vals.get("name") {
                 None | Some(Cell::Null) => true,
                 Some(Cell::Str(s)) => s.trim().is_empty() || s.as_ref() == "New",
@@ -197,13 +249,16 @@ impl AccountBatchPayment {
                 } else {
                     "BATCH/IN/"
                 };
-                let rows = tx
+                let next: i64 = tx
                     .query(
-                        "SELECT count(*)::int8 + 1 FROM account_batch_payment WHERE batch_type = $1",
-                        &[&batch_type],
+                        "SELECT nextval(pg_get_serial_sequence('account_batch_payment', 'id'))::int8",
+                        &[],
                     )
-                    .await?;
-                let next: i64 = rows.first().and_then(|r| r.try_get(0).ok()).unwrap_or(1);
+                    .await?
+                    .first()
+                    .ok_or_else(|| Error::invariant("Missing nextval row for batch payment."))?
+                    .try_get(0)
+                    .map_err(db)?;
                 vals.insert(
                     "name".into(),
                     Cell::Str(format!("{prefix}{next:05}").into()),
@@ -213,8 +268,66 @@ impl AccountBatchPayment {
         sup.call(tx, this.as_records(), (vals_list,)).await
     }
 
-    /// Validates the batch: verifies at least one payment, matching direction/journal, posts
-    /// any draft payments, and marks the batch Sent.
+    #[method(override)]
+    async fn write(
+        this: &RecordSet<AccountBatchPayment>,
+        tx: &mut Transaction,
+        vals: RawVals,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.env().su() {
+            if vals.contains("state") {
+                return Err(Error::validation(
+                    "Batch payment status must be changed through Validate, Reconcile, or Reset actions.",
+                ));
+            }
+            let ids: Vec<i64> = this.as_records().ids().to_vec();
+            if !ids.is_empty() {
+                tx.flush().await?;
+                let locked = tx
+                    .query(
+                        "SELECT id::int8 FROM account_batch_payment \
+                         WHERE id = ANY($1::int8[]) AND state IN ('sent', 'reconciled') LIMIT 1",
+                        &[&ids],
+                    )
+                    .await?;
+                if !locked.is_empty() {
+                    return Err(Error::user(
+                        "Sent or reconciled batch payments cannot be modified.",
+                    ));
+                }
+            }
+        }
+        sup.call(tx, this.as_records(), (vals,)).await
+    }
+
+    #[method(override)]
+    async fn unlink(
+        this: &RecordSet<AccountBatchPayment>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<()> {
+        if !this.env().su() {
+            let ids: Vec<i64> = this.as_records().ids().to_vec();
+            if !ids.is_empty() {
+                tx.flush().await?;
+                let locked = tx
+                    .query(
+                        "SELECT id::int8 FROM account_batch_payment \
+                         WHERE id = ANY($1::int8[]) AND state <> 'draft' LIMIT 1",
+                        &[&ids],
+                    )
+                    .await?;
+                if !locked.is_empty() {
+                    return Err(Error::user("Only draft batch payments can be deleted."));
+                }
+            }
+        }
+        sup.call(tx, this.as_records(), ()).await
+    }
+
+    /// Validates the batch: verifies at least one payment, matching direction/journal/currency,
+    /// posts any draft payments, and marks the batch Sent.
     #[method]
     #[rpc(effect = write)]
     pub async fn validate_batch(
@@ -222,26 +335,38 @@ impl AccountBatchPayment {
         tx: &mut Transaction,
     ) -> Result<()> {
         this.as_records().check_access(tx, Operation::Write).await?;
+        tx.flush().await?;
         let env = this.env().clone();
+        let uid = env.uid();
         for batch in this.iter() {
             let bid = batch.as_records().ids()[0];
-            let state = batch.get(tx, AccountBatchPayment::STATE).await?;
-            if state.as_deref() != Some("draft") {
+            let brows = tx
+                .query(
+                    "SELECT b.state::text, b.journal_id::int8, b.batch_type::text, \
+                            COALESCE(j.currency_id, c.currency_id)::int8 \
+                     FROM account_batch_payment b \
+                     JOIN account_journal j ON j.id = b.journal_id \
+                     JOIN res_company c ON c.id = j.company_id \
+                     WHERE b.id = $1 FOR UPDATE OF b",
+                    &[&bid],
+                )
+                .await?;
+            let Some(brow) = brows.first() else {
+                return Err(Error::missing("Batch payment not found."));
+            };
+            let state: String = brow.try_get(0).map_err(db)?;
+            if state != "draft" {
                 return Err(Error::user("Only draft batch payments can be validated."));
             }
-            let journal_id = batch
-                .get(tx, AccountBatchPayment::JOURNAL_ID)
-                .await?
-                .ok_or_else(|| Error::validation("Choose a bank journal for the batch payment."))?
-                .get();
-            let batch_type = batch
-                .get(tx, AccountBatchPayment::BATCH_TYPE)
-                .await?
-                .unwrap_or_else(|| Arc::from("inbound"));
+            let journal_id: i64 = brow.try_get(1).map_err(db)?;
+            let batch_type: String = brow.try_get(2).map_err(db)?;
+            let batch_currency_id: i64 = brow.try_get(3).map_err(db)?;
+
             let rows = tx
                 .query(
-                    "SELECT id::int8, state::text, journal_id::int8, payment_type::text \
-                     FROM account_payment WHERE batch_payment_id = $1 ORDER BY id",
+                    "SELECT id::int8, state::text, journal_id::int8, payment_type::text, \
+                            currency_id::int8 \
+                     FROM account_payment WHERE batch_payment_id = $1 ORDER BY id FOR UPDATE",
                     &[&bid],
                 )
                 .await?;
@@ -252,26 +377,24 @@ impl AccountBatchPayment {
             }
             let mut draft_ids = Vec::new();
             for row in &rows {
-                let pid: i64 = row
-                    .try_get(0)
-                    .map_err(|e| Error::db(format!("Payment id unreadable: {e}")))?;
-                let pstate: String = row
-                    .try_get(1)
-                    .map_err(|e| Error::db(format!("Payment state unreadable: {e}")))?;
-                let pjournal: i64 = row
-                    .try_get(2)
-                    .map_err(|e| Error::db(format!("Payment journal unreadable: {e}")))?;
-                let ptype: String = row
-                    .try_get(3)
-                    .map_err(|e| Error::db(format!("Payment type unreadable: {e}")))?;
+                let pid: i64 = row.try_get(0).map_err(db)?;
+                let pstate: String = row.try_get(1).map_err(db)?;
+                let pjournal: i64 = row.try_get(2).map_err(db)?;
+                let ptype: String = row.try_get(3).map_err(db)?;
+                let pcur: i64 = row.try_get(4).map_err(db)?;
                 if pjournal != journal_id {
                     return Err(Error::user(
                         "All payments in a batch must belong to the batch's bank journal.",
                     ));
                 }
-                if ptype != batch_type.as_ref() {
+                if ptype != batch_type {
                     return Err(Error::user(
                         "All payments in a batch must match the batch direction (Inbound/Outbound).",
+                    ));
+                }
+                if pcur != batch_currency_id {
+                    return Err(Error::user(
+                        "All payments in a batch must use the same currency as the batch journal.",
                     ));
                 }
                 if pstate == "canceled" || pstate == "rejected" {
@@ -288,9 +411,9 @@ impl AccountBatchPayment {
                 post_payments(tx, &drafts).await?;
             }
             tx.execute(
-                "UPDATE account_batch_payment SET state = 'sent', write_date = now() AT TIME ZONE 'UTC' \
-                 WHERE id = $1",
-                &[&bid],
+                "UPDATE account_batch_payment SET state = 'sent', write_uid = $2, \
+                 write_date = now() AT TIME ZONE 'UTC' WHERE id = $1 AND state = 'draft'",
+                &[&bid, &uid],
             )
             .await?;
             tx.invalidate_records(
@@ -310,35 +433,56 @@ impl AccountBatchPayment {
         tx: &mut Transaction,
     ) -> Result<()> {
         this.as_records().check_access(tx, Operation::Write).await?;
+        tx.flush().await?;
         let env = this.env().clone();
+        let uid = env.uid();
         for batch in this.iter() {
             let bid = batch.as_records().ids()[0];
-            let state = batch.get(tx, AccountBatchPayment::STATE).await?;
-            if state.as_deref() != Some("sent") {
+            let brows = tx
+                .query(
+                    "SELECT state::text FROM account_batch_payment WHERE id = $1 FOR UPDATE",
+                    &[&bid],
+                )
+                .await?;
+            let Some(brow) = brows.first() else {
+                return Err(Error::missing("Batch payment not found."));
+            };
+            if brow.try_get::<_, String>(0).map_err(db)? != "sent" {
                 return Err(Error::user("Only sent batch payments can be reconciled."));
             }
             let rows = tx
                 .query(
-                    "SELECT id::int8 FROM account_payment \
-                     WHERE batch_payment_id = $1 AND state = 'paid' ORDER BY id",
+                    "SELECT id::int8, state::text FROM account_payment \
+                     WHERE batch_payment_id = $1 ORDER BY id FOR UPDATE",
                     &[&bid],
                 )
                 .await?;
-            let paid_ids: Vec<i64> = rows
-                .iter()
-                .map(|r| {
-                    r.try_get::<_, i64>(0)
-                        .map_err(|e| Error::db(format!("Batch payment id unreadable: {e}")))
-                })
-                .collect::<Result<_>>()?;
+            if rows.is_empty() {
+                return Err(Error::user("Cannot reconcile an empty batch payment."));
+            }
+            let mut paid_ids = Vec::new();
+            for r in &rows {
+                let pid: i64 = r.try_get(0).map_err(db)?;
+                let st: String = r.try_get(1).map_err(db)?;
+                match st.as_str() {
+                    "paid" => paid_ids.push(pid),
+                    "in_process" | "posted" => paid_ids.push(pid),
+                    "reconciled" => {}
+                    other => {
+                        return Err(Error::user(format!(
+                            "Cannot reconcile batch: payment #{pid} is in status '{other}'."
+                        )));
+                    }
+                }
+            }
             if !paid_ids.is_empty() {
                 let paid = env.records("account.payment")?.browse(paid_ids)?;
                 validate_payments(tx, &paid).await?;
             }
             tx.execute(
-                "UPDATE account_batch_payment SET state = 'reconciled', write_date = now() AT TIME ZONE 'UTC' \
-                 WHERE id = $1",
-                &[&bid],
+                "UPDATE account_batch_payment SET state = 'reconciled', write_uid = $2, \
+                 write_date = now() AT TIME ZONE 'UTC' WHERE id = $1 AND state = 'sent'",
+                &[&bid, &uid],
             )
             .await?;
             tx.invalidate_records(batch.as_records(), Some(&["state"]))
@@ -355,18 +499,28 @@ impl AccountBatchPayment {
         tx: &mut Transaction,
     ) -> Result<()> {
         this.as_records().check_access(tx, Operation::Write).await?;
+        tx.flush().await?;
+        let uid = this.env().uid();
         for batch in this.iter() {
             let bid = batch.as_records().ids()[0];
-            let state = batch.get(tx, AccountBatchPayment::STATE).await?;
-            if state.as_deref() != Some("sent") {
+            let brows = tx
+                .query(
+                    "SELECT state::text FROM account_batch_payment WHERE id = $1 FOR UPDATE",
+                    &[&bid],
+                )
+                .await?;
+            let Some(brow) = brows.first() else {
+                return Err(Error::missing("Batch payment not found."));
+            };
+            if brow.try_get::<_, String>(0).map_err(db)? != "sent" {
                 return Err(Error::user(
                     "Only sent batch payments can be reset to draft.",
                 ));
             }
             tx.execute(
-                "UPDATE account_batch_payment SET state = 'draft', write_date = now() AT TIME ZONE 'UTC' \
-                 WHERE id = $1",
-                &[&bid],
+                "UPDATE account_batch_payment SET state = 'draft', write_uid = $2, \
+                 write_date = now() AT TIME ZONE 'UTC' WHERE id = $1 AND state = 'sent'",
+                &[&bid, &uid],
             )
             .await?;
             tx.invalidate_records(batch.as_records(), Some(&["state"]))
@@ -379,11 +533,22 @@ impl AccountBatchPayment {
 /// Converts an exact `Decimal` monetary amount to English words for check printing and
 /// amount-in-words display (never uses floating-point arithmetic).
 pub fn amount_to_words(amount: Decimal, currency_code: &str) -> String {
-    let abs = amount.abs().round_dp(2);
+    amount_to_words_scaled(amount, currency_code, 2)
+}
+
+/// Currency-scale-aware English check amount-in-words formatter (`u128`-safe).
+pub fn amount_to_words_scaled(amount: Decimal, currency_code: &str, scale: u32) -> String {
+    let clamped_scale = scale.min(6);
+    let abs = amount.abs().round_dp(clamped_scale);
     let whole_dec = abs.trunc();
-    let frac_dec = ((abs - whole_dec) * Decimal::from(100)).round_dp(0);
-    let whole: u64 = whole_dec.to_string().parse().unwrap_or(0);
-    let cents: u64 = frac_dec.to_string().parse().unwrap_or(0);
+    let factor = 10u128.pow(clamped_scale);
+    let frac_dec = if clamped_scale == 0 {
+        Decimal::ZERO
+    } else {
+        ((abs - whole_dec) * Decimal::from(factor)).round_dp(0)
+    };
+    let whole: u128 = whole_dec.to_string().parse().unwrap_or(0);
+    let minor: u128 = frac_dec.to_string().parse().unwrap_or(0);
 
     let code = currency_code.to_uppercase();
     let (major_sg, major_pl, minor_sg, minor_pl) = match code.as_str() {
@@ -391,6 +556,7 @@ pub fn amount_to_words(amount: Decimal, currency_code: &str) -> String {
         "EUR" => ("Euro", "Euros", "Cent", "Cents"),
         "GBP" => ("Pound", "Pounds", "Penny", "Pence"),
         "IDR" => ("Rupiah", "Rupiah", "Sen", "Sen"),
+        "JPY" => ("Yen", "Yen", "Sen", "Sen"),
         "SGD" => ("Singapore Dollar", "Singapore Dollars", "Cent", "Cents"),
         other if !other.is_empty() => (other, other, "Cent", "Cents"),
         _ => ("Unit", "Units", "Cent", "Cents"),
@@ -403,25 +569,33 @@ pub fn amount_to_words(amount: Decimal, currency_code: &str) -> String {
     } else {
         ""
     };
-    if cents == 0 {
+    if minor == 0 || clamped_scale == 0 {
         format!("{prefix}{major_word} {major_label}")
     } else {
-        let minor_word = integer_to_words(cents);
-        let minor_label = if cents == 1 { minor_sg } else { minor_pl };
+        let minor_word = integer_to_words(minor);
+        let minor_label = if minor == 1 { minor_sg } else { minor_pl };
         format!("{prefix}{major_word} {major_label} and {minor_word} {minor_label}")
     }
 }
 
-fn integer_to_words(n: u64) -> String {
+fn integer_to_words(n: u128) -> String {
     if n == 0 {
         return "Zero".to_owned();
     }
-    const SCALES: [&str; 5] = ["", "Thousand", "Million", "Billion", "Trillion"];
+    const SCALES: [&str; 7] = [
+        "",
+        "Thousand",
+        "Million",
+        "Billion",
+        "Trillion",
+        "Quadrillion",
+        "Quintillion",
+    ];
     let mut parts = Vec::new();
     let mut rem = n;
     let mut scale = 0usize;
     while rem > 0 {
-        let chunk = rem % 1000;
+        let chunk = (rem % 1000) as u64;
         if chunk > 0 {
             let chunk_str = chunk_to_words(chunk);
             if scale > 0 && scale < SCALES.len() {

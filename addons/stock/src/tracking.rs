@@ -17,7 +17,7 @@
 use std::collections::BTreeMap;
 
 use erp_addon_product::ProductTemplate;
-use erp_sdk::prelude::*;
+use erp_sdk::{Operation, prelude::*};
 
 use crate::error::StockError;
 
@@ -46,6 +46,24 @@ pub struct StockProductTracking {
 
 #[methods(ProductTemplate, addon = "stock")]
 impl StockProductTracking {
+    #[constrains("weight", "volume")]
+    async fn _check_non_negative_dimensions(
+        this: &RecordSet<ProductTemplate>,
+        tx: &mut Transaction,
+    ) -> Result<()> {
+        let weights = this.mapped(tx, StockProductTracking::WEIGHT).await?;
+        let volumes = this.mapped(tx, StockProductTracking::VOLUME).await?;
+        for (w, v) in weights.into_iter().zip(volumes) {
+            if w < Decimal::ZERO {
+                return Err(Error::validation("Product weight cannot be negative."));
+            }
+            if v < Decimal::ZERO {
+                return Err(Error::validation("Product volume cannot be negative."));
+            }
+        }
+        Ok(())
+    }
+
     #[method(override)]
     async fn write(
         this: &RecordSet<ProductTemplate>,
@@ -53,6 +71,7 @@ impl StockProductTracking {
         vals: RawVals,
         sup: Super,
     ) -> Result<()> {
+        this.as_records().check_access(tx, Operation::Write).await?;
         let new_tracking = match vals.get("tracking") {
             Some(Cell::Str(s)) => Some(Tracking::from_selection(Some(s.as_ref()))?),
             Some(Cell::Null) => Some(Tracking::Untracked),

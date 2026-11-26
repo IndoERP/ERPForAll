@@ -315,8 +315,8 @@ export class HomeMenu {
     }
   }
 
-  private readonly onKeyDown = (event: KeyboardEvent): void => {
-    if (!this._isOpen) return;
+  private readonly onKeyDown = (event: Event): void => {
+    if (!this._isOpen || !(event instanceof KeyboardEvent)) return;
 
     if (event.key === "Escape") {
       if (getActiveBottomSheetCount() > 0) return;

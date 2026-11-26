@@ -118,7 +118,7 @@ async fn document_action(tx: &mut Transaction, id: i64) -> Result<Value> {
     let form: i64 = view.try_get(0).map_err(decode)?;
     Ok(Value::Json(Arc::new(json!({
         "type": "ir.actions.act_window", "name": "Vendor Bill",
-        "res_model": "account.move", "res_id": id, "views": [[form,"form"]], "target": "new"
+        "res_model": "account.move", "res_id": id, "views": [[form,"form"]], "target": "current"
     }))))
 }
 
@@ -200,7 +200,7 @@ async fn draft_or_open(
             crate::bill_history::read(tx, &env, company, order_id, limit).await?
         }
     };
-    let (items, sources) = billable_items(tx, &env, order_id, limit).await?;
+    let (items, sources) = billable_items(tx, &env, company, order_id, limit).await?;
     if items.is_empty() {
         if let Some(bill) = history.latest_active {
             return document_action(tx, bill).await;
@@ -259,6 +259,7 @@ async fn draft_or_open(
 async fn billable_items(
     tx: &mut Transaction,
     env: &erp_sdk::Env,
+    company: i64,
     order_id: i64,
     limit: i64,
 ) -> Result<(Vec<Command>, Vec<i64>)> {
@@ -342,26 +343,44 @@ async fn billable_items(
     for (source, target) in mappings {
         columns.push((target, lines.cells(tx, source).await?));
     }
-    let asset_cells = lines.cells(tx, "asset_id").await?;
+    let asset_cells = columns
+        .iter()
+        .find(|(target, _)| *target == "asset_id")
+        .map(|(_, col)| col.as_slice())
+        .unwrap_or(&[]);
     let mut cip_account_by_asset = BTreeMap::<i64, i64>::new();
-    let asset_ids_vec: Vec<i64> = asset_cells
+    let mut asset_ids_vec: Vec<i64> = asset_cells
         .iter()
         .filter_map(|c| match c {
             Cell::Id(id) => Some(*id),
             _ => None,
         })
         .collect();
+    asset_ids_vec.sort_unstable();
+    asset_ids_vec.dedup();
     if !asset_ids_vec.is_empty() {
+        env.records("account.asset")?
+            .browse(asset_ids_vec.clone())?
+            .check_access(tx, Operation::Read)
+            .await?;
         let arows = tx
             .query(
-                "SELECT id::int8, account_asset_id::int8 FROM account_asset \
-                 WHERE id = ANY($1::int8[]) AND COALESCE(asset_type, 'normal') = 'cip'",
-                &[&asset_ids_vec],
+                "SELECT id::int8, account_asset_id::int8, name::text \
+                 FROM account_asset \
+                 WHERE id = ANY($1::int8[]) AND company_id = $2 \
+                   AND COALESCE(asset_type, 'normal') = 'cip'",
+                &[&asset_ids_vec, &company],
             )
             .await?;
         for ar in arows {
             let aid: i64 = ar.try_get(0).map_err(decode)?;
-            let acc_id: i64 = ar.try_get(1).map_err(decode)?;
+            let acc_id: Option<i64> = ar.try_get(1).map_err(decode)?;
+            let aname: String = ar.try_get(2).map_err(decode)?;
+            let acc_id = acc_id.ok_or_else(|| {
+                Error::validation(format!(
+                    "CIP Asset '{aname}' has no Fixed Asset / CIP GL account configured."
+                ))
+            })?;
             cip_account_by_asset.insert(aid, acc_id);
         }
     }

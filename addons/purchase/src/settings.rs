@@ -247,15 +247,59 @@ pub(crate) async fn default_receipt_reminder(tx: &mut Transaction) -> Result<boo
     .await?;
     let read = serde_json::to_value(&read)
         .map_err(|error| Error::internal(format!("purchase settings: {error}")))?;
-    Ok(read["values"]
+    let entry = read["values"]
         .as_array()
         .and_then(|values| {
             values
                 .iter()
                 .find(|v| v["key"] == DEFAULT_RECEIPT_REMINDER_SETTING)
         })
-        .and_then(|entry| entry["value"].as_bool())
-        .unwrap_or(false))
+        .ok_or_else(|| {
+            Error::internal(format!(
+                "purchase setting '{DEFAULT_RECEIPT_REMINDER_SETTING}' missing from response"
+            ))
+        })?;
+    entry["value"].as_bool().ok_or_else(|| {
+        Error::internal(format!(
+            "purchase setting '{DEFAULT_RECEIPT_REMINDER_SETTING}' is not a boolean"
+        ))
+    })
+}
+
+/// Reads [`DAYS_TO_PURCHASE_SETTING`] for `company` with framework rights.
+pub(crate) async fn days_to_purchase(tx: &mut Transaction, company: i64) -> Result<i32> {
+    let env = tx.env().sudo(true).with_company(company)?;
+    let id = u64::try_from(company)
+        .ok()
+        .and_then(|id| WireId::try_from(id).ok())
+        .ok_or_else(|| Error::validation(format!("company id {company} is invalid")))?;
+    let read = read_values(
+        &env,
+        tx,
+        SettingsScope::Company { company_id: id },
+        vec![DAYS_TO_PURCHASE_SETTING.to_owned()],
+    )
+    .await?;
+    let read = serde_json::to_value(&read)
+        .map_err(|error| Error::internal(format!("purchase settings: {error}")))?;
+    let entry = read["values"]
+        .as_array()
+        .and_then(|values| values.iter().find(|v| v["key"] == DAYS_TO_PURCHASE_SETTING))
+        .ok_or_else(|| {
+            Error::internal(format!(
+                "purchase setting '{DAYS_TO_PURCHASE_SETTING}' missing from response"
+            ))
+        })?;
+    let raw = entry["value"].as_i64().ok_or_else(|| {
+        Error::internal(format!(
+            "purchase setting '{DAYS_TO_PURCHASE_SETTING}' is not an integer"
+        ))
+    })?;
+    i32::try_from(raw).map_err(|_| {
+        Error::validation(format!(
+            "purchase setting '{DAYS_TO_PURCHASE_SETTING}' ({raw}) is out of i32 range"
+        ))
+    })
 }
 
 /// Whether `purchase` is being installed, read once per transaction: the product create path

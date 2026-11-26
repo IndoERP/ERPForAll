@@ -13,7 +13,12 @@ use super::db;
     description = "CIP Cost Accumulation Line",
     order = "date, id",
     check_company_auto = true,
-    company_access = direct(field = "company_id", branch = "exact", empty = "deny")
+    company_access = direct(field = "company_id", branch = "exact", empty = "deny"),
+    keys = [key(
+        name = "_unique_move_line",
+        fields = ["move_line_id"],
+        message = "A journal item can only generate one CIP accumulation line."
+    )]
 )]
 pub struct AccountAssetCipLine {
     /// Target CIP asset.
@@ -131,7 +136,8 @@ pub async fn record_cip_lines_for_moves(
             "SELECT l.id::int8, l.asset_id::int8, l.date, l.partner_id::int8, \
                     l.account_id::int8, COALESCE(l.name, m.name, 'CIP Cost')::text, \
                     COALESCE(l.balance, 0), COALESCE(a.asset_type, 'normal')::text, \
-                    COALESCE(a.state, 'draft')::text, a.name::text \
+                    COALESCE(a.state, 'draft')::text, a.name::text, \
+                    l.company_id::int8, a.company_id::int8, a.account_asset_id::int8 \
              FROM account_move_line l \
              JOIN account_move m ON m.id = l.move_id \
              JOIN account_asset a ON a.id = l.asset_id \
@@ -161,9 +167,22 @@ pub async fn record_cip_lines_for_moves(
         let asset_type: String = row.try_get(7).map_err(db)?;
         let state: String = row.try_get(8).map_err(db)?;
         let asset_name: String = row.try_get(9).map_err(db)?;
+        let line_company_id: i64 = row.try_get(10).map_err(db)?;
+        let asset_company_id: i64 = row.try_get(11).map_err(db)?;
+        let asset_gl_account_id: i64 = row.try_get(12).map_err(db)?;
 
+        if line_company_id != asset_company_id {
+            return Err(Error::validation(format!(
+                "Journal item '{label}' cannot reference CIP asset '{asset_name}' from another company."
+            )));
+        }
         if asset_type != "cip" {
             continue;
+        }
+        if account_id != asset_gl_account_id {
+            return Err(Error::validation(format!(
+                "Journal item '{label}' tagged with CIP asset '{asset_name}' must post to the asset's CIP GL account."
+            )));
         }
         if !matches!(state.as_str(), "draft" | "cip") {
             return Err(Error::user(format!(
@@ -193,7 +212,7 @@ pub async fn record_cip_lines_for_moves(
     if vals_list.is_empty() {
         return Ok(());
     }
-    let clean_env = env.with_context_replaced(erp_sdk::Context::default());
+    let clean_env = crate::moves::post::strip_default_context(env);
     clean_env
         .records("account.asset.cip.line")?
         .create(tx, vals_list)
@@ -222,7 +241,7 @@ pub async fn record_cip_lines_for_moves(
 }
 
 /// Removes CIP accumulation lines when their originating journal entries are reset to draft;
-/// refuses if any linked CIP cost line has already been settled into a fixed asset.
+/// refuses if any linked CIP cost line has already been settled or its CIP asset is already settled/closed.
 pub async fn remove_cip_lines_for_moves(tx: &mut Transaction, move_ids: &[i64]) -> Result<()> {
     if move_ids.is_empty() {
         return Ok(());
@@ -232,7 +251,10 @@ pub async fn remove_cip_lines_for_moves(tx: &mut Transaction, move_ids: &[i64]) 
             "SELECT count(*)::int8 \
              FROM account_asset_cip_line c \
              JOIN account_move_line l ON l.id = c.move_line_id \
-             WHERE l.move_id = ANY($1::int8[]) AND COALESCE(c.settled_amount, 0) <> 0",
+             JOIN account_asset a ON a.id = c.asset_id \
+             WHERE l.move_id = ANY($1::int8[]) \
+               AND (COALESCE(c.settled_amount, 0) <> 0 \
+                    OR a.state IN ('settled', 'close', 'disposed'))",
             &[&move_ids],
         )
         .await?[0]
@@ -240,7 +262,7 @@ pub async fn remove_cip_lines_for_moves(tx: &mut Transaction, move_ids: &[i64]) 
         .map_err(db)?;
     if settled_count > 0 {
         return Err(Error::user(
-            "Cannot reset a journal entry whose CIP cost lines have already been settled. Reverse the CIP settlement first.",
+            "Cannot reset a journal entry whose CIP asset or cost lines have already been settled. Reverse the CIP settlement first.",
         ));
     }
     tx.execute(

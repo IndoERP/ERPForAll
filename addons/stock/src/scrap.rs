@@ -4,7 +4,8 @@
 
 use std::collections::BTreeMap;
 
-use erp_sdk::{Operation, ValueMap, prelude::*};
+use erp_sdk::sequence::draw_by_code;
+use erp_sdk::{CompanyId, Operation, ValueMap, prelude::*};
 
 use crate::move_lines::DeferSettle;
 use crate::picking::StockPicking;
@@ -94,6 +95,7 @@ pub struct StockScrap {
         many2one,
         comodel = "res.partner",
         ondelete = "restrict",
+        check_company = true,
         string = "Owner"
     )]
     pub owner_id: Option<RecId>,
@@ -103,6 +105,7 @@ pub struct StockScrap {
         comodel = "stock.picking",
         ondelete = "set null",
         index = "btree_not_null",
+        check_company = true,
         string = "Transfer"
     )]
     pub picking_id: Option<RecId>,
@@ -122,6 +125,7 @@ pub struct StockScrap {
         comodel = "stock.location",
         required = true,
         ondelete = "restrict",
+        check_company = true,
         string = "Source Location"
     )]
     pub location_id: Option<RecId>,
@@ -131,6 +135,7 @@ pub struct StockScrap {
         comodel = "stock.location",
         required = true,
         ondelete = "restrict",
+        check_company = true,
         string = "Scrap Location"
     )]
     pub scrap_location_id: Option<RecId>,
@@ -198,12 +203,8 @@ pub(crate) async fn default_stock_location(
         .map_err(db_err)
 }
 
-/// Find or create the virtual scrap location (`usage = 'inventory'`, named `Scrap`).
-pub(crate) async fn ensure_scrap_location(
-    env: &Env,
-    tx: &mut Transaction,
-    company_id: i64,
-) -> Result<i64> {
+/// Read an existing virtual scrap location (`usage = 'inventory'`, named `Scrap`) without writing.
+async fn find_scrap_location(tx: &mut Transaction, company_id: i64) -> Result<Option<i64>> {
     let rows = tx
         .query(
             "SELECT id::int8 FROM stock_location \
@@ -214,8 +215,20 @@ pub(crate) async fn ensure_scrap_location(
             &[&company_id],
         )
         .await?;
-    if let Some(row) = rows.first() {
-        return row.try_get(0).map_err(db_err);
+    rows.first()
+        .map(|row| row.try_get(0))
+        .transpose()
+        .map_err(db_err)
+}
+
+/// Find or create the virtual scrap location (`usage = 'inventory'`, named `Scrap`).
+pub(crate) async fn ensure_scrap_location(
+    env: &Env,
+    tx: &mut Transaction,
+    company_id: i64,
+) -> Result<i64> {
+    if let Some(existing) = find_scrap_location(tx, company_id).await? {
+        return Ok(existing);
     }
     let mut vals = RawVals::new();
     vals.insert("name".into(), Cell::Str("Scrap".into()));
@@ -235,27 +248,9 @@ pub(crate) async fn ensure_scrap_location(
 }
 
 async fn next_scrap_name(env: &Env, tx: &mut Transaction, company_id: i64) -> Result<String> {
-    let seq_env = env.with_company(company_id)?.sudo(true);
-    let seqs = seq_env.records("ir.sequence")?;
-    if let Ok(Value::Str(code)) = seqs
-        .call::<_, Value>(tx, "next_by_code", ("stock.scrap".to_owned(),))
-        .await
-        && !code.is_empty()
-    {
-        return Ok(code.to_string());
-    }
-    let rows = tx
-        .query(
-            "SELECT COALESCE(max(id), 0)::int8 + 1 FROM stock_scrap",
-            &[],
-        )
-        .await?;
-    let next: i64 = rows
-        .first()
-        .ok_or_else(|| Error::internal("Scrap sequence fallback returned no row."))?
-        .try_get(0)
-        .map_err(db_err)?;
-    Ok(format!("SP/{next:05}"))
+    let company = CompanyId::new(company_id)?;
+    let today = env.context_today()?;
+    draw_by_code(tx, &env.sudo(true), "stock.scrap", company, Some(today)).await
 }
 
 #[methods(StockScrap, addon = "stock")]
@@ -285,8 +280,8 @@ impl StockScrap {
             }
             if fields.iter().any(|f| f == "scrap_location_id")
                 && !out.contains_key("scrap_location_id")
+                && let Some(scrap_loc) = find_scrap_location(tx, cid).await?
             {
-                let scrap_loc = ensure_scrap_location(env, tx, cid).await?;
                 out.insert("scrap_location_id".into(), Value::Int(scrap_loc));
             }
         }
@@ -357,6 +352,43 @@ impl StockScrap {
             }
         }
         sup.call(tx, this.as_records(), (vals_list,)).await
+    }
+
+    #[method(override)]
+    async fn write(
+        this: &RecordSet<StockScrap>,
+        tx: &mut Transaction,
+        vals: RawVals,
+        sup: Super,
+    ) -> Result<()> {
+        for forbidden in ["state", "move_id", "date_done"] {
+            if vals.contains(forbidden) {
+                return Err(Error::validation(format!(
+                    "Field '{forbidden}' on a scrap order cannot be written directly."
+                )));
+            }
+        }
+        let ids = this.ids();
+        if !ids.is_empty() {
+            tx.flush().await?;
+            let rows = tx
+                .query(
+                    "SELECT count(*)::int8 FROM stock_scrap WHERE id = ANY($1) AND state = 'done'",
+                    &[&ids],
+                )
+                .await?;
+            let done_count: i64 = rows
+                .first()
+                .ok_or_else(|| Error::internal("Scrap state check returned no row."))?
+                .try_get(0)
+                .map_err(db_err)?;
+            if done_count > 0 {
+                return Err(Error::validation(
+                    "Validated scrap orders cannot be modified.",
+                ));
+            }
+        }
+        sup.call(tx, this.as_records(), (vals,)).await
     }
 
     #[method(override)]
@@ -447,11 +479,6 @@ impl StockScrap {
                             "You need to specify a Serial Number before validating this scrap.",
                         ));
                     }
-                    Some("serial") if scrap_qty != Decimal::ONE => {
-                        return Err(Error::user(
-                            "A serial-tracked product must be scrapped in quantity 1.",
-                        ));
-                    }
                     _ => {}
                 }
 
@@ -522,7 +549,16 @@ impl StockScrap {
                         &[&line_id],
                     )
                     .await?;
-                let qty_product_uom: Decimal = qty_row[0].try_get(0).map_err(db_err)?;
+                let qty_product_uom: Decimal = qty_row
+                    .first()
+                    .ok_or_else(|| Error::internal("Scrap move line not found after create."))?
+                    .try_get(0)
+                    .map_err(db_err)?;
+                if tracking.as_deref() == Some("serial") && qty_product_uom != Decimal::ONE {
+                    return Err(Error::user(format!(
+                        "A serial-tracked product must be scrapped in quantity 1 (base unit quantity was {qty_product_uom})."
+                    )));
+                }
 
                 if is_storable && !qty_product_uom.is_zero() {
                     let src_key = QuantKey::new(company_id, product_id, location_id)
@@ -602,7 +638,10 @@ impl StockPicking {
                 .await?;
             for (key, quantity) in groups.column(0).iter().zip(groups.column(1)) {
                 if let (Some(id), GroupValue::Int(count)) = (key.record_id(), quantity) {
-                    counts.insert(id.get(), i32::try_from(*count).unwrap_or(i32::MAX));
+                    let count_i32 = i32::try_from(*count).map_err(|_| {
+                        Error::invariant(format!("Scrap count {count} exceeds i32 range."))
+                    })?;
+                    counts.insert(id.get(), count_i32);
                 }
             }
         }

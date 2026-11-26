@@ -369,6 +369,7 @@ export function createHtmlEditor(options: HtmlEditorOptions): HtmlEditorHandle {
   stops.push(() => { window.removeEventListener("scroll", reflow, true); window.removeEventListener("resize", reflow); });
   const focusToolbar = (): void => { toolbar.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus(); };
   listen(toolbar, "keydown", event => {
+    if (!(event instanceof KeyboardEvent)) return;
     const buttons = [...toolbar.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")], at = buttons.indexOf(document.activeElement as HTMLButtonElement);
     if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (staged) restoreSelection(editable, staged); editable.focus(); return; }
     const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
@@ -376,7 +377,7 @@ export function createHtmlEditor(options: HtmlEditorOptions): HtmlEditorHandle {
     else if (event.key === "Home" || event.key === "End") { event.preventDefault(); buttons[event.key === "Home" ? 0 : buttons.length - 1]?.focus(); }
   });
   listen(editable, "keydown", event => {
-    if (dead || options.readonly || options.disabled || composition || event.isComposing || event.keyCode === 229) return;
+    if (!(event instanceof KeyboardEvent) || dead || options.readonly || options.disabled || composition || event.isComposing || event.keyCode === 229) return;
     if (slashOpen) {
       const open = slashOpen, move = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
       if (move) { event.preventDefault(); open.index = (open.index + move + open.matches.length) % open.matches.length; renderSlash(); return; }

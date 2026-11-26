@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! Multi-company integration tests for ERPForAll's 4 enterprise financial pillars:
-//! 1. Feature toggles in Accounting Settings (SME/UMKM default-off light groups)
+//! Multi-company integration tests for ERPForAll's 4 controlling & consolidation pillars:
+//! 1. Feature toggles in Accounting Settings (default-off light groups)
 //! 2. Multi-company Cost Center Controlling, Locks, Validity & SKF Allocations
 //! 3. Multi-company Asset CIP Accumulation, Multi-Receiver Settlement & Reversal
 //! 4. Multi-company Advanced Budgeting, Real-Time AVC, Workbench Amendments & Commitments
@@ -96,6 +96,11 @@ async fn ensure_currency(tx: &mut Transaction, code: &str, symbol: &str) -> i64 
     {
         return row.get(0);
     }
+    let rounding = match code {
+        "IDR" | "JPY" | "KRW" => Decimal::ONE,
+        "KWD" | "BHD" | "OMR" => Decimal::new(1, 3),
+        _ => Decimal::new(1, 2),
+    };
     tx.env()
         .records("res.currency")
         .unwrap()
@@ -105,7 +110,7 @@ async fn ensure_currency(tx: &mut Transaction, code: &str, symbol: &str) -> i64 
                 RawVals::new()
                     .set_cell("name", Cell::Str(code.into()))
                     .set_cell("symbol", Cell::Str(symbol.into()))
-                    .set_cell("rounding", Cell::Decimal(Decimal::new(1, 2)))
+                    .set_cell("rounding", Cell::Decimal(rounding))
                     .set_cell("active", Cell::Bool(true)),
             ],
         )
@@ -228,7 +233,7 @@ async fn feature_toggles_are_light_groups_declared_in_accounting_settings() {
     let h = harness().await;
     let mut tx = h.begin().await.unwrap();
 
-    // 1. All 4 enterprise feature groups are registered as light groups in ResGroups.
+    // 1. All 4 controlling feature groups are registered as light groups in ResGroups.
     let light_groups: Vec<String> = tx
         .env()
         .records("res.groups")
@@ -1440,7 +1445,7 @@ async fn multicompany_multicurrency_consolidation_cta_ic_elimination_and_nci() {
     let rt_hist = ensure_rate_type(&mut tx, "historical", "Historical").await;
     let _rt_spot = ensure_rate_type(&mut tx, "spot", "Spot").await;
 
-    let parent_co = make_company(&mut tx, "IndoERP Holding USD", usd).await;
+    let parent_co = make_company(&mut tx, "Apex Holding USD", usd).await;
     let sub_co = make_company(&mut tx, "PT Nusantara Subsidiary IDR", idr).await;
 
     // Tag Trading Partners on both companies' partners.
@@ -1716,7 +1721,7 @@ async fn multicompany_multicurrency_consolidation_cta_ic_elimination_and_nci() {
             &mut tx,
             vec![
                 RawVals::new()
-                    .set_cell("name", Cell::Str("IndoERP Group".into()))
+                    .set_cell("name", Cell::Str("Apex Group".into()))
                     .set_cell("code", Cell::Str("GRP-TEST".into()))
                     .set_cell("currency_id", Cell::Id(usd))
                     .set_cell("closing_rate_type_code", Cell::Str("closing".into()))
@@ -1726,6 +1731,7 @@ async fn multicompany_multicurrency_consolidation_cta_ic_elimination_and_nci() {
                     )
                     .set_cell("historical_rate_type_code", Cell::Str("historical".into()))
                     .set_cell("fallback_to_spot", Cell::Bool(true))
+                    .set_cell("ic_tolerance", Cell::Decimal(dec("100.00")))
                     .set_commands(
                         "unit_ids",
                         vec![

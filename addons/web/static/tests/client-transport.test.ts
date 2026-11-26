@@ -1,11 +1,23 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import { expect, test, vi } from "vitest";
-import { RpcClient, ClientError, refusedFields } from "../src/client/transport.js";
+import { RpcClient, ClientError, newRequestId, refusedFields } from "../src/client/transport.js";
 import { RecordState } from "../src/client/record.js";
 import type { Field } from "../src/client/metadata.js";
 import { parseRoute, routeUrl } from "../src/client/route.js";
 
 const recordFields: Field[] = [{ name: "name", kind: "char", label: "Name", readonly: false, required: true, selection: null, relation: null, relationField: null }];
+
+test("newRequestId generates a valid v4 UUID via getRandomValues when randomUUID is absent", () => {
+  const realCrypto = globalThis.crypto;
+  const fallbackCrypto = { getRandomValues: (arr: Uint8Array) => realCrypto.getRandomValues(arr) };
+  vi.stubGlobal("crypto", fallbackCrypto);
+  try {
+    const id = newRequestId();
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
 
 test("JSON2 sends same-origin cookies and returns the unwrapped method value", async () => {
   const fetcher = vi.fn(async () => new Response('{"records":[],"length":0}', { headers: { "Content-Type": "application/json" } }));

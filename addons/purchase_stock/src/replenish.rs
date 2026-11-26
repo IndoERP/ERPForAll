@@ -3,9 +3,9 @@
 use erp_addon_product::{SellerInfo, SellerQuery};
 use erp_addon_stock::position::{PositionMeasure, PositionRequest, PositionScope, stock_position};
 use erp_addon_stock::{StockRule, StockWarehouseOrderpoint};
+use erp_sdk::Operation;
 use erp_sdk::prelude::*;
 use erp_sdk::serde_json::json;
-use erp_sdk::{Context, Operation};
 
 #[extend(StockRule, addon = "purchase_stock")]
 struct PurchaseRule {
@@ -112,7 +112,7 @@ async fn replenish(tx: &mut Transaction, point: &Records) -> Result<Value> {
     {
         return Err(Error::access("Select the reordering rule's company."));
     }
-    let env = caller.with_context_replaced(Context::new().with_company_id(company));
+    let env = caller.with_company(company)?;
     let orders = env.records("purchase.order")?;
     orders.check_access(tx, Operation::Create).await?;
     env.records("purchase.order.line")?
@@ -361,6 +361,6 @@ async fn open_rfq(tx: &mut Transaction, order: &Records) -> Result<Value> {
     };
     let view: i64 = row.try_get(0).map_err(db)?;
     Ok(Value::Json(Arc::new(
-        json!({"type":"ir.actions.act_window","name":"Request for Quotation","res_model":"purchase.order","res_id":order.ensure_one()?.int()?,"views":[[view,"form"]],"target":"new"}),
+        json!({"type":"ir.actions.act_window","name":"Request for Quotation","res_model":"purchase.order","res_id":order.ensure_one()?.int()?,"views":[[view,"form"]],"target":"current"}),
     )))
 }

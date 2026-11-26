@@ -245,7 +245,6 @@ struct AccountingCompany {
             ("out_and_in_invoices", "Customer Invoices and Vendor Bills")
         ],
         default = "none",
-        required = true,
         string = "Quick Encoding"
     )]
     pub quick_edit_mode: Option<Arc<str>>,

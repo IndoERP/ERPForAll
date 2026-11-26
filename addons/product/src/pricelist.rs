@@ -279,6 +279,77 @@ impl ProductPricelistItem {
         }
         sup.call(tx, this.as_records(), (vals,)).await
     }
+
+    #[constrains(
+        "base",
+        "base_pricelist_id",
+        "pricelist_id",
+        "price_round",
+        "price_min_margin",
+        "price_max_margin",
+        "date_start",
+        "date_end"
+    )]
+    async fn _check_rule_invariants(
+        this: &RecordSet<ProductPricelistItem>,
+        tx: &mut Transaction,
+    ) -> Result<()> {
+        let bases = this.mapped(tx, ProductPricelistItem::BASE).await?;
+        let base_pls = this
+            .mapped(tx, ProductPricelistItem::BASE_PRICELIST_ID)
+            .await?;
+        let pls = this.mapped(tx, ProductPricelistItem::PRICELIST_ID).await?;
+        let rounds = this.mapped(tx, ProductPricelistItem::PRICE_ROUND).await?;
+        let min_margins = this
+            .mapped(tx, ProductPricelistItem::PRICE_MIN_MARGIN)
+            .await?;
+        let max_margins = this
+            .mapped(tx, ProductPricelistItem::PRICE_MAX_MARGIN)
+            .await?;
+        let starts = this.mapped(tx, ProductPricelistItem::DATE_START).await?;
+        let ends = this.mapped(tx, ProductPricelistItem::DATE_END).await?;
+
+        for i in 0..this.len() {
+            if rounds[i] < Decimal::ZERO {
+                return Err(Error::validation(
+                    "Pricelist rounding precision cannot be negative.",
+                ));
+            }
+            if min_margins[i] < Decimal::ZERO || max_margins[i] < Decimal::ZERO {
+                return Err(Error::validation(
+                    "Pricelist minimum and maximum margins cannot be negative.",
+                ));
+            }
+            if min_margins[i] > Decimal::ZERO
+                && max_margins[i] > Decimal::ZERO
+                && min_margins[i] > max_margins[i]
+            {
+                return Err(Error::validation(
+                    "Pricelist minimum margin cannot exceed maximum margin.",
+                ));
+            }
+            if let (Some(s), Some(e)) = (starts[i], ends[i])
+                && s > e
+            {
+                return Err(Error::validation(
+                    "Pricelist rule start date cannot be after end date.",
+                ));
+            }
+            if bases[i].as_deref() == Some("pricelist") {
+                let Some(base_pl) = base_pls[i] else {
+                    return Err(Error::validation(
+                        "Choose a base pricelist when 'Based on' is set to Other Pricelist.",
+                    ));
+                };
+                if pls[i] == Some(base_pl) {
+                    return Err(Error::validation(
+                        "A pricelist rule cannot reference its own pricelist as the base pricelist.",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
@@ -343,54 +414,76 @@ impl ProductPricelist {
 
         let d1 = Domain::condition("pricelist_id", Operator::Eq, pricelist_id)?;
         let items = item_model.search(tx, &d1).await?;
+        if items.is_empty() {
+            return Ok(None);
+        }
+
+        // Batch-load all rule columns upfront instead of N+1 per-item reads.
+        let min_qtys = items.cells(tx, "min_quantity").await?;
+        let date_starts = items.cells(tx, "date_start").await?;
+        let date_ends = items.cells(tx, "date_end").await?;
+        let applied_ons = items.cells(tx, "applied_on").await?;
+        let rule_prods = items.cells(tx, "product_id").await?;
+        let rule_tmpls = items.cells(tx, "product_tmpl_id").await?;
+        let rule_cats = items.cells(tx, "categ_id").await?;
+
+        let mut prod_cat_path: Option<String> = None;
+        let mut rule_cat_paths = std::collections::BTreeMap::<i64, String>::new();
 
         let mut best_item: Option<Records> = None;
-        for item_rec_id in items.rec_ids() {
-            let item = item_model.browse(vec![item_rec_id.get()])?;
-            let min_qty = cell_decimal(item.cell(tx, "min_quantity").await?, "min_quantity")?;
+        for (idx, item_rec_id) in items.rec_ids().iter().enumerate() {
+            let min_qty = cell_decimal(min_qtys[idx].clone(), "min_quantity")?;
             if min_qty > quantity {
                 continue;
             }
 
             if let Some(target_date) = date {
-                if let Cell::DateTime(start) = item.cell(tx, "date_start").await?
+                if let Cell::DateTime(start) = date_starts[idx]
                     && target_date < start
                 {
                     continue;
                 }
-                if let Cell::DateTime(end) = item.cell(tx, "date_end").await?
+                if let Cell::DateTime(end) = date_ends[idx]
                     && target_date > end
                 {
                     continue;
                 }
             }
 
-            let applied_on = cell_str(item.cell(tx, "applied_on").await?, "applied_on")?;
+            let applied_on = cell_str(applied_ons[idx].clone(), "applied_on")?;
             let matched = match applied_on.as_str() {
                 "0_product_variant" => {
-                    cell_id(item.cell(tx, "product_id").await?, "product_id")? == Some(product_id)
+                    cell_id(rule_prods[idx].clone(), "product_id")? == Some(product_id)
                 }
                 "1_product" => {
-                    cell_id(item.cell(tx, "product_tmpl_id").await?, "product_tmpl_id")?
-                        == Some(tmpl_id)
+                    cell_id(rule_tmpls[idx].clone(), "product_tmpl_id")? == Some(tmpl_id)
                 }
                 "2_product_category" => {
-                    match (
-                        cell_id(item.cell(tx, "categ_id").await?, "categ_id")?,
-                        categ_id,
-                    ) {
+                    match (cell_id(rule_cats[idx].clone(), "categ_id")?, categ_id) {
                         (Some(rule_cat), Some(prod_cat_id)) if rule_cat == prod_cat_id => true,
                         (Some(rule_cat), Some(prod_cat_id)) => {
                             let cat_model = this.env().records("product.category")?;
-                            let prod_cat = cat_model.browse(vec![prod_cat_id])?;
-                            let rule_cat_rec = cat_model.browse(vec![rule_cat])?;
-                            let p_path =
-                                cell_str(prod_cat.cell(tx, "parent_path").await?, "parent_path")?;
-                            let r_path = cell_str(
-                                rule_cat_rec.cell(tx, "parent_path").await?,
-                                "parent_path",
-                            )?;
-                            !r_path.is_empty() && p_path.starts_with(&r_path)
+                            if prod_cat_path.is_none() {
+                                let prod_cat = cat_model.browse(vec![prod_cat_id])?;
+                                prod_cat_path = Some(cell_str(
+                                    prod_cat.cell(tx, "parent_path").await?,
+                                    "parent_path",
+                                )?);
+                            }
+                            let r_path = match rule_cat_paths.get(&rule_cat) {
+                                Some(cached) => cached.as_str(),
+                                None => {
+                                    let rule_cat_rec = cat_model.browse(vec![rule_cat])?;
+                                    let p = cell_str(
+                                        rule_cat_rec.cell(tx, "parent_path").await?,
+                                        "parent_path",
+                                    )?;
+                                    rule_cat_paths.insert(rule_cat, p);
+                                    rule_cat_paths[&rule_cat].as_str()
+                                }
+                            };
+                            let p_path = prod_cat_path.as_deref().unwrap_or("");
+                            !r_path.is_empty() && p_path.starts_with(r_path)
                         }
                         _ => false,
                     }
@@ -404,7 +497,7 @@ impl ProductPricelist {
             };
 
             if matched {
-                best_item = Some(item);
+                best_item = Some(item_model.browse(vec![item_rec_id.get()])?);
                 break;
             }
         }
@@ -434,12 +527,13 @@ impl ProductPricelist {
             )?;
             let company_id = match pl_company {
                 Some(c) => c,
-                None => env.company_id()?.unwrap_or(1),
+                None => crate::defaults::env_company_id(env, "the pricelist currency conversion")?,
             };
             let company_currency = company_currency_id(tx, env, company_id).await?;
-            let rate_day = date
-                .map(|dt| Date::from_days((dt.micros() / 86_400_000_000) as i32))
-                .unwrap_or_else(Date::today);
+            let rate_day = match date {
+                Some(dt) => Date::context_today_at(env.tz(), dt)?,
+                None => env.context_today()?,
+            };
 
             let lst_price_raw = cell_decimal(prod.cell(tx, "lst_price").await?, "lst_price")?;
             let lst_price = match target_currency {
@@ -581,9 +675,9 @@ impl ProductPricelist {
                         cell_decimal(item.cell(tx, "price_min_margin").await?, "price_min_margin")?;
                     let max_margin =
                         cell_decimal(item.cell(tx, "price_max_margin").await?, "price_max_margin")?;
-                    Ok(apply_pricelist_formula(
+                    try_apply_pricelist_formula(
                         base_price, discount, round, surcharge, min_margin, max_margin,
-                    ))
+                    )
                 }
                 other => Err(Error::programming(format!(
                     "pricelist item has unknown compute_price '{other}'"
@@ -613,6 +707,47 @@ async fn convert_currency(
     erp_addon_base::money::convert(env, tx, amount, from, to, comp, date).await
 }
 
+/// Checked exact-decimal pricelist formula: discount/markup, rounding multiple, surcharge,
+/// and min/max margin clamping. Fails loudly on overflow instead of panicking.
+pub fn try_apply_pricelist_formula(
+    base_price: Decimal,
+    discount_pct: Decimal,
+    price_round: Decimal,
+    price_surcharge: Decimal,
+    min_margin: Decimal,
+    max_margin: Decimal,
+) -> Result<Decimal> {
+    let overflow = || Error::validation("Pricelist price calculation overflowed.");
+    let discount_ratio = discount_pct
+        .checked_div(Decimal::from(100))
+        .ok_or_else(overflow)?;
+    let discount_amt = base_price
+        .checked_mul(discount_ratio)
+        .ok_or_else(overflow)?;
+    let mut price = base_price.checked_sub(discount_amt).ok_or_else(overflow)?;
+    if price_round > Decimal::ZERO {
+        let steps = price.checked_div(price_round).ok_or_else(overflow)?;
+        price = steps
+            .round_dp_with_strategy(0, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
+            .checked_mul(price_round)
+            .ok_or_else(overflow)?;
+    }
+    price = price.checked_add(price_surcharge).ok_or_else(overflow)?;
+    if min_margin > Decimal::ZERO {
+        let floor = base_price.checked_add(min_margin).ok_or_else(overflow)?;
+        if price < floor {
+            price = floor;
+        }
+    }
+    if max_margin > Decimal::ZERO {
+        let ceil = base_price.checked_add(max_margin).ok_or_else(overflow)?;
+        if price > ceil {
+            price = ceil;
+        }
+    }
+    Ok(price)
+}
+
 /// Pure exact-decimal pricelist formula: discount/markup, rounding multiple, surcharge,
 /// and min/max margin clamping.
 pub fn apply_pricelist_formula(
@@ -623,20 +758,15 @@ pub fn apply_pricelist_formula(
     min_margin: Decimal,
     max_margin: Decimal,
 ) -> Decimal {
-    let mut price = base_price - (base_price * (discount_pct / Decimal::from(100)));
-    if price_round > Decimal::ZERO {
-        price = (price / price_round)
-            .round_dp_with_strategy(0, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
-            * price_round;
-    }
-    price += price_surcharge;
-    if min_margin > Decimal::ZERO && price < base_price + min_margin {
-        price = base_price + min_margin;
-    }
-    if max_margin > Decimal::ZERO && price > base_price + max_margin {
-        price = base_price + max_margin;
-    }
-    price
+    try_apply_pricelist_formula(
+        base_price,
+        discount_pct,
+        price_round,
+        price_surcharge,
+        min_margin,
+        max_margin,
+    )
+    .unwrap_or(base_price)
 }
 
 #[cfg(test)]

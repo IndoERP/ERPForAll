@@ -1445,3 +1445,264 @@ async fn a_branch_uses_the_receivable_account_of_its_parent_company() {
     tx.rollback().await.unwrap();
     h.cleanup().await.unwrap();
 }
+
+#[tokio::test]
+async fn live_onchange_computes_draft_invoice_line_and_header_totals_before_save() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    let b = books(&mut tx, "Live Onchange Co").await;
+    let env = tx.env().with_company(b.company).unwrap();
+    let currency = match env
+        .records("res.company")
+        .unwrap()
+        .browse([b.company])
+        .unwrap()
+        .cell(&mut tx, "currency_id")
+        .await
+        .unwrap()
+    {
+        Cell::Id(id) => id,
+        other => panic!("company currency is {other:?}"),
+    };
+    let uom: i64 = tx
+        .query(
+            "INSERT INTO uom_uom (name, active, relative_factor, factor, sequence) \
+             VALUES (jsonb_build_object('en_US', 'Units'), true, 1, 1, 1) RETURNING id::int8",
+            &[],
+        )
+        .await
+        .unwrap()[0]
+        .get(0);
+    let tmpl: i64 = tx
+        .query(
+            "INSERT INTO product_template (name, active, type, uom_id, list_price) \
+             VALUES (jsonb_build_object('en_US', 'Consulting'), true, 'service', $1, 100) \
+             RETURNING id::int8",
+            &[&uom],
+        )
+        .await
+        .unwrap()[0]
+        .get(0);
+    let prod: i64 = tx
+        .query(
+            "INSERT INTO product_product (product_tmpl_id, active, standard_price, lst_price) \
+             VALUES ($1, true, 50, 100) RETURNING id::int8",
+            &[&tmpl],
+        )
+        .await
+        .unwrap()[0]
+        .get(0);
+    tx.execute(
+        "INSERT INTO product_taxes_rel (prod_id, tax_id) VALUES ($1, $2)",
+        &[&tmpl, &b.sale_tax],
+    )
+    .await
+    .unwrap();
+
+    let obj = |entries: Vec<(&str, Value)>| -> Value {
+        let mut map = erp_sdk::ValueMap::new();
+        for (k, v) in entries {
+            map.insert(k.to_owned(), v);
+        }
+        Value::Map(std::sync::Arc::new(map))
+    };
+
+    // 1. Line onchange on an unsaved invoice line with a virtual unsaved `account.move` parent.
+    let line_spec = obj(vec![
+        ("name", obj(vec![])),
+        ("product_uom_id", obj(vec![])),
+        ("account_id", obj(vec![])),
+        ("price_unit", obj(vec![])),
+        ("tax_ids", obj(vec![])),
+        ("price_subtotal", obj(vec![])),
+        ("price_total", obj(vec![])),
+    ]);
+    let parent_dict = obj(vec![
+        ("id", Value::False),
+        ("move_type", Value::str("out_invoice")),
+        ("company_id", Value::Int(b.company)),
+        ("currency_id", Value::Int(currency)),
+        ("journal_id", Value::Int(b.sale)),
+        ("partner_id", Value::Int(b.customer)),
+    ]);
+
+    let res = env
+        .records("account.move.line")
+        .unwrap()
+        .web_call(
+            &mut tx,
+            "onchange",
+            &obj(vec![
+                (
+                    "values",
+                    obj(vec![
+                        ("move_id", parent_dict.clone()),
+                        ("display_type", Value::str("product")),
+                        ("product_id", Value::Int(prod)),
+                        ("quantity", Value::Decimal(d("2"))),
+                    ]),
+                ),
+                ("field_names", Value::list([Value::str("product_id")])),
+                ("fields_spec", line_spec.clone()),
+            ]),
+        )
+        .await
+        .unwrap();
+    let lval = res.dict().unwrap().get("value").unwrap();
+    let lmap = lval.dict().unwrap();
+    assert_eq!(lmap.get("name").unwrap(), Value::str("Consulting"));
+    assert_eq!(lmap.get("product_uom_id").unwrap(), Value::Int(uom));
+    assert_eq!(lmap.get("account_id").unwrap(), Value::Int(b.income));
+    assert_eq!(lmap.get("price_unit").unwrap(), Value::Decimal(d("100")));
+    assert_eq!(
+        lmap.get("price_subtotal").unwrap(),
+        Value::Decimal(d("200"))
+    );
+    assert_eq!(lmap.get("price_total").unwrap(), Value::Decimal(d("230")));
+
+    // Editing quantity + discount refreshes line amounts immediately.
+    let res = env
+        .records("account.move.line")
+        .unwrap()
+        .web_call(
+            &mut tx,
+            "onchange",
+            &obj(vec![
+                (
+                    "values",
+                    obj(vec![
+                        ("move_id", parent_dict),
+                        ("display_type", Value::str("product")),
+                        ("product_id", Value::Int(prod)),
+                        ("quantity", Value::Decimal(d("4"))),
+                        ("price_unit", Value::Decimal(d("100"))),
+                        ("discount", Value::Decimal(d("10"))),
+                        (
+                            "tax_ids",
+                            Value::list([Value::list([
+                                Value::Int(6),
+                                Value::Int(0),
+                                Value::list([Value::Int(b.sale_tax)]),
+                            ])]),
+                        ),
+                        ("price_subtotal", Value::Decimal(d("200"))),
+                        ("price_total", Value::Decimal(d("230"))),
+                    ]),
+                ),
+                (
+                    "field_names",
+                    Value::list([Value::str("quantity"), Value::str("discount")]),
+                ),
+                ("fields_spec", line_spec),
+            ]),
+        )
+        .await
+        .unwrap();
+    let lval = res.dict().unwrap().get("value").unwrap();
+    let lmap = lval.dict().unwrap();
+    // 4 * 100 * 0.9 = 360 subtotal, 15% tax = 54, total = 414
+    assert_eq!(
+        lmap.get("price_subtotal").unwrap(),
+        Value::Decimal(d("360"))
+    );
+    assert_eq!(lmap.get("price_total").unwrap(), Value::Decimal(d("414")));
+
+    // 2. Invoice header onchange computes untaxed, tax, total, residual and due date before Save.
+    let inv_spec = obj(vec![
+        ("amount_untaxed", obj(vec![])),
+        ("amount_tax", obj(vec![])),
+        ("amount_total", obj(vec![])),
+        ("amount_residual", obj(vec![])),
+        ("invoice_date_due", obj(vec![])),
+    ]);
+    let inv_date = Date::from_ymd(2026, 11, 26).unwrap();
+    let inv_res = env
+        .records("account.move")
+        .unwrap()
+        .web_call(
+            &mut tx,
+            "onchange",
+            &obj(vec![
+                (
+                    "values",
+                    obj(vec![
+                        ("move_type", Value::str("out_invoice")),
+                        ("state", Value::str("draft")),
+                        ("company_id", Value::Int(b.company)),
+                        ("currency_id", Value::Int(currency)),
+                        ("journal_id", Value::Int(b.sale)),
+                        ("partner_id", Value::Int(b.customer)),
+                        ("invoice_date", Value::Date(inv_date)),
+                        ("amount_untaxed", Value::Decimal(Decimal::ZERO)),
+                        ("amount_tax", Value::Decimal(Decimal::ZERO)),
+                        ("amount_total", Value::Decimal(Decimal::ZERO)),
+                        ("amount_residual", Value::Decimal(Decimal::ZERO)),
+                        (
+                            "invoice_line_ids",
+                            Value::list([Value::list([
+                                Value::Int(0),
+                                Value::str("line_1"),
+                                obj(vec![
+                                    ("display_type", Value::str("product")),
+                                    ("name", Value::str("Consulting")),
+                                    ("account_id", Value::Int(b.income)),
+                                    ("quantity", Value::Decimal(d("2"))),
+                                    ("price_unit", Value::Decimal(d("100"))),
+                                    ("discount", Value::Decimal(Decimal::ZERO)),
+                                    (
+                                        "tax_ids",
+                                        Value::list([Value::list([
+                                            Value::Int(6),
+                                            Value::Int(0),
+                                            Value::list([Value::Int(b.sale_tax)]),
+                                        ])]),
+                                    ),
+                                ]),
+                            ])]),
+                        ),
+                    ]),
+                ),
+                ("field_names", Value::list([Value::str("invoice_line_ids")])),
+                ("fields_spec", inv_spec),
+            ]),
+        )
+        .await
+        .unwrap();
+    let ival = inv_res.dict().unwrap().get("value").unwrap();
+    let imap = ival.dict().unwrap();
+    assert_eq!(
+        imap.get("amount_untaxed").unwrap(),
+        Value::Decimal(d("200"))
+    );
+    assert_eq!(imap.get("amount_tax").unwrap(), Value::Decimal(d("30")));
+    assert_eq!(imap.get("amount_total").unwrap(), Value::Decimal(d("230")));
+    assert_eq!(
+        imap.get("amount_residual").unwrap(),
+        Value::Decimal(d("230"))
+    );
+    assert_eq!(imap.get("invoice_date_due").unwrap(), Value::Date(inv_date));
+
+    // SYNC_OWNED_FIELDS are still refused on real persistence writes.
+    let err = tx
+        .savepoint(async |tx| {
+            moves(tx, b.company)
+                .create(
+                    tx,
+                    vec![
+                        invoice(
+                            "out_invoice",
+                            b.customer,
+                            vec![product_line("1", "10", "0", &[])],
+                        )
+                        .set_cell("amount_total", Cell::Decimal(d("999"))),
+                    ],
+                )
+                .await
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::UserError);
+
+    tx.rollback().await.unwrap();
+    h.cleanup().await.unwrap();
+}

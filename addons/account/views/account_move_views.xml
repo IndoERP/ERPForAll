@@ -27,7 +27,7 @@
         <header>
           <button name="action_post" type="object" string="Post" class="oe_highlight" invisible="state != 'draft'"/>
           <button name="action_reverse" type="object" string="Reverse Entry" invisible="state != 'posted'"/>
-          <button name="button_draft" type="object" string="Reset to Draft" invisible="state == 'draft'"/>
+          <button name="button_draft" type="object" string="Reset to Draft" invisible="reset_blocked"/>
           <button name="button_cancel" type="object" string="Cancel" invisible="state != 'draft'"/>
           <field name="state" widget="statusbar" statusbar_visible="draft,posted"/>
         </header>
@@ -44,6 +44,7 @@
           <!-- a posted or cancelled entry keeps only its reference editable, as the server does -->
           <group>
             <group>
+              <field name="reset_blocked" invisible="1"/>
               <field name="move_type" invisible="1" readonly="state != 'draft'"/>
               <field name="date" readonly="state != 'draft'"/>
               <field name="journal_id" readonly="state != 'draft'"/>
@@ -116,6 +117,7 @@
         <field name="account_id"/>
         <field name="partner_id"/>
         <field name="name"/>
+        <field name="analytic_account_id" groups="account.group_cost_center_controlling"/>
         <field name="tax_ids" widget="many2many_tags"/>
         <field name="currency_id" invisible="1"/>
         <field name="debit"/>
@@ -136,6 +138,8 @@
             <group>
               <field name="account_id" readonly="parent_state in ('posted', 'cancel')"/>
               <field name="partner_id" readonly="parent_state in ('posted', 'cancel')"/>
+              <field name="analytic_account_id" groups="account.group_cost_center_controlling" readonly="parent_state in ('posted', 'cancel')"/>
+              <field name="trading_partner_company_id" groups="account.group_group_consolidation" readonly="parent_state in ('posted', 'cancel')"/>
               <field name="name"/>
               <field name="display_type" readonly="parent_state in ('posted', 'cancel')"/>
               <field name="date_maturity"/>

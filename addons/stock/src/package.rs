@@ -3,7 +3,8 @@
 //! quants and child packages (`complete_name`, `location_id`, `company_id`) and the name sequence
 //! default are's.
 
-use erp_sdk::{Operation, prelude::*};
+use erp_sdk::sequence::draw_by_code;
+use erp_sdk::{CompanyId, Operation, ValueMap, prelude::*};
 
 use crate::picking::StockPicking;
 
@@ -65,12 +66,8 @@ pub struct StockPackage {
     #[field(float, digits = "Stock Weight", string = "Shipping Weight")]
     pub shipping_weight: Decimal,
     /// Date the package was packed.
-    #[field(date, default_fn = default_today, string = "Pack Date")]
+    #[field(date, string = "Pack Date")]
     pub pack_date: Option<Date>,
-}
-
-fn default_today(_ctx: &erp_sdk::DefaultContext) -> Value {
-    Value::Date(Date::today())
 }
 
 fn db_err(e: impl std::error::Error + Send + Sync + 'static) -> Error {
@@ -78,26 +75,45 @@ fn db_err(e: impl std::error::Error + Send + Sync + 'static) -> Error {
 }
 
 async fn next_package_name(env: &Env, tx: &mut Transaction) -> Result<String> {
-    let seqs = env.sudo(true).records("ir.sequence")?;
-    if let Ok(Value::Str(code)) = seqs
-        .call::<_, Value>(tx, "next_by_code", ("stock.package".to_owned(),))
-        .await
-        && !code.is_empty()
-    {
-        return Ok(code.to_string());
+    let today = env.context_today()?;
+    if let Some(cid) = env.company_id()? {
+        let company = CompanyId::new(cid)?;
+        return draw_by_code(tx, &env.sudo(true), "stock.package", company, Some(today)).await;
     }
     let rows = tx
         .query(
-            "SELECT COALESCE(max(id), 0)::int8 + 1 FROM stock_package",
+            "SELECT nextval(pg_get_serial_sequence('stock_package', 'id'))::int8",
             &[],
         )
         .await?;
-    let next: i64 = rows[0].try_get(0).map_err(db_err)?;
+    let next: i64 = rows
+        .first()
+        .ok_or_else(|| Error::internal("Package sequence returned no row."))?
+        .try_get(0)
+        .map_err(db_err)?;
     Ok(format!("PACK{next:07}"))
 }
 
 #[methods(StockPackage, addon = "stock")]
 impl StockPackage {
+    #[method(override)]
+    async fn default_get(
+        this: &RecordSet<StockPackage>,
+        tx: &mut Transaction,
+        fields: Vec<String>,
+        sup: Super,
+    ) -> Result<ValueMap> {
+        let mut out: ValueMap = sup.call(tx, this.as_records(), (fields.clone(),)).await?;
+        if fields.iter().any(|f| f == "pack_date") && !out.contains_key("pack_date") {
+            let today = match this.env().company_id()? {
+                Some(cid) => erp_addon_base::company_calendar::business_date(tx, cid).await?,
+                None => this.env().context_today()?,
+            };
+            out.insert("pack_date".into(), Value::Date(today));
+        }
+        Ok(out)
+    }
+
     #[method(override)]
     async fn create(
         this: &RecordSet<StockPackage>,
@@ -109,7 +125,10 @@ impl StockPackage {
             .check_access(tx, Operation::Create)
             .await?;
         let env = this.env();
-        let today = Date::today();
+        let today = match env.company_id()? {
+            Some(cid) => erp_addon_base::company_calendar::business_date(tx, cid).await?,
+            None => env.context_today()?,
+        };
         for vals in &mut vals_list {
             let needs_name = match vals.get("name") {
                 None | Some(Cell::Null) => true,
@@ -143,7 +162,10 @@ impl StockPicking {
         tx.savepoint(async move |tx| {
             tx.flush().await?;
             let state_rows = tx
-                .query("SELECT state FROM stock_picking WHERE id = $1", &[&id])
+                .query(
+                    "SELECT state FROM stock_picking WHERE id = $1 FOR UPDATE",
+                    &[&id],
+                )
                 .await?;
             let state: String = state_rows
                 .first()

@@ -2,11 +2,12 @@
 //! Promotions, Loyalty Programs & Coupons (`loyalty.program`, `loyalty.rule`, `loyalty.reward`,
 //! `loyalty.card`, and `sale.loyalty.coupon.wizard`).
 
+use erp_addon_base::money::{CURRENCY_ROUNDING_MODE, RoundingTable};
 use erp_sdk::Operation;
 use erp_sdk::prelude::*;
 use erp_sdk::serde_json::json;
 
-use crate::order::SaleOrder;
+use crate::order::{SaleOrder, strip_default_context};
 
 /// Pure exact-decimal loyalty reward discount calculation.
 /// For `discount_mode == "percent"`, computes `untaxed * discount / 100` (rounded to 2dp).
@@ -29,7 +30,11 @@ pub fn compute_loyalty_reward_discount(
             if discount > Decimal::from(100) {
                 return Err(Error::user("Reward percentage cannot exceed 100%."));
             }
-            Ok((untaxed * discount / Decimal::from(100)).round_dp(2))
+            let raw = untaxed
+                .checked_mul(discount)
+                .and_then(|v| v.checked_div(Decimal::from(100)))
+                .ok_or_else(|| Error::validation("Reward discount calculation overflowed."))?;
+            Ok(raw.round_dp(2))
         }
         "per_order" => Ok(discount.min(untaxed).round_dp(2)),
         other => Err(Error::validation(format!(
@@ -152,20 +157,33 @@ impl LoyaltyProgram {
         tx: &mut Transaction,
         out: &mut Assign<'_, LoyaltyProgram>,
     ) -> Result<()> {
+        tx.flush().await?;
+        let real_ids: Vec<i64> = this
+            .as_records()
+            .rec_ids()
+            .iter()
+            .filter_map(|r| r.as_real().map(|id| id.get()))
+            .collect();
+        let mut counts = std::collections::BTreeMap::<i64, i32>::new();
+        if !real_ids.is_empty() {
+            let rows = tx
+                .query(
+                    "SELECT program_id::int8, count(*)::int4 FROM loyalty_card \
+                     WHERE program_id = ANY($1) GROUP BY program_id",
+                    &[&real_ids],
+                )
+                .await?;
+            for row in rows {
+                let pid: i64 = row.try_get(0).map_err(db)?;
+                let cnt: i32 = row.try_get(1).map_err(db)?;
+                counts.insert(pid, cnt);
+            }
+        }
         for (i, rid) in this.as_records().rec_ids().iter().enumerate() {
-            let cnt = if let Some(real) = rid.as_real() {
-                let rows = tx
-                    .query(
-                        "SELECT count(*)::int4 FROM loyalty_card WHERE program_id = $1",
-                        &[&real.get()],
-                    )
-                    .await?;
-                rows.first()
-                    .and_then(|r| r.try_get::<_, i32>(0).ok())
-                    .unwrap_or(0)
-            } else {
-                0
-            };
+            let cnt = rid
+                .as_real()
+                .and_then(|r| counts.get(&r.get()).copied())
+                .unwrap_or(0);
             out.set(i, LoyaltyProgram::COUPON_COUNT, cnt)?;
         }
         Ok(())
@@ -180,20 +198,26 @@ impl LoyaltyProgram {
     ) -> Result<Value> {
         let prog = this.ensure_one()?;
         prog.as_records().check_access(tx, Operation::Write).await?;
+        let card_model = prog.env().records("loyalty.card")?;
+        card_model.check_access(tx, Operation::Create).await?;
         let pid = prog.as_records().ids()[0];
         let rows = tx
-            .query("SELECT count(*)::int8 + 1 FROM loyalty_card", &[])
+            .query(
+                "SELECT nextval(pg_get_serial_sequence('loyalty_card', 'id'))::int8",
+                &[],
+            )
             .await?;
-        let next: i64 = rows.first().and_then(|r| r.try_get(0).ok()).unwrap_or(1);
+        let next: i64 = rows
+            .first()
+            .ok_or_else(|| Error::invariant("Failed to allocate next loyalty coupon number."))?
+            .try_get(0)
+            .map_err(db)?;
         let code = format!("COUP-{next:05}");
         let mut vals = RawVals::new();
         vals.insert("program_id".into(), Cell::Id(pid));
         vals.insert("code".into(), Cell::Str(code.as_str().into()));
         vals.insert("points".into(), Cell::Decimal(Decimal::ONE));
-        prog.env()
-            .records("loyalty.card")?
-            .create(tx, vec![vals])
-            .await?;
+        card_model.create(tx, vec![vals]).await?;
         tx.invalidate_records(prog.as_records(), Some(&["card_ids", "coupon_count"]))
             .await?;
         Ok(Value::Json(Arc::new(json!({
@@ -377,7 +401,23 @@ pub struct LoyaltyCard {
 }
 
 #[methods(LoyaltyCard, addon = "sale")]
-impl LoyaltyCard {}
+impl LoyaltyCard {
+    #[method(override)]
+    async fn write(
+        this: &RecordSet<LoyaltyCard>,
+        tx: &mut Transaction,
+        vals: RawVals,
+        sup: Super,
+    ) -> Result<()> {
+        let env = this.env();
+        if !env.su() && !tx.has_group(env, crate::LOCK_GROUP).await? {
+            return Err(Error::access(
+                "Only a Sales Administrator can modify coupons or loyalty cards directly.",
+            ));
+        }
+        sup.call(tx, this.as_records(), (vals,)).await
+    }
+}
 
 /// `sale.loyalty.coupon.wizard`: modal dialog to redeem a coupon or promo code on a sales order.
 #[model(
@@ -438,145 +478,275 @@ impl SaleLoyaltyCouponWizard {
             return Err(Error::user("Enter a coupon or promotion code."));
         }
 
-        let env = wizard
-            .env()
-            .with_context_replaced(erp_sdk::Context::default());
+        let env = strip_default_context(wizard.env());
         let order_rec = env.records("sale.order")?.browse([order_id])?;
         order_rec.check_access(tx, Operation::Write).await?;
-        let untaxed = match order_rec.cell(tx, "amount_untaxed").await? {
-            Cell::Decimal(d) => d,
-            _ => Decimal::ZERO,
-        };
-        let company_id = match order_rec.cell(tx, "company_id").await? {
-            Cell::Id(id) => id,
-            _ => 1,
-        };
-        let today = Date::today();
+        let code_owned = code.to_owned();
+        let uid = env.uid();
 
-        // Try matching an active coupon card first, then fall back to a promo rule code.
-        let card_rows = tx
-            .query(
-                "SELECT c.id::int8, c.program_id::int8, COALESCE(c.points, 0), c.expiration_date, \
-                        p.date_from, p.date_to \
-                 FROM loyalty_card c \
-                 JOIN loyalty_program p ON p.id = c.program_id \
-                 WHERE lower(c.code) = lower($1) AND c.active = true AND p.active = true \
-                   AND p.company_id = $2 \
-                 LIMIT 1 FOR UPDATE OF c",
-                &[&code, &company_id],
-            )
+        let (desc, disc_amount) = tx
+            .savepoint(async |tx| {
+                tx.flush().await?;
+                order_rec.lock_for_update(tx, true).await?;
+
+                let state = match order_rec.cell(tx, "state").await? {
+                    Cell::Str(s) => s.to_string(),
+                    other => {
+                        return Err(Error::invariant(format!(
+                            "sale.order.state returned {other:?}"
+                        )));
+                    }
+                };
+                if state != "draft" && state != "sent" {
+                    return Err(Error::user(
+                        "Coupons can only be redeemed on draft or sent quotations.",
+                    ));
+                }
+                if order_rec.cell(tx, "locked").await? == Cell::Bool(true) {
+                    return Err(Error::user(
+                        "This sales order is locked and cannot accept a coupon.",
+                    ));
+                }
+                let untaxed = match order_rec.cell(tx, "amount_untaxed").await? {
+                    Cell::Decimal(d) => d,
+                    Cell::Null => Decimal::ZERO,
+                    other => {
+                        return Err(Error::invariant(format!(
+                            "sale.order.amount_untaxed returned {other:?}"
+                        )));
+                    }
+                };
+                let company_id = match order_rec.cell(tx, "company_id").await? {
+                    Cell::Id(id) => id,
+                    other => {
+                        return Err(Error::invariant(format!(
+                            "Sales order {order_id} has no valid company ({other:?})."
+                        )));
+                    }
+                };
+                let currency_id = match order_rec.cell(tx, "currency_id").await? {
+                    Cell::Id(id) => id,
+                    other => {
+                        return Err(Error::invariant(format!(
+                            "Sales order {order_id} has no valid currency ({other:?})."
+                        )));
+                    }
+                };
+                let order_partner_id = match order_rec.cell(tx, "partner_id").await? {
+                    Cell::Id(id) => Some(id),
+                    Cell::Null => None,
+                    other => {
+                        return Err(Error::invariant(format!(
+                            "sale.order.partner_id returned {other:?}"
+                        )));
+                    }
+                };
+                let qty_rows = tx
+                    .query(
+                        "SELECT COALESCE(SUM(product_uom_qty), 0) FROM sale_order_line \
+                         WHERE order_id = $1 AND display_type IS NULL \
+                           AND NOT COALESCE(is_downpayment, false) AND product_uom_qty > 0",
+                        &[&order_id],
+                    )
+                    .await?;
+                let order_qty: Decimal = qty_rows
+                    .first()
+                    .ok_or_else(|| Error::invariant("Missing sum row for order quantity."))?
+                    .try_get(0)
+                    .map_err(db)?;
+
+                let today = env.context_today()?;
+
+                // Try matching an active coupon card first, then fall back to a promo rule code.
+                let card_rows = tx
+                    .query(
+                        "SELECT c.id::int8, c.program_id::int8, COALESCE(c.points, 0), \
+                                c.expiration_date, c.partner_id::int8, p.date_from, p.date_to \
+                         FROM loyalty_card c \
+                         JOIN loyalty_program p ON p.id = c.program_id \
+                         WHERE lower(c.code) = lower($1) AND c.active = true AND p.active = true \
+                           AND p.company_id = $2 \
+                         LIMIT 1 FOR UPDATE OF c",
+                        &[&code_owned, &company_id],
+                    )
+                    .await?;
+
+                let (program_id, card_opt): (i64, Option<(i64, Decimal)>) =
+                    if let Some(crow) = card_rows.first() {
+                        let cid: i64 = crow.try_get(0).map_err(db)?;
+                        let pid: i64 = crow.try_get(1).map_err(db)?;
+                        let pts: Decimal = crow.try_get(2).map_err(db)?;
+                        let exp: Option<Date> = crow.try_get(3).map_err(db)?;
+                        let card_partner: Option<i64> = crow.try_get(4).map_err(db)?;
+                        let p_from: Option<Date> = crow.try_get(5).map_err(db)?;
+                        let p_to: Option<Date> = crow.try_get(6).map_err(db)?;
+                        if let Some(cp) = card_partner
+                            && order_partner_id != Some(cp)
+                        {
+                            return Err(Error::user(
+                                "This coupon belongs to a different customer.",
+                            ));
+                        }
+                        if let Some(e) = exp
+                            && today > e
+                        {
+                            return Err(Error::user(format!(
+                                "Coupon {code_owned} expired on {e}."
+                            )));
+                        }
+                        if let Some(df) = p_from
+                            && today < df
+                        {
+                            return Err(Error::user(format!("This promotion starts on {df}.")));
+                        }
+                        if let Some(dt) = p_to
+                            && today > dt
+                        {
+                            return Err(Error::user(format!("This promotion ended on {dt}.")));
+                        }
+                        // Enforce any program eligibility rules (minimum qty / amount).
+                        let prog_rules = tx
+                            .query(
+                                "SELECT COALESCE(minimum_qty, 0), COALESCE(minimum_amount, 0) \
+                                 FROM loyalty_rule WHERE program_id = $1 ORDER BY id",
+                                &[&pid],
+                            )
+                            .await?;
+                        if !prog_rules.is_empty() {
+                            let mut matched = false;
+                            let mut first_min_qty = Decimal::ZERO;
+                            let mut first_min_amt = Decimal::ZERO;
+                            for (idx, rr) in prog_rules.iter().enumerate() {
+                                let mq: Decimal = rr.try_get(0).map_err(db)?;
+                                let ma: Decimal = rr.try_get(1).map_err(db)?;
+                                if idx == 0 {
+                                    first_min_qty = mq;
+                                    first_min_amt = ma;
+                                }
+                                if order_qty >= mq && untaxed >= ma {
+                                    matched = true;
+                                    break;
+                                }
+                            }
+                            if !matched {
+                                return Err(Error::user(format!(
+                                    "Order does not meet eligibility rules for '{code_owned}' \
+                                     (minimum quantity {first_min_qty}, minimum amount {first_min_amt})."
+                                )));
+                            }
+                        }
+                        (pid, Some((cid, pts)))
+                    } else {
+                        let rule_rows = tx
+                            .query(
+                                "SELECT r.program_id::int8, COALESCE(r.minimum_qty, 0), \
+                                        COALESCE(r.minimum_amount, 0), p.date_from, p.date_to \
+                                 FROM loyalty_rule r \
+                                 JOIN loyalty_program p ON p.id = r.program_id \
+                                 WHERE lower(r.code) = lower($1) AND p.active = true \
+                                   AND p.company_id = $2 \
+                                 LIMIT 1",
+                                &[&code_owned, &company_id],
+                            )
+                            .await?;
+                        let Some(rrow) = rule_rows.first() else {
+                            return Err(Error::user(format!(
+                                "Coupon or promo code '{code_owned}' was not found or is inactive."
+                            )));
+                        };
+                        let pid: i64 = rrow.try_get(0).map_err(db)?;
+                        let min_qty: Decimal = rrow.try_get(1).map_err(db)?;
+                        let min_amt: Decimal = rrow.try_get(2).map_err(db)?;
+                        let p_from: Option<Date> = rrow.try_get(3).map_err(db)?;
+                        let p_to: Option<Date> = rrow.try_get(4).map_err(db)?;
+                        if let Some(df) = p_from
+                            && today < df
+                        {
+                            return Err(Error::user(format!("This promotion starts on {df}.")));
+                        }
+                        if let Some(dt) = p_to
+                            && today > dt
+                        {
+                            return Err(Error::user(format!("This promotion ended on {dt}.")));
+                        }
+                        if order_qty < min_qty {
+                            return Err(Error::user(format!(
+                                "Minimum quantity for '{code_owned}' is {min_qty}; current order quantity is {order_qty}."
+                            )));
+                        }
+                        if untaxed < min_amt {
+                            return Err(Error::user(format!(
+                                "Minimum order amount for '{code_owned}' is {min_amt}; current untaxed total is {untaxed}."
+                            )));
+                        }
+                        (pid, None)
+                    };
+
+                let reward_rows = tx
+                    .query(
+                        "SELECT description::text, discount_mode::text, COALESCE(discount, 0), \
+                                COALESCE(required_points, 1) \
+                         FROM loyalty_reward WHERE program_id = $1 ORDER BY id LIMIT 1",
+                        &[&program_id],
+                    )
+                    .await?;
+                let Some(rw) = reward_rows.first() else {
+                    return Err(Error::user(
+                        "This promotion program has no reward configured yet.",
+                    ));
+                };
+                let desc: String = rw.try_get(0).map_err(db)?;
+                let mode: String = rw.try_get(1).map_err(db)?;
+                let disc_val: Decimal = rw.try_get(2).map_err(db)?;
+                let req_pts: Decimal = rw.try_get(3).map_err(db)?;
+
+                let cur_rec = RecId::from_real(currency_id)
+                    .ok_or_else(|| Error::invariant("Invalid order currency id."))?;
+                let rounding = RoundingTable::load(&env, tx, &[cur_rec]).await?;
+                let inc = rounding.get(cur_rec)?.increment();
+                let raw_disc = compute_loyalty_reward_discount(untaxed, disc_val, &mode)?;
+                let disc_amount = inc.quantize(raw_disc, CURRENCY_ROUNDING_MODE)?;
+
+                let uom_id = crate::discount::default_unit_uom_id(tx).await?;
+                let mut lvals = RawVals::new();
+                lvals.insert("order_id".into(), Cell::Id(order_id));
+                lvals.insert(
+                    "name".into(),
+                    Cell::Str(format!("{desc} [{code_owned}]").into()),
+                );
+                lvals.insert("product_uom_id".into(), Cell::Id(uom_id));
+                lvals.insert("product_uom_qty".into(), Cell::Decimal(Decimal::ONE));
+                lvals.insert("price_unit".into(), Cell::Decimal(-disc_amount));
+                env.records("sale.order.line")?
+                    .create(tx, vec![lvals])
+                    .await?;
+
+                if let Some((cid, pts)) = card_opt {
+                    if pts < req_pts {
+                        return Err(Error::user(format!(
+                            "Coupon {code_owned} has {pts} point(s), but {req_pts} point(s) are required."
+                        )));
+                    }
+                    let new_pts = pts
+                        .checked_sub(req_pts)
+                        .ok_or_else(|| Error::validation("Coupon point calculation overflowed."))?;
+                    let still_active = new_pts > Decimal::ZERO;
+                    tx.execute(
+                        "UPDATE loyalty_card SET points = $2, active = $3, write_uid = $4, \
+                         write_date = now() AT TIME ZONE 'UTC' WHERE id = $1",
+                        &[&cid, &new_pts, &still_active, &uid],
+                    )
+                    .await?;
+                    let card_rec = env.sudo(true).records("loyalty.card")?.browse([cid])?;
+                    tx.invalidate_records(&card_rec, Some(&["points", "active"]))
+                        .await?;
+                }
+
+                wizard.as_records().unlink(tx).await?;
+                Ok((desc, disc_amount))
+            })
             .await?;
 
-        let (program_id, card_opt): (i64, Option<(i64, Decimal)>) = if let Some(crow) =
-            card_rows.first()
-        {
-            let cid: i64 = crow.try_get(0).map_err(db)?;
-            let pid: i64 = crow.try_get(1).map_err(db)?;
-            let pts: Decimal = crow.try_get(2).map_err(db)?;
-            let exp: Option<Date> = crow.try_get(3).map_err(db)?;
-            let p_from: Option<Date> = crow.try_get(4).map_err(db)?;
-            let p_to: Option<Date> = crow.try_get(5).map_err(db)?;
-            if let Some(e) = exp
-                && today > e
-            {
-                return Err(Error::user(format!("Coupon {code} expired on {e}.")));
-            }
-            if let Some(df) = p_from
-                && today < df
-            {
-                return Err(Error::user(format!("This promotion starts on {df}.")));
-            }
-            if let Some(dt) = p_to
-                && today > dt
-            {
-                return Err(Error::user(format!("This promotion ended on {dt}.")));
-            }
-            (pid, Some((cid, pts)))
-        } else {
-            let rule_rows = tx
-                .query(
-                    "SELECT r.program_id::int8, COALESCE(r.minimum_amount, 0), p.date_from, p.date_to \
-                     FROM loyalty_rule r \
-                     JOIN loyalty_program p ON p.id = r.program_id \
-                     WHERE lower(r.code) = lower($1) AND p.active = true AND p.company_id = $2 \
-                     LIMIT 1",
-                    &[&code, &company_id],
-                )
-                .await?;
-            let Some(rrow) = rule_rows.first() else {
-                return Err(Error::user(format!(
-                    "Coupon or promo code '{code}' was not found or is inactive."
-                )));
-            };
-            let pid: i64 = rrow.try_get(0).map_err(db)?;
-            let min_amt: Decimal = rrow.try_get(1).map_err(db)?;
-            let p_from: Option<Date> = rrow.try_get(2).map_err(db)?;
-            let p_to: Option<Date> = rrow.try_get(3).map_err(db)?;
-            if let Some(df) = p_from
-                && today < df
-            {
-                return Err(Error::user(format!("This promotion starts on {df}.")));
-            }
-            if let Some(dt) = p_to
-                && today > dt
-            {
-                return Err(Error::user(format!("This promotion ended on {dt}.")));
-            }
-            if untaxed < min_amt {
-                return Err(Error::user(format!(
-                    "Minimum order amount for '{code}' is {min_amt}; current untaxed total is {untaxed}."
-                )));
-            }
-            (pid, None)
-        };
-
-        let reward_rows = tx
-            .query(
-                "SELECT description::text, discount_mode::text, COALESCE(discount, 0), \
-                        COALESCE(required_points, 1) \
-                 FROM loyalty_reward WHERE program_id = $1 ORDER BY id LIMIT 1",
-                &[&program_id],
-            )
-            .await?;
-        let Some(rw) = reward_rows.first() else {
-            return Err(Error::user(
-                "This promotion program has no reward configured yet.",
-            ));
-        };
-        let desc: String = rw.try_get(0).map_err(db)?;
-        let mode: String = rw.try_get(1).map_err(db)?;
-        let disc_val: Decimal = rw.try_get(2).map_err(db)?;
-        let req_pts: Decimal = rw.try_get(3).map_err(db)?;
-
-        if let Some((cid, pts)) = card_opt {
-            if pts < req_pts {
-                return Err(Error::user(format!(
-                    "Coupon {code} has {pts} point(s), but {req_pts} point(s) are required."
-                )));
-            }
-            let new_pts = pts - req_pts;
-            let still_active = new_pts > Decimal::ZERO;
-            tx.execute(
-                "UPDATE loyalty_card SET points = $2, active = $3, \
-                 write_date = now() AT TIME ZONE 'UTC' WHERE id = $1",
-                &[&cid, &new_pts, &still_active],
-            )
-            .await?;
-        }
-
-        let disc_amount = compute_loyalty_reward_discount(untaxed, disc_val, &mode)?;
-        let uom_id = crate::discount::default_unit_uom_id(tx).await?;
-        let mut lvals = RawVals::new();
-        lvals.insert("order_id".into(), Cell::Id(order_id));
-        lvals.insert("name".into(), Cell::Str(format!("{desc} [{code}]").into()));
-        lvals.insert("product_uom_id".into(), Cell::Id(uom_id));
-        lvals.insert("product_uom_qty".into(), Cell::Decimal(Decimal::ONE));
-        lvals.insert("price_unit".into(), Cell::Decimal(-disc_amount));
-        env.records("sale.order.line")?
-            .create(tx, vec![lvals])
-            .await?;
-
-        wizard.as_records().unlink(tx).await?;
         Ok(Value::Json(Arc::new(json!({
             "type": "ir.actions.client",
             "tag": "display_notification",
