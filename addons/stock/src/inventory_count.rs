@@ -371,8 +371,8 @@ impl StockQuant {
                 ))),
             }
         };
-        let qty = decode_opt_dec(entry.cell(tx, "quantity").await?, "quantity")?
-            .unwrap_or(Decimal::ZERO);
+        let qty =
+            decode_opt_dec(entry.cell(tx, "quantity").await?, "quantity")?.unwrap_or(Decimal::ZERO);
         let counted = decode_opt_dec(
             entry.cell(tx, "inventory_quantity").await?,
             "inventory_quantity",
@@ -385,7 +385,10 @@ impl StockQuant {
             }
             None => {
                 vals.insert("inventory_quantity_set".into(), Cell::Bool(false));
-                vals.insert("inventory_diff_quantity".into(), Cell::Decimal(Decimal::ZERO));
+                vals.insert(
+                    "inventory_diff_quantity".into(),
+                    Cell::Decimal(Decimal::ZERO),
+                );
             }
         }
         entry.write_base(tx, vals).await?;

@@ -65,7 +65,11 @@ pub struct Uom {
     #[field(char, index = true)]
     pub parent_path: Option<Arc<str>>,
     /// Context-sensitive name, including the direct ratio when requested.
-    #[field(char, compute = "_compute_uom_display_name", search_method = "_search_display_name")]
+    #[field(
+        char,
+        compute = "_compute_uom_display_name",
+        search_method = "_search_display_name"
+    )]
     pub display_name: Option<Arc<str>>,
 }
 
