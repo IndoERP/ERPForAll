@@ -1,0 +1,42 @@
+{
+  "shard_id": "shard_functional_product_1",
+  "lang": "id",
+  "version": "next",
+  "audience": "functional",
+  "modules": [
+    "product"
+  ],
+  "docs": [
+    {
+      "page_id": "user/master-data-contacts-products",
+      "title": "Kontak, Produk, Satuan Ukur, dan Data Referensi",
+      "module": "product",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "Data master yang rapi menjaga konsistensi antara Penjualan, Pembelian, Inventaris, dan Akuntansi. Pelanggan dan pemasok berbagi satu direktori **Contacts**, sedangkan barang fisik dan jasa berbagi satu katalog **Products** lengkap dengan varian, harga, pelacakan, dan satuan ukur."
+        },
+        {
+          "anchor": "manage-contacts",
+          "text": "1. Buka aplikasi **Contacts** dari pemilih aplikasi (atau buka **Sales → Orders → Customers** / **Purchase → Orders → Vendors**). 2. Cari berdasarkan nama, email, telepon, referensi, atau NPWP/Tax ID, atau saring dengan filter **Companies**. 3. Klik **New** (atau buka kontak yang ada) untuk mengisi: * **Type**: Tentukan apakah kontak berupa perusahaan atau perorangan (kontak perorangan dapat dikaitkan ke perusahaan induk agar mewarisi alamat penagihan dan pengiriman). * **Alamat & NPWP/Tax ID**: Lengkapi jalan, kota, kode pos, negara, dan Tax ID agar faktur dan laporan pajak terisi akurat. * **Detail Kontak**: Simpan nomor telepon, ponsel, email, situs web, dan tag untuk pengelompokan. * **Default Akuntansi & Pembayaran**: Tetapkan termin pembayaran, posisi fiskal, dan rekening bank untuk transaksi piutang/utang. 4. Klik **Save**. Seluruh modul langsung menggunakan data kontak terbaru ini. ![Form Kontak menyatukan detail perusahaan, alamat, nomor pajak, dan riwayat chatter untuk Penjualan, Pembelian, dan Akuntansi.](/id/next/assets/docs/assets/user-manual/getting-started/contacts-form.webp)"
+        },
+        {
+          "anchor": "manage-products",
+          "text": "Daftar produk dapat dibuka melalui **Sales → Products → Products**, **Purchase → Products → Products**, atau **Inventory → Products → Products**: 1. Klik **New** untuk membuat template produk baru, atau pilih produk yang ada untuk diubah. 2. Pada tab **General Information**, atur: * **Product Type**: * **Goods (Storable / Stockable)**: Dilacak di lokasi gudang lengkap dengan stok on-hand, penerimaan, pengiriman, dan valuasi persediaan. * **Consumable**: Barang habis pakai yang dapat dikirim/diterima tanpa pemblokiran stok ketat. * **Service**: Jasa non-fisik (konsultasi, perawatan, ongkos kirim, langganan) tanpa transfer gudang. * **Sales Price & Cost**: Harga jual standar dan harga pokok/biaya untuk perhitungan margin serta valuasi stok. * **Internal Reference & Barcode**: Kode SKU dan barcode (EAN/GS1) untuk pencarian cepat pada pesanan dan pemindaian gudang. * **Product Category & Units of Measure**: Menentukan akun akuntansi default serta satuan stok vs satuan pembelian. 3. Pada tab **Attributes & Variants**, tambahkan atribut (seperti Warna, Ukuran, atau Kapasitas) untuk menghasilkan **Product Variants** otomatis. Lihat seluruh varian di **Products → Product Variants**. 4. Pada tab **Inventory**, atur **Traceability** (No Tracking, By Lots, By Unique Serial Number), pengaturan **Expiration Date** (bila kedaluwarsa diaktifkan), rute (Buy, Manufacture, Replenish on Order), serta berat/volume logistik. 5. Gunakan tombol pintar di bagian atas (**On Hand**, **Forecasted**, **Moves**, **Reordering**) untuk memeriksa posisi stok gudang langsung dari kartu produk. ![Form Produk menyatukan harga, biaya, pelacakan, varian, dan tombol pintar stok gudang dalam satu layar.](/id/next/assets/docs/assets/user-manual/getting-started/product-form.webp)"
+        },
+        {
+          "anchor": "uom-and-currencies",
+          "text": "Administrator mengelola tabel referensi bersama di **Settings → Reference Data**: * **Units of Measure**: Mendefinisikan kategori satuan (Unit, Berat, Panjang, Volume, Waktu) beserta rasio konversinya (misalnya 1 Lusin = 12 Unit atau 1 Dus = 24 Unit) sehingga pembelian per dus otomatis dikonversi menjadi unit saat masuk gudang. * **Currencies**: Mengaktifkan mata uang asing, mengatur simbol/pembulatan, serta mencatat kurs harian untuk daftar harga multi-mata uang, faktur, tagihan pemasok, dan konsolidasi grup. * **Languages**: Mengaktifkan bahasa antarmuka dan dokumen (seperti Inggris dan Indonesia) agar pengguna dapat mengganti bahasa UI maupun mencetak dokumen sesuai bahasa mitra. * **Barcode Rules**: Mengatur nomenklatur barcode (termasuk GS1) untuk pembacaan otomatis saat pemindaian di gudang."
+        },
+        {
+          "anchor": "best-practices",
+          "text": "* **Hindari Duplikasi Mitra**: Selalu cari berdasarkan nama atau Tax ID sebelum membuat kontak baru agar saldo piutang dan utang tetap terkonsolidasi pada satu buku pembantu mitra. * **Tetapkan Pelacakan Sebelum Pergerakan Stok Pertama**: Tentukan apakah produk dilacak **By Lots** atau **By Unique Serial Number** sebelum menerima stok awal; mengubah mode pelacakan setelah ada pergerakan stok memerlukan penyesuaian stok on-hand terlebih dahulu. * **Selaraskan Kategori Produk dengan Akuntansi**: Kelompokkan produk ke kategori yang jelas (misalnya *Bahan Baku*, *Barang Jadi*, *Perlengkapan Kantor*, *Jasa*) agar laporan Penjualan, Valuasi Stok, dan Laba Rugi tetap rapi."
+        }
+      ]
+    }
+  ]
+}

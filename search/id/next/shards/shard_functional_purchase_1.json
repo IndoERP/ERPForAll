@@ -4,12 +4,13 @@
   "version": "next",
   "audience": "functional",
   "modules": [
+    "purchase",
     "purchase"
   ],
   "docs": [
     {
       "page_id": "user/buy-and-receive",
-      "title": "Membeli dan Menerima Barang",
+      "title": "Pembelian, Penerimaan Barang, dan Tagihan Pemasok",
       "module": "purchase",
       "sections": [
         {
@@ -18,31 +19,74 @@
         },
         {
           "anchor": "top",
-          "text": "Panduan ini memandu Anda melalui alur pembelian lengkap di ERPForAll: membuat permintaan penawaran harga, mengonfirmasi dan menyetujui pesanan pembelian, memeriksa penerimaan barang di gudang, serta membuat tagihan vendor yang sesuai."
+          "text": "Bab ini memandu alur **Procure-to-Pay** lengkap di ERPForAll—mulai dari membuat Permintaan Penawaran (RFQ), mengonfirmasi Pesanan Pembelian (PO), memproses penerimaan barang parsial dengan backorder di gudang, menerbitkan Tagihan Pemasok dengan pencocokan 3 arah (3-Way Match), hingga retur barang ke pemasok."
         },
         {
           "anchor": "before-starting",
-          "text": "Untuk menjalankan alur ini, Anda memerlukan hak akses dan konfigurasi berikut: * **Peran Purchase User**: Diperlukan untuk membuat permintaan penawaran harga, mengubah baris draf, dan mengonfirmasi pesanan standar. * **Peran Purchase Administrator**: Diperlukan jika nilai pesanan melampaui batas persetujuan perusahaan sehingga membutuhkan tombol **Approve Order**, atau untuk membuka kunci pesanan. * **Peran Inventory User**: Diperlukan untuk memeriksa dan memvalidasi penerimaan barang masuk pada menu **Inventory > Operations > Receipts**. * **Peran Accounting User**: Untuk membuat draf tagihan vendor dari pesanan pembelian, operator memerlukan hak akses Purchase sekaligus Accounting (pengguna yang hanya memiliki akses Purchase tidak dapat membuat tagihan). Akses Accounting juga diperlukan untuk memposting tagihan ke buku besar akuntansi. * **Konfigurasi**: Untuk penerimaan langsung, addon **Purchase Stock** harus aktif dengan gudang satu langkah penerimaan. Untuk membuat tagihan dari pesanan, perusahaan harus memiliki jurnal pembelian yang terkonfigurasi."
+          "text": "* **Purchase User**: Membuat RFQ, menyunting baris produk, dan mengonfirmasi pesanan di bawah batas persetujuan perusahaan. * **Purchase Administrator**: Menyetujui pesanan yang melewati batas persetujuan ganda (**Approve Order**), mengunci/membuka pesanan terkonfirmasi, dan mengatur Konfigurasi Pembelian. * **Inventory User**: Memvalidasi penerimaan barang dan backorder di **Inventory → Operations → Receipts**. * **Accounting User**: Membuat draf tagihan pemasok dari PO terkonfirmasi, mengisi **Bill Date**, memposting tagihan ke jurnal Pembelian, dan mencatat pembayaran pemasok."
         },
         {
           "anchor": "request-quotation",
-          "text": "Ikuti langkah-langkah berikut untuk membuat draf penawaran: 1. Buka menu **Purchase > Orders > Requests for Quotation** lalu klik **New**. 2. Periksa data bawaan untuk perusahaan, mata uang, pembeli, dan tenggat waktu pesanan. Pilih mitra pada bidang **Vendor**. 3. Pada tab **Products**, klik **Add a line**. Ketik sebagian nama barang (contoh: Office Chair) dan pilih produk yang sesuai. 4. Masukkan jumlah pesanan pada tabel (contoh: 10.00). Anda dapat mengosongkan satuan, deskripsi, harga satuan, dan pajak agar terisi otomatis dari master produk atau data harga vendor. 5. Klik **Save**. **Hasil yang terlihat**: Dokumen menerima nomor urut seperti PO00001. Total baris, jumlah sebelum pajak, dan total pajak dihitung ulang secara otomatis."
+          "text": "1. Buka **Purchase → Orders → Requests for Quotation** lalu klik **New**. 2. Pilih **Vendor** serta periksa **Order Deadline**, **Expected Arrival**, **Currency**, dan **Buyer**. 3. Pada tab **Products**, klik **Add a line** lalu pilih produk, **Quantity**, **Unit**, **Unit Price** (otomatis terisi bila cocok dengan Vendor Pricelist), dan **Taxes**. 4. Klik **Save**. ERPForAll memberikan nomor urut pembelian (misalnya PO00023) serta menghitung subtotal, pajak, dan total akhir."
         },
         {
           "anchor": "confirm-and-approve",
-          "text": "Setelah harga dan rincian barang sesuai, lanjutkan proses konfirmasi: 1. Pada formulir permintaan yang telah disimpan, klik **Confirm Order**. 2. Jika total pesanan berada di bawah ambang batas persetujuan perusahaan, status langsung berubah menjadi pesanan pembelian resmi. 3. Jika perusahaan menerapkan persetujuan bertingkat dan pesanan mencapai batas minimum, status berpindah ke **To Approve**. 4. Administrator pembelian memeriksa pesanan lalu mengeklik **Approve Order** untuk menyelesaikan konfirmasi. **Tindakan yang memposting data**: Mengeklik **Confirm Order** (atau **Approve Order**) mengunci vendor dan mata uang, menetapkan baris pesanan, serta secara otomatis membuat dokumen penerimaan barang masuk di modul persediaan."
+          "text": "1. Tinjau harga pemasok dan kuantitas pada RFQ lalu klik **Confirm Order**. 2. Jika total pesanan berada di bawah ambang persetujuan ganda, status langsung menjadi **Purchase Order** dan sistem membentuk dokumen penerimaan gudang (dapat dibuka lewat tombol pintar **Receipt**). 3. Jika total pesanan mencapai atau melebihi batas minimum persetujuan kedua (diatur pada **Purchase → Configuration → Settings**), status berpindah ke **To Approve** hingga Purchase Administrator mengklik **Approve Order**. ![Pesanan Pembelian yang terkonfirmasi mengunci pemasok dan mata uang, menampilkan status Purchase Order, serta menautkan langsung tombol pintar Receipt gudang.](/id/next/assets/docs/assets/user-manual/purchasing/confirmed-po.webp)"
         },
         {
           "anchor": "receive-goods",
-          "text": "Saat kiriman tiba di gudang: 1. Pada pesanan pembelian yang telah dikonfirmasi, klik tautan **Receipt** (atau buka **Inventory > Operations > Receipts** dan cari nomor pesanan pada **Source Document**). 2. Periksa daftar barang pada tab **Operations** atau **Detailed Operations**. 3. Ubah kuantitas selesai sesuai jumlah fisik yang diterima. Sebagai contoh, jika dipesan 10.00 unit dan yang tiba 8.00, masukkan 8.00. 4. Klik **Validate**. 5. Jika jenis operasi diatur ke **Ask**, pilih **Create Backorder** untuk mencatat sisa 2.00 unit pada dokumen transfer terpisah, atau pilih **Close Remaining Demand** jika tidak ada sisa pengiriman lagi. **Hasil yang terlihat**: Status transfer barang berubah menjadi **Done**. Kembali ke formulir pesanan pembelian di tab **Products**, kolom **Received Qty** terbarui menampilkan jumlah yang telah diterima (8.00)."
-        },
-        {
-          "anchor": "handle-failure",
-          "text": "Saat mengonfirmasi pesanan, Anda mungkin menemui kendala berikut: * **Masalah**: Mengeklik **Confirm Order** atau **Approve Order** gagal dan memunculkan galat konfigurasi bahwa dokumen penerimaan barang tidak dapat dibuat. * **Penyebab**: Hal ini terjadi jika perusahaan memiliki beberapa gudang aktif, jenis operasi barang masuk tidak aktif, atau rute penerimaan menggunakan lebih dari satu langkah yang tidak didukung penerimaan langsung. * **Pemulihan**: Buka **Inventory > Configuration > Warehouses** menggunakan akun administrator. Pastikan gudang target memiliki jenis operasi barang masuk aktif dengan rute penerimaan 1 langkah (Receive goods directly). Setelah diperbaiki, buka kembali pesanan pembelian dan klik **Confirm Order** atau **Approve Order** ulang."
+          "text": "Saat kiriman tiba di gudang: 1. Klik tombol pintar **Receipt** pada Pesanan Pembelian terkonfirmasi (atau buka **Inventory → Operations → Receipts** dan cari nomor PO pada **Source Document**). 2. Pada tab **Detailed Operations**, ubah kolom **Quantity / Done** sesuai jumlah fisik yang benar-benar diterima (misalnya isi 6 saat pesanan berjumlah 10). 3. Klik **Validate**. 4. Bila jumlah diterima lebih kecil dari pesanan, dialog **Remaining demand** menawarkan pilihan: * **Create Backorder**: Membuat dokumen penerimaan terbuka terpisah untuk sisa 4 unit (Back Order of Main/IN/...). * **Close Remaining Demand / No Backorder**: Menutup penerimaan pada 6 unit tanpa menunggu kiriman susulan. 5. Kembali ke Pesanan Pembelian: **Received Qty** menampilkan 6, dan setelah backorder sisa 4 unit divalidasi, **Received Qty** menjadi 10 dengan status **Waiting Bills**. ![Saat barang datang lebih sedikit dari pesanan, dialog Remaining demand memungkinkan Anda membuat dokumen backorder untuk sisanya.](/id/next/assets/docs/assets/user-manual/purchasing/backorder-dialog.webp)"
         },
         {
           "anchor": "vendor-billing",
-          "text": "Setelah penerimaan barang tercatat di gudang, buat tagihan vendor yang sesuai: 1. Buka pesanan pembelian yang telah memiliki kuantitas barang diterima. Membuat draf tagihan dari pesanan memerlukan operator dengan hak akses Purchase sekaligus Accounting; pengguna yang hanya memiliki hak akses Purchase tidak dapat membuat tagihan. 2. Klik **First Vendor Bill**. Jika tagihan sudah pernah dibuat, mengeklik **First Vendor Bill** kembali akan membuka ulang dokumen tagihan pertama tersebut (bahkan setelah diposting atau dibatalkan), bukan membuat draf baru. 3. Periksa draf tagihan yang dihasilkan di **Accounting > Vendors > Bills**, yang terisi dengan kuantitas yang diterima, harga satuan yang disepakati, dan pajak vendor. 4. Periksa baris draf tagihan terhadap faktur fisik yang diberikan oleh vendor. 5. Klik **Confirm** pada formulir tagihan vendor untuk memposting entri jurnal ke jurnal pembelian. 6. Untuk menagih sisa kuantitas barang diterima yang bernilai positif, gunakan tombol **Bill Remaining Received Goods**. Sebagai contoh, jika dipesan 10.00 unit, diterima 8.00 unit, dan tagihan pertama mencakup 5.00 unit, mengeklik **Bill Remaining Received Goods** akan membuat draf tagihan untuk sisa 3.00 unit. Jika seluruh 8.00 unit yang diterima telah ditagihkan, tindakan ini membuka tagihan aktif terkait yang terbaru."
+          "text": "1. Pada Pesanan Pembelian yang barangnya sudah diterima, klik **Create Bill** (membutuhkan hak akses Purchase sekaligus Accounting). 2. ERPForAll membuka draf Tagihan Pemasok berisi kuantitas diterima, harga PO, pajak masukan, serta status **Purchase Match** (**Matched** ketika kuantitas dipesan, diterima, dan ditagih cocok pada pencocokan 3 arah). 3. Masukkan **Bill Date** dan nomor referensi faktur pemasok, cocokkan dengan tagihan fisik dari pemasok, lalu klik **Confirm** untuk memposting (BILL/...). 4. Klik **Register Payment** untuk melunasi tagihan hingga berstatus **PAID**. Pada PO, **Billed Qty** terbarui dan status berubah menjadi **Fully Billed**. ![Tagihan Pemasok yang dibuat dari Pesanan Pembelian memverifikasi kesesuaian jumlah dipesan, diterima, dan ditagih dengan status Purchase Match: Matched.](/id/next/assets/docs/assets/user-manual/purchasing/vendor-bill-3way-match.webp)"
+        },
+        {
+          "anchor": "purchase-returns",
+          "text": "Jika barang yang sudah diterima ternyata rusak atau ditolak setelah validasi: 1. Buka dokumen **Receipt** berstatus Done dari tombol pintar **Receipt** di PO lalu klik **Return**. 2. ERPForAll membentuk dokumen pengiriman balik (Return of Main/IN/... dari Main/Stock menuju Vendors). 3. Periksa atau isi jumlah retur pada **Demand** di baris perpindahan stok (misalnya 1 unit), klik **Confirm**, lalu klik **Validate** untuk mengeluarkan barang retur dari gudang. 4. Buat **Vendor Refund / Nota Kredit Pemasok** di Akuntansi jika tagihan pemasok sudah diposting."
+        },
+        {
+          "anchor": "handle-failure",
+          "text": "* **Gagal Mengonfirmasi Draf Tagihan (\"enter the bill date before confirming\")**: Tagihan pemasok dari PO mewajibkan pengisian **Bill Date** sesuai tanggal faktur pemasok sebelum klik **Confirm**. * **Kesalahan Konfigurasi Gudang Saat Konfirmasi PO**: Pastikan perusahaan memiliki gudang aktif dengan tipe operasi penerimaan yang valid di **Inventory → Configuration → Operation Types**. * **Penagihan Penerimaan Parsial**: Saat kebijakan penagihan berbasis **Received Quantities** aktif, ERPForAll hanya menagih jumlah yang sudah divalidasi di gudang. Validasi backorder terlebih dahulu sebelum menagih sisanya."
+        }
+      ]
+    },
+    {
+      "page_id": "user/purchasing-agreements-and-controls",
+      "title": "Perjanjian Pembelian, RFQ Alternatif, Daftar Harga, dan Analitik",
+      "module": "purchase",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "Selain pesanan pembelian satuan, ERPForAll membantu tim pengadaan menstandardisasi harga pemasok, menjalankan tender kompetitif dengan RFQ Alternatif, menyepakati Blanket Order jangka panjang, menerapkan kontrol persetujuan dan pencocokan 3 arah, serta memantau belanja lewat Laporan Pembelian dinamis."
+        },
+        {
+          "anchor": "purchase-settings",
+          "text": "Buka **Purchase → Configuration → Settings** (membutuhkan peran Purchase Administrator / Settings Administration) untuk mengatur kebijakan pengadaan perusahaan: * **Order Approval**: Mewajibkan persetujuan kedua manajer (**Approve Order**) setiap kali nilai PO melampaui ambang batas tertentu (misalnya $5,000). * **Lock Confirmed Orders**: Mengunci PO terkonfirmasi otomatis agar tidak dapat diubah lagi, atau membiarkannya tetap dapat disunting sesuai kebutuhan operasional. * **Three-Way Bill Matching**: Memeriksa kesesuaian kuantitas **Dipesan (Ordered)**, **Diterima (Received)**, dan **Ditagih (Billed)** pada Tagihan Pemasok agar tim Utang langsung melihat status **Matched** sebelum membayar. * **Days to Purchase**: Cadangan waktu tunggu yang dipakai aturan pengisian ulang otomatis agar RFQ diterbitkan sebelum stok habis. ![Pengaturan Pembelian menyatukan batas persetujuan, penguncian pesanan, pencocokan tagihan 3 arah, dan waktu tunggu pengadaan.](/id/next/assets/docs/assets/user-manual/purchasing/purchase-settings.webp)"
+        },
+        {
+          "anchor": "vendor-pricelists",
+          "text": "1. Buka **Purchase → Products → Vendor Pricelists** untuk melihat seluruh harga kesepakatan pemasok lintas produk. 2. Klik **New** untuk menambahkan aturan harga pemasok: * **Vendor** dan **Product** (beserta nama/kode produk milik pemasok bila perlu). * **Minimum Quantity**: Ambang kuantitas bertingkat (misalnya harga satuan 1 unit vs harga grosir 50 unit). * **Unit Price**, **Currency**, **Delivery Lead Time (hari)**, dan masa berlaku (**Validity**) opsional. 3. Setiap kali pembeli memilih produk pada RFQ baru—atau saat Replenishment gudang membuat RFQ otomatis—ERPForAll memilih pemasok dan harga satuan paling sesuai secara otomatis. ![Daftar Harga Pemasok menyimpan tingkatan volume, mata uang, harga kesepakatan, dan waktu kirim pemasok.](/id/next/assets/docs/assets/user-manual/purchasing/vendor-pricelists.webp)"
+        },
+        {
+          "anchor": "purchase-agreements",
+          "text": "Gunakan **Purchase Agreements** untuk mengunci harga kontrak dan target kuantitas bersama pemasok selama periode tertentu: 1. Buka **Purchase → Orders → Purchase Agreements** lalu klik **New**. 2. Pilih **Agreement Type** (*Blanket Order* atau *Purchase Template*), pilih **Vendor**, tentukan masa kontrak, dan tambahkan baris produk beserta kuantitas target dan harga satuan. 3. Klik **Save** lalu **Confirm** (mendapat nomor urut seperti PA00001). 4. Saat membutuhkan pengiriman bertahap, buat RFQ yang tertaut ke perjanjian tersebut agar harga kontrak otomatis tersalin dan total pemesanan terakumulasi terhadap target perjanjian. ![Perjanjian Pembelian (Blanket Order) terkonfirmasi melacak produk kontrak pemasok, target kuantitas, dan harga satuan yang disepakati.](/id/next/assets/docs/assets/user-manual/purchasing/purchase-agreement.webp)"
+        },
+        {
+          "anchor": "alternative-rfqs",
+          "text": "Untuk meminta penawaran kompetitif dari beberapa pemasok atas kebutuhan yang sama: 1. Buka draf RFQ (misalnya PO00023) lalu klik **Alternative** (atau **Create Alternative**). 2. Pilih **Alternative Vendor** yang berada pada perusahaan aktif (atau kontak bersama lintas perusahaan) lalu konfirmasi untuk membentuk RFQ alternatif tertaut (misalnya PO00024). 3. Isi penawaran harga dan waktu kirim dari masing-masing pemasok pada RFQ terkait. 4. Klik **Compare Product Lines** (atau buka tampilan perbandingan **Alternatives**) untuk membandingkan harga satuan, kuantitas, mata uang, dan jadwal tiba berdampingan lalu pilih penawaran terbaik untuk dikonfirmasi. ![Perbandingan RFQ Alternatif menampilkan penawaran beberapa pemasok secara berdampingan agar pembeli dapat memilih penawaran terbaik.](/id/next/assets/docs/assets/user-manual/purchasing/compare-alternatives.webp)"
+        },
+        {
+          "anchor": "purchase-analytics",
+          "text": "Buka **Purchase → Reporting** untuk memantau kinerja pengadaan melalui tiga tampilan: * **Purchase Report**: Laporan hierarkis dinamis yang merangkum total belanja per pemasok dan nomor PO lengkap dengan filter periode, perbandingan, drill-down, serta ekspor PDF/XLSX. * **Purchases by Product**: Melacak total **Ordered**, **Received**, **Billed**, dan **Untaxed** per produk untuk mendeteksi antrean penerimaan maupun penagihan yang tertunda. * **Purchase Pivot & Graph**: Analisis **List**, **Pivot**, dan **Graph** interaktif untuk membedah belanja berdasarkan pemasok, pembeli, kategori produk, tanggal pesanan, atau status. ![Purchase Report merangkum total belanja pengadaan berdasarkan pemasok dan pesanan lengkap dengan filter serta ekspor.](/id/next/assets/docs/assets/user-manual/purchasing/purchase-report.webp)"
+        },
+        {
+          "anchor": "troubleshooting",
+          "text": "* **Galat Lintas Perusahaan Saat Membuat RFQ Alternatif**: Pastikan **Alternative Vendor** yang dipilih terdaftar pada perusahaan aktif yang sama (atau tidak dikunci ke perusahaan lain pada kartu kontaknya). * **Tombol Pintar Alternatives Belum Langsung Terlihat**: Setelah menutup wizard RFQ Alternatif, segarkan atau buka ulang RFQ awal jika tombol statistik **Alternatives** di header belum langsung tampil."
         }
       ]
     }

@@ -1,7 +1,7 @@
 {
   "lang": "en",
   "version": "next",
-  "doc_count": 115,
+  "doc_count": 126,
   "docs": [
     {
       "id": "index",
@@ -6325,9 +6325,166 @@
       "shard_id": "shard_developer_core_1"
     },
     {
+      "id": "user/accounting-bank-reconciliation",
+      "title": "Bank Statements and Bank Reconciliation",
+      "description": "Record or import bank and cash statements, review unreconciled liquidity lines, match against open invoices or counterpart accounts, and post reconciled bank entries.",
+      "audience": "functional",
+      "module": "account",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "before-starting",
+          "depth": 2,
+          "text": "Prerequisites"
+        },
+        {
+          "id": "create-bank-statement",
+          "depth": 2,
+          "text": "Recording or Importing a Bank Statement"
+        },
+        {
+          "id": "reconcile-lines",
+          "depth": 2,
+          "text": "Reconciling Bank Statement Lines"
+        },
+        {
+          "id": "verify-cash-position",
+          "depth": 2,
+          "text": "Verifying Cash Balances After Reconciliation"
+        },
+        {
+          "id": "troubleshooting",
+          "depth": 2,
+          "text": "Troubleshooting Bank Reconciliation"
+        }
+      ],
+      "shard_id": "shard_functional_account_1"
+    },
+    {
+      "id": "user/accounting-consolidation",
+      "title": "Multi-Company Group Consolidation",
+      "description": "Configure consolidation groups, bootstrap the group financial statement chart, run period consolidations with FX translation (CTA), intercompany eliminations, and NCI, and inspect consolidated statements.",
+      "audience": "functional",
+      "module": "account",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "before-starting",
+          "depth": 2,
+          "text": "Prerequisites"
+        },
+        {
+          "id": "configure-consolidation-group",
+          "depth": 2,
+          "text": "Configuring a Consolidation Group and Group FS Chart"
+        },
+        {
+          "id": "run-consolidation",
+          "depth": 2,
+          "text": "Executing a Period Consolidation Run"
+        },
+        {
+          "id": "review-consolidated-statements",
+          "depth": 2,
+          "text": "Reviewing Consolidated Reports and the IC Matrix"
+        },
+        {
+          "id": "troubleshooting",
+          "depth": 2,
+          "text": "Troubleshooting Consolidation Reports"
+        }
+      ],
+      "shard_id": "shard_functional_account_1"
+    },
+    {
+      "id": "user/accounting-controlling-budgets-assets",
+      "title": "Controlling, Budgets (AVC), and Fixed Assets & CIP",
+      "description": "Enable enterprise finance toggles in Accounting Settings, manage Cost Centers and SKF cost allocations, enforce real-time Budget Availability Control (AVC), and track Fixed Assets and CIP depreciation.",
+      "audience": "functional",
+      "module": "account",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "enable-enterprise-finance",
+          "depth": 2,
+          "text": "Enabling Enterprise Finance Features"
+        },
+        {
+          "id": "controlling-and-skf",
+          "depth": 2,
+          "text": "Cost & Profit Center Controlling and SKF Allocations"
+        },
+        {
+          "id": "budgets-and-avc",
+          "depth": 2,
+          "text": "Budgets and Real-Time Availability Control (AVC)"
+        },
+        {
+          "id": "fixed-assets-and-cip",
+          "depth": 2,
+          "text": "Fixed Assets, CIP Settlements, and Depreciation"
+        },
+        {
+          "id": "troubleshooting",
+          "depth": 2,
+          "text": "Troubleshooting Controlling, Budgets, and Assets"
+        }
+      ],
+      "shard_id": "shard_functional_account_1"
+    },
+    {
+      "id": "user/accounting-setup-and-ledger",
+      "title": "Accounting Setup, Chart of Accounts, and Manual Journal Entries",
+      "description": "Navigate the Accounting dashboard, configure your Chart of Accounts, journals, taxes, fiscal positions, payment terms, and fiscal periods, and post or reverse manual journal entries.",
+      "audience": "functional",
+      "module": "account",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "before-starting",
+          "depth": 2,
+          "text": "Prerequisites and Accounting Roles"
+        },
+        {
+          "id": "chart-of-accounts",
+          "depth": 2,
+          "text": "Chart of Accounts and Account Tags"
+        },
+        {
+          "id": "journals-and-taxes",
+          "depth": 2,
+          "text": "Journals, Taxes, Fiscal Positions, and Payment Terms"
+        },
+        {
+          "id": "fiscal-periods-and-locks",
+          "depth": 2,
+          "text": "Fiscal Periods and Lock Dates"
+        },
+        {
+          "id": "manual-journal-entries",
+          "depth": 2,
+          "text": "Posting and Reversing Manual Journal Entries"
+        },
+        {
+          "id": "troubleshooting",
+          "depth": 2,
+          "text": "Troubleshooting Common Setup Issues"
+        }
+      ],
+      "shard_id": "shard_functional_account_1"
+    },
+    {
       "id": "user/buy-and-receive",
-      "title": "Buy and Receive Goods",
-      "description": "Operator guide for requesting quotations, confirming purchase orders, following warehouse receipts, and recording vendor bills.",
+      "title": "Purchasing, Receiving Goods, and Vendor Billing",
+      "description": "Create requests for quotation, confirm and approve purchase orders, receive partial shipments with backorders, create 3-way matched vendor bills, and handle purchase returns.",
       "audience": "functional",
       "module": "purchase",
       "models": [],
@@ -6337,40 +6494,45 @@
         {
           "id": "before-starting",
           "depth": 2,
-          "text": "Prerequisites and roles"
+          "text": "Prerequisites and Roles"
         },
         {
           "id": "request-quotation",
           "depth": 2,
-          "text": "Create a request for quotation"
+          "text": "Creating a Request for Quotation (RFQ)"
         },
         {
           "id": "confirm-and-approve",
           "depth": 2,
-          "text": "Confirm and approve the purchase order"
+          "text": "Confirming and Approving the Purchase Order"
         },
         {
           "id": "receive-goods",
           "depth": 2,
-          "text": "Receive goods and handle short deliveries"
-        },
-        {
-          "id": "handle-failure",
-          "depth": 2,
-          "text": "Troubleshooting: resolving warehouse configuration errors"
+          "text": "Receiving Goods and Handling Partial Backorders"
         },
         {
           "id": "vendor-billing",
           "depth": 2,
-          "text": "Create and verify the vendor bill"
+          "text": "Creating and Verifying the Vendor Bill (3-Way Match)"
+        },
+        {
+          "id": "purchase-returns",
+          "depth": 2,
+          "text": "Returning Goods to a Vendor"
+        },
+        {
+          "id": "handle-failure",
+          "depth": 2,
+          "text": "Troubleshooting Purchasing & Receipts"
         }
       ],
       "shard_id": "shard_functional_purchase_1"
     },
     {
       "id": "user/configure-your-workspace",
-      "title": "Configure Your Workspace, Companies, and Collaboration",
-      "description": "Learn how to find and adjust module settings, switch active companies safely, preserve ongoing chat, and collaborate using the AI Assistant and record drafts.",
+      "title": "Configure Your Workspace, Companies, and AI Assistant",
+      "description": "Configure module settings, manage users and active companies, collaborate in record chatter, and use the AI Assistant workspace safely.",
       "audience": "functional",
       "module": "base",
       "models": [],
@@ -6385,7 +6547,12 @@
         {
           "id": "find-module-settings",
           "depth": 2,
-          "text": "Finding and Editing Addon Settings"
+          "text": "Finding and Editing Module Settings"
+        },
+        {
+          "id": "manage-users-and-companies",
+          "depth": 2,
+          "text": "Managing Users, Access Rights, and Companies"
         },
         {
           "id": "switch-active-company",
@@ -6395,12 +6562,12 @@
         {
           "id": "preserve-chat-and-chatter",
           "depth": 2,
-          "text": "Preserving Messages and Open Conversations"
+          "text": "Collaborating in Record Chatter"
         },
         {
           "id": "ai-workspace-safe-drafts",
           "depth": 2,
-          "text": "Using the AI Workspace and Safe Record Drafts"
+          "text": "Using the AI Assistant Workspace"
         },
         {
           "id": "failure-recovery",
@@ -6411,9 +6578,166 @@
       "shard_id": "shard_functional_base_1"
     },
     {
+      "id": "user/hr-contracts-skills-and-analytics",
+      "title": "Employment Contracts, Skills, Resumes, and HR Analytics",
+      "description": "Track versioned employment contracts, record employee resumes, skills, and certifications, and analyze workforce metrics using Headcount Analysis, Contract History, and Skills Inventory.",
+      "audience": "functional",
+      "module": "hr",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "resume-and-skills",
+          "depth": 2,
+          "text": "Tracking Employee Resumes, Skills, and Certifications"
+        },
+        {
+          "id": "contracts-and-versions",
+          "depth": 2,
+          "text": "Managing Employment Contracts and Version History"
+        },
+        {
+          "id": "hr-analytics",
+          "depth": 2,
+          "text": "Analyzing Workforce Data (Headcount & Skills Inventory)"
+        },
+        {
+          "id": "troubleshooting",
+          "depth": 2,
+          "text": "Troubleshooting HR Records & Reports"
+        }
+      ],
+      "shard_id": "shard_functional_hr_1"
+    },
+    {
+      "id": "user/hr-employees-and-org-chart",
+      "title": "Employee Directory, Profiles, Departments, and Org Chart",
+      "description": "Browse the Employee Directory in Kanban and List views, maintain employee profiles and departments, navigate the interactive Organization Chart, and configure work locations and job positions.",
+      "audience": "functional",
+      "module": "hr",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "before-starting",
+          "depth": 2,
+          "text": "Prerequisites and HR Roles"
+        },
+        {
+          "id": "employee-directory",
+          "depth": 2,
+          "text": "Browsing the Employee Directory (Kanban and List)"
+        },
+        {
+          "id": "profiles-and-org-chart",
+          "depth": 2,
+          "text": "Maintaining Employee Profiles and the Interactive Org Chart"
+        },
+        {
+          "id": "departments-and-configuration",
+          "depth": 2,
+          "text": "Configuring Departments, Job Positions, and Work Locations"
+        },
+        {
+          "id": "troubleshooting",
+          "depth": 2,
+          "text": "Troubleshooting Employee Records"
+        }
+      ],
+      "shard_id": "shard_functional_hr_1"
+    },
+    {
+      "id": "user/inventory-quality-and-delivery",
+      "title": "Quality Control, Fleet Vehicles, Delivery Carriers, and Barcodes",
+      "description": "Configure Quality Control Points and Teams, manage Quality Checks and Quality Alerts, maintain Fleet Vehicles and delivery shipping options, and use barcodes in warehouse workflows.",
+      "audience": "functional",
+      "module": "quality_control",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "quality-control-setup",
+          "depth": 2,
+          "text": "Setting Up Quality Teams and Control Points"
+        },
+        {
+          "id": "quality-checks-and-alerts",
+          "depth": 2,
+          "text": "Running Quality Checks and Managing Quality Alerts"
+        },
+        {
+          "id": "quality-checks",
+          "depth": 3,
+          "text": "Quality Checks"
+        },
+        {
+          "id": "quality-alerts",
+          "depth": 3,
+          "text": "Quality Alerts"
+        },
+        {
+          "id": "fleet-and-delivery",
+          "depth": 2,
+          "text": "Managing Fleet Vehicles and Delivery Carriers"
+        },
+        {
+          "id": "warehouse-barcodes",
+          "depth": 2,
+          "text": "Using Barcodes and GS1 Nomenclature"
+        },
+        {
+          "id": "troubleshooting",
+          "depth": 2,
+          "text": "Troubleshooting Quality & Delivery Operations"
+        }
+      ],
+      "shard_id": "shard_functional_quality_control_1"
+    },
+    {
+      "id": "user/inventory-traceability-and-routes",
+      "title": "Lots, Serials, Expiry Dates, Multi-Step Routes, and Landed Costs",
+      "description": "Enable advanced warehouse settings, track lots, unique serial numbers, and expiration dates, configure storage locations, putaway rules, and routes, and allocate Landed Costs to stock valuation.",
+      "audience": "functional",
+      "module": "stock",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "enable-inventory-features",
+          "depth": 2,
+          "text": "Enabling Traceability, Locations, Packages, and Routes"
+        },
+        {
+          "id": "lots-serials-expiry",
+          "depth": 2,
+          "text": "Tracking Lots, Serial Numbers, and Expiration Dates"
+        },
+        {
+          "id": "locations-routes-putaway",
+          "depth": 2,
+          "text": "Locations, Storage Categories, Putaway Rules, and Routes"
+        },
+        {
+          "id": "landed-costs",
+          "depth": 2,
+          "text": "Allocating Landed Costs to Stock Valuation"
+        },
+        {
+          "id": "troubleshooting",
+          "depth": 2,
+          "text": "Troubleshooting Traceability, Routes, and Valuation"
+        }
+      ],
+      "shard_id": "shard_functional_stock_1"
+    },
+    {
       "id": "user/manage-warehouse",
-      "title": "Manage Warehouse Transfers, Lots, Short Receipts, and Replenishment",
-      "description": "Operator instructions for managing warehouse operations in ERPForAll: opening transfers, inspecting lots, processing partial receipts with backorders, requesting manual replenishment, and verifying updated stock lines.",
+      "title": "Warehouse Operations, Cycle Counts, Scrap, and Replenishment",
+      "description": "Navigate the Inventory Overview, process receipts, deliveries, and backorders, perform physical stock counts and scrap orders, trigger replenishment reordering rules, and audit stock reports.",
       "audience": "functional",
       "module": "stock",
       "models": [],
@@ -6423,12 +6747,12 @@
         {
           "id": "before-starting",
           "depth": 2,
-          "text": "Prerequisites and Role Requirements"
+          "text": "Prerequisites and Roles"
         },
         {
           "id": "choose-transfer-and-track-lots",
           "depth": 2,
-          "text": "Selecting a Transfer and Inspecting Lots"
+          "text": "Opening Transfers from the Inventory Overview"
         },
         {
           "id": "receive-less-than-planned",
@@ -6436,27 +6760,75 @@
           "text": "Receiving Less Than Planned and Handling Backorders"
         },
         {
-          "id": "manual-replenishment-buy",
+          "id": "physical-inventory-and-scrap",
           "depth": 2,
-          "text": "Manual Replenishment with the Buy Route"
+          "text": "Physical Inventory Counts and Scrap Orders"
         },
         {
-          "id": "failure-and-recovery",
+          "id": "physical-stock-count",
+          "depth": 3,
+          "text": "Recording a Physical Stock Count"
+        },
+        {
+          "id": "scrap-orders",
+          "depth": 3,
+          "text": "Recording Damaged or Obsolete Stock (Scrap)"
+        },
+        {
+          "id": "manual-replenishment-buy",
           "depth": 2,
-          "text": "Handling Disallowed Negative Stock and Missing Quantities"
+          "text": "Replenishment with Reordering Rules (Buy Route)"
         },
         {
           "id": "verify-stock-records",
           "depth": 2,
-          "text": "Verifying the Updated Stock Record"
+          "text": "Auditing Stock Position and Moves History"
+        },
+        {
+          "id": "failure-and-recovery",
+          "depth": 2,
+          "text": "Troubleshooting Warehouse Operations"
         }
       ],
       "shard_id": "shard_functional_stock_1"
     },
     {
+      "id": "user/master-data-contacts-products",
+      "title": "Contacts, Products, Units of Measure, and Reference Data",
+      "description": "Maintain shared master data for customers, vendors, products, variants, units of measure, and currencies used across every ERPForAll module.",
+      "audience": "functional",
+      "module": "product",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "manage-contacts",
+          "depth": 2,
+          "text": "Managing Contacts (Customers and Vendors)"
+        },
+        {
+          "id": "manage-products",
+          "depth": 2,
+          "text": "Managing Products and Product Variants"
+        },
+        {
+          "id": "uom-and-currencies",
+          "depth": 2,
+          "text": "Units of Measure, Currencies, and Languages"
+        },
+        {
+          "id": "best-practices",
+          "depth": 2,
+          "text": "Master Data Hygiene Best Practices"
+        }
+      ],
+      "shard_id": "shard_functional_product_1"
+    },
+    {
       "id": "user/operations-guide",
-      "title": "Daily operations guide",
-      "description": "Follow a sale, purchase or warehouse receipt to the accounting document that records its outcome.",
+      "title": "ERPForAll User Manual: Daily Operations Guide",
+      "description": "Start here to navigate ERPForAll end to end across Accounting, Purchasing, Inventory, Sales, Human Resources, and Workspace administration.",
       "audience": "functional",
       "module": "base",
       "models": [],
@@ -6466,20 +6838,68 @@
         {
           "id": "choose-workflow",
           "depth": 2,
-          "text": "Choose a workflow"
+          "text": "Choose Your Workflow"
         },
         {
           "id": "follow-one-purchase",
           "depth": 2,
-          "text": "Follow one purchase across teams"
+          "text": "End-to-End Business Cycles Across Teams"
+        },
+        {
+          "id": "navigation-tips",
+          "depth": 2,
+          "text": "Daily Navigation Tips"
         }
       ],
       "shard_id": "shard_functional_base_1"
     },
     {
+      "id": "user/purchasing-agreements-and-controls",
+      "title": "Purchase Agreements, Alternative RFQs, Pricelists, and Analytics",
+      "description": "Configure Purchase Settings, maintain Vendor Pricelists, negotiate Blanket Purchase Agreements, compare Alternative RFQs side by side, and analyze spend with Purchase Reports.",
+      "audience": "functional",
+      "module": "purchase",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "purchase-settings",
+          "depth": 2,
+          "text": "Configuring Purchase Controls and Settings"
+        },
+        {
+          "id": "vendor-pricelists",
+          "depth": 2,
+          "text": "Maintaining Vendor Pricelists"
+        },
+        {
+          "id": "purchase-agreements",
+          "depth": 2,
+          "text": "Negotiating Purchase Agreements (Blanket Orders)"
+        },
+        {
+          "id": "alternative-rfqs",
+          "depth": 2,
+          "text": "Comparing Alternative RFQs Side by Side"
+        },
+        {
+          "id": "purchase-analytics",
+          "depth": 2,
+          "text": "Analyzing Spend with Purchase Reports"
+        },
+        {
+          "id": "troubleshooting",
+          "depth": 2,
+          "text": "Troubleshooting Agreements & Alternative RFQs"
+        }
+      ],
+      "shard_id": "shard_functional_purchase_1"
+    },
+    {
       "id": "user/read-financial-reports",
-      "title": "Financial Reports: Scope, Navigation, Drill-Down, and Export",
-      "description": "Select reporting periods and company scope, review financial statements, drill down to supporting journal items, and export reports.",
+      "title": "Financial Reports: Statements, Drill-Down, and Export",
+      "description": "Configure reporting periods and comparisons, read Balance Sheet, Profit and Loss, General Ledger, Cash Flow, and Aged reports, drill down to journal items, and export PDF or XLSX.",
       "audience": "functional",
       "module": "account_reporting",
       "models": [],
@@ -6494,35 +6914,35 @@
         {
           "id": "navigate-and-scope",
           "depth": 2,
-          "text": "Accessing Reports and Setting the Scope"
+          "text": "Available Reports and Filter Controls"
         },
         {
           "id": "read-and-drill",
           "depth": 2,
-          "text": "Reading Figures and Drilling Down"
+          "text": "Navigating Hierarchies and Drilling Down"
         },
         {
           "id": "cash-flow-classification",
           "depth": 2,
-          "text": "Classifying Cash Flow Activities"
+          "text": "Understanding the Cash Flow Statement"
         },
         {
           "id": "export-and-print",
           "depth": 2,
-          "text": "Exporting and Printing Statements"
+          "text": "Exporting to PDF and XLSX"
         },
         {
           "id": "failure-and-recovery",
           "depth": 2,
-          "text": "Troubleshooting and Recovery"
+          "text": "Troubleshooting Reports"
         }
       ],
       "shard_id": "shard_functional_account_reporting_1"
     },
     {
       "id": "user/record-and-settle-invoices",
-      "title": "Prepare Journals, Post Invoices, and Settle Payments",
-      "description": "Step-by-step operator guide to configuring journals, issuing customer invoices, recording vendor bills, registering payments, and tracking settlement reconciliation in ERPForAll.",
+      "title": "Customer Invoices, Vendor Bills, Payments, and Credit Notes",
+      "description": "Create and post customer invoices and vendor bills, register partial and full payments, issue credit notes and refunds, and use batch payments and follow-up reports.",
       "audience": "functional",
       "module": "account",
       "models": [],
@@ -6532,32 +6952,37 @@
         {
           "id": "before-starting",
           "depth": 2,
-          "text": "Prerequisites and Required Roles"
+          "text": "Before Starting"
         },
         {
-          "id": "prepare-journals",
+          "id": "customer-invoices",
           "depth": 2,
-          "text": "Preparing Accounting Journals"
+          "text": "Creating and Posting a Customer Invoice"
         },
         {
-          "id": "create-and-post-invoice",
+          "id": "register-payments",
           "depth": 2,
-          "text": "Creating and Confirming an Invoice or Bill"
+          "text": "Registering Partial and Full Payments"
         },
         {
-          "id": "register-payment",
+          "id": "credit-notes",
           "depth": 2,
-          "text": "Registering Payment"
+          "text": "Issuing Credit Notes and Refunds"
         },
         {
-          "id": "review-reconciliation",
+          "id": "vendor-bills",
           "depth": 2,
-          "text": "Verifying Status and Reconciliation Outcomes"
+          "text": "Recording and Settling Vendor Bills"
         },
         {
-          "id": "troubleshooting-recovery",
+          "id": "batch-followups-recurring",
           "depth": 2,
-          "text": "Handling Common Validation Failures"
+          "text": "Batch Payments, Follow-Ups, and Recurring Entries"
+        },
+        {
+          "id": "troubleshooting",
+          "depth": 2,
+          "text": "Troubleshooting AR/AP Posting"
         }
       ],
       "shard_id": "shard_functional_account_1"
@@ -6601,6 +7026,39 @@
       "shard_id": "shard_functional_web_1"
     },
     {
+      "id": "user/sales-pricing-and-analytics",
+      "title": "Pricelists, Discounts, Sales Teams, Margins, and Sales Analytics",
+      "description": "Configure multi-currency pricelists, discounts and loyalty programs, quotation templates, and sales teams, and analyze revenue and margins with Sales Reports, Pivot, and Graph views.",
+      "audience": "functional",
+      "module": "sale",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "pricelists",
+          "depth": 2,
+          "text": "Configuring Multi-Currency Pricelists"
+        },
+        {
+          "id": "discounts-templates-teams",
+          "depth": 2,
+          "text": "Discounts & Loyalty, Quotation Templates, and Sales Teams"
+        },
+        {
+          "id": "sales-reporting",
+          "depth": 2,
+          "text": "Analyzing Revenue and Margins with Sales Reports"
+        },
+        {
+          "id": "troubleshooting",
+          "depth": 2,
+          "text": "Troubleshooting Pricing and Sales Reports"
+        }
+      ],
+      "shard_id": "shard_functional_sale_1"
+    },
+    {
       "id": "user/stock-receipt-admission",
       "title": "Validate a company-owned receipt",
       "description": "Receive storable stock when Stock Valuation Admission is installed.",
@@ -6623,8 +7081,8 @@
     },
     {
       "id": "user/work-with-customers",
-      "title": "Work with Customers and Sales Quotations",
-      "description": "Learn how to locate a customer contact, prepare a sales quotation, add line items, confirm the quotation into a sales order, and verify delivery and invoicing status.",
+      "title": "Sales Quotations, Order Fulfillment, Invoicing, and Returns",
+      "description": "Prepare quotations with pricelists, templates, and optional products, confirm sales orders, deliver goods with FIFO stock reservation, invoice via regular or down-payment flows, and handle returns.",
       "audience": "functional",
       "module": "sale",
       "models": [],
@@ -6637,29 +7095,39 @@
           "text": "Prerequisites and User Roles"
         },
         {
-          "id": "find-customer",
-          "depth": 2,
-          "text": "Find an Existing Customer Contact"
-        },
-        {
           "id": "create-quote",
           "depth": 2,
-          "text": "Create a New Quotation and Add Order Lines"
+          "text": "Creating a Quotation with Pricelists, Templates, and Optional Products"
         },
         {
           "id": "confirm-order",
           "depth": 2,
-          "text": "Progress and Confirm the Quotation into a Sales Order"
+          "text": "Confirming the Quotation into a Sales Order"
+        },
+        {
+          "id": "deliver-and-return",
+          "depth": 2,
+          "text": "Delivering Goods and Handling Customer Returns"
+        },
+        {
+          "id": "validate-delivery",
+          "depth": 3,
+          "text": "Validating the Outgoing Delivery"
+        },
+        {
+          "id": "customer-returns",
+          "depth": 3,
+          "text": "Processing a Customer Return"
+        },
+        {
+          "id": "invoicing-and-credit-notes",
+          "depth": 2,
+          "text": "Invoicing (Regular vs. Down Payments) and Credit Notes"
         },
         {
           "id": "handle-failure",
           "depth": 2,
-          "text": "Handling Confirmation Failure and Recovery"
-        },
-        {
-          "id": "track-order",
-          "depth": 2,
-          "text": "Track Order Progress, Invoicing, and Delivery Status"
+          "text": "Troubleshooting Sales Orders"
         }
       ],
       "shard_id": "shard_functional_sale_1"

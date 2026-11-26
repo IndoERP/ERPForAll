@@ -4,12 +4,13 @@
   "version": "next",
   "audience": "functional",
   "modules": [
+    "purchase",
     "purchase"
   ],
   "docs": [
     {
       "page_id": "user/buy-and-receive",
-      "title": "Buy and Receive Goods",
+      "title": "Purchasing, Receiving Goods, and Vendor Billing",
       "module": "purchase",
       "sections": [
         {
@@ -18,31 +19,74 @@
         },
         {
           "anchor": "top",
-          "text": "This guide walks you through the complete purchasing cycle in ERPForAll: preparing a request for quotation, confirming and approving the purchase order, checking goods in as they arrive at the warehouse, and generating the corresponding vendor bill."
+          "text": "This chapter covers the end-to-end **Procure-to-Pay** workflow in ERPForAll—from raising a Request for Quotation (RFQ) and confirming a Purchase Order to receiving partial warehouse deliveries with backorders, generating a 3-way matched Vendor Bill, and processing vendor returns."
         },
         {
           "anchor": "before-starting",
-          "text": "To work through this process, you need the following access rights and configurations: * **Purchase role User**: Required to create requests for quotation, edit draft lines, and confirm standard orders. * **Purchase role Administrator**: Required if an order exceeds your company's approval threshold, requiring second approval via **Approve Order**, or to unlock orders. * **Warehouse / Inventory User**: Required to inspect and validate incoming shipments under **Inventory > Operations > Receipts**. * **Accounting User**: To create a draft vendor bill from a purchase order, an operator needs both Purchase and Accounting access rights (a purchase-only user cannot generate draft bills). Accounting access is also required to post bills in the accounting ledger. * **Configuration**: For direct receipts, **Purchase Stock** must be active with a single-step receiving warehouse. For generating bills from orders, the company must have a standard purchase journal configured."
+          "text": "* **Purchase User**: Creates RFQs, manages product lines, and confirms orders within the company approval threshold. * **Purchase Administrator**: Approves orders exceeding the double-approval threshold (**Approve Order**), locks/unlocks confirmed orders, and configures Purchase Settings. * **Inventory User**: Validates incoming receipts and backorders under **Inventory → Operations → Receipts**. * **Accounting User**: Creates draft vendor bills from confirmed purchase orders, sets the **Bill Date**, posts bills to the Purchase journal, and registers vendor payments."
         },
         {
           "anchor": "request-quotation",
-          "text": "Follow these steps to create and calculate a new purchase request: 1. Navigate to **Purchase > Orders > Requests for Quotation** and click **New**. 2. Verify the prefilled company, currency, buyer name, and order deadline. Choose the partner in the **Vendor** field. 3. Under the **Products** tab, click **Add a line**. Type part of the item name (for example, Office Chair) and select the matching product from the dropdown. 4. Enter the desired quantity in the table (for example, 10.00). You can leave unit, description, price, and taxes blank to pull them automatically from the vendor pricing or product master. 5. Click **Save**. **Visible outcome**: The document is assigned a unique tracking sequence such as PO00001. Line amounts, untaxed total, and combined taxes recalculate based on the entered quantity."
+          "text": "1. Navigate to **Purchase → Orders → Requests for Quotation** and click **New**. 2. Select the **Vendor** and check **Order Deadline**, **Expected Arrival**, **Currency**, and **Buyer**. 3. Under the **Products** tab, click **Add a line** and choose the product, **Quantity**, **Unit**, **Unit Price** (auto-filled when a Vendor Pricelist matches), and **Taxes**. 4. Click **Save**. ERPForAll assigns a purchase sequence number (for example, PO00023) and computes untaxed, tax, and grand totals."
         },
         {
           "anchor": "confirm-and-approve",
-          "text": "Once prices and details are settled, proceed to confirmation: 1. On the saved request form, click **Confirm Order**. 2. If the total is below the company approval threshold, the status updates immediately to purchase order. 3. If your company enforces a second approval threshold and the order total reaches that minimum, the status moves to **To Approve**. 4. A Purchase administrator reviews the order and clicks **Approve Order** to complete confirmation. **What posts data**: Clicking **Confirm Order** (or **Approve Order** for approval-gated orders) locks the partner and currency, commits the order lines, and generates the linked incoming shipment in inventory."
+          "text": "1. Review vendor pricing and quantities on the RFQ and click **Confirm Order**. 2. If the order total is below the company approval threshold, it immediately becomes a **Purchase Order** and creates the incoming warehouse receipt (accessible from the **Receipt** smart button). 3. If the order reaches or exceeds your company's second-approval minimum (configured in **Purchase → Configuration → Settings**), the status moves to **To Approve** until a Purchase Administrator clicks **Approve Order**. ![A confirmed Purchase Order locks vendor and currency, displays its Purchase Order status, and links directly to the warehouse Receipt smart button.](/en/next/assets/docs/assets/user-manual/purchasing/confirmed-po.webp)"
         },
         {
           "anchor": "receive-goods",
-          "text": "When goods arrive at the dock: 1. On the confirmed purchase order, click **Receipt** (or go to **Inventory > Operations > Receipts** and locate the order number in **Source Document**). 2. Review the scheduled items under **Operations** or **Detailed Operations**. 3. Update the quantities done to reflect actual received counts. For example, if 10.00 units were ordered and only 8.00 arrived, enter 8.00. 4. Click **Validate**. 5. If the operation type is configured with **Ask**, select **Create Backorder** to keep the remaining 2.00 units on an open transfer, or choose **Close Remaining Demand** if no further shipment will arrive. **Visible outcome**: The incoming transfer status changes to **Done**. Back on the purchase order under **Products**, the **Received Qty** column updates to show the completed count (8.00)."
-        },
-        {
-          "anchor": "handle-failure",
-          "text": "During order confirmation, you might encounter an error: * **Problem**: Clicking **Confirm Order** or **Approve Order** fails with a configuration error stating that incoming operations cannot be created. * **Cause**: This occurs when your active company has multiple active warehouses, an inactive incoming operation type, or a multi-step receiving route that direct purchase receipts do not support. * **Recovery**: Open **Inventory > Configuration > Warehouses** with an administrator account. Ensure the target warehouse has an active incoming operation type set to 1-step receiving (Receive goods directly). Once configured, return to the purchase order and click **Confirm Order** or **Approve Order** again."
+          "text": "When goods arrive at the receiving dock: 1. Click the **Receipt** smart button on the confirmed Purchase Order (or open **Inventory → Operations → Receipts** and match **Source Document** to your PO number). 2. Under **Detailed Operations**, update the **Quantity / Done** count to match the physical delivery (for example, entering 6 when 10 units were ordered). 3. Click **Validate**. 4. When received quantity is less than planned demand, the **Remaining demand** dialog prompts you to: * **Create Backorder**: Generates a linked open receipt for the remaining 4 units (Back Order of Main/IN/...). * **Close Remaining Demand / No Backorder**: Closes the receipt at 6 units without expecting further delivery. 5. Return to the Purchase Order: **Received Qty** reflects 6, and once the backorder receipt is validated for the remaining 4 units, **Received Qty** updates to 10 and the billing status becomes **Waiting Bills**. ![When receiving fewer items than ordered, the Remaining demand dialog lets you create a linked backorder receipt for the balance.](/en/next/assets/docs/assets/user-manual/purchasing/backorder-dialog.webp)"
         },
         {
           "anchor": "vendor-billing",
-          "text": "After goods are recorded at the warehouse, generate the corresponding vendor bill: 1. Open the confirmed purchase order containing received quantities. Creating a draft bill from the order requires an operator with both Purchase and Accounting access rights; purchase-only users cannot generate bills. 2. Click **First Vendor Bill**. If a bill was already generated, clicking **First Vendor Bill** again reopens that same first bill (even if posted or cancelled) rather than creating a new draft. 3. Review the generated draft bill under **Accounting > Vendors > Bills**, populated with the received quantities, agreed purchase price, and vendor taxes. 4. Check the draft bill lines against the physical invoice provided by the vendor. 5. Click **Confirm** on the vendor bill to post the journal items to the purchase journal. 6. To bill positive remaining received quantities, use **Bill Remaining Received Goods** instead. For example, if you ordered 10.00 units, received 8.00 units, and the first bill covered 5.00 units, clicking **Bill Remaining Received Goods** drafts a bill for the remaining 3.00 units. If all 8.00 received units were already billed, retrying opens the latest active linked bill."
+          "text": "1. On the confirmed Purchase Order with received quantities, click **Create Bill** (requires both Purchase and Accounting access rights). 2. ERPForAll opens a draft Vendor Bill populated with the received quantities, agreed PO prices, purchase taxes, and **Purchase Match** status (showing **Matched** when ordered, received, and billed quantities align under 3-Way Matching). 3. Enter the vendor's **Bill Date** and invoice reference number, review line amounts against the physical supplier invoice, and click **Confirm** to post the bill (BILL/...). 4. Click **Register Payment** to settle the bill and move its status to **PAID**. Back on the PO, **Billed Qty** updates and status becomes **Fully Billed**. ![A Vendor Bill drafted from a Purchase Order verifies ordered, received, and billed quantities with Purchase Match: Matched.](/en/next/assets/docs/assets/user-manual/purchasing/vendor-bill-3way-match.webp)"
+        },
+        {
+          "anchor": "purchase-returns",
+          "text": "If received goods are damaged or rejected after validation: 1. Open the completed **Receipt** (Done) from the Purchase Order's **Receipt** smart button and click **Return**. 2. ERPForAll creates a reverse outgoing transfer (Return of Main/IN/... from Main/Stock to Vendors). 3. Verify or enter the return **Demand** quantity on the move line (for example, 1 unit), click **Confirm**, and click **Validate** to ship the returned items out of stock. 4. Record a matching **Vendor Refund / Credit Note** in Accounting if the vendor bill was already posted."
+        },
+        {
+          "anchor": "handle-failure",
+          "text": "* **Cannot Confirm Draft Vendor Bill (\"enter the bill date before confirming\")**: Draft bills created from Purchase Orders require an explicit **Bill Date** matching the vendor's invoice before clicking **Confirm**. * **Warehouse Configuration Error on PO Confirmation**: Ensure the company has an active warehouse with a valid incoming operation type configured under **Inventory → Configuration → Operation Types**. * **Short-Receipt Billing**: When **Received Quantities** control is enabled, ERPForAll bills only the quantities actually validated on warehouse receipts. Validate pending backorders before billing the remainder."
+        }
+      ]
+    },
+    {
+      "page_id": "user/purchasing-agreements-and-controls",
+      "title": "Purchase Agreements, Alternative RFQs, Pricelists, and Analytics",
+      "module": "purchase",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "Beyond single purchase orders, ERPForAll helps procurement teams standardize supplier pricing, run competitive tenders with Alternative RFQs, negotiate multi-period Blanket Agreements, enforce approval and 3-way match controls, and monitor spend through dynamic Purchase Reports."
+        },
+        {
+          "anchor": "purchase-settings",
+          "text": "Open **Purchase → Configuration → Settings** (requires Purchase Administrator / Settings Administration access) to configure company-wide procurement controls: * **Order Approval**: Require a manager's second approval (**Approve Order**) whenever a Purchase Order exceeds a configured monetary threshold (for example, $5,000). * **Lock Confirmed Orders**: Automatically lock confirmed POs against post-confirmation edits, or leave confirmed orders editable when buyers need flexibility. * **Three-Way Bill Matching**: Cross-check **Ordered**, **Received**, and **Billed** quantities on Vendor Bills so Accounts Payable sees at a glance whether a bill is **Matched** or requires exception review before payment. * **Days to Purchase**: Lead time buffer used by automated inventory replenishment to schedule RFQs ahead of stockouts. ![Purchase Settings centralizes approval thresholds, order locking, 3-way bill matching, and procurement lead times.](/en/next/assets/docs/assets/user-manual/purchasing/purchase-settings.webp)"
+        },
+        {
+          "anchor": "vendor-pricelists",
+          "text": "1. Open **Purchase → Products → Vendor Pricelists** to view all negotiated supplier prices across products. 2. Click **New** to define a vendor price rule: * **Vendor** and **Product** (plus optional vendor product name/code). * **Minimum Quantity**: Volume tier threshold (for example, 1 unit vs. 50 units bulk pricing). * **Unit Price**, **Currency**, **Delivery Lead Time (days)**, and optional **Validity** dates. 3. Whenever a buyer selects that product on a new RFQ—or when Inventory Replenishment auto-generates an RFQ—ERPForAll selects the best matching vendor and unit price automatically. ![Vendor Pricelists store volume tiers, currencies, negotiated unit prices, and supplier delivery lead times.](/en/next/assets/docs/assets/user-manual/purchasing/vendor-pricelists.webp)"
+        },
+        {
+          "anchor": "purchase-agreements",
+          "text": "Use **Purchase Agreements** to lock in framework pricing and target quantities with a vendor over a contract period: 1. Open **Purchase → Orders → Purchase Agreements** and click **New**. 2. Choose the **Agreement Type** (*Blanket Order* or *Purchase Template*), select the **Vendor**, set contract dates, and add product lines with contracted quantities and unit prices. 3. Click **Save** and **Confirm** (assigning a sequence such as PA00001). 4. When you need a delivery call-off, create an RFQ linked to the agreement so contracted prices copy cleanly and ordered quantities accumulate against the agreement target. ![A confirmed Blanket Purchase Agreement tracks contracted vendor products, target quantities, and agreed unit prices.](/en/next/assets/docs/assets/user-manual/purchasing/purchase-agreement.webp)"
+        },
+        {
+          "anchor": "alternative-rfqs",
+          "text": "To solicit competitive bids from multiple suppliers for the same requirement: 1. Open a draft RFQ (for example, PO00023) and click **Alternative** (or **Create Alternative**). 2. Select an **Alternative Vendor** belonging to the active company (or a shared company-agnostic contact) and confirm to generate a linked alternative RFQ (for example, PO00024). 3. Enter each vendor's quoted unit prices and lead times on their respective RFQs. 4. Click **Compare Product Lines** (or open the **Alternatives** comparison view) to compare vendor quotes line by line—including unit price, quantity, currency, and expected arrival—and choose the winning line or RFQ to confirm. ![Alternative RFQ comparison displays competing vendor quotes side by side so buyers can select the best offer before confirming.](/en/next/assets/docs/assets/user-manual/purchasing/compare-alternatives.webp)"
+        },
+        {
+          "anchor": "purchase-analytics",
+          "text": "Open **Purchase → Reporting** to monitor procurement performance across three built-in views: * **Purchase Report**: Dynamic hierarchical report summarizing total spend by vendor and purchase order with period filters, comparisons, drill-down, and PDF/XLSX export. * **Purchases by Product**: Tracks **Ordered**, **Received**, **Billed**, and **Untaxed** totals per product to highlight open receiving or billing backlogs. * **Purchase Pivot & Graph**: Interactive **List**, **Pivot**, and **Graph** analysis for slicing spend by vendor, buyer, product category, order date, or status. ![The Purchase Report rolls up total procurement spend by vendor and order with interactive filtering and export.](/en/next/assets/docs/assets/user-manual/purchasing/purchase-report.webp)"
+        },
+        {
+          "anchor": "troubleshooting",
+          "text": "* **Cross-Company Error When Creating Alternative RFQ**: Ensure the selected **Alternative Vendor** belongs to the same active company (or has no restrictive company set on its contact record). * **Alternatives Smart Button Not Immediately Visible**: After closing the Alternative RFQ wizard, refresh or reopen the original RFQ if the **Alternatives** stat button has not updated in the header yet."
         }
       ]
     }

@@ -1,12 +1,169 @@
 {
   "lang": "id",
   "version": "next",
-  "doc_count": 9,
+  "doc_count": 20,
   "docs": [
     {
+      "id": "user/accounting-bank-reconciliation",
+      "title": "Rekening Koran dan Rekonsiliasi Bank",
+      "description": "Mencatat atau mengimpor rekening koran bank dan kas, meninjau baris belum terekon, mencocokkan dengan faktur terbuka atau akun lawan, serta memposting jurnal bank.",
+      "audience": "functional",
+      "module": "account",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "before-starting",
+          "depth": 2,
+          "text": "Prasyarat"
+        },
+        {
+          "id": "create-bank-statement",
+          "depth": 2,
+          "text": "Mencatat atau Mengimpor Rekening Koran"
+        },
+        {
+          "id": "reconcile-lines",
+          "depth": 2,
+          "text": "Merekonsiliasi Baris Rekening Koran"
+        },
+        {
+          "id": "verify-cash-position",
+          "depth": 2,
+          "text": "Memverifikasi Saldo Kas Setelah Rekonsiliasi"
+        },
+        {
+          "id": "troubleshooting",
+          "depth": 2,
+          "text": "Mengatasi Kendala Rekonsiliasi Bank"
+        }
+      ],
+      "shard_id": "shard_functional_account_1"
+    },
+    {
+      "id": "user/accounting-consolidation",
+      "title": "Konsolidasi Grup Multi-Perusahaan",
+      "description": "Mengatur grup konsolidasi, membangun struktur Group FS Chart, menjalankan konsolidasi periode lengkap dengan penjabaran kurs (CTA), eliminasi antarperusahaan, dan NCI, serta meninjau laporan konsolidasian.",
+      "audience": "functional",
+      "module": "account",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "before-starting",
+          "depth": 2,
+          "text": "Prasyarat"
+        },
+        {
+          "id": "configure-consolidation-group",
+          "depth": 2,
+          "text": "Mengatur Grup Konsolidasi dan Group FS Chart"
+        },
+        {
+          "id": "run-consolidation",
+          "depth": 2,
+          "text": "Menjalankan Konsolidasi Periode"
+        },
+        {
+          "id": "review-consolidated-statements",
+          "depth": 2,
+          "text": "Meninjau Laporan Konsolidasian dan Matriks IC"
+        },
+        {
+          "id": "troubleshooting",
+          "depth": 2,
+          "text": "Mengatasi Kendala Laporan Konsolidasi"
+        }
+      ],
+      "shard_id": "shard_functional_account_1"
+    },
+    {
+      "id": "user/accounting-controlling-budgets-assets",
+      "title": "Controlling, Anggaran (AVC), serta Aset Tetap & CIP",
+      "description": "Mengaktifkan fitur keuangan enterprise di Pengaturan Akuntansi, mengelola Cost Center dan alokasi SKF, menerapkan Kontrol Ketersediaan Anggaran (AVC) real-time, serta melacak Aset Tetap dan CIP.",
+      "audience": "functional",
+      "module": "account",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "enable-enterprise-finance",
+          "depth": 2,
+          "text": "Mengaktifkan Fitur Keuangan Enterprise"
+        },
+        {
+          "id": "controlling-and-skf",
+          "depth": 2,
+          "text": "Cost & Profit Center Controlling dan Alokasi SKF"
+        },
+        {
+          "id": "budgets-and-avc",
+          "depth": 2,
+          "text": "Anggaran dan Kontrol Ketersediaan Real-Time (AVC)"
+        },
+        {
+          "id": "fixed-assets-and-cip",
+          "depth": 2,
+          "text": "Aset Tetap, Penyelesaian CIP, dan Penyusutan"
+        },
+        {
+          "id": "troubleshooting",
+          "depth": 2,
+          "text": "Mengatasi Kendala Controlling, Anggaran, dan Aset"
+        }
+      ],
+      "shard_id": "shard_functional_account_1"
+    },
+    {
+      "id": "user/accounting-setup-and-ledger",
+      "title": "Pengaturan Akuntansi, Bagan Akun, dan Entri Jurnal Manual",
+      "description": "Menavigasi dasbor Akuntansi, mengatur Bagan Akun, jurnal, pajak, posisi fiskal, termin pembayaran, periode fiskal, serta memposting atau membalik entri jurnal manual.",
+      "audience": "functional",
+      "module": "account",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "before-starting",
+          "depth": 2,
+          "text": "Prasyarat dan Peran Akuntansi"
+        },
+        {
+          "id": "chart-of-accounts",
+          "depth": 2,
+          "text": "Bagan Akun (Chart of Accounts) dan Tag Akun"
+        },
+        {
+          "id": "journals-and-taxes",
+          "depth": 2,
+          "text": "Jurnal, Pajak, Posisi Fiskal, dan Termin Pembayaran"
+        },
+        {
+          "id": "fiscal-periods-and-locks",
+          "depth": 2,
+          "text": "Periode Fiskal dan Tanggal Kunci (Lock Dates)"
+        },
+        {
+          "id": "manual-journal-entries",
+          "depth": 2,
+          "text": "Memposting dan Membalik Entri Jurnal Manual"
+        },
+        {
+          "id": "troubleshooting",
+          "depth": 2,
+          "text": "Mengatasi Masalah Pengaturan Umum"
+        }
+      ],
+      "shard_id": "shard_functional_account_1"
+    },
+    {
       "id": "user/buy-and-receive",
-      "title": "Membeli dan Menerima Barang",
-      "description": "Panduan operator untuk meminta penawaran, mengonfirmasi pesanan pembelian, memantau penerimaan gudang, dan mencatat tagihan vendor.",
+      "title": "Pembelian, Penerimaan Barang, dan Tagihan Pemasok",
+      "description": "Membuat permintaan penawaran (RFQ), mengonfirmasi dan menyetujui pesanan pembelian, menerima pengiriman parsial dengan backorder, membuat tagihan pemasok 3-way match, serta menangani retur pembelian.",
       "audience": "functional",
       "module": "purchase",
       "models": [],
@@ -16,40 +173,45 @@
         {
           "id": "before-starting",
           "depth": 2,
-          "text": "Prasyarat dan peran pengguna"
+          "text": "Prasyarat dan Peran"
         },
         {
           "id": "request-quotation",
           "depth": 2,
-          "text": "Membuat permintaan penawaran harga"
+          "text": "Membuat Permintaan Penawaran (RFQ)"
         },
         {
           "id": "confirm-and-approve",
           "depth": 2,
-          "text": "Mengonfirmasi dan menyetujui pesanan pembelian"
+          "text": "Mengonfirmasi dan Menyetujui Pesanan Pembelian"
         },
         {
           "id": "receive-goods",
           "depth": 2,
-          "text": "Menerima barang dan mengelola penerimaan parsial"
-        },
-        {
-          "id": "handle-failure",
-          "depth": 2,
-          "text": "Penanganan kendala: mengatasi galat konfigurasi gudang"
+          "text": "Menerima Barang dan Menangani Backorder Parsial"
         },
         {
           "id": "vendor-billing",
           "depth": 2,
-          "text": "Membuat dan memeriksa tagihan vendor"
+          "text": "Membuat dan Memverifikasi Tagihan Pemasok (3-Way Match)"
+        },
+        {
+          "id": "purchase-returns",
+          "depth": 2,
+          "text": "Mengembalikan Barang ke Pemasok (Retur Pembelian)"
+        },
+        {
+          "id": "handle-failure",
+          "depth": 2,
+          "text": "Mengatasi Kendala Pembelian & Penerimaan"
         }
       ],
       "shard_id": "shard_functional_purchase_1"
     },
     {
       "id": "user/configure-your-workspace",
-      "title": "Mengonfigurasi Ruang Kerja, Perusahaan, dan Kolaborasi",
-      "description": "Pelajari cara menemukan dan mengubah pengaturan modul, beralih perusahaan aktif dengan aman, mempertahankan riwayat obrolan, serta berkolaborasi menggunakan AI Assistant dan draf dokumen.",
+      "title": "Mengatur Ruang Kerja, Perusahaan, dan Asisten AI",
+      "description": "Mengatur konfigurasi modul, mengelola pengguna dan perusahaan aktif, berkolaborasi lewat chatter dokumen, serta menggunakan Asisten AI secara aman.",
       "audience": "functional",
       "module": "base",
       "models": [],
@@ -67,32 +229,194 @@
           "text": "Menemukan dan Mengubah Pengaturan Modul"
         },
         {
+          "id": "manage-users-and-companies",
+          "depth": 2,
+          "text": "Mengelola Pengguna, Hak Akses, dan Perusahaan"
+        },
+        {
           "id": "switch-active-company",
           "depth": 2,
-          "text": "Beralih Perusahaan dan Menjaga Perubahan Data"
+          "text": "Berpindah Perusahaan dan Menjaga Suntingan"
         },
         {
           "id": "preserve-chat-and-chatter",
           "depth": 2,
-          "text": "Mempertahankan Pesan dan Percakapan Terbuka"
+          "text": "Berkolaborasi di Chatter Dokumen"
         },
         {
           "id": "ai-workspace-safe-drafts",
           "depth": 2,
-          "text": "Menggunakan AI Workspace dan Draf Rekaman Aman"
+          "text": "Menggunakan Ruang Kerja Asisten AI"
         },
         {
           "id": "failure-recovery",
           "depth": 2,
-          "text": "Menangani Kegagalan Validasi dan Kesalahan Simpan"
+          "text": "Menangani Kegagalan Validasi dan Simpan"
         }
       ],
       "shard_id": "shard_functional_base_1"
     },
     {
+      "id": "user/hr-contracts-skills-and-analytics",
+      "title": "Kontrak Kerja, Keahlian, Riwayat Kerja, dan Analitik SDM",
+      "description": "Melacak riwayat kontrak kerja berversi, mencatat riwayat kerja, keahlian, dan sertifikasi karyawan, serta menganalisis tenaga kerja lewat Headcount Analysis, Contract History, dan Skills Inventory.",
+      "audience": "functional",
+      "module": "hr",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "resume-and-skills",
+          "depth": 2,
+          "text": "Melacak Riwayat Kerja (Resume), Keahlian, dan Sertifikasi"
+        },
+        {
+          "id": "contracts-and-versions",
+          "depth": 2,
+          "text": "Mengelola Kontrak Kerja dan Riwayat Versi"
+        },
+        {
+          "id": "hr-analytics",
+          "depth": 2,
+          "text": "Menganalisis Data Tenaga Kerja (Headcount & Skills Inventory)"
+        },
+        {
+          "id": "troubleshooting",
+          "depth": 2,
+          "text": "Mengatasi Kendala Data & Laporan SDM"
+        }
+      ],
+      "shard_id": "shard_functional_hr_1"
+    },
+    {
+      "id": "user/hr-employees-and-org-chart",
+      "title": "Direktori Karyawan, Profil, Departemen, dan Struktur Organisasi",
+      "description": "Menjelajahi Direktori Karyawan dalam tampilan Kanban dan List, mengelola profil karyawan dan departemen, menavigasi Struktur Organisasi interaktif, serta mengatur lokasi kerja dan jabatan.",
+      "audience": "functional",
+      "module": "hr",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "before-starting",
+          "depth": 2,
+          "text": "Prasyarat dan Peran SDM"
+        },
+        {
+          "id": "employee-directory",
+          "depth": 2,
+          "text": "Menjelajahi Direktori Karyawan (Kanban dan List)"
+        },
+        {
+          "id": "profiles-and-org-chart",
+          "depth": 2,
+          "text": "Mengelola Profil Karyawan dan Struktur Organisasi Interaktif"
+        },
+        {
+          "id": "departments-and-configuration",
+          "depth": 2,
+          "text": "Mengatur Departemen, Jabatan, dan Lokasi Kerja"
+        },
+        {
+          "id": "troubleshooting",
+          "depth": 2,
+          "text": "Mengatasi Kendala Data Karyawan"
+        }
+      ],
+      "shard_id": "shard_functional_hr_1"
+    },
+    {
+      "id": "user/inventory-quality-and-delivery",
+      "title": "Kontrol Kualitas, Armada Kendaraan, Kurir Pengiriman, dan Barcode",
+      "description": "Mengatur Quality Control Points dan Tim Kualitas, mengelola Quality Checks dan Quality Alerts, memelihara Armada Kendaraan dan opsi pengiriman, serta memakai barcode di gudang.",
+      "audience": "functional",
+      "module": "quality_control",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "quality-control-setup",
+          "depth": 2,
+          "text": "Mengatur Tim Kualitas dan Quality Control Points"
+        },
+        {
+          "id": "quality-checks-and-alerts",
+          "depth": 2,
+          "text": "Menjalankan Quality Checks dan Quality Alerts"
+        },
+        {
+          "id": "quality-checks",
+          "depth": 3,
+          "text": "Pemeriksaan Kualitas (Quality Checks)"
+        },
+        {
+          "id": "quality-alerts",
+          "depth": 3,
+          "text": "Peringatan Kualitas (Quality Alerts)"
+        },
+        {
+          "id": "fleet-and-delivery",
+          "depth": 2,
+          "text": "Mengelola Armada Kendaraan dan Kurir Pengiriman"
+        },
+        {
+          "id": "warehouse-barcodes",
+          "depth": 2,
+          "text": "Menggunakan Barcode dan Nomenklatur GS1"
+        },
+        {
+          "id": "troubleshooting",
+          "depth": 2,
+          "text": "Mengatasi Kendala Kualitas & Pengiriman"
+        }
+      ],
+      "shard_id": "shard_functional_quality_control_1"
+    },
+    {
+      "id": "user/inventory-traceability-and-routes",
+      "title": "Lot, Nomor Seri, Tanggal Kedaluwarsa, Rute Multi-Tahap, dan Landed Cost",
+      "description": "Mengaktifkan pengaturan gudang lanjutan, melacak lot, nomor seri unik, dan kedaluwarsa, mengatur lokasi penyimpanan, putaway, rute, serta mengalokasikan Landed Cost ke valuasi stok.",
+      "audience": "functional",
+      "module": "stock",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "enable-inventory-features",
+          "depth": 2,
+          "text": "Mengaktifkan Pelacakan, Lokasi, Paket, dan Rute"
+        },
+        {
+          "id": "lots-serials-expiry",
+          "depth": 2,
+          "text": "Melacak Lot, Nomor Seri, dan Tanggal Kedaluwarsa"
+        },
+        {
+          "id": "locations-routes-putaway",
+          "depth": 2,
+          "text": "Lokasi, Kategori Penyimpanan, Aturan Putaway, dan Rute"
+        },
+        {
+          "id": "landed-costs",
+          "depth": 2,
+          "text": "Mengalokasikan Landed Cost ke Valuasi Persediaan"
+        },
+        {
+          "id": "troubleshooting",
+          "depth": 2,
+          "text": "Mengatasi Kendala Pelacakan, Rute, dan Valuasi"
+        }
+      ],
+      "shard_id": "shard_functional_stock_1"
+    },
+    {
       "id": "user/manage-warehouse",
-      "title": "Panduan Pengelolaan Transfer Gudang, Lot, Penerimaan Sebagian, dan Pengisian Ulang",
-      "description": "Panduan operator untuk mengelola operasi gudang di ERPForAll: memilih transfer, memeriksa lot, memproses penerimaan sebagian dengan backorder, meminta pengisian ulang manual, dan memverifikasi baris stok yang diperbarui.",
+      "title": "Operasi Gudang, Stok Opname, Scrap, dan Pengisian Ulang",
+      "description": "Menavigasi Inventory Overview, memproses penerimaan, pengiriman, dan backorder, melakukan stok opname dan scrap, menjalankan aturan replenishment, serta mengaudit laporan stok.",
       "audience": "functional",
       "module": "stock",
       "models": [],
@@ -102,40 +426,88 @@
         {
           "id": "before-starting",
           "depth": 2,
-          "text": "Prasyarat dan Persyaratan Peran"
+          "text": "Prasyarat dan Peran"
         },
         {
           "id": "choose-transfer-and-track-lots",
           "depth": 2,
-          "text": "Memilih Transfer dan Memeriksa Lot"
+          "text": "Membuka Transfer dari Inventory Overview"
         },
         {
           "id": "receive-less-than-planned",
           "depth": 2,
-          "text": "Menerima Lebih Sedikit dari Rencana dan Menangani Backorder"
+          "text": "Menerima Lebih Sedikit dari Rencana dan Backorder"
+        },
+        {
+          "id": "physical-inventory-and-scrap",
+          "depth": 2,
+          "text": "Stok Opname (Physical Inventory) dan Pesanan Scrap"
+        },
+        {
+          "id": "physical-stock-count",
+          "depth": 3,
+          "text": "Mencatat Penghitungan Stok Fisik"
+        },
+        {
+          "id": "scrap-orders",
+          "depth": 3,
+          "text": "Mencatat Barang Rusak atau Kedaluwarsa (Scrap)"
         },
         {
           "id": "manual-replenishment-buy",
           "depth": 2,
-          "text": "Pengisian Ulang Manual dengan Rute Buy"
-        },
-        {
-          "id": "failure-and-recovery",
-          "depth": 2,
-          "text": "Menangani Penolakan Stok Negatif dan Kendala Kuantitas"
+          "text": "Pengisian Ulang Stok dengan Aturan Pemesanan (Rute Buy)"
         },
         {
           "id": "verify-stock-records",
           "depth": 2,
-          "text": "Memverifikasi Catatan Stok yang Diperbarui"
+          "text": "Mengaudit Posisi Stok dan Riwayat Pergerakan"
+        },
+        {
+          "id": "failure-and-recovery",
+          "depth": 2,
+          "text": "Mengatasi Kendala Operasi Gudang"
         }
       ],
       "shard_id": "shard_functional_stock_1"
     },
     {
+      "id": "user/master-data-contacts-products",
+      "title": "Kontak, Produk, Satuan Ukur, dan Data Referensi",
+      "description": "Mengelola data master bersama untuk pelanggan, pemasok, produk, varian, satuan ukur, dan mata uang yang dipakai di seluruh modul ERPForAll.",
+      "audience": "functional",
+      "module": "product",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "manage-contacts",
+          "depth": 2,
+          "text": "Mengelola Kontak (Pelanggan dan Pemasok)"
+        },
+        {
+          "id": "manage-products",
+          "depth": 2,
+          "text": "Mengelola Produk dan Varian Produk"
+        },
+        {
+          "id": "uom-and-currencies",
+          "depth": 2,
+          "text": "Satuan Ukur, Mata Uang, dan Bahasa"
+        },
+        {
+          "id": "best-practices",
+          "depth": 2,
+          "text": "Praktik Terbaik Kebersihan Data Master"
+        }
+      ],
+      "shard_id": "shard_functional_product_1"
+    },
+    {
       "id": "user/operations-guide",
-      "title": "Panduan operasional ERPForAll",
-      "description": "Ikuti alur penjualan, pembelian dan penerimaan barang sampai ke dokumen akuntansi yang mencatat hasilnya.",
+      "title": "Panduan Pengguna ERPForAll: Operasi Harian",
+      "description": "Mulai dari sini untuk menavigasi ERPForAll secara menyeluruh dari Akuntansi, Pembelian, Inventaris, Penjualan, SDM, hingga administrasi ruang kerja.",
       "audience": "functional",
       "module": "base",
       "models": [],
@@ -145,20 +517,68 @@
         {
           "id": "choose-workflow",
           "depth": 2,
-          "text": "Pilih pekerjaan"
+          "text": "Pilih Alur Kerja Anda"
         },
         {
           "id": "follow-one-purchase",
           "depth": 2,
-          "text": "Ikuti satu pembelian dari awal sampai pembayaran"
+          "text": "Siklus Bisnis Terpadu Antar Tim"
+        },
+        {
+          "id": "navigation-tips",
+          "depth": 2,
+          "text": "Tips Navigasi Harian"
         }
       ],
       "shard_id": "shard_functional_base_1"
     },
     {
+      "id": "user/purchasing-agreements-and-controls",
+      "title": "Perjanjian Pembelian, RFQ Alternatif, Daftar Harga, dan Analitik",
+      "description": "Mengatur Pengaturan Pembelian, mengelola Daftar Harga Pemasok, menyusun Perjanjian Pembelian (Blanket Order), membandingkan RFQ Alternatif, serta menganalisis belanja lewat Laporan Pembelian.",
+      "audience": "functional",
+      "module": "purchase",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "purchase-settings",
+          "depth": 2,
+          "text": "Mengatur Kontrol dan Pengaturan Pembelian"
+        },
+        {
+          "id": "vendor-pricelists",
+          "depth": 2,
+          "text": "Mengelola Daftar Harga Pemasok (Vendor Pricelists)"
+        },
+        {
+          "id": "purchase-agreements",
+          "depth": 2,
+          "text": "Menyusun Perjanjian Pembelian (Blanket Order)"
+        },
+        {
+          "id": "alternative-rfqs",
+          "depth": 2,
+          "text": "Membandingkan RFQ Alternatif Berdampingan"
+        },
+        {
+          "id": "purchase-analytics",
+          "depth": 2,
+          "text": "Menganalisis Belanja dengan Laporan Pembelian"
+        },
+        {
+          "id": "troubleshooting",
+          "depth": 2,
+          "text": "Mengatasi Kendala Perjanjian & RFQ Alternatif"
+        }
+      ],
+      "shard_id": "shard_functional_purchase_1"
+    },
+    {
       "id": "user/read-financial-reports",
-      "title": "Laporan Keuangan: Cakupan, Navigasi, Penelusuran Rinci, dan Ekspor",
-      "description": "Pilih periode laporan dan cakupan perusahaan, tinjau laporan keuangan, telusuri rincian entri jurnal pendukung, serta ekspor laporan.",
+      "title": "Laporan Keuangan: Pernyataan, Drill-Down, dan Ekspor",
+      "description": "Mengatur periode pelaporan dan perbandingan, membaca Neraca, Laba Rugi, Buku Besar, Arus Kas, dan Umur Piutang/Utang, melakukan drill-down ke jurnal, serta ekspor PDF/XLSX.",
       "audience": "functional",
       "module": "account_reporting",
       "models": [],
@@ -173,35 +593,35 @@
         {
           "id": "navigate-and-scope",
           "depth": 2,
-          "text": "Mengakses Laporan dan Menentukan Cakupan"
+          "text": "Daftar Laporan dan Filter Cakupan"
         },
         {
           "id": "read-and-drill",
           "depth": 2,
-          "text": "Membaca Angka dan Menelusuri Data Rinci"
+          "text": "Menavigasi Hierarki dan Melakukan Drill-Down"
         },
         {
           "id": "cash-flow-classification",
           "depth": 2,
-          "text": "Klasifikasi Aktivitas Arus Kas"
+          "text": "Memahami Laporan Arus Kas"
         },
         {
           "id": "export-and-print",
           "depth": 2,
-          "text": "Mengekspor dan Mencetak Laporan"
+          "text": "Mengekspor ke PDF dan XLSX"
         },
         {
           "id": "failure-and-recovery",
           "depth": 2,
-          "text": "Penanganan Kendala dan Pemulihan"
+          "text": "Mengatasi Kendala Laporan"
         }
       ],
       "shard_id": "shard_functional_account_reporting_1"
     },
     {
       "id": "user/record-and-settle-invoices",
-      "title": "Menyiapkan Jurnal, Memposting Faktur, dan Menyelesaikan Pembayaran",
-      "description": "Panduan operator langkah demi langkah untuk mengonfigurasi jurnal, menerbitkan faktur pelanggan, mencatat tagihan pemasok, mencatat pembayaran, dan memantau rekonsiliasi pelunasan di ERPForAll.",
+      "title": "Faktur Pelanggan, Tagihan Pemasok, Pembayaran, dan Nota Kredit",
+      "description": "Membuat dan memposting faktur pelanggan dan tagihan pemasok, mencatat pembayaran parsial dan penuh, menerbitkan nota kredit, serta menggunakan pembayaran massal dan penagihan.",
       "audience": "functional",
       "module": "account",
       "models": [],
@@ -211,32 +631,37 @@
         {
           "id": "before-starting",
           "depth": 2,
-          "text": "Prasyarat dan Peran Pengguna"
+          "text": "Sebelum Memulai"
         },
         {
-          "id": "prepare-journals",
+          "id": "customer-invoices",
           "depth": 2,
-          "text": "Menyiapkan Jurnal Akuntansi"
+          "text": "Membuat dan Memposting Faktur Pelanggan"
         },
         {
-          "id": "create-and-post-invoice",
+          "id": "register-payments",
           "depth": 2,
-          "text": "Membuat dan Mengonfirmasi Faktur atau Tagihan"
+          "text": "Mencatat Pembayaran Parsial dan Penuh"
         },
         {
-          "id": "register-payment",
+          "id": "credit-notes",
           "depth": 2,
-          "text": "Mencatat Pembayaran"
+          "text": "Menerbitkan Nota Kredit dan Pengembalian (Refund)"
         },
         {
-          "id": "review-reconciliation",
+          "id": "vendor-bills",
           "depth": 2,
-          "text": "Memeriksa Status dan Hasil Rekonsiliasi"
+          "text": "Mencatat dan Melunasi Tagihan Pemasok"
         },
         {
-          "id": "troubleshooting-recovery",
+          "id": "batch-followups-recurring",
           "depth": 2,
-          "text": "Menangani Kegagalan Validasi Umum"
+          "text": "Pembayaran Massal, Penagihan (Follow-Up), dan Entri Berulang"
+        },
+        {
+          "id": "troubleshooting",
+          "depth": 2,
+          "text": "Mengatasi Kendala Posting AR/AP"
         }
       ],
       "shard_id": "shard_functional_account_1"
@@ -280,6 +705,39 @@
       "shard_id": "shard_functional_web_1"
     },
     {
+      "id": "user/sales-pricing-and-analytics",
+      "title": "Daftar Harga, Diskon, Tim Penjualan, Margin, dan Analitik Penjualan",
+      "description": "Mengatur daftar harga multi-mata uang, program diskon & loyalitas, template penawaran, dan tim penjualan, serta menganalisis pendapatan dan margin lewat Laporan Penjualan, Pivot, dan Grafik.",
+      "audience": "functional",
+      "module": "sale",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "pricelists",
+          "depth": 2,
+          "text": "Mengatur Daftar Harga Multi-Mata Uang (Pricelists)"
+        },
+        {
+          "id": "discounts-templates-teams",
+          "depth": 2,
+          "text": "Diskon & Loyalitas, Template Penawaran, dan Tim Penjualan"
+        },
+        {
+          "id": "sales-reporting",
+          "depth": 2,
+          "text": "Menganalisis Pendapatan dan Margin lewat Laporan Penjualan"
+        },
+        {
+          "id": "troubleshooting",
+          "depth": 2,
+          "text": "Mengatasi Kendala Harga dan Laporan Penjualan"
+        }
+      ],
+      "shard_id": "shard_functional_sale_1"
+    },
+    {
       "id": "user/stock-receipt-admission",
       "title": "Validasi penerimaan barang milik perusahaan",
       "description": "Menerima barang yang disimpan sebagai stok saat Stock Valuation Admission terpasang.",
@@ -302,8 +760,8 @@
     },
     {
       "id": "user/work-with-customers",
-      "title": "Bekerja dengan Pelanggan dan Penawaran Penjualan",
-      "description": "Pelajari cara menemukan kontak pelanggan, membuat penawaran penjualan (quotation), menambahkan baris pesanan, mengonfirmasi penawaran menjadi sales order, serta memeriksa status pengiriman dan faktur.",
+      "title": "Penawaran Penjualan, Pengiriman, Penagihan Faktur, dan Retur",
+      "description": "Menyusun penawaran dengan daftar harga, template, dan produk opsional, mengonfirmasi pesanan penjualan, mengirim barang dengan reservasi FIFO, menerbitkan faktur reguler atau uang muka, serta menangani retur.",
       "audience": "functional",
       "module": "sale",
       "models": [],
@@ -316,29 +774,39 @@
           "text": "Prasyarat dan Peran Pengguna"
         },
         {
-          "id": "find-customer",
-          "depth": 2,
-          "text": "Mencari Kontak Pelanggan yang Ada"
-        },
-        {
           "id": "create-quote",
           "depth": 2,
-          "text": "Membuat Penawaran Baru dan Menambahkan Baris Pesanan"
+          "text": "Membuat Penawaran dengan Daftar Harga, Template, dan Produk Opsional"
         },
         {
           "id": "confirm-order",
           "depth": 2,
-          "text": "Memproses dan Mengonfirmasi Penawaran Menjadi Sales Order"
+          "text": "Mengonfirmasi Penawaran Menjadi Pesanan Penjualan"
+        },
+        {
+          "id": "deliver-and-return",
+          "depth": 2,
+          "text": "Mengirim Barang dan Menangani Retur Pelanggan"
+        },
+        {
+          "id": "validate-delivery",
+          "depth": 3,
+          "text": "Memvalidasi Pengiriman Keluar"
+        },
+        {
+          "id": "customer-returns",
+          "depth": 3,
+          "text": "Memproses Retur Pelanggan"
+        },
+        {
+          "id": "invoicing-and-credit-notes",
+          "depth": 2,
+          "text": "Penagihan Faktur (Reguler vs. Uang Muka) dan Nota Kredit"
         },
         {
           "id": "handle-failure",
           "depth": 2,
-          "text": "Menangani Kegagalan Konfirmasi dan Langkah Pemulihan"
-        },
-        {
-          "id": "track-order",
-          "depth": 2,
-          "text": "Memantau Progres Pesanan, Penagihan Faktur, dan Pengiriman"
+          "text": "Mengatasi Kendala Pesanan Penjualan"
         }
       ],
       "shard_id": "shard_functional_sale_1"

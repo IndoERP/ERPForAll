@@ -1,7 +1,7 @@
 {
   "lang": "id",
   "version": "next",
-  "total_shards": 7,
+  "total_shards": 10,
   "shards": [
     {
       "shard_id": "shard_functional_account_1",
@@ -9,8 +9,8 @@
       "modules": [
         "account"
       ],
-      "doc_count": 1,
-      "byte_size": 7803
+      "doc_count": 5,
+      "byte_size": 29589
     },
     {
       "shard_id": "shard_functional_account_reporting_1",
@@ -19,7 +19,7 @@
         "account_reporting"
       ],
       "doc_count": 1,
-      "byte_size": 9101
+      "byte_size": 6784
     },
     {
       "shard_id": "shard_functional_base_1",
@@ -28,7 +28,25 @@
         "base"
       ],
       "doc_count": 2,
-      "byte_size": 10341
+      "byte_size": 13987
+    },
+    {
+      "shard_id": "shard_functional_hr_1",
+      "audience": "functional",
+      "modules": [
+        "hr"
+      ],
+      "doc_count": 2,
+      "byte_size": 8357
+    },
+    {
+      "shard_id": "shard_functional_product_1",
+      "audience": "functional",
+      "modules": [
+        "product"
+      ],
+      "doc_count": 1,
+      "byte_size": 5230
     },
     {
       "shard_id": "shard_functional_purchase_1",
@@ -36,8 +54,17 @@
       "modules": [
         "purchase"
       ],
+      "doc_count": 2,
+      "byte_size": 11669
+    },
+    {
+      "shard_id": "shard_functional_quality_control_1",
+      "audience": "functional",
+      "modules": [
+        "quality_control"
+      ],
       "doc_count": 1,
-      "byte_size": 6368
+      "byte_size": 4112
     },
     {
       "shard_id": "shard_functional_sale_1",
@@ -45,8 +72,8 @@
       "modules": [
         "sale"
       ],
-      "doc_count": 1,
-      "byte_size": 8565
+      "doc_count": 2,
+      "byte_size": 9977
     },
     {
       "shard_id": "shard_functional_stock_1",
@@ -54,8 +81,8 @@
       "modules": [
         "stock"
       ],
-      "doc_count": 2,
-      "byte_size": 10407
+      "doc_count": 3,
+      "byte_size": 13295
     },
     {
       "shard_id": "shard_functional_web_1",
@@ -68,12 +95,23 @@
     }
   ],
   "page_to_shard": {
+    "user/accounting-bank-reconciliation": "shard_functional_account_1",
+    "user/accounting-consolidation": "shard_functional_account_1",
+    "user/accounting-controlling-budgets-assets": "shard_functional_account_1",
+    "user/accounting-setup-and-ledger": "shard_functional_account_1",
     "user/record-and-settle-invoices": "shard_functional_account_1",
     "user/read-financial-reports": "shard_functional_account_reporting_1",
     "user/configure-your-workspace": "shard_functional_base_1",
     "user/operations-guide": "shard_functional_base_1",
+    "user/hr-contracts-skills-and-analytics": "shard_functional_hr_1",
+    "user/hr-employees-and-org-chart": "shard_functional_hr_1",
+    "user/master-data-contacts-products": "shard_functional_product_1",
     "user/buy-and-receive": "shard_functional_purchase_1",
+    "user/purchasing-agreements-and-controls": "shard_functional_purchase_1",
+    "user/inventory-quality-and-delivery": "shard_functional_quality_control_1",
+    "user/sales-pricing-and-analytics": "shard_functional_sale_1",
     "user/work-with-customers": "shard_functional_sale_1",
+    "user/inventory-traceability-and-routes": "shard_functional_stock_1",
     "user/manage-warehouse": "shard_functional_stock_1",
     "user/stock-receipt-admission": "shard_functional_stock_1",
     "user/report-barcodes": "shard_functional_web_1"

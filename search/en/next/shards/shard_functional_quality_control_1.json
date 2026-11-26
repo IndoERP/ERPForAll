@@ -1,0 +1,50 @@
+{
+  "shard_id": "shard_functional_quality_control_1",
+  "lang": "en",
+  "version": "next",
+  "audience": "functional",
+  "modules": [
+    "quality_control"
+  ],
+  "docs": [
+    {
+      "page_id": "user/inventory-quality-and-delivery",
+      "title": "Quality Control, Fleet Vehicles, Delivery Carriers, and Barcodes",
+      "module": "quality_control",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "ERPForAll integrates **Quality Control**, **Fleet Vehicle** management, **Delivery Carriers**, and **Barcode** nomenclature directly into **Inventory** so inspection, shipping, and scanning stay tightly coupled to stock operations."
+        },
+        {
+          "anchor": "quality-control-setup",
+          "text": "1. **Quality Teams** (**Inventory → More → Configuration → Quality Teams**): Create responsible QA teams (for example, *Main Quality Team*) to own inspection checks and corrective alerts. 2. **Quality Control Points (QCP)** (**Inventory → More → Configuration → Quality Control Points**): Define automated inspection triggers by selecting: * **Products** or **Product Categories** to inspect. * **Operation Types** (for example, *Receiving* or *Deliveries*) where checks trigger automatically. * **Control Type**: *Pass - Fail*, *Instructions*, or *Measure* (with tolerance thresholds). * **Team** and inspection instructions."
+        },
+        {
+          "anchor": "quality-checks",
+          "text": "1. Open **Inventory → Operations → Quality Checks** to review pending (To Do), passed, or failed inspections. 2. Open a check (for example, QC-2026-0003) to review the linked product, transfer/picking reference, lot, and inspection instructions, then record the inspection result (**Pass** or **Fail**). ![Quality Checks lists every scheduled and completed warehouse inspection together with its product, team, and status.](/en/next/assets/docs/assets/user-manual/inventory/quality-checks.webp)"
+        },
+        {
+          "anchor": "quality-alerts",
+          "text": "When a defect, supplier non-conformance, or packaging damage is discovered: 1. Open **Inventory → Operations → Quality Alerts** and click **New**. 2. Enter a clear title, select the affected **Product**, optional **Lot/Serial**, **Quality Team**, **Priority**, and root-cause / corrective-action notes. 3. Move the alert through its lifecycle: **New** → **Confirmed** → **Mark Solved** (**Solved**) once containment and corrective actions are verified. ![A Quality Alert tracks product defects, assigned QA team, priority, and resolution stages through to Solved.](/en/next/assets/docs/assets/user-manual/inventory/quality-alert.webp)"
+        },
+        {
+          "anchor": "fleet-and-delivery",
+          "text": "* **Vehicle Categories & Fleet Vehicles** (**Inventory → More → Configuration → Vehicle Categories** and **Fleet Vehicles**): Maintain your internal delivery fleet (for example, *Delivery Van 01*), registration plate, driver assignment, capacity, and vehicle category for dispatch planning. * **Delivery Carriers & Shipping Settings** (**Inventory → More → Configuration → Settings**): Enable shipping/carrier options to attach delivery methods and shipping cost calculations to sales orders and outgoing deliveries."
+        },
+        {
+          "anchor": "warehouse-barcodes",
+          "text": "* Assign unique barcodes on each product under **Products → General Information → Barcode**. * Configure barcode parsing rules (including GS1 application identifiers for GTIN, lot, and expiry) under **Settings → Reference Data → Barcode rules**. * To include machine-readable barcodes on printed transfer slips, invoices, or custom documents, see [Barcodes in Printed Reports](/en/next/user/report-barcodes.md)."
+        },
+        {
+          "anchor": "troubleshooting",
+          "text": "* **Quality Check Not Triggering on Receipt**: Verify the **Quality Control Point** is active and matches both the product/category and the exact **Operation Type** (e.g., *Receiving*) on the transfer. * **Unexpected Error When Recording Quality Check Result**: If clicking **Pass** on a check returns a server error, reload the page, log a **Quality Alert** to preserve the audit trail, and notify your system administrator with the error ID."
+        }
+      ]
+    }
+  ]
+}

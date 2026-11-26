@@ -1,0 +1,50 @@
+{
+  "shard_id": "shard_functional_quality_control_1",
+  "lang": "id",
+  "version": "next",
+  "audience": "functional",
+  "modules": [
+    "quality_control"
+  ],
+  "docs": [
+    {
+      "page_id": "user/inventory-quality-and-delivery",
+      "title": "Kontrol Kualitas, Armada Kendaraan, Kurir Pengiriman, dan Barcode",
+      "module": "quality_control",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "ERPForAll mengintegrasikan **Kontrol Kualitas (Quality Control)**, manajemen **Armada Kendaraan (Fleet)**, **Kurir Pengiriman**, dan nomenklatur **Barcode** langsung di dalam **Inventory** sehingga inspeksi, pengiriman, dan pemindaian terhubung erat dengan operasi gudang."
+        },
+        {
+          "anchor": "quality-control-setup",
+          "text": "1. **Quality Teams** (**Inventory → More → Configuration → Quality Teams**): Buat tim penanggung jawab QA (misalnya *Main Quality Team*) yang menangani inspeksi dan peringatan kualitas. 2. **Quality Control Points (QCP)** (**Inventory → More → Configuration → Quality Control Points**): Tentukan pemicu inspeksi otomatis dengan memilih: * **Products** atau **Product Categories** yang diperiksa. * **Operation Types** (misalnya *Receiving* atau *Deliveries*) tempat pemeriksaan otomatis muncul. * **Control Type**: *Pass - Fail*, *Instructions*, atau *Measure* (dengan rentang toleransi). * **Team** serta instruksi pemeriksaan."
+        },
+        {
+          "anchor": "quality-checks",
+          "text": "1. Buka **Inventory → Operations → Quality Checks** untuk meninjau inspeksi tertunda (To Do), lolos, atau gagal. 2. Buka satu pemeriksaan (misalnya QC-2026-0003) untuk melihat produk, referensi transfer, lot, dan instruksi pemeriksaan, lalu catat hasilnya (**Pass** atau **Fail**). ![Daftar Quality Checks menampilkan seluruh inspeksi gudang terjadwal maupun selesai beserta produk, tim, dan statusnya.](/id/next/assets/docs/assets/user-manual/inventory/quality-checks.webp)"
+        },
+        {
+          "anchor": "quality-alerts",
+          "text": "Saat ditemukan cacat barang, ketidaksesuaian pemasok, atau kerusakan kemasan: 1. Buka **Inventory → Operations → Quality Alerts** lalu klik **New**. 2. Isi judul yang jelas, pilih **Product** terdampak, **Lot/Serial** (opsional), **Quality Team**, **Priority**, serta catatan akar masalah dan tindakan perbaikan. 3. Jalankan siklus statusnya: **New** → **Confirmed** → **Mark Solved** (**Solved**) setelah tindakan korektif terverifikasi. ![Quality Alert melacak temuan cacat produk, tim QA penanggung jawab, prioritas, hingga tahap penyelesaian Solved.](/id/next/assets/docs/assets/user-manual/inventory/quality-alert.webp)"
+        },
+        {
+          "anchor": "fleet-and-delivery",
+          "text": "* **Vehicle Categories & Fleet Vehicles** (**Inventory → More → Configuration → Vehicle Categories** dan **Fleet Vehicles**): Kelola kendaraan pengiriman internal (misalnya *Delivery Van 01*), nomor polisi, pengemudi, kapasitas, dan kategori kendaraan untuk penjadwalan pengiriman. * **Delivery Carriers & Pengaturan Pengiriman** (**Inventory → More → Configuration → Settings**): Aktifkan opsi pengiriman/kurir untuk menautkan metode pengiriman dan perhitungan ongkos kirim pada pesanan penjualan serta pengiriman keluar."
+        },
+        {
+          "anchor": "warehouse-barcodes",
+          "text": "* Tetapkan barcode unik pada setiap produk di **Products → General Information → Barcode**. * Atur aturan penguraian barcode (termasuk pengenal aplikasi GS1 untuk GTIN, lot, dan tanggal kedaluwarsa) di **Settings → Reference Data → Barcode rules**. * Untuk menampilkan barcode yang dapat dipindai pada slip transfer, faktur, atau dokumen cetak lainnya, lihat [Barcode pada Laporan Cetak](/id/next/user/report-barcodes.md)."
+        },
+        {
+          "anchor": "troubleshooting",
+          "text": "* **Quality Check Tidak Muncul Saat Penerimaan**: Pastikan **Quality Control Point** aktif dan cocok dengan produk/kategori serta **Operation Type** (misalnya *Receiving*) pada transfer terkait. * **Galat Tak Terduga Saat Mencatat Hasil Quality Check**: Jika klik **Pass** menghasilkan galat server, muat ulang halaman, catat **Quality Alert** untuk menjaga jejak audit, dan laporkan Error ID kepada administrator sistem."
+        }
+      ]
+    }
+  ]
+}

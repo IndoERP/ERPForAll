@@ -1,0 +1,78 @@
+{
+  "shard_id": "shard_functional_hr_1",
+  "lang": "id",
+  "version": "next",
+  "audience": "functional",
+  "modules": [
+    "hr",
+    "hr"
+  ],
+  "docs": [
+    {
+      "page_id": "user/hr-contracts-skills-and-analytics",
+      "title": "Kontrak Kerja, Keahlian, Riwayat Kerja, dan Analitik SDM",
+      "module": "hr",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "Tim SDM menggunakan **Resume & Skills**, **Contract History**, dan **HR Reporting** di aplikasi **Employees** untuk melacak kualifikasi karyawan, menjaga versi kontrak kerja dari waktu ke waktu, serta memantau jumlah karyawan dan status kontrak di seluruh perusahaan."
+        },
+        {
+          "anchor": "resume-and-skills",
+          "text": "1. Buka profil karyawan pada **Employees → Management** lalu pindah ke tab **Resume**: * **Resume**: Catat tonggak karier kronologis berdasarkan **Resume Sections** (diatur di **Employees → More → Configuration → Resume Sections**, seperti *Experience*, *Education*, atau *Internal Milestones*) lengkap dengan tanggal mulai/selesai dan deskripsi. * **Skills & Certifications**: Tambahkan keahlian terstruktur berdasarkan **Skill Types** (**Configuration → Skill Types**, seperti *Languages*, *Technical*, atau *Certifications*) beserta tingkat kemahiran dan masa berlakunya. 2. Untuk meninjau atau memperbarui entri lintas organisasi sekaligus, buka **Employees → More → Learning → Resume Entries** dan **Employees → More → Learning → Skills & Certifications**. ![Tab Resume menampilkan linimasa riwayat karier berdampingan dengan bilah kemahiran Skills & Certifications.](/id/next/assets/docs/assets/user-manual/hr/employee-resume-skills.webp) ![Skills & Certifications menyediakan daftar terpusat kompetensi dan tingkat sertifikasi karyawan seluruh perusahaan.](/id/next/assets/docs/assets/user-manual/hr/skills-certifications.webp)"
+        },
+        {
+          "anchor": "contracts-and-versions",
+          "text": "ERPForAll menyimpan ketentuan kerja dalam catatan versi bertanggal sehingga promosi, mutasi departemen, penyesuaian gaji, dan perpanjangan kontrak tetap dapat diaudit sepenuhnya: 1. Dari profil karyawan mana pun, klik tombol pintar **History** (misalnya 2 History) untuk meninjau setiap versi kontrak/penugasan bertanggal bagi karyawan tersebut. 2. Buka **Employees → More → Reporting → Contract History** untuk memeriksa kontrak seluruh karyawan—termasuk nama karyawan, departemen, jabatan, tanggal efektif mulai/akhir, jadwal kerja, dan status kontrak. 3. Saat karyawan mendapat promosi atau perpanjangan kontrak, buat versi bertanggal baru daripada menimpa riwayat lama agar catatan periode sebelumnya tetap akurat untuk audit SDM dan penggajian. ![Contract History menyajikan daftar terpusat kontrak kerja berversi lengkap dengan tanggal efektif, departemen, dan statusnya.](/id/next/assets/docs/assets/user-manual/hr/contract-history.webp)"
+        },
+        {
+          "anchor": "hr-analytics",
+          "text": "Buka **Employees → More → Reporting** untuk memantau KPI tenaga kerja: * **Headcount Analysis**: Laporan interaktif yang merinci jumlah karyawan aktif per departemen, jabatan, lokasi kerja, manajer, dan tipe karyawan—otomatis terbarui saat staf baru bergabung atau keluar. * **Contract History**: Memantau kontrak aktif, mendatang, dan mendekati habis masa berlaku agar perpanjangan tidak terlewat. * **Skills Inventory**: Membantu manajer dan SDM menemukan karyawan bersertifikasi atau berkeahlian khusus lintas departemen untuk penugasan proyek maupun audit kepatuhan. ![Headcount Analysis melacak jumlah karyawan aktif per departemen, manajer, dan unit organisasi secara real-time.](/id/next/assets/docs/assets/user-manual/hr/headcount-analysis.webp)"
+        },
+        {
+          "anchor": "troubleshooting",
+          "text": "* **Tipe Keahlian atau Bagian Resume Belum Tersedia**: Sebelum mencatat keahlian atau riwayat kerja pada database baru, minta HR Administrator mendefinisikan data awal di **Employees → More → Configuration → Skill Types** dan **Resume Sections**. * **Karyawan Baru Belum Muncul di Headcount**: Pastikan profil karyawan tersimpan pada perusahaan aktif yang dipilih di pojok kanan atas dan tidak berstatus diarsipkan."
+        }
+      ]
+    },
+    {
+      "page_id": "user/hr-employees-and-org-chart",
+      "title": "Direktori Karyawan, Profil, Departemen, dan Struktur Organisasi",
+      "module": "hr",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "Aplikasi **Employees** menyatukan direktori tenaga kerja, hierarki organisasi, departemen, jabatan, dan lokasi kerja perusahaan sambil melindungi data pribadi dan kontrak SDM melalui hak akses berbasis peran."
+        },
+        {
+          "anchor": "before-starting",
+          "text": "* **Internal User**: Dapat membuka **Employees → Directory** dan **Departments** (kontak kerja publik, jabatan, departemen, atasan, dan struktur pelaporan) tanpa melihat data pribadi atau kontrak rahasia. * **HR Officer (HR User)**: Membuka **Employees → Management** untuk membuat dan mengubah profil karyawan, mengelola riwayat kerja, keahlian, versi kontrak, serta laporan SDM. * **HR Administrator**: Mengatur tipe karyawan, lokasi kerja, jadwal kerja, posisi jabatan, alasan pengunduran diri, tipe keahlian, dan bagian riwayat kerja."
+        },
+        {
+          "anchor": "employee-directory",
+          "text": "1. Buka aplikasi **Employees** dari pemilih aplikasi lalu pilih **Directory** (atau **Management** bagi petugas SDM). 2. Beralih antara tampilan **Kanban** (kartu visual lengkap dengan potret karyawan, jabatan, departemen, email kerja, dan tag) dan tampilan **List** (tabel untuk pengurutan serta penyaringan cepat). 3. Gunakan bilah pencarian untuk menyaring karyawan berdasarkan nama, departemen, jabatan, atasan, atau lokasi kerja. ![Direktori Karyawan tampilan Kanban menampilkan potret, jabatan, departemen, dan kontak kerja setiap anggota tim.](/id/next/assets/docs/assets/user-manual/hr/employee-directory-kanban.webp)"
+        },
+        {
+          "anchor": "profiles-and-org-chart",
+          "text": "1. Klik kartu karyawan mana pun—atau klik **New** pada **Employees → Management**—untuk membuka form Profil Karyawan. 2. Lengkapi informasi kerja utama pada tab **Work**: * **Company**, **Department**, **Job Position / Job Title**, **Work Email**, **Work Phone**, dan **Work Location**. * **Manager** dan **Coach**: Memilih **Department** otomatis mengisi atasan departemen sebagai manajer bawaan karyawan dan langsung memperbarui struktur organisasi. * **Working Schedule** dan **Employee Type** (Penuh Waktu, Paruh Waktu, Kontraktor, Magang). 3. Gunakan **Struktur Organisasi Interaktif (Organization Chart)** di sisi kanan tab **Work** untuk melihat garis pelaporan (atasan → karyawan saat ini → bawahan langsung beserta jumlah tim) dan klik nama rekan mana pun untuk langsung membuka profilnya. 4. Gunakan tombol pintar di bagian atas (**History** dan **Team**) untuk meninjau riwayat kontrak atau daftar bawahan langsung seorang manajer. 5. Petugas SDM juga mengelola tab privat—**Payroll**, **Personal** (alamat rumah, kontak darurat, identitas), **End of Collaboration** (offboarding & alasan keluar), dan **Settings** (tautan akun pengguna ERP). ![Profil Karyawan menggabungkan detail Work, tombol pintar History dan Team, serta Struktur Organisasi Interaktif yang menampilkan atasan dan bawahan.](/id/next/assets/docs/assets/user-manual/hr/employee-org-chart.webp)"
+        },
+        {
+          "anchor": "departments-and-configuration",
+          "text": "* **Departments** (**Employees → Departments**): Susun pohon departemen bertingkat (misalnya *Management → Engineering*, *Finance*, *Operations*) lengkap dengan manajer masing-masing unit. * **Configuration** (**Employees → More → Configuration**): * **Employee**: Kelola *Employee Types*, *Work Locations* (Kantor Pusat, Cabang, Remote), *Departure Reasons*, dan *Tags*. * **Time Management**: Definisikan *Working Schedules* (jam kerja mingguan standar). * **Recruitment**: Kelola daftar baku *Job Positions*."
+        },
+        {
+          "anchor": "troubleshooting",
+          "text": "* **Tab Privat Tidak Tampil**: Hanya pengguna dalam grup **HR Officer** atau **HR Administrator** yang dapat membuka tab **Personal**, **Payroll**, dan **End of Collaboration**; karyawan biasa menggunakan **Directory** untuk informasi kerja publik. * **Manager Tidak Terisi Otomatis**: Periksa apakah **Department** terpilih sudah memiliki **Manager** pada **Employees → Departments**, atau pilih **Manager** secara manual di tab **Work**."
+        }
+      ]
+    }
+  ]
+}

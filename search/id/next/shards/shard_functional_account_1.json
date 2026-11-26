@@ -4,12 +4,16 @@
   "version": "next",
   "audience": "functional",
   "modules": [
+    "account",
+    "account",
+    "account",
+    "account",
     "account"
   ],
   "docs": [
     {
-      "page_id": "user/record-and-settle-invoices",
-      "title": "Menyiapkan Jurnal, Memposting Faktur, dan Menyelesaikan Pembayaran",
+      "page_id": "user/accounting-bank-reconciliation",
+      "title": "Rekening Koran dan Rekonsiliasi Bank",
       "module": "account",
       "sections": [
         {
@@ -18,31 +22,179 @@
         },
         {
           "anchor": "top",
-          "text": "Panduan ini memandu operator dalam mengelola siklus penagihan penjualan dan pembelian di ERPForAll. Anda akan mempelajari cara memeriksa jurnal akuntansi, membuat dan mengonfirmasi faktur pelanggan serta tagihan pemasok, mencatat pembayaran, dan memantau status pencocokan dokumen serta jumlah jatuh tempo."
+          "text": "Rekonsiliasi bank memastikan setiap setoran dan penarikan pada rekening koran sesuai dengan buku besar akuntansi Anda. ERPForAll mendukung pencatatan manual maupun impor rekening koran, pencocokan baris mutasi dengan faktur/tagihan terbuka atau akun lawan, serta posting otomatis entri jurnal bank."
         },
         {
           "anchor": "before-starting",
-          "text": "Sebelum menerbitkan faktur atau mencatat tagihan pemasok, pastikan konfigurasi berikut telah tersedia: * **Peran Pengguna**: Pengguna akuntansi standar membuat faktur, memasukkan baris produk, mengonfirmasi dokumen, mencatat pembayaran, dan melihat item jurnal. Pengaturan jurnal memerlukan hak akses administrator akuntansi. * **Akun Perusahaan**: Perusahaan harus memiliki akun piutang (*receivable*) dan akun utang (*payable*) aktif yang terdaftar pada bagan akun (*chart of accounts*). * **Jurnal**: Pastikan setidaknya satu jurnal penjualan (untuk dokumen pelanggan) dan satu jurnal pembelian (untuk dokumen pemasok) telah aktif dengan akun bawaan (*default account*) yang sesuai (pendapatan untuk penjualan, beban untuk pembelian). Selain itu, minimal satu jurnal bank atau kas harus aktif beserta metode pembayaran dan akun bawaannya untuk mencatat pelunasan."
+          "text": "* **Jurnal Bank atau Kas**: Daftarkan setiap rekening bank perusahaan dan kas kecil sebagai jurnal di **Accounting → More → Configuration → Journals** lengkap dengan akun likuiditasnya (misalnya 101100 Main Bank Account). * **Akun Mitra Dapat Direkonsiliasi**: Akun piutang dan utang wajib mengaktifkan **Allow Reconciliation** agar mutasi bank dapat melunasi faktur atau tagihan terbuka secara langsung. * **Izin Akuntansi**: Mencatat rekening koran dan melakukan rekonsiliasi memerlukan peran pengguna Akuntansi atau Akuntan."
         },
         {
-          "anchor": "prepare-journals",
-          "text": "Setiap entri faktur, tagihan, dan pembayaran dicatat di dalam jurnal yang sesuai. 1. Buka menu **Accounting > Configuration > Journals** (administrator akuntansi). 2. Periksa daftar jurnal yang tersedia (basis data standar mencakup Customer Invoices, Vendor Bills, dan Main Bank). 3. Klik **New** untuk membuat jurnal baru. 4. Masukkan nama jurnal dan pilih **Type** (Sales, Purchase, Bank, Cash, atau Credit Card). 5. Kolom **Short Code** dapat dikosongkan; ERPForAll secara otomatis menetapkan kode unik berikutnya yang tersedia untuk tipe tersebut (seperti INV1, BILL1, atau BNK1). 6. Tentukan **Default Account** yang sesuai dengan tipe jurnal: akun pendapatan untuk penjualan, akun beban untuk pembelian, atau akun kas/bank untuk jurnal pembayaran. 7. Biarkan kolom **Currency** kosong untuk menggunakan mata uang standar perusahaan, atau pilih mata uang asing jika jurnal ini khusus menangani mata uang tersebut. 8. Klik **Save**. Tab **Journal Entries** mengatur penomoran dokumen (seperti INV1/2026/00001 untuk faktur, RINV1/... untuk nota kredit, atau PBNK1/... untuk pembayaran). ![Form faktur menampilkan jurnal, baris tagihan, dan total.](https://raw.githubusercontent.com/IndoERP/ERPForAll/a0b166f13a9bfef45efe154016c4f5d9fd2e37c0/.github/assets/invoice-form.png)"
+          "anchor": "create-bank-statement",
+          "text": "1. Buka **Accounting → More → Accounting → Bank Statements** (atau klik langsung dari kartu jurnal Bank pada **Accounting Dashboard**). 2. Klik **New** untuk mencatat rekening koran secara manual, atau gunakan fitur impor CSV saat mengunggah file mutasi dari bank. 3. Lengkapi header rekening koran: * **Reference**: Identitas periode atau nomor rekening koran (misalnya Main Bank Nov 2026). * **Journal**: Pilih jurnal Bank atau Kas yang sesuai. * **Date**: Tanggal penutupan rekening koran. * **Starting Balance** dan **Ending Balance**: Masukkan saldo awal dan saldo akhir dari bank untuk dibandingkan dengan **Computed Balance**. 4. Pada tab **Transactions**, klik **Add a line** untuk setiap baris mutasi: * Isi **Date**, **Label** (uraian mutasi bank), **Partner** (opsional), dan **Amount** (positif untuk dana masuk/setoran, negatif untuk dana keluar/pembayaran). * Secara opsional pilih **Counterpart Account** (misalnya biaya administrasi bank atau pendapatan bunga) atau pilih faktur/tagihan terbuka untuk dicocokkan. 5. Klik **Save** lalu pastikan **Computed Balance** sama dengan saldo akhir bank Anda. ![Rekening Koran tersimpan menampilkan saldo awal, saldo terhitung, dan saldo akhir beserta setiap baris transaksi mutasi.](/id/next/assets/docs/assets/user-manual/accounting/bank-statement.webp)"
         },
         {
-          "anchor": "create-and-post-invoice",
-          "text": "Ikuti langkah-langkah berikut untuk mencatat faktur pelanggan atau tagihan pemasok: 1. Untuk penagihan pelanggan, buka menu **Accounting > Customers > Invoices**. Untuk pembelian dari pemasok, buka menu **Accounting > Vendors > Bills**. 2. Klik **New**. 3. Pilih mitra pada kolom **Customer** (atau **Vendor**). Untuk faktur pelanggan, tentukan tanggal pada kolom **Invoice Date** (jika dikosongkan, konfirmasi akan menggunakan tanggal hari ini berdasarkan zona waktu bisnis perusahaan). Untuk tagihan pemasok, tanggal tagihan wajib diisi. 4. Anda dapat memilih **Journal** dan **Currency** jika diperlukan. Jika dikosongkan, Accounting otomatis memilih jurnal penjualan atau pembelian yang sesuai. 5. Pada tab **Invoice Lines**, klik **Add a line**. 6. Pilih item pada kolom **Product** atau jasa untuk mengisi label, satuan ukuran, harga satuan, dan pajak yang berlaku, lalu sesuaikan **Quantity**, **Unit Price**, **Discount**, atau **Taxes**. 7. Klik **Save**. ERPForAll menghitung jumlah sebelum pajak, nilai pajak, total, dan nilai awal **Amount Due**. Tab **Journal Items** menampilkan rincian entri akuntansi di balik faktur: baris produk, baris pajak, serta baris piutang atau utang. 8. Klik **Confirm**. **Tindakan yang mengubah data**: Menekan tombol **Confirm** memeriksa kelengkapan mitra, minimal satu baris produk, dan total yang tidak bernilai negatif (serta tanggal tagihan untuk tagihan pemasok). Setelah terkonfirmasi, sistem menetapkan nomor urut resmi, mengubah status dokumen dari Draft menjadi Posted, dan membukukan entri aktif ke buku besar. Reset to Draft dan Cancel tersedia setelah fitur posting aktif pada versi Anda."
+          "anchor": "reconcile-lines",
+          "text": "1. Buka **Accounting → More → Accounting → Bank Reconciliation** untuk melihat daftar **To Reconcile** yang berisi baris mutasi belum terekon. 2. Pilih satu baris mutasi untuk memeriksa tanggal, keterangan, mitra, dan nominalnya. 3. Tentukan metode rekonsiliasi: * **Cocokkan Faktur / Tagihan Terbuka**: Pilih faktur pelanggan atau tagihan pemasok yang masih memiliki saldo terbuka untuk melunasinya langsung. * **Gunakan Counterpart Account**: Untuk biaya bank, bunga, transfer antarbank, atau beban tanpa tagihan pemasok, pilih **Counterpart Account** yang sesuai (seperti *Biaya Bank* atau akun kliring/likuiditas). 4. Klik **Reconcile** (atau **Reconcile All** pada header rekening koran setelah semua baris memiliki pasangan yang sah). 5. ERPForAll memposting jurnal bank seimbang (misalnya BNK1/2026/00012), menandai baris berstatus **RECONCILED**, dan memperbarui status rekening koran secara otomatis. ![Baris rekening koran yang telah direkonsiliasi menampilkan lencana RECONCILED dan tautan langsung ke jurnal bank yang terbentuk.](/id/next/assets/docs/assets/user-manual/accounting/bank-reconciled-line.webp)"
         },
         {
-          "anchor": "register-payment",
-          "text": "Mencatat pembayaran berfungsi mencatat penerimaan atau pengeluaran dana dan mencocokkannya langsung dengan saldo terbuka faktur. Tindakan ini berbeda dari rekonsiliasi rekening koran bank, yang mencocokkan mutasi rekening koran terhadap entri jurnal bank. 1. Buka faktur atau tagihan terkonfirmasi yang masih memiliki nilai pada **Amount Due**. 2. Klik **Register Payment**. 3. Periksa kolom-kolom yang diusulkan pada dialog: * **Journal**: Mengusulkan jurnal bank utama perusahaan secara bawaan. * **Payment Method**: Menampilkan metode pembayaran yang sesuai dengan arah transaksi (penerimaan atau pengeluaran). * **Payment Date**: Otomatis terisi tanggal hari ini berdasarkan zona waktu bisnis perusahaan. * **Memo**: Mengusulkan nomor referensi dokumen faktur atau tagihan. * **Amount**: Menampilkan seluruh sisa tagihan. Masukkan nominal yang lebih kecil untuk pembayaran bertahap (misalnya, pada tagihan sebesar 100, pembayaran 60 menyisakan saldo terbuka sebesar 40). 4. Klik **Pay**. Jika dokumen telah dibayar sebagian saat dialog masih terbuka, sistem meminta Anda membuka kembali dialog tersebut. **Tindakan yang mengubah data**: Menekan tombol **Pay** menerbitkan catatan pembayaran terkonfirmasi di bawah menu **Customers > Payments** (atau **Vendors > Payments**) dengan nomor pembayaran tersendiri (seperti PBNK1/2026/00001), membukukan entri jurnal pembayaran kas/bank, dan mencocokkan baris pembayaran terhadap baris piutang/utang faktur terkait."
+          "anchor": "verify-cash-position",
+          "text": "Setelah proses rekonsiliasi selesai: 1. Kembali ke **Accounting Dashboard** untuk memastikan saldo buku pada kartu jurnal Bank selaras dengan saldo rekening koran terakhir. 2. Buka **Accounting → More → Reporting → Cash Flow Statement** atau **General Ledger** (saring akun bank terkait) untuk mengaudit setiap jurnal bank yang diposting."
         },
         {
-          "anchor": "review-reconciliation",
-          "text": "Setelah mencatat pembayaran, periksa pembaruan status dokumen dan pencocokan pelunasan: * **Payment Status**: Menampilkan status **Paid** jika seluruh saldo lunas, atau **Partially Paid** jika masih terdapat sisa saldo yang belum terbayar. * **Amount Due**: Berkurang secara langsung sebesar nominal pembayaran yang dicocokkan (misalnya berkurang dari 100 menjadi 40 setelah pembayaran 60, dan menjadi 0 saat lunas sepenuhnya). * **Matching #**: Pada tab **Journal Items**, baris akun piutang atau utang menampilkan penanda pencocokan: kode berawalan P diikuti angka selama pelunasan belum penuh, atau angka tanpa awalan setelah seluruh transaksi terkait selesai dilunasi. * **History & Messages**: Riwayat pesan formulir mencatat perubahan status (Draft → Posted) dan peristiwa pencocokan pembayaran lengkap dengan nama pengguna dan waktu."
+          "anchor": "troubleshooting",
+          "text": "* **\"No open receivable/payable items left to reconcile\"**: Terjadi bila baris mutasi diarahkan ke faktur/tagihan yang sudah lunas penuh melalui **Register Payment**. Kosongkan **Match Invoice/Bill** lalu arahkan baris ke akun kliring penerimaan/pembayaran tertunda (atau akun lawan likuiditas), atau pastikan hanya memilih faktur yang masih memiliki saldo terbuka. * **Selisih Saldo Akhir (Ending Balance Mismatch)**: Periksa apakah ada tanda nominal yang terbalik (penarikan harus negatif, setoran positif) atau apakah **Starting Balance** berbeda dari saldo akhir rekening koran periode sebelumnya. * **Mutasi Mata Uang Asing**: Saat mutasi bank melunasi faktur mata uang asing, ERPForAll otomatis menghitung selisih kurs terealisasi menggunakan akun selisih kurs perusahaan."
+        }
+      ]
+    },
+    {
+      "page_id": "user/accounting-consolidation",
+      "title": "Konsolidasi Grup Multi-Perusahaan",
+      "module": "account",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
         },
         {
-          "anchor": "troubleshooting-recovery",
-          "text": "**Penolakan Validasi Saat Konfirmasi** * **Kegagalan yang Terjadi**: Saat menekan tombol **Confirm**, proses ditolak melalui peringatan validasi dan nomor entri tidak diterbitkan. * **Penyebab Utama**: Dokumen belum memiliki mitra pelanggan atau pemasok, tidak memiliki baris produk, memiliki nilai total negatif, atau tagihan pemasok belum diisi tanggal tagihannya. * **Langkah Pemulihan**: 1. Kembali ke formulir draf dokumen. 2. Pilih mitra pada kolom **Customer** atau **Vendor**. 3. Pada tab **Invoice Lines**, tambahkan minimal satu baris produk dengan kuantitas dan harga valid sehingga total tidak negatif. 4. Pada tagihan pemasok, isi kolom tanggal tagihan. 5. Klik **Save**, kemudian klik **Confirm**."
+          "anchor": "top",
+          "text": "Bila organisasi Anda menjalankan perusahaan induk beserta satu atau beberapa anak perusahaan—termasuk yang memiliki mata uang atau bagan akun lokal berbeda—gunakan **Group Consolidation** di dalam **Accounting** untuk menghasilkan laporan keuangan konsolidasian yang seimbang dengan jejak audit penuh."
+        },
+        {
+          "anchor": "before-starting",
+          "text": "1. Pastikan **Group Consolidation** aktif di **Accounting → More → Configuration → Settings** (lihat [Controlling, Anggaran & Aset Tetap](/id/next/user/accounting-controlling-budgets-assets.md#enable-enterprise-finance)). 2. Pastikan seluruh entitas anak telah terdaftar pada **Settings → Users & Companies → Companies** dan akun pengguna Anda memiliki izin akses ke induk serta anak perusahaan tersebut. 3. Perbarui kurs penutupan (closing) dan rata-rata (average) di **Settings → Reference Data → Currencies** untuk setiap anak perusahaan bermata uang asing."
+        },
+        {
+          "anchor": "configure-consolidation-group",
+          "text": "1. Buka **Accounting → More → Consolidation → Consolidation Groups** lalu klik **New** (atau tinjau grup yang sudah ada). 2. Lengkapi header grup: * **Group Name & Code**: Nama dan kode grup pelaporan (misalnya Holding Consolidated Group). * **Reporting Currency**: Mata uang penyajian laporan konsolidasian. 3. Pada tab **Entities**, tambahkan entitas induk dan setiap anak perusahaan lengkap dengan: * **Consolidation Method**: *Full Consolidation* (entitas terkendali), *Proportional*, atau *Equity Method*. * **Ownership Percentage**: Persentase kepemilikan yang otomatis digunakan untuk menghitung **Kepentingan Nonpengendali (NCI)** bila kepemilikan di bawah 100%. 4. Klik **Bootstrap Group FS Chart** untuk membentuk struktur akun laporan grup standar (Aset, Liabilitas, Ekuitas, Pendapatan, Beban, CTA, dan NCI) lalu petakan akun lokal tiap entitas ke baris Group FS terkait."
+        },
+        {
+          "anchor": "run-consolidation",
+          "text": "1. Buka **Accounting → More → Consolidation → Consolidation Runs** lalu klik **New**. 2. Pilih **Consolidation Group**, tentukan **Period** (tanggal awal dan akhir), serta deskripsi run (misalnya Holding consolidation Jan–Nov 2026). 3. Jalankan perhitungan konsolidasi. ERPForAll secara otomatis memproses: * **Penjabaran Kurs & CTA**: Menjabarkan pos neraca entitas asing pada kurs penutupan, pos laba rugi pada kurs rata-rata, dan ekuitas historis pada kurs historis, lalu mencatat selisihnya ke **Cumulative Translation Adjustment (CTA)**. * **Eliminasi Antarperusahaan (IC)**: Mencocokkan dan mengeliminasi piutang/utang, pendapatan/beban, serta saldo internal antar anggota grup. * **Kepentingan Nonpengendali (NCI)**: Memisahkan porsi minoritas atas laba bersih dan ekuitas anak perusahaan sesuai persentase kepemilikan. * **Verifikasi Keseimbangan Otomatis**: Memastikan **Total Aset Konsolidasian = Total Liabilitas & Ekuitas Konsolidasian** (Diff $0.00). 4. Tinjau tab **Totals**, **Verification**, dan **Consolidation Ledger**, lalu kunci run konsolidasi setelah diaudit. ![Consolidation Run merangkum Total Aset, Liabilitas & Ekuitas, Laba Bersih grup, verifikasi saldo (selisih $0.00), dan entri buku besar konsolidasi.](/id/next/assets/docs/assets/user-manual/accounting/consolidation-run.webp)"
+        },
+        {
+          "anchor": "review-consolidated-statements",
+          "text": "Buka **Accounting → More → Consolidation** untuk melihat hasil pelaporan grup: * **Consolidated Balance Sheet**: Menyajikan posisi keuangan grup setelah penjabaran kurs, eliminasi antarperusahaan, dan alokasi NCI. * **Consolidated Profit & Loss**: Menyajikan pendapatan, beban, dan laba bersih grup yang dapat diatribusikan ke induk maupun kepentingan nonpengendali. * **IC Reconciliation Matrix**: Membandingkan pasangan saldo antarperusahaan di antara setiap anak usaha agar tim keuangan dapat menemukan dan menyelesaikan selisih sebelum tutup buku grup. ![Consolidated Profit & Loss menggabungkan pendapatan, beban, dan laba bersih seluruh entitas yang dikonsolidasikan.](/id/next/assets/docs/assets/user-manual/accounting/consolidated-pnl.webp)"
+        },
+        {
+          "anchor": "troubleshooting",
+          "text": "* **Laporan Menampilkan \"No data for these filters\"**: Periksa filter **Period** di bagian atas **Consolidated Balance Sheet** atau **IC Reconciliation Matrix**—bila bawaannya adalah **Today**, ubah ke **This year** atau rentang tanggal yang mencakup **Consolidation Run** Anda. * **Selisih Antarperusahaan pada Matriks IC**: Buka **IC Reconciliation Matrix**, identifikasi pasangan entitas yang tidak cocok, periksa apakah salah satu anak perusahaan masih memiliki faktur/tagihan berstatus Draft, posting dokumen tersebut, lalu jalankan ulang konsolidasi. * **Akun Lokal Belum Dipetakan**: Jika anak perusahaan memposting transaksi ke akun lokal baru, petakan akun tersebut ke baris **Group FS Chart** di dalam Consolidation Group sebelum menjalankan ulang konsolidasi periode."
+        }
+      ]
+    },
+    {
+      "page_id": "user/accounting-controlling-budgets-assets",
+      "title": "Controlling, Anggaran (AVC), serta Aset Tetap & CIP",
+      "module": "account",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "ERPForAll menyertakan modul akuntansi manajemen dan siklus hidup aset langsung di dalam aplikasi **Accounting**. Aktifkan fitur enterprise yang dibutuhkan pada **Pengaturan Akuntansi** untuk membuka Cost & Profit Center Controlling, Kontrol Ketersediaan Anggaran (AVC) real-time, serta Aset Tetap dan Aset Dalam Penyelesaian (CIP)."
+        },
+        {
+          "anchor": "enable-enterprise-finance",
+          "text": "1. Buka **Accounting → More → Configuration → Settings** (periksa cakupan **Current company** maupun **Global settings** sesuai kebutuhan). 2. Aktifkan modul yang digunakan organisasi Anda: * **Controlling** — *Cost Center & Profit Center Controlling* (membuka Analytic Plans, Cost & Profit Centers, Default Cost Center Rules, Statistical Key Figures, Cost Allocation Cycles/Runs, dan Cost Center Performance). * **Budgeting & AVC** — *Advanced Budgeting & Availability Control (AVC)* (membuka Budget Control Profiles, Budgets, Budget Amendments, Budget Commitments, dan laporan Budget Availability Control). * **Fixed Assets & CIP** — *Fixed Assets & Construction in Progress (CIP)* (membuka Asset Classes, Assets & CIP, CIP Settlements, dan Depreciation Runs). * **Group Consolidation** — *Group Financial Statement Consolidation* (dibahas pada [Konsolidasi Multi-Perusahaan](/id/next/user/accounting-consolidation.md)). 3. Klik **Save** lalu muat ulang halaman agar seluruh menu terkait tampil di bawah **Accounting → More**. ![Pengaturan Akuntansi mengaktifkan fitur Controlling, Budgeting & AVC, Fixed Assets & CIP, dan Group Consolidation.](/id/next/assets/docs/assets/user-manual/accounting/accounting-settings.webp)"
+        },
+        {
+          "anchor": "controlling-and-skf",
+          "text": "1. **Analytic Plans & Cost Centers**: * Atur dimensi analitik pada **Accounting → More → Configuration → Analytic Plans** (misalnya *Departments* dan *Projects*). * Buat unit organisasi pada **Configuration → Cost & Profit Centers** (lengkapi kode, tipe center, hierarki induk, dan analytic plan). * Atur **Default Cost Center Rules** agar posting pada akun atau produk tertentu otomatis mengisi cost center bawaan. 2. **Statistical Key Figures (SKF) & Siklus Alokasi Biaya**: * Definisikan dasar alokasi (seperti jumlah karyawan, luas ruangan, atau unit server) di **Configuration → Statistical Key Figures**. * Buat aturan distribusi overhead di **Configuration → Cost Allocation Cycles** (cost center pengirim, penerima, pemicu SKF atau persentase tetap). * Jalankan alokasi berkala di **Accounting → More → Accounting → Cost Allocation Runs** lalu posting entri alokasinya. 3. **Pelaporan Analitik & Kinerja Pusat Biaya**: * Buka **Reporting → Analytic Report** atau **Reporting → Cost Center Performance** untuk membandingkan biaya aktual, pendapatan, dan alokasi overhead per pusat biaya. ![Cost & Profit Centers mengelompokkan departemen dan unit laba untuk akuntansi manajemen.](/id/next/assets/docs/assets/user-manual/accounting/cost-centers.webp) ![Analytic Report menggabungkan pendapatan dan beban terposting berdasarkan pusat biaya dan rencana analitik.](/id/next/assets/docs/assets/user-manual/accounting/analytic-report.webp)"
+        },
+        {
+          "anchor": "budgets-and-avc",
+          "text": "Budget Availability Control memantau komitmen (Pesanan Pembelian) dan realisasi aktual (Tagihan Pemasok / Entri Jurnal) terhadap anggaran yang disetujui secara real-time: 1. **Budget Control Profiles**: Buka **Configuration → Budget Control Profiles** untuk menetapkan ambang peringatan dan blokir (misalnya *Strict Hard Stop: 80% Warn / 100% Block*). 2. **Membuat dan Mengaktifkan Anggaran**: * Buka **Accounting → More → Accounting → Budgets** lalu klik **New**. * Isi nama anggaran, rentang periode fiskal, dan **Budget Control Profile**. * Tambahkan baris anggaran berisi **Account**, **Cost Center**, dan **Planned Amount**. * Klik **Confirm** lalu **Approve & Activate AVC**. Saat aktif, form anggaran menampilkan saldo **Released**, **Committed**, **Actual**, dan **Available**. 3. **Memantau Komitmen, Amandemen, dan Utilisasi**: * Tinjau komitmen PO aktif di **Accounting → Budget Commitments**. * Ajukan realokasi atau penambahan anggaran tengah tahun melalui **Accounting → Budget Amendments** agar baseline awal dan anggaran revisi tetap terdokumentasi. * Pantau persentase serapan anggaran seluruh perusahaan di **Reporting → Budget Availability Control**. ![Anggaran AVC aktif melacak nominal Released, Committed, Actual, dan Available sesuai Budget Control Profile.](/id/next/assets/docs/assets/user-manual/accounting/budget-avc.webp)"
+        },
+        {
+          "anchor": "fixed-assets-and-cip",
+          "text": "1. **Asset Classes**: Atur kelas aset di **Configuration → Asset Classes** lengkap dengan akun aset tetap, akumulasi penyusutan, beban penyusutan, metode, serta masa manfaat bawaan. 2. **Membuat Aset Tetap atau CIP**: * Buka **Accounting → More → Accounting → Assets & CIP** lalu klik **New**. * Isi nama aset, kode, **Asset Class**, **Asset Type** (*Fixed Asset* atau *Construction in Progress*), tanggal perolehan, nilai perolehan, metode penyusutan (*Straight Line* atau *Declining Balance*), dan jumlah periode. * Periksa isian **Fixed Asset / CIP Account**, **Accumulated Depreciation Account**, dan **Depreciation Expense Account**. 3. **Menghitung Penyusutan & Menjalankan Aset**: * Klik **Compute Depreciation** untuk menyusun **Depreciation Board** per periode. * Konfirmasi aset sehingga statusnya berpindah ke **Running**. * Posting penyusutan berkala satu per satu lewat **Post Next Depreciation** pada form aset, atau secara massal di **Accounting → Depreciation Runs**. 4. **Kapitalisasi Aset Dalam Penyelesaian (CIP)**: * Kumpulkan biaya proyek modal pada aset CIP selama masa pembangunan. * Saat siap digunakan, buka **Accounting → CIP Settlements** untuk memindahkan akumulasi biaya CIP menjadi satu atau beberapa Aset Tetap yang siap disusutkan. ![Depreciation Board menjadwalkan setiap entri penyusutan bulanan sepanjang masa manfaat aset.](/id/next/assets/docs/assets/user-manual/accounting/asset-depreciation-board.webp)"
+        },
+        {
+          "anchor": "troubleshooting",
+          "text": "* **Menu Tidak Muncul di Bawah Accounting → More**: Pastikan sakelar fitur terkait aktif di **Accounting Settings** (cakupan Company maupun Global pada multi-perusahaan) lalu muat ulang halaman browser. * **Akun Aset Tetap Wajib Saat Menyimpan**: Jika memilih **Asset Class** belum otomatis mengisi ketiga akun akuntansi, pilih secara manual **Fixed Asset / CIP Account**, **Accumulated Depreciation Account**, dan **Depreciation Expense Account** sebelum mengklik **Save**. * **Penolakan Hard-Stop AVC**: Saat PO atau Tagihan Pemasok melebihi 100% sisa anggaran pada profil Hard Stop, kurangi nominal belanja, lakukan realokasi melalui **Budget Amendment**, atau minta tim Keuangan meninjau profil kontrol anggaran."
+        }
+      ]
+    },
+    {
+      "page_id": "user/accounting-setup-and-ledger",
+      "title": "Pengaturan Akuntansi, Bagan Akun, dan Entri Jurnal Manual",
+      "module": "account",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "Aplikasi **Accounting** dibangun di atas buku besar pencatatan ganda berbasis jurnal. Sebelum menerbitkan faktur atau menutup periode, pastikan Bagan Akun, jurnal, pajak, termin pembayaran, dan periode fiskal sudah tertata agar setiap transaksi operasional terposting ke akun yang tepat. ![Dasbor Akuntansi mengelompokkan pekerjaan harian berdasarkan jurnal—Customer Invoices, Vendor Bills, Bank, dan Cash—lengkap dengan tombol aksi cepat.](/id/next/assets/docs/assets/user-manual/accounting/dashboard.webp)"
+        },
+        {
+          "anchor": "before-starting",
+          "text": "Tetapkan peran akuntansi pada **Settings → Users & Companies → Users**: * **Read-only (Accounting Read-Only)**: Melihat entri jurnal, faktur, tagihan, dan laporan keuangan tanpa dapat mengubah data akuntansi. * **Billing / Invoicing User**: Menyusun dan memposting faktur pelanggan, tagihan pemasok, serta pembayaran. * **Accountant / Administrator**: Mengatur Bagan Akun, jurnal, pajak, posisi fiskal, periode fiskal, tanggal kunci, controlling, anggaran, aset tetap, dan konsolidasi grup."
+        },
+        {
+          "anchor": "chart-of-accounts",
+          "text": "1. Buka **Accounting → More → Configuration → Chart of Accounts**. 2. Tinjau daftar akun berdasarkan **Code**, **Account Name**, **Type** (Aset, Liabilitas, Ekuitas, Pendapatan, Beban, Off-Balance), dan **Allow Reconciliation**. 3. Aktifkan **Allow Reconciliation** pada akun piutang, utang, serta akun kliring pembayaran/penerimaan agar pembayaran dan nota kredit dapat direkonsiliasi terhadap item terbuka. 4. Klik **New** untuk menambah akun baru, tentukan kode, tipe akun, mata uang (opsional), serta **Account Tags** untuk klasifikasi pajak atau arus kas. ![Bagan Akun mendefinisikan setiap akun buku besar, klasifikasi tipe akun, serta pengaturan rekonsiliasi.](/id/next/assets/docs/assets/user-manual/accounting/chart-of-accounts.webp)"
+        },
+        {
+          "anchor": "journals-and-taxes",
+          "text": "Atur kaidah pencatatan harian pada **Accounting → More → Configuration**: * **Journals**: Kelola jurnal terpisah untuk **Sales** (Faktur Pelanggan), **Purchases** (Tagihan Pemasok), **Bank**, **Cash**, dan **Miscellaneous** (akrual manual, penyusutan, penutupan buku). Setiap jurnal menentukan akun debit/kredit bawaan, prefiks nomor urut, dan opsi nomor nota kredit terpisah. * **Taxes & Tax Groups**: Definisikan pajak penjualan dan pembelian (persentase atau nominal tetap, inklusif atau eksklusif harga) beserta akun pajaknya. * **Fiscal Positions**: Petakan pajak dan akun domestik otomatis menjadi ekspor, bebas pajak, atau pajak khusus sesuai posisi fiskal maupun negara mitra. * **Payment Terms**: Atur jadwal jatuh tempo seperti *Immediate Payment*, *15 Days*, *30 Days*, *End of Following Month*, atau termin bertahap (misalnya 30% di muka dan 70% dalam 30 hari)."
+        },
+        {
+          "anchor": "fiscal-periods-and-locks",
+          "text": "1. Buka **Accounting → More → Configuration → Fiscal Periods** untuk memeriksa periode akuntansi terbuka pada tahun buku berjalan. 2. Setelah tutup buku bulanan atau tahunan selesai, tutup periode terkait (atau tetapkan tanggal kunci di **Accounting → More → Configuration → Settings**) guna mencegah posting mundur yang mengubah laporan keuangan final. 3. Hanya Administrator Akuntansi berwenang yang dapat mengubah tanggal kunci atau membuka kembali periode tertutup bila diperlukan penyesuaian audit."
+        },
+        {
+          "anchor": "manual-journal-entries",
+          "text": "Gunakan entri jurnal manual untuk akrual gaji, biaya dibayar di muka, penyesuaian, atau reklasifikasi antar akun: 1. Buka **Accounting → More → Accounting → Journal Entries** lalu klik **New**. 2. Lengkapi header: **Accounting Date**, **Journal** (umumnya *Miscellaneous Operations*), **Company**, dan **Reference** yang jelas (misalnya memo akrual sewa bulanan). 3. Pada tab **Journal Items**, klik **Add a line** untuk setiap sisi debit dan kredit: * Pilih **Account**, **Partner** (opsional), **Label**, serta nominal **Debit** atau **Credit** (serta **Analytic Distribution** bila Controlling aktif). * Pastikan total Debit sama dengan total Kredit agar jurnal seimbang. 4. Klik **Save**, tinjau baris jurnal, lalu klik **Post**. ERPForAll memberikan nomor urut final (misalnya GEN/2026/11/0003) dan mengunci entri dari penyuntingan langsung. 5. **Membalik Entri (Reverse Entry)**: Jika entri terposting perlu dikoreksi atau akrual harus dibalik pada periode berikutnya, klik **Reverse Entry**, masukkan tanggal balik dan alasannya, lalu konfirmasi. Sistem memposting jurnal pembalik terkait (misalnya GEN/2026/11/0004) demi menjaga jejak audit utuh. ![Entri jurnal manual yang sudah diposting menampilkan baris debit dan kredit seimbang, nomor urut, dan tombol Reverse Entry.](/id/next/assets/docs/assets/user-manual/accounting/posted-journal-entry.webp)"
+        },
+        {
+          "anchor": "troubleshooting",
+          "text": "* **Jurnal Gagal Diposting (Tidak Seimbang)**: Pastikan jumlah seluruh baris Debit persis sama dengan jumlah baris Kredit sesuai presisi mata uang sebelum mengklik **Post**. * **Field Header Wajib Belum Terisi**: Pastikan **Journal**, **Date**, dan **Company** telah terisi sebelum memposting entri manual baru. * **Galat Periode Terkunci**: Jika ERPForAll menolak posting pada tanggal lampau, pindahkan **Accounting Date** ke periode terbuka atau minta Administrator Akuntansi meninjau **Fiscal Periods** dan tanggal kunci."
+        }
+      ]
+    },
+    {
+      "page_id": "user/record-and-settle-invoices",
+      "title": "Faktur Pelanggan, Tagihan Pemasok, Pembayaran, dan Nota Kredit",
+      "module": "account",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "Gunakan menu **Customers** dan **Vendors** pada aplikasi **Accounting** untuk mengelola seluruh siklus Piutang (AR) dan Utang (AP)—mulai dari penyusunan dan posting dokumen, pembayaran parsial maupun penuh, nota kredit, pembayaran massal, hingga tindak lanjut piutang jatuh tempo."
+        },
+        {
+          "anchor": "before-starting",
+          "text": "Pastikan hal berikut sebelum mencatat transaksi AR/AP: * **Perusahaan Aktif & Jurnal**: Pastikan perusahaan aktif di pojok kanan atas sudah benar dan jurnal Penjualan, Pembelian, serta Bank/Kas tersedia. * **Data Master Mitra**: Pastikan pelanggan atau pemasok memiliki alamat penagihan, NPWP/Tax ID, dan termin pembayaran yang akurat. * **Hak Akses Pengguna**: Membuat, memposting, dan membayar faktur/tagihan membutuhkan izin pengguna Akuntansi."
+        },
+        {
+          "anchor": "customer-invoices",
+          "text": "1. Buka **Accounting → Customers → Invoices** lalu klik **New**. 2. Pilih **Customer**, periksa **Invoice Date**, **Payment Terms** (atau **Due Date**), **Journal**, dan **Currency**. 3. Pada tab **Invoice Lines**, klik **Add a line** untuk memilih **Product** (atau isi deskripsi), **Quantity**, **Unit Price**, **Discount (%)** bila ada, serta **Taxes** (misalnya VAT 11% (Sales)). 4. Klik **Save** lalu tinjau **Untaxed Amount**, **Tax**, dan **Total**. 5. Klik **Confirm** (atau **Post**). ERPForAll menerbitkan nomor faktur resmi (misalnya INV/2026/00025), memposting jurnal piutang serta pendapatan/pajak, dan menampilkan tombol **Register Payment** serta **Credit Note**. ![Faktur Pelanggan yang sudah diposting menampilkan nomor resmi, rincian pajak, total tagihan, serta tombol Register Payment dan Credit Note.](/id/next/assets/docs/assets/user-manual/accounting/customer-invoice-posted.webp)"
+        },
+        {
+          "anchor": "register-payments",
+          "text": "Anda dapat melunasi faktur atau tagihan pemasok sekaligus maupun dalam beberapa cicilan: 1. Buka faktur atau tagihan yang sudah diposting lalu klik **Register Payment**. 2. Pilih **Journal** (seperti *Main Bank* atau *Petty Cash Box*), **Payment Method**, **Payment Date**, dan **Amount**: * **Pembayaran Parsial**: Masukkan nominal lebih kecil dari sisa tagihan (misalnya $100.00 dari $333.00). ERPForAll menghitung **Payment Difference** ($233.00) dan otomatis memilih **Keep open** agar sisa piutang tetap terbuka. * **Penghapusan Selisih (Write-Off)**: Jika selisih merupakan biaya administrasi bank, pembulatan, atau potongan pelunasan cepat, pilih **Mark as fully paid** lalu tentukan akun dan keterangan write-off. 3. Klik **Create Payment**. 4. Pada pembayaran parsial, **Amount Due** pada faktur langsung berkurang dan pembayaran tertaut di smart button **Payments**. Ulangi **Register Payment** untuk melunasi sisanya hingga status faktur menjadi **PAID** dengan Amount Due $0.00. ![Dialog Register Payment otomatis menghitung selisih pembayaran parsial agar Anda dapat membiarkan sisa terbuka atau menghapusnya.](/id/next/assets/docs/assets/user-manual/accounting/register-payment-partial.webp) ![Setelah lunas penuh, faktur menampilkan lencana PAID, Amount Due nol, dan tombol pintar Payments yang menautkan seluruh pembayaran.](/id/next/assets/docs/assets/user-manual/accounting/customer-invoice-paid.webp)"
+        },
+        {
+          "anchor": "credit-notes",
+          "text": "Bila pelanggan mengembalikan barang, membatalkan jasa, atau memperoleh penyesuaian harga atas faktur yang sudah diposting: 1. Buka Faktur Pelanggan terkait lalu klik **Credit Note** (atau buka **Accounting → Customers → Credit Notes → New**). 2. Pada wizard **Credit Note**, pilih **Credit Method** (draf pengembalian sebagian atau pembalikan penuh), isi **Reason** dan **Reversal Date**, lalu konfirmasi. 3. Tinjau Nota Kredit yang terbentuk (berawalan RINV/...), sesuaikan kuantitas baris bila pengembalian bersifat sebagian, lalu klik **Confirm** untuk mempostingnya ke buku besar. 4. Untuk nota retur pemasok, ikuti langkah yang sama dari Tagihan Pemasok (atau buka **Accounting → Vendors → Refunds**). ![Nota Kredit terposting membalik baris faktur terkait dan mempertahankan referensi langsung ke faktur asalnya.](/id/next/assets/docs/assets/user-manual/accounting/credit-note-posted.webp)"
+        },
+        {
+          "anchor": "vendor-bills",
+          "text": "1. Buka **Accounting → Vendors → Bills** lalu klik **New** (atau buat draf tagihan langsung dari Pesanan Pembelian—lihat [Pembelian dan Penerimaan Barang](/id/next/user/buy-and-receive.md)). 2. Pilih **Vendor**, masukkan **Bill Date** dan nomor **Reference** faktur pemasok, serta periksa **Journal** dan **Accounting Date**. 3. Tambahkan baris beban atau persediaan pada **Invoice Lines**, periksa pajak masukan dan totalnya, klik **Save**, lalu klik **Confirm** untuk memposting (menghasilkan nomor seperti BILL/2026/11/0021). 4. Klik **Register Payment** saat melakukan pembayaran agar jurnal pengeluaran kas/bank tercatat dan status tagihan berubah menjadi **PAID**. ![Tagihan Pemasok yang sudah diposting mencatat kewajiban utang dan menyediakan aksi Register Payment serta retur pemasok.](/id/next/assets/docs/assets/user-manual/accounting/vendor-bill-posted.webp)"
+        },
+        {
+          "anchor": "batch-followups-recurring",
+          "text": "* **Batch Payments** (**Customers → Batch Payments** / **Vendors → Batch Payments**): Mengelompokkan beberapa pembayaran dari jurnal yang sama ke satu slip setoran atau batch transfer bank agar satu baris rekening koran dapat merekonsiliasi banyak faktur sekaligus. * **Follow-up Reports** (**Customers → Follow-up Reports**): Memantau piutang pelanggan jatuh tempo berdasarkan tingkat penagihan (**Configuration → Follow-up Levels**) agar tim keuangan dapat menindaklanjuti secara sistematis. * **Recurring & Deferred Entries** (**Accounting → More → Accounting → Recurring & Deferred**): Mengotomatisasi pengakuan pendapatan berkala, amortisasi biaya dibayar di muka, atau jadwal jurnal berulang bulanan."
+        },
+        {
+          "anchor": "troubleshooting",
+          "text": "* **Bill Date Masih Kosong**: Tagihan pemasok wajib memiliki **Bill Date** sebelum diposting (terutama draf yang dibuat otomatis dari Pesanan Pembelian). Isi **Bill Date** pada header terlebih dahulu sebelum mengklik **Confirm**. * **Koreksi Dokumen Terposting**: Faktur dan tagihan yang sudah diposting bersifat permanen demi integritas audit. Gunakan **Credit Note** / **Refund** untuk membalik kesalahan alih-alih menghapus dokumen terposting. * **Faktur Masih Terbuka Setelah Pembayaran**: Pastikan pembayaran diposting ke akun piutang/utang yang mengaktifkan rekonsiliasi, lalu buka tombol pintar **Payments** untuk memverifikasi pencocokannya."
         }
       ]
     }

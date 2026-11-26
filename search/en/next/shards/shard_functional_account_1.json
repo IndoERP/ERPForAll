@@ -4,12 +4,16 @@
   "version": "next",
   "audience": "functional",
   "modules": [
+    "account",
+    "account",
+    "account",
+    "account",
     "account"
   ],
   "docs": [
     {
-      "page_id": "user/record-and-settle-invoices",
-      "title": "Prepare Journals, Post Invoices, and Settle Payments",
+      "page_id": "user/accounting-bank-reconciliation",
+      "title": "Bank Statements and Bank Reconciliation",
       "module": "account",
       "sections": [
         {
@@ -18,31 +22,179 @@
         },
         {
           "anchor": "top",
-          "text": "This guide walks operators through managing sales and purchase billing cycles in ERPForAll. You will learn how to verify accounting journals, create and confirm customer invoices and vendor bills, register payments, and monitor document matching and amount due statuses."
+          "text": "Bank reconciliation verifies that every deposit and withdrawal on your bank statement matches your accounting ledger. ERPForAll supports recording or importing bank statements, matching statement lines against open receivable/payable items or counterpart accounts, and posting the resulting bank journal entries cleanly."
         },
         {
           "anchor": "before-starting",
-          "text": "Before issuing invoices or recording bills, ensure the following setup is in place: * **User Role**: Standard accounting users create invoices, enter product lines, confirm documents, register payments, and view journal items. Configuring journals requires accounting administrator permissions. * **Company Accounts**: The company must have an active receivable account and a payable account configured in the chart of accounts. * **Journals**: Ensure at least one sales journal (for customer invoices) and one purchase journal (for vendor bills) exist with an appropriate default account (income for sales, expenses for purchases). Additionally, at least one bank or cash journal must be active with configured payment methods and a default account for settling balances."
+          "text": "* **Bank or Cash Journal**: Configure each company bank account or petty cash box as a journal under **Accounting → More → Configuration → Journals** with its dedicated liquidity account (for example, 101100 Main Bank Account). * **Reconcilable Partner Accounts**: Receivable and payable accounts must have **Allow Reconciliation** enabled so bank lines can settle open invoices or bills directly. * **Accounting Permissions**: Recording statements and reconciling lines requires Accounting user or Accountant permissions."
         },
         {
-          "anchor": "prepare-journals",
-          "text": "Every invoice, bill, and payment is posted in an appropriate journal. 1. Navigate to **Accounting > Configuration > Journals** (accounting administrator). 2. Review existing journals (a standard database includes Customer Invoices, Vendor Bills, and Main Bank). 3. Click **New** to create a journal. 4. Enter the journal name and select the **Type** (Sales, Purchase, Bank, Cash, or Credit Card). 5. **Short Code** may remain empty; ERPForAll assigns the next available unique code for that type (such as INV1, BILL1, or BNK1). 6. Select the **Default Account** matching the journal type: income for sales, expenses for purchases, or bank/cash for payment journals. 7. Leave **Currency** blank for company currency, or choose a foreign currency if the journal exclusively handles that currency. 8. Click **Save**. The **Journal Entries** tab controls document numbering (such as INV1/2026/00001 for invoices, RINV1/... for credit notes, or PBNK1/... for payments). ![An invoice form shows the journal, invoice lines and current totals.](https://raw.githubusercontent.com/IndoERP/ERPForAll/a0b166f13a9bfef45efe154016c4f5d9fd2e37c0/.github/assets/invoice-form.png)"
+          "anchor": "create-bank-statement",
+          "text": "1. Open **Accounting → More → Accounting → Bank Statements** (or click directly from a Bank journal card on the **Accounting Dashboard**). 2. Click **New** to create a statement manually, or use the statement CSV import option when uploading bank downloads. 3. Fill the statement header: * **Reference**: A clear period or statement identifier (for example, Main Bank Nov 2026). * **Journal**: Select the matching Bank or Cash journal. * **Date**: Statement closing date. * **Starting Balance** and **Ending Balance**: Enter the opening and closing balances from your bank statement to check against **Computed Balance**. 4. Under **Transactions**, click **Add a line** for each bank movement: * Enter **Date**, **Label** (bank description), optional **Partner**, and **Amount** (positive for deposits/receipts, negative for withdrawals/payments). * Optionally assign a **Counterpart Account** (such as bank charges or interest income) or select an open invoice/bill to match. 5. Click **Save** and confirm that **Computed Balance** matches your bank's ending balance. ![A saved Bank Statement displays starting, computed, and ending balances alongside every imported or manually entered transaction line.](/en/next/assets/docs/assets/user-manual/accounting/bank-statement.webp)"
         },
         {
-          "anchor": "create-and-post-invoice",
-          "text": "Follow these steps to record a customer invoice or vendor bill: 1. For customer billing, open **Accounting > Customers > Invoices**. For vendor purchases, open **Accounting > Vendors > Bills**. 2. Click **New**. 3. Choose the **Customer** (or **Vendor**). For an invoice, set the **Invoice Date** (if omitted, confirmation defaults to today's date in the company Business Time Zone). For a vendor bill, fill the bill date. 4. Optionally choose the **Journal** and **Currency**. If omitted, Accounting chooses the eligible sales or purchase journal. 5. On the **Invoice Lines** tab, click **Add a line**. 6. Select the **Product** or service to populate its label, unit, price, and taxes, then adjust **Quantity**, **Unit Price**, **Discount**, or **Taxes**. 7. Click **Save**. ERPForAll computes untaxed amount, taxes, total, and initial **Amount Due**. The **Journal Items** tab displays the underlying accounting entries: product lines, tax lines, and receivable or payable line. 8. Click **Confirm**. **Action that changes data**: **Confirm** checks that the invoice has a partner, at least one product line, and a non-negative total (and a bill date for vendor bills). Upon confirmation, it assigns the sequential entry number, changes status from Draft to Posted, and books active entries in the general ledger. Reset to Draft and Cancel are available once posting is active in your version."
+          "anchor": "reconcile-lines",
+          "text": "1. Open **Accounting → More → Accounting → Bank Reconciliation** to view the **To Reconcile** queue of unmatched statement lines. 2. Select an unreconciled line to inspect its date, label, partner, and amount. 3. Choose how to reconcile the movement: * **Match Open Invoice / Vendor Bill**: Select an unpaid invoice or vendor bill that still has open receivable/payable items to settle it directly. * **Match Counterpart Account**: For bank fees, interest, internal transfers, or expenses without a vendor bill, choose the appropriate **Counterpart Account** (such as *Bank Charges* or an inter-bank suspense/liquidity account). 4. Click **Reconcile** (or **Reconcile All** on the statement header once every line has a valid target). 5. ERPForAll posts the balanced bank journal entry (for example, BNK1/2026/00012), marks the line **RECONCILED**, and updates the statement status automatically. ![A reconciled bank statement line displays the RECONCILED badge and links directly to the generated bank journal entry.](/en/next/assets/docs/assets/user-manual/accounting/bank-reconciled-line.webp)"
         },
         {
-          "anchor": "register-payment",
-          "text": "Registering a payment records money received or sent and matches it directly against the invoice's open balance. This is distinct from bank statement reconciliation, which matches statement lines to bank journal items. 1. Open a confirmed invoice or bill that still has an **Amount Due**. 2. Click **Register Payment**. 3. Verify the dialog fields: * **Journal**: Proposes the company's first bank journal. * **Payment Method**: Shows methods matching the direction (receiving or sending). * **Payment Date**: Defaults to today's date in the company Business Time Zone. * **Memo**: Proposes document numbers. * **Amount**: Defaults to the full amount due. Enter less for a partial payment (for example, on an invoice of 100, paying 60 leaves an outstanding balance of 40). 4. Click **Pay**. If the document was partially settled while the dialog was open, the system prompts you to reopen the dialog. **Action that changes data**: **Pay** generates a confirmed payment record under **Customers > Payments** (or **Vendors > Payments**) with its own number (such as PBNK1/2026/00001), posts the payment journal entry, and matches the payment line against the invoice receivable/payable line."
+          "anchor": "verify-cash-position",
+          "text": "After completing reconciliation: 1. Return to the **Accounting Dashboard** to verify that the Bank journal card's ledger balance aligns with your latest reconciled statement balance. 2. Open **Accounting → More → Reporting → Cash Flow Statement** or **General Ledger** (filtering on your bank liquidity account) to audit every posted bank journal entry."
         },
         {
-          "anchor": "review-reconciliation",
-          "text": "After registering a payment, check the document status and settlement matching: * **Payment Status**: Displays **Paid** once fully settled, or **Partially Paid** when an outstanding balance remains. * **Amount Due**: Decreases immediately by each matched payment amount (for example, falling from 100 to 40 after a 60 payment, and reaching 0 when fully paid). * **Matching #**: On the **Journal Items** tab, receivable or payable lines show a matching code: P followed by a number while partially settled, or a plain number once fully settled. * **History & Messages**: The chatter records status changes (Draft → Posted) and payment matching entries with user and timestamp."
+          "anchor": "troubleshooting",
+          "text": "* **\"No open receivable/payable items left to reconcile\"**: This occurs if a statement line points to an invoice or bill that was already paid and reconciled in full via **Register Payment**. Either clear **Match Invoice/Bill** and point the line to the outstanding payments/receipts clearing account (or counterpart liquidity account), or match only invoices with a positive open balance. * **Ending Balance Mismatch**: Check whether any bank line has an inverted sign (withdrawals must be negative, deposits positive) or whether **Starting Balance** differs from the previous statement's closing balance. * **Foreign Currency Bank Lines**: When a bank movement settles a foreign-currency invoice, ERPForAll automatically calculates any realized exchange gain or loss using the company's exchange difference accounts."
+        }
+      ]
+    },
+    {
+      "page_id": "user/accounting-consolidation",
+      "title": "Multi-Company Group Consolidation",
+      "module": "account",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
         },
         {
-          "anchor": "troubleshooting-recovery",
-          "text": "**Validation Refusal During Confirmation** * **Observed Failure**: Clicking **Confirm** fails with a validation refusal and no entry number is assigned. * **Root Cause**: The document lacks a customer or vendor, has no product lines, has a negative total, or is a vendor bill missing its bill date. * **Recovery Steps**: 1. Return to the draft form. 2. Select a partner in **Customer** or **Vendor**. 3. Under **Invoice Lines**, add at least one line with valid quantity and price ensuring a non-negative total. 4. On vendor bills, fill the bill date. 5. Click **Save**, then click **Confirm**."
+          "anchor": "top",
+          "text": "When your organization operates a holding company and one or more subsidiaries—even across different currencies or local charts of accounts—use **Group Consolidation** inside **Accounting** to produce unified, balanced consolidated financial statements with full audit traceability."
+        },
+        {
+          "anchor": "before-starting",
+          "text": "1. Ensure **Group Consolidation** is enabled under **Accounting → More → Configuration → Settings** (see [Controlling, Budgets & Fixed Assets](/en/next/user/accounting-controlling-budgets-assets.md#enable-enterprise-finance)). 2. Verify that all participating subsidiaries are created under **Settings → Users & Companies → Companies** and that your user account has access to the holding and subsidiary companies. 3. Maintain up-to-date closing and average currency exchange rates under **Settings → Reference Data → Currencies** for any foreign-currency subsidiary."
+        },
+        {
+          "anchor": "configure-consolidation-group",
+          "text": "1. Open **Accounting → More → Consolidation → Consolidation Groups** and click **New** (or inspect an existing group). 2. Define the group header: * **Group Name & Code**: Identify the reporting group (for example, Holding Consolidated Group). * **Reporting Currency**: The functional currency in which consolidated statements are presented. 3. On the **Entities** tab, add the parent and each subsidiary with: * **Consolidation Method**: *Full Consolidation* (controlled subsidiaries), *Proportional*, or *Equity Method*. * **Ownership Percentage**: Used automatically to calculate **Non-Controlling Interest (NCI)** when ownership is below 100%. 4. Click **Bootstrap Group FS Chart** to generate a standard group-level financial statement structure (Assets, Liabilities, Equity, Revenue, Expenses, CTA, and NCI lines) and map each entity's local accounts to the corresponding group FS lines."
+        },
+        {
+          "anchor": "run-consolidation",
+          "text": "1. Open **Accounting → More → Consolidation → Consolidation Runs** and click **New**. 2. Select the **Consolidation Group**, target **Period** (start and end dates), and run description (for example, Holding consolidation Jan–Nov 2026). 3. Run the consolidation calculation. ERPForAll executes: * **Currency Translation & CTA**: Translates foreign-subsidiary balance sheet items at closing rate, P&L items at average rate, and historical equity at historical rate, posting the difference automatically to **Cumulative Translation Adjustment (CTA)**. * **Intercompany (IC) Elimination**: Matches and eliminates intercompany receivables/payables, revenues/expenses, and internal balances across group members. * **Non-Controlling Interest (NCI)**: Separates minority share of subsidiary net income and equity based on ownership percentage. * **Automatic Balance Verification**: Confirms **Total Consolidated Assets = Total Consolidated Liabilities & Equity** (Diff $0.00). 4. Review the **Totals**, **Verification**, and **Consolidation Ledger** tabs, then confirm/lock the consolidation run once audited. ![A Consolidation Run summarizes group Assets, Liabilities & Equity, Net Profit, balance verification ($0.00 difference), and consolidation ledger entries.](/en/next/assets/docs/assets/user-manual/accounting/consolidation-run.webp)"
+        },
+        {
+          "anchor": "review-consolidated-statements",
+          "text": "Open **Accounting → More → Consolidation** to review group-level outputs: * **Consolidated Balance Sheet**: Presents group financial position after FX translation, IC eliminations, and NCI allocation. * **Consolidated Profit & Loss**: Presents group revenues, expenses, and net profit attributable to parent and non-controlling interests. * **IC Reconciliation Matrix**: Compares paired intercompany balances between every pair of subsidiaries so finance teams can spot and resolve intercompany discrepancies before closing the group period. ![Consolidated Profit & Loss rolls up group revenues, expenses, and net profit across every consolidated entity.](/en/next/assets/docs/assets/user-manual/accounting/consolidated-pnl.webp)"
+        },
+        {
+          "anchor": "troubleshooting",
+          "text": "* **Report Shows \"No data for these filters\"**: Check the **Period** filter at the top of **Consolidated Balance Sheet** or **IC Reconciliation Matrix**—if the default filter is set to **Today**, switch it to **This year** or the exact date range covered by your completed **Consolidation Run**. * **Intercompany Imbalance in IC Matrix**: Open the **IC Reconciliation Matrix**, identify which two entities have an unmatched receivable/payable or revenue/expense pair, verify whether one subsidiary has an unposted draft invoice/bill, post it, and re-run consolidation. * **Unmapped Local Account**: If a subsidiary posts to a newly added local account, map that account to its target **Group FS Chart** line inside the Consolidation Group before re-running the period consolidation."
+        }
+      ]
+    },
+    {
+      "page_id": "user/accounting-controlling-budgets-assets",
+      "title": "Controlling, Budgets (AVC), and Fixed Assets & CIP",
+      "module": "account",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "ERPForAll includes built-in management accounting and asset lifecycle modules directly inside **Accounting**. Enable the enterprise features you need from **Accounting Settings** to unlock Cost & Profit Center Controlling, Real-Time Budget Availability Control (AVC), and Fixed Assets with Construction in Progress (CIP)."
+        },
+        {
+          "anchor": "enable-enterprise-finance",
+          "text": "1. Open **Accounting → More → Configuration → Settings** (check both **Current company** and **Global settings** scopes as needed). 2. Enable the modules your organization uses: * **Controlling** — *Cost Center & Profit Center Controlling* (unlocks Analytic Plans, Cost & Profit Centers, Default Cost Center Rules, Statistical Key Figures, Cost Allocation Cycles/Runs, and Cost Center Performance). * **Budgeting & AVC** — *Advanced Budgeting & Availability Control (AVC)* (unlocks Budget Control Profiles, Budgets, Budget Amendments, Budget Commitments, and Budget Availability Control report). * **Fixed Assets & CIP** — *Fixed Assets & Construction in Progress (CIP)* (unlocks Asset Classes, Assets & CIP, CIP Settlements, and Depreciation Runs). * **Group Consolidation** — *Group Financial Statement Consolidation* (covered in [Multi-Company Consolidation](/en/next/user/accounting-consolidation.md)). 3. Click **Save** and reload the page so the corresponding menus appear under **Accounting → More**. ![Accounting Settings toggles activate Controlling, Budgeting & AVC, Fixed Assets & CIP, and Group Consolidation.](/en/next/assets/docs/assets/user-manual/accounting/accounting-settings.webp)"
+        },
+        {
+          "anchor": "controlling-and-skf",
+          "text": "1. **Analytic Plans & Cost Centers**: * Configure dimensions under **Accounting → More → Configuration → Analytic Plans** (for example, *Departments* and *Projects*). * Create organizational units under **Configuration → Cost & Profit Centers** (specifying code, center type, parent hierarchy, and analytic plan). * Set **Default Cost Center Rules** so postings to selected accounts or products automatically derive the right cost center. 2. **Statistical Key Figures (SKF) & Cost Allocation Cycles**: * Define allocation drivers (such as headcount, square meters, or server units) under **Configuration → Statistical Key Figures**. * Define overhead distribution rules under **Configuration → Cost Allocation Cycles** (sender cost center, receiver cost centers, SKF driver or fixed percentages). * Execute periodic overhead allocations under **Accounting → More → Accounting → Cost Allocation Runs** and post the allocation entries. 3. **Analytic & Cost Center Reporting**: * Open **Reporting → Analytic Report** or **Reporting → Cost Center Performance** to compare actual costs, revenues, and allocated overhead by cost center and plan. ![Cost & Profit Centers organize internal departments and profit units for management accounting.](/en/next/assets/docs/assets/user-manual/accounting/cost-centers.webp) ![The Analytic Report aggregates posted revenues and expenses across cost centers and analytic plans.](/en/next/assets/docs/assets/user-manual/accounting/analytic-report.webp)"
+        },
+        {
+          "anchor": "budgets-and-avc",
+          "text": "Budget Availability Control monitors commitments (Purchase Orders) and actuals (Vendor Bills / Journal Entries) against approved budgets in real time: 1. **Budget Control Profiles**: Open **Configuration → Budget Control Profiles** to define warning and hard-stop thresholds (for example, *Strict Hard Stop: 80% Warn / 100% Block*). 2. **Create and Activate a Budget**: * Open **Accounting → More → Accounting → Budgets** and click **New**. * Enter the budget name, fiscal period range, and **Budget Control Profile**. * Add budget lines specifying **Account**, **Cost Center**, and **Planned Amount**. * Click **Confirm** and then **Approve & Activate AVC**. Once active, ERPForAll displays **Released**, **Committed**, **Actual**, and **Available** balances on the budget form. 3. **Track Commitments, Amendments, and Utilization**: * Inspect active PO encumbrances under **Accounting → Budget Commitments**. * Request mid-year reallocations or top-ups cleanly under **Accounting → Budget Amendments** so original baseline vs. revised budget remains auditable. * Monitor company-wide utilization percentage under **Reporting → Budget Availability Control**. ![An active AVC Budget tracks Released, Committed, Actual, and Available amounts under your chosen Budget Control Profile.](/en/next/assets/docs/assets/user-manual/accounting/budget-avc.webp)"
+        },
+        {
+          "anchor": "fixed-assets-and-cip",
+          "text": "1. **Asset Classes**: Configure asset categories under **Configuration → Asset Classes** with default fixed asset, accumulated depreciation, and depreciation expense accounts plus method and useful life. 2. **Create a Fixed Asset or CIP Record**: * Open **Accounting → More → Accounting → Assets & CIP** and click **New**. * Enter the asset name, code, **Asset Class**, **Asset Type** (*Fixed Asset* or *Construction in Progress*), acquisition date, acquisition value, depreciation method (*Straight Line* or *Declining Balance*), and number of periods. * Verify the **Fixed Asset / CIP Account**, **Accumulated Depreciation Account**, and **Depreciation Expense Account** fields. 3. **Compute Depreciation & Run Asset**: * Click **Compute Depreciation** to generate the period-by-period **Depreciation Board**. * Confirm/start the asset so its state moves to **Running**. * Post periodic depreciation individually via **Post Next Depreciation** on the asset form or in batch across all running assets under **Accounting → Depreciation Runs**. 4. **Capitalize Construction in Progress (CIP)**: * Accumulate capital project costs on a CIP asset while under construction. * When commissioned, open **Accounting → CIP Settlements** to settle accumulated CIP costs into one or more final depreciable Fixed Assets. ![The Asset Depreciation Board schedules every monthly depreciation entry across the asset's useful life.](/en/next/assets/docs/assets/user-manual/accounting/asset-depreciation-board.webp)"
+        },
+        {
+          "anchor": "troubleshooting",
+          "text": "* **Menus Not Visible Under Accounting → More**: Verify the corresponding toggle is enabled in **Accounting Settings** (both Company and Global scopes if multi-company) and reload the browser tab. * **Missing Fixed Asset Account on Save**: If selecting an **Asset Class** does not prefill all three accounting accounts automatically, explicitly choose **Fixed Asset / CIP Account**, **Accumulated Depreciation Account**, and **Depreciation Expense Account** before clicking **Save**. * **AVC Hard-Stop Rejection**: When a Purchase Order or Vendor Bill exceeds 100% of available budget under a Hard Stop profile, either reduce the spend, reallocate funds via a **Budget Amendment**, or have Finance review the Budget Control Profile."
+        }
+      ]
+    },
+    {
+      "page_id": "user/accounting-setup-and-ledger",
+      "title": "Accounting Setup, Chart of Accounts, and Manual Journal Entries",
+      "module": "account",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "The **Accounting** application is organized around a journal-based double-entry ledger. Before issuing invoices or closing periods, verify your Chart of Accounts, journals, taxes, payment terms, and fiscal periods so every operational document posts cleanly to the right accounts. ![The Accounting Dashboard groups daily work by journal—Customer Invoices, Vendor Bills, Bank, and Cash—with quick action buttons.](/en/next/assets/docs/assets/user-manual/accounting/dashboard.webp)"
+        },
+        {
+          "anchor": "before-starting",
+          "text": "Assign accounting roles under **Settings → Users & Companies → Users**: * **Read-only (Accounting Read-Only)**: View posted journal entries, invoices, bills, and financial reports without modifying accounting data. * **Billing / Invoicing User**: Draft and post customer invoices, vendor bills, and payments. * **Accountant / Administrator**: Configure Chart of Accounts, journals, taxes, fiscal positions, fiscal periods, lock dates, controlling, budgets, fixed assets, and group consolidation."
+        },
+        {
+          "anchor": "chart-of-accounts",
+          "text": "1. Open **Accounting → More → Configuration → Chart of Accounts**. 2. Review existing accounts by **Code**, **Account Name**, **Type** (Asset, Liability, Equity, Income, Expense, Off-Balance), and **Allow Reconciliation**. 3. Enable **Allow Reconciliation** on receivable, payable, and outstanding payment/receipt clearing accounts so payments and credit notes can be matched against open items. 4. Click **New** to add a custom account, assign its code, account type, currency (optional), and any **Account Tags** used for tax or cash-flow classification. ![The Chart of Accounts defines every statutory ledger account, type classification, and reconciliation capability.](/en/next/assets/docs/assets/user-manual/accounting/chart-of-accounts.webp)"
+        },
+        {
+          "anchor": "journals-and-taxes",
+          "text": "Configure daily posting rules under **Accounting → More → Configuration**: * **Journals**: Maintain separate journals for **Sales** (Customer Invoices), **Purchases** (Vendor Bills), **Bank**, **Cash**, and **Miscellaneous** (manual accruals, depreciation, closing entries). Each journal defines its default debit/credit accounts, sequence prefix, and optional dedicated credit-note sequence. * **Taxes & Tax Groups**: Define sales and purchase taxes (percentage or fixed, price-included or price-excluded) together with tax repartition lines and tax accounts. * **Fiscal Positions**: Map default domestic taxes and accounts to export, tax-exempt, or regional equivalents automatically based on the customer or vendor's fiscal position or country. * **Payment Terms**: Configure due-date schedules such as *Immediate Payment*, *15 Days*, *30 Days*, *End of Following Month*, or split installments (for example, 30% upfront and 70% within 30 days)."
+        },
+        {
+          "anchor": "fiscal-periods-and-locks",
+          "text": "1. Open **Accounting → More → Configuration → Fiscal Periods** to verify open accounting periods for the current fiscal year. 2. When month-end or year-end review finishes, close or lock completed periods (or set lock dates in **Accounting → More → Configuration → Settings**) to prevent backdated postings from altering audited financial statements. 3. Only authorized Accounting Administrators can adjust lock dates or reopen a closed period if a statutory adjustment is required."
+        },
+        {
+          "anchor": "manual-journal-entries",
+          "text": "Use manual journal entries for payroll accruals, prepayments, adjustments, or inter-account reclassifications: 1. Open **Accounting → More → Accounting → Journal Entries** and click **New**. 2. Fill the header: **Accounting Date**, **Journal** (typically *Miscellaneous Operations*), **Company**, and a descriptive **Reference** (for example, monthly rent accrual or adjustment memo). 3. Under **Journal Items**, click **Add a line** for each debit and credit leg: * Choose the **Account**, optional **Partner**, **Label**, and **Debit** or **Credit** amount (plus **Analytic Distribution** if Controlling is active). * Confirm that total Debits equal total Credits so the entry is balanced. 4. Click **Save**, review the generated lines, and click **Post**. ERPForAll assigns the final sequence number (such as GEN/2026/11/0003) and locks the entry from direct editing. 5. **Reversing an Entry**: If a posted manual entry needs correction or an accrual must reverse in the next period, click **Reverse Entry**, enter the reversal date and reason, and confirm. ERPForAll posts a linked reversal entry (such as GEN/2026/11/0004) preserving a full audit trail. ![A posted manual journal entry shows balanced debit and credit items, sequence number, and the Reverse Entry action.](/en/next/assets/docs/assets/user-manual/accounting/posted-journal-entry.webp)"
+        },
+        {
+          "anchor": "troubleshooting",
+          "text": "* **Entry Will Not Post (Unbalanced)**: Verify that the sum of Debit lines equals the sum of Credit lines to the exact currency precision before clicking **Post**. * **Missing Required Header Fields**: Ensure **Journal**, **Date**, and **Company** are selected before posting a new manual entry. * **Period Locked Error**: If ERPForAll refuses posting on an earlier date, either move the **Accounting Date** to the current open period or ask an Accounting Administrator to review **Fiscal Periods** and lock dates."
+        }
+      ]
+    },
+    {
+      "page_id": "user/record-and-settle-invoices",
+      "title": "Customer Invoices, Vendor Bills, Payments, and Credit Notes",
+      "module": "account",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "Use the **Customers** and **Vendors** menus in **Accounting** to manage your entire Accounts Receivable (AR) and Accounts Payable (AP) lifecycle—from drafting and posting documents to partial settlements, full payments, credit notes, batch payments, and overdue follow-ups."
+        },
+        {
+          "anchor": "before-starting",
+          "text": "Verify the following before recording AR/AP documents: * **Active Company & Journals**: Confirm the active company in the top-right header and ensure active Sales, Purchase, and Bank/Cash journals exist. * **Partner Master Data**: Confirm that the customer or vendor has accurate billing address, tax ID, and default payment terms. * **User Access**: Creating, posting, and paying invoices or bills requires Accounting user permissions."
+        },
+        {
+          "anchor": "customer-invoices",
+          "text": "1. Navigate to **Accounting → Customers → Invoices** and click **New**. 2. Select the **Customer**, confirm **Invoice Date**, **Payment Terms** (or explicit **Due Date**), **Journal**, and **Currency**. 3. Under **Invoice Lines**, click **Add a line** to select the **Product** (or enter a description), **Quantity**, **Unit Price**, optional **Discount (%)**, and **Taxes** (for example, VAT 11% (Sales)). 4. Click **Save** and review **Untaxed Amount**, **Tax**, and **Total**. 5. Click **Confirm** (or **Post**). ERPForAll assigns the official invoice number (for example, INV/2026/00025), posts the receivable and revenue/tax journal items, and displays **Register Payment** and **Credit Note**. ![A posted Customer Invoice shows the assigned number, tax breakdown, total due, and Register Payment and Credit Note actions.](/en/next/assets/docs/assets/user-manual/accounting/customer-invoice-posted.webp)"
+        },
+        {
+          "anchor": "register-payments",
+          "text": "You can settle an invoice or vendor bill in one payment or across multiple installments: 1. Open the posted invoice or vendor bill and click **Register Payment**. 2. Choose the **Journal** (such as *Main Bank* or *Petty Cash Box*), **Payment Method**, **Payment Date**, and **Amount**: * **Partial Payment**: Enter an amount lower than the open balance (for example, $100.00 against $333.00). ERPForAll displays the **Payment Difference** ($233.00) and defaults to **Keep open** so the remaining balance stays collectible. * **Write-Off Difference**: If the difference is a bank fee, rounding, or agreed early-payment discount, choose **Mark as fully paid** and select the write-off account and label. 3. Click **Create Payment**. 4. For a partial payment, the invoice displays its reduced **Amount Due** and links the payment in the **Payments** smart button. Repeat **Register Payment** for the remaining balance to reconcile the invoice to **PAID** with $0.00 Amount Due. ![The Register Payment dialog calculates partial payment differences automatically and lets you keep the balance open or write it off.](/en/next/assets/docs/assets/user-manual/accounting/register-payment-partial.webp) ![Once settled in full, the invoice displays the PAID badge, zero Amount Due, and a Payments smart button linking every payment entry.](/en/next/assets/docs/assets/user-manual/accounting/customer-invoice-paid.webp)"
+        },
+        {
+          "anchor": "credit-notes",
+          "text": "When a customer returns goods, cancels a service, or receives a price adjustment on a posted invoice: 1. Open the posted Customer Invoice and click **Credit Note** (or open **Accounting → Customers → Credit Notes → New**). 2. In the **Credit Note** wizard, select the **Credit Method** (partial refund draft or full reversal), enter a clear **Reason** and **Reversal Date**, and confirm. 3. Review the generated Credit Note (numbered RINV/...), adjust line quantities if issuing a partial refund, and click **Confirm** to post the reversal to the ledger. 4. For vendor refunds, follow the same steps from a posted Vendor Bill (or open **Accounting → Vendors → Refunds**). ![A posted Credit Note reverses the targeted invoice lines and maintains a direct reference to the original invoice.](/en/next/assets/docs/assets/user-manual/accounting/credit-note-posted.webp)"
+        },
+        {
+          "anchor": "vendor-bills",
+          "text": "1. Navigate to **Accounting → Vendors → Bills** and click **New** (or create a draft bill directly from a confirmed Purchase Order—see [Purchasing and Receipts](/en/next/user/buy-and-receive.md)). 2. Select the **Vendor**, enter the **Bill Date** and vendor invoice **Reference**, and verify the **Journal** and **Accounting Date**. 3. Add expense or inventory lines under **Invoice Lines**, verify purchase taxes and total, click **Save**, and click **Confirm** to post (assigning a sequence such as BILL/2026/11/0021). 4. Click **Register Payment** when paying the vendor to post the outgoing payment and update the bill status to **PAID**. ![A posted Vendor Bill records the payable liability and exposes Register Payment and vendor refund actions.](/en/next/assets/docs/assets/user-manual/accounting/vendor-bill-posted.webp)"
+        },
+        {
+          "anchor": "batch-followups-recurring",
+          "text": "* **Batch Payments** (**Customers → Batch Payments** / **Vendors → Batch Payments**): Group multiple individual payments from the same journal into one deposit slip or bank payment batch so a single bank statement line can reconcile multiple invoices or bills. * **Follow-up Reports** (**Customers → Follow-up Reports**): Review overdue customer receivables grouped by configured **Follow-up Levels** (**Configuration → Follow-up Levels**) so finance teams can track reminders and overdue balances systematically. * **Recurring & Deferred Entries** (**Accounting → More → Accounting → Recurring & Deferred**): Automate periodic revenue recognition, prepaid expense amortization, or recurring monthly journal schedules."
+        },
+        {
+          "anchor": "troubleshooting",
+          "text": "* **Missing Bill Date**: Vendor bills require an explicit **Bill Date** before posting (especially when generated from a Purchase Order). Fill **Bill Date** on the form header before clicking **Confirm**. * **Reopening or Fixing a Posted Document**: Posted invoices and bills are immutable for audit integrity. Use **Credit Note** / **Refund** to reverse mistakes rather than deleting posted documents. * **Invoice Still Open After Payment**: Confirm that the payment was posted to a reconcilable receivable/payable partner account and open the **Payments** smart button to verify reconciliation."
         }
       ]
     }

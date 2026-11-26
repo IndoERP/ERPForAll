@@ -1,0 +1,78 @@
+{
+  "shard_id": "shard_functional_hr_1",
+  "lang": "en",
+  "version": "next",
+  "audience": "functional",
+  "modules": [
+    "hr",
+    "hr"
+  ],
+  "docs": [
+    {
+      "page_id": "user/hr-contracts-skills-and-analytics",
+      "title": "Employment Contracts, Skills, Resumes, and HR Analytics",
+      "module": "hr",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "HR teams use **Resume & Skills**, **Contract History**, and **HR Reporting** inside the **Employees** app to track employee qualifications, maintain versioned employment terms over time, and monitor company-wide headcount and contract statuses."
+        },
+        {
+          "anchor": "resume-and-skills",
+          "text": "1. Open an employee profile under **Employees → Management** and switch to the **Resume** tab: * **Resume**: Record chronological career milestones grouped by **Resume Sections** (configured under **Employees → More → Configuration → Resume Sections**, such as *Experience*, *Education*, or *Internal Milestones*), with start/end dates and descriptions. * **Skills & Certifications**: Assign structured skills grouped by **Skill Types** (**Configuration → Skill Types**, such as *Languages*, *Technical*, or *Certifications*) together with proficiency levels and validity dates. 2. To review or batch-maintain entries across the entire organization, open **Employees → More → Learning → Resume Entries** and **Employees → More → Learning → Skills & Certifications**. ![The Resume tab displays chronological career milestones alongside structured Skills & Certifications proficiency bars.](/en/next/assets/docs/assets/user-manual/hr/employee-resume-skills.webp) ![Skills & Certifications gives HR officers a company-wide register of employee competencies and certification levels.](/en/next/assets/docs/assets/user-manual/hr/skills-certifications.webp)"
+        },
+        {
+          "anchor": "contracts-and-versions",
+          "text": "ERPForAll tracks employment terms using versioned history records so promotions, department transfers, salary adjustments, and contract renewals remain fully auditable: 1. From any employee profile, click the **History** smart button (for example, 2 History) to view every dated employment/contract version for that employee. 2. Open **Employees → More → Reporting → Contract History** to inspect contracts across all employees—including employee name, department, job position, effective start/end dates, working schedule, wage/terms, and contract status. 3. When an employee receives a promotion or renewal, create a new dated version rather than overwriting historical dates so prior periods remain accurate for HR and payroll audits. ![Contract History provides a centralized view of versioned employment contracts, effective dates, departments, and statuses.](/en/next/assets/docs/assets/user-manual/hr/contract-history.webp)"
+        },
+        {
+          "anchor": "hr-analytics",
+          "text": "Open **Employees → More → Reporting** to monitor workforce KPIs: * **Headcount Analysis**: Interactive report breaking down active headcount across departments, job positions, work locations, managers, and employee types—updating immediately as new staff join or depart. * **Contract History**: Monitors active, upcoming, and expiring contracts to prevent missed renewals. * **Skills Inventory**: Helps managers and HR locate certified or specialized employees across departments for project staffing and compliance audits. ![Headcount Analysis tracks active employees across departments, managers, and organizational units in real time.](/en/next/assets/docs/assets/user-manual/hr/headcount-analysis.webp)"
+        },
+        {
+          "anchor": "troubleshooting",
+          "text": "* **Missing Skill Types or Resume Sections**: Before recording skills or resume milestones on a fresh database, have an HR Administrator define entries under **Employees → More → Configuration → Skill Types** and **Resume Sections**. * **New Employee Missing from Headcount**: Confirm that the employee record is saved under the active company shown in the top-right company switcher and is not archived."
+        }
+      ]
+    },
+    {
+      "page_id": "user/hr-employees-and-org-chart",
+      "title": "Employee Directory, Profiles, Departments, and Org Chart",
+      "module": "hr",
+      "sections": [
+        {
+          "anchor": "top",
+          "text": "<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->"
+        },
+        {
+          "anchor": "top",
+          "text": "The **Employees** application centralizes your company's workforce directory, organizational hierarchy, departments, job positions, and work locations while keeping sensitive HR and payroll data protected behind role-based permissions."
+        },
+        {
+          "anchor": "before-starting",
+          "text": "* **Internal User**: Can browse **Employees → Directory** and **Departments** (public work contact details, job title, department, manager, and reporting hierarchy) without accessing private personal or contract details. * **HR Officer (HR User)**: Opens **Employees → Management** to create and update employee records, manage resume entries, skills, contract versions, and view HR reports. * **HR Administrator**: Configures employee types, work locations, working schedules, job positions, departure reasons, skill types, and resume sections."
+        },
+        {
+          "anchor": "employee-directory",
+          "text": "1. Open **Employees** from the app switcher and select **Directory** (or **Management** for HR officers). 2. Switch between **Kanban** view (visual cards with employee portraits, job titles, departments, work email, and tags) and **List** view (tabular directory for quick sorting and filtering). 3. Use the search bar to filter employees by name, department, job title, manager, or work location. ![The Employee Directory Kanban displays every team member's portrait, job title, department, and work contact details.](/en/next/assets/docs/assets/user-manual/hr/employee-directory-kanban.webp)"
+        },
+        {
+          "anchor": "profiles-and-org-chart",
+          "text": "1. Click any employee card—or click **New** under **Employees → Management**—to open the Employee Profile form. 2. Fill core work information on the **Work** tab: * **Company**, **Department**, **Job Position / Job Title**, **Work Email**, **Work Phone**, and **Work Location**. * **Manager** and **Coach**: Choosing a **Department** automatically populates the department's manager as the employee's default manager and updates the organizational hierarchy immediately. * **Working Schedule** and **Employee Type** (Full-time, Part-time, Contractor, Intern). 3. Use the **Interactive Organization Chart** on the right side of the **Work** tab to inspect reporting lines (superior → current employee → direct reports with headcount badges) and click any colleague in the chart to jump straight to their profile. 4. Use the top smart buttons (**History** and **Team**) to inspect contract history or view the manager's direct reports. 5. HR Officers also manage private tabs—**Payroll**, **Personal** (home address, emergency contact, ID/passport), **End of Collaboration** (offboarding & departure reason), and **Settings** (linked ERP user account). ![An Employee Profile combines Work details, smart buttons for History and Team, and an Interactive Organization Chart showing managers and direct reports.](/en/next/assets/docs/assets/user-manual/hr/employee-org-chart.webp)"
+        },
+        {
+          "anchor": "departments-and-configuration",
+          "text": "* **Departments** (**Employees → Departments**): Build a multi-level department tree (for example, *Management → Engineering*, *Finance*, *Operations*) with an assigned department manager for each unit. * **Configuration** (**Employees → More → Configuration**): * **Employee**: Maintain *Employee Types*, *Work Locations* (Head Office, Branch, Remote), *Departure Reasons*, and *Tags*. * **Time Management**: Define *Working Schedules* (standard weekly working hours). * **Recruitment**: Maintain standardized *Job Positions*."
+        },
+        {
+          "anchor": "troubleshooting",
+          "text": "* **Private Tabs Not Visible**: Only users in the **HR Officer** or **HR Administrator** group can view **Personal**, **Payroll**, and **End of Collaboration** tabs; standard employees use **Directory** for public work information. * **Manager Did Not Populate Automatically**: Check that the selected **Department** has a **Manager** assigned under **Employees → Departments**, or pick the **Manager** manually on the **Work** tab."
+        }
+      ]
+    }
+  ]
+}
