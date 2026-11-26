@@ -137,7 +137,7 @@ async fn stock_without_tracking_tables(db: &TestDb, earlier_version: Option<&str
     let client = db.client().await.unwrap();
     for table in TRACKING_TABLES {
         client
-            .batch_execute(&format!("DROP TABLE {table}"))
+            .batch_execute(&format!("DROP TABLE {table} CASCADE"))
             .await
             .unwrap_or_else(|e| panic!("drop {table}: {e:?}"));
     }

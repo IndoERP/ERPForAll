@@ -1880,9 +1880,139 @@ const SUDO_SITES: &[(&str, usize, &str)] = &[
         "reads only `sale_invoice_policy` of the companies of the order lines being computed, or of the current company for a new product, so the policy does not depend on the reader's company rule; one selection value per company, which lands on the caller's own line or product and is never returned as a company record",
     ),
     (
-        "sale/settings.rs::lock_confirmed",
+        "sale/settings.rs::read_bool",
         1,
-        "reads the one global switch `sale.lock_confirmed_sales` while an order is confirmed; confirming needs no settings group, the framework reads its own configuration, and only the boolean is used",
+        "reads declared boolean global switches of `sale` (such as `sale.lock_confirmed_sales`) inside order workflows; callers need no settings group, the framework reads its own configuration, and only the boolean leaves",
+    ),
+    (
+        "sale/settings.rs::quotation_validity_days",
+        1,
+        "reads the company-scoped integer setting `sale.quotation_validity_days` to default quotation expiration dates; callers need no settings group and only the bounded integer leaves",
+    ),
+    (
+        "sale/loyalty.rs::action_apply",
+        1,
+        "updates redeemed points/usage counters on a validated loyalty card inside a savepoint after checking caller write access on the sales order and read access on the loyalty program/card; ordinary sales users cannot write loyalty cards directly",
+    ),
+    (
+        "sale/team_dashboard.rs::_compute_sale_dashboard_card",
+        1,
+        "reads only `currency_id` of the companies of sales teams the caller can read, so each dashboard card formats amounts in the team company's currency without returning company records",
+    ),
+    (
+        "purchase/requisition.rs::create",
+        1,
+        "draws the next `purchase.requisition` sequence number after checking caller create access on `purchase.requisition`; sequences are administrator-managed configuration and only the formatted reference string leaves",
+    ),
+    (
+        "purchase/settings.rs::days_to_purchase",
+        1,
+        "reads the company-scoped integer setting `purchase.days_to_purchase` for replenishment lead time; callers need no settings group and only the bounded integer leaves",
+    ),
+    (
+        "purchase/settings.rs::default_receipt_reminder",
+        1,
+        "reads the company-scoped boolean setting `purchase.receipt_reminder` when creating orders/vendors; callers need no settings group and only the boolean leaves",
+    ),
+    (
+        "account/budget/amendment.rs::action_approve",
+        1,
+        "invalidates/updates linked budget lines after checking caller write access and `account.group_account_manager` on the budget amendment inside a savepoint",
+    ),
+    (
+        "account/budget/avc.rs::check_and_record_commitments",
+        1,
+        "records budget commitment rows (`account.budget.commitment`) when authorized purchase orders are confirmed, after verifying order access and company match; ordinary purchase users cannot forge or edit commitment rows directly",
+    ),
+    (
+        "account/consolidation/engine.rs::action_execute_run",
+        1,
+        "reads subsidiary posted ledger lines across the consolidation group's member companies after explicitly checking `account.group_account_manager`, `account.group_group_consolidation`, and access to every member company of the group",
+    ),
+    (
+        "account_reporting/migrations.rs::check_definitions",
+        1,
+        "install/upgrade migration check reading shipped reporting definitions as system during module lifecycle; never reachable from RPC",
+    ),
+    (
+        "stock/inventory_count.rs::company_annual_count_date",
+        1,
+        "reads the company-scoped annual inventory month/day settings scoped with `with_company(company_id)` when scheduling the next count date; callers need no settings group and only `(month, day)` leaves",
+    ),
+    (
+        "stock/inventory_count.rs::ensure_inventory_location",
+        1,
+        "creates the virtual inventory-adjustment counterpart location on first adjustment if missing, after checking caller write access and `stock.group_stock_manager`; returns only the location id",
+    ),
+    (
+        "stock/orderpoint_ops.rs::company_horizon_days",
+        1,
+        "reads the company-scoped integer setting `stock.horizon_days` scoped with `with_company(company_id)` for orderpoint forecast bounds; callers need no settings group and only the bounded integer leaves",
+    ),
+    (
+        "stock/orderpoint_ops.rs::next_orderpoint_name",
+        1,
+        "draws the next `stock.orderpoint` sequence number after checking caller create access on `stock.warehouse.orderpoint`; only the formatted reference leaves",
+    ),
+    (
+        "stock/package.rs::next_package_name",
+        1,
+        "draws the next `stock.package` sequence number after checking caller create access on `stock.package`; only the formatted reference leaves",
+    ),
+    (
+        "stock/procurement.rs::sync_warehouse_step_rules",
+        1,
+        "creates/toggles warehouse-owned multi-step route rules and intermediate locations after checking caller write access on `stock.warehouse`; returns nothing",
+    ),
+    (
+        "stock/procurement.rs::toggle_mto_route",
+        1,
+        "activates/deactivates the company's MTO route toggle from the stock settings hook after settings write authorization; returns nothing",
+    ),
+    (
+        "stock/scrap.rs::ensure_scrap_location",
+        1,
+        "creates the virtual scrap counterpart location on first scrap validation if missing, after checking caller write access on `stock.scrap`; returns only the location id",
+    ),
+    (
+        "stock/scrap.rs::next_scrap_name",
+        1,
+        "draws the next `stock.scrap` sequence number after checking caller create access on `stock.scrap`; only the formatted reference leaves",
+    ),
+    (
+        "stock_barcode/lib.rs::global_barcode_separator",
+        1,
+        "reads the global setting `stock.barcode_separator` to split combined barcode scans; callers need no settings group and only the bounded separator string leaves",
+    ),
+    (
+        "stock_barcode/lib.rs::next_session_name",
+        1,
+        "draws the next `stock.barcode.session` sequence number after checking caller create access on `stock.barcode.session`; only the formatted reference leaves",
+    ),
+    (
+        "stock_landed_costs/lib.rs::next_landed_cost_name",
+        1,
+        "draws the next `stock.landed.cost` sequence number after checking caller create access on `stock.landed.cost`; only the formatted reference leaves",
+    ),
+    (
+        "quality_control/lib.rs::next_seq",
+        1,
+        "draws the next sequence number (`quality.point`, `quality.check`, `quality.alert`) after checking caller create access on the owning model; only the formatted reference leaves",
+    ),
+    (
+        "quality_control/lib.rs::generate_quality_checks_for_pickings",
+        1,
+        "creates matching `quality.check` rows when an authorized transfer is confirmed or validated, even when the warehouse operator lacks direct `quality.point` write rights; scoped strictly to the transfer's company",
+    ),
+    (
+        "stock_sms/lib.rs::confirmation_flags",
+        1,
+        "reads the company-scoped delivery email/SMS confirmation boolean settings scoped with `with_company(company_id)` on outgoing transfer validation; callers need no settings group and only `(email, sms)` booleans leave",
+    ),
+    (
+        "stock_sms/lib.rs::button_validate",
+        1,
+        "logs `stock.delivery.notification` audit rows for outgoing transfers just validated by an authorized caller; scoped strictly to the validated transfer's company and partner",
     ),
     (
         "sales_team/res_users.rs::active_teams",

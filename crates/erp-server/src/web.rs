@@ -3530,7 +3530,7 @@ mod tests {
         let body = to_bytes(page.into_body(), 16_384).await.unwrap();
         let html = std::str::from_utf8(&body).unwrap();
         assert!(html.contains("Wrong address for this server"));
-        assert!(html.contains("Open http://127.0.0.1:8069/erp/login"));
+        assert!(html.contains("Open http://127.0.0.1:8069/erp and try again."));
         assert!(!html.contains("does not have access"));
     }
     #[tokio::test]

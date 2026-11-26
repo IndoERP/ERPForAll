@@ -167,15 +167,9 @@ async fn served_node_offers_and_installs_account_and_stock() {
         "the Sales delivery bridge is offered for explicit installation"
     );
     assert_eq!(
-        state_of(&start, "stock_sms"),
-        None,
-        "stock_sms is not offered"
-    );
-    assert!(
-        log.contains(
-            "addon catalogue: stock_sms is not offered for installation: declared, no behaviour yet"
-        ),
-        "stock_sms: {log}"
+        state_of(&start, "stock_sms").as_deref(),
+        Some("uninstalled"),
+        "stock_sms is now offered for explicit installation"
     );
     assert!(!log.contains("no Rust sources"), "{log}");
     // A folder with a crate this binary does not link says so (the fixture's `unlinked_native`).

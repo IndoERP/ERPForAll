@@ -81,6 +81,7 @@ async fn install(db: &TestDb) -> Orm {
             &erp_addon_uom::ADDON,
             &erp_addon_product::ADDON,
             &erp_addon_analytic::ADDON,
+            &erp_addon_reporting::ADDON,
             &erp_addon_account::ADDON,
             &erp_addon_purchase::ADDON,
         ])

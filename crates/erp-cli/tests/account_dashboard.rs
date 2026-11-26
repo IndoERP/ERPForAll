@@ -444,7 +444,16 @@ async fn cards_per_journal_type_with_drafts_body() {
     assert_eq!(drafts["context"]["default_journal_id"], b.purchase);
 
     let bank = card(&mut tx, main, b.bank).await.unwrap();
-    assert_eq!(bank["buttons"], serde_json::json!([]));
+    assert_eq!(
+        bank["buttons"],
+        serde_json::json!([{
+            "action": "account.action_bank_statement_tree",
+            "context": {"default_journal_id": b.bank},
+            "label": "New Statement",
+            "primary": true,
+            "view_mode": "form"
+        }])
+    );
     // the journal's entries are a figure: its count is the list it opens (one draft entry)
     let transactions = stat(&bank, "Transactions");
     assert_eq!(transactions["count"], 1, "{bank}");

@@ -305,15 +305,30 @@ fn purchase_installs_with_groups_access_sequence_and_settings() {
             )
             .await,
             [
+                "ir.actions.act_window:action_product_supplierinfo",
+                "ir.actions.act_window:action_purchase_order_analysis",
+                "ir.actions.act_window:action_purchase_requisition",
+                "ir.actions.act_window:action_purchase_vendors",
                 "ir.actions.act_window:purchase_form_action",
                 "ir.actions.act_window:purchase_rfq",
                 "ir.actions.act_window:purchase_settings_action",
                 "ir.ui.menu:menu_procurement_management",
+                "ir.ui.menu:menu_purchase_analysis",
+                "ir.ui.menu:menu_purchase_by_product_report",
                 "ir.ui.menu:menu_purchase_config",
+                "ir.ui.menu:menu_purchase_config_supplierinfo",
+                "ir.ui.menu:menu_purchase_dynamic_report",
                 "ir.ui.menu:menu_purchase_form_action",
                 "ir.ui.menu:menu_purchase_general_settings",
+                "ir.ui.menu:menu_purchase_product_template",
+                "ir.ui.menu:menu_purchase_product_variant",
+                "ir.ui.menu:menu_purchase_products",
+                "ir.ui.menu:menu_purchase_report",
+                "ir.ui.menu:menu_purchase_requisition",
                 "ir.ui.menu:menu_purchase_rfq",
                 "ir.ui.menu:menu_purchase_root",
+                "ir.ui.menu:menu_purchase_supplierinfo",
+                "ir.ui.menu:menu_purchase_vendors",
             ]
         );
         let orders = strings(&mut tx, "SELECT count(*)::text FROM purchase_order").await;

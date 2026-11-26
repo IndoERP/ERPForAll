@@ -158,7 +158,7 @@ fn account_demo_ledger_and_journals_load_with_demo() {
         assert_eq!(
             rows[0],
             [
-                "account.account=22",
+                "account.account=24",
                 "account.account.tag=3",
                 "account.journal=6",
                 "account.journal.group=1",
@@ -177,6 +177,8 @@ fn account_demo_ledger_and_journals_load_with_demo() {
                 "131000 Goods for Resale asset_current []",
                 "141000 Prepaid Rent asset_prepayments [Premises Costs]",
                 "151000 Office Equipment asset_fixed [Investing & Extraordinary Activities]",
+                "151900 Accumulated Depreciation asset_non_current []",
+                "159000 Construction in Progress (CIP) asset_non_current []",
                 "211000 Trade Payables liability_payable [Operating Activities]",
                 "221000 Sales Tax Payable liability_current []",
                 "251000 Long-term Bank Loan liability_non_current [Financing Activities]",

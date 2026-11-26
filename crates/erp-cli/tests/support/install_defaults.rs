@@ -153,7 +153,10 @@ pub const STOCK: &[(&str, &[&str])] = &[
         &[
             "stock_location_customers=customer/Customers/true/shared/1",
             "stock_location_inter_company=transit/Inter-company transit/false/shared/1",
+            "stock_location_inventory=inventory/Virtual Locations/Inventory adjustment/true/shared/1",
+            "stock_location_scrap=inventory/Virtual Locations/Scrap/true/shared/1",
             "stock_location_suppliers=supplier/Vendors/true/shared/1",
+            "stock_location_virtual=view/Virtual Locations/true/shared/1",
         ],
     ),
     (

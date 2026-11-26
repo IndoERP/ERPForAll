@@ -27,7 +27,15 @@ async fn native_serving_root_publishes_web_view_types() {
     assert_eq!(
         keys,
         [
-            "calendar", "form", "graph", "kanban", "list", "pivot", "search"
+            "activity",
+            "calendar",
+            "form",
+            "graph",
+            "hierarchy",
+            "kanban",
+            "list",
+            "pivot",
+            "search"
         ]
     );
     for key in keys {

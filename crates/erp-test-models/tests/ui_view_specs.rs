@@ -532,7 +532,7 @@ async fn view_selection_refuses_bad_input() {
     assert_eq!(
         err.to_string(),
         "Unknown view type 'gantt'. Allowed types are: list, form, graph, pivot, calendar, \
-         kanban, search, card, qweb"
+         kanban, hierarchy, activity, search, card, qweb"
     );
     let form = ViewType::new(&tx, "form").unwrap();
     let context = Context::from_pairs([("form_view_ref", Value::Int(3))]);
@@ -774,8 +774,8 @@ async fn validation_errors_name_the_view() {
     assert_eq!(
         err.to_string(),
         "Invalid view type: 'sheet'.\nYou might have used an invalid starting tag in the \
-         architecture.\nAllowed types are: list, form, graph, pivot, calendar, kanban, search, \
-         card, qweb"
+         architecture.\nAllowed types are: list, form, graph, pivot, calendar, kanban, hierarchy, \
+         activity, search, card, qweb"
     );
     let ViewRecordError::InvalidType { tag, allowed } = record_error(&err) else {
         panic!("{err:?}")
@@ -784,7 +784,17 @@ async fn validation_errors_name_the_view() {
     assert_eq!(
         allowed,
         &[
-            "list", "form", "graph", "pivot", "calendar", "kanban", "search", "card", "qweb"
+            "list",
+            "form",
+            "graph",
+            "pivot",
+            "calendar",
+            "kanban",
+            "hierarchy",
+            "activity",
+            "search",
+            "card",
+            "qweb"
         ]
     );
     let err = try_create(&mut tx, &[("model", s(VIEW))]).await;

@@ -412,6 +412,7 @@ fn inventory_settings_publish_typed_scoped_defaults_after_install() {
             .collect();
         let expected = BTreeMap::from([
             ("stock.picking_policy", serde_json::json!("direct")),
+            ("stock.replenish_on_order", serde_json::json!(false)),
             ("stock.horizon_days", serde_json::json!(365)),
             ("stock.annual_inventory_month", serde_json::json!("12")),
             ("stock.annual_inventory_day", serde_json::json!(31)),
@@ -882,15 +883,14 @@ fn inventory_settings_isolate_companies_and_describe_deferred_features() {
                 super::security::xid(&orm, module, menu).await
             );
         }
-        let route = json["items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|i| i["key"] == "stock.replenish_on_order")
-            .unwrap();
-        assert_eq!(
-            route["detail"],
-            "Unavailable until a later release supplies route activation."
+        // stock.replenish_on_order is now a live boolean company setting rather than a deferred info item.
+        assert!(
+            !json["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|i| i["key"] == "stock.replenish_on_order"),
+            "stock.replenish_on_order should be a declared setting, not a deferred panel info item"
         );
         for (key, label, addon) in [
             (
@@ -905,6 +905,18 @@ fn inventory_settings_isolate_companies_and_describe_deferred_features() {
                 "Direct supplier delivery",
                 "stock_dropshipping",
             ),
+            (
+                "stock.module_stock_landed_costs",
+                "Landed costs",
+                "stock_landed_costs",
+            ),
+            ("stock.module_stock_barcode", "Scanning", "stock_barcode"),
+            (
+                "stock.module_quality_control",
+                "Quality checks",
+                "quality_control",
+            ),
+            ("stock.module_stock_fleet", "Transport", "stock_fleet"),
         ] {
             let item = json["items"]
                 .as_array()
@@ -933,29 +945,15 @@ fn inventory_settings_isolate_companies_and_describe_deferred_features() {
             .unwrap_err();
             assert_eq!(error.kind(), ErrorKind::Access);
         }
-        for (key, label) in [
-            ("stock.module_stock_fleet", "Transport"),
-            ("stock.module_stock_barcode", "Scanning"),
-            ("stock.module_stock_barcode_barcodelookup", "Barcode lookup"),
-            ("stock.module_quality_control", "Quality checks"),
-            (
-                "stock.module_quality_control_worksheet",
-                "Quality worksheets",
-            ),
-        ] {
-            let item = json["items"]
+        // All inventory features are now shipped as live settings or installable modules (no deferred info rows).
+        assert!(
+            !json["items"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .find(|i| i["key"] == key)
-                .unwrap();
-            assert_eq!(item["kind"], "info");
-            assert_eq!(item["value"], format!("{label} (unavailable)"));
-            assert_eq!(
-                item["detail"],
-                "Unavailable until a later release supplies this addon."
-            );
-        }
+                .any(|i| i["app"] == "stock" && i["kind"] == "info"),
+            "no deferred stock info items remain"
+        );
         let error = write_values(
             &env,
             &mut tx,

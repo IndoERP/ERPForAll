@@ -19,6 +19,7 @@ const OPS: [(Operation, char); 4] = [
 // An independent behavioral oracle: employee / operator / manager, including inherited grants.
 const STOCK_MATRIX: &[(&str, [&str; 3])] = &[
     ("product.removal", ["r", "r", "r"]),
+    ("stock.inventory.adjustment.new", ["", "", "crud"]),
     ("stock.location", ["r", "r", "crud"]),
     ("stock.location.policy", ["r", "r", "crud"]),
     ("stock.lot", ["", "crud", "crud"]),
@@ -29,7 +30,7 @@ const STOCK_MATRIX: &[(&str, [&str; 3])] = &[
     // L6': corrections are written by the correction engine only; serial positions by the engine
     ("stock.move.line.correction", ["", "r", "r"]),
     ("stock.move.line.serial", ["", "crud", "crud"]),
-    ("stock.package", ["", "", ""]), // supplies company scope before grants.
+    ("stock.package", ["", "crud", "crud"]),
     ("stock.package.type", ["", "r", "crud"]),
     ("stock.picking", ["", "crud", "crud"]),
     ("stock.picking.batch", ["", "crud", "crud"]),
@@ -41,6 +42,7 @@ const STOCK_MATRIX: &[(&str, [&str; 3])] = &[
     ("stock.reference", ["cru", "cru", "cru"]),
     ("stock.route", ["r", "r", "crud"]),
     ("stock.rule", ["r", "r", "crud"]),
+    ("stock.scrap", ["", "cru", "crud"]),
     ("stock.serial.position", ["r", "r", "r"]),
     ("stock.storage.category", ["r", "r", "crud"]),
     ("stock.storage.category.capacity", ["r", "r", "crud"]),
@@ -813,11 +815,7 @@ fn stock_security_no_permission_rows_deny_every_ordinary_role() {
         let orm = secure(&db, &installed).await;
         for id in users {
             let mut tx = orm.begin(UserId::new(id).unwrap()).await.unwrap();
-            for name in [
-                "stock.lot.name.scope",
-                "stock.topology.version",
-                "stock.package",
-            ] {
+            for name in ["stock.lot.name.scope", "stock.topology.version"] {
                 let records = tx.env().records(name).unwrap();
                 let specification = orm.registry().model(name).unwrap();
                 for op in [Operation::Read, Operation::Write] {
