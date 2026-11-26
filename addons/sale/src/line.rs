@@ -259,6 +259,16 @@ pub struct SaleOrderLine {
         string = "Taxes"
     )]
     pub tax_ids: Vec<RecId>,
+    /// Optional Profit Center / Cost Center propagated to customer invoice lines.
+    #[field(
+        many2one,
+        comodel = "account.analytic.account",
+        check_company = true,
+        ondelete = "set null",
+        index = "btree_not_null",
+        string = "Profit / Cost Center"
+    )]
+    pub analytic_account_id: Option<RecId>,
     /// The order's currency.
     #[field(
         many2one,

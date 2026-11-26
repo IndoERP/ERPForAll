@@ -2,7 +2,7 @@
 //! Plain company accounting configuration. Property defaults use the separate mapping
 //! runtime; fiscal calendars, lock policies and taxes remain in their owning modules.
 pub mod chart_activation;
-mod settings;
+pub mod settings;
 pub(crate) mod validation;
 pub(crate) mod valuation;
 

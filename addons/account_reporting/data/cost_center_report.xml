@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<erp>
+  <data noupdate="1">
+    <record id="report_cost_center_performance" model="reporting.report">
+      <field name="name">Cost Center Performance</field>
+      <field name="provider">account_reporting.cost_center_report</field>
+      <field name="date_mode">range</field>
+      <field name="date_default">this_year</field>
+      <field name="comparison" eval="False"/>
+      <field name="multi_company" eval="False"/>
+      <field name="totals_below" eval="True"/>
+    </record>
+    <record id="cc_rep_col_primary" model="reporting.report.column">
+      <field name="report_id" ref="report_cost_center_performance"/>
+      <field name="sequence">10</field>
+      <field name="name">Primary Actual</field>
+      <field name="label">primary</field>
+      <field name="kind">monetary</field>
+    </record>
+    <record id="cc_rep_col_secondary" model="reporting.report.column">
+      <field name="report_id" ref="report_cost_center_performance"/>
+      <field name="sequence">20</field>
+      <field name="name">Secondary Allocation</field>
+      <field name="label">secondary</field>
+      <field name="kind">monetary</field>
+    </record>
+    <record id="cc_rep_col_actual" model="reporting.report.column">
+      <field name="report_id" ref="report_cost_center_performance"/>
+      <field name="sequence">30</field>
+      <field name="name">Total Actual</field>
+      <field name="label">actual</field>
+      <field name="kind">monetary</field>
+    </record>
+    <record id="cc_rep_col_committed" model="reporting.report.column">
+      <field name="report_id" ref="report_cost_center_performance"/>
+      <field name="sequence">40</field>
+      <field name="name">Committed (PO)</field>
+      <field name="label">committed</field>
+      <field name="kind">monetary</field>
+    </record>
+    <record id="cc_rep_col_budget" model="reporting.report.column">
+      <field name="report_id" ref="report_cost_center_performance"/>
+      <field name="sequence">50</field>
+      <field name="name">Budget Released</field>
+      <field name="label">budget</field>
+      <field name="kind">monetary</field>
+    </record>
+    <record id="cc_rep_col_available" model="reporting.report.column">
+      <field name="report_id" ref="report_cost_center_performance"/>
+      <field name="sequence">60</field>
+      <field name="name">Available</field>
+      <field name="label">available</field>
+      <field name="kind">monetary</field>
+    </record>
+  </data>
+  <record id="action_cost_center_performance" model="ir.actions.client">
+    <field name="name">Cost Center Performance</field>
+    <field name="tag">reporting.report</field>
+    <field name="params" eval="{'report': ref('report_cost_center_performance')}"/>
+  </record>
+  <menuitem id="menu_cost_center_performance" name="Cost Center Performance" parent="menu_account_reporting" action="action_cost_center_performance" groups="account.group_cost_center_controlling" sequence="62"/>
+  <record id="menu_cost_center_performance" model="ir.ui.menu"><field name="web_icon">lucide:network</field></record>
+</erp>

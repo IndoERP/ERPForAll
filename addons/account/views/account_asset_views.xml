@@ -1,7 +1,69 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
-<!-- Fixed Assets & Depreciation Schedules: Accounting > Accounting > Assets -->
+<!-- Fixed Assets, Asset Classes, Construction in Progress (CIP), Settlements & Depreciation Runs -->
 <erp>
+  <!-- Asset Classes -->
+  <record id="view_account_asset_category_list" model="ir.ui.view">
+    <field name="name">account.asset.category.list</field>
+    <field name="model">account.asset.category</field>
+    <field name="arch" type="xml">
+      <list>
+        <field name="code"/>
+        <field name="name"/>
+        <field name="asset_type" widget="badge" options="{'tone_info': ['normal'], 'tone_warning': ['cip']}"/>
+        <field name="account_asset_id"/>
+        <field name="method"/>
+        <field name="method_number"/>
+        <field name="method_period"/>
+        <field name="active"/>
+      </list>
+    </field>
+  </record>
+  <record id="view_account_asset_category_form" model="ir.ui.view">
+    <field name="name">account.asset.category.form</field>
+    <field name="model">account.asset.category</field>
+    <field name="arch" type="xml">
+      <form string="Asset Class">
+        <sheet>
+          <div class="oe_title"><h1><field name="name" placeholder="e.g. Machinery &amp; Equipment"/></h1></div>
+          <group>
+            <group string="Classification">
+              <field name="code" placeholder="CLS-MACH"/>
+              <field name="asset_type"/>
+              <field name="active"/>
+              <field name="company_id" readonly="1"/>
+            </group>
+            <group string="Default Depreciation">
+              <field name="method" invisible="asset_type == 'cip'"/>
+              <field name="method_number" invisible="asset_type == 'cip'"/>
+              <field name="method_period" invisible="asset_type == 'cip'"/>
+              <field name="method_progress_factor" invisible="asset_type == 'cip' or method != 'degressive'"/>
+              <field name="prorata_temporis" invisible="asset_type == 'cip'"/>
+            </group>
+          </group>
+          <group string="Accounting">
+            <group>
+              <field name="journal_id"/>
+              <field name="account_asset_id"/>
+            </group>
+            <group>
+              <field name="account_depreciation_id" invisible="asset_type == 'cip'"/>
+              <field name="account_depreciation_expense_id" invisible="asset_type == 'cip'"/>
+              <field name="account_disposal_gain_loss_id" invisible="asset_type == 'cip'"/>
+            </group>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="action_account_asset_category" model="ir.actions.act_window">
+    <field name="name">Asset Classes</field>
+    <field name="res_model">account.asset.category</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="view_account_asset_category_list"/>
+  </record>
+
+  <!-- Depreciation Board Lines -->
   <record id="view_account_asset_dep_line_list" model="ir.ui.view">
     <field name="name">account.asset.depreciation.line.list</field>
     <field name="model">account.asset.depreciation.line</field>
@@ -18,7 +80,6 @@
       </list>
     </field>
   </record>
-
   <record id="view_account_asset_dep_line_form" model="ir.ui.view">
     <field name="name">account.asset.depreciation.line.form</field>
     <field name="model">account.asset.depreciation.line</field>
@@ -40,50 +101,272 @@
     </field>
   </record>
 
+  <!-- CIP Cost Accumulation Lines -->
+  <record id="view_account_asset_cip_line_list" model="ir.ui.view">
+    <field name="name">account.asset.cip.line.list</field>
+    <field name="model">account.asset.cip.line</field>
+    <field name="arch" type="xml">
+      <list>
+        <field name="date"/>
+        <field name="name"/>
+        <field name="partner_id"/>
+        <field name="account_id"/>
+        <field name="amount"/>
+        <field name="settled_amount"/>
+        <field name="unsettled_amount"/>
+        <field name="currency_id" invisible="1"/>
+      </list>
+    </field>
+  </record>
+  <record id="view_account_asset_cip_line_form" model="ir.ui.view">
+    <field name="name">account.asset.cip.line.form</field>
+    <field name="model">account.asset.cip.line</field>
+    <field name="arch" type="xml">
+      <form string="CIP Cost Line" create="0" edit="0">
+        <sheet>
+          <group>
+            <group>
+              <field name="date" readonly="1"/>
+              <field name="name" readonly="1"/>
+              <field name="partner_id" readonly="1"/>
+              <field name="account_id" readonly="1"/>
+            </group>
+            <group>
+              <field name="amount" readonly="1"/>
+              <field name="settled_amount" readonly="1"/>
+              <field name="unsettled_amount" readonly="1"/>
+              <field name="currency_id" invisible="1"/>
+            </group>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+
+  <!-- CIP Settlement Rules -->
+  <record id="view_account_asset_settlement_rule_list" model="ir.ui.view">
+    <field name="name">account.asset.settlement.rule.list</field>
+    <field name="model">account.asset.settlement.rule</field>
+    <field name="arch" type="xml">
+      <list>
+        <field name="sequence"/>
+        <field name="name"/>
+        <field name="receiver_type"/>
+        <field name="percentage"/>
+        <field name="fixed_amount"/>
+        <field name="target_category_id"/>
+        <field name="target_asset_id"/>
+        <field name="expense_account_id"/>
+        <field name="analytic_account_id"/>
+        <field name="currency_id" invisible="1"/>
+      </list>
+    </field>
+  </record>
+  <record id="view_account_asset_settlement_rule_form" model="ir.ui.view">
+    <field name="name">account.asset.settlement.rule.form</field>
+    <field name="model">account.asset.settlement.rule</field>
+    <field name="arch" type="xml">
+      <form string="CIP Settlement Rule">
+        <sheet>
+          <group>
+            <group>
+              <field name="sequence"/>
+              <field name="name"/>
+              <field name="receiver_type"/>
+              <field name="percentage"/>
+              <field name="fixed_amount"/>
+            </group>
+            <group>
+              <field name="target_category_id" invisible="receiver_type != 'new_asset'"/>
+              <field name="auto_confirm_asset" invisible="receiver_type != 'new_asset'"/>
+              <field name="target_asset_id" invisible="receiver_type != 'existing_asset'"/>
+              <field name="expense_account_id" invisible="receiver_type != 'cost_center'"/>
+              <field name="analytic_account_id"/>
+              <field name="currency_id" invisible="1"/>
+            </group>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+
+  <!-- CIP Settlements -->
+  <record id="view_account_asset_settlement_line_list" model="ir.ui.view">
+    <field name="name">account.asset.settlement.line.list</field>
+    <field name="model">account.asset.settlement.line</field>
+    <field name="arch" type="xml">
+      <list>
+        <field name="name"/>
+        <field name="receiver_type"/>
+        <field name="account_id"/>
+        <field name="target_asset_id"/>
+        <field name="analytic_account_id"/>
+        <field name="amount"/>
+        <field name="currency_id" invisible="1"/>
+      </list>
+    </field>
+  </record>
+  <record id="view_account_asset_settlement_line_form" model="ir.ui.view">
+    <field name="name">account.asset.settlement.line.form</field>
+    <field name="model">account.asset.settlement.line</field>
+    <field name="arch" type="xml">
+      <form string="CIP Settlement Receiver Line" create="0" edit="0">
+        <sheet>
+          <group>
+            <group>
+              <field name="name" readonly="1"/>
+              <field name="receiver_type" readonly="1"/>
+              <field name="account_id" readonly="1"/>
+            </group>
+            <group>
+              <field name="target_asset_id" readonly="1"/>
+              <field name="analytic_account_id" readonly="1"/>
+              <field name="amount" readonly="1"/>
+              <field name="currency_id" invisible="1"/>
+            </group>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="view_account_asset_settlement_list" model="ir.ui.view">
+    <field name="name">account.asset.settlement.list</field>
+    <field name="model">account.asset.settlement</field>
+    <field name="arch" type="xml">
+      <list>
+        <field name="name"/>
+        <field name="cip_asset_id"/>
+        <field name="settlement_date"/>
+        <field name="settlement_mode"/>
+        <field name="total_settled"/>
+        <field name="move_id"/>
+        <field name="currency_id"/>
+        <field name="state" widget="badge" options="{'tone_warning': ['draft'], 'tone_success': ['posted'], 'tone_danger': ['reversed']}"/>
+      </list>
+    </field>
+  </record>
+  <record id="view_account_asset_settlement_form" model="ir.ui.view">
+    <field name="name">account.asset.settlement.form</field>
+    <field name="model">account.asset.settlement</field>
+    <field name="arch" type="xml">
+      <form string="CIP Settlement">
+        <header>
+          <button name="action_post_settlement" type="object" string="Execute Settlement" class="btn-primary" invisible="state != 'draft'"/>
+          <button name="action_reverse_settlement" type="object" string="Reverse Settlement" invisible="state != 'posted'"/>
+          <field name="state" widget="statusbar" statusbar_visible="draft,posted,reversed"/>
+        </header>
+        <sheet>
+          <div class="oe_title"><h1><field name="name" placeholder="e.g. Phase 1 Building Capitalization" readonly="state != 'draft'"/></h1></div>
+          <group>
+            <group>
+              <field name="cip_asset_id" readonly="state != 'draft'"/>
+              <field name="settlement_date" readonly="state != 'draft'"/>
+              <field name="settlement_mode" readonly="state != 'draft'"/>
+              <field name="partial_amount" readonly="state != 'draft'" invisible="settlement_mode != 'partial'"/>
+            </group>
+            <group>
+              <field name="total_settled" readonly="1"/>
+              <field name="move_id" readonly="1"/>
+              <field name="reversal_move_id" readonly="1" invisible="state != 'reversed'"/>
+              <field name="currency_id" readonly="1"/>
+              <field name="company_id" readonly="1"/>
+            </group>
+          </group>
+          <notebook>
+            <page string="Capitalization Receivers" name="lines">
+              <field name="line_ids" readonly="1"/>
+            </page>
+          </notebook>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="action_account_asset_settlement" model="ir.actions.act_window">
+    <field name="name">CIP Settlements</field>
+    <field name="res_model">account.asset.settlement</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="view_account_asset_settlement_list"/>
+  </record>
+
+  <!-- Fixed Assets & CIP Master -->
   <record id="view_account_asset_list" model="ir.ui.view">
     <field name="name">account.asset.list</field>
     <field name="model">account.asset</field>
     <field name="arch" type="xml">
       <list>
+        <field name="code"/>
         <field name="name"/>
+        <field name="asset_type" widget="badge" options="{'tone_info': ['normal'], 'tone_warning': ['cip']}"/>
+        <field name="category_id"/>
+        <field name="analytic_account_id"/>
         <field name="acquisition_date"/>
         <field name="original_value"/>
+        <field name="cip_unsettled_amount"/>
         <field name="value_residual"/>
-        <field name="method"/>
         <field name="currency_id"/>
-        <field name="state" widget="badge" options="{'tone_warning': ['draft'], 'tone_info': ['open'], 'tone_success': ['close']}"/>
+        <field name="state" widget="badge" options="{'tone_warning': ['draft', 'cip'], 'tone_info': ['open'], 'tone_success': ['settled', 'close'], 'tone_danger': ['disposed']}"/>
       </list>
     </field>
   </record>
-
+  <record id="view_account_asset_search" model="ir.ui.view">
+    <field name="name">account.asset.search</field>
+    <field name="model">account.asset</field>
+    <field name="arch" type="xml">
+      <search string="Assets &amp; CIP">
+        <field name="code"/>
+        <field name="name"/>
+        <field name="category_id"/>
+        <field name="analytic_account_id"/>
+        <filter name="filter_fixed" string="Fixed Assets" domain="[('asset_type', '=', 'normal')]"/>
+        <filter name="filter_cip" string="Construction in Progress (CIP)" domain="[('asset_type', '=', 'cip')]"/>
+        <group>
+          <filter name="groupby_type" string="Asset Type" context="{'group_by': 'asset_type'}"/>
+          <filter name="groupby_category" string="Asset Class" context="{'group_by': 'category_id'}"/>
+          <filter name="groupby_state" string="Status" context="{'group_by': 'state'}"/>
+        </group>
+      </search>
+    </field>
+  </record>
   <record id="view_account_asset_form" model="ir.ui.view">
     <field name="name">account.asset.form</field>
     <field name="model">account.asset</field>
     <field name="arch" type="xml">
-      <form string="Fixed Asset">
+      <form string="Fixed Asset / CIP">
         <header>
-          <button name="action_compute_depreciation_board" type="object" string="Compute Depreciation" invisible="state == 'close'"/>
+          <button name="action_compute_depreciation_board" type="object" string="Compute Depreciation" invisible="asset_type == 'cip' or state in ('close', 'disposed', 'settled')"/>
           <button name="action_validate" type="object" string="Confirm" class="btn-primary" invisible="state != 'draft'"/>
-          <button name="action_post_next_depreciation" type="object" string="Post Next Depreciation" class="btn-primary" invisible="state != 'open'"/>
+          <button name="action_post_next_depreciation" type="object" string="Post Next Depreciation" class="btn-primary" invisible="asset_type == 'cip' or state != 'open'"/>
+          <button name="action_dispose_asset" type="object" string="Dispose / Scrap" invisible="asset_type == 'cip' or state != 'open'"/>
           <button name="action_close" type="object" string="Close Asset" invisible="state != 'open'"/>
-          <field name="state" widget="statusbar" statusbar_visible="draft,open,close"/>
+          <field name="state" widget="statusbar" statusbar_visible="draft,cip,open,settled,close"/>
         </header>
         <sheet>
-          <div class="oe_title"><h1><field name="name" placeholder="e.g. Office Equipment" readonly="state != 'draft'"/></h1></div>
+          <div class="oe_title"><h1><field name="name" placeholder="e.g. Assembly Plant Wing B (CIP)" readonly="state in ('close', 'disposed', 'settled')"/></h1></div>
           <group>
-            <group string="Asset Values">
+            <group string="Classification &amp; Values">
+              <field name="code" placeholder="AST-2026-001"/>
+              <field name="asset_type" readonly="state != 'draft'"/>
+              <field name="category_id" readonly="state != 'draft'"/>
+              <field name="analytic_account_id"/>
+              <field name="source_cip_id" readonly="1" invisible="not source_cip_id"/>
               <field name="acquisition_date" readonly="state != 'draft'"/>
-              <field name="original_value" readonly="state != 'draft'"/>
-              <field name="salvage_value" readonly="state != 'draft'"/>
+              <field name="original_value" readonly="state != 'draft'" invisible="asset_type == 'cip'"/>
+              <field name="salvage_value" readonly="state != 'draft'" invisible="asset_type == 'cip'"/>
+              <field name="cip_accumulated_amount" readonly="1" invisible="asset_type != 'cip'"/>
+              <field name="cip_settled_amount" readonly="1" invisible="asset_type != 'cip'"/>
+              <field name="cip_unsettled_amount" readonly="1" invisible="asset_type != 'cip'"/>
               <field name="value_residual" readonly="1"/>
               <field name="currency_id" readonly="1"/>
               <field name="company_id" readonly="1"/>
             </group>
             <group string="Depreciation Method">
-              <field name="method" readonly="state != 'draft'"/>
-              <field name="method_number" readonly="state != 'draft'"/>
-              <field name="method_period" readonly="state != 'draft'"/>
-              <field name="method_progress_factor" readonly="state != 'draft'" invisible="method != 'degressive'"/>
+              <field name="method" readonly="state != 'draft'" invisible="asset_type == 'cip'"/>
+              <field name="method_number" readonly="state != 'draft'" invisible="asset_type == 'cip'"/>
+              <field name="method_period" readonly="state != 'draft'" invisible="asset_type == 'cip'"/>
+              <field name="method_progress_factor" readonly="state != 'draft'" invisible="asset_type == 'cip' or method != 'degressive'"/>
+              <field name="prorata_temporis" readonly="state != 'draft'" invisible="asset_type == 'cip'"/>
+              <field name="disposal_date" readonly="1" invisible="state != 'disposed'"/>
+              <field name="disposal_move_id" readonly="1" invisible="state != 'disposed'"/>
             </group>
           </group>
           <group string="Accounting">
@@ -92,27 +375,91 @@
               <field name="account_asset_id" readonly="state != 'draft'"/>
             </group>
             <group>
-              <field name="account_depreciation_id" readonly="state != 'draft'"/>
-              <field name="account_depreciation_expense_id" readonly="state != 'draft'"/>
+              <field name="account_depreciation_id" readonly="state != 'draft'" invisible="asset_type == 'cip'"/>
+              <field name="account_depreciation_expense_id" readonly="state != 'draft'" invisible="asset_type == 'cip'"/>
+              <field name="account_disposal_gain_loss_id" readonly="state != 'draft'" invisible="asset_type == 'cip'"/>
             </group>
           </group>
           <notebook>
-            <page string="Depreciation Board" name="board">
+            <page string="Depreciation Board" name="board" invisible="asset_type == 'cip'">
               <field name="depreciation_line_ids" readonly="1"/>
+            </page>
+            <page string="CIP Cost Accumulation" name="cip_lines" invisible="asset_type != 'cip'">
+              <field name="cip_line_ids" readonly="1"/>
+            </page>
+            <page string="CIP Settlement Rules" name="settlement_rules" invisible="asset_type != 'cip'">
+              <field name="settlement_rule_ids" readonly="state in ('settled', 'close')"/>
+            </page>
+            <page string="CIP Settlements" name="settlements" invisible="asset_type != 'cip'">
+              <field name="settlement_ids" readonly="1"/>
             </page>
           </notebook>
         </sheet>
       </form>
     </field>
   </record>
-
   <record id="action_account_asset" model="ir.actions.act_window">
-    <field name="name">Assets</field>
+    <field name="name">Assets &amp; CIP</field>
     <field name="res_model">account.asset</field>
     <field name="view_mode">list,form</field>
     <field name="view_id" ref="view_account_asset_list"/>
+    <field name="search_view_id" ref="view_account_asset_search"/>
   </record>
 
-  <menuitem id="menu_account_asset" name="Assets" parent="menu_finance_entries" action="action_account_asset" sequence="50"/>
+  <!-- Periodic Batch Depreciation Runs -->
+  <record id="view_account_asset_dep_run_list" model="ir.ui.view">
+    <field name="name">account.asset.depreciation.run.list</field>
+    <field name="model">account.asset.depreciation.run</field>
+    <field name="arch" type="xml">
+      <list>
+        <field name="name"/>
+        <field name="cutoff_date"/>
+        <field name="entries_posted"/>
+        <field name="total_depreciation"/>
+        <field name="currency_id"/>
+        <field name="state" widget="badge" options="{'tone_warning': ['draft'], 'tone_success': ['posted']}"/>
+      </list>
+    </field>
+  </record>
+  <record id="view_account_asset_dep_run_form" model="ir.ui.view">
+    <field name="name">account.asset.depreciation.run.form</field>
+    <field name="model">account.asset.depreciation.run</field>
+    <field name="arch" type="xml">
+      <form string="Periodic Depreciation Run">
+        <header>
+          <button name="action_post_due_depreciations" type="object" string="Post Due Depreciations" class="btn-primary" invisible="state != 'draft'"/>
+          <field name="state" widget="statusbar" statusbar_visible="draft,posted"/>
+        </header>
+        <sheet>
+          <div class="oe_title"><h1><field name="name" placeholder="e.g. Nov 2026 Periodic Depreciation" readonly="state != 'draft'"/></h1></div>
+          <group>
+            <group>
+              <field name="cutoff_date" readonly="state != 'draft'"/>
+              <field name="company_id" readonly="1"/>
+            </group>
+            <group>
+              <field name="entries_posted" readonly="1"/>
+              <field name="total_depreciation" readonly="1"/>
+              <field name="currency_id" readonly="1"/>
+            </group>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="action_account_asset_dep_run" model="ir.actions.act_window">
+    <field name="name">Periodic Depreciation Runs</field>
+    <field name="res_model">account.asset.depreciation.run</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="view_account_asset_dep_run_list"/>
+  </record>
+
+  <menuitem id="menu_account_asset" name="Assets &amp; CIP" parent="menu_finance_entries" action="action_account_asset" groups="account.group_asset_cip" sequence="50"/>
+  <menuitem id="menu_account_asset_settlement" name="CIP Settlements" parent="menu_finance_entries" action="action_account_asset_settlement" groups="account.group_asset_cip" sequence="51"/>
+  <menuitem id="menu_account_asset_dep_run" name="Depreciation Runs" parent="menu_finance_entries" action="action_account_asset_dep_run" groups="account.group_asset_cip" sequence="52"/>
+  <menuitem id="menu_account_asset_category" name="Asset Classes" parent="menu_finance_configuration" action="action_account_asset_category" groups="account.group_asset_cip" sequence="80"/>
   <record id="menu_account_asset" model="ir.ui.menu"><field name="web_icon">lucide:archive</field></record>
+  <record id="menu_account_asset_settlement" model="ir.ui.menu"><field name="web_icon">lucide:building-2</field></record>
+  <record id="menu_account_asset_dep_run" model="ir.ui.menu"><field name="web_icon">lucide:calendar-check</field></record>
+  <record id="menu_account_asset_category" model="ir.ui.menu"><field name="web_icon">lucide:layers</field></record>
 </erp>

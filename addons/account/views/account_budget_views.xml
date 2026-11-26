@@ -1,7 +1,58 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
-<!-- Financial Budgets: Accounting > Accounting > Budgets -->
+<!-- Advanced Budgeting, AVC Profiles, Budget Amendments Workbench & Purchase Commitments -->
 <erp>
+  <!-- AVC Control Profiles -->
+  <record id="view_account_budget_profile_list" model="ir.ui.view">
+    <field name="name">account.budget.profile.list</field>
+    <field name="model">account.budget.profile</field>
+    <field name="arch" type="xml">
+      <list>
+        <field name="code"/>
+        <field name="name"/>
+        <field name="avc_mode" widget="badge" options="{'tone_info': ['none'], 'tone_warning': ['warning'], 'tone_danger': ['hard_stop']}"/>
+        <field name="warning_threshold_pct"/>
+        <field name="blocking_threshold_pct"/>
+        <field name="tolerance_amount"/>
+        <field name="check_commitments"/>
+        <field name="currency_id" invisible="1"/>
+      </list>
+    </field>
+  </record>
+  <record id="view_account_budget_profile_form" model="ir.ui.view">
+    <field name="name">account.budget.profile.form</field>
+    <field name="model">account.budget.profile</field>
+    <field name="arch" type="xml">
+      <form string="Budget Control Profile">
+        <sheet>
+          <div class="oe_title"><h1><field name="name" placeholder="e.g. Strict OPEX Hard-Stop (80/100)"/></h1></div>
+          <group>
+            <group>
+              <field name="code" placeholder="AVC-STRICT"/>
+              <field name="avc_mode"/>
+              <field name="check_commitments"/>
+              <field name="active"/>
+            </group>
+            <group>
+              <field name="warning_threshold_pct"/>
+              <field name="blocking_threshold_pct"/>
+              <field name="tolerance_amount"/>
+              <field name="currency_id" readonly="1"/>
+              <field name="company_id" readonly="1"/>
+            </group>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="action_account_budget_profile" model="ir.actions.act_window">
+    <field name="name">Budget Control Profiles (AVC)</field>
+    <field name="res_model">account.budget.profile</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="view_account_budget_profile_list"/>
+  </record>
+
+  <!-- Budget Lines -->
   <record id="view_account_budget_line_list" model="ir.ui.view">
     <field name="name">account.budget.line.list</field>
     <field name="model">account.budget.line</field>
@@ -10,17 +61,22 @@
         <field name="name"/>
         <field name="account_id"/>
         <field name="analytic_account_id"/>
+        <field name="asset_id"/>
         <field name="date_from"/>
         <field name="date_to"/>
+        <field name="original_amount"/>
+        <field name="revision_amount"/>
         <field name="planned_amount"/>
+        <field name="released_amount"/>
+        <field name="committed_amount"/>
         <field name="practical_amount"/>
-        <field name="theoretical_amount"/>
-        <field name="percentage" string="Achievement %"/>
+        <field name="available_amount"/>
+        <field name="percentage" string="Util %"/>
+        <field name="avc_status" widget="badge" options="{'tone_success': ['ok'], 'tone_warning': ['warning'], 'tone_danger': ['exceeded']}"/>
         <field name="currency_id" invisible="1"/>
       </list>
     </field>
   </record>
-
   <record id="view_account_budget_line_form" model="ir.ui.view">
     <field name="name">account.budget.line.form</field>
     <field name="model">account.budget.line</field>
@@ -28,18 +84,25 @@
       <form string="Budget Line">
         <sheet>
           <group>
-            <group>
+            <group string="Budget Scope">
               <field name="name"/>
               <field name="account_id"/>
               <field name="analytic_account_id"/>
-              <field name="planned_amount"/>
-            </group>
-            <group>
+              <field name="asset_id"/>
               <field name="date_from"/>
               <field name="date_to"/>
+            </group>
+            <group string="Availability Control">
+              <field name="original_amount"/>
+              <field name="revision_amount" readonly="1"/>
+              <field name="planned_amount"/>
+              <field name="release_pct"/>
+              <field name="released_amount"/>
+              <field name="committed_amount" readonly="1"/>
               <field name="practical_amount" readonly="1"/>
-              <field name="theoretical_amount" readonly="1"/>
-              <field name="percentage" readonly="1"/>
+              <field name="assigned_amount" readonly="1"/>
+              <field name="available_amount" readonly="1"/>
+              <field name="avc_status" readonly="1"/>
               <field name="currency_id" invisible="1"/>
             </group>
           </group>
@@ -48,22 +111,27 @@
     </field>
   </record>
 
+  <!-- Budgets -->
   <record id="view_account_budget_list" model="ir.ui.view">
     <field name="name">account.budget.list</field>
     <field name="model">account.budget</field>
     <field name="arch" type="xml">
       <list>
         <field name="name"/>
+        <field name="version_code"/>
+        <field name="budget_type"/>
+        <field name="profile_id"/>
         <field name="date_from"/>
         <field name="date_to"/>
-        <field name="total_planned"/>
+        <field name="total_released"/>
+        <field name="total_committed"/>
         <field name="total_practical"/>
+        <field name="total_available"/>
         <field name="currency_id"/>
         <field name="state" widget="badge" options="{'tone_warning': ['draft'], 'tone_info': ['confirm'], 'tone_success': ['validate', 'done'], 'tone_danger': ['cancel']}"/>
       </list>
     </field>
   </record>
-
   <record id="view_account_budget_form" model="ir.ui.view">
     <field name="name">account.budget.form</field>
     <field name="model">account.budget</field>
@@ -71,9 +139,9 @@
       <form string="Budget">
         <header>
           <button name="action_budget_confirm" type="object" string="Confirm" class="btn-primary" invisible="state != 'draft'"/>
-          <button name="action_budget_validate" type="object" string="Approve" class="btn-primary" invisible="state != 'confirm'"/>
-          <button name="action_refresh_practical" type="object" string="Compute Practical" invisible="state not in ('confirm', 'validate')"/>
-          <button name="action_budget_done" type="object" string="Done" invisible="state != 'validate'"/>
+          <button name="action_budget_validate" type="object" string="Approve &amp; Activate AVC" class="btn-primary" invisible="state != 'confirm'"/>
+          <button name="action_refresh_practical" type="object" string="Refresh Availability" invisible="state not in ('confirm', 'validate')"/>
+          <button name="action_budget_done" type="object" string="Close" invisible="state != 'validate'"/>
           <button name="action_budget_cancel" type="object" string="Cancel" invisible="state not in ('draft', 'confirm')"/>
           <button name="action_budget_draft" type="object" string="Reset to Draft" invisible="state != 'cancel'"/>
           <field name="state" widget="statusbar" statusbar_visible="draft,confirm,validate,done"/>
@@ -81,15 +149,23 @@
         <sheet>
           <div class="oe_title"><h1><field name="name" placeholder="e.g. FY2026 Operating Budget" readonly="state in ('done', 'cancel')"/></h1></div>
           <group>
-            <group>
+            <group string="Configuration">
+              <field name="version_code" readonly="state in ('done', 'cancel')"/>
+              <field name="budget_type" readonly="state != 'draft'"/>
+              <field name="profile_id" readonly="state in ('done', 'cancel')"/>
               <field name="date_from" readonly="state in ('done', 'cancel')"/>
               <field name="date_to" readonly="state in ('done', 'cancel')"/>
-            </group>
-            <group>
-              <field name="total_planned" readonly="1"/>
-              <field name="total_practical" readonly="1"/>
-              <field name="currency_id" readonly="1"/>
               <field name="company_id" readonly="1"/>
+            </group>
+            <group string="Availability Summary">
+              <field name="total_original" readonly="1"/>
+              <field name="total_revision" readonly="1"/>
+              <field name="total_planned" readonly="1"/>
+              <field name="total_released" readonly="1"/>
+              <field name="total_committed" readonly="1"/>
+              <field name="total_practical" readonly="1"/>
+              <field name="total_available" readonly="1"/>
+              <field name="currency_id" readonly="1"/>
             </group>
           </group>
           <notebook>
@@ -101,7 +177,6 @@
       </form>
     </field>
   </record>
-
   <record id="action_account_budget" model="ir.actions.act_window">
     <field name="name">Budgets</field>
     <field name="res_model">account.budget</field>
@@ -109,6 +184,159 @@
     <field name="view_id" ref="view_account_budget_list"/>
   </record>
 
-  <menuitem id="menu_account_budget" name="Budgets" parent="menu_finance_entries" action="action_account_budget" sequence="45"/>
+  <!-- Budget Amendments (Workbench) -->
+  <record id="view_account_budget_amendment_line_list" model="ir.ui.view">
+    <field name="name">account.budget.amendment.line.list</field>
+    <field name="model">account.budget.amendment.line</field>
+    <field name="arch" type="xml">
+      <list>
+        <field name="budget_line_id"/>
+        <field name="amount"/>
+        <field name="note"/>
+        <field name="currency_id" invisible="1"/>
+      </list>
+    </field>
+  </record>
+  <record id="view_account_budget_amendment_line_form" model="ir.ui.view">
+    <field name="name">account.budget.amendment.line.form</field>
+    <field name="model">account.budget.amendment.line</field>
+    <field name="arch" type="xml">
+      <form string="Amendment Line">
+        <sheet>
+          <group>
+            <field name="budget_line_id"/>
+            <field name="amount"/>
+            <field name="note"/>
+            <field name="currency_id" invisible="1"/>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="view_account_budget_amendment_list" model="ir.ui.view">
+    <field name="name">account.budget.amendment.list</field>
+    <field name="model">account.budget.amendment</field>
+    <field name="arch" type="xml">
+      <list>
+        <field name="date"/>
+        <field name="name"/>
+        <field name="budget_id"/>
+        <field name="amendment_type" widget="badge" options="{'tone_success': ['supplement', 'release'], 'tone_info': ['transfer', 'carryforward'], 'tone_warning': ['return']}"/>
+        <field name="total_delta"/>
+        <field name="currency_id"/>
+        <field name="state" widget="badge" options="{'tone_warning': ['draft', 'submitted'], 'tone_success': ['approved'], 'tone_danger': ['cancelled']}"/>
+      </list>
+    </field>
+  </record>
+  <record id="view_account_budget_amendment_form" model="ir.ui.view">
+    <field name="name">account.budget.amendment.form</field>
+    <field name="model">account.budget.amendment</field>
+    <field name="arch" type="xml">
+      <form string="Budget Amendment">
+        <header>
+          <button name="action_submit" type="object" string="Submit" class="btn-primary" invisible="state != 'draft'"/>
+          <button name="action_approve" type="object" string="Approve &amp; Apply" class="btn-primary" invisible="state not in ('draft', 'submitted')"/>
+          <button name="action_cancel" type="object" string="Cancel" invisible="state in ('approved', 'cancelled')"/>
+          <field name="state" widget="statusbar" statusbar_visible="draft,submitted,approved"/>
+        </header>
+        <sheet>
+          <div class="oe_title"><h1><field name="name" placeholder="e.g. Q4 Cloud Infrastructure Supplement" readonly="state in ('approved', 'cancelled')"/></h1></div>
+          <group>
+            <group>
+              <field name="amendment_type" readonly="state in ('approved', 'cancelled')"/>
+              <field name="budget_id" readonly="state in ('approved', 'cancelled')"/>
+              <field name="target_budget_id" readonly="state in ('approved', 'cancelled')" invisible="amendment_type != 'carryforward'"/>
+              <field name="date" readonly="state in ('approved', 'cancelled')"/>
+            </group>
+            <group>
+              <field name="total_delta" readonly="1"/>
+              <field name="currency_id" readonly="1"/>
+              <field name="company_id" readonly="1"/>
+            </group>
+          </group>
+          <group>
+            <field name="reason" readonly="state in ('approved', 'cancelled')"/>
+          </group>
+          <notebook>
+            <page string="Amendment Lines" name="lines">
+              <field name="line_ids" readonly="state in ('approved', 'cancelled')"/>
+            </page>
+          </notebook>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="action_account_budget_amendment" model="ir.actions.act_window">
+    <field name="name">Budget Amendments</field>
+    <field name="res_model">account.budget.amendment</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="view_account_budget_amendment_list"/>
+  </record>
+
+  <!-- Open Purchase Commitments -->
+  <record id="view_account_budget_commitment_list" model="ir.ui.view">
+    <field name="name">account.budget.commitment.list</field>
+    <field name="model">account.budget.commitment</field>
+    <field name="arch" type="xml">
+      <list>
+        <field name="date"/>
+        <field name="name"/>
+        <field name="source_ref"/>
+        <field name="budget_line_id"/>
+        <field name="analytic_account_id"/>
+        <field name="asset_id"/>
+        <field name="ordered_amount"/>
+        <field name="liquidated_amount"/>
+        <field name="open_amount"/>
+        <field name="currency_id"/>
+        <field name="state" widget="badge" options="{'tone_warning': ['open', 'partially_billed'], 'tone_success': ['closed'], 'tone_danger': ['cancelled']}"/>
+      </list>
+    </field>
+  </record>
+  <record id="view_account_budget_commitment_form" model="ir.ui.view">
+    <field name="name">account.budget.commitment.form</field>
+    <field name="model">account.budget.commitment</field>
+    <field name="arch" type="xml">
+      <form string="Budget Commitment" create="0" edit="0">
+        <header>
+          <field name="state" widget="statusbar" statusbar_visible="open,partially_billed,closed"/>
+        </header>
+        <sheet>
+          <div class="oe_title"><h1><field name="name" readonly="1"/></h1></div>
+          <group>
+            <group string="Source Document">
+              <field name="date" readonly="1"/>
+              <field name="source_model" readonly="1"/>
+              <field name="source_ref" readonly="1"/>
+              <field name="company_id" readonly="1"/>
+            </group>
+            <group string="Budget &amp; Amounts">
+              <field name="budget_line_id" readonly="1"/>
+              <field name="analytic_account_id" readonly="1"/>
+              <field name="asset_id" readonly="1"/>
+              <field name="ordered_amount" readonly="1"/>
+              <field name="liquidated_amount" readonly="1"/>
+              <field name="open_amount" readonly="1"/>
+              <field name="currency_id" readonly="1"/>
+            </group>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="action_account_budget_commitment" model="ir.actions.act_window">
+    <field name="name">Budget Commitments (PO)</field>
+    <field name="res_model">account.budget.commitment</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="view_account_budget_commitment_list"/>
+  </record>
+
+  <menuitem id="menu_account_budget" name="Budgets" parent="menu_finance_entries" action="action_account_budget" groups="account.group_budget_avc" sequence="45"/>
+  <menuitem id="menu_account_budget_amendment" name="Budget Amendments" parent="menu_finance_entries" action="action_account_budget_amendment" groups="account.group_budget_avc" sequence="46"/>
+  <menuitem id="menu_account_budget_commitment" name="Budget Commitments" parent="menu_finance_entries" action="action_account_budget_commitment" groups="account.group_budget_avc" sequence="47"/>
+  <menuitem id="menu_account_budget_profile" name="Budget Control Profiles" parent="menu_finance_configuration" action="action_account_budget_profile" groups="account.group_budget_avc" sequence="81"/>
   <record id="menu_account_budget" model="ir.ui.menu"><field name="web_icon">lucide:trending-up</field></record>
+  <record id="menu_account_budget_amendment" model="ir.ui.menu"><field name="web_icon">lucide:file-diff</field></record>
+  <record id="menu_account_budget_commitment" model="ir.ui.menu"><field name="web_icon">lucide:lock</field></record>
+  <record id="menu_account_budget_profile" model="ir.ui.menu"><field name="web_icon">lucide:shield-check</field></record>
 </erp>

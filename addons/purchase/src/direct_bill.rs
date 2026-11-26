@@ -292,6 +292,8 @@ async fn billable_items(
             "price_unit",
             "discount",
             "tax_ids",
+            "analytic_account_id",
+            "asset_id",
         ],
     )
     .await?;
@@ -333,10 +335,35 @@ async fn billable_items(
         ("name", "name"),
         ("price_unit", "price_unit"),
         ("discount", "discount"),
+        ("analytic_account_id", "analytic_account_id"),
+        ("asset_id", "asset_id"),
     ];
     let mut columns = Vec::with_capacity(mappings.len());
     for (source, target) in mappings {
         columns.push((target, lines.cells(tx, source).await?));
+    }
+    let asset_cells = lines.cells(tx, "asset_id").await?;
+    let mut cip_account_by_asset = BTreeMap::<i64, i64>::new();
+    let asset_ids_vec: Vec<i64> = asset_cells
+        .iter()
+        .filter_map(|c| match c {
+            Cell::Id(id) => Some(*id),
+            _ => None,
+        })
+        .collect();
+    if !asset_ids_vec.is_empty() {
+        let arows = tx
+            .query(
+                "SELECT id::int8, account_asset_id::int8 FROM account_asset \
+                 WHERE id = ANY($1::int8[]) AND COALESCE(asset_type, 'normal') = 'cip'",
+                &[&asset_ids_vec],
+            )
+            .await?;
+        for ar in arows {
+            let aid: i64 = ar.try_get(0).map_err(decode)?;
+            let acc_id: i64 = ar.try_get(1).map_err(decode)?;
+            cip_account_by_asset.insert(aid, acc_id);
+        }
     }
     let quantities = lines.cells(tx, "qty_to_invoice").await?;
     let mut items = Vec::new();
@@ -369,6 +396,11 @@ async fn billable_items(
                 Error::invariant("A purchase line disappeared while preparing its vendor bill.")
             })?;
             item = item.set_cell(*target, value.clone());
+        }
+        if let Some(Cell::Id(aid)) = asset_cells.get(index)
+            && let Some(&cip_acc) = cip_account_by_asset.get(aid)
+        {
+            item = item.set_cell("account_id", Cell::Id(cip_acc));
         }
         items.push(Command::Create(item));
         sources.push(id);

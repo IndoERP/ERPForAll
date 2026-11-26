@@ -46,6 +46,7 @@ The total with taxes and
               <field name="display_type"/>
               <field name="product_id" invisible="display_type" readonly="qty_delivered &gt; 0 or qty_invoiced &gt; 0"/>
               <field name="name" required="0"/>
+              <field name="analytic_account_id" invisible="display_type" groups="account.group_cost_center_controlling"/>
             </group>
             <group>
               <field name="product_uom_qty" invisible="display_type"/>

@@ -17,7 +17,7 @@
 mod display;
 pub(crate) use display::draft_label;
 mod line;
-mod post;
+pub(crate) mod post;
 mod reversal;
 
 pub use line::AccountMoveLine;

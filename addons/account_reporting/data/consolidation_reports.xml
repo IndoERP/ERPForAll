@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<!-- Consolidated Balance Sheet, Consolidated Profit & Loss & Intercompany Reconciliation Matrix -->
+<erp>
+  <data noupdate="1">
+    <!-- 1. Consolidated Balance Sheet -->
+    <record id="report_consolidated_bs" model="reporting.report">
+      <field name="name">Consolidated Balance Sheet</field>
+      <field name="provider">account_reporting.consolidated_bs</field>
+      <field name="date_mode">single</field>
+      <field name="date_default">today</field>
+      <field name="comparison" eval="False"/>
+      <field name="multi_company" eval="True"/>
+      <field name="totals_below" eval="True"/>
+    </record>
+    <record id="cbs_col_translated" model="reporting.report.column">
+      <field name="report_id" ref="report_consolidated_bs"/>
+      <field name="sequence">10</field>
+      <field name="name">Translated Sum</field>
+      <field name="label">translated</field>
+      <field name="kind">monetary</field>
+    </record>
+    <record id="cbs_col_elim" model="reporting.report.column">
+      <field name="report_id" ref="report_consolidated_bs"/>
+      <field name="sequence">20</field>
+      <field name="name">IC Eliminations</field>
+      <field name="label">elimination</field>
+      <field name="kind">monetary</field>
+    </record>
+    <record id="cbs_col_adj" model="reporting.report.column">
+      <field name="report_id" ref="report_consolidated_bs"/>
+      <field name="sequence">30</field>
+      <field name="name">Adjustments &amp; NCI</field>
+      <field name="label">adj_nci</field>
+      <field name="kind">monetary</field>
+    </record>
+    <record id="cbs_col_consol" model="reporting.report.column">
+      <field name="report_id" ref="report_consolidated_bs"/>
+      <field name="sequence">40</field>
+      <field name="name">Consolidated</field>
+      <field name="label">consolidated</field>
+      <field name="kind">monetary</field>
+    </record>
+
+    <!-- 2. Consolidated Profit & Loss -->
+    <record id="report_consolidated_pl" model="reporting.report">
+      <field name="name">Consolidated Profit and Loss</field>
+      <field name="provider">account_reporting.consolidated_pl</field>
+      <field name="date_mode">range</field>
+      <field name="date_default">this_year</field>
+      <field name="comparison" eval="False"/>
+      <field name="multi_company" eval="True"/>
+      <field name="totals_below" eval="True"/>
+    </record>
+    <record id="cpl_col_translated" model="reporting.report.column">
+      <field name="report_id" ref="report_consolidated_pl"/>
+      <field name="sequence">10</field>
+      <field name="name">Translated Sum</field>
+      <field name="label">translated</field>
+      <field name="kind">monetary</field>
+    </record>
+    <record id="cpl_col_elim" model="reporting.report.column">
+      <field name="report_id" ref="report_consolidated_pl"/>
+      <field name="sequence">20</field>
+      <field name="name">IC Eliminations</field>
+      <field name="label">elimination</field>
+      <field name="kind">monetary</field>
+    </record>
+    <record id="cpl_col_adj" model="reporting.report.column">
+      <field name="report_id" ref="report_consolidated_pl"/>
+      <field name="sequence">30</field>
+      <field name="name">Adjustments &amp; NCI</field>
+      <field name="label">adj_nci</field>
+      <field name="kind">monetary</field>
+    </record>
+    <record id="cpl_col_consol" model="reporting.report.column">
+      <field name="report_id" ref="report_consolidated_pl"/>
+      <field name="sequence">40</field>
+      <field name="name">Consolidated</field>
+      <field name="label">consolidated</field>
+      <field name="kind">monetary</field>
+    </record>
+
+    <!-- 3. Intercompany Reconciliation Matrix -->
+    <record id="report_ic_reconciliation" model="reporting.report">
+      <field name="name">Intercompany Reconciliation Matrix</field>
+      <field name="provider">account_reporting.ic_reconciliation</field>
+      <field name="date_mode">single</field>
+      <field name="date_default">today</field>
+      <field name="comparison" eval="False"/>
+      <field name="multi_company" eval="True"/>
+      <field name="totals_below" eval="False"/>
+    </record>
+    <record id="ic_col_kind" model="reporting.report.column">
+      <field name="report_id" ref="report_ic_reconciliation"/>
+      <field name="sequence">10</field>
+      <field name="name">Pair Type</field>
+      <field name="label">pair_kind</field>
+      <field name="kind">text</field>
+    </record>
+    <record id="ic_col_a" model="reporting.report.column">
+      <field name="report_id" ref="report_ic_reconciliation"/>
+      <field name="sequence">20</field>
+      <field name="name">Entity A Reported</field>
+      <field name="label">entity_a</field>
+      <field name="kind">monetary</field>
+    </record>
+    <record id="ic_col_b" model="reporting.report.column">
+      <field name="report_id" ref="report_ic_reconciliation"/>
+      <field name="sequence">30</field>
+      <field name="name">Entity B Counterpart</field>
+      <field name="label">entity_b</field>
+      <field name="kind">monetary</field>
+    </record>
+    <record id="ic_col_var" model="reporting.report.column">
+      <field name="report_id" ref="report_ic_reconciliation"/>
+      <field name="sequence">40</field>
+      <field name="name">Unreconciled Variance</field>
+      <field name="label">variance</field>
+      <field name="kind">monetary</field>
+    </record>
+  </data>
+
+  <record id="action_consolidated_bs" model="ir.actions.client">
+    <field name="name">Consolidated Balance Sheet</field>
+    <field name="tag">reporting.report</field>
+    <field name="params" eval="{'report': ref('report_consolidated_bs')}"/>
+  </record>
+  <record id="action_consolidated_pl" model="ir.actions.client">
+    <field name="name">Consolidated Profit and Loss</field>
+    <field name="tag">reporting.report</field>
+    <field name="params" eval="{'report': ref('report_consolidated_pl')}"/>
+  </record>
+  <record id="action_ic_reconciliation" model="ir.actions.client">
+    <field name="name">Intercompany Reconciliation Matrix</field>
+    <field name="tag">reporting.report</field>
+    <field name="params" eval="{'report': ref('report_ic_reconciliation')}"/>
+  </record>
+
+  <menuitem id="menu_consolidated_bs" name="Consolidated Balance Sheet" parent="account.menu_consolidation_root" action="action_consolidated_bs" groups="account.group_account_readonly" sequence="30"/>
+  <menuitem id="menu_consolidated_pl" name="Consolidated Profit &amp; Loss" parent="account.menu_consolidation_root" action="action_consolidated_pl" groups="account.group_account_readonly" sequence="35"/>
+  <menuitem id="menu_ic_reconciliation" name="IC Reconciliation Matrix" parent="account.menu_consolidation_root" action="action_ic_reconciliation" groups="account.group_account_readonly" sequence="40"/>
+  <record id="menu_consolidated_bs" model="ir.ui.menu"><field name="web_icon">lucide:scale</field></record>
+  <record id="menu_consolidated_pl" model="ir.ui.menu"><field name="web_icon">lucide:line-chart</field></record>
+  <record id="menu_ic_reconciliation" model="ir.ui.menu"><field name="web_icon">lucide:arrow-left-right</field></record>
+</erp>

@@ -137,6 +137,19 @@ pub struct AccountAccount {
     /// Belongs to Non Trade Receivable/Payable in reports.
     #[field(boolean, default = false)]
     pub non_trade: bool,
+    /// Controlling policy for Cost Center assignment on journal items using this account.
+    #[field(
+        selection,
+        selection = [
+            ("optional", "Optional"),
+            ("mandatory", "Mandatory"),
+            ("forbidden", "Forbidden"),
+        ],
+        required = true,
+        default = "optional",
+        string = "Cost Center Policy"
+    )]
+    pub cost_center_policy: Option<Arc<str>>,
     /// Companies that use the account.
     #[field(
         many2many,

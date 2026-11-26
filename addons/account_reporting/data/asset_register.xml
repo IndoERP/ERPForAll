@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<erp>
+  <data noupdate="1">
+    <record id="report_asset_register" model="reporting.report">
+      <field name="name">Asset &amp; CIP History Sheet</field>
+      <field name="provider">account_reporting.asset_register</field>
+      <field name="date_mode">single</field>
+      <field name="date_default">today</field>
+      <field name="comparison" eval="False"/>
+      <field name="multi_company" eval="False"/>
+      <field name="totals_below" eval="True"/>
+    </record>
+    <record id="asset_reg_col_type" model="reporting.report.column">
+      <field name="report_id" ref="report_asset_register"/>
+      <field name="sequence">10</field>
+      <field name="name">Type</field>
+      <field name="label">asset_type</field>
+      <field name="kind">text</field>
+    </record>
+    <record id="asset_reg_col_state" model="reporting.report.column">
+      <field name="report_id" ref="report_asset_register"/>
+      <field name="sequence">20</field>
+      <field name="name">Status</field>
+      <field name="label">state</field>
+      <field name="kind">text</field>
+    </record>
+    <record id="asset_reg_col_gross" model="reporting.report.column">
+      <field name="report_id" ref="report_asset_register"/>
+      <field name="sequence">30</field>
+      <field name="name">Gross / CIP Cost</field>
+      <field name="label">gross</field>
+      <field name="kind">monetary</field>
+    </record>
+    <record id="asset_reg_col_settled" model="reporting.report.column">
+      <field name="report_id" ref="report_asset_register"/>
+      <field name="sequence">40</field>
+      <field name="name">CIP Settled</field>
+      <field name="label">settled</field>
+      <field name="kind">monetary</field>
+    </record>
+    <record id="asset_reg_col_dep" model="reporting.report.column">
+      <field name="report_id" ref="report_asset_register"/>
+      <field name="sequence">50</field>
+      <field name="name">Accum. Depreciation</field>
+      <field name="label">depreciation</field>
+      <field name="kind">monetary</field>
+    </record>
+    <record id="asset_reg_col_nbv" model="reporting.report.column">
+      <field name="report_id" ref="report_asset_register"/>
+      <field name="sequence">60</field>
+      <field name="name">Net Book Value</field>
+      <field name="label">nbv</field>
+      <field name="kind">monetary</field>
+    </record>
+  </data>
+  <record id="action_asset_register" model="ir.actions.client">
+    <field name="name">Asset &amp; CIP History Sheet</field>
+    <field name="tag">reporting.report</field>
+    <field name="params" eval="{'report': ref('report_asset_register')}"/>
+  </record>
+  <menuitem id="menu_asset_register" name="Asset &amp; CIP History Sheet" parent="menu_account_reporting" action="action_asset_register" groups="account.group_asset_cip" sequence="64"/>
+  <record id="menu_asset_register" model="ir.ui.menu"><field name="web_icon">lucide:building-2</field></record>
+</erp>

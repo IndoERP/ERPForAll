@@ -1,0 +1,358 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<!-- Group Financial Consolidation: Groups, Units, FS Chart, Account Mapping, Runs & Adjustments -->
+<erp>
+  <!-- Consolidation Units -->
+  <record id="view_consolidation_unit_list" model="ir.ui.view">
+    <field name="name">account.consolidation.unit.list</field>
+    <field name="model">account.consolidation.unit</field>
+    <field name="arch" type="xml">
+      <list>
+        <field name="company_id"/>
+        <field name="currency_id"/>
+        <field name="is_parent"/>
+        <field name="consolidation_method"/>
+        <field name="ownership_pct"/>
+        <field name="investment_account_id"/>
+      </list>
+    </field>
+  </record>
+  <record id="view_consolidation_unit_form" model="ir.ui.view">
+    <field name="name">account.consolidation.unit.form</field>
+    <field name="model">account.consolidation.unit</field>
+    <field name="arch" type="xml">
+      <form string="Consolidation Unit">
+        <sheet>
+          <group>
+            <field name="company_id"/>
+            <field name="currency_id" readonly="1"/>
+            <field name="is_parent"/>
+            <field name="consolidation_method"/>
+            <field name="ownership_pct"/>
+            <field name="investment_account_id"/>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+
+  <!-- Group FS Items -->
+  <record id="view_consolidation_account_list" model="ir.ui.view">
+    <field name="name">account.consolidation.account.list</field>
+    <field name="model">account.consolidation.account</field>
+    <field name="arch" type="xml">
+      <list>
+        <field name="sequence"/>
+        <field name="code"/>
+        <field name="name"/>
+        <field name="section"/>
+        <field name="rate_method"/>
+        <field name="ic_role"/>
+      </list>
+    </field>
+  </record>
+  <record id="view_consolidation_account_form" model="ir.ui.view">
+    <field name="name">account.consolidation.account.form</field>
+    <field name="model">account.consolidation.account</field>
+    <field name="arch" type="xml">
+      <form string="Group FS Item">
+        <sheet>
+          <group>
+            <field name="sequence"/>
+            <field name="code"/>
+            <field name="name"/>
+            <field name="section"/>
+            <field name="rate_method"/>
+            <field name="ic_role"/>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+
+  <!-- Account Mapping -->
+  <record id="view_consolidation_account_map_list" model="ir.ui.view">
+    <field name="name">account.consolidation.account.map.list</field>
+    <field name="model">account.consolidation.account.map</field>
+    <field name="arch" type="xml">
+      <list>
+        <field name="company_id"/>
+        <field name="account_id"/>
+        <field name="consolidation_account_id"/>
+      </list>
+    </field>
+  </record>
+  <record id="view_consolidation_account_map_form" model="ir.ui.view">
+    <field name="name">account.consolidation.account.map.form</field>
+    <field name="model">account.consolidation.account.map</field>
+    <field name="arch" type="xml">
+      <form string="Entity Account Mapping">
+        <sheet>
+          <group>
+            <field name="company_id"/>
+            <field name="account_id"/>
+            <field name="consolidation_account_id"/>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+
+  <!-- Consolidation Groups -->
+  <record id="view_consolidation_group_list" model="ir.ui.view">
+    <field name="name">account.consolidation.group.list</field>
+    <field name="model">account.consolidation.group</field>
+    <field name="arch" type="xml">
+      <list>
+        <field name="code"/>
+        <field name="name"/>
+        <field name="currency_id"/>
+        <field name="closing_rate_type_code"/>
+        <field name="average_rate_type_code"/>
+        <field name="historical_rate_type_code"/>
+        <field name="active"/>
+      </list>
+    </field>
+  </record>
+  <record id="view_consolidation_group_form" model="ir.ui.view">
+    <field name="name">account.consolidation.group.form</field>
+    <field name="model">account.consolidation.group</field>
+    <field name="arch" type="xml">
+      <form string="Consolidation Group">
+        <header>
+          <button name="action_bootstrap_default_chart" type="object" string="Bootstrap Group FS Chart" class="btn-primary"/>
+          <button name="action_auto_map_units" type="object" string="Auto-Map Entity Accounts"/>
+        </header>
+        <sheet>
+          <div class="oe_title"><h1><field name="name" placeholder="e.g. IndoERP Holding Consolidated"/></h1></div>
+          <group>
+            <group string="Group Scope">
+              <field name="code" placeholder="GRP-HOLDING"/>
+              <field name="currency_id"/>
+              <field name="ic_tolerance"/>
+              <field name="active"/>
+            </group>
+            <group string="FX Translation Rate Types (IAS 21 / PSAK 10)">
+              <field name="closing_rate_type_code"/>
+              <field name="average_rate_type_code"/>
+              <field name="historical_rate_type_code"/>
+              <field name="fallback_to_spot"/>
+            </group>
+          </group>
+          <notebook>
+            <page string="Consolidation Units (Entities)" name="units">
+              <field name="unit_ids"/>
+            </page>
+            <page string="Group FS Chart" name="accounts">
+              <field name="account_ids"/>
+            </page>
+            <page string="Entity Account Mappings" name="mappings">
+              <field name="mapping_ids"/>
+            </page>
+            <page string="Consolidation Runs" name="runs">
+              <field name="run_ids" readonly="1"/>
+            </page>
+          </notebook>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="action_consolidation_group" model="ir.actions.act_window">
+    <field name="name">Consolidation Groups</field>
+    <field name="res_model">account.consolidation.group</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="view_consolidation_group_list"/>
+  </record>
+
+  <!-- Consolidation Adjustments -->
+  <record id="view_consolidation_adjustment_line_list" model="ir.ui.view">
+    <field name="name">account.consolidation.adjustment.line.list</field>
+    <field name="model">account.consolidation.adjustment.line</field>
+    <field name="arch" type="xml">
+      <list>
+        <field name="consolidation_account_id"/>
+        <field name="company_id"/>
+        <field name="name"/>
+        <field name="amount"/>
+        <field name="currency_id" invisible="1"/>
+      </list>
+    </field>
+  </record>
+  <record id="view_consolidation_adjustment_line_form" model="ir.ui.view">
+    <field name="name">account.consolidation.adjustment.line.form</field>
+    <field name="model">account.consolidation.adjustment.line</field>
+    <field name="arch" type="xml">
+      <form string="Consolidation Adjustment Line">
+        <sheet>
+          <group>
+            <field name="consolidation_account_id"/>
+            <field name="company_id"/>
+            <field name="name"/>
+            <field name="amount"/>
+            <field name="currency_id" invisible="1"/>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="view_consolidation_adjustment_list" model="ir.ui.view">
+    <field name="name">account.consolidation.adjustment.list</field>
+    <field name="model">account.consolidation.adjustment</field>
+    <field name="arch" type="xml">
+      <list>
+        <field name="date"/>
+        <field name="name"/>
+        <field name="run_id"/>
+        <field name="state" widget="badge" options="{'tone_warning': ['draft'], 'tone_success': ['posted']}"/>
+      </list>
+    </field>
+  </record>
+  <record id="view_consolidation_adjustment_form" model="ir.ui.view">
+    <field name="name">account.consolidation.adjustment.form</field>
+    <field name="model">account.consolidation.adjustment</field>
+    <field name="arch" type="xml">
+      <form string="Consolidation Adjustment">
+        <header>
+          <button name="action_post_adjustment" type="object" string="Post Adjustment" class="btn-primary" invisible="state != 'draft'"/>
+          <field name="state" widget="statusbar" statusbar_visible="draft,posted"/>
+        </header>
+        <sheet>
+          <div class="oe_title"><h1><field name="name" placeholder="e.g. Unrealized Inventory Profit Elimination" readonly="state != 'draft'"/></h1></div>
+          <group>
+            <field name="run_id" readonly="state != 'draft'"/>
+            <field name="date" readonly="state != 'draft'"/>
+            <field name="memo" readonly="state != 'draft'"/>
+            <field name="currency_id" readonly="1"/>
+          </group>
+          <notebook>
+            <page string="Lines" name="lines">
+              <field name="line_ids" readonly="state != 'draft'"/>
+            </page>
+          </notebook>
+        </sheet>
+      </form>
+    </field>
+  </record>
+
+  <!-- Consolidation Ledger Lines -->
+  <record id="view_consolidation_line_list" model="ir.ui.view">
+    <field name="name">account.consolidation.line.list</field>
+    <field name="model">account.consolidation.line</field>
+    <field name="arch" type="xml">
+      <list>
+        <field name="posting_level" widget="badge" options="{'tone_info': ['00_translated'], 'tone_warning': ['10_manual_adjustment', '20_ic_elimination'], 'tone_success': ['30_nci']}"/>
+        <field name="consolidation_account_id"/>
+        <field name="company_id"/>
+        <field name="trading_partner_company_id"/>
+        <field name="label"/>
+        <field name="local_amount"/>
+        <field name="local_currency_id"/>
+        <field name="exchange_rate"/>
+        <field name="group_amount"/>
+        <field name="currency_id"/>
+      </list>
+    </field>
+  </record>
+  <record id="view_consolidation_line_form" model="ir.ui.view">
+    <field name="name">account.consolidation.line.form</field>
+    <field name="model">account.consolidation.line</field>
+    <field name="arch" type="xml">
+      <form string="Consolidation Ledger Line" create="0" edit="0">
+        <sheet>
+          <group>
+            <group>
+              <field name="posting_level" readonly="1"/>
+              <field name="consolidation_account_id" readonly="1"/>
+              <field name="company_id" readonly="1"/>
+              <field name="trading_partner_company_id" readonly="1"/>
+              <field name="label" readonly="1"/>
+            </group>
+            <group>
+              <field name="local_amount" readonly="1"/>
+              <field name="local_currency_id" readonly="1"/>
+              <field name="exchange_rate" readonly="1"/>
+              <field name="group_amount" readonly="1"/>
+              <field name="currency_id" readonly="1"/>
+            </group>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+
+  <!-- Consolidation Runs (Monitor) -->
+  <record id="view_consolidation_run_list" model="ir.ui.view">
+    <field name="name">account.consolidation.run.list</field>
+    <field name="model">account.consolidation.run</field>
+    <field name="arch" type="xml">
+      <list>
+        <field name="name"/>
+        <field name="group_id"/>
+        <field name="date_from"/>
+        <field name="date_to"/>
+        <field name="total_assets"/>
+        <field name="total_liabilities_equity"/>
+        <field name="balance_check_diff"/>
+        <field name="group_net_profit"/>
+        <field name="total_cta"/>
+        <field name="total_nci_equity"/>
+        <field name="currency_id"/>
+        <field name="state" widget="badge" options="{'tone_warning': ['draft'], 'tone_info': ['executed'], 'tone_success': ['locked']}"/>
+      </list>
+    </field>
+  </record>
+  <record id="view_consolidation_run_form" model="ir.ui.view">
+    <field name="name">account.consolidation.run.form</field>
+    <field name="model">account.consolidation.run</field>
+    <field name="arch" type="xml">
+      <form string="Consolidation Run">
+        <header>
+          <button name="action_execute_run" type="object" string="Execute Consolidation" class="btn-primary" invisible="state == 'locked'"/>
+          <button name="action_lock_run" type="object" string="Lock Final Period" class="btn-primary" invisible="state != 'executed'"/>
+          <field name="state" widget="statusbar" statusbar_visible="draft,executed,locked"/>
+        </header>
+        <sheet>
+          <div class="oe_title"><h1><field name="name" placeholder="e.g. FY2026 Consolidated Statements" readonly="state == 'locked'"/></h1></div>
+          <group>
+            <group string="Scope &amp; Period">
+              <field name="group_id" readonly="state == 'locked'"/>
+              <field name="date_from" readonly="state == 'locked'"/>
+              <field name="date_to" readonly="state == 'locked'"/>
+              <field name="currency_id" readonly="1"/>
+            </group>
+            <group string="Consolidated Totals &amp; Verification">
+              <field name="total_assets" readonly="1"/>
+              <field name="total_liabilities_equity" readonly="1"/>
+              <field name="balance_check_diff" readonly="1"/>
+              <field name="group_net_profit" readonly="1"/>
+              <field name="total_cta" readonly="1"/>
+              <field name="total_nci_equity" readonly="1"/>
+              <field name="total_nci_profit" readonly="1"/>
+            </group>
+          </group>
+          <notebook>
+            <page string="Consolidation Ledger (All Posting Levels)" name="lines">
+              <field name="line_ids" readonly="1"/>
+            </page>
+            <page string="Top-Side Manual Adjustments" name="adjustments">
+              <field name="adjustment_ids" readonly="state == 'locked'"/>
+            </page>
+          </notebook>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="action_consolidation_run" model="ir.actions.act_window">
+    <field name="name">Consolidation Runs</field>
+    <field name="res_model">account.consolidation.run</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="view_consolidation_run_list"/>
+  </record>
+
+  <menuitem id="menu_consolidation_root" name="Consolidation" parent="menu_finance" groups="account.group_group_consolidation" sequence="65"/>
+  <menuitem id="menu_consolidation_runs" name="Consolidation Runs" parent="menu_consolidation_root" action="action_consolidation_run" sequence="10"/>
+  <menuitem id="menu_consolidation_groups" name="Consolidation Groups" parent="menu_consolidation_root" action="action_consolidation_group" groups="account.group_account_manager" sequence="20"/>
+  <record id="menu_consolidation_root" model="ir.ui.menu"><field name="web_icon">lucide:globe</field></record>
+  <record id="menu_consolidation_runs" model="ir.ui.menu"><field name="web_icon">lucide:combine</field></record>
+  <record id="menu_consolidation_groups" model="ir.ui.menu"><field name="web_icon">lucide:building</field></record>
+</erp>

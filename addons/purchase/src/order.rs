@@ -608,6 +608,73 @@ impl PurchaseOrder {
     #[method]
     async fn _approve(this: &RecordSet<PurchaseOrder>, tx: &mut Transaction) -> Result<()> {
         let orders = this.as_records();
+        // Controlling & Budget Availability Control (AVC): validate Cost Center locks and
+        // record Purchase Commitments before approving orders.
+        let order_ids = sorted_ids(orders);
+        if !order_ids.is_empty() {
+            let line_rows = tx
+                .query(
+                    "SELECT l.id::int8, o.name::text, o.company_id::int8, \
+                            COALESCE(o.date_order::date, CURRENT_DATE), \
+                            l.analytic_account_id::int8, l.asset_id::int8, \
+                            COALESCE(l.price_subtotal, 0), COALESCE(o.amount_total, 0), \
+                            COALESCE(o.amount_total_cc, 0), a.account_asset_id::int8 \
+                     FROM purchase_order_line l \
+                     JOIN purchase_order o ON o.id = l.order_id \
+                     LEFT JOIN account_asset a ON a.id = l.asset_id \
+                     WHERE l.order_id = ANY($1::int8[]) \
+                     ORDER BY l.id",
+                    &[&order_ids],
+                )
+                .await?;
+            let mut requests = Vec::new();
+            for r in line_rows {
+                let lid: i64 = r.try_get(0).map_err(db)?;
+                let oname: String = r.try_get(1).map_err(db)?;
+                let cid: i64 = r.try_get(2).map_err(db)?;
+                let odate: Date = r.try_get(3).map_err(db)?;
+                let cc_id: Option<i64> = r.try_get(4).map_err(db)?;
+                let asset_id: Option<i64> = r.try_get(5).map_err(db)?;
+                let subtotal: Decimal = r.try_get(6).map_err(db)?;
+                let o_tot: Decimal = r.try_get(7).map_err(db)?;
+                let o_tot_cc: Decimal = r.try_get(8).map_err(db)?;
+                let asset_acc: Option<i64> = r.try_get(9).map_err(db)?;
+
+                if let Some(cc) = cc_id {
+                    erp_addon_account::controlling::validate_center_for_commitment(tx, cc, odate)
+                        .await?;
+                }
+                if cc_id.is_none() && asset_id.is_none() {
+                    continue;
+                }
+                let cc_amount = if !o_tot.is_zero() && !o_tot_cc.is_zero() && o_tot != o_tot_cc {
+                    (subtotal * o_tot_cc / o_tot).round_dp(2)
+                } else {
+                    subtotal.round_dp(2)
+                };
+                if cc_amount > Decimal::ZERO {
+                    requests.push(erp_addon_account::budget::avc::CommitmentRequest {
+                        source_model: "purchase.order.line".to_owned(),
+                        source_id: lid,
+                        source_ref: oname,
+                        company_id: cid,
+                        account_id: asset_acc,
+                        analytic_account_id: cc_id,
+                        asset_id,
+                        date: odate,
+                        amount: cc_amount,
+                    });
+                }
+            }
+            if !requests.is_empty() {
+                erp_addon_account::budget::avc::check_and_record_commitments(
+                    tx,
+                    orders.env(),
+                    &requests,
+                )
+                .await?;
+            }
+        }
         orders
             .write_base(
                 tx,
@@ -616,7 +683,7 @@ impl PurchaseOrder {
                     .set_cell("date_approve", Cell::DateTime(DateTime::now())),
             )
             .await?;
-        let heads = read_heads(tx, &sorted_ids(orders)).await?;
+        let heads = read_heads(tx, &order_ids).await?;
         let policies = policies(tx, &heads).await?;
         let lock: Vec<i64> = heads
             .iter()
@@ -668,6 +735,21 @@ impl PurchaseOrder {
             .map(|row| row.try_get(0).map_err(db))
             .collect::<Result<_>>()?;
         erp_addon_account::moves::cancel_document_drafts(tx, records.env(), &drafts).await?;
+        let po_line_ids: Vec<i64> = tx
+            .query(
+                "SELECT id::int8 FROM purchase_order_line WHERE order_id = ANY($1::int8[])",
+                &[&records.ids()],
+            )
+            .await?
+            .iter()
+            .map(|r| r.try_get(0).map_err(db))
+            .collect::<Result<_>>()?;
+        erp_addon_account::budget::avc::release_commitments_for_source(
+            tx,
+            "purchase.order.line",
+            &po_line_ids,
+        )
+        .await?;
         records
             .write_base(
                 tx,

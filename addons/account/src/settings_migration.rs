@@ -19,6 +19,57 @@ async fn move_validation_limits(tx: &mut Transaction, _from: &SemverVersion) -> 
     .await
 }
 
+/// Post-schema migration for `account` 1.16: backfills controlling, CIP asset, advanced budget
+/// AVC, and intercompany trading partner defaults for existing rows.
+#[erp_sdk::migration(addon = "account", version = "1.16", stage = post)]
+async fn backfill_enterprise_controlling_and_consolidation(
+    tx: &mut Transaction,
+    _from: &SemverVersion,
+) -> Result<()> {
+    tx.execute(
+        "UPDATE account_account SET cost_center_policy = 'optional' WHERE cost_center_policy IS NULL",
+        &[],
+    )
+    .await?;
+    tx.execute(
+        "UPDATE account_asset \
+         SET asset_type = COALESCE(asset_type, 'normal'), \
+             prorata_temporis = COALESCE(prorata_temporis, false) \
+         WHERE asset_type IS NULL OR prorata_temporis IS NULL",
+        &[],
+    )
+    .await?;
+    tx.execute(
+        "UPDATE account_budget \
+         SET budget_type = COALESCE(budget_type, 'opex'), \
+             version_code = COALESCE(version_code, 'V0') \
+         WHERE budget_type IS NULL OR version_code IS NULL",
+        &[],
+    )
+    .await?;
+    tx.execute(
+        "UPDATE account_budget_line \
+         SET original_amount = COALESCE(original_amount, planned_amount, 0), \
+             revision_amount = COALESCE(revision_amount, 0), \
+             release_pct = COALESCE(release_pct, 100), \
+             released_amount = COALESCE(released_amount, planned_amount, 0), \
+             committed_amount = COALESCE(committed_amount, 0), \
+             avc_status = COALESCE(avc_status, 'ok') \
+         WHERE original_amount IS NULL OR released_amount IS NULL OR avc_status IS NULL",
+        &[],
+    )
+    .await?;
+    tx.execute(
+        "UPDATE res_partner p \
+         SET trading_partner_company_id = c.id \
+         FROM res_company c \
+         WHERE c.partner_id = p.id AND p.trading_partner_company_id IS NULL",
+        &[],
+    )
+    .await?;
+    Ok(())
+}
+
 pub(super) async fn move_global_integer_parameters(
     tx: &mut Transaction,
     parameters: impl IntoIterator<Item = ParameterDecl>,

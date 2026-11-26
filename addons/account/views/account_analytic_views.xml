@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
-<!-- Analytic Plans, Accounts, Distribution Models & Analytic Items -->
+<!-- Cost & Profit Centers, Hierarchies, Statistical Key Figures, Allocation Cycles & Analytic Items -->
 <erp>
   <record id="view_analytic_plan_list" model="ir.ui.view">
     <field name="name">account.analytic.plan.list</field>
@@ -19,7 +19,7 @@
     <field name="arch" type="xml">
       <form string="Analytic Plan">
         <sheet>
-          <div class="oe_title"><h1><field name="name" placeholder="e.g. Projects"/></h1></div>
+          <div class="oe_title"><h1><field name="name" placeholder="e.g. Cost Centers"/></h1></div>
           <group>
             <field name="parent_id"/>
             <field name="default_applicability"/>
@@ -43,8 +43,10 @@
       <list>
         <field name="date"/>
         <field name="name"/>
-        <field name="account_id"/>
-        <field name="plan_id"/>
+        <field name="account_id" string="Cost Center"/>
+        <field name="cost_kind" widget="badge" options="{'tone_info': ['primary'], 'tone_warning': ['secondary_distribution'], 'tone_success': ['secondary_assessment']}"/>
+        <field name="partner_center_id"/>
+        <field name="general_account_id"/>
         <field name="partner_id"/>
         <field name="ref"/>
         <field name="unit_amount"/>
@@ -62,7 +64,10 @@
           <group>
             <group>
               <field name="name"/>
-              <field name="account_id"/>
+              <field name="account_id" string="Cost Center"/>
+              <field name="cost_kind"/>
+              <field name="partner_center_id"/>
+              <field name="general_account_id"/>
               <field name="date"/>
               <field name="partner_id"/>
             </group>
@@ -70,6 +75,8 @@
               <field name="amount"/>
               <field name="unit_amount"/>
               <field name="ref"/>
+              <field name="move_line_id" readonly="1"/>
+              <field name="allocation_run_id" readonly="1"/>
               <field name="currency_id" readonly="1"/>
               <field name="company_id" readonly="1"/>
             </group>
@@ -86,9 +93,13 @@
         <field name="name"/>
         <field name="account_id"/>
         <field name="plan_id"/>
+        <field name="partner_center_id"/>
         <field name="partner_id"/>
+        <filter name="filter_primary" string="Primary Postings" domain="[('cost_kind', '=', 'primary')]"/>
+        <filter name="filter_secondary" string="Secondary Allocations" domain="[('cost_kind', '!=', 'primary')]"/>
         <group>
-          <filter name="groupby_account" string="Analytic Account" context="{'group_by': 'account_id'}"/>
+          <filter name="groupby_account" string="Cost Center" context="{'group_by': 'account_id'}"/>
+          <filter name="groupby_cost_kind" string="Cost Kind" context="{'group_by': 'cost_kind'}"/>
           <filter name="groupby_plan" string="Plan" context="{'group_by': 'plan_id'}"/>
         </group>
       </search>
@@ -107,13 +118,17 @@
     <field name="model">account.analytic.account</field>
     <field name="arch" type="xml">
       <list>
-        <field name="name"/>
         <field name="code"/>
-        <field name="plan_id"/>
-        <field name="partner_id"/>
+        <field name="name"/>
+        <field name="center_type" widget="badge" options="{'tone_info': ['cost_center'], 'tone_success': ['profit_center'], 'tone_warning': ['internal_order', 'project']}"/>
+        <field name="category"/>
+        <field name="parent_id"/>
+        <field name="profit_center_id"/>
+        <field name="manager_user_id"/>
         <field name="debit"/>
         <field name="credit"/>
         <field name="balance"/>
+        <field name="subtree_balance"/>
         <field name="currency_id"/>
       </list>
     </field>
@@ -122,25 +137,48 @@
     <field name="name">account.analytic.account.form</field>
     <field name="model">account.analytic.account</field>
     <field name="arch" type="xml">
-      <form string="Analytic Account">
+      <form string="Cost / Profit Center">
         <sheet>
-          <div class="oe_title"><h1><field name="name" placeholder="e.g. Project Phoenix"/></h1></div>
+          <div class="oe_title"><h1><field name="name" placeholder="e.g. IT Shared Services"/></h1></div>
           <group>
-            <group>
-              <field name="code"/>
+            <group string="Organization &amp; Hierarchy">
+              <field name="code" placeholder="e.g. CC-IT-01"/>
+              <field name="center_type"/>
+              <field name="category"/>
               <field name="plan_id"/>
+              <field name="parent_id"/>
+              <field name="profit_center_id"/>
+              <field name="manager_user_id"/>
               <field name="partner_id"/>
               <field name="active"/>
             </group>
-            <group>
+            <group string="Balances &amp; Rollup">
               <field name="debit" readonly="1"/>
               <field name="credit" readonly="1"/>
               <field name="balance" readonly="1"/>
+              <field name="subtree_debit" readonly="1"/>
+              <field name="subtree_credit" readonly="1"/>
+              <field name="subtree_balance" readonly="1"/>
               <field name="currency_id" readonly="1"/>
               <field name="company_id" readonly="1"/>
             </group>
           </group>
+          <group string="Validity &amp; Posting Control Indicators">
+            <group>
+              <field name="valid_from"/>
+              <field name="valid_to"/>
+            </group>
+            <group>
+              <field name="lock_primary_costs"/>
+              <field name="lock_revenues"/>
+              <field name="lock_secondary_costs"/>
+              <field name="lock_commitment"/>
+            </group>
+          </group>
           <notebook>
+            <page string="Sub-Centers" name="sub_centers">
+              <field name="child_ids" readonly="1"/>
+            </page>
             <page string="Analytic Items" name="lines">
               <field name="line_ids" readonly="1"/>
             </page>
@@ -149,11 +187,32 @@
       </form>
     </field>
   </record>
+  <record id="view_analytic_account_search" model="ir.ui.view">
+    <field name="name">account.analytic.account.search</field>
+    <field name="model">account.analytic.account</field>
+    <field name="arch" type="xml">
+      <search string="Cost &amp; Profit Centers">
+        <field name="code"/>
+        <field name="name"/>
+        <field name="parent_id"/>
+        <field name="profit_center_id"/>
+        <filter name="filter_cost_centers" string="Cost Centers" domain="[('center_type', '=', 'cost_center')]"/>
+        <filter name="filter_profit_centers" string="Profit Centers" domain="[('center_type', '=', 'profit_center')]"/>
+        <filter name="filter_internal_orders" string="Internal Orders" domain="[('center_type', '=', 'internal_order')]"/>
+        <group>
+          <filter name="groupby_type" string="Center Type" context="{'group_by': 'center_type'}"/>
+          <filter name="groupby_parent" string="Parent Group" context="{'group_by': 'parent_id'}"/>
+          <filter name="groupby_category" string="Category" context="{'group_by': 'category'}"/>
+        </group>
+      </search>
+    </field>
+  </record>
   <record id="action_analytic_account" model="ir.actions.act_window">
-    <field name="name">Analytic Accounts</field>
+    <field name="name">Cost &amp; Profit Centers</field>
     <field name="res_model">account.analytic.account</field>
     <field name="view_mode">list,form</field>
     <field name="view_id" ref="view_analytic_account_list"/>
+    <field name="search_view_id" ref="view_analytic_account_search"/>
   </record>
 
   <record id="view_analytic_distribution_model_list" model="ir.ui.view">
@@ -165,8 +224,10 @@
         <field name="name"/>
         <field name="account_prefix"/>
         <field name="partner_id"/>
+        <field name="product_id"/>
         <field name="analytic_account_id"/>
         <field name="percentage"/>
+        <field name="active"/>
       </list>
     </field>
   </record>
@@ -181,11 +242,13 @@
               <field name="name"/>
               <field name="account_prefix"/>
               <field name="partner_id"/>
+              <field name="product_id"/>
             </group>
             <group>
               <field name="analytic_account_id"/>
               <field name="percentage"/>
               <field name="sequence"/>
+              <field name="active"/>
               <field name="company_id" readonly="1"/>
             </group>
           </group>
@@ -194,18 +257,267 @@
     </field>
   </record>
   <record id="action_analytic_distribution_model" model="ir.actions.act_window">
-    <field name="name">Analytic Distribution Models</field>
+    <field name="name">Default Cost Center Rules</field>
     <field name="res_model">account.analytic.distribution.model</field>
     <field name="view_mode">list,form</field>
     <field name="view_id" ref="view_analytic_distribution_model_list"/>
   </record>
 
-  <menuitem id="menu_analytic_items" name="Analytic Items" parent="menu_finance_entries" action="action_analytic_line" sequence="40"/>
-  <menuitem id="menu_analytic_plans" name="Analytic Plans" parent="menu_finance_configuration" action="action_analytic_plan" groups="account.group_account_manager" sequence="75"/>
-  <menuitem id="menu_analytic_accounts" name="Analytic Accounts" parent="menu_finance_configuration" action="action_analytic_account" groups="account.group_account_manager" sequence="76"/>
-  <menuitem id="menu_analytic_distribution_models" name="Analytic Distribution Models" parent="menu_finance_configuration" action="action_analytic_distribution_model" groups="account.group_account_manager" sequence="77"/>
+  <!-- Statistical Key Figures -->
+  <record id="view_analytic_skf_line_list" model="ir.ui.view">
+    <field name="name">account.analytic.skf.line.list</field>
+    <field name="model">account.analytic.skf.line</field>
+    <field name="arch" type="xml">
+      <list>
+        <field name="date"/>
+        <field name="analytic_account_id"/>
+        <field name="quantity"/>
+        <field name="note"/>
+      </list>
+    </field>
+  </record>
+  <record id="view_analytic_skf_line_form" model="ir.ui.view">
+    <field name="name">account.analytic.skf.line.form</field>
+    <field name="model">account.analytic.skf.line</field>
+    <field name="arch" type="xml">
+      <form string="SKF Measurement">
+        <sheet>
+          <group>
+            <field name="analytic_account_id"/>
+            <field name="date"/>
+            <field name="quantity"/>
+            <field name="note"/>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="view_analytic_skf_list" model="ir.ui.view">
+    <field name="name">account.analytic.skf.list</field>
+    <field name="model">account.analytic.skf</field>
+    <field name="arch" type="xml">
+      <list>
+        <field name="code"/>
+        <field name="name"/>
+        <field name="unit_label"/>
+        <field name="skf_type"/>
+        <field name="active"/>
+      </list>
+    </field>
+  </record>
+  <record id="view_analytic_skf_form" model="ir.ui.view">
+    <field name="name">account.analytic.skf.form</field>
+    <field name="model">account.analytic.skf</field>
+    <field name="arch" type="xml">
+      <form string="Statistical Key Figure">
+        <sheet>
+          <div class="oe_title"><h1><field name="name" placeholder="e.g. Employee Headcount"/></h1></div>
+          <group>
+            <group>
+              <field name="code" placeholder="HEADCOUNT"/>
+              <field name="unit_label"/>
+              <field name="skf_type"/>
+            </group>
+            <group>
+              <field name="active"/>
+              <field name="company_id" readonly="1"/>
+            </group>
+          </group>
+          <notebook>
+            <page string="Measurements" name="lines">
+              <field name="line_ids"/>
+            </page>
+          </notebook>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="action_analytic_skf" model="ir.actions.act_window">
+    <field name="name">Statistical Key Figures</field>
+    <field name="res_model">account.analytic.skf</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="view_analytic_skf_list"/>
+  </record>
+
+  <!-- Cost Allocation Cycles & Runs -->
+  <record id="view_cost_allocation_receiver_list" model="ir.ui.view">
+    <field name="name">account.cost.allocation.receiver.list</field>
+    <field name="model">account.cost.allocation.receiver</field>
+    <field name="arch" type="xml">
+      <list>
+        <field name="receiver_center_id"/>
+        <field name="fixed_pct"/>
+      </list>
+    </field>
+  </record>
+  <record id="view_cost_allocation_receiver_form" model="ir.ui.view">
+    <field name="name">account.cost.allocation.receiver.form</field>
+    <field name="model">account.cost.allocation.receiver</field>
+    <field name="arch" type="xml">
+      <form string="Allocation Receiver">
+        <sheet>
+          <group>
+            <field name="receiver_center_id"/>
+            <field name="fixed_pct"/>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="view_cost_allocation_rule_list" model="ir.ui.view">
+    <field name="name">account.cost.allocation.rule.list</field>
+    <field name="model">account.cost.allocation.rule</field>
+    <field name="arch" type="xml">
+      <list>
+        <field name="sequence"/>
+        <field name="name"/>
+        <field name="sender_center_id"/>
+        <field name="sender_share_pct"/>
+      </list>
+    </field>
+  </record>
+  <record id="view_cost_allocation_rule_form" model="ir.ui.view">
+    <field name="name">account.cost.allocation.rule.form</field>
+    <field name="model">account.cost.allocation.rule</field>
+    <field name="arch" type="xml">
+      <form string="Allocation Rule">
+        <sheet>
+          <group>
+            <field name="sequence"/>
+            <field name="name"/>
+            <field name="sender_center_id"/>
+            <field name="sender_share_pct"/>
+          </group>
+          <notebook>
+            <page string="Receivers" name="receivers">
+              <field name="receiver_ids"/>
+            </page>
+          </notebook>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="view_cost_allocation_cycle_list" model="ir.ui.view">
+    <field name="name">account.cost.allocation.cycle.list</field>
+    <field name="model">account.cost.allocation.cycle</field>
+    <field name="arch" type="xml">
+      <list>
+        <field name="code"/>
+        <field name="name"/>
+        <field name="allocation_method"/>
+        <field name="tracing_basis"/>
+        <field name="skf_id"/>
+        <field name="active"/>
+      </list>
+    </field>
+  </record>
+  <record id="view_cost_allocation_cycle_form" model="ir.ui.view">
+    <field name="name">account.cost.allocation.cycle.form</field>
+    <field name="model">account.cost.allocation.cycle</field>
+    <field name="arch" type="xml">
+      <form string="Cost Allocation Cycle">
+        <sheet>
+          <div class="oe_title"><h1><field name="name" placeholder="e.g. Monthly Shared IT Assessment"/></h1></div>
+          <group>
+            <group>
+              <field name="code" placeholder="ALLOC-IT"/>
+              <field name="allocation_method"/>
+              <field name="tracing_basis"/>
+              <field name="skf_id" invisible="tracing_basis != 'skf'"/>
+            </group>
+            <group>
+              <field name="active"/>
+              <field name="company_id" readonly="1"/>
+            </group>
+          </group>
+          <notebook>
+            <page string="Sender &amp; Receiver Rules" name="rules">
+              <field name="rule_ids"/>
+            </page>
+            <page string="Execution Runs" name="runs">
+              <field name="run_ids" readonly="1"/>
+            </page>
+          </notebook>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="action_cost_allocation_cycle" model="ir.actions.act_window">
+    <field name="name">Cost Allocation Cycles</field>
+    <field name="res_model">account.cost.allocation.cycle</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="view_cost_allocation_cycle_list"/>
+  </record>
+
+  <record id="view_cost_allocation_run_list" model="ir.ui.view">
+    <field name="name">account.cost.allocation.run.list</field>
+    <field name="model">account.cost.allocation.run</field>
+    <field name="arch" type="xml">
+      <list>
+        <field name="name"/>
+        <field name="cycle_id"/>
+        <field name="date_from"/>
+        <field name="date_to"/>
+        <field name="posting_date"/>
+        <field name="total_allocated"/>
+        <field name="currency_id"/>
+        <field name="state" widget="badge" options="{'tone_warning': ['draft'], 'tone_success': ['posted'], 'tone_danger': ['reversed']}"/>
+      </list>
+    </field>
+  </record>
+  <record id="view_cost_allocation_run_form" model="ir.ui.view">
+    <field name="name">account.cost.allocation.run.form</field>
+    <field name="model">account.cost.allocation.run</field>
+    <field name="arch" type="xml">
+      <form string="Cost Allocation Run">
+        <header>
+          <button name="action_execute_allocation" type="object" string="Execute Allocation" class="btn-primary" invisible="state != 'draft'"/>
+          <button name="action_reverse_allocation" type="object" string="Reverse Allocation" invisible="state != 'posted'"/>
+          <field name="state" widget="statusbar" statusbar_visible="draft,posted,reversed"/>
+        </header>
+        <sheet>
+          <div class="oe_title"><h1><field name="name" placeholder="e.g. Nov 2026 IT Overhead Assessment" readonly="state != 'draft'"/></h1></div>
+          <group>
+            <group>
+              <field name="cycle_id" readonly="state != 'draft'"/>
+              <field name="date_from" readonly="state != 'draft'"/>
+              <field name="date_to" readonly="state != 'draft'"/>
+              <field name="posting_date" readonly="state != 'draft'"/>
+            </group>
+            <group>
+              <field name="total_allocated" readonly="1"/>
+              <field name="currency_id" readonly="1"/>
+              <field name="company_id" readonly="1"/>
+            </group>
+          </group>
+          <notebook>
+            <page string="Generated Postings" name="lines">
+              <field name="line_ids" readonly="1"/>
+            </page>
+          </notebook>
+        </sheet>
+      </form>
+    </field>
+  </record>
+  <record id="action_cost_allocation_run" model="ir.actions.act_window">
+    <field name="name">Cost Allocation Runs</field>
+    <field name="res_model">account.cost.allocation.run</field>
+    <field name="view_mode">list,form</field>
+    <field name="view_id" ref="view_cost_allocation_run_list"/>
+  </record>
+
+  <menuitem id="menu_analytic_items" name="Analytic Items" parent="menu_finance_entries" action="action_analytic_line" groups="account.group_cost_center_controlling" sequence="40"/>
+  <menuitem id="menu_cost_allocation_runs" name="Cost Allocation Runs" parent="menu_finance_entries" action="action_cost_allocation_run" groups="account.group_cost_center_controlling" sequence="42"/>
+  <menuitem id="menu_analytic_plans" name="Analytic Plans" parent="menu_finance_configuration" action="action_analytic_plan" groups="account.group_cost_center_controlling" sequence="75"/>
+  <menuitem id="menu_analytic_accounts" name="Cost &amp; Profit Centers" parent="menu_finance_configuration" action="action_analytic_account" groups="account.group_cost_center_controlling" sequence="76"/>
+  <menuitem id="menu_analytic_distribution_models" name="Default Cost Center Rules" parent="menu_finance_configuration" action="action_analytic_distribution_model" groups="account.group_cost_center_controlling" sequence="77"/>
+  <menuitem id="menu_analytic_skf" name="Statistical Key Figures" parent="menu_finance_configuration" action="action_analytic_skf" groups="account.group_cost_center_controlling" sequence="78"/>
+  <menuitem id="menu_cost_allocation_cycles" name="Cost Allocation Cycles" parent="menu_finance_configuration" action="action_cost_allocation_cycle" groups="account.group_cost_center_controlling" sequence="79"/>
   <record id="menu_analytic_items" model="ir.ui.menu"><field name="web_icon">lucide:git-branch</field></record>
+  <record id="menu_cost_allocation_runs" model="ir.ui.menu"><field name="web_icon">lucide:split</field></record>
   <record id="menu_analytic_plans" model="ir.ui.menu"><field name="web_icon">lucide:git-branch</field></record>
-  <record id="menu_analytic_accounts" model="ir.ui.menu"><field name="web_icon">lucide:git-branch</field></record>
+  <record id="menu_analytic_accounts" model="ir.ui.menu"><field name="web_icon">lucide:network</field></record>
   <record id="menu_analytic_distribution_models" model="ir.ui.menu"><field name="web_icon">lucide:workflow</field></record>
+  <record id="menu_analytic_skf" model="ir.ui.menu"><field name="web_icon">lucide:bar-chart-3</field></record>
+  <record id="menu_cost_allocation_cycles" model="ir.ui.menu"><field name="web_icon">lucide:repeat</field></record>
 </erp>

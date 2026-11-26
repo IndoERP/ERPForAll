@@ -224,6 +224,7 @@ async fn invoice_items(
     let descriptions = source.cells(tx, "name").await?;
     let prices = source.cells(tx, "price_unit").await?;
     let discounts = source.cells(tx, "discount").await?;
+    let analytics = source.cells(tx, "analytic_account_id").await?;
     Ok(eligible
         .into_iter()
         .enumerate()
@@ -236,6 +237,7 @@ async fn invoice_items(
                 .set_cell("sequence", sequences[index].clone())
                 .set_cell("price_unit", prices[index].clone())
                 .set_cell("discount", discounts[index].clone())
+                .set_cell("analytic_account_id", analytics[index].clone())
                 .set_cell("quantity", Cell::Decimal(qty))
                 .set_commands(
                     "tax_ids",

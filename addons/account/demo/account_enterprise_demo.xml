@@ -1,0 +1,240 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<!-- Enterprise controlling, Asset CIP, Budgeting AVC, Group Consolidation & Role-based demo data.
+     Loaded only when demo data is requested; keeps fresh SME/UMKM installations uncluttered. -->
+<erp>
+  <data noupdate="1">
+    <!-- Dedicated CIP & Accumulated Depreciation demo accounts -->
+    <record id="account_demo_cip" model="account.account">
+      <field name="name">Construction in Progress (CIP)</field>
+      <field name="code">159000</field>
+      <field name="account_type">asset_non_current</field>
+      <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
+    </record>
+    <record id="account_demo_accum_dep" model="account.account">
+      <field name="name">Accumulated Depreciation</field>
+      <field name="code">151900</field>
+      <field name="account_type">asset_non_current</field>
+      <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
+    </record>
+
+    <!-- Role-specific demo users across all 4 enterprise pillars + read-only auditor -->
+    <record id="demo_user_cost_controller" model="res.users">
+      <field name="name">Maya Santoso (Cost Controller)</field>
+      <field name="login">cost_controller@demo.local</field>
+      <field name="company_id" ref="base.main_company"/>
+      <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
+      <field name="group_ids" eval="[(6, 0, [ref('account.group_account_user'), ref('account.group_cost_center_controlling')])]"/>
+    </record>
+    <record id="demo_user_asset_accountant" model="res.users">
+      <field name="name">Budi Hartono (Asset &amp; CIP Accountant)</field>
+      <field name="login">asset_accountant@demo.local</field>
+      <field name="company_id" ref="base.main_company"/>
+      <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
+      <field name="group_ids" eval="[(6, 0, [ref('account.group_account_user'), ref('account.group_asset_cip')])]"/>
+    </record>
+    <record id="demo_user_budget_manager" model="res.users">
+      <field name="name">Rina Wijaya (Budget &amp; AVC Approver)</field>
+      <field name="login">budget_manager@demo.local</field>
+      <field name="company_id" ref="base.main_company"/>
+      <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
+      <field name="group_ids" eval="[(6, 0, [ref('account.group_account_manager'), ref('account.group_budget_avc'), ref('account.group_budget_override')])]"/>
+    </record>
+    <record id="demo_user_group_consolidator" model="res.users">
+      <field name="name">Hendra Kusuma (Group Consolidator)</field>
+      <field name="login">group_consolidator@demo.local</field>
+      <field name="company_id" ref="base.main_company"/>
+      <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
+      <field name="group_ids" eval="[(6, 0, [ref('account.group_account_manager'), ref('account.group_group_consolidation')])]"/>
+    </record>
+    <record id="demo_user_finance_auditor" model="res.users">
+      <field name="name">Dewi Lestari (Read-Only Auditor)</field>
+      <field name="login">finance_auditor@demo.local</field>
+      <field name="company_id" ref="base.main_company"/>
+      <field name="company_ids" eval="[(6, 0, [ref('base.main_company')])]"/>
+      <field name="group_ids" eval="[(6, 0, [ref('account.group_account_readonly'), ref('account.group_cost_center_controlling'), ref('account.group_asset_cip'), ref('account.group_budget_avc'), ref('account.group_group_consolidation')])]"/>
+    </record>
+
+    <!-- Pillar 1: Cost Center & Profit Center Hierarchy, SKF & Allocation Cycle -->
+    <record id="demo_pc_operations" model="account.analytic.account">
+      <field name="name">Operations Profit Center</field>
+      <field name="code">DEMO-PC-OPS</field>
+      <field name="plan_id" ref="analytic.analytic_plan_departments"/>
+      <field name="center_type">profit_center</field>
+      <field name="category">production</field>
+      <field name="manager_user_id" ref="demo_user_cost_controller"/>
+      <field name="company_id" ref="base.main_company"/>
+    </record>
+    <record id="demo_cc_corporate" model="account.analytic.account">
+      <field name="name">Corporate Shared Services Group</field>
+      <field name="code">DEMO-CC-CORP</field>
+      <field name="plan_id" ref="analytic.analytic_plan_departments"/>
+      <field name="center_type">cost_center</field>
+      <field name="category">administration</field>
+      <field name="manager_user_id" ref="demo_user_cost_controller"/>
+      <field name="company_id" ref="base.main_company"/>
+    </record>
+    <record id="demo_cc_it" model="account.analytic.account">
+      <field name="name">IT Shared Services</field>
+      <field name="code">DEMO-CC-IT</field>
+      <field name="plan_id" ref="analytic.analytic_plan_departments"/>
+      <field name="center_type">cost_center</field>
+      <field name="category">service</field>
+      <field name="parent_id" ref="demo_cc_corporate"/>
+      <field name="lock_revenues" eval="True"/>
+      <field name="manager_user_id" ref="demo_user_cost_controller"/>
+      <field name="company_id" ref="base.main_company"/>
+    </record>
+    <record id="demo_cc_prod" model="account.analytic.account">
+      <field name="name">Manufacturing Plant A</field>
+      <field name="code">DEMO-CC-PROD</field>
+      <field name="plan_id" ref="analytic.analytic_plan_departments"/>
+      <field name="center_type">cost_center</field>
+      <field name="category">production</field>
+      <field name="profit_center_id" ref="demo_pc_operations"/>
+      <field name="manager_user_id" ref="demo_user_cost_controller"/>
+      <field name="company_id" ref="base.main_company"/>
+    </record>
+    <record id="demo_cc_sales" model="account.analytic.account">
+      <field name="name">Commercial Sales</field>
+      <field name="code">DEMO-CC-SALES</field>
+      <field name="plan_id" ref="analytic.analytic_plan_departments"/>
+      <field name="center_type">cost_center</field>
+      <field name="category">sales</field>
+      <field name="profit_center_id" ref="demo_pc_operations"/>
+      <field name="manager_user_id" ref="demo_user_cost_controller"/>
+      <field name="company_id" ref="base.main_company"/>
+    </record>
+    <record id="demo_skf_headcount" model="account.analytic.skf">
+      <field name="name">Employee Headcount (FTE)</field>
+      <field name="code">DEMO-SKF-HC</field>
+      <field name="skf_type">fixed</field>
+      <field name="unit_name">FTE</field>
+      <field name="company_id" ref="base.main_company"/>
+    </record>
+    <record id="demo_skf_hc_prod" model="account.analytic.skf.line">
+      <field name="skf_id" ref="demo_skf_headcount"/>
+      <field name="analytic_account_id" ref="demo_cc_prod"/>
+      <field name="date">2026-01-01</field>
+      <field name="quantity">60</field>
+      <field name="note">Plant A Operators</field>
+    </record>
+    <record id="demo_skf_hc_sales" model="account.analytic.skf.line">
+      <field name="skf_id" ref="demo_skf_headcount"/>
+      <field name="analytic_account_id" ref="demo_cc_sales"/>
+      <field name="date">2026-01-01</field>
+      <field name="quantity">40</field>
+      <field name="note">Commercial Sales Team</field>
+    </record>
+    <record id="demo_alloc_cycle_it" model="account.cost.allocation.cycle">
+      <field name="name">Monthly IT Overhead Assessment</field>
+      <field name="code">DEMO-CYC-IT</field>
+      <field name="allocation_method">assessment</field>
+      <field name="tracing_basis">skf</field>
+      <field name="skf_id" ref="demo_skf_headcount"/>
+      <field name="company_id" ref="base.main_company"/>
+    </record>
+    <record id="demo_alloc_rule_it" model="account.cost.allocation.rule">
+      <field name="cycle_id" ref="demo_alloc_cycle_it"/>
+      <field name="sequence">10</field>
+      <field name="name">Allocate IT Shared Services by Headcount</field>
+      <field name="sender_center_id" ref="demo_cc_it"/>
+      <field name="sender_share_pct">100</field>
+    </record>
+    <record id="demo_alloc_recv_prod" model="account.cost.allocation.receiver">
+      <field name="rule_id" ref="demo_alloc_rule_it"/>
+      <field name="receiver_center_id" ref="demo_cc_prod"/>
+      <field name="fixed_pct">60</field>
+    </record>
+    <record id="demo_alloc_recv_sales" model="account.cost.allocation.receiver">
+      <field name="rule_id" ref="demo_alloc_rule_it"/>
+      <field name="receiver_center_id" ref="demo_cc_sales"/>
+      <field name="fixed_pct">40</field>
+    </record>
+
+    <!-- Pillar 2: Asset Classes (CIP + Normal) & Capital Project -->
+    <record id="demo_asset_cls_cip" model="account.asset.category">
+      <field name="name">Capital Projects (CIP / AuC)</field>
+      <field name="code">DEMO-CLS-CIP</field>
+      <field name="asset_type">cip</field>
+      <field name="journal_id" ref="journal_demo_general"/>
+      <field name="account_asset_id" ref="account_demo_cip"/>
+      <field name="company_id" ref="base.main_company"/>
+    </record>
+    <record id="demo_asset_cls_machinery" model="account.asset.category">
+      <field name="name">Production Machinery</field>
+      <field name="code">DEMO-CLS-MACH</field>
+      <field name="asset_type">normal</field>
+      <field name="method">linear</field>
+      <field name="method_number">60</field>
+      <field name="method_period">1</field>
+      <field name="prorata_temporis" eval="True"/>
+      <field name="journal_id" ref="journal_demo_general"/>
+      <field name="account_asset_id" ref="account_demo_equipment"/>
+      <field name="account_depreciation_id" ref="account_demo_accum_dep"/>
+      <field name="account_depreciation_expense_id" ref="account_demo_depreciation"/>
+      <field name="company_id" ref="base.main_company"/>
+    </record>
+    <record id="demo_cip_project" model="account.asset">
+      <field name="name">Automated Packaging Line Expansion (CIP)</field>
+      <field name="code">DEMO-CIP-001</field>
+      <field name="asset_type">cip</field>
+      <field name="category_id" ref="demo_asset_cls_cip"/>
+      <field name="analytic_account_id" ref="demo_cc_prod"/>
+      <field name="acquisition_date">2026-01-15</field>
+      <field name="journal_id" ref="journal_demo_general"/>
+      <field name="account_asset_id" ref="account_demo_cip"/>
+      <field name="company_id" ref="base.main_company"/>
+    </record>
+
+    <!-- Pillar 3: Advanced Budgeting AVC Control Profile & Baseline Budget -->
+    <record id="demo_budget_profile_strict" model="account.budget.profile">
+      <field name="name">Enterprise Hard Stop (80% Warn / 100% Block)</field>
+      <field name="code">DEMO-AVC-STRICT</field>
+      <field name="avc_mode">hard_stop</field>
+      <field name="warning_threshold_pct">80</field>
+      <field name="blocking_threshold_pct">100</field>
+      <field name="tolerance_amount">0</field>
+      <field name="check_commitments" eval="True"/>
+      <field name="company_id" ref="base.main_company"/>
+    </record>
+    <record id="demo_budget_fy2026" model="account.budget">
+      <field name="name">FY2026 Enterprise Controlling Budget (Demo)</field>
+      <field name="version_code">V0</field>
+      <field name="budget_type">opex</field>
+      <field name="profile_id" ref="demo_budget_profile_strict"/>
+      <field name="date_from">2026-01-01</field>
+      <field name="date_to">2026-12-31</field>
+      <field name="company_id" ref="base.main_company"/>
+    </record>
+    <record id="demo_budget_line_prod" model="account.budget.line">
+      <field name="budget_id" ref="demo_budget_fy2026"/>
+      <field name="name">Manufacturing Plant A Operating Budget</field>
+      <field name="analytic_account_id" ref="demo_cc_prod"/>
+      <field name="date_from">2026-01-01</field>
+      <field name="date_to">2026-12-31</field>
+      <field name="original_amount">50000</field>
+      <field name="planned_amount">50000</field>
+      <field name="release_pct">100</field>
+      <field name="released_amount">50000</field>
+    </record>
+
+    <!-- Pillar 4: Group Consolidation Group -->
+    <record id="demo_consolidation_group" model="account.consolidation.group">
+      <field name="name">Holding Consolidated Group (Demo)</field>
+      <field name="code">DEMO-GRP-HOLDING</field>
+      <field name="currency_id" ref="base.USD"/>
+      <field name="closing_rate_type_code">closing</field>
+      <field name="average_rate_type_code">monthly_average</field>
+      <field name="historical_rate_type_code">historical</field>
+      <field name="fallback_to_spot" eval="True"/>
+    </record>
+    <record id="demo_consolidation_unit_parent" model="account.consolidation.unit">
+      <field name="group_id" ref="demo_consolidation_group"/>
+      <field name="company_id" ref="base.main_company"/>
+      <field name="is_parent" eval="True"/>
+      <field name="consolidation_method">full</field>
+      <field name="ownership_pct">100</field>
+    </record>
+  </data>
+</erp>

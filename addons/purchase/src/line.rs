@@ -134,6 +134,26 @@ pub struct PurchaseOrderLine {
         string = "Taxes"
     )]
     pub tax_ids: Vec<RecId>,
+    /// Cost Center / Analytic Account charged by this purchase line (checked against Budget AVC).
+    #[field(
+        many2one,
+        comodel = "account.analytic.account",
+        check_company = true,
+        ondelete = "set null",
+        index = "btree_not_null",
+        string = "Cost Center"
+    )]
+    pub analytic_account_id: Option<RecId>,
+    /// Optional Construction in Progress (CIP) asset accumulating costs from this purchase line.
+    #[field(
+        many2one,
+        comodel = "account.asset",
+        check_company = true,
+        ondelete = "set null",
+        index = "btree_not_null",
+        string = "CIP Asset"
+    )]
+    pub asset_id: Option<RecId>,
     /// The vendor price row the line was priced from, if any.
     #[field(
         many2one,

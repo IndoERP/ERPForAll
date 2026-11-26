@@ -3,7 +3,7 @@ summary = "Journals, ledgers, taxes, invoices and payments"
 category = "Accounting"
 author = "Arkana"
 license = "MIT OR Apache-2.0"
-version = "1.15.1"
+version = "1.16.0"
 depends = ["base", "web", "product", "analytic"]
 application = true
 exact_only = true
@@ -13,6 +13,7 @@ exact_only = true
 # small generic ledger and its journals, one file per model family; tests/manifest_order.rs holds both lists.
 data = [
     "security/account_security.xml",
+    "security/account_group_classification.xml",
     "data/account_data.xml",
     "data/default_account_roles.xml",
     "data/account_payment_data.xml",
@@ -40,6 +41,7 @@ data = [
     "views/account_asset_views.xml",
     "views/account_recurring_views.xml",
     "views/account_fiscal_position_views.xml",
+    "views/account_consolidation_views.xml",
     "views/account_reports.xml",
     "views/account_incoterms_views.xml",
     "security/ir.access.csv",
@@ -48,4 +50,5 @@ demo = [
     "demo/account_account_demo.xml",
     "demo/account_journal_demo.xml",
     "demo/account_payment_demo.xml",
+    "demo/account_enterprise_demo.xml",
 ]

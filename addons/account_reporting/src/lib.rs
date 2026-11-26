@@ -6,7 +6,11 @@ erp_sdk::addon!(
     depends = ["account", "analytic", "reporting"]
 );
 mod aged_partner;
+mod asset_register;
 mod balance_sheet;
+mod budget_avc_report;
+mod consolidation_report;
+mod cost_center_report;
 mod general_ledger;
 mod migrations;
 mod partner_ledger;

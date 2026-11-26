@@ -287,6 +287,14 @@ pub async fn post_moves(tx: &mut Transaction, moves: &Records) -> Result<()> {
             .map(|h| h.id)
             .zip(dates.iter().copied())
             .collect();
+        // Controlling: auto-assign default cost centers, enforce mandatory/locks/validity,
+        // stamp intercompany trading partners, and check real-time Budget AVC before posting.
+        crate::controlling::apply_default_cost_centers(tx, &ids).await?;
+        crate::controlling::validate_move_cost_centers(tx, &ids).await?;
+        stamp_trading_partners_for_moves(tx, &ids).await?;
+        let avc_touched =
+            crate::budget::avc::check_and_apply_move_avc(tx, moves.env(), &ids).await?;
+
         set_state(tx, &pairs, "posted").await?;
         // the history of the entries (a no-op without a tracking addon such as the mail bridge)
         tx.track_external(
@@ -306,9 +314,33 @@ pub async fn post_moves(tx: &mut Transaction, moves: &Records) -> Result<()> {
         )?;
         number(tx, moves, &headers, &dates).await?;
         create_analytic_lines_for_moves(tx, moves.env(), &ids).await?;
+        crate::asset::cip::record_cip_lines_for_moves(tx, moves.env(), &ids).await?;
+        if !avc_touched.is_empty() {
+            crate::budget::refresh_budget_lines(tx, &avc_touched).await?;
+        }
         invalidate(tx, moves).await
     })
     .await
+}
+
+async fn stamp_trading_partners_for_moves(tx: &mut Transaction, move_ids: &[i64]) -> Result<()> {
+    if move_ids.is_empty() {
+        return Ok(());
+    }
+    tx.execute(
+        "UPDATE account_move_line l \
+         SET trading_partner_company_id = COALESCE(p.trading_partner_company_id, c.id) \
+         FROM res_partner p \
+         LEFT JOIN res_company c ON c.partner_id = p.id \
+         WHERE l.move_id = ANY($1::int8[]) \
+           AND l.partner_id = p.id \
+           AND l.trading_partner_company_id IS NULL \
+           AND COALESCE(p.trading_partner_company_id, c.id) IS NOT NULL \
+           AND COALESCE(p.trading_partner_company_id, c.id) <> l.company_id",
+        &[&move_ids],
+    )
+    .await?;
+    Ok(())
 }
 
 async fn create_analytic_lines_for_moves(
@@ -323,7 +355,7 @@ async fn create_analytic_lines_for_moves(
         .query(
             "SELECT l.analytic_account_id::int8, COALESCE(l.name, m.name, 'Journal Item')::text, \
                     l.date, l.partner_id::int8, -COALESCE(l.balance, 0), COALESCE(l.quantity, 0), \
-                    m.name::text \
+                    m.name::text, l.id::int8, l.account_id::int8 \
              FROM account_move_line l \
              JOIN account_move m ON m.id = l.move_id \
              WHERE l.move_id = ANY($1::int8[]) \
@@ -345,12 +377,19 @@ async fn create_analytic_lines_for_moves(
         let amount: Decimal = row.try_get(4).map_err(db)?;
         let qty: Decimal = row.try_get(5).map_err(db)?;
         let mref: Option<String> = row.try_get(6).map_err(db)?;
+        let ml_id: i64 = row.try_get(7).map_err(db)?;
+        let gl_acc_id: Option<i64> = row.try_get(8).map_err(db)?;
         let mut v = RawVals::new();
         v.insert("account_id".into(), Cell::Id(aid));
         v.insert("name".into(), Cell::Str(label.into()));
         v.insert("date".into(), Cell::Date(date));
         v.insert("amount".into(), Cell::Decimal(amount));
         v.insert("unit_amount".into(), Cell::Decimal(qty));
+        v.insert("cost_kind".into(), Cell::Str("primary".into()));
+        v.insert("move_line_id".into(), Cell::Id(ml_id));
+        if let Some(ga) = gl_acc_id {
+            v.insert("general_account_id".into(), Cell::Id(ga));
+        }
         if let Some(pid) = partner {
             v.insert("partner_id".into(), Cell::Id(pid));
         }
@@ -405,6 +444,14 @@ pub async fn reset_moves(tx: &mut Transaction, moves: &Records) -> Result<()> {
             let closed = read_closed(tx, &posted).await?;
             refuse_locked(tx, &closed, "reset to draft", LockScope::Tax, None).await?;
             refuse_consequences(tx, &posted, "reset to draft").await?;
+            crate::asset::cip::remove_cip_lines_for_moves(tx, &posted).await?;
+            tx.execute(
+                "DELETE FROM account_analytic_line a \
+                 USING account_move_line l \
+                 WHERE a.move_line_id = l.id AND l.move_id = ANY($1::int8[])",
+                &[&posted],
+            )
+            .await?;
             tx.execute(
                 "UPDATE account_move SET name = NULL WHERE id = ANY($1::int8[])",
                 &[&posted],

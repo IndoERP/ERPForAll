@@ -31,6 +31,7 @@
               <field name="reconcile"/>
               <field name="tax_ids" widget="many2many_tags"/>
               <field name="non_trade"/>
+              <field name="cost_center_policy" groups="account.group_cost_center_controlling"/>
               <field name="currency_id"/>
             </group>
             <group>

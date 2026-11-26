@@ -127,16 +127,35 @@ pub struct AccountMoveLine {
         string = "Partner"
     )]
     pub partner_id: Option<RecId>,
-    /// Optional analytic account for cost/revenue tracking; generates an analytic item on posting.
+    /// Optional analytic account / cost center for controlling; generates an analytic item on posting.
     #[field(
         many2one,
         comodel = "account.analytic.account",
         check_company = true,
         ondelete = "set null",
         index = "btree_not_null",
-        string = "Analytic Account"
+        string = "Cost Center"
     )]
     pub analytic_account_id: Option<RecId>,
+    /// Optional CIP or Fixed Asset receiving construction costs from this line.
+    #[field(
+        many2one,
+        comodel = "account.asset",
+        check_company = true,
+        ondelete = "set null",
+        index = "btree_not_null",
+        string = "Asset / CIP"
+    )]
+    pub asset_id: Option<RecId>,
+    /// Counterpart group legal entity for intercompany reconciliation & consolidation elimination.
+    #[field(
+        many2one,
+        comodel = "res.company",
+        ondelete = "set null",
+        index = "btree_not_null",
+        string = "Trading Partner"
+    )]
+    pub trading_partner_company_id: Option<RecId>,
     /// Label.
     #[field(char, string = "Label")]
     pub name: Option<Arc<str>>,

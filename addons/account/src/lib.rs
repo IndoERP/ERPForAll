@@ -8,10 +8,21 @@ erp_sdk::addon!(
     exact_only = true
 );
 
+/// Feature group enabling Cost Center & Profit Center Controlling menus and fields.
+pub const COST_CENTER_GROUP: &str = "account.group_cost_center_controlling";
+/// Feature group enabling Fixed Assets & Construction in Progress (CIP) menus and fields.
+pub const ASSET_CIP_GROUP: &str = "account.group_asset_cip";
+/// Feature group enabling Advanced Budgeting & Availability Control (AVC) menus and fields.
+pub const BUDGET_AVC_GROUP: &str = "account.group_budget_avc";
+/// Feature group enabling Group Financial Statement Consolidation menus and fields.
+pub const CONSOLIDATION_GROUP: &str = "account.group_group_consolidation";
+
 pub mod asset;
 pub mod bank;
 pub mod budget;
 pub mod company;
+pub mod consolidation;
+pub mod controlling;
 mod costing;
 pub mod fiscal;
 pub mod followup;
@@ -27,6 +38,7 @@ pub mod payment;
 pub mod payterm;
 pub mod reconcile;
 pub mod recurring;
+mod res_groups;
 
 mod settings_migration;
 pub mod smart_buttons;

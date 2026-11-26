@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<erp>
+  <data noupdate="1">
+    <record id="report_budget_avc" model="reporting.report">
+      <field name="name">Budget Availability Control (AVC)</field>
+      <field name="provider">account_reporting.budget_avc</field>
+      <field name="date_mode">range</field>
+      <field name="date_default">this_year</field>
+      <field name="comparison" eval="False"/>
+      <field name="multi_company" eval="False"/>
+      <field name="totals_below" eval="True"/>
+    </record>
+    <record id="bavc_col_original" model="reporting.report.column">
+      <field name="report_id" ref="report_budget_avc"/>
+      <field name="sequence">10</field>
+      <field name="name">Original</field>
+      <field name="label">original</field>
+      <field name="kind">monetary</field>
+    </record>
+    <record id="bavc_col_revision" model="reporting.report.column">
+      <field name="report_id" ref="report_budget_avc"/>
+      <field name="sequence">20</field>
+      <field name="name">Revisions</field>
+      <field name="label">revision</field>
+      <field name="kind">monetary</field>
+    </record>
+    <record id="bavc_col_released" model="reporting.report.column">
+      <field name="report_id" ref="report_budget_avc"/>
+      <field name="sequence">30</field>
+      <field name="name">Released</field>
+      <field name="label">released</field>
+      <field name="kind">monetary</field>
+    </record>
+    <record id="bavc_col_committed" model="reporting.report.column">
+      <field name="report_id" ref="report_budget_avc"/>
+      <field name="sequence">40</field>
+      <field name="name">Committed (PO)</field>
+      <field name="label">committed</field>
+      <field name="kind">monetary</field>
+    </record>
+    <record id="bavc_col_actual" model="reporting.report.column">
+      <field name="report_id" ref="report_budget_avc"/>
+      <field name="sequence">50</field>
+      <field name="name">Actual</field>
+      <field name="label">actual</field>
+      <field name="kind">monetary</field>
+    </record>
+    <record id="bavc_col_available" model="reporting.report.column">
+      <field name="report_id" ref="report_budget_avc"/>
+      <field name="sequence">60</field>
+      <field name="name">Available</field>
+      <field name="label">available</field>
+      <field name="kind">monetary</field>
+    </record>
+    <record id="bavc_col_util" model="reporting.report.column">
+      <field name="report_id" ref="report_budget_avc"/>
+      <field name="sequence">70</field>
+      <field name="name">Util %</field>
+      <field name="label">util_pct</field>
+      <field name="kind">percent</field>
+    </record>
+  </data>
+  <record id="action_budget_avc_report" model="ir.actions.client">
+    <field name="name">Budget Availability Control (AVC)</field>
+    <field name="tag">reporting.report</field>
+    <field name="params" eval="{'report': ref('report_budget_avc')}"/>
+  </record>
+  <menuitem id="menu_budget_avc_report" name="Budget Availability Control" parent="menu_account_reporting" action="action_budget_avc_report" groups="account.group_budget_avc" sequence="66"/>
+  <record id="menu_budget_avc_report" model="ir.ui.menu"><field name="web_icon">lucide:shield-check</field></record>
+</erp>

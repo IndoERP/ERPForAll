@@ -3,7 +3,8 @@
 use erp_sdk::prelude::*;
 use erp_sdk::settings::{PanelItemDecl, PanelItemValue, ScopeKind, SettingsScope};
 
-fn items() -> Result<Vec<PanelItemDecl>> {
+/// Returns all Accounting Settings panel items (links and optional enterprise feature toggles).
+pub fn items() -> Result<Vec<PanelItemDecl>> {
     Ok(vec![
         PanelItemDecl::action_link(
             "account.company_configuration",
@@ -29,6 +30,76 @@ fn items() -> Result<Vec<PanelItemDecl>> {
             .sequence(10)
             .scope(ScopeKind::Company)
             .access(&["account.group_account_readonly"])?,
+        // Optional enterprise controlling, CIP, budgeting AVC, and consolidation feature toggles.
+        // Disabled by default so SME/UMKM installations remain clean until enabled by an admin.
+        PanelItemDecl::group_toggle(
+            "account.group_cost_center_controlling",
+            "Cost Center & Profit Center Controlling",
+            crate::COST_CENTER_GROUP,
+        )?
+        .block("Controlling")?
+        .sequence(10)
+        .access(&["base.group_system"])?,
+        PanelItemDecl::menu_link(
+            "account.setup_cost_centers",
+            "Cost & Profit Centers",
+            "account.menu_analytic_accounts",
+        )?
+        .block("Controlling")?
+        .sequence(20)
+        .scope(ScopeKind::Company)
+        .access(&[crate::COST_CENTER_GROUP])?,
+        PanelItemDecl::group_toggle(
+            "account.group_asset_cip",
+            "Fixed Assets & Construction in Progress (CIP)",
+            crate::ASSET_CIP_GROUP,
+        )?
+        .block("Fixed Assets & CIP")?
+        .sequence(10)
+        .access(&["base.group_system"])?,
+        PanelItemDecl::menu_link(
+            "account.setup_asset_classes",
+            "Asset Classes",
+            "account.menu_account_asset_category",
+        )?
+        .block("Fixed Assets & CIP")?
+        .sequence(20)
+        .scope(ScopeKind::Company)
+        .access(&[crate::ASSET_CIP_GROUP])?,
+        PanelItemDecl::group_toggle(
+            "account.group_budget_avc",
+            "Advanced Budgeting & Availability Control (AVC)",
+            crate::BUDGET_AVC_GROUP,
+        )?
+        .block("Budgeting & AVC")?
+        .sequence(10)
+        .access(&["base.group_system"])?,
+        PanelItemDecl::menu_link(
+            "account.setup_budget_profiles",
+            "Budget Control Profiles",
+            "account.menu_account_budget_profile",
+        )?
+        .block("Budgeting & AVC")?
+        .sequence(20)
+        .scope(ScopeKind::Company)
+        .access(&[crate::BUDGET_AVC_GROUP])?,
+        PanelItemDecl::group_toggle(
+            "account.group_group_consolidation",
+            "Group Financial Statement Consolidation",
+            crate::CONSOLIDATION_GROUP,
+        )?
+        .block("Group Consolidation")?
+        .sequence(10)
+        .access(&["base.group_system"])?,
+        PanelItemDecl::menu_link(
+            "account.setup_consolidation_groups",
+            "Consolidation Groups",
+            "account.menu_consolidation_groups",
+        )?
+        .block("Group Consolidation")?
+        .sequence(20)
+        .scope(ScopeKind::Global)
+        .access(&[crate::CONSOLIDATION_GROUP])?,
     ])
 }
 fn resolve<'a>(

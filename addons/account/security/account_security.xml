@@ -20,4 +20,27 @@ Accounting groups, from the least to the most access. The full matrix and the ot
     <field name="implied_ids" eval="[Command.link(ref('group_account_user'))]"/>
     <field name="implied_by_ids" eval="[Command.link(ref('base.group_system'))]"/>
   </record>
+
+  <record id="group_budget_override" model="res.groups">
+    <field name="name">Budget Availability Control Override</field>
+    <field name="implied_ids" eval="[Command.link(ref('group_account_manager'))]"/>
+  </record>
+
+  <!-- Optional enterprise feature toggles (light groups controlled from Accounting Settings).
+       Disabled by default so SME/UMKM installations stay uncluttered until enabled. -->
+  <record id="group_cost_center_controlling" model="res.groups">
+    <field name="name">Cost Center &amp; Profit Center Controlling</field>
+  </record>
+
+  <record id="group_asset_cip" model="res.groups">
+    <field name="name">Fixed Assets &amp; Construction in Progress (CIP)</field>
+  </record>
+
+  <record id="group_budget_avc" model="res.groups">
+    <field name="name">Advanced Budgeting &amp; Availability Control (AVC)</field>
+  </record>
+
+  <record id="group_group_consolidation" model="res.groups">
+    <field name="name">Group Financial Statement Consolidation</field>
+  </record>
 </erp>

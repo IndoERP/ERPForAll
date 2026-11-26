@@ -1,9 +1,9 @@
 name = "Analytic Accounting"
-summary = "Analytic plans, analytic accounts and analytic lines"
+summary = "Cost centers, profit centers, hierarchies, statistical key figures and analytic lines"
 category = "Accounting"
 author = "Arkana"
 license = "MIT OR Apache-2.0"
-version = "1.1.0"
+version = "1.2.0"
 depends = ["base"]
 data = [
     "data/analytic_data.xml",

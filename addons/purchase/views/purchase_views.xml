@@ -12,6 +12,8 @@
         <!-- the line form and the server keep a received or billed line's product and unit -->
         <field name="product_id"/>
         <field name="name"/>
+        <field name="analytic_account_id" groups="account.group_cost_center_controlling"/>
+        <field name="asset_id" groups="account.group_asset_cip"/>
         <field name="product_qty"/>
         <field name="uom_id"/>
         <field name="date_planned" invisible="1"/>
@@ -48,6 +50,8 @@
               <field name="qty_received" readonly="1"/>
               <field name="qty_invoiced" readonly="1"/>
               <field name="qty_to_invoice" readonly="1"/>
+              <field name="analytic_account_id" groups="account.group_cost_center_controlling"/>
+              <field name="asset_id" groups="account.group_asset_cip"/>
             </group>
             <group string="Pricing">
               <field name="price_unit"/>
