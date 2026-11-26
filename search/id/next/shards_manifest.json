@@ -9,8 +9,8 @@
       "modules": [
         "account"
       ],
-      "doc_count": 5,
-      "byte_size": 29589
+      "doc_count": 8,
+      "byte_size": 58566
     },
     {
       "shard_id": "shard_functional_account_reporting_1",
@@ -28,7 +28,7 @@
         "base"
       ],
       "doc_count": 2,
-      "byte_size": 14650
+      "byte_size": 15372
     },
     {
       "shard_id": "shard_functional_hr_1",
@@ -96,8 +96,11 @@
   ],
   "page_to_shard": {
     "user/accounting-bank-reconciliation": "shard_functional_account_1",
+    "user/accounting-budget-depreciation-full-cycle-example": "shard_functional_account_1",
     "user/accounting-consolidation": "shard_functional_account_1",
     "user/accounting-controlling-budgets-assets": "shard_functional_account_1",
+    "user/accounting-full-cycle-example": "shard_functional_account_1",
+    "user/accounting-menus-and-reports-reference": "shard_functional_account_1",
     "user/accounting-setup-and-ledger": "shard_functional_account_1",
     "user/record-and-settle-invoices": "shard_functional_account_1",
     "user/read-financial-reports": "shard_functional_account_reporting_1",

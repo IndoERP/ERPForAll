@@ -1,7 +1,7 @@
 {
   "lang": "en",
   "version": "next",
-  "doc_count": 129,
+  "doc_count": 132,
   "docs": [
     {
       "id": "index",
@@ -6363,6 +6363,69 @@
       "shard_id": "shard_functional_account_1"
     },
     {
+      "id": "user/accounting-budget-depreciation-full-cycle-example",
+      "title": "Budget Control (AVC), Controlling & Fixed Asset Depreciation Full-Cycle Example",
+      "description": "Walk through real-time Budget Availability Control (80% warning, 100% hard-stop block, and Budget Amendment), Fixed Asset single and batch Depreciation Runs, CIP Settlement, and SKF Cost Allocations end to end.",
+      "audience": "functional",
+      "module": "account",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "part-a-budget-avc",
+          "depth": 2,
+          "text": "Part A: Real-Time Budget Control (AVC) Full Cycle"
+        },
+        {
+          "id": "avc-step-1-setup",
+          "depth": 3,
+          "text": "Step A1: Activate a Budget with Strict Hard-Stop AVC (`$1,000.00`)"
+        },
+        {
+          "id": "avc-step-2-warning",
+          "depth": 3,
+          "text": "Step A2: Spend 85% and Trigger the Warning Band (`BILL/2026/11/0023`)"
+        },
+        {
+          "id": "avc-step-3-hard-stop",
+          "depth": 3,
+          "text": "Step A3: Exceed 100% and Observe the Live AVC Hard-Stop Block"
+        },
+        {
+          "id": "avc-step-4-amendment-and-post",
+          "depth": 3,
+          "text": "Step A4: Approve a Budget Amendment (`+$500.00`) and Post the Bill (`BILL/2026/11/0024`)"
+        },
+        {
+          "id": "part-b-depreciation-and-cip",
+          "depth": 2,
+          "text": "Part B: Fixed Asset Depreciation, Batch Runs & CIP Settlement Full Cycle"
+        },
+        {
+          "id": "depr-step-1-single-asset",
+          "depth": 3,
+          "text": "Step B1: Register an Asset and Post Period 1 Depreciation (`GEN/2026/11/0005`)"
+        },
+        {
+          "id": "depr-step-2-batch-run",
+          "depth": 3,
+          "text": "Step B2: Execute a Month-End Batch Depreciation Run"
+        },
+        {
+          "id": "depr-step-3-cip-settlement",
+          "depth": 3,
+          "text": "Step B3: Capitalize Construction in Progress via CIP Settlement"
+        },
+        {
+          "id": "part-c-audit-table",
+          "depth": 2,
+          "text": "Part C: Complete Financial, Budget & Controlling Impact Summary"
+        }
+      ],
+      "shard_id": "shard_functional_account_1"
+    },
+    {
       "id": "user/accounting-consolidation",
       "title": "Multi-Company Group Consolidation",
       "description": "Configure consolidation groups, bootstrap the group financial statement chart, run period consolidations with FX translation (CTA), intercompany eliminations, and NCI, and inspect consolidated statements.",
@@ -6434,6 +6497,102 @@
           "id": "troubleshooting",
           "depth": 2,
           "text": "Troubleshooting Controlling, Budgets, and Assets"
+        }
+      ],
+      "shard_id": "shard_functional_account_1"
+    },
+    {
+      "id": "user/accounting-full-cycle-example",
+      "title": "Accounting Full-Cycle Example: Record-to-Report End-to-End",
+      "description": "Follow one complete Accounting period cycle from manual journal entries and reversals through customer invoicing with partial/full payments, credit notes, vendor bills, bank reconciliation, and statutory financial statement verification.",
+      "audience": "functional",
+      "module": "account",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "scenario-overview",
+          "depth": 2,
+          "text": "Period Scenario and Document Set"
+        },
+        {
+          "id": "step-1-manual-je",
+          "depth": 2,
+          "text": "Step 1: Post and Reverse a Manual Journal Entry (`GEN/2026/11/0003`)"
+        },
+        {
+          "id": "step-2-ar-invoice-partial-full",
+          "depth": 2,
+          "text": "Step 2: Issue Customer Invoice, Register Partial & Final Payments, and Credit Note"
+        },
+        {
+          "id": "step-3-ap-vendor-bill",
+          "depth": 2,
+          "text": "Step 3: Record and Settle a Vendor Bill (`BILL/2026/11/0021`)"
+        },
+        {
+          "id": "step-4-bank-reconciliation",
+          "depth": 2,
+          "text": "Step 4: Reconcile a Bank Statement (`BNK1/2026/00012`)"
+        },
+        {
+          "id": "step-5-verify-financial-statements",
+          "depth": 2,
+          "text": "Step 5: Close, Audit, and Export Financial Statements"
+        },
+        {
+          "id": "full-cycle-journal-table",
+          "depth": 2,
+          "text": "Double-Entry Summary Table"
+        }
+      ],
+      "shard_id": "shard_functional_account_1"
+    },
+    {
+      "id": "user/accounting-menus-and-reports-reference",
+      "title": "Complete Accounting Menus, Configuration, and Reports Reference",
+      "description": "Complete reference directory covering every menu item, configuration screen, controlling tool, consolidation screen, and all 17 statutory and management reports in ERPForAll Accounting.",
+      "audience": "functional",
+      "module": "account",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "dashboard-and-ar-ap",
+          "depth": 2,
+          "text": "Dashboard, Customers (AR), and Vendors (AP)"
+        },
+        {
+          "id": "more-accounting-menu",
+          "depth": 2,
+          "text": "Accounting Operations (`Accounting → More → Accounting`)"
+        },
+        {
+          "id": "all-17-reports",
+          "depth": 2,
+          "text": "All 17 Accounting Reports (`Accounting → More → Reporting`)"
+        },
+        {
+          "id": "statutory-reports",
+          "depth": 3,
+          "text": "Statutory Financial Statements and Ledgers"
+        },
+        {
+          "id": "management-reports",
+          "depth": 3,
+          "text": "Controlling, Asset, and Budget Reports"
+        },
+        {
+          "id": "consolidation-menus",
+          "depth": 2,
+          "text": "Multi-Company Consolidation (`Accounting → More → Consolidation`)"
+        },
+        {
+          "id": "configuration-menus",
+          "depth": 2,
+          "text": "Complete Accounting Configuration (`Accounting → More → Configuration`)"
         }
       ],
       "shard_id": "shard_functional_account_1"

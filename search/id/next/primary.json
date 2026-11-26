@@ -1,7 +1,7 @@
 {
   "lang": "id",
   "version": "next",
-  "doc_count": 23,
+  "doc_count": 26,
   "docs": [
     {
       "id": "user/accounting-bank-reconciliation",
@@ -37,6 +37,69 @@
           "id": "troubleshooting",
           "depth": 2,
           "text": "Mengatasi Kendala Rekonsiliasi Bank"
+        }
+      ],
+      "shard_id": "shard_functional_account_1"
+    },
+    {
+      "id": "user/accounting-budget-depreciation-full-cycle-example",
+      "title": "Contoh Full Cycle Budget Control (AVC), Controlling & Depresiasi Aset Tetap",
+      "description": "Ikuti studi kasus nyata Kontrol Ketersediaan Anggaran (peringatan 80%, blokir keras 100%, dan Amandemen Anggaran), Depresiasi Aset Tetap satuan & massal, Penyelesaian CIP, dan Alokasi Biaya SKF.",
+      "audience": "functional",
+      "module": "account",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "part-a-budget-avc",
+          "depth": 2,
+          "text": "Bagian A: Full Cycle Kontrol Ketersediaan Anggaran (AVC) Real-Time"
+        },
+        {
+          "id": "avc-step-1-setup",
+          "depth": 3,
+          "text": "Langkah A1: Mengaktifkan Anggaran dengan Strict Hard-Stop AVC (`$1,000.00`)"
+        },
+        {
+          "id": "avc-step-2-warning",
+          "depth": 3,
+          "text": "Langkah A2: Realisasi 85% Memicu Status Peringatan (`BILL/2026/11/0023`)"
+        },
+        {
+          "id": "avc-step-3-hard-stop",
+          "depth": 3,
+          "text": "Langkah A3: Melampaui 100% dan Terkena Blokir Keras AVC (Hard-Stop)"
+        },
+        {
+          "id": "avc-step-4-amendment-and-post",
+          "depth": 3,
+          "text": "Langkah A4: Menyetujui Amandemen Anggaran (`+$500.00`) dan Memposting Tagihan (`BILL/2026/11/0024`)"
+        },
+        {
+          "id": "part-b-depreciation-and-cip",
+          "depth": 2,
+          "text": "Bagian B: Full Cycle Depresiasi Aset Tetap, Batch Run & Penyelesaian CIP"
+        },
+        {
+          "id": "depr-step-1-single-asset",
+          "depth": 3,
+          "text": "Langkah B1: Mendaftarkan Aset dan Memposting Depresiasi Periode 1 (`GEN/2026/11/0005`)"
+        },
+        {
+          "id": "depr-step-2-batch-run",
+          "depth": 3,
+          "text": "Langkah B2: Menjalankan Batch Depreciation Run Akhir Bulan"
+        },
+        {
+          "id": "depr-step-3-cip-settlement",
+          "depth": 3,
+          "text": "Langkah B3: Mengapitalisasi Aset Dalam Penyelesaian (CIP Settlement)"
+        },
+        {
+          "id": "part-c-audit-table",
+          "depth": 2,
+          "text": "Bagian C: Ringkasan Dampak Keuangan, Anggaran & Controlling"
         }
       ],
       "shard_id": "shard_functional_account_1"
@@ -113,6 +176,102 @@
           "id": "troubleshooting",
           "depth": 2,
           "text": "Mengatasi Kendala Controlling, Anggaran, dan Aset"
+        }
+      ],
+      "shard_id": "shard_functional_account_1"
+    },
+    {
+      "id": "user/accounting-full-cycle-example",
+      "title": "Contoh Full Cycle Akuntansi: Record-to-Report End-to-End",
+      "description": "Ikuti satu siklus periode Akuntansi lengkap dari entri jurnal manual dan pembalikannya, faktur pelanggan dengan pembayaran parsial/penuh, nota kredit, tagihan pemasok, rekonsiliasi bank, hingga verifikasi laporan keuangan.",
+      "audience": "functional",
+      "module": "account",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "scenario-overview",
+          "depth": 2,
+          "text": "Skenario Periode dan Daftar Dokumen"
+        },
+        {
+          "id": "step-1-manual-je",
+          "depth": 2,
+          "text": "Langkah 1: Memposting dan Membalik Jurnal Manual (`GEN/2026/11/0003`)"
+        },
+        {
+          "id": "step-2-ar-invoice-partial-full",
+          "depth": 2,
+          "text": "Langkah 2: Menerbitkan Faktur Pelanggan, Pembayaran Parsial/Penuh, dan Nota Kredit"
+        },
+        {
+          "id": "step-3-ap-vendor-bill",
+          "depth": 2,
+          "text": "Langkah 3: Mencatat dan Melunasi Tagihan Pemasok (`BILL/2026/11/0021`)"
+        },
+        {
+          "id": "step-4-bank-reconciliation",
+          "depth": 2,
+          "text": "Langkah 4: Merekonsiliasi Rekening Koran Bank (`BNK1/2026/00012`)"
+        },
+        {
+          "id": "step-5-verify-financial-statements",
+          "depth": 2,
+          "text": "Langkah 5: Tutup Buku, Audit, dan Ekspor Laporan Keuangan"
+        },
+        {
+          "id": "full-cycle-journal-table",
+          "depth": 2,
+          "text": "Tabel Ringkasan Pencatatan Ganda (Double-Entry)"
+        }
+      ],
+      "shard_id": "shard_functional_account_1"
+    },
+    {
+      "id": "user/accounting-menus-and-reports-reference",
+      "title": "Referensi Lengkap Menu, Konfigurasi, dan Laporan Akuntansi",
+      "description": "Direktori referensi lengkap mencakup seluruh menu, layar konfigurasi, alat controlling, konsolidasi, serta ke-17 laporan keuangan dan manajemen pada aplikasi Akuntansi ERPForAll.",
+      "audience": "functional",
+      "module": "account",
+      "models": [],
+      "rpc": [],
+      "spec_ids": [],
+      "headings": [
+        {
+          "id": "dashboard-and-ar-ap",
+          "depth": 2,
+          "text": "Dasbor, Pelanggan (Piutang/AR), dan Pemasok (Utang/AP)"
+        },
+        {
+          "id": "more-accounting-menu",
+          "depth": 2,
+          "text": "Operasi Akuntansi (`Accounting → More → Accounting`)"
+        },
+        {
+          "id": "all-17-reports",
+          "depth": 2,
+          "text": "Seluruh 17 Laporan Akuntansi (`Accounting → More → Reporting`)"
+        },
+        {
+          "id": "statutory-reports",
+          "depth": 3,
+          "text": "Laporan Keuangan Statutori dan Buku Besar"
+        },
+        {
+          "id": "management-reports",
+          "depth": 3,
+          "text": "Laporan Controlling, Aset, dan Anggaran"
+        },
+        {
+          "id": "consolidation-menus",
+          "depth": 2,
+          "text": "Konsolidasi Multi-Perusahaan (`Accounting → More → Consolidation`)"
+        },
+        {
+          "id": "configuration-menus",
+          "depth": 2,
+          "text": "Konfigurasi Lengkap Akuntansi (`Accounting → More → Configuration`)"
         }
       ],
       "shard_id": "shard_functional_account_1"
