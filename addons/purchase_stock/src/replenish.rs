@@ -361,6 +361,6 @@ async fn open_rfq(tx: &mut Transaction, order: &Records) -> Result<Value> {
     };
     let view: i64 = row.try_get(0).map_err(db)?;
     Ok(Value::Json(Arc::new(
-        json!({"type":"ir.actions.act_window","name":"Request for Quotation","res_model":"purchase.order","res_id":order.ensure_one()?.int()?,"views":[[view,"form"]],"target":"current"}),
+        json!({"type":"ir.actions.act_window","name":"Request for Quotation","res_model":"purchase.order","res_id":order.ensure_one()?.int()?,"views":[[view,"form"]],"target":"new"}),
     )))
 }

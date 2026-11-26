@@ -118,7 +118,7 @@ async fn document_action(tx: &mut Transaction, id: i64) -> Result<Value> {
     let form: i64 = view.try_get(0).map_err(decode)?;
     Ok(Value::Json(Arc::new(json!({
         "type": "ir.actions.act_window", "name": "Vendor Bill",
-        "res_model": "account.move", "res_id": id, "views": [[form,"form"]], "target": "current"
+        "res_model": "account.move", "res_id": id, "views": [[form,"form"]], "target": "new"
     }))))
 }
 
