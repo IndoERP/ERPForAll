@@ -41,7 +41,7 @@ pub struct ResPartnerTradingPartner {
     )]
 )]
 pub struct AccountConsolidationGroup {
-    /// Group name (e.g. "IndoERP Holding Consolidated").
+    /// Group name (e.g. "Group Holding Consolidated").
     #[field(char, required = true, string = "Group Name")]
     pub name: Option<Arc<str>>,
     /// Short group code (e.g. "GRP-HOLDING").

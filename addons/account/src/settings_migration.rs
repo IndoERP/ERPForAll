@@ -22,7 +22,7 @@ async fn move_validation_limits(tx: &mut Transaction, _from: &SemverVersion) -> 
 /// Post-schema migration for `account` 1.16: backfills controlling, CIP asset, advanced budget
 /// AVC, and intercompany trading partner defaults for existing rows.
 #[erp_sdk::migration(addon = "account", version = "1.16", stage = post)]
-async fn backfill_enterprise_controlling_and_consolidation(
+async fn backfill_controlling_and_consolidation(
     tx: &mut Transaction,
     _from: &SemverVersion,
 ) -> Result<()> {
@@ -47,15 +47,21 @@ async fn backfill_enterprise_controlling_and_consolidation(
         &[],
     )
     .await?;
+    // Schema sync applies PostgreSQL fast defaults (0, 100, 'ok') before post migrations run,
+    // so also backfill pre-existing rows whose planned_amount <> 0 still carry default 0s.
     tx.execute(
         "UPDATE account_budget_line \
-         SET original_amount = COALESCE(original_amount, planned_amount, 0), \
+         SET original_amount = CASE WHEN COALESCE(original_amount, 0) = 0 AND COALESCE(revision_amount, 0) = 0 AND COALESCE(planned_amount, 0) <> 0 \
+                                    THEN planned_amount ELSE COALESCE(original_amount, 0) END, \
              revision_amount = COALESCE(revision_amount, 0), \
              release_pct = COALESCE(release_pct, 100), \
-             released_amount = COALESCE(released_amount, planned_amount, 0), \
+             released_amount = CASE WHEN COALESCE(released_amount, 0) = 0 AND COALESCE(original_amount, 0) = 0 AND COALESCE(revision_amount, 0) = 0 AND COALESCE(planned_amount, 0) <> 0 \
+                                    THEN planned_amount ELSE COALESCE(released_amount, 0) END, \
              committed_amount = COALESCE(committed_amount, 0), \
              avc_status = COALESCE(avc_status, 'ok') \
-         WHERE original_amount IS NULL OR released_amount IS NULL OR avc_status IS NULL",
+         WHERE original_amount IS NULL OR revision_amount IS NULL OR release_pct IS NULL \
+            OR released_amount IS NULL OR committed_amount IS NULL OR avc_status IS NULL \
+            OR (original_amount = 0 AND revision_amount = 0 AND released_amount = 0 AND COALESCE(planned_amount, 0) <> 0)",
         &[],
     )
     .await?;

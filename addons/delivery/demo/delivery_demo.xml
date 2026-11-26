@@ -21,7 +21,7 @@
       <field name="delivery_type">fixed</field>
       <field name="product_id" search="[('product_tmpl_id', '=', ref('delivery.product_delivery_standard'))]"/>
       <field name="fixed_price">15</field>
-      <field name="free_over">true</field>
+      <field name="free_over" eval="True"/>
       <field name="amount">500</field>
       <field name="sequence">10</field>
       <field name="carrier_description">Flat-rate shipping, free for orders over 500.</field>

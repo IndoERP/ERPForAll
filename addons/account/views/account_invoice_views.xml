@@ -37,7 +37,7 @@
         <field name="product_id"/>
         <field name="name"/>
         <field name="account_id"/>
-        <field name="analytic_account_id"/>
+        <field name="analytic_account_id" groups="account.group_cost_center_controlling"/>
         <field name="quantity"/>
         <field name="product_uom_id"/>
         <field name="price_unit"/>
@@ -62,7 +62,7 @@
               <field name="product_id" readonly="parent_state in ('posted', 'cancel')"/>
               <field name="name"/>
               <field name="account_id" readonly="parent_state in ('posted', 'cancel')"/>
-              <field name="analytic_account_id" readonly="parent_state in ('posted', 'cancel')"/>
+              <field name="analytic_account_id" groups="account.group_cost_center_controlling" readonly="parent_state in ('posted', 'cancel')"/>
             </group>
             <group>
               <field name="quantity" readonly="parent_state in ('posted', 'cancel')"/>

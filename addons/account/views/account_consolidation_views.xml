@@ -124,7 +124,7 @@
           <button name="action_auto_map_units" type="object" string="Auto-Map Entity Accounts"/>
         </header>
         <sheet>
-          <div class="oe_title"><h1><field name="name" placeholder="e.g. IndoERP Holding Consolidated"/></h1></div>
+          <div class="oe_title"><h1><field name="name" placeholder="e.g. Group Holding Consolidated"/></h1></div>
           <group>
             <group string="Group Scope">
               <field name="code" placeholder="GRP-HOLDING"/>
@@ -350,7 +350,7 @@
   </record>
 
   <menuitem id="menu_consolidation_root" name="Consolidation" parent="menu_finance" groups="account.group_group_consolidation" sequence="65"/>
-  <menuitem id="menu_consolidation_runs" name="Consolidation Runs" parent="menu_consolidation_root" action="action_consolidation_run" sequence="10"/>
+  <menuitem id="menu_consolidation_runs" name="Consolidation Runs" parent="menu_consolidation_root" action="action_consolidation_run" groups="account.group_account_readonly" sequence="10"/>
   <menuitem id="menu_consolidation_groups" name="Consolidation Groups" parent="menu_consolidation_root" action="action_consolidation_group" groups="account.group_account_manager" sequence="20"/>
   <record id="menu_consolidation_root" model="ir.ui.menu"><field name="web_icon">lucide:globe</field></record>
   <record id="menu_consolidation_runs" model="ir.ui.menu"><field name="web_icon">lucide:combine</field></record>

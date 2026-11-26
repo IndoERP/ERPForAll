@@ -5,7 +5,7 @@
     <record id="product_landed_cost_freight" model="product.template">
       <field name="name">Inbound Freight &amp; Customs</field>
       <field name="type">service</field>
-      <field name="landed_cost_ok">true</field>
+      <field name="landed_cost_ok" eval="True"/>
       <field name="split_method_landed_cost">by_quantity</field>
       <field name="list_price">250000</field>
       <field name="standard_price">250000</field>

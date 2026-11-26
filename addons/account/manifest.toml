@@ -50,5 +50,5 @@ demo = [
     "demo/account_account_demo.xml",
     "demo/account_journal_demo.xml",
     "demo/account_payment_demo.xml",
-    "demo/account_enterprise_demo.xml",
+    "demo/account_controlling_demo.xml",
 ]

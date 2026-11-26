@@ -26,8 +26,8 @@ Accounting groups, from the least to the most access. The full matrix and the ot
     <field name="implied_ids" eval="[Command.link(ref('group_account_manager'))]"/>
   </record>
 
-  <!-- Optional enterprise feature toggles (light groups controlled from Accounting Settings).
-       Disabled by default so SME/UMKM installations stay uncluttered until enabled. -->
+  <!-- Optional controlling feature toggles (light groups controlled from Accounting Settings).
+       Disabled by default so smaller organizations stay uncluttered until enabled. -->
   <record id="group_cost_center_controlling" model="res.groups">
     <field name="name">Cost Center &amp; Profit Center Controlling</field>
   </record>
