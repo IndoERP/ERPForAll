@@ -3,6 +3,7 @@
 //! default cost center derivation, and posting validation (mandatory policy, validity windows,
 //! primary cost locks, direct revenue locks, and commitment locks).
 
+use erp_addon_analytic::allocation::AccountCostAllocationRun;
 use erp_addon_analytic::{
     AccountAnalyticDistributionModel, AccountAnalyticLine, is_center_valid_on,
 };
@@ -268,6 +269,88 @@ pub async fn validate_center_for_commitment(
         return Err(Error::user(format!(
             "Cost Center {label} is outside its validity period on {date}."
         )));
+    }
+    Ok(())
+}
+
+/// Extends `account.cost.allocation.run` so posting or reversing a secondary cost allocation run
+/// immediately refreshes matching validated budget lines.
+#[extend(AccountCostAllocationRun, addon = "account")]
+pub struct CostAllocationRunBudgetHook {}
+
+#[methods(AccountCostAllocationRun, addon = "account")]
+impl CostAllocationRunBudgetHook {
+    #[method(override)]
+    async fn action_execute_allocation(
+        this: &RecordSet<AccountCostAllocationRun>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<()> {
+        let run_ids = this.as_records().ids();
+        sup.call(tx, this.as_records(), ()).await?;
+        refresh_budgets_for_allocation_runs(tx, &run_ids, None).await
+    }
+
+    #[method(override)]
+    async fn action_reverse_allocation(
+        this: &RecordSet<AccountCostAllocationRun>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<()> {
+        let run_ids = this.as_records().ids();
+        let pre_targets = read_allocation_run_budget_targets(tx, &run_ids).await?;
+        sup.call(tx, this.as_records(), ()).await?;
+        refresh_budgets_for_allocation_runs(tx, &run_ids, Some(pre_targets)).await
+    }
+}
+
+async fn read_allocation_run_budget_targets(
+    tx: &mut Transaction,
+    run_ids: &[i64],
+) -> Result<Vec<(i64, Date, Vec<i64>)>> {
+    if run_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = tx
+        .query(
+            "SELECT r.company_id::int8, r.posting_date, \
+                    COALESCE(ARRAY_AGG(DISTINCT l.account_id::int8) FILTER (WHERE l.account_id IS NOT NULL), '{}') \
+             FROM account_cost_allocation_run r \
+             LEFT JOIN account_analytic_line l ON l.allocation_run_id = r.id \
+             WHERE r.id = ANY($1::int8[]) AND r.posting_date IS NOT NULL \
+             GROUP BY r.id, r.company_id, r.posting_date",
+            &[&run_ids],
+        )
+        .await?;
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let company_id: i64 = row.try_get(0).map_err(db)?;
+        let posting_date: Date = row.try_get(1).map_err(db)?;
+        let cc_ids: Vec<i64> = row.try_get(2).map_err(db)?;
+        if !cc_ids.is_empty() {
+            out.push((company_id, posting_date, cc_ids));
+        }
+    }
+    Ok(out)
+}
+
+async fn refresh_budgets_for_allocation_runs(
+    tx: &mut Transaction,
+    run_ids: &[i64],
+    pre_targets: Option<Vec<(i64, Date, Vec<i64>)>>,
+) -> Result<()> {
+    let targets = match pre_targets {
+        Some(t) => t,
+        None => read_allocation_run_budget_targets(tx, run_ids).await?,
+    };
+    for (company_id, posting_date, cc_ids) in targets {
+        crate::budget::refresh_matching_budget_lines_for_analytic(
+            tx,
+            company_id,
+            posting_date,
+            &cc_ids,
+        )
+        .await?;
     }
     Ok(())
 }

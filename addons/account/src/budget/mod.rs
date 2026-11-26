@@ -668,6 +668,89 @@ impl AccountBudget {
     }
 }
 
+/// Finds and refreshes all validated budget lines whose company, period, and dimensions
+/// (`asset_id`, `account_id`, or `analytic_account_id` subtree) overlap any item in `move_ids`.
+pub async fn refresh_matching_budget_lines_for_moves(
+    tx: &mut Transaction,
+    move_ids: &[i64],
+) -> Result<()> {
+    if move_ids.is_empty() {
+        return Ok(());
+    }
+    let rows = tx
+        .query(
+            "SELECT DISTINCT bl.id::int8 \
+             FROM account_budget_line bl \
+             JOIN account_budget b ON b.id = bl.budget_id \
+             JOIN account_move_line ml ON ml.move_id = ANY($1::int8[]) \
+               AND ml.company_id = bl.company_id \
+               AND ml.date >= bl.date_from AND ml.date <= bl.date_to \
+             LEFT JOIN account_analytic_account cc ON cc.id = ml.analytic_account_id \
+             LEFT JOIN account_analytic_account p ON p.id = bl.analytic_account_id \
+             WHERE b.state = 'validate' \
+               AND ( \
+                   (bl.asset_id IS NOT NULL AND bl.asset_id = ml.asset_id) \
+                   OR (bl.asset_id IS NULL \
+                       AND (bl.account_id IS NULL OR bl.account_id = ml.account_id) \
+                       AND (bl.analytic_account_id IS NULL \
+                            OR (cc.id IS NOT NULL AND p.id IS NOT NULL \
+                                AND (cc.id = p.id OR (p.parent_path IS NOT NULL AND cc.parent_path IS NOT NULL \
+                                     AND starts_with(cc.parent_path, p.parent_path))))) \
+                       AND (bl.account_id IS NOT NULL OR bl.analytic_account_id IS NOT NULL)) \
+               ) \
+             ORDER BY bl.id",
+            &[&move_ids],
+        )
+        .await?;
+    let ids: Vec<i64> = rows
+        .iter()
+        .map(|r| r.try_get(0).map_err(db))
+        .collect::<Result<_>>()?;
+    if !ids.is_empty() {
+        refresh_budget_lines(tx, &ids).await?;
+    }
+    Ok(())
+}
+
+/// Finds and refreshes all validated budget lines overlapping `(company_id, date)` and any cost
+/// center in `cc_ids` (including ancestor rollup budget lines).
+pub async fn refresh_matching_budget_lines_for_analytic(
+    tx: &mut Transaction,
+    company_id: i64,
+    date: Date,
+    cc_ids: &[i64],
+) -> Result<()> {
+    if cc_ids.is_empty() {
+        return Ok(());
+    }
+    let rows = tx
+        .query(
+            "SELECT DISTINCT bl.id::int8 \
+             FROM account_budget_line bl \
+             JOIN account_budget b ON b.id = bl.budget_id \
+             JOIN account_analytic_account p ON p.id = bl.analytic_account_id \
+             JOIN account_analytic_account cc ON cc.id = ANY($3::int8[]) \
+             WHERE b.state = 'validate' \
+               AND bl.company_id = $1 \
+               AND bl.date_from <= $2 AND bl.date_to >= $2 \
+               AND bl.asset_id IS NULL \
+               AND bl.account_id IS NULL \
+               AND (cc.id = p.id OR (p.parent_path IS NOT NULL AND cc.parent_path IS NOT NULL \
+                    AND starts_with(cc.parent_path, p.parent_path))) \
+             ORDER BY bl.id",
+            &[&company_id, &date, &cc_ids],
+        )
+        .await?;
+    let ids: Vec<i64> = rows
+        .iter()
+        .map(|r| r.try_get(0).map_err(db))
+        .collect::<Result<_>>()?;
+    if !ids.is_empty() {
+        refresh_budget_lines(tx, &ids).await?;
+    }
+    Ok(())
+}
+
 /// Refreshes stored `committed_amount`, `practical_amount`, `theoretical_amount`, `percentage`,
 /// and `avc_status` for the given `account.budget.line` ids.
 pub async fn refresh_budget_lines(tx: &mut Transaction, line_ids: &[i64]) -> Result<()> {
@@ -770,14 +853,25 @@ pub async fn refresh_budget_lines(tx: &mut Transaction, line_ids: &[i64]) -> Res
                     .map_err(db)?
             } else {
                 let sign_expr = if is_revenue { "l.amount" } else { "-l.amount" };
+                let group_filter = match budget_type.as_str() {
+                    "revenue" => "a.internal_group = 'income'",
+                    "capex" => "(a.internal_group IN ('asset', 'expense') OR ml.asset_id IS NOT NULL)",
+                    _ => {
+                        "(a.internal_group = 'expense' \
+                          OR (l.move_line_id IS NULL AND COALESCE(l.cost_kind, 'primary') = 'secondary'))"
+                    }
+                };
                 let sql = format!(
                     "SELECT COALESCE(SUM({sign_expr}), 0) \
                      FROM account_analytic_line l \
                      JOIN account_analytic_account cc ON cc.id = l.account_id \
                      JOIN account_analytic_account p ON p.id = $1 \
+                     LEFT JOIN account_move_line ml ON ml.id = l.move_line_id \
+                     LEFT JOIN account_account a ON a.id = COALESCE(ml.account_id, l.general_account_id) \
                      WHERE l.company_id = $4 AND l.date >= $2 AND l.date <= $3 \
                        AND (cc.id = p.id OR (p.parent_path IS NOT NULL AND cc.parent_path IS NOT NULL \
-                            AND starts_with(cc.parent_path, p.parent_path)))"
+                            AND starts_with(cc.parent_path, p.parent_path))) \
+                       AND {group_filter}"
                 );
                 let p_rows = tx
                     .query(&sql, &[&cc_id, &d_from, &d_to, &company_id])

@@ -1287,6 +1287,36 @@ impl AccountBankStatementLine {
             .await?;
             if let Some(sid) = statement_id {
                 refresh_statement_totals(tx, sid).await?;
+                let srows = tx
+                    .query(
+                        "SELECT s.state::text, COALESCE(s.is_complete, false), \
+                                COALESCE(s.unreconciled_count, 0), \
+                                (SELECT count(*)::int8 FROM account_bank_statement_line WHERE statement_id = s.id) \
+                         FROM account_bank_statement s WHERE s.id = $1 FOR UPDATE",
+                        &[&sid],
+                    )
+                    .await?;
+                if let Some(srow) = srows.first() {
+                    let sstate: String = srow.try_get(0).map_err(db)?;
+                    let complete: bool = srow.try_get(1).map_err(db)?;
+                    let unrec: i32 = srow.try_get(2).map_err(db)?;
+                    let line_count: i64 = srow.try_get(3).map_err(db)?;
+                    if sstate == "open" && complete && unrec == 0 && line_count > 0 {
+                        tx.execute(
+                            "UPDATE account_bank_statement SET state = 'posted', \
+                             write_uid = $2, write_date = now() AT TIME ZONE 'UTC' \
+                             WHERE id = $1 AND state = 'open'",
+                            &[&sid, &uid],
+                        )
+                        .await?;
+                    }
+                }
+                let st_rec = env.records("account.bank.statement")?.browse([sid])?;
+                tx.invalidate_records(
+                    &st_rec,
+                    Some(&["state", "is_complete", "unreconciled_count", "balance_end"]),
+                )
+                .await?;
             }
             Ok(())
         })

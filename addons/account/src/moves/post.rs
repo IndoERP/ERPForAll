@@ -424,6 +424,7 @@ pub async fn post_moves(tx: &mut Transaction, moves: &Records) -> Result<()> {
         if !avc_touched.is_empty() {
             crate::budget::refresh_budget_lines(tx, &avc_touched).await?;
         }
+        crate::budget::refresh_matching_budget_lines_for_moves(tx, &ids).await?;
         invalidate(tx, moves).await
     })
     .await
@@ -596,6 +597,7 @@ pub async fn reset_moves(tx: &mut Transaction, moves: &Records) -> Result<()> {
         if !posted.is_empty() {
             crate::budget::avc::restore_commitments_and_refresh_for_reset_moves(tx, &posted)
                 .await?;
+            crate::budget::refresh_matching_budget_lines_for_moves(tx, &posted).await?;
         }
         tx.track_external(
             moves,
