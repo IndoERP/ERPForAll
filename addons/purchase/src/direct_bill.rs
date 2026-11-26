@@ -177,31 +177,31 @@ async fn draft_or_open(
     let env = order.env().with_context_replaced(context);
     let bills = env.records("account.move")?;
     bills.check_access(tx, Operation::Read).await?;
-    // Only this operation inserts the links; the parent row lock serializes every writer. A bill
-    // the order's cancel cancelled is history: a confirmed-again order gets a new first bill.
-    if request == BillRequest::First && let Some(row) = tx.query("SELECT k.bill_id FROM purchase_direct_bill_line k JOIN account_move m ON m.id = k.bill_id WHERE k.company_id=$1 AND k.order_id=$2 AND m.state <> 'cancel' ORDER BY k.bill_id LIMIT 1", &[&company, &order_id]).await?.first() {
-        let bill = row.try_get(0).map_err(decode)?;
-        bills.browse([bill])?.check_access(tx, Operation::Read).await?;
-        return document_action(tx, bill).await;
-    }
-    bills.check_access(tx, Operation::Create).await?;
-    env.records("account.move.line")?
-        .check_access(tx, Operation::Create)
-        .await?;
     if order.cell(tx, "state").await? != Cell::Str("purchase".into()) {
         return Err(Error::user(
             "Confirm and approve the purchase order before creating a vendor bill.",
         ));
     }
     let limit = erp_sdk::params::get_int(tx, &crate::ADDON, SOURCE_LIMIT).await?;
-    let history = match request {
-        BillRequest::First => crate::bill_history::History::default(),
-        BillRequest::Remaining => {
-            crate::bill_history::read(tx, &env, company, order_id, limit).await?
-        }
-    };
+    let history = crate::bill_history::read(tx, &env, company, order_id, limit).await?;
     let (items, sources) = billable_items(tx, &env, company, order_id, limit).await?;
     if items.is_empty() {
+        if request == BillRequest::First
+            && let Some(row) = tx
+                .query(
+                    "SELECT k.bill_id FROM purchase_direct_bill_line k \
+                     JOIN account_move m ON m.id = k.bill_id \
+                     WHERE k.company_id=$1 AND k.order_id=$2 AND m.state <> 'cancel' \
+                     ORDER BY k.bill_id LIMIT 1",
+                    &[&company, &order_id],
+                )
+                .await?
+                .first()
+        {
+            let bill = row.try_get(0).map_err(decode)?;
+            bills.browse([bill])?.check_access(tx, Operation::Read).await?;
+            return document_action(tx, bill).await;
+        }
         if let Some(bill) = history.latest_active {
             return document_action(tx, bill).await;
         }
@@ -210,6 +210,10 @@ async fn draft_or_open(
              product's bill control to ordered quantities.",
         ));
     }
+    bills.check_access(tx, Operation::Create).await?;
+    env.records("account.move.line")?
+        .check_access(tx, Operation::Create)
+        .await?;
     if history.link_count > 0 {
         let new_total = history
             .link_count

@@ -94,17 +94,60 @@ impl AccountMove {
         tx: &mut Transaction,
     ) -> Result<Value> {
         let rev_id = reverse_move(tx, this.as_records()).await?;
+        let rev_type = this
+            .env()
+            .records("account.move")?
+            .browse([rev_id])?
+            .cell(tx, "move_type")
+            .await?;
+        let is_invoice = matches!(
+            rev_type,
+            Cell::Str(ref s)
+                if matches!(
+                    s.as_ref(),
+                    "out_invoice" | "out_refund" | "in_invoice" | "in_refund"
+                )
+        );
+        let mut view_id = Value::False;
+        if is_invoice {
+            let vrows = tx
+                .query(
+                    "SELECT res_id::int8 FROM ir_model_data \
+                     WHERE module = 'account' AND name = 'view_invoice_form' LIMIT 1",
+                    &[],
+                )
+                .await?;
+            if let Some(vid) = vrows.first().and_then(|r| r.try_get::<_, i64>(0).ok()) {
+                view_id = Value::Int(vid);
+            }
+        }
         let mut action = erp_sdk::ValueMap::new();
         action.insert("type".into(), Value::str("ir.actions.act_window"));
-        action.insert("name".into(), Value::str("Reversal"));
+        action.insert(
+            "name".into(),
+            Value::str(if is_invoice { "Credit Note" } else { "Reversal" }),
+        );
         action.insert("res_model".into(), Value::str("account.move"));
         action.insert("res_id".into(), Value::Int(rev_id));
         action.insert(
             "views".into(),
-            Value::list([Value::list([Value::False, Value::str("form")])]),
+            Value::list([Value::list([view_id, Value::str("form")])]),
         );
         action.insert("target".into(), Value::str("current"));
         Ok(Value::Map(action.into()))
+    }
+
+    /// Extension hook called after [`reverse_move_with_options`] creates a reversal entry/credit
+    /// note and its lines. Downstream addons (`sale`, `purchase`) override this to propagate
+    /// order-line links (`sale_line_id`, `purchase.direct.bill.line`) without layering cycles.
+    #[method]
+    pub async fn _after_reverse_move(
+        _this: &RecordSet<AccountMove>,
+        _tx: &mut Transaction,
+        _source_move_id: i64,
+        _line_pairs: Value,
+    ) -> Result<()> {
+        Ok(())
     }
 
     /// Whether Reset to Draft is refused ([`reset_moves`]): every entry that is neither cancelled
@@ -1249,7 +1292,9 @@ pub async fn reverse_move_with_options(
 
         let unchecked_lines = super::unchecked(&env.records("account.move.line")?);
         let mut new_lines = Vec::new();
+        let mut src_line_ids: Vec<i64> = Vec::new();
         for lrow in line_rows {
+            let src_line_id: i64 = lrow.try_get(0).map_err(db)?;
             let display_type: String = lrow.try_get(4).map_err(db)?;
             if rev_type != "entry" && display_type != "product" {
                 continue;
@@ -1317,10 +1362,15 @@ pub async fn reverse_move_with_options(
                     );
                 }
             }
+            src_line_ids.push(src_line_id);
             new_lines.push(lvals);
         }
+        let mut line_pairs: Vec<Value> = Vec::new();
         if !new_lines.is_empty() {
-            unchecked_lines.create(tx, new_lines).await?;
+            let created_lines = unchecked_lines.create(tx, new_lines).await?;
+            for (src_id, rev_line_id) in src_line_ids.into_iter().zip(created_lines.ids()) {
+                line_pairs.push(Value::list([Value::Int(src_id), Value::Int(rev_line_id)]));
+            }
         }
         if rev_type != "entry" {
             crate::invoice::sync_lines(tx, &env, &[rev_id]).await?;
@@ -1328,6 +1378,10 @@ pub async fn reverse_move_with_options(
             super::refresh_entry_totals(tx, &[rev_id]).await?;
             super::check_balanced(tx, &[rev_id]).await?;
         }
+        let rev_move = env.records("account.move")?.browse([rev_id])?;
+        let _: () = rev_move
+            .call(tx, "_after_reverse_move", (source_id, Value::list(line_pairs)))
+            .await?;
         Ok(rev_id)
     })
     .await

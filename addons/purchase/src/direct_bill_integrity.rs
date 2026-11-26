@@ -21,9 +21,102 @@ impl DirectBill {
             &["company_id","currency_id","partner_id","move_type","journal_id"],
             "SELECT 1 FROM purchase_direct_bill_line s
              JOIN account_move m ON m.id=s.bill_id JOIN purchase_order p ON p.id=s.order_id
-             WHERE m.id=ANY($1) AND (m.move_type IS DISTINCT FROM 'in_invoice'
+             WHERE m.id=ANY($1) AND (m.move_type NOT IN ('in_invoice', 'in_refund')
              OR m.company_id IS DISTINCT FROM s.company_id OR m.currency_id IS DISTINCT FROM p.currency_id
              OR m.partner_id IS DISTINCT FROM p.partner_id) LIMIT 1").await
+    }
+
+    /// Propagate purchase order bill-line links onto reversed vendor credit notes / bills so
+    /// `qty_invoiced`, `qty_to_invoice`, `invoice_status`, and AVC commitments stay accurate.
+    #[method(override)]
+    async fn _after_reverse_move(
+        this: &RecordSet<AccountMove>,
+        tx: &mut Transaction,
+        source_move_id: i64,
+        line_pairs: Value,
+        sup: Super,
+    ) -> Result<()> {
+        sup.call(
+            tx,
+            this.as_records(),
+            (source_move_id, line_pairs.clone()),
+        )
+        .await?;
+        let Some(rev_id) = this.as_records().ids().into_iter().next() else {
+            return Ok(());
+        };
+        let mut pairs: Vec<(i64, i64)> = Vec::new();
+        if let Value::List(entries) = &line_pairs {
+            for entry in entries.iter() {
+                if let Value::List(pair) = entry
+                    && pair.len() == 2
+                    && let (Value::Int(src), Value::Int(rev)) = (&pair[0], &pair[1])
+                {
+                    pairs.push((*src, *rev));
+                }
+            }
+        }
+        if pairs.is_empty() {
+            return Ok(());
+        }
+        let src_ids: Vec<i64> = pairs.iter().map(|(s, _)| *s).collect();
+        let rows = tx
+            .query(
+                "SELECT company_id::int8, order_id::int8, purchase_line_id::int8, bill_line_id::int8 \
+                 FROM purchase_direct_bill_line \
+                 WHERE bill_id = $1 AND bill_line_id = ANY($2::int8[])",
+                &[&source_move_id, &src_ids],
+            )
+            .await?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let rev_by_src: std::collections::BTreeMap<i64, i64> = pairs.into_iter().collect();
+        let mut links = Vec::new();
+        let mut order_ids = std::collections::BTreeSet::new();
+        for row in rows {
+            let company_id: i64 = row.try_get(0).map_err(|e| {
+                Error::db("Reading purchase reversal link company failed.").with_source(e)
+            })?;
+            let order_id: i64 = row.try_get(1).map_err(|e| {
+                Error::db("Reading purchase reversal link order failed.").with_source(e)
+            })?;
+            let purchase_line_id: i64 = row.try_get(2).map_err(|e| {
+                Error::db("Reading purchase reversal link line failed.").with_source(e)
+            })?;
+            let src_line_id: i64 = row.try_get(3).map_err(|e| {
+                Error::db("Reading purchase reversal link item failed.").with_source(e)
+            })?;
+            if let Some(&rev_line_id) = rev_by_src.get(&src_line_id) {
+                order_ids.insert(order_id);
+                links.push(
+                    RawVals::new()
+                        .set_cell("company_id", Cell::Id(company_id))
+                        .set_cell("order_id", Cell::Id(order_id))
+                        .set_cell("bill_id", Cell::Id(rev_id))
+                        .set_cell("purchase_line_id", Cell::Id(purchase_line_id))
+                        .set_cell("bill_line_id", Cell::Id(rev_line_id)),
+                );
+            }
+        }
+        if !links.is_empty() {
+            tx.env()
+                .sudo(true)
+                .records("purchase.direct.bill.line")?
+                .create(tx, links)
+                .await?;
+            tx.flush().await?;
+            tx.invalidate_records(this.as_records(), Some(&["purchase_order_count"]))
+                .await?;
+            let orders = tx
+                .env()
+                .records("purchase.order")?
+                .browse(order_ids)?;
+            tx.invalidate_records(&orders, Some(&["invoice_status", "invoice_count"]))
+                .await?;
+            crate::line::invalidate_bill_comparisons(tx).await?;
+        }
+        Ok(())
     }
 
     /// Posting refuses a vendor bill whose purchase order is not confirmed (cancelled or back to a

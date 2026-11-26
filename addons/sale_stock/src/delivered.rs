@@ -151,6 +151,44 @@ impl DeliveredLine {
     }
 
     #[method(override)]
+    async fn _stock_moves_all_finished(
+        this: &RecordSet<SaleOrderLine>,
+        tx: &mut Transaction,
+        sup: Super,
+    ) -> Result<std::collections::BTreeSet<RecId>> {
+        let lines = this.as_records();
+        let mut finished: std::collections::BTreeSet<RecId> = sup.call(tx, lines, ()).await?;
+        let ids = lines.ids();
+        if ids.is_empty() {
+            return Ok(finished);
+        }
+        let rows = tx
+            .query(
+                "WITH shipments AS ( \
+                     SELECT link.sale_line_id, m.state::text AS state \
+                     FROM sale_stock_delivery_move_link link \
+                     JOIN stock_move root ON root.id = link.move_id AND root.company_id = link.company_id \
+                     JOIN stock_move m ON (m.id = root.id OR m.backorder_root_move_id = root.id) \
+                       AND m.company_id = link.company_id \
+                     WHERE link.sale_line_id = ANY($1::int8[]) \
+                 ) \
+                 SELECT sale_line_id::int8 \
+                 FROM shipments \
+                 GROUP BY sale_line_id \
+                 HAVING bool_and(state IN ('done', 'cancel')) AND bool_or(state = 'done')",
+                &[&ids],
+            )
+            .await?;
+        for row in rows {
+            let id: i64 = row.try_get(0).map_err(decode)?;
+            let rec_id =
+                RecId::from_real(id).ok_or_else(|| Error::invariant("Invalid linked sales line."))?;
+            finished.insert(rec_id);
+        }
+        Ok(finished)
+    }
+
+    #[method(override)]
     async fn write(
         this: &RecordSet<SaleOrderLine>,
         tx: &mut Transaction,

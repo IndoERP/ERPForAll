@@ -90,9 +90,10 @@ async fn create_draft(tx: &mut Transaction, order: &Records, order_id: i64) -> R
             .await?;
     }
     let limit = erp_sdk::params::get_int(tx, &crate::ADDON, LIMIT_KEY).await?;
-    let items = invoice_items(tx, &env, order_id, limit).await?;
+    let (move_type, items) = invoice_items(tx, &env, order_id, limit).await?;
+    let is_refund = move_type == "out_refund";
     let vals = RawVals::new()
-        .set_cell("move_type", Cell::Str("out_invoice".into()))
+        .set_cell("move_type", Cell::Str(move_type.into()))
         .set_cell("company_id", company)
         .set_cell("ref", order.cell(tx, "name").await?)
         .set_cell("partner_id", order.cell(tx, "partner_invoice_id").await?)
@@ -111,7 +112,14 @@ async fn create_draft(tx: &mut Transaction, order: &Records, order_id: i64) -> R
     Ok(Value::Map(
         ValueMap::from([
             ("type".into(), Value::str("ir.actions.act_window")),
-            ("name".into(), Value::str("Customer Invoice")),
+            (
+                "name".into(),
+                Value::str(if is_refund {
+                    "Credit Note"
+                } else {
+                    "Customer Invoice"
+                }),
+            ),
             ("res_model".into(), Value::str("account.move")),
             ("res_id".into(), Value::Int(invoice.ensure_one()?.int()?)),
             (
@@ -129,7 +137,7 @@ async fn invoice_items(
     env: &Env,
     order: i64,
     limit: i64,
-) -> Result<Vec<Command>> {
+) -> Result<(&'static str, Vec<Command>)> {
     let candidates = tx
         .query(
             "SELECT id::int8 FROM sale_order_line WHERE order_id=$1 ORDER BY sequence,id LIMIT $2",
@@ -197,11 +205,6 @@ async fn invoice_items(
             }
             continue;
         }
-        if qty < Decimal::ZERO {
-            return Err(Error::user(
-                "This order needs a credit invoice. Use Accounting for negative lines.",
-            ));
-        }
         eligible.push((id, qty));
     }
     if eligible.is_empty() {
@@ -226,10 +229,33 @@ async fn invoice_items(
     let prices = source.cells(tx, "price_unit").await?;
     let discounts = source.cells(tx, "discount").await?;
     let analytics = source.cells(tx, "analytic_account_id").await?;
-    Ok(eligible
+    // When all remaining lines are negative (e.g. a customer return) or their net subtotal is
+    // negative, generate a customer credit note (`out_refund`) with negated positive quantities.
+    let mut net_estimate = Decimal::ZERO;
+    let all_negative = eligible.iter().all(|(_, qty)| *qty < Decimal::ZERO);
+    for (index, (_, qty)) in eligible.iter().enumerate() {
+        let price = match prices.get(index) {
+            Some(Cell::Decimal(p)) => *p,
+            _ => Decimal::ZERO,
+        };
+        let disc = match discounts.get(index) {
+            Some(Cell::Decimal(d)) => *d,
+            _ => Decimal::ZERO,
+        };
+        let factor = Decimal::ONE - disc / Decimal::from(100);
+        net_estimate += *qty * price * factor;
+    }
+    let is_refund = all_negative || net_estimate < Decimal::ZERO;
+    let move_type = if is_refund {
+        "out_refund"
+    } else {
+        "out_invoice"
+    };
+    let commands = eligible
         .into_iter()
         .enumerate()
         .map(|(index, (id, qty))| {
+            let line_qty = if is_refund { -qty } else { qty };
             let vals = RawVals::new()
                 .set_cell("sale_line_id", Cell::Id(id))
                 .set_cell("product_id", products[index].clone())
@@ -239,14 +265,15 @@ async fn invoice_items(
                 .set_cell("price_unit", prices[index].clone())
                 .set_cell("discount", discounts[index].clone())
                 .set_cell("analytic_account_id", analytics[index].clone())
-                .set_cell("quantity", Cell::Decimal(qty))
+                .set_cell("quantity", Cell::Decimal(line_qty))
                 .set_commands(
                     "tax_ids",
                     [Command::set(taxes.get(&id).into_iter().flatten().copied())],
                 );
             Command::create(vals)
         })
-        .collect())
+        .collect();
+    Ok((move_type, commands))
 }
 
 async fn source_taxes(

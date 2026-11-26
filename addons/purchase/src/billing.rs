@@ -172,8 +172,8 @@ async fn billed_quantities(
     Ok(billed)
 }
 
-/// The bill control of each product of `products`; a product without one bills received
-/// quantities, as the reference does for any product not set to ordered quantities.
+/// The bill control of each product of `products`: services always bill ordered quantities;
+/// any other product follows its `purchase_method` (defaulting to received quantities when unset).
 async fn product_policies(
     tx: &mut Transaction,
     env: &Env,
@@ -181,11 +181,17 @@ async fn product_policies(
 ) -> Result<BTreeMap<RecId, bool>> {
     let products = env.records("product.product")?.browse_ids(products);
     let ids = products.rec_ids().to_vec();
+    let kinds = products.values(tx, "type").await?;
     let values = products.values(tx, "purchase_method").await?;
     Ok(ids
         .into_iter()
-        .zip(values)
-        .map(|(id, policy)| (id, matches!(policy, Value::Str(p) if p.as_ref() == ORDERED)))
+        .zip(kinds.into_iter().zip(values))
+        .map(|(id, (kind, policy))| {
+            let is_service = matches!(kind, Value::Str(k) if k.as_ref() == "service");
+            let ordered =
+                is_service || matches!(policy, Value::Str(p) if p.as_ref() == ORDERED);
+            (id, ordered)
+        })
         .collect())
 }
 

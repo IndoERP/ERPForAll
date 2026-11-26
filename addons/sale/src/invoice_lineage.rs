@@ -271,6 +271,92 @@ impl SalesInvoiceHeader {
         sup.call(tx, moves, ()).await
     }
 
+    /// Propagate sales order line links onto reversed customer credit notes / invoices so
+    /// `qty_invoiced`, `qty_to_invoice`, and `invoice_status` remain accurate.
+    #[method(override)]
+    async fn _after_reverse_move(
+        this: &RecordSet<AccountMove>,
+        tx: &mut Transaction,
+        source_move_id: i64,
+        line_pairs: Value,
+        sup: Super,
+    ) -> Result<()> {
+        sup.call(
+            tx,
+            this.as_records(),
+            (source_move_id, line_pairs.clone()),
+        )
+        .await?;
+        let mut pairs: Vec<(i64, i64)> = Vec::new();
+        if let Value::List(entries) = &line_pairs {
+            for entry in entries.iter() {
+                if let Value::List(pair) = entry
+                    && pair.len() == 2
+                    && let (Value::Int(src), Value::Int(rev)) = (&pair[0], &pair[1])
+                {
+                    pairs.push((*src, *rev));
+                }
+            }
+        }
+        if pairs.is_empty() {
+            return Ok(());
+        }
+        let src_ids: Vec<i64> = pairs.iter().map(|(s, _)| *s).collect();
+        let rows = tx
+            .query(
+                "SELECT k.invoice_item_id::int8, k.sale_line_id::int8, s.order_id::int8 \
+                 FROM sale_invoice_item k \
+                 JOIN sale_order_line s ON s.id = k.sale_line_id \
+                 WHERE k.invoice_item_id = ANY($1::int8[])",
+                &[&src_ids],
+            )
+            .await?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let rev_by_src: BTreeMap<i64, i64> = pairs.into_iter().collect();
+        let mut new_links = Vec::new();
+        let mut rev_line_ids = Vec::new();
+        let mut sale_line_ids = BTreeSet::new();
+        let mut order_ids = BTreeSet::new();
+        for row in rows {
+            let src_line_id: i64 = row.try_get(0).map_err(decode)?;
+            let sale_line_id: i64 = row.try_get(1).map_err(decode)?;
+            let order_id: i64 = row.try_get(2).map_err(decode)?;
+            if let Some(&rev_line_id) = rev_by_src.get(&src_line_id) {
+                rev_line_ids.push(rev_line_id);
+                sale_line_ids.insert(sale_line_id);
+                order_ids.insert(order_id);
+                new_links.push(
+                    RawVals::new()
+                        .set_cell("invoice_item_id", Cell::Id(rev_line_id))
+                        .set_cell("sale_line_id", Cell::Id(sale_line_id)),
+                );
+            }
+        }
+        if !new_links.is_empty() {
+            let links = this.env().sudo(true).records("sale.invoice.item")?;
+            links.create(tx, new_links).await?;
+            tx.flush().await?;
+            check_links(tx, rev_line_ids.clone(), "l.id").await?;
+            let items = this.env().records("account.move.line")?.browse(rev_line_ids)?;
+            tx.invalidate_records(&items, Some(&["sale_line_id"])).await?;
+            let sol = this
+                .env()
+                .records("sale.order.line")?
+                .browse(sale_line_ids)?;
+            tx.invalidate_records(
+                &sol,
+                Some(&["qty_invoiced", "qty_to_invoice", "invoice_status"]),
+            )
+            .await?;
+            let orders = this.env().records("sale.order")?.browse(order_ids)?;
+            tx.invalidate_records(&orders, Some(&["invoice_status", "invoice_count"]))
+                .await?;
+        }
+        Ok(())
+    }
+
     #[constrains("partner_id", "currency_id", "company_id", "move_type")]
     async fn _check_sales_items(this: &RecordSet<AccountMove>, tx: &mut Transaction) -> Result<()> {
         check_links(tx, this.ids(), "m.id").await

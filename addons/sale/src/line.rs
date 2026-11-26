@@ -878,7 +878,25 @@ impl SaleOrderLine {
     ) -> Result<()> {
         let lines = facts(this, tx).await?;
         let policies = this.mapped(tx, SaleOrderLine::INVOICE_POLICY).await?;
-        for (index, (line, policy)) in lines.iter().zip(policies).enumerate() {
+        let rec_ids = this.as_records().rec_ids().to_vec();
+        let needs_delivery_check = lines.iter().zip(&policies).any(|(line, policy)| {
+            line.state == "sale"
+                && !line.downpayment
+                && line.to_invoice.is_zero()
+                && line.invoiced < line.ordered
+                && policy.as_deref() == Some("delivery")
+                && !line.delivered.is_zero()
+        });
+        let finished_deliveries: std::collections::BTreeSet<RecId> = if needs_delivery_check {
+            this.as_records()
+                .call(tx, "_stock_moves_all_finished", ())
+                .await?
+        } else {
+            std::collections::BTreeSet::new()
+        };
+        for (index, ((line, policy), rec_id)) in
+            lines.iter().zip(policies).zip(rec_ids).enumerate()
+        {
             let status = if line.state != "sale" {
                 "no"
             } else if line.downpayment && line.to_invoice.is_zero() {
@@ -890,7 +908,11 @@ impl SaleOrderLine {
                 && line.delivered > line.ordered
             {
                 "upselling"
-            } else if line.invoiced >= line.ordered {
+            } else if line.invoiced >= line.ordered
+                || (policy.as_deref() == Some("delivery")
+                    && !line.delivered.is_zero()
+                    && finished_deliveries.contains(&rec_id))
+            {
                 "invoiced"
             } else {
                 "no"
@@ -902,6 +924,17 @@ impl SaleOrderLine {
             )?;
         }
         Ok(())
+    }
+
+    /// Lines whose linked outgoing stock moves are all finished (`done` or `cancel`, with at
+    /// least one `done`). Overridden by `sale_stock` so delivery-policy lines with partial
+    /// returns and no remaining open deliveries transition to `invoiced`.
+    #[method]
+    async fn _stock_moves_all_finished(
+        _this: &RecordSet<SaleOrderLine>,
+        _tx: &mut Transaction,
+    ) -> Result<std::collections::BTreeSet<RecId>> {
+        Ok(std::collections::BTreeSet::new())
     }
 
     /// The delivered-quantity method of goods lines: `manual` in `sale`; `sale_stock` answers

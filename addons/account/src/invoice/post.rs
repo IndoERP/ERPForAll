@@ -116,9 +116,14 @@ pub async fn check_postable(tx: &mut Transaction, env: &Env, moves: &[i64]) -> R
                 "{what} {id}: add at least one product line before confirming."
             ));
         }
-        if decimal(nth(&totals, i, "amount_total")?)? < Decimal::ZERO {
+        let total = decimal(nth(&totals, i, "amount_total")?)?;
+        if total < Decimal::ZERO {
             problems.push(format!(
                 "{what} {id}: the total is negative; record a credit note instead."
+            ));
+        } else if !sale && total.is_zero() && with_lines.contains(id) {
+            problems.push(format!(
+                "{what} {id}: the total is zero; enter a non-zero quantity and price before confirming."
             ));
         }
         if !sale && !dated(nth(&dates, i, "invoice_date")?, "invoice_date")? {
