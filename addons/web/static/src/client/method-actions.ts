@@ -1,7 +1,7 @@
 /*! SPDX-License-Identifier: MIT OR Apache-2.0 */
 import type { ActionResult } from "../generated/human-ui.js";
 import type { Route } from "./route.js";
-import { ClientError } from "./transport.js";
+import { ClientError, newRequestId } from "./transport.js";
 
 export type CurrentWindow = Extract<ActionResult, { kind: "current_window" }>;
 export interface MethodAction {
@@ -26,7 +26,7 @@ export const MAX_METHOD_ACTIONS = 64;
  * entry again before it opens. `clear()` (changed metadata, the page's end) drops only this page's copies, so it does
  * not tell `keep`: a kept entry still opens after the server admits it again under the new metadata. */
 export class MethodActions {
-  private readonly page = crypto.randomUUID();
+  private readonly page = newRequestId();
   private next = 0;
   private readonly entries = new Map<string, MethodAction>();
   constructor(private readonly keep?: { save(id: string, entry: MethodAction): void; remove(id: string): void }) {}

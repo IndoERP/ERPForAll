@@ -434,12 +434,13 @@ impl ProductPricelist {
             )?;
             let company_id = match pl_company {
                 Some(c) => c,
-                None => env.company_id()?.unwrap_or(1),
+                None => crate::defaults::env_company_id(env, "the pricelist currency conversion")?,
             };
             let company_currency = company_currency_id(tx, env, company_id).await?;
-            let rate_day = date
-                .map(|dt| Date::from_days((dt.micros() / 86_400_000_000) as i32))
-                .unwrap_or_else(Date::today);
+            let rate_day = match date {
+                Some(dt) => Date::context_today_at(env.tz(), dt)?,
+                None => env.context_today()?,
+            };
 
             let lst_price_raw = cell_decimal(prod.cell(tx, "lst_price").await?, "lst_price")?;
             let lst_price = match target_currency {

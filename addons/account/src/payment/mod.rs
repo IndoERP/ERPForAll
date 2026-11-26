@@ -35,7 +35,7 @@ pub const SERVICE_OWNED: [&str; 7] = [
 
 /// What feeds the journal entry of a payment: refused on a payment that is no longer a draft
 /// (paid, reconciled, cancelled or rejected); reset a cancelled or rejected one to draft first.
-pub const ENTRY_FIELDS: [&str; 11] = [
+pub const ENTRY_FIELDS: [&str; 12] = [
     "date",
     "amount",
     "payment_type",
@@ -47,6 +47,7 @@ pub const ENTRY_FIELDS: [&str; 11] = [
     "company_id",
     "payment_method_line_id",
     "payment_reference",
+    "check_number",
 ];
 
 /// `account.payment.method`: a way to pay or to be paid, in one direction.
@@ -513,9 +514,7 @@ impl AccountPayment {
                 values.insert("company_id".to_owned(), Value::Int(cid));
             }
             if names.iter().any(|n| n == "date") && !values.contains_key("date") {
-                let today = erp_addon_base::company_calendar::business_date(tx, cid)
-                    .await
-                    .unwrap_or_else(|_| Date::today());
+                let today = erp_addon_base::company_calendar::business_date(tx, cid).await?;
                 values.insert("date".to_owned(), Value::Date(today));
             }
             let mut journal_id = match values.get("journal_id") {
@@ -696,7 +695,8 @@ impl AccountPayment {
             .filter(|f| vals.contains(f))
             .collect();
         let memo = vals.contains("memo");
-        if !entry.is_empty() || memo {
+        let batch = vals.contains("batch_payment_id");
+        if !entry.is_empty() || memo || batch {
             this.as_records()
                 .check_access(tx, erp_sdk::Operation::Write)
                 .await?;
@@ -704,6 +704,9 @@ impl AccountPayment {
         if !entry.is_empty() {
             service::refuse_posted(tx, &this.ids(), &entry.join(", ")).await?;
             service::refuse_ended(tx, &this.ids(), &entry.join(", ")).await?;
+        }
+        if batch {
+            service::refuse_batch_change(tx, &this.ids(), vals.get("batch_payment_id")).await?;
         }
         sup.call(tx, this.as_records(), (vals,)).await?;
         if memo {

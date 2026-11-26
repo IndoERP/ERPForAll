@@ -87,6 +87,7 @@ pub struct HrDepartment {
     #[field(
         many2one,
         comodel = "hr.employee",
+        check_company = false,
         ondelete = "set null",
         tracking = true,
         string = "Manager"
@@ -108,6 +109,52 @@ pub struct HrDepartment {
 
 #[methods(HrDepartment, addon = "hr")]
 impl HrDepartment {
+    #[method(override)]
+    async fn default_get(
+        this: &RecordSet<HrDepartment>,
+        tx: &mut Transaction,
+        names: Vec<String>,
+        sup: Super,
+    ) -> Result<ValueMap> {
+        let mut values: ValueMap = sup.call(tx, this.as_records(), (names.clone(),)).await?;
+        if names.iter().any(|n| n == "company_id")
+            && !values.contains_key("company_id")
+            && let Some(company) = this.env().company_id()?
+        {
+            values.insert("company_id".into(), Value::Int(company));
+        }
+        Ok(values)
+    }
+
+    #[method(override)]
+    async fn create(
+        this: &RecordSet<HrDepartment>,
+        tx: &mut Transaction,
+        mut vals_list: Vec<RawVals>,
+        sup: Super,
+    ) -> Result<Records> {
+        let env = this.env().clone();
+        let active_company = env.company_id()?;
+        let depts = env.records("hr.department")?;
+        for vals in &mut vals_list {
+            if !vals.contains("company_id") {
+                let inherited = match vals.get("parent_id") {
+                    Some(Cell::Id(pid)) => {
+                        match depts.browse([*pid])?.cell(tx, "company_id").await? {
+                            Cell::Id(cid) => Some(cid),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some(cid) = inherited.or(active_company) {
+                    vals.insert("company_id".into(), Cell::Id(cid));
+                }
+            }
+        }
+        sup.call(tx, this.as_records(), (vals_list,)).await
+    }
+
     #[compute(depends = ["name", "parent_id", "parent_id.complete_name"])]
     async fn _compute_complete_name(
         this: &RecordSet<HrDepartment>,

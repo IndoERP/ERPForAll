@@ -71,7 +71,7 @@ import { WizardDialog } from "./wizard-dialog.js";
 import type { ActionResult } from "../generated/human-ui.js";
 import { RecordForm, formFocus } from "./record-form.js";
 import { MessagingStore } from "@erpforall/mail-store";
-import { ClientError, RpcClient, type CallOptions } from "./transport.js";
+import { ClientError, RpcClient, newRequestId, type CallOptions } from "./transport.js";
 import { attachSubviews } from "./x2many.js";
 import { loadDatabaseTheme, loadUserColorScheme, officeShell } from "./theme.js";
 import { MetadataCache, invalidatesMetadata } from "./metadata-cache.js";
@@ -274,7 +274,7 @@ export class HumanApp {
   /** Client action results kept for their route (`client:<n>`), bounded; and the state each client action left. */
   private readonly clientResults = new Map<string, ClientResult>();
   private readonly clientStates = new Map<string, unknown>();
-  private readonly clientResultPage = crypto.randomUUID();
+  private readonly clientResultPage = newRequestId();
   private clientCounter = 0;
   private pendingClient: MountedClient | undefined;
   private clientMounted: MountedClient | undefined;

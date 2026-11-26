@@ -425,30 +425,15 @@ fn currency_follows_the_pricelist_and_a_confirmed_pricelist_is_kept() {
             dec("1")
         );
 
-        // no rule of the foreign pricelist: the sales price would need a conversion, refused
+        // no rule of the foreign pricelist: converts list_price (100) from company currency at 0.9
         let lamp = product(&mut tx, "Lamp", "100", &[]).await;
-        refused(
-            try_line(
-                &mut tx,
-                &abroad,
-                RawVals::new().set_cell("product_id", Cell::Id(lamp)),
-            )
-            .await
-            .map(|_| ()),
-            ErrorKind::Validation,
-            "The pricelist Abroad is in ",
-        );
-        refused(
-            try_line(
-                &mut tx,
-                &abroad,
-                RawVals::new().set_cell("product_id", Cell::Id(lamp)),
-            )
-            .await
-            .map(|_| ()),
-            ErrorKind::Validation,
-            "would need a currency conversion",
-        );
+        let converted = add_line(
+            &mut tx,
+            &abroad,
+            RawVals::new().set_cell("product_id", Cell::Id(lamp)),
+        )
+        .await;
+        assert_eq!(amount(&mut tx, &converted, "price_unit").await, dec("90"));
         // a typed price is the caller's and is kept
         let typed = add_line(
             &mut tx,
@@ -980,22 +965,26 @@ fn a_pricelist_in_another_currency_is_refused_on_a_quotation_with_lines() {
         )
         .await
         .unwrap();
-        add_line(
+        let line = add_line(
             &mut tx,
             &quotation,
             RawVals::new().set_cell("product_id", Cell::Id(chair)),
         )
         .await;
-        refused(
-            write(
-                &mut tx,
-                &quotation,
-                RawVals::new().set_cell("pricelist_id", Cell::Id(lists[1])),
-            )
-            .await,
-            ErrorKind::Validation,
-            "Prices cannot be updated to a new currency yet",
+        assert_eq!(amount(&mut tx, &line, "price_unit").await, dec("100"));
+        // switching a draft quotation with lines to a foreign pricelist converts its lines
+        write(
+            &mut tx,
+            &quotation,
+            RawVals::new().set_cell("pricelist_id", Cell::Id(lists[1])),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            many2one(&mut tx, &quotation, "currency_id").await,
+            Some(foreign)
         );
+        assert_eq!(amount(&mut tx, &line, "price_unit").await, dec("90"));
         write(
             &mut tx,
             &quotation,
@@ -1003,6 +992,7 @@ fn a_pricelist_in_another_currency_is_refused_on_a_quotation_with_lines() {
         )
         .await
         .unwrap();
+        assert_eq!(amount(&mut tx, &line, "price_unit").await, dec("100"));
         tx.rollback().await.unwrap();
     });
 }

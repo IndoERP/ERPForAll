@@ -182,12 +182,8 @@ pub(crate) async fn heads(
 }
 
 /// The unit price of `product` in `unit` for `quantity` on an order with `head`: the pricelist's
-/// price, else the product's sales price converted from the company currency at the order day.
-///
-/// A pricelist in another currency than the company's prices only through a fixed-price rule (its
-/// price is in the pricelist currency); any other price would need the sales price converted
-/// inside the pricelist, which is not built yet, and is refused by name instead of taken
-/// unconverted.
+/// price (converted to the pricelist currency using the company exchange rate on the order day
+/// when needed), else the product's sales price converted from the company currency.
 pub(crate) async fn price_of(
     tx: &mut Transaction,
     env: &Env,

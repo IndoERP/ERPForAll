@@ -13,9 +13,19 @@ export interface ErrorDiagnostics {
   readonly requestId?: string;
 }
 const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-/** A fresh v4 UUID; the server keeps a well-formed one, so a call that gets no answer has an id too. */
+/** A fresh v4 UUID; falls back to `crypto.getRandomValues` in non-secure HTTP contexts where `randomUUID` is absent. */
 export function newRequestId(): string {
-  return crypto.randomUUID();
+  const c = globalThis.crypto;
+  if (typeof c?.randomUUID === "function") return c.randomUUID();
+  if (typeof c?.getRandomValues === "function") {
+    const bytes = new Uint8Array(16);
+    c.getRandomValues(bytes);
+    bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+    bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+  throw new ClientError("unsupported", "A cryptographic random source is unavailable in this browser.");
 }
 export class ClientError extends Error {
   constructor(readonly kind: FailureKind, message: string, readonly status = 0, readonly diagnostics?: ErrorDiagnostics,
