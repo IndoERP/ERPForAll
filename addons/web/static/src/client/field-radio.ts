@@ -104,6 +104,15 @@ export function radioControl(options: FieldControlOptions): FieldControl {
       const label = el("label", labelText, "form-check-label o_form_label");
       label.htmlFor = inputId;
 
+      item.addEventListener("click", (event: MouseEvent) => {
+        if (field.readonly || radio.disabled || event.target === radio || event.target === label) return;
+        radio.focus();
+        if (!radio.checked) {
+          radio.checked = true;
+          radio.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      });
+
       item.append(radio, label);
       group.append(item);
     }

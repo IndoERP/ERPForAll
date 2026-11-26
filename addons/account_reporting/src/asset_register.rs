@@ -293,14 +293,65 @@ impl ReportProvider for AssetRegisterReport {
                     cx.tx(),
                     ReadGroup::new(asset_domain)
                         .groupby(["category_id", "asset_type", "state"])
-                        .aggregates([
-                            "original_value:sum",
-                            "cip_accumulated_amount:sum",
-                            "cip_settled_amount:sum",
-                            "cip_unsettled_amount:sum",
-                        ]),
+                        .aggregates(["original_value:sum"]),
                 )
                 .await?;
+
+            // Derive CIP accumulation & settlement strictly from stored `account.asset.cip.line`
+            // rows dated <= `to` (never aggregating unstored computed fields on `account.asset`).
+            let cip_groups = cx
+                .env()
+                .records("account.asset.cip.line")?
+                ._read_group(
+                    cx.tx(),
+                    ReadGroup::new(cond(json!([
+                        ["asset_id.company_id", "=", company],
+                        ["asset_id.asset_type", "=", "cip"],
+                        ["asset_id.state", "!=", "draft"],
+                        ["asset_id.acquisition_date", "<=", day(to)],
+                        ["date", "<=", day(to)]
+                    ]))?)
+                    .groupby(["asset_id"])
+                    .aggregates(["amount:sum", "settled_amount:sum"]),
+                )
+                .await?;
+            let mut cip_by_asset = BTreeMap::<i64, (Decimal, Decimal)>::new();
+            for row in cip_groups.rows() {
+                if let Some(aid) = gid(row.first()) {
+                    let acc = gnum(row.get(1))?;
+                    let set = gnum(row.get(2))?;
+                    if !acc.is_zero() || !set.is_zero() {
+                        let slot = cip_by_asset
+                            .entry(aid)
+                            .or_insert((Decimal::ZERO, Decimal::ZERO));
+                        slot.0 += acc;
+                        slot.1 += set;
+                    }
+                }
+            }
+            let mut cip_by_cat = BTreeMap::<Option<i64>, (Decimal, Decimal, Decimal)>::new();
+            if !cip_by_asset.is_empty() {
+                let cip_asset_ids: Vec<i64> = cip_by_asset.keys().copied().collect();
+                let arows = asset_rec
+                    .browse(cip_asset_ids)?
+                    .read_rows(cx.tx(), &["id", "category_id"], Load::Raw)
+                    .await?;
+                for ar in arows.iter().map(Value::Row) {
+                    let aid = int_field(&ar, "id")?;
+                    let cat_id = opt_int_field(&ar, "category_id")?;
+                    if let Some(&(acc, set)) = cip_by_asset.get(&aid) {
+                        let uns = (acc - set).max(Decimal::ZERO);
+                        let slot = cip_by_cat.entry(cat_id).or_insert((
+                            Decimal::ZERO,
+                            Decimal::ZERO,
+                            Decimal::ZERO,
+                        ));
+                        slot.0 += acc;
+                        slot.1 += set;
+                        slot.2 += uns;
+                    }
+                }
+            }
 
             // Derive Accumulated Depreciation strictly from posted depreciation lines <= `to`
             // (never `original_value - value_residual`, which misclassifies disposal write-offs as depreciation).
@@ -362,21 +413,23 @@ impl ReportProvider for AssetRegisterReport {
                 let atype = gtext(row.get(1))?;
                 let state = gtext(row.get(2))?;
                 let orig = gnum(row.get(3))?;
-                let cip_acc = gnum(row.get(4))?;
-                let cip_set = gnum(row.get(5))?;
-                let cip_uns = gnum(row.get(6))?;
 
                 let entry = by_cat.entry(cat_id).or_default();
-                if atype == "cip" {
-                    entry.gross += cip_acc;
-                    entry.settled += cip_set;
-                    entry.nbv += cip_uns;
-                } else {
+                if atype != "cip" {
                     entry.gross += orig;
                     if state != "disposed" {
                         *active_orig_by_cat.entry(cat_id).or_insert(Decimal::ZERO) += orig;
                     }
                 }
+            }
+            for (cat_id, (cip_acc, cip_set, cip_uns)) in cip_by_cat {
+                if let Some(cid) = cat_id {
+                    cat_ids.insert(cid);
+                }
+                let entry = by_cat.entry(cat_id).or_default();
+                entry.gross += cip_acc;
+                entry.settled += cip_set;
+                entry.nbv += cip_uns;
             }
             if by_cat.len() > limit {
                 return Err(invalid(format!(
@@ -529,9 +582,6 @@ impl ReportProvider for AssetRegisterReport {
                         "asset_type",
                         "state",
                         "original_value",
-                        "cip_accumulated_amount",
-                        "cip_settled_amount",
-                        "cip_unsettled_amount",
                     ],
                     Load::Raw,
                 )
@@ -543,6 +593,7 @@ impl ReportProvider for AssetRegisterReport {
                 .map(|r| int_field(&r, "id"))
                 .collect::<Result<_>>()?;
             let mut dep_by_asset = BTreeMap::<i64, Decimal>::new();
+            let mut cip_by_asset = BTreeMap::<i64, (Decimal, Decimal)>::new();
             if !page_ids.is_empty() {
                 let dep_groups = cx
                     .env()
@@ -563,6 +614,28 @@ impl ReportProvider for AssetRegisterReport {
                         *dep_by_asset.entry(aid).or_insert(Decimal::ZERO) += gnum(dr.get(1))?;
                     }
                 }
+                let cip_groups = cx
+                    .env()
+                    .records("account.asset.cip.line")?
+                    ._read_group(
+                        cx.tx(),
+                        ReadGroup::new(cond(json!([
+                            ["asset_id", "in", page_ids],
+                            ["date", "<=", day(to)]
+                        ]))?)
+                        .groupby(["asset_id"])
+                        .aggregates(["amount:sum", "settled_amount:sum"]),
+                    )
+                    .await?;
+                for cr in cip_groups.rows() {
+                    if let Some(aid) = gid(cr.first()) {
+                        let slot = cip_by_asset
+                            .entry(aid)
+                            .or_insert((Decimal::ZERO, Decimal::ZERO));
+                        slot.0 += gnum(cr.get(1))?;
+                        slot.1 += gnum(cr.get(2))?;
+                    }
+                }
             }
 
             let mut out = Vec::new();
@@ -578,13 +651,17 @@ impl ReportProvider for AssetRegisterReport {
                     format!("{code} {name}")
                 };
                 let totals = if atype == "cip" {
+                    let (acc, set) = cip_by_asset
+                        .get(&aid)
+                        .copied()
+                        .unwrap_or((Decimal::ZERO, Decimal::ZERO));
                     AssetTotals {
                         kind_text: "CIP".to_owned(),
                         state_text: state,
-                        gross: dec_field(&row, "cip_accumulated_amount")?,
-                        settled: dec_field(&row, "cip_settled_amount")?,
+                        gross: acc,
+                        settled: set,
                         depreciation: Decimal::ZERO,
-                        nbv: dec_field(&row, "cip_unsettled_amount")?,
+                        nbv: (acc - set).max(Decimal::ZERO),
                     }
                 } else {
                     let orig = dec_field(&row, "original_value")?;

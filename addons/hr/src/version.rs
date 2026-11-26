@@ -111,24 +111,32 @@ pub struct HrEmployeeVersion {
 
 #[methods(HrEmployeeVersion, addon = "hr")]
 impl HrEmployeeVersion {
-    #[compute(depends = ["employee_id", "employee_id.company_id"])]
+    #[compute(candidate, depends = ["employee_id", "employee_id.company_id"])]
     async fn _compute_company_id(
         this: &RecordSet<HrEmployeeVersion>,
-        tx: &mut Transaction,
+        tx: &mut ReadTx<'_>,
         out: &mut Assign<'_, HrEmployeeVersion>,
     ) -> Result<()> {
-        let employees = this.env().records("hr.employee")?;
-        let emp_ids = this.mapped(tx, HrEmployeeVersion::EMPLOYEE_ID).await?;
+        let emp_ids = tx.mapped(this, HrEmployeeVersion::EMPLOYEE_ID).await?;
         for (index, emp_opt) in emp_ids.into_iter().enumerate() {
             let company = match emp_opt {
-                Some(eid) => match employees
-                    .browse([eid.get()])?
-                    .cell(tx, "company_id")
-                    .await?
-                {
-                    Cell::Id(cid) => RecId::from_real(cid),
-                    _ => None,
-                },
+                Some(eid) => {
+                    let rows = tx
+                        .query(
+                            "SELECT company_id::int8 FROM hr_employee WHERE id = $1",
+                            &[&eid.get()],
+                        )
+                        .await?;
+                    match rows.first() {
+                        Some(row) => row
+                            .try_get::<_, Option<i64>>(0)
+                            .map_err(|e| {
+                                Error::db("Could not read employee company.").with_source(e)
+                            })?
+                            .and_then(RecId::from_real),
+                        None => None,
+                    }
+                }
                 None => None,
             };
             out.set(index, HrEmployeeVersion::COMPANY_ID, company)?;

@@ -153,9 +153,10 @@ function relationAutocomplete(options: RelationAutocompleteOptions): ReturnType<
             return { id: integer(record["id"], "relation id"), display_name: text(record["display_name"], "relation name"), ...(field.options?.color_field ? { [field.options.color_field.name]: record[field.options.color_field.name] } : {}) };
           }).filter(item => !skip.has(item.id)).slice(0, limit).map(item => ({ kind: "option", label: item.display_name, select: () => pick(item) }));
           if (items.length > 0) { const more = searchMoreOption(query); if (more) items.push(more); }
-          if (query !== "" && !field.options?.no_create && !field.options?.no_quick_create && field.options?.create !== false) items.push({ kind: "option", label: `Create "${query}"`, select: () => {
+          const trimmedQuery = query.trim();
+          if (trimmedQuery !== "" && !field.options?.no_create && !field.options?.no_quick_create && field.options?.create !== false) items.push({ kind: "option", label: `Create "${trimmedQuery}"`, select: () => {
             run(async () => {
-              const created = array(await rpc.call(field.relation!, "name_create", { name: query, context: effective.context }, { write: true }), "created record");
+              const created = array(await rpc.call(field.relation!, "name_create", { name: trimmedQuery, context: effective.context }, { write: true }), "created record");
               if (created.length !== 2) throw new ClientError("server", "Invalid quick-create response.");
               // name_create returns only (id, name): a new tag has no colour until it is read back.
               const choice = { id: integer(created[0], "created record id"), display_name: text(created[1], "created record name"), ...(field.options?.color_field ? { [field.options.color_field.name]: false } : {}) };

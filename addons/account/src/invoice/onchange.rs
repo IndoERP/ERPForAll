@@ -366,6 +366,42 @@ impl AccountMoveLine {
         preview_line_amounts(tx, line, head.company, head.currency, is_refund(move_type)).await?;
         Ok(OnchangeResult::none())
     }
+
+    /// Live `onchange` for manual journal items: keep `amount_currency` synchronized with
+    /// `balance` for company-currency lines without writing read-only generated `debit`/`credit`.
+    #[onchange("balance")]
+    async fn _onchange_balance_currency(
+        this: &RecordSet<AccountMoveLine>,
+        tx: &mut Transaction,
+    ) -> Result<OnchangeResult> {
+        let line = this.as_records();
+        let balance = amount(&line.cell(tx, "balance").await?, "balance")?;
+        let line_currency = id_of(&line.cell(tx, "currency_id").await?, "currency_id")?;
+        let entry = line.related(tx, "move_id").await?;
+        let company_currency = match move_head_for_onchange(tx, this.env(), &entry).await? {
+            Some(head) => Some(head.company_currency),
+            None => None,
+        };
+        let same_currency = match (line_currency, company_currency) {
+            (Some(lc), Some(cc)) => lc == cc,
+            (None, _) | (_, None) => true,
+        };
+        let mut assign = RawVals::new();
+        if same_currency {
+            assign.insert("amount_currency".into(), Cell::Decimal(balance));
+        } else {
+            let cur_amt = amount(&line.cell(tx, "amount_currency").await?, "amount_currency")?;
+            let opposite_sign = (cur_amt > Decimal::ZERO && balance < Decimal::ZERO)
+                || (cur_amt < Decimal::ZERO && balance > Decimal::ZERO);
+            if opposite_sign {
+                assign.insert("amount_currency".into(), Cell::Decimal(-cur_amt));
+            }
+        }
+        if !assign.is_empty() {
+            line.write_base(tx, assign).await?;
+        }
+        Ok(OnchangeResult::none())
+    }
 }
 
 async fn recompute_move_totals(
@@ -556,6 +592,51 @@ impl AccountMove {
                 .await?;
         }
         recompute_move_totals(tx, this.env(), entry).await
+    }
+
+    /// Live `onchange` when `journal_id` or `company_id` changes on a draft entry/invoice:
+    /// derives `currency_id` from the journal or falls back to the company currency so switching
+    /// journals never leaves `currency_id` unset.
+    #[onchange("journal_id", "company_id")]
+    async fn _onchange_journal_currency(
+        this: &RecordSet<AccountMove>,
+        tx: &mut Transaction,
+    ) -> Result<OnchangeResult> {
+        let entry = this.as_records();
+        if let Cell::Str(state) = entry.cell(tx, "state").await?
+            && state.as_ref() != "draft"
+        {
+            return Ok(OnchangeResult::none());
+        }
+        let env = this.env();
+        let mut currency = None;
+        if let Some(jid) = id_of(&entry.cell(tx, "journal_id").await?, "journal_id")? {
+            let jrec = env.records("account.journal")?.browse([jid])?;
+            currency = id_of(&jrec.cell(tx, "currency_id").await?, "currency_id")?;
+            if id_of(&entry.cell(tx, "company_id").await?, "company_id")?.is_none()
+                && let Some(jcomp) = id_of(&jrec.cell(tx, "company_id").await?, "company_id")?
+            {
+                entry
+                    .write_base(tx, RawVals::new().set_cell("company_id", Cell::Id(jcomp)))
+                    .await?;
+            }
+        }
+        if currency.is_none() {
+            let company = match id_of(&entry.cell(tx, "company_id").await?, "company_id")? {
+                Some(c) => Some(c),
+                None => env.company_id()?,
+            };
+            if let Some(cid) = company {
+                let crec = env.records("res.company")?.browse([cid])?;
+                currency = id_of(&crec.cell(tx, "currency_id").await?, "currency_id")?;
+            }
+        }
+        if let Some(cur) = currency {
+            entry
+                .write_base(tx, RawVals::new().set_cell("currency_id", Cell::Id(cur)))
+                .await?;
+        }
+        recompute_move_totals(tx, env, entry).await
     }
 
     /// Live `onchange` for `account.move`: recomputes draft invoice line amounts, tax totals

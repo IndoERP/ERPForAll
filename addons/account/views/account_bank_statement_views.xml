@@ -12,7 +12,7 @@
         <field name="journal_id"/>
         <field name="payment_ref"/>
         <field name="partner_id"/>
-        <field name="matched_move_id"/>
+        <field name="matched_move_id" domain="[('state', '=', 'posted'), ('payment_state', 'in', ['not_paid', 'partial']), ('move_type', 'in', ['out_invoice', 'out_refund', 'in_invoice', 'in_refund'])]"/>
         <field name="counterpart_account_id"/>
         <field name="amount"/>
         <field name="currency_id"/>
@@ -39,7 +39,7 @@
             <group>
               <field name="journal_id" readonly="is_reconciled"/>
               <field name="partner_id" readonly="is_reconciled"/>
-              <field name="matched_move_id" readonly="is_reconciled"/>
+              <field name="matched_move_id" readonly="is_reconciled" domain="[('state', '=', 'posted'), ('payment_state', 'in', ['not_paid', 'partial']), ('move_type', 'in', ['out_invoice', 'out_refund', 'in_invoice', 'in_refund'])]"/>
               <field name="counterpart_account_id" readonly="is_reconciled"/>
               <field name="move_id" readonly="1"/>
               <field name="is_reconciled" readonly="1"/>
@@ -75,7 +75,7 @@
             </group>
             <group>
               <field name="partner_id" readonly="is_reconciled"/>
-              <field name="matched_move_id" readonly="is_reconciled"/>
+              <field name="matched_move_id" readonly="is_reconciled" domain="[('state', '=', 'posted'), ('payment_state', 'in', ['not_paid', 'partial']), ('move_type', 'in', ['out_invoice', 'out_refund', 'in_invoice', 'in_refund'])]"/>
               <field name="counterpart_account_id" readonly="is_reconciled"/>
               <field name="move_id" readonly="1" invisible="not move_id"/>
               <field name="is_reconciled" readonly="1"/>

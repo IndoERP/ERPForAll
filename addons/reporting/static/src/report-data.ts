@@ -36,7 +36,8 @@ export function visibleLines(lines: Line[], options: Options, serverSearch = fal
   // Descendant matches keep their path. A sibling of a match stays hidden.
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i]!;
-    if (line.kind === "more" || (line.unfoldable && !line.unfolded) || line.cells.some(cell => !cell.zero)) {
+    const blankCells = line.cells.every(cell => cell.kind === "empty" || cell.kind === "text" || cell.kind === "date" || cell.value === null);
+    if (line.kind === "more" || (line.unfoldable && !line.unfolded && blankCells) || line.cells.some(cell => !cell.zero)) {
       nonzero.add(line.id);
     }
     if (line.parent !== null) {

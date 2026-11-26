@@ -244,6 +244,7 @@ export class RecordState {
   private policyFailure: Error | undefined;
   private unknownWrite = false;
   private pending = false;
+  private pendingOnchange: Promise<void> | undefined;
   id: number | undefined;
   warning = "";
   warningDetails: OnchangeWarning | undefined;
@@ -388,17 +389,33 @@ export class RecordState {
     // transient models declare no onchange, so an edit stays in the browser.
     if (passwordModels.has(this.model)) return;
     this.pending = true;
-    try { await this.applyOnchange(name); }
-    finally { this.pending = false; }
+    const job = this.applyOnchange(name);
+    this.pendingOnchange = job;
+    try { await job; }
+    finally {
+      if (this.pendingOnchange === job) this.pendingOnchange = undefined;
+      this.pending = false;
+    }
   }
   async save(): Promise<void> {
     if (passwordModels.has(this.model)) throw new ClientError("validation", "A password form is submitted with its button; it is never saved.");
     if (this.policyFailure) throw this.policyFailure;
     if (this.unknownWrite) throw new ClientError("ambiguous", "Reload the record before another write; the previous change may already be saved.");
+    if (this.pending && !this.pendingOnchange) throw new ClientError("validation", "Wait for the current operation to complete.");
     const owner = this.editorOwner, identity = this.resetIdentity;
+    if (this.pendingOnchange) {
+      await this.pendingOnchange;
+      if (this.editorOwner !== owner) throw new ClientError("validation", "The record editor owner changed before saving.");
+      if (this.resetIdentity !== identity) throw new ClientError("validation", "Save was superseded by a record reset.");
+    }
     if (owner) {
       const admission = owner.beforeSave();
       if (admission !== undefined) await admission;
+      if (this.editorOwner !== owner) throw new ClientError("validation", "The record editor owner changed before saving.");
+      if (this.resetIdentity !== identity) throw new ClientError("validation", "Save was superseded by a record reset.");
+    }
+    if (this.pendingOnchange) {
+      await this.pendingOnchange;
       if (this.editorOwner !== owner) throw new ClientError("validation", "The record editor owner changed before saving.");
       if (this.resetIdentity !== identity) throw new ClientError("validation", "Save was superseded by a record reset.");
     }

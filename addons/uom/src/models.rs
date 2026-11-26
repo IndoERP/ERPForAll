@@ -23,6 +23,7 @@ pub const MAX_HIERARCHY_PATH_BYTES: usize = 8192;
 #[model(
     name = "uom.uom",
     description = "Unit of Measure",
+    rec_names_search = ["name"],
     parent_store = true,
     parent_name = "relative_uom_id",
     order = "sequence, name",
@@ -64,7 +65,7 @@ pub struct Uom {
     #[field(char, index = true)]
     pub parent_path: Option<Arc<str>>,
     /// Context-sensitive name, including the direct ratio when requested.
-    #[field(char, compute = "_compute_uom_display_name")]
+    #[field(char, compute = "_compute_uom_display_name", search_method = "_search_display_name")]
     pub display_name: Option<Arc<str>>,
 }
 
@@ -261,6 +262,18 @@ impl Uom {
             batch.set(index, Uom::DISPLAY_NAME, value.as_str())?;
         }
         Ok(())
+    }
+
+    #[search_method]
+    fn _search_display_name(
+        req: &FieldSearchRequest<'_>,
+        _cx: &mut FieldSearchContext<'_>,
+    ) -> Result<Domain> {
+        Ok(Domain::condition(
+            "name",
+            req.operator(),
+            req.operand().clone(),
+        )?)
     }
 
     /// A root is the reference unit, so its relative ratio is exactly one.

@@ -604,6 +604,65 @@ impl AccountAsset {
         Ok(values)
     }
 
+    /// Live `onchange` when selecting an Asset Class (`category_id`): copies its accounts,
+    /// class type, journal, and depreciation parameters onto the draft asset immediately.
+    #[onchange("category_id")]
+    async fn _onchange_category_id(
+        this: &RecordSet<AccountAsset>,
+        tx: &mut Transaction,
+    ) -> Result<OnchangeResult> {
+        let entry = this.as_records();
+        if let Cell::Str(state) = entry.cell(tx, "state").await?
+            && state.as_ref() != "draft"
+        {
+            return Ok(OnchangeResult::none());
+        }
+        let cat_id = match entry.cell(tx, "category_id").await? {
+            Cell::Null | Cell::Bool(false) => return Ok(OnchangeResult::none()),
+            Cell::Id(id) => id,
+            Cell::Int(id) => i64::from(id),
+            other => {
+                return Err(Error::validation(format!(
+                    "category_id takes a record id, not {other:?}."
+                )));
+            }
+        };
+        let cat = this
+            .env()
+            .records("account.asset.category")?
+            .browse([cat_id])?;
+        let mut vals = RawVals::new();
+        for field in [
+            "asset_type",
+            "journal_id",
+            "account_asset_id",
+            "method",
+            "method_number",
+            "method_period",
+            "method_progress_factor",
+            "prorata_temporis",
+        ] {
+            let cell = cat.cell(tx, field).await?;
+            if !matches!(cell, Cell::Null) {
+                vals.insert(field.into(), cell);
+            }
+        }
+        // Nullable depreciation/disposal accounts must also clear stale values when switching
+        // from a depreciable Asset Class to a CIP class.
+        for field in [
+            "account_depreciation_id",
+            "account_depreciation_expense_id",
+            "account_disposal_gain_loss_id",
+        ] {
+            let cell = cat.cell(tx, field).await?;
+            vals.insert(field.into(), cell);
+        }
+        if !vals.is_empty() {
+            entry.write_base(tx, vals).await?;
+        }
+        Ok(OnchangeResult::none())
+    }
+
     #[method(override)]
     async fn write(
         this: &RecordSet<AccountAsset>,

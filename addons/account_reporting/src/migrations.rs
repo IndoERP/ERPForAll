@@ -1085,6 +1085,54 @@ async fn tax_report_and_aged_flags_post(tx: &mut Transaction, _from: &SemverVers
     check_definitions(tx).await
 }
 
+/// Remove orphaned legacy `reporting.report.line` rows (from pre-Title-Case Balance Sheet and
+/// Profit & Loss templates that have no current `ir.model.data` external id) so upgraded
+/// databases never display duplicate uppercase + lowercase sections (`QA-ACC-09`).
+#[erp_sdk::migration(addon = "account_reporting", version = "1.16", stage = post)]
+pub async fn prune_orphan_financial_report_lines(
+    tx: &mut Transaction,
+    _from: &erp_sdk::migrations::SemverVersion,
+) -> Result<()> {
+    let deleted = tx
+        .execute(
+            "DELETE FROM reporting_report_line l \
+             USING ir_model_data rep \
+             WHERE rep.module = 'account_reporting' \
+               AND rep.model = 'reporting.report' \
+               AND rep.name IN ('report_balance_sheet', 'report_profit_loss') \
+               AND l.report_id = rep.res_id \
+               AND NOT EXISTS ( \
+                   SELECT 1 FROM ir_model_data d \
+                   WHERE d.model = 'reporting.report.line' AND d.res_id = l.id \
+               ) \
+               AND (l.name->>'en_US') IN ( \
+                   'Current assets', 'Cash and bank', 'Non-current assets', \
+                   'Current liabilities', 'Non-current liabilities', \
+                   'Gross profit', 'Operating profit', 'Net profit' \
+               )",
+            &[],
+        )
+        .await?;
+    if deleted > 0 {
+        tx.invalidate_model("reporting.report.line", None).await?;
+    }
+    // Align Consolidated Balance Sheet & IC Reconciliation Matrix default cutoff to `this_year`
+    // (end of fiscal year) matching Consolidated Profit & Loss so FY runs render explicitly
+    // without crossing a mid-year cutoff silently (`QA-ACC-11`).
+    for report in ["report_consolidated_bs", "report_ic_reconciliation"] {
+        set_if(
+            tx,
+            REPORT,
+            report,
+            "date_default",
+            Some("today"),
+            Some("this_year"),
+        )
+        .await?;
+    }
+    check_definitions(tx).await
+}
+
 /// Every report of this addon loads as the report screen loads it; a kept administrator change
 /// that no longer fits stops the upgrade here, named, instead of failing on the screen.
 async fn check_definitions(tx: &mut Transaction) -> Result<()> {

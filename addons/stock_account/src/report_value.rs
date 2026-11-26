@@ -288,7 +288,14 @@ async fn value(
         // The null-lot cost key prices tracked lots when the product is valued as a whole.
         let published = state.get(&(company, product, lot))
             .or_else(|| state.get(&(company, product, None)))
-            .ok_or_else(|| Error::validation("A stock line has no published valuation. Publish its cost state before requesting Stock Value."))?;
+            .ok_or_else(|| {
+                let prod_hint = product
+                    .map(|id| format!(" (product id {id})"))
+                    .unwrap_or_default();
+                Error::validation(format!(
+                    "A stock line{prod_hint} has no published valuation. Publish its cost state before requesting Stock Value."
+                ))
+            })?;
         if Some(published.2) != currency {
             return Err(Error::validation(
                 "A stock cost state uses a different currency from its company.",

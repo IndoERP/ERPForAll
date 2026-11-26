@@ -154,4 +154,64 @@
   </record>
   <menuitem id="menu_invoice_analysis" name="Invoice Analysis" parent="menu_account_reporting" action="action_invoice_analysis" groups="account.group_account_readonly" sequence="55"/>
   <record id="menu_invoice_analysis" model="ir.ui.menu"><field name="web_icon">lucide:trending-up</field></record>
+
+  <record id="view_account_move_invoice_pivot" model="ir.ui.view">
+    <field name="name">account.move.invoice.pivot</field>
+    <field name="model">account.move</field>
+    <field name="arch" type="xml">
+      <pivot string="Invoice Pivot Analysis">
+        <field name="partner_id" type="row"/>
+        <field name="move_type" type="col"/>
+        <field name="amount_untaxed" type="measure"/>
+        <field name="amount_tax" type="measure"/>
+        <field name="amount_total" type="measure"/>
+        <field name="amount_residual" type="measure"/>
+      </pivot>
+    </field>
+  </record>
+  <record id="view_account_move_invoice_graph" model="ir.ui.view">
+    <field name="name">account.move.invoice.graph</field>
+    <field name="model">account.move</field>
+    <field name="arch" type="xml">
+      <graph string="Invoice Graph Analysis" type="bar">
+        <field name="partner_id"/>
+        <field name="move_type" type="col"/>
+        <field name="amount_total" type="measure"/>
+      </graph>
+    </field>
+  </record>
+  <record id="action_invoice_pivot_graph" model="ir.actions.act_window">
+    <field name="name">Invoice Pivot &amp; Graph</field>
+    <field name="res_model">account.move</field>
+    <field name="view_mode">pivot,graph,list,form</field>
+    <field name="search_view_id" ref="account.view_invoice_search"/>
+    <field name="domain">[('move_type', 'in', ['out_invoice', 'out_refund', 'in_invoice', 'in_refund']), ('state', '=', 'posted')]</field>
+    <field name="context">{'default_move_type': 'out_invoice'}</field>
+  </record>
+  <record id="action_invoice_pivot_graph_view_pivot" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="action_invoice_pivot_graph"/>
+    <field name="view_id" ref="view_account_move_invoice_pivot"/>
+    <field name="view_mode">pivot</field>
+    <field name="sequence" eval="10"/>
+  </record>
+  <record id="action_invoice_pivot_graph_view_graph" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="action_invoice_pivot_graph"/>
+    <field name="view_id" ref="view_account_move_invoice_graph"/>
+    <field name="view_mode">graph</field>
+    <field name="sequence" eval="20"/>
+  </record>
+  <record id="action_invoice_pivot_graph_view_list" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="action_invoice_pivot_graph"/>
+    <field name="view_id" ref="account.view_invoice_list"/>
+    <field name="view_mode">list</field>
+    <field name="sequence" eval="30"/>
+  </record>
+  <record id="action_invoice_pivot_graph_view_form" model="ir.actions.act_window.view">
+    <field name="act_window_id" ref="action_invoice_pivot_graph"/>
+    <field name="view_id" ref="account.view_invoice_form"/>
+    <field name="view_mode">form</field>
+    <field name="sequence" eval="40"/>
+  </record>
+  <menuitem id="menu_invoice_pivot_graph" name="Invoice Pivot &amp; Graph" parent="menu_account_reporting" action="action_invoice_pivot_graph" groups="account.group_account_readonly" sequence="56"/>
+  <record id="menu_invoice_pivot_graph" model="ir.ui.menu"><field name="web_icon">lucide:bar-chart-3</field></record>
 </erp>

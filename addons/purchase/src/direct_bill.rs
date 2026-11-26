@@ -228,11 +228,13 @@ async fn draft_or_open(
             )));
         }
     }
+    let bill_date = erp_addon_base::company_calendar::business_date(tx, company).await?;
     let header = RawVals::new()
         .set_cell("move_type", Cell::Str("in_invoice".into()))
         .set_cell("company_id", Cell::Id(company))
         .set_cell("partner_id", order.cell(tx, "partner_id").await?)
         .set_cell("currency_id", order.cell(tx, "currency_id").await?)
+        .set_cell("invoice_date", Cell::Date(bill_date))
         .set_cell("ref", order.cell(tx, "name").await?)
         .set_commands("invoice_line_ids", items);
     // A row lock alone leaves the PO visible to a transaction whose snapshot predates

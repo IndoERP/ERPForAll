@@ -247,8 +247,8 @@ pub struct AccountMove {
 
 #[methods(AccountMove, addon = "account")]
 impl AccountMove {
-    /// A new entry shows its currency before it is saved: the journal's currency when the
-    /// context names a journal, else the company's, the same order `create` derives it in.
+    /// A new entry shows its company, journal, date and currency before it is saved, in the same
+    /// order `create` derives them.
     #[method(override)]
     async fn default_get(
         this: &RecordSet<AccountMove>,
@@ -257,23 +257,83 @@ impl AccountMove {
         sup: Super,
     ) -> Result<ValueMap> {
         let mut values: ValueMap = sup.call(tx, this.as_records(), (names.clone(),)).await?;
-        if names.iter().any(|n| n == "currency_id") && !values.contains_key("currency_id") {
-            let env = this.env();
-            let mut currency = None;
-            if let Some(Value::Int(journal)) = env.context().get("default_journal_id") {
-                let journal = env.records("account.journal")?.browse([journal])?;
-                currency = id_cell(Some(&journal.cell(tx, "currency_id").await?), "currency_id")?;
+        let env = this.env();
+        let company = match values
+            .get("company_id")
+            .cloned()
+            .or_else(|| env.context().get("default_company_id"))
+        {
+            Some(Value::Int(company)) => Some(company),
+            _ => env.company_id()?,
+        };
+        if names.iter().any(|n| n == "company_id")
+            && !values.contains_key("company_id")
+            && let Some(company) = company
+        {
+            values.insert("company_id".to_owned(), Value::Int(company));
+        }
+        let move_type_val = values
+            .get("move_type")
+            .cloned()
+            .or_else(|| env.context().get("default_move_type"));
+        let move_type = match move_type_val.as_ref() {
+            Some(Value::Str(s)) => s.as_ref(),
+            _ => "entry",
+        };
+        let mut journal = match values
+            .get("journal_id")
+            .cloned()
+            .or_else(|| env.context().get("default_journal_id"))
+        {
+            Some(Value::Int(j)) => Some(j),
+            _ => None,
+        };
+        if journal.is_none()
+            && names.iter().any(|n| n == "journal_id")
+            && let Some(company) = company
+        {
+            let jtype = match move_type {
+                "out_invoice" | "out_refund" | "out_receipt" => "sale",
+                "in_invoice" | "in_refund" | "in_receipt" => "purchase",
+                _ => "general",
+            };
+            let found = env
+                .records("account.journal")?
+                .search_with(
+                    tx,
+                    &Domain::and([
+                        Domain::condition("type", Operator::Eq, jtype)?,
+                        Domain::condition("company_id", Operator::ParentOf, company)?,
+                    ]),
+                    &SearchOptions::new().limit(1),
+                )
+                .await?;
+            if let Some(jid) = found.ids().first().copied() {
+                journal = Some(jid);
+                values.insert("journal_id".to_owned(), Value::Int(jid));
             }
-            if currency.is_none() {
-                let company = match env.context().get("default_company_id") {
-                    Some(Value::Int(company)) => Some(company),
-                    _ => env.company_id()?,
-                };
-                if let Some(company) = company {
-                    let company = env.records("res.company")?.browse([company])?;
-                    currency =
-                        id_cell(Some(&company.cell(tx, "currency_id").await?), "currency_id")?;
-                }
+        }
+        if names.iter().any(|n| n == "date")
+            && !values.contains_key("date")
+            && let Some(company) = company
+        {
+            let days = erp_addon_base::company_calendar::business_days(tx, env, &[company]).await?;
+            let day = days
+                .get(&company)
+                .ok_or_else(|| Error::missing(format!("Company {company} is unavailable.")))?;
+            values.insert("date".to_owned(), Value::Date(day.date));
+        }
+        if names.iter().any(|n| n == "currency_id") && !values.contains_key("currency_id") {
+            let mut currency = None;
+            if let Some(jid) = journal {
+                let jrec = env.records("account.journal")?.browse([jid])?;
+                currency = id_cell(Some(&jrec.cell(tx, "currency_id").await?), "currency_id")?;
+            }
+            if currency.is_none()
+                && let Some(company) = company
+            {
+                let crec = env.records("res.company")?.browse([company])?;
+                currency = id_cell(Some(&crec.cell(tx, "currency_id").await?), "currency_id")?;
             }
             if let Some(currency) = currency {
                 values.insert("currency_id".to_owned(), Value::Int(currency));

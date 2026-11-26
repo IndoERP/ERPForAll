@@ -48,11 +48,22 @@ function responsiveActions(host: HTMLElement, kind: "header" | "box"): () => voi
   fit();
   const view = host.ownerDocument.defaultView!;
   const onResize = (): void => { if (measured) arrange(controls.length); fit(); };
+  let disposed = false;
+  let rafId: number | undefined;
+  const scheduleResize = (): void => {
+    if (disposed) return;
+    if (typeof view.requestAnimationFrame === "function") {
+      if (rafId !== undefined) return;
+      rafId = view.requestAnimationFrame(() => { rafId = undefined; if (!disposed) onResize(); });
+    } else {
+      onResize();
+    }
+  };
   view.addEventListener("resize", onResize);
   // The strip's column changes size with the control row's other content, not only with the window.
-  const observer = measured && typeof ResizeObserver === "function" ? new ResizeObserver(onResize) : undefined;
+  const observer = measured && typeof ResizeObserver === "function" ? new ResizeObserver(scheduleResize) : undefined;
   if (observer) observer.observe(host.parentElement!);
-  return () => { view.removeEventListener("resize", onResize); observer?.disconnect(); controller.dispose(); };
+  return () => { disposed = true; if (rafId !== undefined) { view.cancelAnimationFrame?.(rafId); rafId = undefined; } view.removeEventListener("resize", onResize); observer?.disconnect(); controller.dispose(); };
 }
 
 
@@ -87,10 +98,21 @@ function overflowTabs(tabs: HTMLElement, pages: readonly { tab: HTMLButtonElemen
   };
   fit();
   const view = tabs.ownerDocument.defaultView!;
+  let tabDisposed = false;
+  let tabRafId: number | undefined;
+  const scheduleFit = (): void => {
+    if (tabDisposed) return;
+    if (typeof view.requestAnimationFrame === "function") {
+      if (tabRafId !== undefined) return;
+      tabRafId = view.requestAnimationFrame(() => { tabRafId = undefined; if (!tabDisposed) fit(); });
+    } else {
+      fit();
+    }
+  };
   view.addEventListener("resize", fit);
-  const observer = typeof ResizeObserver === "function" ? new ResizeObserver(fit) : undefined;
+  const observer = typeof ResizeObserver === "function" ? new ResizeObserver(scheduleFit) : undefined;
   observer?.observe(tabs);
-  return { fit, dispose: () => { view.removeEventListener("resize", fit); observer?.disconnect(); controller.dispose(); } };
+  return { fit, dispose: () => { tabDisposed = true; if (tabRafId !== undefined) { view.cancelAnimationFrame?.(tabRafId); tabRafId = undefined; } view.removeEventListener("resize", fit); observer?.disconnect(); controller.dispose(); } };
 }
 
 /**

@@ -173,8 +173,16 @@ export function mountGraph(options: GraphViewOptions): GraphView {
       chart.append(text);
     }
     const band = box.w / Math.max(data.labels.length, 1);
+    const angled = data.labels.length > 8 || band < 76;
+    const stepIdx = angled && band < 22 ? Math.ceil(22 / Math.max(band, 1)) : 1;
     data.labels.forEach((label, index) => {
-      const text = svg("text", { x: box.x + band * (index + 0.5), y: box.y + box.h + 18, "text-anchor": "middle" }, "graph-tick");
+      if (index % stepIdx !== 0) return;
+      const cx = box.x + band * (index + 0.5);
+      const cy = box.y + box.h + (angled ? 14 : 18);
+      const attrs: Record<string, string | number> = angled
+        ? { x: cx, y: cy, "text-anchor": "start", transform: `rotate(35 ${cx} ${cy})` }
+        : { x: cx, y: cy, "text-anchor": "middle" };
+      const text = svg("text", attrs, "graph-tick");
       text.textContent = cut(label);
       chart.append(text);
     });
@@ -207,7 +215,8 @@ export function mountGraph(options: GraphViewOptions): GraphView {
     const tops = data.labels.map((_, x) => shown.reduce((sum, item) => sum + item.series.points[x]!.value, 0));
     const values = stack ? tops : shown.flatMap(item => item.series.points.map(p => p.value));
     const max = Math.max(0, ...values), min = Math.min(0, ...shown.flatMap(item => item.series.points.map(p => p.value)));
-    const box = { x: 72, y: 12, w: width - 88, h: height - 48 };
+    const angledLabels = data.labels.length > 8 || (width - 88) / Math.max(data.labels.length, 1) < 76;
+    const box = { x: 72, y: 12, w: Math.max(width - (angledLabels ? 140 : 88), 120), h: height - (angledLabels ? 92 : 48) };
     const scale = drawAxes(chart, data, box, min, max === min ? min + 1 : max);
     const band = box.w / Math.max(data.labels.length, 1);
     const base = new Array<number>(data.labels.length).fill(0);

@@ -161,8 +161,12 @@ fn visible(lines: &[Line], hide_zero: bool, search: &str) -> Vec<bool> {
         if own {
             stack.iter().for_each(|s| found[*s] = true);
         }
-        // A folded group or another page may contain a nonzero amount even when its header is blank.
-        if more || (line.unfoldable && !line.unfolded) || !line.is_zero() {
+        // A folded group with blank/text-only header cells or another page may contain a nonzero amount.
+        let blank_cells = line.cells.iter().all(|cell| {
+            matches!(cell.kind(), CellKind::Empty | CellKind::Text | CellKind::Date)
+                || cell.value().is_none()
+        });
+        if more || (line.unfoldable && !line.unfolded && blank_cells) || !line.is_zero() {
             stack.iter().for_each(|s| nonzero[*s] = true);
         }
     }

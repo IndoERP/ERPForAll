@@ -4,7 +4,7 @@ summary = "Review financial statements, trial balance, journals and account move
 category = "Accounting"
 author = "Arkana"
 license = "MIT OR Apache-2.0"
-version = "1.15.0"
+version = "1.16.0"
 depends = ["base", "account", "analytic", "reporting"]
 data = [
     "data/journal_activity.xml",

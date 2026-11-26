@@ -442,6 +442,27 @@ impl QualityPoint {
     }
 }
 
+#[derive(Default)]
+struct InspectionWriteGuard(Option<i64>);
+
+async fn complete_inspection_state(
+    records: &Records,
+    tx: &mut Transaction,
+    id: i64,
+    state: &str,
+    uid: i64,
+) -> Result<()> {
+    let mut vals = RawVals::new();
+    vals.insert("quality_state".into(), Cell::Str(state.into()));
+    vals.insert("control_date".into(), Cell::DateTime(DateTime::now()));
+    vals.insert("user_id".into(), Cell::Id(uid));
+    let previous = tx.extension::<InspectionWriteGuard>().0.replace(id);
+    let result = records.write(tx, vals).await;
+    tx.extension::<InspectionWriteGuard>().0 = previous;
+    result?;
+    tx.flush().await
+}
+
 #[methods(QualityCheck, addon = "quality_control")]
 impl QualityCheck {
     #[method(override)]
@@ -514,21 +535,27 @@ impl QualityCheck {
         vals: RawVals,
         sup: Super,
     ) -> Result<()> {
-        if vals.contains("quality_state")
-            || vals.contains("control_date")
-            || vals.contains("user_id")
+        let ids = this.ids();
+        let guarded = tx
+            .extension::<InspectionWriteGuard>()
+            .0
+            .is_some_and(|allowed| ids.as_slice() == [allowed]);
+        if !guarded
+            && (vals.contains("quality_state")
+                || vals.contains("control_date")
+                || vals.contains("user_id"))
         {
             return Err(Error::validation(
                 "Quality check outcome fields are managed by inspection actions.",
             ));
         }
-        let ids = this.ids();
         if !ids.is_empty()
             && !this.env().su()
             && !tx
                 .has_group(this.env(), "stock.group_stock_manager")
                 .await?
         {
+            tx.flush().await?;
             let rows = tx
                 .query(
                     "SELECT count(*)::int8 FROM quality_check \
@@ -576,6 +603,7 @@ impl QualityCheck {
         records.check_access(tx, Operation::Write).await?;
         let id = records.ensure_one()?.int()?;
         let uid = records.env().uid();
+        tx.flush().await?;
         let rows = tx
             .query(
                 "SELECT quality_state FROM quality_check WHERE id = $1 FOR UPDATE",
@@ -591,18 +619,7 @@ impl QualityCheck {
                 "This quality check has already been completed.",
             ));
         }
-        tx.execute(
-            "UPDATE quality_check \
-             SET quality_state = 'pass', control_date = (now() AT TIME ZONE 'UTC'), \
-                 user_id = $2, write_uid = $2, write_date = (now() AT TIME ZONE 'UTC') \
-             WHERE id = $1",
-            &[&id, &uid],
-        )
-        .await?;
-        records
-            .modified_external(tx, &["quality_state", "control_date", "user_id"])
-            .await?;
-        Ok(())
+        complete_inspection_state(&records, tx, id, "pass", uid).await
     }
 
     /// Mark a pending quality check as Failed.
@@ -613,6 +630,7 @@ impl QualityCheck {
         records.check_access(tx, Operation::Write).await?;
         let id = records.ensure_one()?.int()?;
         let uid = records.env().uid();
+        tx.flush().await?;
         let rows = tx
             .query(
                 "SELECT quality_state FROM quality_check WHERE id = $1 FOR UPDATE",
@@ -628,18 +646,7 @@ impl QualityCheck {
                 "This quality check has already been completed.",
             ));
         }
-        tx.execute(
-            "UPDATE quality_check \
-             SET quality_state = 'fail', control_date = (now() AT TIME ZONE 'UTC'), \
-                 user_id = $2, write_uid = $2, write_date = (now() AT TIME ZONE 'UTC') \
-             WHERE id = $1",
-            &[&id, &uid],
-        )
-        .await?;
-        records
-            .modified_external(tx, &["quality_state", "control_date", "user_id"])
-            .await?;
-        Ok(())
+        complete_inspection_state(&records, tx, id, "fail", uid).await
     }
 
     /// Evaluate `measure` against `[tolerance_min, tolerance_max]` and mark Pass or Fail.
@@ -678,18 +685,7 @@ impl QualityCheck {
         let passed = is_measure_within_tolerance(measure, min_v, max_v)?;
         let state = if passed { "pass" } else { "fail" };
         let uid = records.env().uid();
-        tx.execute(
-            "UPDATE quality_check \
-             SET quality_state = $2, control_date = (now() AT TIME ZONE 'UTC'), \
-                 user_id = $3, write_uid = $3, write_date = (now() AT TIME ZONE 'UTC') \
-             WHERE id = $1",
-            &[&id, &state, &uid],
-        )
-        .await?;
-        records
-            .modified_external(tx, &["quality_state", "control_date", "user_id"])
-            .await?;
-        Ok(())
+        complete_inspection_state(&records, tx, id, state, uid).await
     }
 
     /// Create and open a `quality.alert` linked to this failed check.

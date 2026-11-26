@@ -250,11 +250,60 @@ pub(crate) async fn ensure_scrap_location(
 async fn next_scrap_name(env: &Env, tx: &mut Transaction, company_id: i64) -> Result<String> {
     let company = CompanyId::new(company_id)?;
     let today = env.context_today()?;
-    draw_by_code(tx, &env.sudo(true), "stock.scrap", company, Some(today)).await
+    for _ in 0..100 {
+        let candidate =
+            draw_by_code(tx, &env.sudo(true), "stock.scrap", company, Some(today)).await?;
+        let exists: i64 = tx
+            .query(
+                "SELECT count(*)::int8 FROM stock_scrap WHERE company_id = $1 AND name = $2",
+                &[&company_id, &candidate],
+            )
+            .await?
+            .first()
+            .ok_or_else(|| Error::internal("Scrap name uniqueness check returned no row."))?
+            .try_get(0)
+            .map_err(db_err)?;
+        if exists == 0 {
+            return Ok(candidate);
+        }
+    }
+    Err(Error::validation(
+        "Could not allocate a unique scrap reference from sequence 'stock.scrap'. Advance the sequence next number.",
+    ))
 }
 
 #[methods(StockScrap, addon = "stock")]
 impl StockScrap {
+    /// Live `onchange` when selecting `product_id`: auto-fills `product_uom_id` from the
+    /// product's unit of measure so users do not need to pick Unit manually before saving.
+    #[onchange("product_id")]
+    async fn _onchange_product_id(
+        this: &RecordSet<StockScrap>,
+        tx: &mut Transaction,
+    ) -> Result<OnchangeResult> {
+        let entry = this.as_records();
+        let pid = match entry.cell(tx, "product_id").await? {
+            Cell::Null | Cell::Bool(false) => return Ok(OnchangeResult::none()),
+            Cell::Id(pid) => pid,
+            Cell::Int(pid) => i64::from(pid),
+            other => {
+                return Err(Error::validation(format!(
+                    "product_id takes a record id, not {other:?}."
+                )));
+            }
+        };
+        let prod = this.env().records("product.product")?.browse([pid])?;
+        if let Cell::Id(uom_id) = prod.cell(tx, "uom_id").await? {
+            entry
+                .write_base(
+                    tx,
+                    RawVals::new().set_cell("product_uom_id", Cell::Id(uom_id)),
+                )
+                .await?;
+        }
+        Ok(OnchangeResult::none())
+    }
+
     #[method(override)]
     async fn default_get(
         this: &RecordSet<StockScrap>,

@@ -349,6 +349,49 @@ impl StockQuant {
         Ok(())
     }
 
+    /// Live `onchange` when entering `inventory_quantity`: marks the row as counted and updates
+    /// `inventory_diff_quantity` immediately in the form/list UI. Clearing the field resets
+    /// `inventory_quantity_set` so stock is never silently zeroed.
+    #[onchange("inventory_quantity")]
+    async fn _onchange_inventory_quantity(
+        this: &RecordSet<StockQuant>,
+        tx: &mut Transaction,
+    ) -> Result<OnchangeResult> {
+        let entry = this.as_records();
+        let decode_opt_dec = |cell: Cell, field: &str| -> Result<Option<Decimal>> {
+            match cell {
+                Cell::Null | Cell::Bool(false) => Ok(None),
+                Cell::Decimal(d) => Ok(Some(d)),
+                Cell::Int(i) => Ok(Some(Decimal::from(i))),
+                Cell::Float(f) => Decimal::try_from(f)
+                    .map(Some)
+                    .map_err(|_| Error::validation(format!("{field} must be a finite number."))),
+                other => Err(Error::validation(format!(
+                    "{field} must be a number, not {other:?}."
+                ))),
+            }
+        };
+        let qty = decode_opt_dec(entry.cell(tx, "quantity").await?, "quantity")?
+            .unwrap_or(Decimal::ZERO);
+        let counted = decode_opt_dec(
+            entry.cell(tx, "inventory_quantity").await?,
+            "inventory_quantity",
+        )?;
+        let mut vals = RawVals::new();
+        match counted {
+            Some(c) => {
+                vals.insert("inventory_quantity_set".into(), Cell::Bool(true));
+                vals.insert("inventory_diff_quantity".into(), Cell::Decimal(c - qty));
+            }
+            None => {
+                vals.insert("inventory_quantity_set".into(), Cell::Bool(false));
+                vals.insert("inventory_diff_quantity".into(), Cell::Decimal(Decimal::ZERO));
+            }
+        }
+        entry.write_base(tx, vals).await?;
+        Ok(OnchangeResult::none())
+    }
+
     /// Clear the counted quantity on selected rows without changing on-hand stock.
     #[method]
     #[rpc(effect = write)]
@@ -437,7 +480,8 @@ impl StockQuant {
                 .query(
                     "SELECT id::int8, company_id::int8, product_id::int8, location_id::int8, \
                             lot_id::int8, package_id::int8, owner_id::int8, quantity, \
-                            inventory_quantity, inventory_quantity_set, inventory_note \
+                            inventory_quantity, COALESCE(inventory_quantity_set, false), \
+                            inventory_note \
                      FROM stock_quant WHERE id = ANY($1) \
                      ORDER BY company_id, product_id, location_id, \
                               lot_id NULLS LAST, package_id NULLS LAST, owner_id NULLS LAST",
@@ -454,10 +498,19 @@ impl StockQuant {
                 let package_id: Option<i64> = row.try_get(5).map_err(db_err)?;
                 let owner_id: Option<i64> = row.try_get(6).map_err(db_err)?;
                 let quantity: Decimal = row.try_get(7).map_err(db_err)?;
-                let counted: Decimal = row.try_get(8).map_err(db_err)?;
+                let counted_opt: Option<Decimal> = row.try_get(8).map_err(db_err)?;
                 let is_set: bool = row.try_get(9).map_err(db_err)?;
                 let note: Option<String> = row.try_get(10).map_err(db_err)?;
 
+                let counted = match (is_set, counted_opt) {
+                    (true, None) => {
+                        return Err(Error::validation(
+                            "Counted quantity is missing on a stock row marked as counted.",
+                        ));
+                    }
+                    (false, None) => continue,
+                    (_, Some(c)) => c,
+                };
                 let effective_set = is_set || counted != Decimal::ZERO;
                 if !effective_set {
                     continue;

@@ -8,7 +8,7 @@
       <field name="name">Consolidated Balance Sheet</field>
       <field name="provider">account_reporting.consolidated_bs</field>
       <field name="date_mode">single</field>
-      <field name="date_default">today</field>
+      <field name="date_default">this_year</field>
       <field name="comparison" eval="False"/>
       <field name="multi_company" eval="True"/>
       <field name="totals_below" eval="True"/>
@@ -86,7 +86,7 @@
       <field name="name">Intercompany Reconciliation Matrix</field>
       <field name="provider">account_reporting.ic_reconciliation</field>
       <field name="date_mode">single</field>
-      <field name="date_default">today</field>
+      <field name="date_default">this_year</field>
       <field name="comparison" eval="False"/>
       <field name="multi_company" eval="True"/>
       <field name="totals_below" eval="False"/>

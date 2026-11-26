@@ -503,6 +503,7 @@ export class HumanApp {
       const list: HotkeyBinding[] = [];
       if (active) list.push({ kind: "callback", chord: "escape", target: this.host, allowEditable: true, run: () => this.closeKeyboardOverlay() });
       list.push({ kind: "callback", chord: "ctrl+k", target: this.host, allowEditable: true, run: () => this.openCommandPalette() });
+      list.push({ kind: "callback", chord: "meta+k", target: this.host, allowEditable: true, run: () => this.openCommandPalette() });
       return list;
     } });
     const scriptError = (event: ErrorEvent): void => {

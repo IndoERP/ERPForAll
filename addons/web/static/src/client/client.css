@@ -2916,9 +2916,9 @@ dialog, .client-block-feedback { box-shadow: var(--shadow-dialog); }
 .form-viewport:has(> .record-form-viewport > .form-record-header), .record-form-viewport.record-form-viewport:has(> .form-record-header):has(> .content-sheet) { padding-top: 0; }
 .record-form-viewport > .form-record-header { min-width: 0; }
 .record-form-viewport > .form-record-header:empty { display: none; }
-.record-form-viewport > .form-record-header .form-header { flex-wrap: nowrap; gap: 8px; margin: 0; padding: 0; border: 0; min-height: var(--form-control-height); }
-.record-form-viewport > .form-record-header .form-header-actions { flex: 0 1 auto; flex-wrap: nowrap; gap: 6px; }
-.record-form-viewport > .form-record-header .form-statusbar { flex: 0 1 auto; margin-inline-start: auto; }
+.record-form-viewport > .form-record-header .form-header { flex-wrap: wrap; row-gap: 6px; column-gap: 8px; margin: 0; padding: 0; border: 0; min-height: var(--form-control-height); }
+.record-form-viewport > .form-record-header .form-header-actions { flex: 1 1 auto; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.record-form-viewport > .form-record-header .form-statusbar { flex: 0 1 auto; margin-inline-start: auto; max-width: 100%; overflow-x: auto; padding-block: 2px; margin-block: -2px; }
 /* Without a chatter column the header and the sheet are one centred column that lines up with the control row. */
 /* Without a side column the sheet takes the whole block, so every form has the same left and right edge, in every theme. */
 .record-form-viewport:not(:has(> .record-form-chatter:not(:empty))):not(:has(> .record-form-aside:not(:empty))) { padding: 0 max(24px, calc((100% - 1596px) / 2)) 32px; }
@@ -5182,7 +5182,6 @@ button.statusbar-step.is-passed:hover, button.statusbar-step:not(.is-current):ho
   .activity-matrix-cell { min-width: 124px; }
 }
 
-
 /* Kanban board, grouped (M4.KANBAN-CLIENT-COLUMNS): the columns sit side by side in one scroll box that scrolls both ways, so a
    column's header stays at the top while its cards scroll. A column is a lane on the canvas, not a box around boxes: only the cards
    carry a border. A folded column is one narrow control with the title turned sideways. */
@@ -5309,3 +5308,19 @@ button.statusbar-step.is-passed:hover, button.statusbar-step:not(.is-current):ho
 .stored-map-records li { display: grid; gap: 2px; padding: 4px; border-bottom: 1px solid var(--line); }
 @media (max-width: 768px) { .stored-map { grid-template-columns: 1fr; } }
 .technical-attachment-download { display: block; width: fit-content; margin-top: .5rem; font-size: .875rem; }
+
+/* QA Layout & Controls Polish (QA-UI-05, QA-UI-06, QA-UI-08, QA-WEB-01) */
+.record-form .many2one-readonly { min-width: 0; max-width: 100%; }
+.record-form .many2one-readonly > .related-record-link { max-width: 100%; overflow-wrap: anywhere; }
+.hr-widget, .hr-resume-card, .hr-resume-title { min-width: 0; overflow-wrap: anywhere; }
+.activity-menu-systray .activity-menu-dropdown.open { display: block; z-index: 120; }
+@media (min-width: 769px) {
+  .settings-sidebar {
+    position: sticky;
+    top: calc(var(--app-bar-height) + var(--control-panel-height, 0px));
+    align-self: start;
+    min-height: calc(100dvh - var(--app-bar-height) - var(--control-panel-height, 0px));
+    max-height: calc(100dvh - var(--app-bar-height) - var(--control-panel-height, 0px));
+    overflow-y: auto;
+  }
+}

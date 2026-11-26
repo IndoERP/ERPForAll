@@ -764,7 +764,7 @@ pub async fn check_and_apply_move_avc(
             "WITH md AS (SELECT * FROM unnest($1::int8[], $2::date[]) AS t(move_id, eff_date)) \
              SELECT l.id::int8, l.company_id::int8, md.eff_date, l.account_id::int8, \
                     l.analytic_account_id::int8, l.asset_id::int8, COALESCE(l.balance, 0), \
-                    COALESCE(a.internal_group, '')::text \
+                    COALESCE(a.internal_group, '')::text, l.move_id::int8 \
              FROM md \
              JOIN account_move_line l ON l.move_id = md.move_id \
              JOIN account_account a ON a.id = l.account_id \
@@ -802,6 +802,7 @@ pub async fn check_and_apply_move_avc(
     let mut running_actual_by_line = std::collections::BTreeMap::<i64, Decimal>::new();
     let mut running_liq_by_line = std::collections::BTreeMap::<i64, Decimal>::new();
     let mut blocks = Vec::new();
+    let mut warnings_by_move = std::collections::BTreeMap::<i64, Vec<String>>::new();
 
     for row in lines {
         let ml_id: i64 = row.try_get(0).map_err(db)?;
@@ -811,6 +812,7 @@ pub async fn check_and_apply_move_avc(
         let analytic_id: Option<i64> = row.try_get(4).map_err(db)?;
         let asset_id: Option<i64> = row.try_get(5).map_err(db)?;
         let spend: Decimal = row.try_get(6).map_err(db)?;
+        let move_id: i64 = row.try_get(8).map_err(db)?;
 
         let liquidated_map =
             liquidate_po_commitments_for_move_line(tx, ml_id, spend, &mut touched_budget_lines)
@@ -864,7 +866,16 @@ pub async fn check_and_apply_move_avc(
                     AvcVerdict::Blocked(msg) if !can_override => {
                         blocks.push(msg);
                     }
-                    AvcVerdict::Blocked(_) | AvcVerdict::Warning(_) | AvcVerdict::Ok => {}
+                    AvcVerdict::Blocked(msg) => {
+                        warnings_by_move
+                            .entry(move_id)
+                            .or_default()
+                            .push(format!("[AVC Override] {msg}"));
+                    }
+                    AvcVerdict::Warning(msg) => {
+                        warnings_by_move.entry(move_id).or_default().push(msg);
+                    }
+                    AvcVerdict::Ok => {}
                 }
             }
             *running_liq_by_line.entry(bl.id).or_insert(Decimal::ZERO) += liq;
@@ -874,6 +885,29 @@ pub async fn check_and_apply_move_avc(
 
     if !blocks.is_empty() {
         return Err(Error::user(blocks.join("\n")));
+    }
+    if !warnings_by_move.is_empty() && tx.registry().model("mail.message").is_some() {
+        let escape_html = |text: &str| {
+            text.replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+        };
+        let clean_env = crate::moves::post::strip_default_context(env).sudo(true);
+        let msg_model = clean_env.records("mail.message")?;
+        let mut msg_vals = Vec::with_capacity(warnings_by_move.len());
+        for (mid, msgs) in warnings_by_move {
+            let body_html = msgs
+                .iter()
+                .map(|m| format!("<p>{}</p>", escape_html(m)))
+                .collect::<String>();
+            let mut v = RawVals::new();
+            v.insert("model".into(), Cell::Str("account.move".into()));
+            v.insert("res_id".into(), Cell::Id(mid));
+            v.insert("message_type".into(), Cell::Str("notification".into()));
+            v.insert("body".into(), Cell::Str(body_html.into()));
+            msg_vals.push(v);
+        }
+        msg_model.create(tx, msg_vals).await?;
     }
     touched_budget_lines.sort_unstable();
     touched_budget_lines.dedup();

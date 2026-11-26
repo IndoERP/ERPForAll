@@ -902,22 +902,28 @@ pub async fn refresh_budget_lines(tx: &mut Transaction, line_ids: &[i64]) -> Res
             Decimal::ZERO
         };
 
-        let (theoretical, pct) =
+        let (theoretical, ytd_pct) =
             compute_budget_line_metrics_with_scale(planned, practical, d_from, d_to, today, scale);
         let assigned = committed + practical;
-        let avc_status = if is_revenue {
-            "ok"
+        let (pct, avc_status) = if is_revenue {
+            (ytd_pct, "ok")
         } else {
             let base = released.abs();
+            let util_pct = if !base.is_zero() {
+                (assigned / base * Decimal::from(100)).round_dp(2)
+            } else {
+                Decimal::ZERO
+            };
             let block_limit = (base * block_pct / Decimal::from(100)).round_dp(scale) + tol_amt;
             let warn_limit = (base * warn_pct / Decimal::from(100)).round_dp(scale);
-            if !base.is_zero() && assigned > block_limit {
+            let status = if !base.is_zero() && assigned > block_limit {
                 "exceeded"
             } else if !base.is_zero() && assigned >= warn_limit {
                 "warning"
             } else {
                 "ok"
-            }
+            };
+            (util_pct, status)
         };
 
         tx.execute(

@@ -11,7 +11,7 @@
   <menuitem id="menu_stock_move_line_history" name="Moves History" parent="menu_stock_reporting" action="action_stock_move_line_history" groups="stock.group_stock_user" sequence="40"/>
   <menuitem id="menu_stock_returns" name="Returns" parent="menu_stock_reporting" action="action_picking_tree_returns" groups="stock.group_stock_user" sequence="50"/>
 
-  <menuitem id="menu_stock_warehouse" name="Warehouses" parent="menu_stock_config_settings" action="action_stock_warehouse" groups="stock.group_stock_multi_warehouses" sequence="20"/>
+  <menuitem id="menu_stock_warehouse" name="Warehouses" parent="menu_stock_config_settings" action="action_stock_warehouse" groups="stock.group_stock_manager" sequence="20"/>
   <menuitem id="menu_stock_picking_type_config" name="Operation Types" parent="menu_stock_config_settings" action="action_stock_picking_type_config" sequence="30"/>
   <menuitem id="menu_stock_location" name="Locations" parent="menu_stock_config_settings" action="action_stock_location" groups="stock.group_stock_multi_locations" sequence="40"/>
   <menuitem id="menu_stock_route" name="Routes" parent="menu_stock_config_settings" action="action_stock_route" groups="stock.group_adv_location" sequence="50"/>
