@@ -245,6 +245,8 @@ describe("attachMenuDropdown", () => {
     const typed = new KeyboardEvent("keydown", { key: "i", bubbles: true, cancelable: true });
     input.dispatchEvent(typed);
     expect(typed.defaultPrevented).toBe(false);
+    expect(() => input.dispatchEvent(new Event("keydown", { bubbles: true, cancelable: true }))).not.toThrow();
+    expect(() => trigger.dispatchEvent(new Event("keydown", { bubbles: true, cancelable: true }))).not.toThrow();
     const onItem = new KeyboardEvent("keydown", { key: "i", bubbles: true, cancelable: true });
     item1.dispatchEvent(onItem);
     expect(onItem.defaultPrevented).toBe(true);

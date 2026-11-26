@@ -638,6 +638,33 @@ fn named(env: &Env, vals: &RawVals) -> bool {
 
 #[methods(SaleOrderLine, addon = "sale")]
 impl SaleOrderLine {
+    /// Proposes taxes, pricelist price and line amounts when the product changes in a form.
+    #[onchange("product_id")]
+    async fn _onchange_product_id(
+        this: &RecordSet<SaleOrderLine>,
+        tx: &mut Transaction,
+    ) -> Result<OnchangeResult> {
+        crate::amounts::onchange_line_product(tx, this.as_records()).await
+    }
+
+    /// Reprices when quantity or unit changes (unless priced by hand) and refreshes line amounts.
+    #[onchange("product_uom_id", "product_uom_qty")]
+    async fn _onchange_qty_uom(
+        this: &RecordSet<SaleOrderLine>,
+        tx: &mut Transaction,
+    ) -> Result<OnchangeResult> {
+        crate::amounts::onchange_line_qty_uom(tx, this.as_records()).await
+    }
+
+    /// Refreshes line subtotal, tax and total when price, discount, taxes or display type changes.
+    #[onchange("price_unit", "discount", "tax_ids", "display_type")]
+    async fn _onchange_amounts(
+        this: &RecordSet<SaleOrderLine>,
+        tx: &mut Transaction,
+    ) -> Result<OnchangeResult> {
+        crate::amounts::onchange_line_amounts(tx, this.as_records()).await
+    }
+
     /// The product's name, for lines that have a product.
     #[compute(depends = ["product_id"])]
     async fn _compute_name(

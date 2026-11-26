@@ -947,6 +947,22 @@ impl SaleOrder {
         Ok(())
     }
 
+    /// Recomputes live line amounts and order totals (`amount_untaxed`, `amount_tax`,
+    /// `amount_total`) in memory before Save.
+    #[onchange(
+        "order_line",
+        "pricelist_id",
+        "currency_id",
+        "fiscal_position_id",
+        "date_order"
+    )]
+    async fn _onchange_order_totals(
+        this: &RecordSet<SaleOrder>,
+        tx: &mut Transaction,
+    ) -> Result<OnchangeResult> {
+        crate::amounts::onchange_order_totals(tx, this.as_records()).await
+    }
+
     /// The header fields a locked order refuses to change: customer, invoice address, delivery
     /// address, promised delivery date and the lines (V13). A satellite adds its
     /// own through an override that calls `sup`.

@@ -301,6 +301,34 @@ pub struct PurchaseOrderLine {
 
 #[methods(PurchaseOrderLine, addon = "purchase")]
 impl PurchaseOrderLine {
+    /// Proposes unit, description, vendor taxes, price, discount, planned date and line amounts
+    /// when the product changes in a form before Save.
+    #[onchange("product_id")]
+    async fn _onchange_product_id(
+        this: &RecordSet<PurchaseOrderLine>,
+        tx: &mut Transaction,
+    ) -> Result<OnchangeResult> {
+        onchange_line_product(tx, this.as_records()).await
+    }
+
+    /// Reprices when unit or quantity changes (unless set by hand) and refreshes line amounts.
+    #[onchange("uom_id", "product_qty")]
+    async fn _onchange_qty_uom(
+        this: &RecordSet<PurchaseOrderLine>,
+        tx: &mut Transaction,
+    ) -> Result<OnchangeResult> {
+        onchange_line_qty_uom(tx, this.as_records()).await
+    }
+
+    /// Refreshes line subtotal, tax and total when price, discount or taxes change.
+    #[onchange("price_unit", "discount", "tax_ids")]
+    async fn _onchange_amounts(
+        this: &RecordSet<PurchaseOrderLine>,
+        tx: &mut Transaction,
+    ) -> Result<OnchangeResult> {
+        onchange_line_amounts(tx, this.as_records()).await
+    }
+
     /// Refuses the computed and received fields, fills unit, description, taxes, price, discount
     /// and planned date from the product and the order's vendor, then writes the amounts and the
     /// order totals.
@@ -778,11 +806,23 @@ struct OrderHead {
 fn id_of(cell: Option<&Cell>, field: &str) -> Result<Option<i64>> {
     match cell {
         None | Some(Cell::Null | Cell::Bool(false)) => Ok(None),
-        Some(Cell::Id(id)) => Ok(Some(*id)),
+        Some(Cell::Id(id)) => Ok(RecId::from_raw(*id)
+            .and_then(|rec| rec.as_real().or(rec.origin()))
+            .map(|rec| rec.get())),
         Some(Cell::Int(id)) => Ok(Some(i64::from(*id))),
         Some(other) => Err(Error::validation(format!(
             "{field} takes a record id, not {other:?}."
         ))),
+    }
+}
+
+fn ids_of(cell: &Cell) -> Vec<i64> {
+    match cell {
+        Cell::Ids(ids) => ids
+            .iter()
+            .filter_map(|id| id.as_real().or(id.origin()).map(|id| id.get()))
+            .collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -972,10 +1012,11 @@ async fn manual_prices(tx: &mut Transaction, lines: &Records) -> Result<BTreeSet
 
 /// The vendor price of `product` for the order's vendor, quantity and unit at the deadline's
 /// date, through the product seller service under the order's company.
-async fn seller(
+async fn seller_for(
     tx: &mut Transaction,
     env: &Env,
-    head: &OrderHead,
+    head: &OnchangeHead,
+    partner: i64,
     product: i64,
     quantity: Decimal,
     unit: i64,
@@ -983,7 +1024,7 @@ async fn seller(
     // the UTC day of the deadline, whoever asks: a stored price never depends on the reader
     let date = head.date_order.date();
     let query = SellerQuery::default()
-        .with_partner(head.partner)?
+        .with_partner(partner)?
         .with_quantity(Some(quantity.abs()))
         .with_date(date)
         .with_unit(unit)?
@@ -1006,62 +1047,80 @@ async fn price_of(
     quantity: Decimal,
     unit: i64,
 ) -> Result<(Decimal, Decimal, Option<i64>, i64)> {
+    let pricing_head = OnchangeHead {
+        company: head.company,
+        currency: head.currency,
+        partner: Some(head.partner),
+        date_order: head.date_order,
+    };
+    price_of_head(tx, env, &pricing_head, product, quantity, unit).await
+}
+
+async fn price_of_head(
+    tx: &mut Transaction,
+    env: &Env,
+    head: &OnchangeHead,
+    product: i64,
+    quantity: Decimal,
+    unit: i64,
+) -> Result<(Decimal, Decimal, Option<i64>, i64)> {
     let company_env = env.with_company(head.company)?;
     let digits =
         erp_addon_base::decimal_precision::precision_get(&company_env, tx, "Product Price").await?;
     let precision = Increment::from_places(digits)?;
     let target = load_unit(&company_env, tx, unit).await?;
-    let (price, from_unit, currency, discount, row, delay) =
-        match seller(tx, env, head, product, quantity, unit).await? {
-            Some(info) => {
-                let v = info.values();
-                (
-                    value_amount(v.get("price"), "price")?,
-                    value_id(v.get("uom_id"), "uom_id")?,
-                    value_id(v.get("currency_id"), "currency_id")?,
-                    value_amount(v.get("discount"), "discount")?,
-                    Some(value_id(v.get("supplierinfo"), "supplierinfo")?),
-                    // the reference's lead time is required with a default of 1 day
-                    // : never guessed
-                    match v.get("delay") {
-                        Some(Value::Int(days)) => *days,
-                        _ => {
-                            // the column is required, so no row reaches here without one
-                            return Err(Error::invariant(format!(
-                                "vendor price {} has no lead time",
-                                value_id(v.get("supplierinfo"), "supplierinfo")?
-                            )));
-                        }
-                    },
-                )
-            }
-            None => {
-                let record = company_env.records("product.product")?.browse([product])?;
-                // the cost hook, so a valuation addon supplies it per product
-                let costs: Vec<Decimal> = record.call(tx, "_get_standard_price", ()).await?;
-                let [cost] = costs.as_slice() else {
-                    return Err(Error::programming(
-                        "_get_standard_price must return one value per product.",
-                    ));
-                };
-                let cost = *cost;
-                let from_unit = id_of(Some(&record.cell(tx, "uom_id").await?), "uom_id")?
-                    .ok_or_else(|| Error::invariant(format!("product {product} has no unit")))?;
-                // the reference's cost currency is the product company's or the active company's
-                // currency, never empty;
-                // it is read under the order's company, so an empty one is a broken product
-                let currency = id_of(
-                    Some(&record.cell(tx, "cost_currency_id").await?),
-                    "cost_currency_id",
-                )?
-                .ok_or_else(|| {
-                    Error::invariant(format!("product {product} has no cost currency"))
-                })?;
-                // no vendor price: no lead time, the line is expected at the deadline
-                // (an empty seller info)
-                (cost, from_unit, currency, Decimal::ZERO, None, 0)
-            }
-        };
+    let matched_seller = match head.partner {
+        Some(partner) => seller_for(tx, env, head, partner, product, quantity, unit).await?,
+        None => None,
+    };
+    let (price, from_unit, currency, discount, row, delay) = match matched_seller {
+        Some(info) => {
+            let v = info.values();
+            (
+                value_amount(v.get("price"), "price")?,
+                value_id(v.get("uom_id"), "uom_id")?,
+                value_id(v.get("currency_id"), "currency_id")?,
+                value_amount(v.get("discount"), "discount")?,
+                Some(value_id(v.get("supplierinfo"), "supplierinfo")?),
+                // the reference's lead time is required with a default of 1 day
+                // : never guessed
+                match v.get("delay") {
+                    Some(Value::Int(days)) => *days,
+                    _ => {
+                        // the column is required, so no row reaches here without one
+                        return Err(Error::invariant(format!(
+                            "vendor price {} has no lead time",
+                            value_id(v.get("supplierinfo"), "supplierinfo")?
+                        )));
+                    }
+                },
+            )
+        }
+        None => {
+            let record = company_env.records("product.product")?.browse([product])?;
+            // the cost hook, so a valuation addon supplies it per product
+            let costs: Vec<Decimal> = record.call(tx, "_get_standard_price", ()).await?;
+            let [cost] = costs.as_slice() else {
+                return Err(Error::programming(
+                    "_get_standard_price must return one value per product.",
+                ));
+            };
+            let cost = *cost;
+            let from_unit = id_of(Some(&record.cell(tx, "uom_id").await?), "uom_id")?
+                .ok_or_else(|| Error::invariant(format!("product {product} has no unit")))?;
+            // the reference's cost currency is the product company's or the active company's
+            // currency, never empty;
+            // it is read under the order's company, so an empty one is a broken product
+            let currency = id_of(
+                Some(&record.cell(tx, "cost_currency_id").await?),
+                "cost_currency_id",
+            )?
+            .ok_or_else(|| Error::invariant(format!("product {product} has no cost currency")))?;
+            // no vendor price: no lead time, the line is expected at the deadline
+            // (an empty seller info)
+            (cost, from_unit, currency, Decimal::ZERO, None, 0)
+        }
+    };
     let source = load_unit(&company_env, tx, from_unit).await?;
     let in_unit =
         price_exact(&source, &target, price)?.quantize(&precision, CURRENCY_ROUNDING_MODE)?;
@@ -1634,4 +1693,268 @@ pub(crate) async fn orders_without_product(
         )
         .await?;
     Ok(line_orders(tx, &lines).await?.into_values().collect())
+}
+
+/// Header fields read from an in-memory or persisted singleton `purchase.order` for live
+/// `onchange` calculations.
+struct OnchangeHead {
+    company: i64,
+    currency: i64,
+    partner: Option<i64>,
+    date_order: DateTime,
+}
+
+async fn head_for_onchange(
+    tx: &mut Transaction,
+    env: &Env,
+    order: &Records,
+) -> Result<Option<OnchangeHead>> {
+    let company = if order.is_empty() {
+        env.company_id()?
+    } else {
+        match id_of(Some(&order.cell(tx, "company_id").await?), "company_id")? {
+            Some(c) => Some(c),
+            None => env.company_id()?,
+        }
+    };
+    let Some(company) = company else {
+        return Ok(None);
+    };
+    let partner = if order.is_empty() {
+        None
+    } else {
+        id_of(Some(&order.cell(tx, "partner_id").await?), "partner_id")?
+    };
+    let date_order = if order.is_empty() {
+        DateTime::now()
+    } else {
+        match order.cell(tx, "date_order").await? {
+            Cell::DateTime(at) => at,
+            _ => DateTime::now(),
+        }
+    };
+    let currency = if order.is_empty() {
+        None
+    } else {
+        id_of(Some(&order.cell(tx, "currency_id").await?), "currency_id")?
+    };
+    let currency = match currency {
+        Some(c) => Some(c),
+        None => id_of(
+            Some(
+                &env.records("res.company")?
+                    .browse([company])?
+                    .cell(tx, "currency_id")
+                    .await?,
+            ),
+            "currency_id",
+        )?,
+    };
+    let Some(currency) = currency else {
+        return Ok(None);
+    };
+    Ok(Some(OnchangeHead {
+        company,
+        currency,
+        partner,
+        date_order,
+    }))
+}
+
+fn planned_at(date_order: DateTime, days: i64) -> Result<DateTime> {
+    days.checked_mul(MICROS_PER_DAY)
+        .and_then(|delta| date_order.micros().checked_add(delta))
+        .map(DateTime::from_micros)
+        .ok_or_else(|| Error::validation(format!("A lead time of {days} days is out of range.")))
+}
+
+async fn preview_line_amounts(
+    tx: &mut Transaction,
+    line: &Records,
+    head: &OnchangeHead,
+) -> Result<(Decimal, Decimal, Decimal)> {
+    let env = line.env().clone();
+    let company_env = env.with_company(head.company)?;
+    let currency = RecId::from_real(head.currency)
+        .ok_or_else(|| Error::invariant(format!("record id {}", head.currency)))?;
+    let tax_ids = ids_of(&line.cell(tx, "tax_ids").await?);
+    let tax_set: BTreeSet<i64> = tax_ids.iter().copied().collect();
+    let defs = load_taxes(tx, &company_env, &tax_set).await?;
+    let table = RoundingTable::load(&company_env, tx, &[currency]).await?;
+    let taxes: Vec<TaxDef> = tax_ids
+        .iter()
+        .map(|t| {
+            defs.get(t)
+                .cloned()
+                .ok_or_else(|| Error::invariant(format!("tax {t} was not loaded")))
+        })
+        .collect::<Result<_>>()?;
+    let quantity = amount(&line.cell(tx, "product_qty").await?, "product_qty")?;
+    let result = compute::compute(&BaseLine {
+        price_unit: amount(&line.cell(tx, "price_unit").await?, "price_unit")?,
+        quantity,
+        discount: amount(&line.cell(tx, "discount").await?, "discount")?,
+        taxes: &taxes,
+        increment: table.get(currency)?.increment(),
+    })?;
+    let tax = result
+        .total_included
+        .checked_sub(result.total_excluded)
+        .ok_or_else(out_of_range)?;
+    let digits =
+        erp_addon_base::decimal_precision::precision_get(&company_env, tx, "Product Unit").await?;
+    let qty_precision = Increment::from_places(digits)?;
+    let product_cell = line.cell(tx, "product_id").await?;
+    let uom_cell = line.cell(tx, "uom_id").await?;
+    let in_product_unit = product_quantity(
+        tx,
+        &company_env,
+        &product_cell,
+        &uom_cell,
+        quantity,
+        &qty_precision,
+    )
+    .await?;
+    line.write_base(
+        tx,
+        RawVals::new()
+            .set_cell("price_subtotal", Cell::Decimal(result.total_excluded))
+            .set_cell("price_tax", Cell::Decimal(tax))
+            .set_cell("price_total", Cell::Decimal(result.total_included))
+            .set_cell("product_uom_qty", Cell::Decimal(in_product_unit)),
+    )
+    .await?;
+    Ok((result.total_excluded, tax, result.total_included))
+}
+
+async fn onchange_line_product(tx: &mut Transaction, line: &Records) -> Result<OnchangeResult> {
+    let order = line.related(tx, "order_id").await?;
+    let Some(head) = head_for_onchange(tx, line.env(), &order).await? else {
+        return Ok(OnchangeResult::none());
+    };
+    let Some(product) = id_of(Some(&line.cell(tx, "product_id").await?), "product_id")? else {
+        preview_line_amounts(tx, line, &head).await?;
+        return Ok(OnchangeResult::none());
+    };
+    let company_env = line.env().with_company(head.company)?;
+    let record = company_env.records("product.product")?.browse([product])?;
+    let unit = id_of(Some(&record.cell(tx, "uom_id").await?), "uom_id")?
+        .ok_or_else(|| Error::invariant(format!("product {product} has no unit")))?;
+    let mut assign = RawVals::new().set_cell("uom_id", Cell::Id(unit));
+    if let Some(text) = description(tx, &record).await? {
+        assign.insert("name".into(), Cell::Str(text));
+    } else if let Cell::Str(text) = record.cell(tx, "display_name").await? {
+        assign.insert("name".into(), Cell::Str(text));
+    }
+    let taxes = vendor_taxes(tx, &company_env, &record, head.company).await?;
+    assign.insert_commands("tax_ids".into(), vec![Command::Set(taxes)]);
+    let quantity = amount(&line.cell(tx, "product_qty").await?, "product_qty")?;
+    let (price, discount, row, delay) =
+        price_of_head(tx, line.env(), &head, product, quantity, unit).await?;
+    assign.insert("price_unit".into(), Cell::Decimal(price));
+    assign.insert("technical_price_unit".into(), Cell::Decimal(price));
+    assign.insert("discount".into(), Cell::Decimal(discount));
+    assign.insert(
+        "date_planned".into(),
+        Cell::DateTime(planned_at(head.date_order, delay)?),
+    );
+    assign.insert(
+        "selected_seller_id".into(),
+        row.map_or(Cell::Null, Cell::Id),
+    );
+    line.write_base(tx, assign).await?;
+    preview_line_amounts(tx, line, &head).await?;
+    Ok(OnchangeResult::none())
+}
+
+async fn onchange_line_qty_uom(tx: &mut Transaction, line: &Records) -> Result<OnchangeResult> {
+    let order = line.related(tx, "order_id").await?;
+    let Some(head) = head_for_onchange(tx, line.env(), &order).await? else {
+        return Ok(OnchangeResult::none());
+    };
+    let price_unit = amount(&line.cell(tx, "price_unit").await?, "price_unit")?;
+    let technical = amount(
+        &line.cell(tx, "technical_price_unit").await?,
+        "technical_price_unit",
+    )?;
+    if price_unit == technical
+        && let (Some(product), Some(unit)) = (
+            id_of(Some(&line.cell(tx, "product_id").await?), "product_id")?,
+            id_of(Some(&line.cell(tx, "uom_id").await?), "uom_id")?,
+        )
+    {
+        let quantity = amount(&line.cell(tx, "product_qty").await?, "product_qty")?;
+        let (price, discount, row, _) =
+            price_of_head(tx, line.env(), &head, product, quantity, unit).await?;
+        line.write_base(
+            tx,
+            RawVals::new()
+                .set_cell("price_unit", Cell::Decimal(price))
+                .set_cell("technical_price_unit", Cell::Decimal(price))
+                .set_cell("discount", Cell::Decimal(discount))
+                .set_cell("selected_seller_id", row.map_or(Cell::Null, Cell::Id)),
+        )
+        .await?;
+    }
+    preview_line_amounts(tx, line, &head).await?;
+    Ok(OnchangeResult::none())
+}
+
+async fn onchange_line_amounts(tx: &mut Transaction, line: &Records) -> Result<OnchangeResult> {
+    let order = line.related(tx, "order_id").await?;
+    let Some(head) = head_for_onchange(tx, line.env(), &order).await? else {
+        return Ok(OnchangeResult::none());
+    };
+    preview_line_amounts(tx, line, &head).await?;
+    Ok(OnchangeResult::none())
+}
+
+/// Live `onchange` for `purchase.order`: recomputes in-memory line subtotals, header totals
+/// (`amount_untaxed`, `amount_tax`, `amount_total`, `amount_total_cc`) and earliest
+/// `date_planned` before Save.
+pub(crate) async fn onchange_order_totals(
+    tx: &mut Transaction,
+    order: &Records,
+) -> Result<OnchangeResult> {
+    let Some(head) = head_for_onchange(tx, order.env(), order).await? else {
+        return Ok(OnchangeResult::none());
+    };
+    let lines = order.related(tx, "order_line").await?;
+    let mut untaxed = Decimal::ZERO;
+    let mut tax_total = Decimal::ZERO;
+    let mut earliest: Option<DateTime> = None;
+    for line in lines.iter() {
+        let (sub, tax, _) = preview_line_amounts(tx, &line, &head).await?;
+        untaxed = untaxed.checked_add(sub).ok_or_else(out_of_range)?;
+        tax_total = tax_total.checked_add(tax).ok_or_else(out_of_range)?;
+        if let Cell::DateTime(at) = line.cell(tx, "date_planned").await? {
+            earliest = Some(earliest.map_or(at, |seen| seen.min(at)));
+        }
+    }
+    let total = untaxed.checked_add(tax_total).ok_or_else(out_of_range)?;
+    let company = RecId::from_real(head.company)
+        .ok_or_else(|| Error::invariant(format!("record id {}", head.company)))?;
+    let currency = RecId::from_real(head.currency)
+        .ok_or_else(|| Error::invariant(format!("record id {}", head.currency)))?;
+    let total_cc = in_company_currency(
+        tx,
+        &order.env().with_company(head.company)?,
+        total,
+        currency,
+        company,
+        Some(head.date_order),
+    )
+    .await?;
+    order
+        .write_base(
+            tx,
+            RawVals::new()
+                .set_cell("amount_untaxed", Cell::Decimal(untaxed))
+                .set_cell("amount_tax", Cell::Decimal(tax_total))
+                .set_cell("amount_total", Cell::Decimal(total))
+                .set_cell("amount_total_cc", Cell::Decimal(total_cc))
+                .set_cell("date_planned", earliest.map_or(Cell::Null, Cell::DateTime)),
+        )
+        .await?;
+    Ok(OnchangeResult::none())
 }

@@ -64,6 +64,7 @@ export function createChoiceDropdown(options: {
   const dropdown = attachMenuDropdown({ trigger, menu });
   // A nested choice owns its keys; do not let an ancestor menu move the same focus twice.
   element.addEventListener("keydown", event => {
+    if (!(event instanceof KeyboardEvent)) return;
     if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) || event.key.length === 1 && event.key !== " " && !event.ctrlKey && !event.metaKey && !event.altKey) event.stopPropagation();
   });
   element.append(trigger, menu); setValue(options.value);

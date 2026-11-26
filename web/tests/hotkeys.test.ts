@@ -103,6 +103,11 @@ test("consumed keys, IME sessions, composing events and AltGraph never invoke a 
   const altGraph = new KeyboardEvent("keydown", { key: "x", code: "KeyX", altKey: true, bubbles: true, cancelable: true });
   Object.defineProperty(altGraph, "getModifierState", { value: (name: string): boolean => name === "AltGraph" });
   document.body.dispatchEvent(altGraph); expect(altGraph.defaultPrevented).toBe(false);
+  const input = document.createElement("input"); host.append(input);
+  alt(); expect(hints()).toHaveLength(1);
+  expect(() => input.dispatchEvent(new Event("keydown", { bubbles: true, cancelable: true }))).not.toThrow();
+  expect(hints()).toHaveLength(0);
+  expect(() => input.dispatchEvent(new Event("keyup", { bubbles: true, cancelable: true }))).not.toThrow();
   expect(run).not.toHaveBeenCalled(); access(); expect(run).toHaveBeenCalledOnce();
 });
 

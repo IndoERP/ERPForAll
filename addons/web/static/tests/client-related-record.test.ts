@@ -153,7 +153,7 @@ async function start(resolve: (model: string) => unknown = model => model === "r
     else if (call === "test.note/web_search_read" && failSearch) return new Response(JSON.stringify({ name: "erp.exceptions.ServerError", message: "The notes could not be read." }), { status: 500, headers: { "Content-Type": "application/json" } });
     else if (call === "test.note/web_search_read") value = { length: 2, records: [{ id: 5, name: "Source record" }, { id: 6, name: "Parent record" }] };
     else if (call === "test.note/default_get") value = { name: false, company_id: { id: 9, display_name: "Company record" }, parent_id: false, line_ids: [] };
-    else if (call === "test.note/onchange") value = { value: {} };
+    else if (call === "test.note/onchange" || call === "test.note.line/onchange") value = { value: {} };
     else if (call === "test.note/web_save") {
       const vals = body["vals"] as Record<string, unknown>, id = (body["ids"] as number[])[0] ?? 7;
       writes.push(vals);

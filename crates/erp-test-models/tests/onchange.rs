@@ -6580,3 +6580,187 @@ async fn many_created_lines_link_semantics() {
     drop(tx);
     h.cleanup().await.unwrap();
 }
+
+/// Virtual parent dictionaries on a top-level `Many2one` field let a line `onchange` read unsaved
+/// or edited parent draft fields without touching the database; malformed or nested parent dicts
+/// fail loudly.
+#[tokio::test]
+async fn onchange_virtual_parent_many2one_and_validation() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    let messages = tx.env().records(MESSAGE).unwrap();
+    let line_spec = spec(json!({
+        "body": {},
+        "author": {"fields": {"display_name": {}}},
+        "name": {},
+        "size": {},
+    }));
+
+    // Unsaved virtual parent (`id: false`) supplies draft `name` to `_compute_name`.
+    let result = messages
+        .onchange(
+            &mut tx,
+            values(json!({
+                "discussion": {"id": false, "name": "Draft Discussion"},
+                "body": "hello",
+            })),
+            Vec::new(),
+            line_spec.clone(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        value_of(&result),
+        obj(&[
+            ("body", s("hello")),
+            (
+                "author",
+                obj(&[("id", int(1)), ("display_name", s("__system__"))])
+            ),
+            ("name", s("[Draft Discussion] __system__")),
+            ("size", int(5)),
+        ])
+    );
+
+    // Second call with edited parent draft fields updates the dependent computed field cleanly.
+    let result = messages
+        .onchange(
+            &mut tx,
+            values(json!({
+                "discussion": {"id": false, "name": "Edited In Form"},
+                "body": "world!",
+                "name": "[Draft Discussion] __system__",
+                "size": 0,
+            })),
+            names(&["body"]),
+            line_spec.clone(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(value_of(&result), obj(&[("size", int(6))]));
+    let result = messages
+        .onchange(
+            &mut tx,
+            values(json!({
+                "discussion": {"id": false, "name": "Edited In Form"},
+                "body": "world!",
+            })),
+            Vec::new(),
+            line_spec.clone(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        value_of(&result),
+        obj(&[
+            ("body", s("world!")),
+            (
+                "author",
+                obj(&[("id", int(1)), ("display_name", s("__system__"))])
+            ),
+            ("name", s("[Edited In Form] __system__")),
+            ("size", int(6)),
+        ])
+    );
+
+    // Nested virtual parent is refused loudly.
+    let err = messages
+        .onchange(
+            &mut tx,
+            values(json!({
+                "discussion": {
+                    "id": false,
+                    "name": "Nested",
+                    "moderator": {"id": false, "name": "Too Deep"},
+                },
+                "body": "x",
+            })),
+            Vec::new(),
+            line_spec.clone(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Validation);
+
+    // Virtual parent cannot carry one2many fields or unknown fields.
+    let err = messages
+        .onchange(
+            &mut tx,
+            values(json!({
+                "discussion": {"id": false, "messages": []},
+                "body": "x",
+            })),
+            Vec::new(),
+            line_spec.clone(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Validation);
+    let err = messages
+        .onchange(
+            &mut tx,
+            values(json!({
+                "discussion": {"id": false, "no_such_field": 1},
+                "body": "x",
+            })),
+            Vec::new(),
+            line_spec,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Validation);
+
+    drop(tx);
+    h.cleanup().await.unwrap();
+}
+
+/// Updating an existing line via a parent `onchange` marks the line's edited fields modified in
+/// memory so stored `#[compute]` fields on the line recompute without touching the database.
+#[tokio::test]
+async fn onchange_parent_x2many_update_recomputes_stored_line_fields() {
+    let h = harness().await;
+    let mut tx = h.begin().await.unwrap();
+    let discussion = create(&mut tx, DISCUSSION, &[&[("name", s("General"))]]).await;
+    let d = id(&discussion, 0);
+    let lines = create(
+        &mut tx,
+        MESSAGE,
+        &[&[("discussion", int(d)), ("body", s("one"))]],
+    )
+    .await;
+    let m1 = id(&lines, 0);
+    assert_eq!(lines.value(&mut tx, "size").await.unwrap(), int(3));
+
+    tx.invalidate_all().await.unwrap();
+    tx.capture_statements(true);
+    let result = discussion
+        .onchange(
+            &mut tx,
+            values(json!({
+                "messages": [[1, m1, {"body": "edited body"}]],
+            })),
+            names(&["messages"]),
+            discussion_spec(),
+        )
+        .await
+        .unwrap();
+    let statements = tx.captured().to_vec();
+    tx.capture_statements(false);
+    assert!(
+        statements
+            .iter()
+            .all(|q| !q.contains("SAVEPOINT") && !q.contains("UPDATE \"")),
+        "{statements:#?}"
+    );
+    assert_eq!(
+        value_of(&result),
+        obj(&[(
+            "messages",
+            Value::list([Value::list([int(1), int(m1), obj(&[("size", int(11))])])])
+        )])
+    );
+    // Stored DB value is untouched.
+    assert_eq!(lines.value(&mut tx, "size").await.unwrap(), int(3));
+    drop(tx);
+    h.cleanup().await.unwrap();
+}

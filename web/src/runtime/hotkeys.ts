@@ -155,8 +155,9 @@ class Dispatcher {
     }
     return result;
   }
-  private readonly key = (event: KeyboardEvent): void => {
+  private readonly key = (event: Event): void => {
     this.clear();
+    if (!(event instanceof this.doc.defaultView!.KeyboardEvent)) return;
     if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || this.composing || event.getModifierState("AltGraph")) return;
     const active = this.activeScope();
     const candidates = this.candidates(event, active);
